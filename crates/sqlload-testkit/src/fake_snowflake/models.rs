@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde_json::Value;
 
@@ -10,12 +10,19 @@ pub struct FakeTable {
     pub rows: Vec<Value>,
 }
 
+/// Rows appended under one offset token, not yet committed.
+#[derive(Debug, Clone, Default)]
+pub struct PendingAppend {
+    pub offset_token: String,
+    pub rows: Vec<Value>,
+}
+
 /// One fake channel.
 #[derive(Debug, Clone, Default)]
 pub struct FakeChannel {
     pub continuation: u64,
     pub committed: Option<String>,
-    pub uncommitted: Vec<(String, Vec<Value>)>,
+    pub uncommitted: Vec<PendingAppend>,
     pub error_rows: i64,
 }
 
@@ -30,49 +37,53 @@ pub struct FakeState {
     pub statements: Vec<String>,
 }
 
-/// A running fake Snowflake; dropping it does not stop the server task.
+/// Shared fake state.
+#[derive(Debug, Clone, Default)]
+pub struct SharedState(pub Arc<Mutex<FakeState>>);
+
+impl SharedState {
+    /// The state, recovering it if a handler panicked while holding the lock.
+    pub fn lock(&self) -> MutexGuard<'_, FakeState> {
+        match self.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+/// A running fake Snowflake.
 #[derive(Debug, Clone)]
 pub struct FakeSnowflake {
     pub base_url: String,
-    pub state: Arc<Mutex<FakeState>>,
+    pub state: SharedState,
 }
 
 impl FakeSnowflake {
     /// Committed rows of `table`.
     pub fn rows(&self, table: &str) -> Vec<Value> {
-        self.with_state(|state| {
-            state
-                .tables
-                .get(table)
-                .map(|found| found.rows.clone())
-                .unwrap_or_default()
-        })
+        let state = self.state.lock();
+        state
+            .tables
+            .get(table)
+            .map(|found| found.rows.clone())
+            .unwrap_or_default()
     }
 
     /// Make the next `count` append requests fail with HTTP `status`.
     pub fn fail_next_appends(&self, count: usize, status: u16) {
-        self.with_state(|state| {
-            state
-                .append_failures
-                .extend(std::iter::repeat_n(status, count))
-        });
+        self.state
+            .lock()
+            .append_failures
+            .extend(std::iter::repeat_n(status, count));
     }
 
     /// How many append requests succeeded.
     pub fn appends(&self) -> u64 {
-        self.with_state(|state| state.appends)
+        self.state.lock().appends
     }
 
     /// Every SQL statement received, in order.
     pub fn statements(&self) -> Vec<String> {
-        self.with_state(|state| state.statements.clone())
-    }
-
-    fn with_state<T>(&self, read: impl FnOnce(&mut FakeState) -> T) -> T {
-        let mut guard = match self.state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        read(&mut guard)
+        self.state.lock().statements.clone()
     }
 }

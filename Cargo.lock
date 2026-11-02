@@ -2896,6 +2896,7 @@ dependencies = [
  "sqlload",
  "testcontainers",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

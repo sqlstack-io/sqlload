@@ -22,7 +22,7 @@ pub(crate) fn plan_for(
         .collect();
     existing
         .tables
-        .extend(Some(("SHOP__ORDERS".to_owned(), table)).filter(|_| !columns.is_empty()));
+        .extend((!columns.is_empty()).then_some(("SHOP__ORDERS".to_owned(), table)));
     Ok(build_plan(&config, &streams, &existing, key_pair))
 }
 

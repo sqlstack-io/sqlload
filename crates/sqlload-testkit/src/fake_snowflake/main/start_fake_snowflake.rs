@@ -1,11 +1,9 @@
 //! Start the fake service.
 
-use std::sync::{Arc, Mutex};
-
 use axum::Router;
 
 use crate::fake_snowflake::_helpers::routing::handle;
-use crate::fake_snowflake::models::{FakeSnowflake, FakeState};
+use crate::fake_snowflake::models::{FakeSnowflake, SharedState};
 
 /// Serve the fake on a free local port; it is also its own ingest host.
 pub async fn start_fake_snowflake() -> Result<FakeSnowflake, String> {
@@ -13,10 +11,8 @@ pub async fn start_fake_snowflake() -> Result<FakeSnowflake, String> {
         .await
         .map_err(|error| error.to_string())?;
     let address = listener.local_addr().map_err(|error| error.to_string())?;
-    let state = Arc::new(Mutex::new(FakeState {
-        host: address.to_string(),
-        ..FakeState::default()
-    }));
+    let state = SharedState::default();
+    state.lock().host = address.to_string();
     let router = Router::new().fallback(handle).with_state(state.clone());
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;

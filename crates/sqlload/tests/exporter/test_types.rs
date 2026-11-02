@@ -26,6 +26,7 @@ pub(crate) struct DiscoveryTestCase {
     pub(crate) later_topic: &'static str,
     pub(crate) records: usize,
     pub(crate) expected_table: &'static str,
+    pub(crate) expected_rows: usize,
 }
 
 pub(crate) struct ParallelTestCase {
@@ -34,4 +35,5 @@ pub(crate) struct ParallelTestCase {
     pub(crate) records: usize,
     pub(crate) instances: usize,
     pub(crate) expected_table: &'static str,
+    pub(crate) expected_rows: usize,
 }

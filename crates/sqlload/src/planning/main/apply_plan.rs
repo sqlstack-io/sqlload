@@ -13,7 +13,7 @@ pub async fn apply_plan(sql: &SqlClient, plan: &Plan) -> Result<Vec<PlannedObjec
     }
     let mut created: Vec<PlannedObject> = Vec::new();
     for object in plan.missing() {
-        execute_sql(&sql, &object.create_sql)
+        execute_sql(sql, &object.create_sql)
             .await
             .map_err(|source| ApplyError::Create {
                 name: object.name.clone(),

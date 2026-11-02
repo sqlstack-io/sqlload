@@ -6,10 +6,8 @@ use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
 
+use crate::redpanda::constants::{IMAGE, TAG};
 use crate::redpanda::models::Redpanda;
-
-const IMAGE: &str = "redpandadata/redpanda";
-const TAG: &str = "v25.1.4";
 
 /// A one-node broker advertised on a free host port, with topic auto-creation on.
 pub async fn start_redpanda() -> Result<Redpanda, String> {

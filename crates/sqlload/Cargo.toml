@@ -15,8 +15,6 @@ ssl = ["rdkafka/ssl"]
 sasl = ["rdkafka/sasl"]
 # Select the Docker-backed integration tests (`make test-containers`).
 container-tests = []
-# Select the opt-in tests against real Snowflake and Kafka (`make test-live`).
-live-tests = []
 
 [dependencies]
 aes.workspace = true
@@ -59,6 +57,6 @@ tokio-util.workspace = true
 workspace = true
 
 [[test]]
-name = "containers"
-path = "tests/containers.rs"
+name = "exporter"
+path = "tests/exporter.rs"
 required-features = ["container-tests"]

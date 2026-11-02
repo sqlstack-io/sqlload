@@ -14,7 +14,7 @@ pub async fn read_existing(sql: &SqlClient, config: &Config) -> Result<ExistingO
     let schema_name = config.destination.schema.to_ascii_uppercase();
     let in_schema = format!("{database}.{}", quote_name(&config.destination.schema));
     let mut existing = ExistingObjects::default();
-    let columns = execute_sql(&sql, &format!(
+    let columns = execute_sql(sql, &format!(
             "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM {database}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = {}",
             literal(&schema_name)
         ))
@@ -30,13 +30,13 @@ pub async fn read_existing(sql: &SqlClient, config: &Config) -> Result<ExistingO
                 .insert(column.clone(), data_type.clone());
         }
     }
-    let stages = execute_sql(&sql, &format!("SHOW STAGES IN SCHEMA {in_schema}")).await?;
+    let stages = execute_sql(sql, &format!("SHOW STAGES IN SCHEMA {in_schema}")).await?;
     existing.stages = stages
         .rows
         .iter()
         .filter_map(|row| stages.value(row, "name").map(str::to_owned))
         .collect();
-    let pipes = execute_sql(&sql, &format!("SHOW PIPES IN SCHEMA {in_schema}")).await?;
+    let pipes = execute_sql(sql, &format!("SHOW PIPES IN SCHEMA {in_schema}")).await?;
     existing.pipes = pipes
         .rows
         .iter()

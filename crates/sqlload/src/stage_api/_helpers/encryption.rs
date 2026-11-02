@@ -137,7 +137,7 @@ pub(crate) fn decrypt(
         .for_each(|block| master_cipher.decrypt_block(block));
     let file_cipher = Cipher::new(unpad(&wrapped)?)?;
     let iv = decode(&metadata.iv)?;
-    if iv.len() != BLOCK || ciphertext.is_empty() || ciphertext.len() % BLOCK != 0 {
+    if iv.len() != BLOCK || ciphertext.is_empty() || !ciphertext.len().is_multiple_of(BLOCK) {
         return Err("bad IV or ciphertext length".to_owned());
     }
     let mut plaintext = ciphertext.to_vec();

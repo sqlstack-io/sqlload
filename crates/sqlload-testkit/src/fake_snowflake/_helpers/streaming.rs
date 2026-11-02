@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 
-use crate::fake_snowflake::models::FakeState;
+use crate::fake_snowflake::models::{PendingAppend, SharedState};
 
 type Outcome = Result<Value, (StatusCode, Value)>;
 
@@ -20,6 +20,14 @@ fn segment(path: &str, after: &str) -> String {
         .unwrap_or_default()
 }
 
+fn channel_key(path: &str) -> String {
+    format!(
+        "{}/{}",
+        segment(path, "pipes"),
+        segment(path, "channels").to_ascii_uppercase()
+    )
+}
+
 fn table_of(pipe: &str) -> String {
     pipe.trim_end_matches("-STREAMING").to_owned()
 }
@@ -33,14 +41,22 @@ fn query_value(query: &str, name: &str) -> String {
         .unwrap_or_default()
 }
 
+fn parse_line(line: &str) -> Option<Value> {
+    match serde_json::from_str(line) {
+        Ok(value) => Some(value),
+        Err(_) => None,
+    }
+}
+
+/// The ingest host, which is the fake itself.
+pub(crate) fn host(state: &SharedState) -> Outcome {
+    Ok(Value::String(state.lock().host.clone()))
+}
+
 /// Open or reopen a channel, discarding uncommitted rows like the real service.
-pub(crate) fn open(state: &mut FakeState, path: &str) -> Outcome {
-    let key = format!(
-        "{}/{}",
-        segment(path, "pipes"),
-        segment(path, "channels").to_ascii_uppercase()
-    );
-    let channel = state.channels.entry(key).or_default();
+pub(crate) fn open(state: &SharedState, path: &str) -> Outcome {
+    let mut guard = state.lock();
+    let channel = guard.channels.entry(channel_key(path)).or_default();
     channel.uncommitted.clear();
     channel.continuation += 1;
     Ok(json!({
@@ -50,19 +66,15 @@ pub(crate) fn open(state: &mut FakeState, path: &str) -> Outcome {
 }
 
 /// Accept one gzip NDJSON body after the expected continuation token.
-pub(crate) fn append(state: &mut FakeState, path: &str, query: &str, body: &[u8]) -> Outcome {
-    if let Some(status) = state.append_failures.pop_front() {
+pub(crate) fn append(state: &SharedState, path: &str, query: &str, body: &[u8]) -> Outcome {
+    let mut guard = state.lock();
+    if let Some(status) = guard.append_failures.pop_front() {
         let code = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         return Err((
             code,
             json!({ "code": "INJECTED", "message": "injected failure" }),
         ));
     }
-    let key = format!(
-        "{}/{}",
-        segment(path, "pipes"),
-        segment(path, "channels").to_ascii_uppercase()
-    );
     let mut text = String::new();
     GzDecoder::new(body)
         .read_to_string(&mut text)
@@ -72,7 +84,7 @@ pub(crate) fn append(state: &mut FakeState, path: &str, query: &str, body: &[u8]
                 json!({ "code": "BAD_GZIP", "message": error.to_string() }),
             )
         })?;
-    let channel = state.channels.get_mut(&key).ok_or((
+    let channel = guard.channels.get_mut(&channel_key(path)).ok_or((
         StatusCode::NOT_FOUND,
         json!({ "code": "ERR_CHANNEL_DOES_NOT_EXIST" }),
     ))?;
@@ -82,51 +94,62 @@ pub(crate) fn append(state: &mut FakeState, path: &str, query: &str, body: &[u8]
             json!({ "code": "STALE_CONTINUATION_TOKEN_SEQUENCER" }),
         ));
     }
-    let rows: Vec<Value> = text
-        .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect();
+    let rows: Vec<Value> = text.lines().filter_map(parse_line).collect();
     channel.error_rows += (text.lines().count() - rows.len()) as i64;
-    channel
-        .uncommitted
-        .push((query_value(query, "offsetToken"), rows));
+    channel.uncommitted.push(PendingAppend {
+        offset_token: query_value(query, "offsetToken"),
+        rows,
+    });
     channel.continuation += 1;
-    state.appends += 1;
-    Ok(json!({ "next_continuation_token": channel.continuation.to_string() }))
+    let next = channel.continuation.to_string();
+    guard.appends += 1;
+    Ok(json!({ "next_continuation_token": next }))
+}
+
+fn channel_names(body: &[u8]) -> Vec<String> {
+    let request: Value = match serde_json::from_slice(body) {
+        Ok(value) => value,
+        Err(_) => Value::Null,
+    };
+    let names = request["channel_names"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    names
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_ascii_uppercase)
+        .collect()
+}
+
+fn commit(appended: Vec<PendingAppend>) -> (Option<String>, Vec<Value>) {
+    let committed = appended.last().map(|last| last.offset_token.clone());
+    let rows: Vec<Value> = appended
+        .into_iter()
+        .flat_map(|pending| pending.rows)
+        .collect();
+    (committed, rows)
 }
 
 /// Commit everything appended to the requested channels, then report their status.
-pub(crate) fn bulk_status(state: &mut FakeState, path: &str, body: &[u8]) -> Outcome {
+pub(crate) fn bulk_status(state: &SharedState, path: &str, body: &[u8]) -> Outcome {
     let pipe = segment(path, "pipes")
         .trim_end_matches(":bulk-channel-status")
         .to_owned();
-    let request: Value = serde_json::from_slice(body).unwrap_or_default();
-    let names: Vec<String> = request["channel_names"]
-        .as_array()
-        .map(|names| {
-            names
-                .iter()
-                .filter_map(|name| name.as_str())
-                .map(str::to_ascii_uppercase)
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut guard = state.lock();
     let mut statuses = serde_json::Map::new();
-    for name in names {
-        let key = format!("{pipe}/{name}");
-        let channel = state.channels.entry(key).or_default();
-        let appended = std::mem::take(&mut channel.uncommitted);
-        let committed_rows: Vec<Value> =
-            appended.iter().flat_map(|(_, rows)| rows.clone()).collect();
-        if let Some((token, _)) = appended.last() {
-            channel.committed = Some(token.clone());
+    for name in channel_names(body) {
+        let channel = guard.channels.entry(format!("{pipe}/{name}")).or_default();
+        let (committed, committed_rows) = commit(std::mem::take(&mut channel.uncommitted));
+        if committed.is_some() {
+            channel.committed = committed;
         }
         let status = json!({
             "channel_status_code": "SUCCESS",
             "last_committed_offset_token": channel.committed,
             "rows_error_count": channel.error_rows,
         });
-        state
+        guard
             .tables
             .entry(table_of(&pipe))
             .or_default()
