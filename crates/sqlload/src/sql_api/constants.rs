@@ -1,0 +1,2 @@
+pub const STATEMENT_TIMEOUT_SECS: u64 = 600;
+pub const ASYNC_ACCEPTED: u16 = 202;

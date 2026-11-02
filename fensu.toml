@@ -1,0 +1,7 @@
+[targets.rust]
+analyzer = "rust"
+roots = ["crates"]
+tests = []
+tooling = []
+rule_packs = ["rust"]
+select = ["FPRS"]

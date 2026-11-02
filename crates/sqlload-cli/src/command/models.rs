@@ -1,0 +1,50 @@
+use std::path::PathBuf;
+use std::time::Duration;
+
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Export Kafka topics to Snowflake.
+#[derive(Debug, Parser)]
+#[command(name = "sqlload", version, about)]
+pub struct Cli {
+    /// The configuration file.
+    #[arg(
+        long,
+        short,
+        global = true,
+        default_value = "sqlload.toml",
+        env = "SQLLOAD_CONFIG"
+    )]
+    pub config: PathBuf,
+    /// Log output format.
+    #[arg(long, global = true, value_enum, default_value_t = LogFormat::Text)]
+    pub log_format: LogFormat,
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+/// The subcommands.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Validate the configuration and connect to Kafka and Snowflake.
+    Check,
+    /// Show each topic's table and the objects that would be created.
+    Plan,
+    /// Create missing tables, stages and pipes; never alters or drops.
+    Apply,
+    /// Export until stopped.
+    Run {
+        /// Stop after this long, e.g. `10m`.
+        #[arg(long, value_parser = humantime::parse_duration)]
+        max_duration: Option<Duration>,
+    },
+    /// Show per-partition lag and committed offsets.
+    Status,
+}
+
+/// How logs are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormat {
+    Text,
+    Json,
+}

@@ -1,0 +1,68 @@
+[workspace]
+members = [
+    "crates/sqlload",
+    "crates/sqlload-cli",
+    "crates/sqlload-testkit",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.1" # x-release-please-version
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+repository = "https://github.com/sqlstack-io/sqlload"
+rust-version = "1.95"
+
+[workspace.dependencies]
+aes = "0.8"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+flate2 = "1"
+getrandom = "0.3"
+globset = "0.4"
+hex = "0.4"
+hmac = "0.12"
+humantime = "2"
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
+prometheus-client = "0.25"
+rdkafka = { version = "0.39", default-features = false, features = ["tokio", "libz", "zstd"] }
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json", "form", "query"] }
+rsa = { version = "0.9", features = ["pem"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+sqlload = { path = "crates/sqlload" }
+sqlload-testkit = { path = "crates/sqlload-testkit" }
+tempfile = "3"
+testcontainers = "0.28"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync", "net"] }
+tokio-util = "0.7"
+toml = "0.9"
+tower-layer = "0.3"
+tower-service = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unreachable_pub = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+await_holding_lock = "deny"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1
+debug = false
+
+[profile.release]
+strip = "symbols"

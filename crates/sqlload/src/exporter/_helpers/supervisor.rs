@@ -1,0 +1,218 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+
+use crate::batching::models::BufferGauge;
+use crate::config::main::stream_settings::stream_settings;
+use crate::config::models::Config;
+use crate::delivery::models::{Delivery, StageClients};
+use crate::exporter::_helpers::stream_task::{StreamInputs, run_stream};
+use crate::exporter::models::Clients;
+use crate::kafka::main::list_topics::list_topics;
+use crate::metrics::models::Metrics;
+use crate::naming::main::resolve_streams::resolve_streams;
+use crate::naming::models::Stream;
+use crate::planning::main::apply_plan::apply_plan;
+use crate::planning::main::build_plan::build_plan;
+use crate::planning::main::load_path::load_path;
+use crate::planning::main::read_existing::read_existing;
+use crate::planning::models::LoadPath;
+
+struct Running {
+    topics: Vec<String>,
+    cancel: CancellationToken,
+}
+
+/// Discovers streams, creates their objects and keeps one task per stream running.
+pub(crate) struct Supervisor {
+    pub(crate) config: Arc<Config>,
+    pub(crate) clients: Clients,
+    pub(crate) metrics: Arc<Metrics>,
+    pub(crate) gauge: BufferGauge,
+    running: BTreeMap<String, Running>,
+    tasks: JoinSet<(String, Result<(), String>)>,
+}
+
+impl Supervisor {
+    pub(crate) fn new(
+        config: Arc<Config>,
+        clients: Clients,
+        metrics: Arc<Metrics>,
+        gauge: BufferGauge,
+    ) -> Self {
+        Self {
+            config,
+            clients,
+            metrics,
+            gauge,
+            running: BTreeMap::new(),
+            tasks: JoinSet::new(),
+        }
+    }
+
+    /// Run until `cancel` fires or a stream fails.
+    pub(crate) async fn run(&mut self, cancel: &CancellationToken) -> Result<Vec<String>, String> {
+        self.discover(cancel).await?;
+        let mut discovery = tokio::time::interval(self.config.source.discovery_interval);
+        discovery.tick().await;
+        let outcome = loop {
+            tokio::select! {
+                () = cancel.cancelled() => break Ok(()),
+                _ = discovery.tick() => {
+                    if let Err(error) = self.discover(cancel).await {
+                        tracing::warn!(%error, "topic discovery failed; keeping the current streams");
+                    }
+                }
+                Some(joined) = self.tasks.join_next() => {
+                    if let Some(failure) = self.on_task_end(joined, cancel) {
+                        break Err(failure);
+                    }
+                }
+            }
+        };
+        self.stop_all().await;
+        outcome.map(|()| self.running.keys().cloned().collect())
+    }
+
+    fn on_task_end(
+        &mut self,
+        joined: Result<(String, Result<(), String>), tokio::task::JoinError>,
+        cancel: &CancellationToken,
+    ) -> Option<String> {
+        match joined {
+            Ok((name, Err(error))) => Some(format!("stream {name} failed: {error}")),
+            Err(error) => Some(format!("a stream task panicked: {error}")),
+            Ok((name, Ok(()))) if !cancel.is_cancelled() => {
+                let replaced = self
+                    .running
+                    .get(&name)
+                    .is_some_and(|running| !running.cancel.is_cancelled());
+                match replaced {
+                    true => None,
+                    false => {
+                        tracing::debug!(stream = %name, "previous task for a replaced stream finished");
+                        None
+                    }
+                }
+            }
+            Ok(_) => None,
+        }
+    }
+
+    async fn discover(&mut self, cancel: &CancellationToken) -> Result<(), String> {
+        let topics = list_topics(&self.config).await?;
+        let streams =
+            resolve_streams(&self.config, &topics).map_err(|problems| problems.join("; "))?;
+        let changed: Vec<Stream> = streams
+            .into_iter()
+            .filter(|stream| {
+                self.running
+                    .get(&stream.name)
+                    .is_none_or(|running| running.topics != stream.topics)
+            })
+            .collect();
+        if changed.is_empty() {
+            return Ok(());
+        }
+        self.apply(&changed).await?;
+        for stream in changed {
+            self.start(stream, cancel)?;
+        }
+        Ok(())
+    }
+
+    async fn apply(&self, streams: &[Stream]) -> Result<(), String> {
+        let existing = read_existing(&self.clients.sql, &self.config)
+            .await
+            .map_err(|error| format!("cannot read existing objects: {error}"))?;
+        let plan = build_plan(
+            &self.config,
+            streams,
+            &existing,
+            self.clients.auth.uses_key_pair(),
+        );
+        let created = apply_plan(&self.clients.sql, &plan)
+            .await
+            .map_err(|error| error.to_string())?;
+        for object in created {
+            tracing::info!(kind = %object.kind, name = %object.name, "created");
+        }
+        Ok(())
+    }
+
+    fn start(&mut self, stream: Stream, cancel: &CancellationToken) -> Result<(), String> {
+        if let Some(previous) = self.running.remove(&stream.name) {
+            tracing::info!(stream = %stream.name, topics = ?stream.topics, "topics changed; restarting the stream");
+            previous.cancel.cancel();
+        }
+        let first_topic = stream.topics.first().cloned().unwrap_or_default();
+        let settings = stream_settings(&self.config, &first_topic);
+        let delivery = self.delivery(&stream, settings.oversized)?;
+        let child = cancel.child_token();
+        let inputs = StreamInputs {
+            config: self.config.clone(),
+            stream: stream.clone(),
+            settings,
+            delivery,
+            metrics: self.metrics.clone(),
+            gauge: self.gauge.clone(),
+        };
+        let name = stream.name.clone();
+        let token = child.clone();
+        self.tasks
+            .spawn(async move { (name, run_stream(inputs, token).await) });
+        self.running.insert(
+            stream.name.clone(),
+            Running {
+                topics: stream.topics,
+                cancel: child,
+            },
+        );
+        Ok(())
+    }
+
+    fn delivery(
+        &self,
+        stream: &Stream,
+        oversized: crate::config::models::OversizedPolicy,
+    ) -> Result<Delivery, String> {
+        let path = load_path(&self.config, self.clients.auth.uses_key_pair());
+        if path == LoadPath::Streaming {
+            return Ok(Delivery::streaming(
+                self.clients.streaming.clone(),
+                stream.clone(),
+                self.config.batching.max_request_bytes.0,
+                oversized,
+            ));
+        }
+        let clients = StageClients {
+            http: self.clients.http.clone(),
+            auth: self.clients.auth.clone(),
+            sql: self.clients.sql.clone(),
+            driver: self.clients.driver.clone(),
+            account_url: self.clients.account_url.clone(),
+        };
+        Delivery::stage(clients, self.config.clone(), stream.clone(), path)
+            .map_err(|error| error.to_string())
+    }
+
+    async fn stop_all(&mut self) {
+        for running in self.running.values() {
+            running.cancel.cancel();
+        }
+        let wait = tokio::time::timeout(Duration::from_secs(120), async {
+            while let Some(joined) = self.tasks.join_next().await {
+                if let Ok((name, Err(error))) = joined {
+                    tracing::warn!(stream = %name, %error, "stream ended with an error during shutdown");
+                }
+            }
+        });
+        if wait.await.is_err() {
+            tracing::warn!("streams did not stop within two minutes");
+            self.tasks.abort_all();
+        }
+    }
+}
