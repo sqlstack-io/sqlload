@@ -9,7 +9,8 @@ use crate::http::errors::ApiError;
 use crate::time_text::main::now_ms::now_ms;
 
 /// A credential that never appears in logs or debug output.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(transparent)]
 pub struct Secret(pub String);
 
 impl Secret {
@@ -65,7 +66,7 @@ impl Authenticator {
             .to_ascii_uppercase();
         let qualified_user = format!("{account}.{}", destination.user.to_ascii_uppercase());
         let method = match &destination.auth {
-            AuthConfig::Pat { token } => Method::Pat(Secret(token.clone())),
+            AuthConfig::Pat { token } => Method::Pat(token.clone()),
             AuthConfig::KeyPair { private_key_file } => {
                 let pem = std::fs::read_to_string(private_key_file).map_err(|error| {
                     ApiError::Auth(format!(

@@ -4,7 +4,7 @@ use crate::config::models::Config;
 use crate::delivery::_helpers::stage_paths::{expired_dates, s3_target};
 use crate::delivery::constants::PRUNE_LOOKBACK;
 use crate::delivery::errors::DeliveryError;
-use crate::delivery::models::{DeliveryReport, StageClients, StageDelivery};
+use crate::delivery::models::{DeliveryReport, StageClients, StageDelivery, StagedFile};
 use crate::http::errors::ApiError;
 use crate::naming::main::quote_name::quote_name;
 use crate::naming::models::Stream;
@@ -41,6 +41,7 @@ impl StageDelivery {
             path,
             stage_info: None,
             s3,
+            staged: None,
         })
     }
 
@@ -48,11 +49,17 @@ impl StageDelivery {
     pub(crate) async fn deliver(&mut self, batch: &Batch) -> Result<DeliveryReport, DeliveryError> {
         let plain = batch.ndjson();
         let body = gzip_bytes(&plain);
-        let date = utc_date(now_ms());
-        let file = format!("{}_{}.json.gz", self.stream.name, batch_digest(batch));
-        let key = format!("{date}/{file}");
-        self.upload(&key, &body).await?;
-        self.load(&date, &file).await?;
+        let staged = self.staged_file(batch_digest(batch));
+        if !staged.uploaded {
+            self.upload(&format!("{}/{}", staged.date, staged.file), &body)
+                .await?;
+            self.staged = Some(StagedFile {
+                uploaded: true,
+                ..staged.clone()
+            });
+        }
+        self.load(&staged.date, &staged.file).await?;
+        self.staged = None;
         Ok(DeliveryReport {
             rows: batch.rows.len() as u64,
             uncompressed_bytes: plain.len() as u64,
@@ -61,6 +68,18 @@ impl StageDelivery {
             skipped_rows: 0,
             confirmed: batch.last_offsets(),
         })
+    }
+
+    fn staged_file(&self, digest: String) -> StagedFile {
+        match &self.staged {
+            Some(staged) if staged.digest == digest => staged.clone(),
+            _ => StagedFile {
+                date: utc_date(now_ms()),
+                file: format!("{}_{digest}.json.gz", self.stream.name),
+                digest,
+                uploaded: false,
+            },
+        }
     }
 
     async fn upload(&mut self, key: &str, body: &[u8]) -> Result<(), DeliveryError> {
@@ -76,9 +95,13 @@ impl StageDelivery {
                 .map_err(|error| retry("upload", &error))?;
             return match outcome {
                 PutOutcome::Uploaded => Ok(()),
-                PutOutcome::CredentialsExpired => Err(DeliveryError::Retry(
-                    "the S3 credentials expired".to_owned(),
-                )),
+                PutOutcome::CredentialsExpired => {
+                    self.s3 =
+                        Some(s3_target(&self.config, &self.stream).map_err(DeliveryError::Fatal)?);
+                    Err(DeliveryError::Retry(
+                        "the S3 credentials expired; reloaded them from the environment".to_owned(),
+                    ))
+                }
             };
         }
         for _ in 0..2 {
@@ -201,5 +224,8 @@ fn batch_digest(batch: &Batch) -> String {
 }
 
 fn retry(action: &str, error: &ApiError) -> DeliveryError {
-    DeliveryError::Retry(format!("{action} failed: {error}"))
+    match error.is_retryable() {
+        true => DeliveryError::Retry(format!("{action} failed: {error}")),
+        false => DeliveryError::Fatal(format!("{action} failed: {error}")),
+    }
 }

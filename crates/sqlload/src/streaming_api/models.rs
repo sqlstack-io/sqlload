@@ -15,6 +15,7 @@ use crate::streaming_api::constants::HEALTHY_CHANNEL;
 pub struct OpenedChannel {
     pub continuation_token: String,
     pub committed_offset: Option<i64>,
+    pub error_rows: i64,
 }
 
 /// The status Snowflake reports for one channel.

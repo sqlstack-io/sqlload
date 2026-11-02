@@ -18,3 +18,10 @@ pub(crate) struct StreamSettingsTestCase {
     pub(crate) expected_max_rows: usize,
     pub(crate) expected_max_age: Duration,
 }
+
+pub(crate) struct DestinationNameTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) schema: &'static str,
+    /// The stored schema name, or text the error must contain.
+    pub(crate) expected_outcome: &'static str,
+}

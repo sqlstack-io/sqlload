@@ -59,6 +59,16 @@ pub struct StageDelivery {
     pub(crate) path: LoadPath,
     pub(crate) stage_info: Option<StageInfo>,
     pub(crate) s3: Option<ObjectTarget>,
+    pub(crate) staged: Option<StagedFile>,
+}
+
+/// A batch's file, fixed on the first attempt so retries reuse the same path and skip a finished upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedFile {
+    pub digest: String,
+    pub date: String,
+    pub file: String,
+    pub uploaded: bool,
 }
 
 /// The configured delivery mode for one stream.

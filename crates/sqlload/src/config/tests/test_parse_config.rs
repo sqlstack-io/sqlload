@@ -1,6 +1,8 @@
 use crate::config::main::parse_config::parse_config;
 use crate::config::tests::helpers::{BASE, lookup};
-use crate::config::tests::test_types::{ParseConfigErrorTestCase, ParseConfigTestCase};
+use crate::config::tests::test_types::{
+    DestinationNameTestCase, ParseConfigErrorTestCase, ParseConfigTestCase,
+};
 
 #[test]
 fn given_valid_config_text_when_parsing_then_defaults_fill_the_envelope() -> Result<(), String> {
@@ -74,6 +76,39 @@ fn given_invalid_config_text_when_parsing_then_the_error_names_the_problem() {
         assert!(
             error.to_string().contains(test_case.expected_error),
             "{}: {error}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_destination_names_when_parsing_then_plain_names_are_upper_cased_and_others_rejected() {
+    let test_cases = [
+        DestinationNameTestCase {
+            description: "a lower-case schema is stored as Snowflake resolves it",
+            schema: "raw_kafka",
+            expected_outcome: "RAW_KAFKA",
+        },
+        DestinationNameTestCase {
+            description: "a schema that would need quoting is rejected",
+            schema: "raw-kafka",
+            expected_outcome: "must be an unquoted identifier",
+        },
+    ];
+    for test_case in &test_cases {
+        let text = format!(
+            "{}[staging]\nkind = \"none\"\n",
+            BASE.replace(
+                "schema = \"RAW\"",
+                &format!("schema = \"{}\"", test_case.schema)
+            )
+        );
+        let outcome = parse_config(&text, &lookup)
+            .map(|config| config.destination.schema)
+            .unwrap_or_else(|error| error.to_string());
+        assert!(
+            outcome.contains(test_case.expected_outcome),
+            "{}: {outcome}",
             test_case.description
         );
     }

@@ -1,6 +1,6 @@
 # sqlload
 
-Export Kafka topics to Snowflake tables. One process watches a set of topics, creates the tables it needs, and keeps each table up to date with exactly the records in its topics, using as few connections and as little warehouse time as the chosen delivery mode allows.
+Export Kafka topics to Snowflake tables. One process watches a set of topics, creates the tables it needs, and keeps each table up to date with the records in its topics, using as few connections and as little warehouse time as the chosen delivery mode allows.
 
 sqlload is a pre-release. The configuration format may still change.
 
@@ -20,7 +20,9 @@ sqlload is a pre-release. The configuration format may still change.
 | `internal` | gzip files on a table stage, loaded by Snowpipe (key pair) or `COPY` | Kafka consumer group | Only for `COPY` | A few to Snowflake and S3 |
 | `s3` | gzip files in your bucket, loaded by an auto-ingest pipe or `COPY` | Kafka consumer group | Only for `COPY` | A few to S3 |
 
-Streaming is the cheapest and lowest-latency mode. Rows are counted as delivered only after Snowflake reports them committed, and after a crash sqlload resumes from the channel's committed offset, so nothing is lost or duplicated. Rows Snowflake rejects go to the table's error table (`ERROR_LOGGING = TRUE`) and are counted in `sqlload_error_rows_total`.
+Streaming is the cheapest and lowest-latency mode, and the only one with exactly-once delivery: rows count as delivered only after Snowflake reports them committed, and after a crash, restart or rebalance sqlload resumes from each channel's committed offset, so nothing is lost or duplicated.
+
+The staged modes are at-least-once. A batch's offsets are committed to Kafka only after its load is accepted, and a retried batch reuses the same file, so ordinary retries do not duplicate rows. A crash between the load and the Kafka commit, or a rebalance in that window, loads the batch's rows again. Rows Snowflake rejects go to the table's error table (`ERROR_LOGGING = TRUE`) and are counted in `sqlload_error_rows_total`.
 
 `internal` mode supports S3-backed accounts with the default client-side encryption only. Snowpipe's `insertFiles` endpoint does not accept access tokens, so with a token `load = "auto"` uses `COPY`, which needs a running warehouse.
 
@@ -43,6 +45,12 @@ See [`sqlload.example.toml`](sqlload.example.toml) for every setting. Unknown ke
 Authentication is a programmatic access token (`method = "pat"`) or a key pair (`method = "key_pair"`, an unencrypted PKCS#8 or PKCS#1 PEM file). The role needs `CREATE TABLE`, plus `CREATE STAGE` and `CREATE PIPE` for staged modes, on the schema, and `USAGE` on the warehouse when one is used.
 
 Kafka TLS and SASL need the `ssl` and `sasl` build features, which the release binaries include.
+
+In `s3` mode, AWS credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`, and are read again when S3 reports them expired.
+
+Topics that share a table through a naming rule must not differ only in case or punctuation, because they would share streaming channel names; `plan` rejects such groups.
+
+A delivery that keeps failing for 10 minutes stops the exporter rather than letting its consumer drop out of the group; errors that cannot succeed on retry, such as a rejected `COPY`, stop it at once.
 
 ## Metrics
 

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
+use crate::auth::models::Secret;
 use crate::config::_helpers::defaults;
 use crate::config::_helpers::units::{
     deserialize_duration, deserialize_optional_duration, parse_byte_size,
@@ -96,7 +97,7 @@ pub enum DestinationKind {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthConfig {
-    Pat { token: String },
+    Pat { token: Secret },
     KeyPair { private_key_file: PathBuf },
 }
 

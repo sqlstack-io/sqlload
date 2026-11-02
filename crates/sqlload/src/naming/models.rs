@@ -29,17 +29,10 @@ pub struct Stream {
 impl Stream {
     /// The Snowpipe Streaming channel for one topic partition; Snowflake upper-cases channel names.
     pub fn channel(&self, topic: &str, partition: i32) -> String {
-        let topic_part: String = topic
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() {
-                    c.to_ascii_uppercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        format!("{topic_part}_P{partition}")
+        format!(
+            "{}_P{partition}",
+            crate::naming::_helpers::streams::channel_prefix(topic)
+        )
     }
 }
 

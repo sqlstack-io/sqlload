@@ -8,6 +8,7 @@ use crate::config::models::{Config, StagingKind};
 pub(crate) fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut problems: Vec<String> = Vec::new();
     problems.extend(source_problems(config));
+    problems.extend(destination_problems(config));
     problems.extend(column_problems(config));
     problems.extend(template_problems(config));
     problems.extend(staging_problems(config));
@@ -16,6 +17,20 @@ pub(crate) fn validate(config: &Config) -> Result<(), ConfigError> {
         true => Ok(()),
         false => Err(ConfigError::Invalid(problems)),
     }
+}
+
+fn destination_problems(config: &Config) -> Vec<String> {
+    let destination = &config.destination;
+    [
+        ("destination.database", &destination.database),
+        ("destination.schema", &destination.schema),
+    ]
+    .into_iter()
+    .filter(|(_, name)| !is_identifier(name))
+    .map(|(key, name)| {
+        format!("{key} {name:?} must be an unquoted identifier (letters, digits, _ and $)")
+    })
+    .collect()
 }
 
 fn source_problems(config: &Config) -> Vec<String> {

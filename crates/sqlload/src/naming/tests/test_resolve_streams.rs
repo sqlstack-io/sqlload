@@ -1,6 +1,6 @@
 use crate::naming::main::resolve_streams::resolve_streams;
 use crate::naming::tests::helpers::{config_with_naming, topics};
-use crate::naming::tests::test_types::ResolveStreamsTestCase;
+use crate::naming::tests::test_types::{ResolveStreamsErrorTestCase, ResolveStreamsTestCase};
 
 #[test]
 fn given_grouped_topics_when_resolving_streams_then_names_come_from_templates() -> Result<(), String>
@@ -44,6 +44,30 @@ fn given_grouped_topics_when_resolving_streams_then_names_come_from_templates() 
         assert_eq!(
             found, test_case.expected_streams,
             "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_topics_sharing_a_channel_name_when_resolving_streams_then_they_are_rejected()
+-> Result<(), String> {
+    let test_cases = [ResolveStreamsErrorTestCase {
+        description: "topics differing only in punctuation cannot share one table's channels",
+        naming: "[[naming.rules]]\nmatch = \"events.*\"\ntable = \"EVENTS\"",
+        topics: &["events.a-b", "events.a_b"],
+        expected_problem: "would share channel EVENTS_A_B",
+    }];
+    for test_case in &test_cases {
+        let config = config_with_naming(test_case.naming)?;
+        let problems =
+            resolve_streams(&config, &topics(test_case.topics)).expect_err(test_case.description);
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains(test_case.expected_problem)),
+            "{}: {problems:?}",
             test_case.description
         );
     }

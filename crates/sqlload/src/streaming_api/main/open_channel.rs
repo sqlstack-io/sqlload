@@ -25,5 +25,6 @@ pub async fn open_channel(
     Ok(OpenedChannel {
         continuation_token: opened.next_continuation_token,
         committed_offset: opened.channel_status.committed_offset(),
+        error_rows: opened.channel_status.rows_error_count.unwrap_or_default(),
     })
 }

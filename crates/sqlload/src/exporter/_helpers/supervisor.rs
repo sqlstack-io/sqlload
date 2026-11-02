@@ -21,9 +21,13 @@ use crate::planning::main::build_plan::build_plan;
 use crate::planning::main::load_path::load_path;
 use crate::planning::main::read_existing::read_existing;
 
+/// How long a replaced stream may take to flush and commit before its successor starts.
+const REPLACE_WAIT: Duration = Duration::from_secs(120);
+
 struct Running {
     topics: Vec<String>,
     cancel: CancellationToken,
+    finished: CancellationToken,
 }
 
 /// Discovers streams, creates their objects and keeps one task per stream running.
@@ -119,7 +123,7 @@ impl Supervisor {
         }
         self.apply(&changed).await?;
         for stream in changed {
-            self.start(stream, cancel)?;
+            self.start(stream, cancel).await?;
         }
         Ok(())
     }
@@ -143,10 +147,17 @@ impl Supervisor {
         Ok(())
     }
 
-    fn start(&mut self, stream: Stream, cancel: &CancellationToken) -> Result<(), String> {
+    async fn start(&mut self, stream: Stream, cancel: &CancellationToken) -> Result<(), String> {
         if let Some(previous) = self.running.remove(&stream.name) {
             tracing::info!(stream = %stream.name, topics = ?stream.topics, "topics changed; restarting the stream");
             previous.cancel.cancel();
+            let stopped = tokio::time::timeout(REPLACE_WAIT, previous.finished.cancelled()).await;
+            if stopped.is_err() {
+                return Err(format!(
+                    "stream {} did not stop within {REPLACE_WAIT:?}",
+                    stream.name
+                ));
+            }
         }
         let first_topic = stream.topics.first().cloned().unwrap_or_default();
         let settings = stream_settings(&self.config, &first_topic);
@@ -162,13 +173,19 @@ impl Supervisor {
         };
         let name = stream.name.clone();
         let token = child.clone();
-        self.tasks
-            .spawn(async move { (name, run_stream(inputs, token).await) });
+        let finished = CancellationToken::new();
+        let done = finished.clone().drop_guard();
+        self.tasks.spawn(async move {
+            let outcome = run_stream(inputs, token).await;
+            drop(done);
+            (name, outcome)
+        });
         self.running.insert(
             stream.name.clone(),
             Running {
                 topics: stream.topics,
                 cancel: child,
+                finished,
             },
         );
         Ok(())

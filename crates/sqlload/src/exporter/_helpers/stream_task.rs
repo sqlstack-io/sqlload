@@ -29,6 +29,14 @@ const CONFIRM_POLL: Duration = Duration::from_secs(1);
 const PRUNE_EVERY: Duration = Duration::from_secs(24 * 3600);
 const SHUTDOWN_CONFIRM_WAIT: Duration = Duration::from_secs(60);
 const KAFKA_TIMEOUT: Duration = Duration::from_secs(10);
+/// Give up on a delivery well before the consumer's 15-minute poll interval expires and it leaves the group.
+const GIVE_UP_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// The outcome of opening a partition's channel.
+enum Opening {
+    Opened(Option<i64>),
+    Cancelled,
+}
 
 /// What a stream task needs.
 pub(crate) struct StreamInputs {
@@ -51,6 +59,7 @@ struct StreamTask {
     resume_after: BTreeMap<Partition, Option<i64>>,
     committed: BTreeMap<Partition, i64>,
     retry: RetryPolicy,
+    cancel: CancellationToken,
 }
 
 /// Consume, batch, deliver and commit one stream until `cancel` fires.
@@ -77,6 +86,7 @@ pub(crate) async fn run_stream(
         resume_after: BTreeMap::new(),
         committed: BTreeMap::new(),
         retry: RetryPolicy::default(),
+        cancel: cancel.clone(),
     };
     tracing::info!(stream = %task.stream.name, topics = ?task.stream.topics, group = %task.stream.consumer_group, "stream started");
     let outcome = task.run(events, &cancel).await;
@@ -147,13 +157,20 @@ impl StreamTask {
             partition: record.partition,
         };
         if self.delivery.resumes_from_warehouse() && !self.delivery.is_open(&partition) {
-            let committed = self.open_partition(&partition).await?;
+            let Opening::Opened(committed) = self.open_partition(&partition).await? else {
+                return Ok(());
+            };
             self.resume_after.insert(partition.clone(), committed);
             if let Some(committed) = committed
                 && record.offset > committed + 1
             {
                 tracing::warn!(stream = %self.stream.name, topic = %partition.topic, partition = partition.partition, committed, offset = record.offset, "Kafka is ahead of the channel; rewinding to the channel's committed offset");
-                self.seek(&partition, Offset::Offset(committed + 1));
+                if self
+                    .seek(&partition, Offset::Offset(committed + 1))
+                    .is_err()
+                {
+                    self.forget(&partition);
+                }
                 return Ok(());
             }
         }
@@ -173,25 +190,42 @@ impl StreamTask {
         Ok(())
     }
 
-    async fn open_partition(&mut self, partition: &Partition) -> Result<Option<i64>, String> {
+    async fn open_partition(&mut self, partition: &Partition) -> Result<Opening, String> {
+        let started = std::time::Instant::now();
         let mut attempt = 0;
         loop {
             match self.delivery.open(partition).await {
-                Ok(committed) => return Ok(committed),
+                Ok(committed) => return Ok(Opening::Opened(committed)),
                 Err(DeliveryError::Fatal(message)) => return Err(message),
+                Err(error) if started.elapsed() > GIVE_UP_AFTER => {
+                    return Err(format!(
+                        "gave up opening {}/{}: {error}",
+                        partition.topic, partition.partition
+                    ));
+                }
                 Err(error) => {
                     attempt += 1;
                     self.count_error(&error);
-                    sleep(self.retry.delay(attempt)).await;
+                    tokio::select! {
+                        () = self.cancel.cancelled() => return Ok(Opening::Cancelled),
+                        () = sleep(self.retry.delay(attempt)) => {}
+                    }
                 }
             }
         }
+    }
+
+    /// Drop a partition's channel and resume point so its next record reopens and re-checks it.
+    fn forget(&mut self, partition: &Partition) {
+        self.delivery.forget(std::slice::from_ref(partition));
+        self.resume_after.remove(partition);
     }
 
     async fn flush(&mut self, cancel: &CancellationToken) -> Result<(), String> {
         let Some(batch) = self.batcher.take() else {
             return Ok(());
         };
+        let started = std::time::Instant::now();
         let mut attempt = 0;
         loop {
             match self.delivery.deliver(&batch).await {
@@ -204,6 +238,11 @@ impl StreamTask {
                 Err(error @ DeliveryError::Reset(_)) => {
                     self.count_error(&error);
                     return self.reset().await;
+                }
+                Err(error) if started.elapsed() > GIVE_UP_AFTER => {
+                    return Err(format!(
+                        "gave up delivering a batch after {GIVE_UP_AFTER:?}: {error}"
+                    ));
                 }
                 Err(error @ DeliveryError::Retry(_)) => {
                     attempt += 1;
@@ -250,13 +289,20 @@ impl StreamTask {
             .map_err(|error| error.to_string())?;
         let partitions = partitions_of(&assigned);
         for partition in partitions {
-            let committed = self.open_partition(&partition).await?;
+            let Opening::Opened(committed) = self.open_partition(&partition).await? else {
+                return Ok(());
+            };
             self.resume_after.insert(partition.clone(), committed);
             let offset = match committed {
                 Some(committed) => Offset::Offset(committed + 1),
                 None => self.kafka_committed(&partition),
             };
-            self.seek(&partition, offset);
+            self.seek(&partition, offset).map_err(|error| {
+                format!(
+                    "cannot rewind {}/{} after a reset: {error}",
+                    partition.topic, partition.partition
+                )
+            })?;
         }
         Ok(())
     }
@@ -264,7 +310,9 @@ impl StreamTask {
     fn kafka_committed(&self, partition: &Partition) -> Offset {
         let mut list = TopicPartitionList::new();
         list.add_partition(&partition.topic, partition.partition);
-        let committed = match self.consumer.committed_offsets(list, KAFKA_TIMEOUT) {
+        let found =
+            tokio::task::block_in_place(|| self.consumer.committed_offsets(list, KAFKA_TIMEOUT));
+        let committed = match found {
             Ok(found) => found.elements().first().map(|element| element.offset()),
             Err(error) => {
                 tracing::warn!(stream = %self.stream.name, %error, "cannot read the committed offset; using start_from");
@@ -278,13 +326,15 @@ impl StreamTask {
         }
     }
 
-    fn seek(&self, partition: &Partition, offset: Offset) {
-        if let Err(error) =
+    fn seek(&self, partition: &Partition, offset: Offset) -> Result<(), String> {
+        let sought = tokio::task::block_in_place(|| {
             self.consumer
                 .seek(&partition.topic, partition.partition, offset, KAFKA_TIMEOUT)
-        {
+        });
+        sought.map_err(|error| {
             tracing::warn!(stream = %self.stream.name, topic = %partition.topic, partition = partition.partition, %error, "seek failed");
-        }
+            error.to_string()
+        })
     }
 
     fn commit(&mut self, offsets: &BTreeMap<Partition, i64>) {
@@ -309,7 +359,11 @@ impl StreamTask {
                 Offset::Offset(offset + 1),
             );
         }
-        if let Err(error) = self.consumer.commit(&list, mode) {
+        let outcome = match mode {
+            CommitMode::Sync => tokio::task::block_in_place(|| self.consumer.commit(&list, mode)),
+            CommitMode::Async => self.consumer.commit(&list, mode),
+        };
+        if let Err(error) = outcome {
             tracing::warn!(stream = %self.stream.name, %error, "offset commit failed; the rows will be delivered again after a restart");
         }
     }

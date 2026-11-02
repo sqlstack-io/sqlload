@@ -53,6 +53,7 @@ impl StreamingDelivery {
             .map_err(open_error)?;
         self.continuations
             .insert(partition.clone(), opened.continuation_token);
+        self.error_rows.insert(channel, opened.error_rows);
         self.pending.remove(partition);
         Ok(opened.committed_offset)
     }
@@ -158,11 +159,13 @@ impl StreamingDelivery {
         let pending = std::mem::take(&mut self.pending);
         let mut confirmation = Confirmation::default();
         for (partition, offset) in pending {
-            let status = statuses
-                .get(&self.channel(&partition))
-                .cloned()
-                .unwrap_or_default();
-            confirmation = self.settle(confirmation, partition, offset, &status)?;
+            let channel = self.channel(&partition);
+            let status = statuses.get(&channel).ok_or_else(|| {
+                DeliveryError::Reset(format!(
+                    "Snowflake reported no status for channel {channel}"
+                ))
+            })?;
+            confirmation = self.settle(confirmation, partition, offset, status)?;
         }
         Ok(confirmation)
     }
@@ -200,7 +203,7 @@ impl StreamingDelivery {
         let previous = self
             .error_rows
             .insert(channel.to_owned(), total)
-            .unwrap_or(total);
+            .unwrap_or_default();
         total.saturating_sub(previous).max(0) as u64
     }
 

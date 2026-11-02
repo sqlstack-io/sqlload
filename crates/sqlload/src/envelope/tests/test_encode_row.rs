@@ -22,6 +22,13 @@ fn given_a_record_when_encoding_then_each_column_holds_its_field() {
             expected_row: r#"{"DATE":"2024-02-29","EXPORTED_AT":"2024-03-01T00:00:00.000Z","H":{"source":"web"},"K":null,"O":42,"P":3,"T":"shop.orders","TS":1709210096000,"TT":0,"V":{"order_id":7},"X":null}"#,
         },
         EncodeRowTestCase {
+            description: "VARIANT columns keep big integers and long decimals exact",
+            value_type: "VARIANT",
+            value: Some(br#"{"id":123456789012345678901234567890,"price":0.1234567890123456789}"#),
+            key: None,
+            expected_row: r#"{"DATE":"2024-02-29","EXPORTED_AT":"2024-03-01T00:00:00.000Z","H":{"source":"web"},"K":null,"O":42,"P":3,"T":"shop.orders","TS":1709210096000,"TT":0,"V":{"id":123456789012345678901234567890,"price":0.1234567890123456789},"X":null}"#,
+        },
+        EncodeRowTestCase {
             description: "VARIANT columns fall back to text for invalid JSON",
             value_type: "VARIANT",
             value: Some(b"not json"),
