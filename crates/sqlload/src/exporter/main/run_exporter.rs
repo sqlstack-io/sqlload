@@ -13,9 +13,7 @@ use crate::exporter::models::RunSummary;
 use crate::metrics::main::serve_metrics::serve_metrics;
 use crate::metrics::models::Metrics;
 
-/// Export every discovered topic until `shutdown` fires, `max_duration` passes, or a stream fails.
-///
-/// Needs a multi-threaded Tokio runtime: blocking Kafka calls run through `block_in_place`.
+/// Export every discovered topic until `shutdown`, `max_duration` or a stream failure; needs a multi-threaded runtime.
 pub async fn run_exporter(
     config: Config,
     max_duration: Option<Duration>,
