@@ -1,0 +1,25 @@
+{
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "sqlload",
+      "include-v-in-tag": true,
+      "include-component-in-tag": false,
+      "bump-minor-pre-major": true,
+      "prerelease": true,
+      "changelog-sections": [
+        { "type": "feat", "section": "Features" },
+        { "type": "fix", "section": "Bug Fixes" },
+        { "type": "perf", "section": "Performance Improvements" },
+        { "type": "refactor", "section": "Refactoring" },
+        { "type": "docs", "section": "Documentation" },
+        { "type": "chore", "section": "Maintenance" },
+        { "type": "ci", "section": "Continuous Integration", "hidden": true },
+        { "type": "test", "section": "Tests", "hidden": true }
+      ],
+      "extra-files": [
+        { "type": "generic", "path": "Cargo.toml" }
+      ]
+    }
+  }
+}

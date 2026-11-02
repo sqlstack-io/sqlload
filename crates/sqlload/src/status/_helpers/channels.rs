@@ -3,11 +3,12 @@ use std::collections::BTreeMap;
 use crate::exporter::models::Clients;
 use crate::kafka::models::PartitionLag;
 use crate::naming::models::Stream;
+use crate::status::constants::NOT_FOUND;
 use crate::status::models::PartitionStatus;
 use crate::streaming_api::main::channel_statuses::channel_statuses;
 use crate::streaming_api::models::ChannelStatus;
 
-/// Channel status for every partition of `stream`, empty when Snowflake cannot say.
+/// Channel status for every partition of `stream`; empty before the first row creates the streaming pipe.
 pub(crate) async fn stream_channels(
     clients: &Clients,
     stream: &Stream,
@@ -19,6 +20,7 @@ pub(crate) async fn stream_channels(
         .collect();
     match channel_statuses(&clients.streaming, &stream.streaming_pipe, &names).await {
         Ok(statuses) => statuses,
+        Err(error) if error.status() == Some(NOT_FOUND) => BTreeMap::new(),
         Err(error) => {
             tracing::warn!(stream = %stream.name, %error, "cannot read channel status");
             BTreeMap::new()

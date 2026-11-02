@@ -1,0 +1,81 @@
+# sqlload configuration. `${NAME}` is replaced from the environment; `$${` is a literal `${`.
+
+[source]
+kind = "kafka"
+brokers = "${KAFKA_BROKERS}"
+include = ["shop.*"]
+exclude = ["shop.*.dlq"]
+# `{stream}` is the lower-case table name; `{table}` and `{table_flat}` also work.
+consumer_group = "sqlload-{stream}"
+# Where a group with no committed offset starts.
+start_from = "latest"
+discovery_interval = "5m"
+
+# Any librdkafka consumer property.
+[source.properties]
+# "security.protocol" = "SASL_SSL"
+# "sasl.mechanisms" = "SCRAM-SHA-512"
+
+[destination]
+kind = "snowflake"
+account = "myorg-myaccount"
+user = "SQLLOAD"
+auth = { method = "pat", token = "${SNOWFLAKE_TOKEN}" }
+# auth = { method = "key_pair", private_key_file = "/etc/sqlload/key.p8" }
+role = "SQLLOAD_ROLE"
+# Needed for `COPY` loads and `plan`/`apply`; streaming does not use it.
+warehouse = "LOAD_WH"
+database = "RAW"
+schema = "KAFKA"
+
+[staging]
+# none: Snowpipe Streaming. internal: files on a table stage. s3: files in your bucket.
+kind = "none"
+# internal and s3: how files are loaded. auto picks Snowpipe with a key pair, otherwise COPY.
+load = "auto"
+# internal: how long dated stage folders are kept.
+retain = "7d"
+
+# [staging.s3]
+# bucket = "my-bucket"
+# prefix = "sqlload"
+# region = "eu-west-2"
+# stage = "SQLLOAD_S3_STAGE"
+# auto_ingest = true
+
+[batching]
+max_bytes = "32MB"
+max_rows = 100000
+max_age = "60s"
+# Across every stream; any stream flushes early when this is reached.
+max_total_bytes = "2GB"
+# Streaming: compressed bytes per append request (service limit 4MiB).
+max_request_bytes = "3.5MB"
+# Streaming: what to do with a row larger than one request: fail or skip.
+oversized = "fail"
+
+# Later matching entries win.
+[[topics]]
+match = "shop.*.events"
+start_from = "earliest"
+max_age = "10s"
+
+[naming]
+# Default rule: strip this prefix, upper-case, `.` becomes `__`, other symbols `_`.
+strip_prefix = "shop."
+# What happens to topics no rule or map entry names: default or fail.
+unmatched = "default"
+stage = "{table}_SQLLOAD_STAGE"
+pipe = "{table}_SQLLOAD_PIPE"
+
+# Rules run in order; `{name}` captures text without dots, `*` matches anything.
+[[naming.rules]]
+match = "shop.{service}_{variant}.{kind}"
+table = "{service}__{kind}"
+
+# Exact names win over rules.
+[naming.map]
+"shop.legacy-orders" = "ORDERS_V1"
+
+[metrics]
+listen = "0.0.0.0:9898"
