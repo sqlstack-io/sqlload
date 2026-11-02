@@ -1,16 +1,13 @@
 //! Consumer group lag for `status`.
 
-use std::time::Duration;
-
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::util::Timeout;
 use rdkafka::{Offset, TopicPartitionList};
 
 use crate::config::models::Config;
 use crate::kafka::_helpers::client::client_config;
+use crate::kafka::constants::METADATA_TIMEOUT;
 use crate::kafka::models::PartitionLag;
-
-const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Committed offsets and high watermarks of `group` on every partition of `topics`, read without joining the group.
 pub async fn group_lag(
@@ -29,7 +26,7 @@ pub async fn group_lag(
         let mut list = TopicPartitionList::new();
         for topic in &topics {
             let metadata = consumer
-                .fetch_metadata(Some(topic), Timeout::After(TIMEOUT))
+                .fetch_metadata(Some(topic), Timeout::After(METADATA_TIMEOUT))
                 .map_err(|error| format!("cannot read metadata for {topic}: {error}"))?;
             for partition in metadata
                 .topics()
@@ -40,7 +37,7 @@ pub async fn group_lag(
             }
         }
         let committed = consumer
-            .committed_offsets(list, Timeout::After(TIMEOUT))
+            .committed_offsets(list, Timeout::After(METADATA_TIMEOUT))
             .map_err(|error| format!("cannot read committed offsets of {group}: {error}"))?;
         let mut lags: Vec<PartitionLag> = Vec::new();
         for element in committed.elements() {
@@ -48,7 +45,7 @@ pub async fn group_lag(
                 .fetch_watermarks(
                     element.topic(),
                     element.partition(),
-                    Timeout::After(TIMEOUT),
+                    Timeout::After(METADATA_TIMEOUT),
                 )
                 .map_err(|error| format!("cannot read watermarks: {error}"))?;
             lags.push(PartitionLag {

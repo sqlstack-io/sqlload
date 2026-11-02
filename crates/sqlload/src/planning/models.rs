@@ -58,6 +58,20 @@ pub struct PlannedObject {
     pub create_sql: String,
 }
 
+impl PlannedObject {
+    /// Why this object does not fit, each prefixed with its kind and name.
+    pub fn problems(&self) -> Vec<String> {
+        let ObjectState::Incompatible(reasons) = &self.state else {
+            return Vec::new();
+        };
+        let prefix = format!("{} {}", self.kind, self.name);
+        reasons
+            .iter()
+            .map(|reason| format!("{prefix}: {reason}"))
+            .collect()
+    }
+}
+
 /// One stream and the objects it needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamPlan {
@@ -75,18 +89,7 @@ pub struct Plan {
 impl Plan {
     /// Every reason the plan cannot be applied.
     pub fn problems(&self) -> Vec<String> {
-        self.objects()
-            .filter_map(|object| match &object.state {
-                ObjectState::Incompatible(reasons) => Some(
-                    reasons
-                        .iter()
-                        .map(|reason| format!("{} {}: {reason}", object.kind, object.name))
-                        .collect::<Vec<_>>(),
-                ),
-                _ => None,
-            })
-            .flatten()
-            .collect()
+        self.objects().flat_map(PlannedObject::problems).collect()
     }
 
     /// The objects that would be created.

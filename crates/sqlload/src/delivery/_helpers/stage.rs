@@ -2,23 +2,24 @@ use crate::batching::main::gzip_bytes::gzip_bytes;
 use crate::batching::models::Batch;
 use crate::config::models::Config;
 use crate::delivery::_helpers::stage_paths::{expired_dates, s3_target};
+use crate::delivery::constants::PRUNE_LOOKBACK;
 use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{DeliveryReport, StageClients, StageDelivery};
 use crate::http::errors::ApiError;
 use crate::naming::main::quote_name::quote_name;
 use crate::naming::models::Stream;
 use crate::planning::models::LoadPath;
+use crate::sql_api::main::execute_sql::execute_sql;
 use crate::stage_api::constants::CREDENTIAL_MARGIN_MS;
 use crate::stage_api::main::insert_files::insert_files;
 use crate::stage_api::main::put_object::put_object;
 use crate::stage_api::main::put_stage_file::put_stage_file;
-use crate::stage_api::models::{PutOutcome, StageInfo};
+use crate::stage_api::models::{ObjectUpload, PipeTarget, PutOutcome, StageInfo};
 use crate::time_text::main::now_ms::now_ms;
 use crate::time_text::main::utc_date::utc_date;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 impl StageDelivery {
     pub(crate) fn new(
@@ -64,15 +65,15 @@ impl StageDelivery {
 
     async fn upload(&mut self, key: &str, body: &[u8]) -> Result<(), DeliveryError> {
         if let Some(target) = &self.s3 {
-            let outcome = put_object(
-                &self.clients.http,
+            let headers: BTreeMap<String, String> = BTreeMap::new();
+            let upload = ObjectUpload {
                 target,
                 key,
-                body.to_vec(),
-                BTreeMap::new(),
-            )
-            .await
-            .map_err(|error| retry("upload", &error))?;
+                headers: &headers,
+            };
+            let outcome = put_object(&self.clients.http, upload, body.to_vec())
+                .await
+                .map_err(|error| retry("upload", &error))?;
             return match outcome {
                 PutOutcome::Uploaded => Ok(()),
                 PutOutcome::CredentialsExpired => Err(DeliveryError::Retry(
@@ -119,15 +120,15 @@ impl StageDelivery {
             LoadPath::S3AutoIngest => return Ok(()),
             LoadPath::StageInsertFiles => {
                 let pipe = self.qualified(&self.stream.pipe);
-                return insert_files(
-                    &self.clients.http,
-                    &self.clients.account_url,
-                    &self.clients.auth,
-                    &pipe,
-                    &[relative],
-                )
-                .await
-                .map_err(|error| retry("insertFiles", &error));
+                let target = PipeTarget {
+                    http: &self.clients.http,
+                    account_url: &self.clients.account_url,
+                    auth: &self.clients.auth,
+                    pipe: &pipe,
+                };
+                return insert_files(&target, &[relative])
+                    .await
+                    .map_err(|error| retry("insertFiles", &error));
             }
             LoadPath::StageCopy => format!("@{}/{date}/", self.qualified(&self.stream.stage)),
             LoadPath::S3Copy => {
@@ -150,9 +151,7 @@ impl StageDelivery {
             "COPY INTO {} FROM {copy_from} FILES = ('{file}') FILE_FORMAT = (TYPE = JSON COMPRESSION = AUTO) MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE",
             self.qualified(&self.stream.table)
         );
-        self.clients
-            .sql
-            .execute(&statement)
+        execute_sql(&self.clients.sql, &statement)
             .await
             .map(|_| ())
             .map_err(|error| retry("COPY", &error))
@@ -165,15 +164,8 @@ impl StageDelivery {
         }
         let stage = self.qualified(&self.stream.stage);
         let mut removed = 0;
-        for date in expired_dates(
-            now_ms(),
-            self.config.staging.retain,
-            Duration::from_secs(30 * 86_400),
-        ) {
-            let rows = self
-                .clients
-                .sql
-                .execute(&format!("REMOVE @{stage}/{date}/"))
+        for date in expired_dates(now_ms(), self.config.staging.retain, PRUNE_LOOKBACK) {
+            let rows = execute_sql(&self.clients.sql, &format!("REMOVE @{stage}/{date}/"))
                 .await
                 .map_err(|error| retry("stage cleanup", &error))?;
             removed += rows.rows.len() as u64;

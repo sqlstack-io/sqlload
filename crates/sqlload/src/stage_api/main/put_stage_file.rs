@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::http::errors::ApiError;
 use crate::stage_api::_helpers::encryption::encrypt;
 use crate::stage_api::main::put_object::put_object;
-use crate::stage_api::models::{PutOutcome, StageInfo};
+use crate::stage_api::models::{ObjectUpload, PutOutcome, StageInfo};
 
 /// Encrypt a gzip file with the stage key and upload it to the internal stage under `key`.
 pub async fn put_stage_file(
@@ -27,5 +27,14 @@ pub async fn put_stage_file(
         ("x-amz-meta-x-amz-key".to_owned(), metadata.key),
         ("x-amz-meta-x-amz-matdesc".to_owned(), metadata.matdesc),
     ]);
-    put_object(http, &stage.target, key, ciphertext, headers).await
+    put_object(
+        http,
+        ObjectUpload {
+            target: &stage.target,
+            key,
+            headers: &headers,
+        },
+        ciphertext,
+    )
+    .await
 }

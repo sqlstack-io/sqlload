@@ -1,14 +1,11 @@
 //! Discover the topics to export.
 
-use std::time::Duration;
-
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::util::Timeout;
 
 use crate::config::models::Config;
 use crate::kafka::_helpers::client::client_config;
-
-const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
+use crate::kafka::constants::METADATA_TIMEOUT;
 
 /// Every topic matching `include` and not `exclude`, skipping internal `__` topics, sorted.
 pub async fn list_topics(config: &Config) -> Result<Vec<String>, String> {

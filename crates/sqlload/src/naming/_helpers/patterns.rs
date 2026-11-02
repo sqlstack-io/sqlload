@@ -51,16 +51,13 @@ impl TopicPattern {
     /// The named captures when `topic` matches.
     pub(crate) fn matches(&self, topic: &str) -> Option<BTreeMap<String, String>> {
         let found = self.regex.captures(topic)?;
-        Some(
-            self.captures
-                .iter()
-                .filter_map(|name| {
-                    found
-                        .name(name)
-                        .map(|value| (name.clone(), value.as_str().to_owned()))
-                })
-                .collect(),
-        )
+        let mut values: BTreeMap<String, String> = BTreeMap::new();
+        for name in &self.captures {
+            if let Some(value) = found.name(name) {
+                values.insert(name.clone(), value.as_str().to_owned());
+            }
+        }
+        Some(values)
     }
 }
 

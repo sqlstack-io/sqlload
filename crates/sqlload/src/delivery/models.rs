@@ -116,7 +116,7 @@ impl Delivery {
 
     pub async fn deliver(&mut self, batch: &Batch) -> Result<DeliveryReport, DeliveryError> {
         match self {
-            Self::Streaming(streaming) => streaming.deliver(batch.clone()).await,
+            Self::Streaming(streaming) => streaming.deliver(batch).await,
             Self::Stage(stage) => stage.deliver(batch).await,
         }
     }
@@ -154,4 +154,14 @@ impl Delivery {
             Self::Stage(stage) => stage.prune().await,
         }
     }
+}
+
+/// The clients and settings a stream's delivery needs.
+#[derive(Debug, Clone)]
+pub struct DeliveryInputs {
+    pub streaming: Arc<StreamingClient>,
+    pub stage: StageClients,
+    pub config: Arc<Config>,
+    pub path: LoadPath,
+    pub oversized: OversizedPolicy,
 }

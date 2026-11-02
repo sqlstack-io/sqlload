@@ -1,27 +1,29 @@
 //! Upload one object with SigV4.
 
-use std::collections::BTreeMap;
-
 use crate::http::errors::ApiError;
 use crate::stage_api::_helpers::s3_errors::outcome_from_failure;
 use crate::stage_api::_helpers::sigv4::{SignInput, UNSIGNED_PAYLOAD, sign_v4, uri_encode};
-use crate::stage_api::models::{ObjectTarget, PutOutcome};
+use crate::stage_api::constants::HOST_HEADER;
+use crate::stage_api::models::{ObjectUpload, PutOutcome};
 use crate::time_text::main::amz_date::amz_date;
 use crate::time_text::main::now_ms::now_ms;
 
 /// Upload `body` to `target` under `key` with extra signed `headers`.
 pub async fn put_object(
     http: &reqwest::Client,
-    target: &ObjectTarget,
-    key: &str,
+    upload: ObjectUpload<'_>,
     body: Vec<u8>,
-    extra_headers: BTreeMap<String, String>,
 ) -> Result<PutOutcome, ApiError> {
+    let ObjectUpload {
+        target,
+        key,
+        headers: extra_headers,
+    } = upload;
     let (host, path) = target.host_and_path(key);
     let canonical_uri = uri_encode(&path, true);
     let now = amz_date(now_ms());
-    let mut headers = extra_headers;
-    headers.insert("host".to_owned(), host.clone());
+    let mut headers = extra_headers.clone();
+    headers.insert(HOST_HEADER.to_owned(), host.clone());
     headers.insert(
         "x-amz-content-sha256".to_owned(),
         UNSIGNED_PAYLOAD.to_owned(),
@@ -46,7 +48,10 @@ pub async fn put_object(
         .header("authorization", authorization)
         .header("content-type", "application/octet-stream")
         .body(body);
-    for (name, value) in headers.iter().filter(|(name, _)| name.as_str() != "host") {
+    for (name, value) in headers
+        .iter()
+        .filter(|(name, _)| name.as_str() != HOST_HEADER)
+    {
         request = request.header(name.as_str(), value.as_str());
     }
     let response = request.send().await?;

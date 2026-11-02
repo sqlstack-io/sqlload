@@ -5,3 +5,9 @@ tests = []
 tooling = []
 rule_packs = ["rust"]
 select = ["FPRS"]
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSS201"
+path = "crates/sqlload/src/auth/models.rs"
+symbols = ["Secret"]
+reason = "Secret wraps credentials and implements Debug by hand so tokens, keys and passwords never reach logs; a derived Debug would print them."

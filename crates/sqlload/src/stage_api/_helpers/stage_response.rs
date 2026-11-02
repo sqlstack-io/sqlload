@@ -67,14 +67,17 @@ pub(crate) fn parse_stage_info(data: &Value) -> Result<StageInfo, String> {
         encryption: EncryptionMaterial {
             query_stage_master_key: Secret(text(&material, "queryStageMasterKey")?),
             query_id: text(&material, "queryId")?,
-            smk_id: material["smkId"]
-                .as_i64()
-                .or_else(|| {
-                    material["smkId"]
-                        .as_str()
-                        .and_then(|value| value.parse().ok())
-                })
-                .ok_or("PUT response has no smkId")?,
+            smk_id: smk_id(&material["smkId"]).ok_or("PUT response has no smkId")?,
         },
     })
+}
+
+fn smk_id(value: &Value) -> Option<i64> {
+    if let Some(number) = value.as_i64() {
+        return Some(number);
+    }
+    match value.as_str()?.parse::<i64>() {
+        Ok(number) => Some(number),
+        Err(_) => None,
+    }
 }

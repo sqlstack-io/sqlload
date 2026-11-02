@@ -7,6 +7,7 @@ use crate::stage_api::_helpers::stage_response::parse_stage_info;
 use crate::stage_api::constants::{QUERY_IN_PROGRESS, SESSION_EXPIRED};
 use crate::time_text::main::now_ms::now_ms;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -281,4 +282,21 @@ impl DriverSession {
             .json()
             .await?)
     }
+}
+
+/// A Snowpipe and how to reach it.
+#[derive(Debug, Clone, Copy)]
+pub struct PipeTarget<'a> {
+    pub http: &'a reqwest::Client,
+    pub account_url: &'a str,
+    pub auth: &'a Authenticator,
+    pub pipe: &'a str,
+}
+
+/// One object upload: where, under which key, and the extra signed headers.
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectUpload<'a> {
+    pub target: &'a ObjectTarget,
+    pub key: &'a str,
+    pub headers: &'a BTreeMap<String, String>,
 }

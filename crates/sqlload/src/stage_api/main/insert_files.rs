@@ -2,18 +2,18 @@
 
 use serde_json::json;
 
-use crate::auth::models::Authenticator;
 use crate::http::errors::ApiError;
 use crate::http::main::check_response::check_response;
+use crate::stage_api::models::PipeTarget;
 
 /// Ask `pipe` (fully qualified) to load `paths`, relative to its stage; Snowpipe accepts only key-pair JWTs here.
-pub async fn insert_files(
-    http: &reqwest::Client,
-    account_url: &str,
-    auth: &Authenticator,
-    pipe: &str,
-    paths: &[String],
-) -> Result<(), ApiError> {
+pub async fn insert_files(target: &PipeTarget<'_>, paths: &[String]) -> Result<(), ApiError> {
+    let PipeTarget {
+        http,
+        account_url,
+        auth,
+        pipe,
+    } = *target;
     if !auth.uses_key_pair() {
         return Err(ApiError::Auth(
             "Snowpipe insertFiles needs key-pair authentication; use load = \"copy\" with a token"

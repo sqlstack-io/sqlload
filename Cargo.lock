@@ -2860,7 +2860,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlload-testkit",
- "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -2893,10 +2892,9 @@ dependencies = [
  "axum",
  "flate2",
  "rdkafka",
- "serde",
  "serde_json",
+ "sqlload",
  "testcontainers",
- "thiserror",
  "tokio",
 ]
 

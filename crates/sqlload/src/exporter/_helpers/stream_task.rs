@@ -264,11 +264,13 @@ impl StreamTask {
     fn kafka_committed(&self, partition: &Partition) -> Offset {
         let mut list = TopicPartitionList::new();
         list.add_partition(&partition.topic, partition.partition);
-        let committed = self
-            .consumer
-            .committed_offsets(list, KAFKA_TIMEOUT)
-            .ok()
-            .and_then(|found| found.elements().first().map(|element| element.offset()));
+        let committed = match self.consumer.committed_offsets(list, KAFKA_TIMEOUT) {
+            Ok(found) => found.elements().first().map(|element| element.offset()),
+            Err(error) => {
+                tracing::warn!(stream = %self.stream.name, %error, "cannot read the committed offset; using start_from");
+                None
+            }
+        };
         match (committed, self.start_from) {
             (Some(Offset::Offset(offset)), _) => Offset::Offset(offset),
             (_, StartFrom::Earliest) => Offset::Beginning,

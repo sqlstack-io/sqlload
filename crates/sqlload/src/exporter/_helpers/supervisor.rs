@@ -7,8 +7,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::batching::models::BufferGauge;
 use crate::config::main::stream_settings::stream_settings;
-use crate::config::models::Config;
-use crate::delivery::models::{Delivery, StageClients};
+use crate::config::models::{Config, OversizedPolicy};
+use crate::delivery::main::build_delivery::build_delivery;
+use crate::delivery::models::{Delivery, DeliveryInputs, StageClients};
 use crate::exporter::_helpers::stream_task::{StreamInputs, run_stream};
 use crate::exporter::models::Clients;
 use crate::kafka::main::list_topics::list_topics;
@@ -19,7 +20,6 @@ use crate::planning::main::apply_plan::apply_plan;
 use crate::planning::main::build_plan::build_plan;
 use crate::planning::main::load_path::load_path;
 use crate::planning::main::read_existing::read_existing;
-use crate::planning::models::LoadPath;
 
 struct Running {
     topics: Vec<String>,
@@ -174,29 +174,21 @@ impl Supervisor {
         Ok(())
     }
 
-    fn delivery(
-        &self,
-        stream: &Stream,
-        oversized: crate::config::models::OversizedPolicy,
-    ) -> Result<Delivery, String> {
-        let path = load_path(&self.config, self.clients.auth.uses_key_pair());
-        if path == LoadPath::Streaming {
-            return Ok(Delivery::streaming(
-                self.clients.streaming.clone(),
-                stream.clone(),
-                self.config.batching.max_request_bytes.0,
-                oversized,
-            ));
-        }
-        let clients = StageClients {
-            http: self.clients.http.clone(),
-            auth: self.clients.auth.clone(),
-            sql: self.clients.sql.clone(),
-            driver: self.clients.driver.clone(),
-            account_url: self.clients.account_url.clone(),
+    fn delivery(&self, stream: &Stream, oversized: OversizedPolicy) -> Result<Delivery, String> {
+        let inputs = DeliveryInputs {
+            streaming: self.clients.streaming.clone(),
+            stage: StageClients {
+                http: self.clients.http.clone(),
+                auth: self.clients.auth.clone(),
+                sql: self.clients.sql.clone(),
+                driver: self.clients.driver.clone(),
+                account_url: self.clients.account_url.clone(),
+            },
+            config: self.config.clone(),
+            path: load_path(&self.config, self.clients.auth.uses_key_pair()),
+            oversized,
         };
-        Delivery::stage(clients, self.config.clone(), stream.clone(), path)
-            .map_err(|error| error.to_string())
+        build_delivery(&inputs, stream).map_err(|error| error.to_string())
     }
 
     async fn stop_all(&mut self) {

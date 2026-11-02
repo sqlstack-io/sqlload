@@ -1,3 +1,5 @@
+use crate::http::constants::{FIRST_SERVER_ERROR, TOO_MANY_REQUESTS};
+
 /// A failed call to a warehouse or object-store endpoint.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ApiError {
@@ -20,7 +22,9 @@ impl ApiError {
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Transport(_) => true,
-            Self::Status { status, .. } => *status == 429 || *status >= 500,
+            Self::Status { status, .. } => {
+                *status == TOO_MANY_REQUESTS || *status >= FIRST_SERVER_ERROR
+            }
             Self::Protocol(_) | Self::Auth(_) => false,
         }
     }

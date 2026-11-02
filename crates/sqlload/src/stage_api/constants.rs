@@ -4,3 +4,4 @@ pub const S3_LOCATION: &str = "S3";
 pub const SUPPORTED_CIPHER: &str = "AES_CBC";
 pub const EXPIRED_TOKEN_CODE: &str = "ExpiredToken";
 pub const CREDENTIAL_MARGIN_MS: i64 = 5 * 60 * 1000;
+pub const HOST_HEADER: &str = "host";
