@@ -129,7 +129,9 @@ impl StageDelivery {
                 .driver
                 .stage_info(&stage)
                 .await
-                .map_err(|error| retry("stage credentials", &error))?;
+                .map_err(|error| {
+                    DeliveryError::Retry(format!("stage credentials failed: {error}"))
+                })?;
             self.stage_info = Some(info);
         }
         self.stage_info

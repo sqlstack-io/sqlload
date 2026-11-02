@@ -29,8 +29,8 @@ const CONFIRM_POLL: Duration = Duration::from_secs(1);
 const PRUNE_EVERY: Duration = Duration::from_secs(24 * 3600);
 const SHUTDOWN_CONFIRM_WAIT: Duration = Duration::from_secs(60);
 const KAFKA_TIMEOUT: Duration = Duration::from_secs(10);
-/// Give up on a delivery well before the consumer's 15-minute poll interval expires and it leaves the group.
-const GIVE_UP_AFTER: Duration = Duration::from_secs(10 * 60);
+/// Give up early enough that one more attempt (up to a 10-minute statement timeout) still ends inside the consumer's 15-minute poll interval.
+const GIVE_UP_AFTER: Duration = Duration::from_secs(4 * 60);
 
 /// The outcome of opening a partition's channel.
 enum Opening {

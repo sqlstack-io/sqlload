@@ -46,11 +46,11 @@ Authentication is a programmatic access token (`method = "pat"`) or a key pair (
 
 Kafka TLS and SASL need the `ssl` and `sasl` build features, which the release binaries include.
 
-In `s3` mode, AWS credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`, and are read again when S3 reports them expired.
+In `s3` mode, AWS credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` at start. Temporary credentials that expire stop the exporter after the retry window; restart it with fresh ones, or use long-lived keys.
 
 Topics that share a table through a naming rule must not differ only in case or punctuation, because they would share streaming channel names; `plan` rejects such groups.
 
-A delivery that keeps failing for 10 minutes stops the exporter rather than letting its consumer drop out of the group; errors that cannot succeed on retry, such as a rejected `COPY`, stop it at once.
+A delivery that keeps failing for 4 minutes stops the exporter rather than letting its consumer drop out of the group; errors that cannot succeed on retry, such as a rejected `COPY`, stop it at once.
 
 ## Metrics
 
