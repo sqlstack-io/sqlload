@@ -25,3 +25,12 @@ pub(crate) struct DestinationNameTestCase {
     /// The stored schema name, or text the error must contain.
     pub(crate) expected_outcome: &'static str,
 }
+
+pub(crate) struct StartupSettingsTestCase {
+    pub(crate) description: &'static str,
+    /// Lines added to `[source]`.
+    pub(crate) source_lines: &'static str,
+    pub(crate) expected_batch: usize,
+    pub(crate) expected_interval: Duration,
+    pub(crate) expected_budget: u64,
+}

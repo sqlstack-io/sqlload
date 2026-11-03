@@ -2343,6 +2343,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rlimit"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f35ee2729c56bb610f6dba436bf78135f728b7373bdffae2ec815b2d3eb98cc3"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2876,6 +2885,7 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "humantime",
+ "rlimit",
  "serde_json",
  "sqlload",
  "tempfile",

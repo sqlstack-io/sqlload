@@ -17,6 +17,7 @@ use sqlload::status::main::collect_status::collect_status;
 use sqlload::status::models::{PartitionStatus, StreamStatus};
 use tokio_util::sync::CancellationToken;
 
+use crate::command::_helpers::limits::raise_open_file_limit;
 use crate::command::_helpers::signals::wait_for_signal;
 
 fn clients(config: &Config) -> Result<Clients, String> {
@@ -159,6 +160,7 @@ pub(crate) async fn run_export(
     config: Config,
     max_duration: Option<Duration>,
 ) -> Result<Vec<String>, String> {
+    raise_open_file_limit();
     let shutdown = CancellationToken::new();
     let signal = shutdown.clone();
     tokio::spawn(async move {

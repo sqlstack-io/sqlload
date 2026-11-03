@@ -44,6 +44,8 @@ See [`sqlload.example.toml`](sqlload.example.toml) for every setting. Unknown ke
 
 Authentication is a programmatic access token (`method = "pat"`) or a key pair (`method = "key_pair"`, an unencrypted PKCS#8 or PKCS#1 PEM file). The role needs `CREATE TABLE`, plus `CREATE STAGE` and `CREATE PIPE` for staged modes, on the schema, and `USAGE` on the warehouse when one is used.
 
+Each stream has its own Kafka consumer. To keep many streams in one process cheap, `run` raises the open-file soft limit to the hard limit, consumers share one `prefetch_budget`, idle fetches wait 2 s, and streams start in waves of `startup_batch`. [`deploy/sqlload.service`](deploy/sqlload.service) is an example systemd unit with suitable limits.
+
 Kafka TLS and SASL need the `ssl` and `sasl` build features, which the release binaries include.
 
 In `s3` mode, AWS credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` at start. Temporary credentials that expire stop the exporter after the retry window; restart it with fresh ones, or use long-lived keys.

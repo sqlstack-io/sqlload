@@ -13,6 +13,7 @@ use crate::delivery::models::{Delivery, DeliveryInputs, StageClients};
 use crate::exporter::_helpers::stream_task::{StreamInputs, run_stream};
 use crate::exporter::models::Clients;
 use crate::kafka::main::list_topics::list_topics;
+use crate::kafka::main::prefetch_kbytes::prefetch_kbytes;
 use crate::metrics::models::Metrics;
 use crate::naming::main::resolve_streams::resolve_streams;
 use crate::naming::models::Stream;
@@ -38,6 +39,7 @@ pub(crate) struct Supervisor {
     pub(crate) gauge: BufferGauge,
     running: BTreeMap<String, Running>,
     tasks: JoinSet<(String, Result<(), String>)>,
+    stream_count: usize,
 }
 
 impl Supervisor {
@@ -54,6 +56,7 @@ impl Supervisor {
             gauge,
             running: BTreeMap::new(),
             tasks: JoinSet::new(),
+            stream_count: 0,
         }
     }
 
@@ -110,6 +113,7 @@ impl Supervisor {
         let topics = list_topics(&self.config).await?;
         let streams =
             resolve_streams(&self.config, &topics).map_err(|problems| problems.join("; "))?;
+        self.stream_count = streams.len();
         let changed: Vec<Stream> = streams
             .into_iter()
             .filter(|stream| {
@@ -122,7 +126,17 @@ impl Supervisor {
             return Ok(());
         }
         self.apply(&changed).await?;
-        for stream in changed {
+        let wave = match self.config.source.startup_batch {
+            0 => changed.len(),
+            size => size,
+        };
+        for (index, stream) in changed.into_iter().enumerate() {
+            if index > 0 && index % wave == 0 {
+                tokio::select! {
+                    () = cancel.cancelled() => return Ok(()),
+                    () = tokio::time::sleep(self.config.source.startup_interval) => {}
+                }
+            }
             self.start(stream, cancel).await?;
         }
         Ok(())
@@ -170,6 +184,10 @@ impl Supervisor {
             delivery,
             metrics: self.metrics.clone(),
             gauge: self.gauge.clone(),
+            prefetch_kbytes: prefetch_kbytes(
+                self.config.source.prefetch_budget.0,
+                self.stream_count,
+            ),
         };
         let name = stream.name.clone();
         let token = child.clone();

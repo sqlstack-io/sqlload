@@ -46,6 +46,7 @@ pub(crate) struct StreamInputs {
     pub(crate) delivery: Delivery,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) gauge: BufferGauge,
+    pub(crate) prefetch_kbytes: u64,
 }
 
 struct StreamTask {
@@ -67,8 +68,12 @@ pub(crate) async fn run_stream(
     inputs: StreamInputs,
     cancel: CancellationToken,
 ) -> Result<(), String> {
-    let (consumer, events) =
-        build_consumer(&inputs.config, &inputs.stream, inputs.settings.start_from)?;
+    let (consumer, events) = build_consumer(
+        &inputs.config,
+        &inputs.stream,
+        inputs.settings.start_from,
+        inputs.prefetch_kbytes,
+    )?;
     let limits = BatchLimits {
         max_bytes: inputs.settings.max_bytes,
         max_rows: inputs.settings.max_rows,

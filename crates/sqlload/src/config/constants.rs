@@ -1,6 +1,10 @@
 /// Consumer group name template; `{stream}` is the lower-case table name.
 pub const DEFAULT_CONSUMER_GROUP: &str = "sqlload-{stream}";
 pub const DEFAULT_DISCOVERY_INTERVAL_SECS: u64 = 300;
+/// Kafka prefetch shared by all consumers.
+pub const DEFAULT_PREFETCH_BUDGET: u64 = 1024 * 1024 * 1024;
+pub const DEFAULT_STARTUP_BATCH: usize = 20;
+pub const DEFAULT_STARTUP_INTERVAL_MS: u64 = 500;
 pub const DEFAULT_RETAIN_SECS: u64 = 7 * 24 * 3600;
 pub const DEFAULT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 pub const DEFAULT_MAX_ROWS: usize = 100_000;

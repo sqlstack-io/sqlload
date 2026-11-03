@@ -20,6 +20,7 @@ sasl = ["sqlload/sasl"]
 [dependencies]
 clap.workspace = true
 humantime.workspace = true
+rlimit.workspace = true
 serde_json.workspace = true
 sqlload.workspace = true
 tokio.workspace = true

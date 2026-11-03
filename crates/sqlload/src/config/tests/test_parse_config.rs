@@ -1,7 +1,9 @@
+use std::time::Duration;
+
 use crate::config::main::parse_config::parse_config;
 use crate::config::tests::helpers::{BASE, lookup};
 use crate::config::tests::test_types::{
-    DestinationNameTestCase, ParseConfigErrorTestCase, ParseConfigTestCase,
+    DestinationNameTestCase, ParseConfigErrorTestCase, ParseConfigTestCase, StartupSettingsTestCase,
 };
 
 #[test]
@@ -112,4 +114,52 @@ fn given_destination_names_when_parsing_then_plain_names_are_upper_cased_and_oth
             test_case.description
         );
     }
+}
+
+#[test]
+fn given_source_startup_settings_when_parsing_then_defaults_apply_and_overrides_win()
+-> Result<(), String> {
+    let test_cases = [
+        StartupSettingsTestCase {
+            description: "streams start 20 at a time with a 1GiB prefetch budget by default",
+            source_lines: "",
+            expected_batch: 20,
+            expected_interval: Duration::from_millis(500),
+            expected_budget: 1024 * 1024 * 1024,
+        },
+        StartupSettingsTestCase {
+            description: "explicit values replace the defaults",
+            source_lines: "startup_batch = 0\nstartup_interval = \"2s\"\nprefetch_budget = \"256MiB\"\n",
+            expected_batch: 0,
+            expected_interval: Duration::from_secs(2),
+            expected_budget: 256 * 1024 * 1024,
+        },
+    ];
+    for test_case in &test_cases {
+        let text = format!(
+            "{}[staging]\nkind = \"none\"\n",
+            BASE.replace(
+                "include = [\"orders.*\"]\n",
+                &format!("include = [\"orders.*\"]\n{}", test_case.source_lines)
+            )
+        );
+        let source = parse_config(&text, &lookup)
+            .map_err(|error| error.to_string())?
+            .source;
+        assert_eq!(
+            (
+                source.startup_batch,
+                source.startup_interval,
+                source.prefetch_budget.0
+            ),
+            (
+                test_case.expected_batch,
+                test_case.expected_interval,
+                test_case.expected_budget
+            ),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

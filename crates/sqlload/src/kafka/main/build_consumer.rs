@@ -5,22 +5,34 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::config::models::{Config, StartFrom};
 use crate::kafka::_helpers::client::client_config;
+use crate::kafka::constants::DEFAULT_FETCH_WAIT_MS;
 use crate::kafka::models::{RebalanceEvent, RebalanceForwarder};
 use crate::kafka::types::StreamKafkaConsumer;
 use crate::naming::models::Stream;
 
-/// A consumer in the stream's group, subscribed to its topics, with offsets committed only by sqlload.
+/// A consumer in the stream's group with offsets committed only by sqlload; properties override the prefetch and fetch wait.
 pub fn build_consumer(
     config: &Config,
     stream: &Stream,
     start_from: StartFrom,
+    prefetch_kbytes: u64,
 ) -> Result<(StreamKafkaConsumer, UnboundedReceiver<RebalanceEvent>), String> {
     let (sender, receiver) = unbounded_channel();
     let reset = match start_from {
         StartFrom::Earliest => "earliest",
         StartFrom::Latest => "latest",
     };
-    let consumer: StreamKafkaConsumer = client_config(config)
+    let mut client = client_config(config);
+    let defaults = [
+        ("queued.max.messages.kbytes", prefetch_kbytes.to_string()),
+        ("fetch.wait.max.ms", DEFAULT_FETCH_WAIT_MS.to_owned()),
+    ];
+    for (key, value) in defaults {
+        if !config.source.properties.contains_key(key) {
+            client.set(key, value);
+        }
+    }
+    let consumer: StreamKafkaConsumer = client
         .set("group.id", &stream.consumer_group)
         .set("client.id", format!("sqlload-{}", stream.name))
         .set("enable.auto.commit", "false")

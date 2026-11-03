@@ -10,8 +10,14 @@ consumer_group = "sqlload-{stream}"
 # Where a group with no committed offset starts.
 start_from = "latest"
 discovery_interval = "5m"
+# Kafka prefetch shared by all consumers (at most 64MiB and at least 1MiB each).
+prefetch_budget = "1GiB"
+# Streams start this many at a time, `startup_interval` apart; 0 starts them all at once.
+startup_batch = 20
+startup_interval = "500ms"
 
-# Any librdkafka consumer property.
+# Any librdkafka consumer property. `queued.max.messages.kbytes` replaces the
+# prefetch share; `fetch.wait.max.ms` defaults to 2000.
 [source.properties]
 # "security.protocol" = "SASL_SSL"
 # "sasl.mechanisms" = "SCRAM-SHA-512"

@@ -48,6 +48,15 @@ pub struct SourceConfig {
         deserialize_with = "deserialize_duration"
     )]
     pub discovery_interval: Duration,
+    #[serde(default = "defaults::prefetch_budget")]
+    pub prefetch_budget: ByteSize,
+    #[serde(default = "defaults::startup_batch")]
+    pub startup_batch: usize,
+    #[serde(
+        default = "defaults::startup_interval",
+        deserialize_with = "deserialize_duration"
+    )]
+    pub startup_interval: Duration,
     #[serde(default)]
     pub properties: BTreeMap<String, String>,
 }

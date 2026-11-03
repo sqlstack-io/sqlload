@@ -3,8 +3,8 @@ use std::time::Duration;
 use crate::config::constants::{
     DEFAULT_CONSUMER_GROUP, DEFAULT_DISCOVERY_INTERVAL_SECS, DEFAULT_MAX_AGE_SECS,
     DEFAULT_MAX_BYTES, DEFAULT_MAX_REQUEST_BYTES, DEFAULT_MAX_ROWS, DEFAULT_MAX_TOTAL_BYTES,
-    DEFAULT_PIPE_TEMPLATE, DEFAULT_RETAIN_SECS, DEFAULT_STAGE_TEMPLATE,
-    DEFAULT_STREAMING_PIPE_TEMPLATE,
+    DEFAULT_PIPE_TEMPLATE, DEFAULT_PREFETCH_BUDGET, DEFAULT_RETAIN_SECS, DEFAULT_STAGE_TEMPLATE,
+    DEFAULT_STARTUP_BATCH, DEFAULT_STARTUP_INTERVAL_MS, DEFAULT_STREAMING_PIPE_TEMPLATE,
 };
 use crate::config::models::{ByteSize, ColumnConfig, EnvelopeField};
 
@@ -14,6 +14,18 @@ pub(crate) fn consumer_group() -> String {
 
 pub(crate) fn discovery_interval() -> Duration {
     Duration::from_secs(DEFAULT_DISCOVERY_INTERVAL_SECS)
+}
+
+pub(crate) fn prefetch_budget() -> ByteSize {
+    ByteSize(DEFAULT_PREFETCH_BUDGET)
+}
+
+pub(crate) fn startup_batch() -> usize {
+    DEFAULT_STARTUP_BATCH
+}
+
+pub(crate) fn startup_interval() -> Duration {
+    Duration::from_millis(DEFAULT_STARTUP_INTERVAL_MS)
 }
 
 pub(crate) fn retain() -> Duration {
