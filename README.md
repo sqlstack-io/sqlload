@@ -39,12 +39,13 @@ The staged modes are at-least-once. A batch's offsets are committed to Kafka onl
 ```
 sqlload -c sqlload.toml check    # validate, connect to Kafka and Snowflake
 sqlload -c sqlload.toml plan     # topic → table mapping and objects to create
+sqlload -c sqlload.toml tables   # topic, table, stream and group per topic; no Snowflake
 sqlload -c sqlload.toml apply    # create missing tables, stages and pipes
 sqlload -c sqlload.toml run      # export until SIGINT or SIGTERM
 sqlload -c sqlload.toml status   # per-partition lag and committed offsets
 ```
 
-`run` creates missing objects itself before starting a stream. `--max-duration 10m` stops it after a while. Logs go to stderr; `--log-format json` writes JSON lines and `RUST_LOG` sets the level.
+`run` creates missing objects itself before starting a stream; a stream whose existing table does not fit is logged and skipped, and checked again hourly. `--max-duration 10m` stops it after a while; `--shard N` (or `SQLLOAD_SHARD`) runs only the streams shard `N` of `source.shards` owns. `tables --topics-file FILE` maps names from a file instead of Kafka. Logs go to stderr; `--log-format json` writes JSON lines and `RUST_LOG` sets the level.
 
 ## Configuration
 
