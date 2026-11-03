@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/sqlload",
-    "crates/sqlload-cli",
     "crates/sqlload-testkit",
 ]
 resolver = "2"

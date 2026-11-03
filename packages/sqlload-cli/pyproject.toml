@@ -24,7 +24,7 @@ Repository = "https://github.com/sqlstack-io/sqlload"
 
 [tool.maturin]
 bindings = "bin"
-manifest-path = "../../crates/sqlload-cli/Cargo.toml"
+manifest-path = "../../crates/sqlload/Cargo.toml"
 # Kafka TLS with OpenSSL built in; SASL PLAIN and SCRAM need nothing else. GSSAPI is left out.
 features = ["ssl-vendored"]
 
