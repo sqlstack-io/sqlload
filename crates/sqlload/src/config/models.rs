@@ -153,7 +153,11 @@ pub struct S3Config {
     #[serde(default)]
     pub prefix: String,
     pub region: String,
+    /// The external stage, `NAME` in the destination schema or `DATABASE.SCHEMA.NAME`.
     pub stage: String,
+    /// Folder template under `prefix`; see [`crate::config::constants::DEFAULT_S3_PATH`].
+    #[serde(default = "defaults::s3_path")]
+    pub path: String,
     #[serde(default)]
     pub endpoint: Option<String>,
     #[serde(default)]

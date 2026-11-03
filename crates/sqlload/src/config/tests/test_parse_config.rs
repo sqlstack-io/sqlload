@@ -67,6 +67,21 @@ fn given_invalid_config_text_when_parsing_then_the_error_names_the_problem() {
             expected_error: "appears twice",
         },
         ParseConfigErrorTestCase {
+            description: "an s3 path without a date is rejected",
+            text: "[staging]\nkind = \"s3\"\n[staging.s3]\nbucket = \"b\"\nregion = \"eu-west-2\"\nstage = \"S\"\npath = \"{topic}/\"\n",
+            expected_error: "must contain {date}",
+        },
+        ParseConfigErrorTestCase {
+            description: "an s3 path with an unknown placeholder is rejected",
+            text: "[staging]\nkind = \"s3\"\n[staging.s3]\nbucket = \"b\"\nregion = \"eu-west-2\"\nstage = \"S\"\npath = \"{topic}/{day}/{date}/\"\n",
+            expected_error: "unknown placeholder {day}",
+        },
+        ParseConfigErrorTestCase {
+            description: "auto-ingest needs one folder per table",
+            text: "[staging]\nkind = \"s3\"\n[staging.s3]\nbucket = \"b\"\nregion = \"eu-west-2\"\nstage = \"S\"\nauto_ingest = true\n",
+            expected_error: "starting with {table}/",
+        },
+        ParseConfigErrorTestCase {
             description: "unknown size units are rejected",
             text: "[staging]\nkind = \"none\"\n[batching]\nmax_bytes = \"3 parsecs\"\n",
             expected_error: "unknown size unit",

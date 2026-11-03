@@ -1,4 +1,5 @@
 use crate::config::models::Config;
+use crate::naming::main::qualify_stage::qualify_stage;
 use crate::naming::models::Stream;
 use crate::planning::_helpers::compatibility::column_problems;
 use crate::planning::_helpers::ddl::{
@@ -42,27 +43,44 @@ pub(crate) fn stream_objects(
             );
             objects.push(pipe_object(stream.pipe.clone(), sql, existing));
         }
-        LoadPath::S3AutoIngest => {
-            let stage = config
-                .staging
-                .s3
-                .as_ref()
-                .map(|s3| s3.stage.clone())
-                .unwrap_or_default();
-            let source = format!("@{}/{}/", qualified(config, &stage), stream.table);
+        LoadPath::S3AutoIngest | LoadPath::S3InsertFiles => {
+            let auto_ingest = path == LoadPath::S3AutoIngest;
             let sql = create_stage_pipe(
                 config,
                 &StagePipe {
                     pipe: &stream.pipe,
                     table: &stream.table,
-                    source: &source,
-                    auto_ingest: true,
+                    source: &s3_source(config, stream, auto_ingest),
+                    auto_ingest,
                 },
             );
             objects.push(pipe_object(stream.pipe.clone(), sql, existing));
         }
     }
     objects
+}
+
+/// The pipe's stage location: the bucket prefix, narrowed to the table's folder for auto-ingest.
+fn s3_source(config: &Config, stream: &Stream, auto_ingest: bool) -> String {
+    let Some(s3) = config.staging.s3.as_ref() else {
+        return String::new();
+    };
+    let stage = qualify_stage(
+        &config.destination.database,
+        &config.destination.schema,
+        &s3.stage,
+    );
+    let mut location = format!("@{stage}/");
+    let prefix = s3.prefix.trim_matches('/');
+    if !prefix.is_empty() {
+        location.push_str(prefix);
+        location.push('/');
+    }
+    if auto_ingest {
+        location.push_str(&stream.table);
+        location.push('/');
+    }
+    location
 }
 
 fn table_object(

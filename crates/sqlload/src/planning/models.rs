@@ -9,6 +9,7 @@ pub enum LoadPath {
     StageInsertFiles,
     StageCopy,
     S3AutoIngest,
+    S3InsertFiles,
     S3Copy,
 }
 

@@ -59,15 +59,20 @@ pub struct StageDelivery {
     pub(crate) path: LoadPath,
     pub(crate) stage_info: Option<StageInfo>,
     pub(crate) s3: Option<ObjectTarget>,
-    pub(crate) staged: Option<StagedFile>,
+    pub(crate) staged: Option<StagedBatch>,
 }
 
-/// A batch's file, fixed on the first attempt so retries reuse the same path and skip a finished upload.
+/// A batch's files, fixed on the first attempt so retries reuse the same paths and skip finished uploads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedBatch {
+    pub digest: String,
+    pub files: Vec<StagedFile>,
+}
+
+/// One file of a batch, relative to the internal stage or to the bucket prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagedFile {
-    pub digest: String,
-    pub date: String,
-    pub file: String,
+    pub key: String,
     pub uploaded: bool,
 }
 

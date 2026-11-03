@@ -12,9 +12,11 @@ pub fn load_path(config: &Config, uses_key_pair: bool) -> LoadPath {
         (StagingKind::Internal, LoadMethod::Auto) if uses_key_pair => LoadPath::StageInsertFiles,
         (StagingKind::Internal, LoadMethod::Auto) => LoadPath::StageCopy,
         (StagingKind::S3, LoadMethod::Copy) => LoadPath::S3Copy,
-        (StagingKind::S3, _) => match config.staging.s3.as_ref().is_some_and(|s3| s3.auto_ingest) {
-            true => LoadPath::S3AutoIngest,
-            false => LoadPath::S3Copy,
-        },
+        (StagingKind::S3, _) if config.staging.s3.as_ref().is_some_and(|s3| s3.auto_ingest) => {
+            LoadPath::S3AutoIngest
+        }
+        (StagingKind::S3, LoadMethod::Snowpipe) => LoadPath::S3InsertFiles,
+        (StagingKind::S3, LoadMethod::Auto) if uses_key_pair => LoadPath::S3InsertFiles,
+        (StagingKind::S3, LoadMethod::Auto) => LoadPath::S3Copy,
     }
 }

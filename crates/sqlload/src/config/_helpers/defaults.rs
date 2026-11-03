@@ -3,8 +3,9 @@ use std::time::Duration;
 use crate::config::constants::{
     DEFAULT_CONSUMER_GROUP, DEFAULT_DISCOVERY_INTERVAL_SECS, DEFAULT_MAX_AGE_SECS,
     DEFAULT_MAX_BYTES, DEFAULT_MAX_REQUEST_BYTES, DEFAULT_MAX_ROWS, DEFAULT_MAX_TOTAL_BYTES,
-    DEFAULT_PIPE_TEMPLATE, DEFAULT_PREFETCH_BUDGET, DEFAULT_RETAIN_SECS, DEFAULT_STAGE_TEMPLATE,
-    DEFAULT_STARTUP_BATCH, DEFAULT_STARTUP_INTERVAL_MS, DEFAULT_STREAMING_PIPE_TEMPLATE,
+    DEFAULT_PIPE_TEMPLATE, DEFAULT_PREFETCH_BUDGET, DEFAULT_RETAIN_SECS, DEFAULT_S3_PATH,
+    DEFAULT_STAGE_TEMPLATE, DEFAULT_STARTUP_BATCH, DEFAULT_STARTUP_INTERVAL_MS,
+    DEFAULT_STREAMING_PIPE_TEMPLATE,
 };
 use crate::config::models::{ByteSize, ColumnConfig, EnvelopeField};
 
@@ -33,7 +34,11 @@ pub(crate) fn retain() -> Duration {
 }
 
 pub(crate) fn auto_ingest() -> bool {
-    true
+    false
+}
+
+pub(crate) fn s3_path() -> String {
+    DEFAULT_S3_PATH.to_owned()
 }
 
 pub(crate) fn max_bytes() -> ByteSize {

@@ -19,5 +19,8 @@ pub fn parse_config(
     validate(&config)?;
     config.destination.database = config.destination.database.to_ascii_uppercase();
     config.destination.schema = config.destination.schema.to_ascii_uppercase();
+    if let Some(s3) = config.staging.s3.as_mut() {
+        s3.stage = s3.stage.to_ascii_uppercase();
+    }
     Ok(config)
 }

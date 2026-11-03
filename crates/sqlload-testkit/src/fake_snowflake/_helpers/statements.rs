@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
+use crate::fake_snowflake::_helpers::objects::{copy_files, parse_stage_pipe};
 use crate::fake_snowflake::models::{FakeTable, SharedState};
 
 type Outcome = Result<Value, (StatusCode, Value)>;
@@ -57,6 +58,16 @@ pub(crate) fn run_statement(state: &SharedState, body: &[u8]) -> Outcome {
     if let Some((table, columns)) = parse_create_table(&statement) {
         guard.tables.entry(table).or_default().columns = columns;
         return Ok(result(&["status"], vec![vec![json!("created")]]));
+    }
+    if let Some((pipe, found)) = parse_stage_pipe(&statement) {
+        guard.pipes.insert(pipe, found);
+        return Ok(result(&["status"], vec![vec![json!("created")]]));
+    }
+    if let Some((table, keys)) = copy_files(&statement) {
+        for key in keys {
+            guard.load_object(&table, &key);
+        }
+        return Ok(result(&["status"], vec![vec![json!("LOADED")]]));
     }
     if statement.starts_with("SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE") {
         let rows: Vec<Vec<Value>> = guard

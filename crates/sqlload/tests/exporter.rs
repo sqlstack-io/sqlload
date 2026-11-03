@@ -2,6 +2,8 @@
 
 #[path = "exporter/helpers.rs"]
 mod helpers;
+#[path = "exporter/test_s3_delivery.rs"]
+mod test_s3_delivery;
 #[path = "exporter/test_streaming_delivery.rs"]
 mod test_streaming_delivery;
 #[path = "exporter/test_streaming_recovery.rs"]

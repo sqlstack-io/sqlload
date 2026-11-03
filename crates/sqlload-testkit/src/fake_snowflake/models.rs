@@ -1,6 +1,9 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use std::io::Read;
+
+use flate2::read::GzDecoder;
 use serde_json::Value;
 
 /// One fake table: its declared columns and the rows committed to it.
@@ -35,6 +38,51 @@ pub struct FakeState {
     pub append_failures: VecDeque<u16>,
     pub appends: u64,
     pub statements: Vec<String>,
+    /// Uploaded objects by `bucket/key`; every external stage is the root of one bucket.
+    pub objects: BTreeMap<String, Vec<u8>>,
+    pub put_failures: VecDeque<u16>,
+    /// Successful and failed upload attempts, in order.
+    pub puts: Vec<String>,
+    pub pipes: BTreeMap<String, FakePipe>,
+    /// Objects already loaded, which the real load history skips.
+    pub loaded: BTreeSet<String>,
+}
+
+impl FakeState {
+    /// Load one gzip NDJSON object into `table` unless it was loaded before or does not exist.
+    pub fn load_object(&mut self, table: &str, key: &str) {
+        if self.loaded.contains(key) {
+            return;
+        }
+        let Some(body) = self.objects.get(key) else {
+            return;
+        };
+        let mut text = String::new();
+        match GzDecoder::new(body.as_slice()).read_to_string(&mut text) {
+            Ok(_) => {}
+            Err(_) => return,
+        }
+        let rows: Vec<Value> = text
+            .lines()
+            .filter_map(|line| match serde_json::from_str(line) {
+                Ok(value) => Some(value),
+                Err(_) => None,
+            })
+            .collect();
+        self.loaded.insert(key.to_owned());
+        self.tables
+            .entry(table.to_owned())
+            .or_default()
+            .rows
+            .extend(rows);
+    }
+}
+
+/// A stage pipe: its table and the object key prefix it loads from.
+#[derive(Debug, Clone, Default)]
+pub struct FakePipe {
+    pub table: String,
+    pub location: String,
 }
 
 /// Shared fake state.
@@ -80,6 +128,24 @@ impl FakeSnowflake {
     /// How many append requests succeeded.
     pub fn appends(&self) -> u64 {
         self.state.lock().appends
+    }
+
+    /// Make the next `count` object uploads fail with HTTP `status`; 400 answers `ExpiredToken`.
+    pub fn fail_next_puts(&self, count: usize, status: u16) {
+        self.state
+            .lock()
+            .put_failures
+            .extend(std::iter::repeat_n(status, count));
+    }
+
+    /// Every stored object key, `bucket/key`.
+    pub fn object_keys(&self) -> Vec<String> {
+        self.state.lock().objects.keys().cloned().collect()
+    }
+
+    /// Every upload attempt's `bucket/key`, in order.
+    pub fn puts(&self) -> Vec<String> {
+        self.state.lock().puts.clone()
     }
 
     /// Every SQL statement received, in order.

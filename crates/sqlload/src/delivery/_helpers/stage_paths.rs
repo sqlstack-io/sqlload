@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use crate::auth::models::Secret;
 use crate::config::models::Config;
-use crate::naming::models::Stream;
 use crate::stage_api::models::{AwsCredentials, ObjectTarget};
+use crate::time_text::main::iso_utc::iso_utc;
 use crate::time_text::main::utc_date::utc_date;
 
 const DAY_MS: i64 = 86_400_000;
@@ -17,8 +17,33 @@ pub(crate) fn expired_dates(now_ms: i64, retain: Duration, lookback: Duration) -
         .collect()
 }
 
+/// The values an `s3` folder template is filled with.
+pub(crate) struct FolderValues<'a> {
+    pub(crate) topic: &'a str,
+    pub(crate) table: &'a str,
+    pub(crate) stream: &'a str,
+    pub(crate) now_ms: i64,
+}
+
+/// The folder for one file under the bucket prefix, always ending in `/`.
+pub(crate) fn render_folder(template: &str, values: &FolderValues<'_>) -> String {
+    let timestamp = iso_utc(values.now_ms);
+    let mut folder = template
+        .replace("{topic}", values.topic)
+        .replace("{table}", values.table)
+        .replace("{stream}", values.stream)
+        .replace("{date}", &timestamp[..10])
+        .replace("{hour}", &timestamp[11..13])
+        .trim_start_matches('/')
+        .to_owned();
+    if !folder.ends_with('/') {
+        folder.push('/');
+    }
+    folder
+}
+
 /// The bucket location for a stream in `s3` mode, with credentials from the standard AWS environment variables.
-pub(crate) fn s3_target(config: &Config, stream: &Stream) -> Result<ObjectTarget, String> {
+pub(crate) fn s3_target(config: &Config) -> Result<ObjectTarget, String> {
     let s3 = config
         .staging
         .s3
@@ -31,8 +56,6 @@ pub(crate) fn s3_target(config: &Config, stream: &Stream) -> Result<ObjectTarget
     if !prefix.is_empty() {
         prefix.push('/');
     }
-    prefix.push_str(&stream.table);
-    prefix.push('/');
     Ok(ObjectTarget {
         endpoint: s3
             .endpoint

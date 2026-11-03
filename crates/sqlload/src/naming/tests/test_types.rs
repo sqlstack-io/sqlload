@@ -25,3 +25,9 @@ pub(crate) struct ResolveStreamsErrorTestCase {
     pub(crate) topics: &'static [&'static str],
     pub(crate) expected_problem: &'static str,
 }
+
+pub(crate) struct QualifyStageTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) stage: &'static str,
+    pub(crate) expected_name: &'static str,
+}

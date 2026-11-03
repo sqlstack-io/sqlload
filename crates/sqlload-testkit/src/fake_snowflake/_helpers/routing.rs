@@ -4,8 +4,10 @@ use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
+use crate::fake_snowflake::_helpers::objects::{insert_files, put_object};
 use crate::fake_snowflake::_helpers::statements::run_statement;
 use crate::fake_snowflake::_helpers::streaming::{append, bulk_status, host, open};
+use crate::fake_snowflake::constants::FAKE_BUCKET;
 use crate::fake_snowflake::models::SharedState;
 
 /// Route one request by method and path.
@@ -20,6 +22,10 @@ pub(crate) async fn handle(
     let outcome = match (method.as_str(), path.as_str()) {
         ("GET", "/v2/streaming/hostname") => host(&state),
         ("POST", "/api/v2/statements") => run_statement(&state, &body),
+        ("PUT", path) if path.starts_with(&format!("/{FAKE_BUCKET}/")) => {
+            put_object(&state, path, &body)
+        }
+        ("POST", path) if path.ends_with("/insertFiles") => insert_files(&state, path, &body),
         ("PUT", path) if path.contains("/channels/") => open(&state, path),
         ("POST", path) if path.ends_with("/rows") => append(&state, path, &query, &body),
         ("POST", path) if path.ends_with(":bulk-channel-status") => {
@@ -33,6 +39,7 @@ pub(crate) async fn handle(
     match outcome {
         Ok(Value::String(text)) => (StatusCode::OK, text).into_response(),
         Ok(value) => (StatusCode::OK, value.to_string()).into_response(),
+        Err((status, Value::String(text))) => (status, text).into_response(),
         Err((status, value)) => (status, value.to_string()).into_response(),
     }
 }

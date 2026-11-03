@@ -16,9 +16,9 @@ check-ci:
 test-unit:
 	cargo test --workspace --lib --quiet
 
-# Needs Docker: starts Redpanda containers and a local fake Snowflake.
+# Needs Docker: starts Redpanda containers and a local fake Snowflake, which is also the S3 bucket.
 test-containers:
-	cargo test -p sqlload --features container-tests --test exporter --quiet -- --test-threads=2
+	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests --test exporter --quiet -- --test-threads=2
 
 test: test-unit test-containers
 

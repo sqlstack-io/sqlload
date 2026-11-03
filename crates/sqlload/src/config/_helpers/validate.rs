@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
-use crate::config::constants::{MAX_NAME_LENGTH, STREAMING_REQUEST_LIMIT};
+use crate::config::constants::{MAX_NAME_LENGTH, S3_PATH_PLACEHOLDERS, STREAMING_REQUEST_LIMIT};
 use crate::config::errors::ConfigError;
-use crate::config::models::{Config, StagingKind};
+use crate::config::models::{Config, S3Config, StagingKind};
 
 /// Reject settings that parse but cannot work together.
 pub(crate) fn validate(config: &Config) -> Result<(), ConfigError> {
@@ -103,8 +103,50 @@ fn staging_problems(config: &Config) -> Vec<String> {
     match (is_s3, config.staging.s3.is_some()) {
         (true, false) => vec!["staging.kind = \"s3\" needs a [staging.s3] section".to_owned()],
         (false, true) => vec!["[staging.s3] is only used when staging.kind = \"s3\"".to_owned()],
-        _ => Vec::new(),
+        _ => config
+            .staging
+            .s3
+            .as_ref()
+            .map(s3_problems)
+            .unwrap_or_default(),
     }
+}
+
+fn s3_problems(s3: &S3Config) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let path = &s3.path;
+    let mut rest = path.as_str();
+    while let Some(start) = rest.find('{') {
+        let Some(length) = rest[start..].find('}') else {
+            problems.push(format!("staging.s3.path {path:?} has an unclosed {{"));
+            break;
+        };
+        let name = &rest[start + 1..start + length];
+        if !S3_PATH_PLACEHOLDERS.contains(&name) {
+            problems.push(format!(
+                "staging.s3.path has an unknown placeholder {{{name}}}"
+            ));
+        }
+        rest = &rest[start + length + 1..];
+    }
+    if !path.contains("{date}") {
+        problems.push("staging.s3.path must contain {date}".to_owned());
+    }
+    if !path.contains("{topic}") && !path.contains("{table}") {
+        problems.push("staging.s3.path must contain {topic} or {table}".to_owned());
+    }
+    if s3.auto_ingest && !path.trim_start_matches('/').starts_with("{table}/") {
+        problems.push(
+            "staging.s3.auto_ingest needs a path starting with {table}/, so each pipe watches one folder"
+                .to_owned(),
+        );
+    }
+    let stage_parts: Vec<&str> = s3.stage.split('.').collect();
+    match stage_parts.as_slice() {
+        [_] | [_, _, _] => {}
+        _ => problems.push("staging.s3.stage must be NAME or DATABASE.SCHEMA.NAME".to_owned()),
+    }
+    problems
 }
 
 /// True for names Snowflake accepts without quotes.
