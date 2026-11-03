@@ -131,11 +131,25 @@ pub struct StagingConfig {
     /// The staged files' format.
     #[serde(default)]
     pub format: FileFormat,
-    /// The most uploads, and separately the most loads, in flight at once across all streams.
+    /// The most uploads, and separately the most loads, in flight at once across all streams; also the most files per stream awaiting a Snowpipe load report.
     #[serde(default = "defaults::max_in_flight")]
     pub max_in_flight: usize,
+    /// What happens when Snowpipe reports that an `insertFiles` file failed to load.
+    #[serde(default)]
+    pub on_load_error: LoadErrorPolicy,
     #[serde(default)]
     pub s3: Option<S3Config>,
+}
+
+/// What happens to a staged file Snowpipe failed to load, fully or partly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadErrorPolicy {
+    /// Stop the stream without committing the file's offsets.
+    #[default]
+    Halt,
+    /// Log it, count it and commit past it.
+    Skip,
 }
 
 /// How staged files are encoded.

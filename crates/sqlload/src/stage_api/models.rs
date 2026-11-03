@@ -87,6 +87,44 @@ pub enum PutOutcome {
     CredentialsExpired,
 }
 
+/// What an object existence check found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectPresence {
+    Found,
+    Missing,
+    CredentialsExpired,
+}
+
+/// A Snowpipe load report: `insertReport` events or a `loadHistoryScan` page.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LoadReport {
+    pub files: Vec<FileLoad>,
+    pub next_begin_mark: Option<String>,
+    /// False when events were missed or, for a history scan, more pages follow.
+    pub complete: bool,
+    /// The newest entry of a history scan page, where the next page starts.
+    pub range_end: Option<String>,
+}
+
+/// One file's load, by its path relative to the pipe's location.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileLoad {
+    pub path: String,
+    pub status: LoadStatus,
+    pub rows_inserted: u64,
+    pub rows_parsed: u64,
+    pub first_error: Option<String>,
+}
+
+/// A file's load status; unknown statuses count as in progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadStatus {
+    InProgress,
+    Loaded,
+    Failed,
+    PartiallyLoaded,
+}
+
 #[derive(Debug)]
 struct Tokens {
     session: String,
@@ -293,7 +331,7 @@ pub struct PipeTarget<'a> {
     pub pipe: &'a str,
 }
 
-/// One object upload: where, under which key, and the extra signed headers.
+/// One object upload or lookup: where, under which key, and the extra signed headers.
 #[derive(Debug, Clone, Copy)]
 pub struct ObjectUpload<'a> {
     pub target: &'a ObjectTarget,

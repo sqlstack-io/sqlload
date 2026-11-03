@@ -41,6 +41,12 @@ kind = "none"
 load = "auto"
 # internal: how long dated stage folders are kept.
 retain = "7d"
+# Uploads, and separately loads, in flight at once across all streams; also the most files
+# per stream that Snowpipe has not reported as loaded yet before the stream waits.
+max_in_flight = 32
+# Snowpipe loads: Kafka offsets are committed once Snowpipe reports the files loaded.
+# halt: stop the stream when a file fails to load. skip: log and count it, then commit past it.
+on_load_error = "halt"
 
 # [staging.s3]
 # bucket = "my-bucket"

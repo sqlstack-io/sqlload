@@ -60,6 +60,21 @@ pub(crate) struct S3RetryTestCase {
     pub(crate) expected_rows: usize,
 }
 
+pub(crate) struct S3LoadReportTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: usize,
+    /// How long reports are withheld after every row is loaded.
+    pub(crate) withheld_for: std::time::Duration,
+    pub(crate) expected_committed: i64,
+}
+
+pub(crate) struct S3LoadFailureTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: usize,
+    pub(crate) load_error: &'static str,
+    pub(crate) expected_committed: i64,
+}
+
 pub(crate) struct ShardingTestCase {
     pub(crate) description: &'static str,
     pub(crate) topics: &'static [&'static str],

@@ -46,6 +46,14 @@ pub struct FakeState {
     pub pipes: BTreeMap<String, FakePipe>,
     /// Objects already loaded, which the real load history skips.
     pub loaded: BTreeSet<String>,
+    /// Paths each pipe received through `insertFiles`, which it skips when sent again.
+    pub received: BTreeSet<(String, String)>,
+    /// Snowpipe load events by pipe, as `insertReport` lists them.
+    pub load_events: BTreeMap<String, Vec<Value>>,
+    /// While set, `insertReport` and `loadHistoryScan` report nothing.
+    pub withhold_reports: bool,
+    /// First errors for the next files Snowpipe fails to load.
+    pub load_failures: VecDeque<String>,
 }
 
 impl FakeState {
@@ -134,6 +142,19 @@ impl FakeSnowflake {
             .lock()
             .put_failures
             .extend(std::iter::repeat_n(status, count));
+    }
+
+    /// Hold back Snowpipe load reports while `withhold` is set; files still load.
+    pub fn withhold_load_reports(&self, withhold: bool) {
+        self.state.lock().withhold_reports = withhold;
+    }
+
+    /// Make the next `count` files sent to `insertFiles` fail to load with `error`.
+    pub fn fail_next_loads(&self, count: usize, error: &str) {
+        self.state
+            .lock()
+            .load_failures
+            .extend(std::iter::repeat_n(error.to_owned(), count));
     }
 
     /// Every stored object key, `bucket/key`.

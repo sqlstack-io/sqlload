@@ -1,9 +1,11 @@
 use std::time::Duration;
 
 use crate::config::main::parse_config::parse_config;
+use crate::config::models::LoadErrorPolicy;
 use crate::config::tests::helpers::{BASE, lookup};
 use crate::config::tests::test_types::{
-    DestinationNameTestCase, ParseConfigErrorTestCase, ParseConfigTestCase, StartupSettingsTestCase,
+    DestinationNameTestCase, LoadErrorPolicyTestCase, ParseConfigErrorTestCase,
+    ParseConfigTestCase, StartupSettingsTestCase,
 };
 
 #[test]
@@ -90,6 +92,11 @@ fn given_invalid_config_text_when_parsing_then_the_error_names_the_problem() {
             description: "at least one upload must be allowed in flight",
             text: "[staging]\nkind = \"internal\"\nmax_in_flight = 0\n",
             expected_error: "max_in_flight must be at least 1",
+        },
+        ParseConfigErrorTestCase {
+            description: "an unknown load error policy is rejected",
+            text: "[staging]\nkind = \"internal\"\non_load_error = \"retry\"\n",
+            expected_error: "unknown variant `retry`",
         },
         ParseConfigErrorTestCase {
             description: "unknown size units are rejected",
@@ -182,6 +189,41 @@ fn given_source_startup_settings_when_parsing_then_defaults_apply_and_overrides_
                 test_case.expected_interval,
                 test_case.expected_budget
             ),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_staging_text_when_parsing_then_failed_loads_halt_unless_skip_is_set() -> Result<(), String>
+{
+    let test_cases = [
+        LoadErrorPolicyTestCase {
+            description: "a failed Snowpipe load stops the stream by default",
+            staging_lines: "",
+            expected_policy: LoadErrorPolicy::Halt,
+        },
+        LoadErrorPolicyTestCase {
+            description: "halt can be set explicitly",
+            staging_lines: "on_load_error = \"halt\"\n",
+            expected_policy: LoadErrorPolicy::Halt,
+        },
+        LoadErrorPolicyTestCase {
+            description: "skip commits past failed files",
+            staging_lines: "on_load_error = \"skip\"\n",
+            expected_policy: LoadErrorPolicy::Skip,
+        },
+    ];
+    for test_case in &test_cases {
+        let text = format!(
+            "{BASE}[staging]\nkind = \"internal\"\n{}",
+            test_case.staging_lines
+        );
+        let config = parse_config(&text, &lookup).map_err(|error| error.to_string())?;
+        assert_eq!(
+            config.staging.on_load_error, test_case.expected_policy,
             "{}",
             test_case.description
         );

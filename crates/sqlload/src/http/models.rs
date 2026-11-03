@@ -50,6 +50,12 @@ impl InFlight {
         self.waited_ms.load(Ordering::Relaxed)
     }
 
+    /// Count time a stream spent waiting for its files awaiting a load report to drop below the limit.
+    pub fn add_wait(&self, waited: Duration) {
+        let waited = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX);
+        self.waited_ms.fetch_add(waited, Ordering::Relaxed);
+    }
+
     async fn acquire(&self, semaphore: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
         let started = Instant::now();
         let permit = match semaphore.clone().acquire_owned().await {

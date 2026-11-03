@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use sqlload::time_text::main::now_ms::now_ms;
 use sqlload::time_text::main::utc_date::utc_date;
@@ -6,16 +7,20 @@ use sqlload_testkit::configs::models::S3Settings;
 use sqlload_testkit::harness::main::start_exporter::start_exporter;
 use sqlload_testkit::harness::main::start_stack::start_stack;
 use sqlload_testkit::harness::main::stop_exporter::stop_exporter;
+use sqlload_testkit::harness::main::wait_for_commits::wait_for_commits;
 use sqlload_testkit::harness::main::wait_for_rows::wait_for_rows;
 use sqlload_testkit::records::main::distinct_positions::distinct_positions;
 use sqlload_testkit::records::main::order_values::order_values;
 use sqlload_testkit::redpanda::main::produce_records::produce_records;
 
-use crate::helpers::{PARTITIONS, run_async, s3_test_config};
-use crate::test_types::{S3LayoutTestCase, S3RetryTestCase};
+use crate::helpers::{ORDERS_GROUP, PARTITIONS, committed, run_async, s3_test_config};
+use crate::test_types::{
+    S3LayoutTestCase, S3LoadFailureTestCase, S3LoadReportTestCase, S3RetryTestCase,
+};
 
 const SHARED_TABLE: &str = "[batching]\nmax_age = \"1s\"\nmax_rows = 100\n[[naming.rules]]\nmatch = \"orders.{kind}\"\ntable = \"ORDERS\"\n";
 const TOPICS: [&str; 2] = ["orders.created", "orders.cancelled"];
+const WAIT: Duration = Duration::from_secs(90);
 
 #[test]
 fn given_two_topics_sharing_a_table_when_exporting_to_s3_then_files_follow_the_path_template()
@@ -194,6 +199,100 @@ fn given_failing_uploads_when_exporting_to_s3_then_retries_reuse_the_key_and_loa
             assert_eq!(
                 attempted.into_iter().cloned().collect::<BTreeSet<String>>(),
                 stored,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_withheld_load_reports_when_exporting_to_s3_then_offsets_are_committed_only_once_loads_are_reported()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [S3LoadReportTestCase {
+            description: "loaded files stay uncommitted until insertReport lists them",
+            records: 200,
+            withheld_for: Duration::from_secs(4),
+            expected_committed: 200,
+        }];
+        for test_case in &test_cases {
+            let stack = start_stack().await?;
+            produce_records(
+                &stack.redpanda.brokers,
+                TOPICS[0],
+                PARTITIONS,
+                &order_values(0, test_case.records),
+            )
+            .await?;
+            stack.fake.withhold_load_reports(true);
+            let settings = S3Settings {
+                extra: SHARED_TABLE,
+                ..S3Settings::default()
+            };
+            let running = start_exporter(s3_test_config(&stack, "orders.*", settings)?);
+            wait_for_rows(&stack.fake, "ORDERS", test_case.records).await?;
+            tokio::time::sleep(test_case.withheld_for).await;
+            let before = committed(&stack, TOPICS[0]).await?;
+            stack.fake.withhold_load_reports(false);
+            let after = wait_for_commits(
+                &stack,
+                ORDERS_GROUP,
+                TOPICS[0],
+                test_case.expected_committed,
+            )
+            .await;
+            stop_exporter(running).await?;
+            assert_eq!(before, 0, "{}", test_case.description);
+            assert_eq!(
+                after?, test_case.expected_committed,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_failed_load_when_exporting_to_s3_with_halt_then_the_stream_stops_without_committing()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [S3LoadFailureTestCase {
+            description: "the first file fails to load, so no offset is committed",
+            records: 200,
+            load_error: "Numeric value 'abc' is not recognized",
+            expected_committed: 0,
+        }];
+        for test_case in &test_cases {
+            let stack = start_stack().await?;
+            produce_records(
+                &stack.redpanda.brokers,
+                TOPICS[0],
+                PARTITIONS,
+                &order_values(0, test_case.records),
+            )
+            .await?;
+            stack.fake.fail_next_loads(1, test_case.load_error);
+            let settings = S3Settings {
+                extra: SHARED_TABLE,
+                ..S3Settings::default()
+            };
+            let running = start_exporter(s3_test_config(&stack, "orders.*", settings)?);
+            let outcome = tokio::time::timeout(WAIT, running.task)
+                .await
+                .map_err(|_| format!("{}: the exporter kept running", test_case.description))?
+                .map_err(|error| error.to_string())?;
+            let error = outcome.expect_err(test_case.description);
+            assert!(
+                error.contains(test_case.load_error) && error.contains("orders_"),
+                "{}: {error}",
+                test_case.description
+            );
+            assert_eq!(
+                committed(&stack, TOPICS[0]).await?,
+                test_case.expected_committed,
                 "{}",
                 test_case.description
             );

@@ -25,16 +25,18 @@ pub(crate) fn put_object(state: &SharedState, path: &str, body: &[u8]) -> Outcom
     Ok(Value::String(String::new()))
 }
 
-/// `/v1/data/pipes/DB.SCHEMA.PIPE/insertFiles`: load each path under the pipe's location.
-pub(crate) fn insert_files(state: &SharedState, path: &str, body: &[u8]) -> Outcome {
-    let pipe = path
-        .trim_end_matches("/insertFiles")
-        .rsplit('/')
-        .next()
-        .and_then(|name| name.rsplit('.').next())
-        .unwrap_or_default()
-        .trim_matches('"')
-        .to_owned();
+/// `HEAD /bucket/key`: whether the object exists.
+pub(crate) fn head_object(state: &SharedState, path: &str) -> Outcome {
+    let key = percent_decode(path.trim_start_matches('/'));
+    match state.lock().objects.contains_key(&key) {
+        true => Ok(Value::String(String::new())),
+        false => Err((StatusCode::NOT_FOUND, Value::String(String::new()))),
+    }
+}
+
+/// `/v1/data/pipes/DB.SCHEMA.PIPE/insertFiles`: load each path under the pipe's location and record a load event; paths the pipe received before are skipped.
+pub(crate) fn insert_files(state: &SharedState, path: &str, query: &str, body: &[u8]) -> Outcome {
+    let pipe = pipe_name(path, "/insertFiles");
     let request: Value = match serde_json::from_slice(body) {
         Ok(value) => value,
         Err(error) => {
@@ -52,12 +54,110 @@ pub(crate) fn insert_files(state: &SharedState, path: &str, body: &[u8]) -> Outc
         ));
     };
     let files = request["files"].as_array().cloned().unwrap_or_default();
+    let mut skipped: Vec<String> = Vec::new();
     for file in files {
-        let relative = file["path"].as_str().unwrap_or_default();
+        let relative = file["path"].as_str().unwrap_or_default().to_owned();
+        if !guard.received.insert((pipe.clone(), relative.clone())) {
+            skipped.push(relative);
+            continue;
+        }
         let key = format!("{}{relative}", found.location);
-        guard.load_object(&found.table, &key);
+        let event = match guard.load_failures.pop_front() {
+            Some(error) => load_event(&relative, "LOAD_FAILED", 0, Some(&error)),
+            None if !guard.objects.contains_key(&key) => {
+                load_event(&relative, "LOAD_FAILED", 0, Some("file not found"))
+            }
+            None => {
+                let before = guard
+                    .tables
+                    .get(&found.table)
+                    .map_or(0, |table| table.rows.len());
+                guard.load_object(&found.table, &key);
+                let after = guard
+                    .tables
+                    .get(&found.table)
+                    .map_or(0, |table| table.rows.len());
+                load_event(&relative, "LOADED", after - before, None)
+            }
+        };
+        guard
+            .load_events
+            .entry(pipe.clone())
+            .or_default()
+            .push(event);
     }
-    Ok(json!({ "responseCode": "SUCCESS" }))
+    let mut response = json!({ "responseCode": "SUCCESS" });
+    if query.contains("showSkippedFiles=true") {
+        response["skippedFiles"] = json!(skipped);
+    }
+    Ok(response)
+}
+
+/// `/v1/data/pipes/DB.SCHEMA.PIPE/insertReport`: load events after `beginMark`, none while reports are withheld.
+pub(crate) fn insert_report(state: &SharedState, path: &str, query: &str) -> Outcome {
+    let pipe = pipe_name(path, "/insertReport");
+    let guard = state.lock();
+    let events = guard.load_events.get(&pipe).cloned().unwrap_or_default();
+    let mark: usize = query
+        .split('&')
+        .filter_map(|pair| pair.strip_prefix("beginMark="))
+        .find_map(parse_mark)
+        .unwrap_or(0)
+        .min(events.len());
+    let (files, next): (Vec<Value>, usize) = match guard.withhold_reports {
+        true => (Vec::new(), mark),
+        false => (events[mark..].to_vec(), events.len()),
+    };
+    Ok(json!({
+        "pipe": pipe,
+        "completeResult": true,
+        "nextBeginMark": next.to_string(),
+        "files": files,
+    }))
+}
+
+/// `/v1/data/pipes/DB.SCHEMA.PIPE/loadHistoryScan`: every load event, none while reports are withheld.
+pub(crate) fn load_history_scan(state: &SharedState, path: &str) -> Outcome {
+    let pipe = pipe_name(path, "/loadHistoryScan");
+    let guard = state.lock();
+    let files = match guard.withhold_reports {
+        true => Vec::new(),
+        false => guard.load_events.get(&pipe).cloned().unwrap_or_default(),
+    };
+    Ok(json!({ "pipe": pipe, "completeResult": "true", "files": files }))
+}
+
+fn parse_mark(mark: &str) -> Option<usize> {
+    match mark.parse() {
+        Ok(mark) => Some(mark),
+        Err(_) => None,
+    }
+}
+
+fn load_event(path: &str, status: &str, rows: usize, error: Option<&str>) -> Value {
+    let mut event = json!({
+        "path": path,
+        "status": status,
+        "rowsInserted": rows,
+        "rowsParsed": rows,
+        "errorsSeen": usize::from(error.is_some()),
+        "complete": error.is_none(),
+    });
+    if let Some(error) = error {
+        event["firstError"] = json!(error);
+    }
+    event
+}
+
+/// The unqualified pipe name of a `/v1/data/pipes/DB.SCHEMA.PIPE/<endpoint>` path.
+fn pipe_name(path: &str, endpoint: &str) -> String {
+    path.trim_end_matches(endpoint)
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.rsplit('.').next())
+        .unwrap_or_default()
+        .trim_matches('"')
+        .to_owned()
 }
 
 /// `CREATE PIPE IF NOT EXISTS P AS COPY INTO T ... FROM @STAGE/location ...` → the pipe; the source may sit inside a Parquet `SELECT`.

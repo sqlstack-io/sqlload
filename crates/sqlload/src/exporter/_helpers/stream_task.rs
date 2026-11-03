@@ -251,6 +251,9 @@ impl StreamTask {
     }
 
     async fn flush(&mut self, cancel: &CancellationToken) -> Result<(), String> {
+        if self.batcher.is_empty() || !self.wait_for_room(cancel).await? {
+            return Ok(());
+        }
         let Some(batch) = self.batcher.take() else {
             return Ok(());
         };
@@ -261,6 +264,7 @@ impl StreamTask {
                 Ok(report) => {
                     self.record(&report);
                     self.commit(&report.confirmed);
+                    self.record_backlog();
                     return Ok(());
                 }
                 Err(DeliveryError::Fatal(message)) => return Err(message),
@@ -285,13 +289,42 @@ impl StreamTask {
         }
     }
 
+    /// Hold new deliveries while the stream's files awaiting a load report fill `staging.max_in_flight`; false when cancelled.
+    async fn wait_for_room(&mut self, cancel: &CancellationToken) -> Result<bool, String> {
+        if !self.delivery.is_full() {
+            return Ok(true);
+        }
+        let started = std::time::Instant::now();
+        tracing::debug!(stream = %self.stream.name, pending = self.delivery.pending_files(), "waiting for Snowpipe to report pending files");
+        let mut room = true;
+        while self.delivery.is_full() {
+            tokio::select! {
+                () = cancel.cancelled() => {
+                    room = false;
+                    break;
+                }
+                () = sleep(CONFIRM_POLL) => {}
+            }
+            self.confirm().await?;
+        }
+        self.metrics.add_in_flight_wait(started.elapsed());
+        Ok(room)
+    }
+
     async fn confirm(&mut self) -> Result<(), String> {
-        match self.delivery.poll().await {
+        let polled = self.delivery.poll().await;
+        self.record_backlog();
+        match polled {
             Ok(confirmation) => {
+                let label = Metrics::label(&self.stream.name);
                 self.metrics
                     .error_rows
-                    .get_or_create(&Metrics::label(&self.stream.name))
+                    .get_or_create(&label)
                     .inc_by(confirmation.error_rows);
+                self.metrics
+                    .skipped_files
+                    .get_or_create(&label)
+                    .inc_by(confirmation.skipped_files);
                 self.commit(&confirmation.confirmed);
                 Ok(())
             }
@@ -423,6 +456,23 @@ impl StreamTask {
             .get_or_create(&label)
             .set(now_ms() / 1000);
         tracing::debug!(stream = %self.stream.name, rows = report.rows, sent_bytes = report.sent_bytes, requests = report.requests, "batch delivered");
+    }
+
+    fn record_backlog(&self) {
+        let label = Metrics::label(&self.stream.name);
+        let files = self.delivery.pending_files();
+        self.metrics
+            .pending_files
+            .get_or_create(&label)
+            .set(i64::try_from(files).unwrap_or(i64::MAX));
+        let age_seconds = self
+            .delivery
+            .oldest_pending_ms()
+            .map_or(0, |sent| (now_ms() - sent).max(0) / 1000);
+        self.metrics
+            .oldest_pending
+            .get_or_create(&label)
+            .set(age_seconds);
     }
 
     fn count_error(&self, error: &DeliveryError) {

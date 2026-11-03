@@ -4,7 +4,9 @@ use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
-use crate::fake_snowflake::_helpers::objects::{insert_files, put_object};
+use crate::fake_snowflake::_helpers::objects::{
+    head_object, insert_files, insert_report, load_history_scan, put_object,
+};
 use crate::fake_snowflake::_helpers::statements::run_statement;
 use crate::fake_snowflake::_helpers::streaming::{append, bulk_status, host, open};
 use crate::fake_snowflake::constants::FAKE_BUCKET;
@@ -25,7 +27,14 @@ pub(crate) async fn handle(
         ("PUT", path) if path.starts_with(&format!("/{FAKE_BUCKET}/")) => {
             put_object(&state, path, &body)
         }
-        ("POST", path) if path.ends_with("/insertFiles") => insert_files(&state, path, &body),
+        ("HEAD", path) if path.starts_with(&format!("/{FAKE_BUCKET}/")) => {
+            head_object(&state, path)
+        }
+        ("POST", path) if path.ends_with("/insertFiles") => {
+            insert_files(&state, path, &query, &body)
+        }
+        ("GET", path) if path.ends_with("/insertReport") => insert_report(&state, path, &query),
+        ("GET", path) if path.ends_with("/loadHistoryScan") => load_history_scan(&state, path),
         ("PUT", path) if path.contains("/channels/") => open(&state, path),
         ("POST", path) if path.ends_with("/rows") => append(&state, path, &query, &body),
         ("POST", path) if path.ends_with(":bulk-channel-status") => {
