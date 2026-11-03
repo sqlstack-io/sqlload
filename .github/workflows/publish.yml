@@ -109,6 +109,9 @@ jobs:
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
           working-directory: packages/sqlload-cli
+          # The vendored OpenSSL build runs Perl's Configure, which needs modules the
+          # manylinux image leaves out.
+          before-script-linux: dnf install -y perl-IPC-Cmd perl-Time-Piece
       - name: Assert native CLI wheel is interpreter-agnostic
         shell: bash
         run: bash .github/scripts/assert_cli_wheel_tags.sh dist
