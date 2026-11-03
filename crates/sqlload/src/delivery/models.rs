@@ -2,6 +2,7 @@ use crate::auth::models::Authenticator;
 use crate::batching::models::{Batch, Partition};
 use crate::config::models::{Config, OversizedPolicy};
 use crate::delivery::errors::DeliveryError;
+use crate::http::models::InFlight;
 use crate::naming::models::Stream;
 use crate::planning::models::LoadPath;
 use crate::sql_api::models::SqlClient;
@@ -36,6 +37,7 @@ pub struct StageClients {
     pub sql: SqlClient,
     pub driver: Arc<DriverSession>,
     pub account_url: String,
+    pub in_flight: InFlight,
 }
 
 /// Channel state for one stream; the committed offset token in Snowflake is the source of truth.

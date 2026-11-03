@@ -8,7 +8,7 @@ use crate::config::models::Config;
 use crate::exporter::models::Clients;
 use crate::http::errors::ApiError;
 use crate::http::main::http_client::build_http_client;
-use crate::http::models::ConnectionCounter;
+use crate::http::models::{ConnectionCounter, InFlight};
 use crate::sql_api::models::SqlClient;
 use crate::stage_api::models::DriverSession;
 use crate::streaming_api::models::StreamingClient;
@@ -30,6 +30,7 @@ pub fn build_clients(config: &Config) -> Result<Clients, ApiError> {
         account_url: account_url(destination),
         http,
         connections,
+        in_flight: InFlight::new(config.staging.max_in_flight),
         auth,
     })
 }

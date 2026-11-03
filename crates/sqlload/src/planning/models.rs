@@ -110,6 +110,7 @@ impl Plan {
 pub struct ExistingObjects {
     pub tables: BTreeMap<String, BTreeMap<String, String>>,
     pub stages: BTreeSet<String>,
+    /// Each pipe's `COPY` definition, when Snowflake shows it.
     pub pipes: BTreeMap<String, Option<String>>,
 }
 

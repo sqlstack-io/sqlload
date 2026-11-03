@@ -60,13 +60,12 @@ pub(crate) fn insert_files(state: &SharedState, path: &str, body: &[u8]) -> Outc
     Ok(json!({ "responseCode": "SUCCESS" }))
 }
 
-/// `CREATE PIPE IF NOT EXISTS P AS COPY INTO T FROM @STAGE/location ...` → the pipe.
+/// `CREATE PIPE IF NOT EXISTS P AS COPY INTO T ... FROM @STAGE/location ...` → the pipe; the source may sit inside a Parquet `SELECT`.
 pub(crate) fn parse_stage_pipe(statement: &str) -> Option<(String, FakePipe)> {
     let rest = statement.strip_prefix("CREATE PIPE IF NOT EXISTS ")?;
     let (pipe, rest) = rest.split_once(' ')?;
-    let (_, rest) = rest.split_once("COPY INTO ")?;
-    let (table, rest) = rest.split_once(" FROM @")?;
-    let location = rest.split_whitespace().next()?;
+    let (_, copy) = rest.split_once("COPY INTO ")?;
+    let (table, location) = copy_target(copy)?;
     Some((
         last_name(pipe),
         FakePipe {
@@ -76,11 +75,11 @@ pub(crate) fn parse_stage_pipe(statement: &str) -> Option<(String, FakePipe)> {
     ))
 }
 
-/// `COPY INTO T FROM @STAGE/folder/ FILES = ('a', 'b') ...` → the table and the object keys to load.
+/// `COPY INTO T ... FROM @STAGE/folder/ ... FILES = ('a', 'b') ...` → the table and the object keys to load.
 pub(crate) fn copy_files(statement: &str) -> Option<(String, Vec<String>)> {
-    let rest = statement.strip_prefix("COPY INTO ")?;
-    let (table, rest) = rest.split_once(" FROM @")?;
-    let (location, rest) = rest.split_once(" FILES = (")?;
+    let copy = statement.strip_prefix("COPY INTO ")?;
+    let (table, location) = copy_target(copy)?;
+    let (_, rest) = copy.split_once(" FILES = (")?;
     let (names, _) = rest.split_once(')')?;
     let folder = stage_relative(location);
     let keys: Vec<String> = names
@@ -88,6 +87,16 @@ pub(crate) fn copy_files(statement: &str) -> Option<(String, Vec<String>)> {
         .map(|name| format!("{folder}{}", name.trim_matches('\'')))
         .collect();
     Some((last_name(table), keys))
+}
+
+/// The table and the `STAGE/path/` after the last `FROM @` of a COPY body.
+fn copy_target(copy: &str) -> Option<(&str, &str)> {
+    let table = copy.split_whitespace().next()?;
+    let (_, source) = copy.rsplit_once(" FROM @")?;
+    let end = source
+        .find(|c: char| c.is_whitespace() || c == ')')
+        .unwrap_or(source.len());
+    Some((table, &source[..end]))
 }
 
 /// The bucket-relative part of `STAGE/path/`, with the fake's single bucket in front.

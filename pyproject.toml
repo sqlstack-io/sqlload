@@ -5,14 +5,13 @@ build-backend = "hatchling.build"
 [project]
 name = "sqlload"
 version = "0.0.1" # x-release-please-version
-description = "Export Kafka topics to Snowflake: Snowpipe Streaming, internal stages or your own S3 bucket"
+description = "SQL data loading tooling. Pre-release, under development."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-keywords = ["kafka", "snowflake", "snowpipe", "s3", "etl"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",

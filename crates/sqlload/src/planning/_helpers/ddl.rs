@@ -1,4 +1,5 @@
 use crate::config::models::Config;
+use crate::file_format::main::copy_into::copy_into;
 use crate::naming::main::quote_name::quote_name;
 use crate::planning::constants::FILE_FORMAT;
 use crate::planning::models::StagePipe;
@@ -52,10 +53,9 @@ pub(crate) fn create_stage_pipe(config: &Config, pipe: &StagePipe<'_>) -> String
         false => "",
     };
     format!(
-        "CREATE PIPE IF NOT EXISTS {}{ingest} AS COPY INTO {} FROM {} {FILE_FORMAT} MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE",
+        "CREATE PIPE IF NOT EXISTS {}{ingest} AS {}",
         qualified(config, pipe.pipe),
-        qualified(config, pipe.table),
-        pipe.source
+        copy_into(config, &qualified(config, pipe.table), pipe.source, "")
     )
 }
 

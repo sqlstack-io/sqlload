@@ -1,5 +1,7 @@
-use crate::planning::tests::helpers::{object_summary, plan_for};
-use crate::planning::tests::test_types::BuildPlanTestCase;
+use crate::planning::tests::helpers::{object_summary, plan_for, plan_with_pipe};
+use crate::planning::tests::test_types::{BuildPlanTestCase, PipeFormatTestCase};
+
+const S3: &str = "[staging]\nkind = \"s3\"\nformat = \"FORMAT\"\n[staging.s3]\nbucket = \"b\"\nregion = \"eu-west-2\"\nstage = \"LAKE\"\n";
 
 #[test]
 fn given_a_delivery_mode_when_planning_then_each_stream_needs_the_matching_objects()
@@ -70,6 +72,69 @@ fn given_a_delivery_mode_when_planning_then_each_stream_needs_the_matching_objec
             plan.problems().len(),
             test_case.expected_problems,
             "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_file_format_when_planning_s3_then_the_pipe_loads_that_format() -> Result<(), String> {
+    let test_cases = [
+        PipeFormatTestCase {
+            description: "a new Parquet pipe selects each column",
+            format: "parquet",
+            existing_definition: None,
+            expected_objects: &["+table SHOP__ORDERS", "+pipe SHOP__ORDERS_SQLLOAD_PIPE"],
+            expected_sql: "FROM (SELECT $1:\"TOPIC\"::VARCHAR, ",
+        },
+        PipeFormatTestCase {
+            description: "an existing JSON pipe is incompatible with Parquet",
+            format: "parquet",
+            existing_definition: Some(
+                "COPY INTO MY_DB.RAW.SHOP__ORDERS FROM @LAKE/ FILE_FORMAT = (TYPE = JSON COMPRESSION = AUTO) MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE",
+            ),
+            expected_objects: &["+table SHOP__ORDERS", "!pipe SHOP__ORDERS_SQLLOAD_PIPE"],
+            expected_sql: "TYPE = PARQUET USE_LOGICAL_TYPE = TRUE",
+        },
+        PipeFormatTestCase {
+            description: "an existing Parquet pipe fits",
+            format: "parquet",
+            existing_definition: Some(
+                "copy into t from (select $1 from @LAKE/) file_format=(type='parquet')",
+            ),
+            expected_objects: &["+table SHOP__ORDERS", "=pipe SHOP__ORDERS_SQLLOAD_PIPE"],
+            expected_sql: "COPY INTO MY_DB.RAW.SHOP__ORDERS (TOPIC, ",
+        },
+        PipeFormatTestCase {
+            description: "an existing Parquet pipe is incompatible with JSON",
+            format: "json",
+            existing_definition: Some(
+                "COPY INTO T FROM (SELECT $1 FROM @LAKE/) FILE_FORMAT = (TYPE = PARQUET)",
+            ),
+            expected_objects: &["+table SHOP__ORDERS", "!pipe SHOP__ORDERS_SQLLOAD_PIPE"],
+            expected_sql: "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE",
+        },
+    ];
+    for test_case in &test_cases {
+        let staging = S3.replace("FORMAT", test_case.format);
+        let plan = plan_with_pipe(&staging, &[], true, test_case.existing_definition)?;
+        assert_eq!(
+            object_summary(&plan),
+            test_case.expected_objects,
+            "{}",
+            test_case.description
+        );
+        let pipe_sql = plan
+            .streams
+            .iter()
+            .flat_map(|stream| stream.objects.iter())
+            .map(|object| object.create_sql.as_str())
+            .find(|sql| sql.starts_with("CREATE PIPE"))
+            .ok_or(test_case.description)?;
+        assert!(
+            pipe_sql.contains(test_case.expected_sql),
+            "{}: {pipe_sql}",
             test_case.description
         );
     }

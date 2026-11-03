@@ -42,10 +42,7 @@ pub async fn read_existing(sql: &SqlClient, config: &Config) -> Result<ExistingO
         .iter()
         .filter_map(|row| {
             let name = pipes.value(row, "name")?.to_owned();
-            Some((
-                name,
-                pipes.value(row, "notification_channel").map(str::to_owned),
-            ))
+            Some((name, pipes.value(row, "definition").map(str::to_owned)))
         })
         .collect();
     Ok(existing)

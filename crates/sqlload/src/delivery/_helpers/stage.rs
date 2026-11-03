@@ -1,4 +1,3 @@
-use crate::batching::main::gzip_bytes::gzip_bytes;
 use crate::batching::models::{Batch, BatchRow};
 use crate::config::models::Config;
 use crate::delivery::_helpers::stage_paths::{
@@ -9,6 +8,9 @@ use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{
     DeliveryReport, StageClients, StageDelivery, StagedBatch, StagedFile,
 };
+use crate::file_format::main::copy_into::copy_into;
+use crate::file_format::main::encode_file::encode_file;
+use crate::file_format::main::file_extension::file_extension;
 use crate::http::errors::ApiError;
 use crate::naming::main::qualify_stage::qualify_stage;
 use crate::naming::main::quote_name::quote_name;
@@ -57,9 +59,14 @@ impl StageDelivery {
         let mut uncompressed_bytes = 0;
         let mut sent_bytes = 0;
         for (index, part) in parts.iter().enumerate() {
-            let plain = ndjson(&part.rows);
-            let body = gzip_bytes(&plain);
-            uncompressed_bytes += plain.len() as u64;
+            let lines: Vec<&str> = part.rows.iter().map(|row| row.line.as_str()).collect();
+            let (body, plain) = encode_file(
+                self.config.staging.format,
+                &self.config.envelope.columns,
+                &lines,
+            )
+            .map_err(DeliveryError::Fatal)?;
+            uncompressed_bytes += plain;
             sent_bytes += body.len() as u64;
             if !staged.files[index].uploaded {
                 let key = staged.files[index].key.clone();
@@ -115,9 +122,14 @@ impl StageDelivery {
             .collect()
     }
 
-    /// `<folder>/<stream>_<digest>.json.gz`: the `s3` path template, or the UTC date on an internal stage.
+    /// `<folder>/<stream>_<digest>.<json.gz|parquet>`: the `s3` path template, or the UTC date on an internal stage.
     fn file_key(&self, part: &Part<'_>, now: i64) -> String {
-        let file = format!("{}_{}.json.gz", self.stream.name, rows_digest(&part.rows));
+        let file = format!(
+            "{}_{}.{}",
+            self.stream.name,
+            rows_digest(&part.rows),
+            file_extension(self.config.staging.format)
+        );
         let template = match &self.s3 {
             Some(_) => self.config.staging.s3.as_ref().map(|s3| s3.path.as_str()),
             None => None,
@@ -158,6 +170,7 @@ impl StageDelivery {
     }
 
     async fn upload(&mut self, key: &str, body: &[u8]) -> Result<(), DeliveryError> {
+        let _slot = self.clients.in_flight.upload().await;
         if let Some(target) = &self.s3 {
             let headers: BTreeMap<String, String> = BTreeMap::new();
             let upload = ObjectUpload {
@@ -214,6 +227,7 @@ impl StageDelivery {
     }
 
     async fn load(&self, keys: &[String]) -> Result<(), DeliveryError> {
+        let _slot = self.clients.in_flight.load().await;
         let location = match self.path {
             LoadPath::S3AutoIngest => return Ok(()),
             LoadPath::StageInsertFiles | LoadPath::S3InsertFiles => {
@@ -250,10 +264,11 @@ impl StageDelivery {
                 true => location.clone(),
                 false => format!("{location}{folder}/"),
             };
-            let statement = format!(
-                "COPY INTO {} FROM {from} FILES = ({}) FILE_FORMAT = (TYPE = JSON COMPRESSION = AUTO) MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE",
-                self.qualified(&self.stream.table),
-                names.join(", ")
+            let statement = copy_into(
+                &self.config,
+                &self.qualified(&self.stream.table),
+                &from,
+                &format!(" FILES = ({})", names.join(", ")),
             );
             execute_sql(&self.clients.sql, &statement)
                 .await
@@ -307,16 +322,6 @@ impl StageDelivery {
 struct Part<'a> {
     topic: &'a str,
     rows: Vec<&'a BatchRow>,
-}
-
-fn ndjson(rows: &[&BatchRow]) -> Vec<u8> {
-    let size: usize = rows.iter().map(|row| row.line.len() + 1).sum();
-    let mut output: Vec<u8> = Vec::with_capacity(size);
-    for row in rows {
-        output.extend_from_slice(row.line.as_bytes());
-        output.push(b'\n');
-    }
-    output
 }
 
 /// A stable name for rows' content, so a retried upload and load of the same rows is deduplicated by Snowflake's load history.

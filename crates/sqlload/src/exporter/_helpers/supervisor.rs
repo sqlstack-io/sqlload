@@ -260,6 +260,7 @@ impl Supervisor {
                 sql: self.clients.sql.clone(),
                 driver: self.clients.driver.clone(),
                 account_url: self.clients.account_url.clone(),
+                in_flight: self.clients.in_flight.clone(),
             },
             config: self.config.clone(),
             path: load_path(&self.config, self.clients.auth.uses_key_pair()),

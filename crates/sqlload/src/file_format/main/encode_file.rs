@@ -3,7 +3,6 @@
 use crate::batching::main::gzip_bytes::gzip_bytes;
 use crate::config::models::{ColumnConfig, FileFormat};
 use crate::file_format::_helpers::parquet::parquet_file;
-use crate::file_format::constants::{JSON_EXTENSION, PARQUET_EXTENSION};
 
 /// The file body for `lines` (JSON objects keyed by column name) and how many uncompressed bytes they held.
 pub fn encode_file(
@@ -24,12 +23,4 @@ pub fn encode_file(
         FileFormat::Parquet => parquet_file(columns, lines)?,
     };
     Ok((body, plain))
-}
-
-/// The file name extension for `format`.
-pub fn file_extension(format: FileFormat) -> &'static str {
-    match format {
-        FileFormat::Json => JSON_EXTENSION,
-        FileFormat::Parquet => PARQUET_EXTENSION,
-    }
 }

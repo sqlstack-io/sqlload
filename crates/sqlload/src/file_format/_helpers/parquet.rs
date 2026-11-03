@@ -55,12 +55,14 @@ impl ColumnBuilder {
         let value = value.filter(|value| !value.is_null());
         match self {
             Self::Int32(builder) => {
-                builder.append_option(integer(value).and_then(|number| i32::try_from(number).ok()));
+                builder.append_option(integer(value).and_then(narrow));
             }
             Self::Int64(builder) => builder.append_option(integer(value)),
             Self::Timestamp(builder) => builder.append_option(value.and_then(instant_ms)),
             Self::Date(builder) => builder.append_option(value.and_then(epoch_days)),
-            Self::Text { builder, json } => builder.append_option(value.map(|value| text(value, *json))),
+            Self::Text { builder, json } => {
+                builder.append_option(value.map(|value| text(value, *json)))
+            }
         }
     }
 
@@ -79,8 +81,8 @@ impl ColumnBuilder {
 pub(crate) fn parquet_file(columns: &[ColumnConfig], lines: &[&str]) -> Result<Vec<u8>, String> {
     let mut builders: Vec<ColumnBuilder> = columns.iter().map(ColumnBuilder::new).collect();
     for line in lines {
-        let row: Map<String, Value> =
-            serde_json::from_str(line).map_err(|error| format!("row is not a JSON object: {error}"))?;
+        let row: Map<String, Value> = serde_json::from_str(line)
+            .map_err(|error| format!("row is not a JSON object: {error}"))?;
         for (column, builder) in columns.iter().zip(builders.iter_mut()) {
             builder.push(row.get(&column.name));
         }
@@ -107,17 +109,28 @@ pub(crate) fn parquet_file(columns: &[ColumnConfig], lines: &[&str]) -> Result<V
 fn integer(value: Option<&Value>) -> Option<i64> {
     match value? {
         Value::Number(number) => number.as_i64(),
-        Value::String(text) => text.trim().parse().ok(),
+        Value::String(text) => match text.trim().parse::<i64>() {
+            Ok(number) => Some(number),
+            Err(_) => None,
+        },
         _ => None,
+    }
+}
+
+fn narrow(number: i64) -> Option<i32> {
+    match i32::try_from(number) {
+        Ok(narrowed) => Some(narrowed),
+        Err(_) => None,
     }
 }
 
 /// Milliseconds since the epoch from RFC 3339 text or a number of milliseconds.
 fn instant_ms(value: &Value) -> Option<i64> {
     match value {
-        Value::String(text) => chrono::DateTime::parse_from_rfc3339(text)
-            .ok()
-            .map(|instant| instant.timestamp_millis()),
+        Value::String(text) => match chrono::DateTime::parse_from_rfc3339(text) {
+            Ok(instant) => Some(instant.timestamp_millis()),
+            Err(_) => None,
+        },
         Value::Number(number) => number.as_i64(),
         _ => None,
     }
@@ -127,9 +140,10 @@ fn instant_ms(value: &Value) -> Option<i64> {
 fn epoch_days(value: &Value) -> Option<i32> {
     use chrono::Datelike;
     let text = value.as_str()?;
-    chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
-        .ok()
-        .map(|date| date.num_days_from_ce() - UNIX_EPOCH_DAYS_FROM_CE)
+    match chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+        Ok(date) => Some(date.num_days_from_ce() - UNIX_EPOCH_DAYS_FROM_CE),
+        Err(_) => None,
+    }
 }
 
 /// Text as is; other values as compact JSON, and every value as JSON in a semi-structured column.

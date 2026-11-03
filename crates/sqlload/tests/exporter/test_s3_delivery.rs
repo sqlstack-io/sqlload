@@ -32,6 +32,7 @@ fn given_two_topics_sharing_a_table_when_exporting_to_s3_then_files_follow_the_p
                     "fake-bucket/exports/orders.cancelled/date=",
                 ],
                 expected_after_date: "/",
+                expected_extension: ".json.gz",
                 expected_rows: 300,
             },
             S3LayoutTestCase {
@@ -41,6 +42,20 @@ fn given_two_topics_sharing_a_table_when_exporting_to_s3_then_files_follow_the_p
                 records_per_topic: 150,
                 expected_folders: &["fake-bucket/exports/ORDERS/date="],
                 expected_after_date: "/hour=",
+                expected_extension: ".json.gz",
+                expected_rows: 300,
+            },
+            S3LayoutTestCase {
+                description: "Parquet files load through insertFiles with every row",
+                staging: "format = \"parquet\"",
+                s3: "",
+                records_per_topic: 150,
+                expected_folders: &[
+                    "fake-bucket/exports/orders.created/date=",
+                    "fake-bucket/exports/orders.cancelled/date=",
+                ],
+                expected_after_date: "/",
+                expected_extension: ".parquet",
                 expected_rows: 300,
             },
         ];
@@ -87,7 +102,8 @@ fn given_two_topics_sharing_a_table_when_exporting_to_s3_then_files_follow_the_p
                             .is_some_and(|rest| {
                                 rest.starts_with(test_case.expected_after_date)
                                     && rest.rsplit('/').next().is_some_and(|file| {
-                                        file.starts_with("orders_") && file.ends_with(".json.gz")
+                                        file.starts_with("orders_")
+                                            && file.ends_with(test_case.expected_extension)
                                     })
                             })
                     })

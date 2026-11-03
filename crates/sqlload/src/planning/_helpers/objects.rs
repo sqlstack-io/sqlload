@@ -1,4 +1,4 @@
-use crate::config::models::Config;
+use crate::config::models::{Config, FileFormat};
 use crate::naming::main::qualify_stage::qualify_stage;
 use crate::naming::models::Stream;
 use crate::planning::_helpers::compatibility::column_problems;
@@ -25,7 +25,12 @@ pub(crate) fn stream_objects(
     match path {
         LoadPath::Streaming if !is_default_streaming_pipe(stream) => {
             let sql = create_streaming_pipe(config, &stream.streaming_pipe, &stream.table);
-            objects.push(pipe_object(stream.streaming_pipe.clone(), sql, existing));
+            objects.push(pipe_object(
+                stream.streaming_pipe.clone(),
+                sql,
+                existing,
+                None,
+            ));
         }
         LoadPath::Streaming | LoadPath::S3Copy => {}
         LoadPath::StageCopy => objects.push(stage_object(config, stream, existing)),
@@ -41,7 +46,12 @@ pub(crate) fn stream_objects(
                     auto_ingest: false,
                 },
             );
-            objects.push(pipe_object(stream.pipe.clone(), sql, existing));
+            objects.push(pipe_object(
+                stream.pipe.clone(),
+                sql,
+                existing,
+                Some(config.staging.format),
+            ));
         }
         LoadPath::S3AutoIngest | LoadPath::S3InsertFiles => {
             let auto_ingest = path == LoadPath::S3AutoIngest;
@@ -54,7 +64,12 @@ pub(crate) fn stream_objects(
                     auto_ingest,
                 },
             );
-            objects.push(pipe_object(stream.pipe.clone(), sql, existing));
+            objects.push(pipe_object(
+                stream.pipe.clone(),
+                sql,
+                existing,
+                Some(config.staging.format),
+            ));
         }
     }
     objects
@@ -116,14 +131,47 @@ fn stage_object(config: &Config, stream: &Stream, existing: &ExistingObjects) ->
     }
 }
 
-fn pipe_object(name: String, create_sql: String, existing: &ExistingObjects) -> PlannedObject {
+/// A pipe; an existing stage pipe that loads another file format than configured is incompatible.
+fn pipe_object(
+    name: String,
+    create_sql: String,
+    existing: &ExistingObjects,
+    format: Option<FileFormat>,
+) -> PlannedObject {
+    let state = match (existing.pipes.get(&name), format) {
+        (None, _) => ObjectState::Missing,
+        (Some(Some(definition)), Some(format)) if definition_format(definition) != format => {
+            ObjectState::Incompatible(vec![format!(
+                "loads {} files, but staging.format is {}; drop the pipe to recreate it",
+                format_name(definition_format(definition)),
+                format_name(format)
+            )])
+        }
+        (Some(_), _) => ObjectState::Exists,
+    };
     PlannedObject {
         kind: ObjectKind::Pipe,
-        state: match existing.pipes.contains_key(&name) {
-            true => ObjectState::Exists,
-            false => ObjectState::Missing,
-        },
+        state,
         name,
         create_sql,
+    }
+}
+
+fn definition_format(definition: &str) -> FileFormat {
+    let compact: String = definition
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match compact.contains("TYPE=PARQUET") || compact.contains("TYPE='PARQUET'") {
+        true => FileFormat::Parquet,
+        false => FileFormat::Json,
+    }
+}
+
+fn format_name(format: FileFormat) -> &'static str {
+    match format {
+        FileFormat::Json => "\"json\"",
+        FileFormat::Parquet => "\"parquet\"",
     }
 }

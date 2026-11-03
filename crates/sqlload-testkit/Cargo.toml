@@ -10,8 +10,9 @@ rust-version.workspace = true
 
 [dependencies]
 axum.workspace = true
+bytes.workspace = true
 flate2.workspace = true
-parquet.workspace = true
+parquet = { workspace = true, features = ["json"] }
 rdkafka.workspace = true
 rsa = { workspace = true, features = ["getrandom"] }
 serde_json.workspace = true

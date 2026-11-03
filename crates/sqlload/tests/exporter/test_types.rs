@@ -47,6 +47,8 @@ pub(crate) struct S3LayoutTestCase {
     pub(crate) expected_folders: &'static [&'static str],
     /// Text between the date and the file name.
     pub(crate) expected_after_date: &'static str,
+    /// The staged files' extension.
+    pub(crate) expected_extension: &'static str,
     pub(crate) expected_rows: usize,
 }
 

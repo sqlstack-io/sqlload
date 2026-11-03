@@ -22,7 +22,11 @@ pub async fn run_exporter(
     let started = Instant::now();
     let clients = build_clients(&config).map_err(|error| error.to_string())?;
     let gauge = BufferGauge::default();
-    let metrics = Arc::new(Metrics::new(clients.connections.clone(), gauge.clone()));
+    let metrics = Arc::new(Metrics::new(
+        clients.connections.clone(),
+        gauge.clone(),
+        clients.in_flight.clone(),
+    ));
     let cancel = shutdown.child_token();
     if let Some(listen) = config.metrics.listen {
         let server_metrics = metrics.clone();

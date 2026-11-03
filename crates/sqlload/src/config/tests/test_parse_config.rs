@@ -82,6 +82,16 @@ fn given_invalid_config_text_when_parsing_then_the_error_names_the_problem() {
             expected_error: "starting with {table}/",
         },
         ParseConfigErrorTestCase {
+            description: "parquet files need s3 staging",
+            text: "[staging]\nkind = \"internal\"\nformat = \"parquet\"\n",
+            expected_error: "needs staging.kind = \"s3\"",
+        },
+        ParseConfigErrorTestCase {
+            description: "at least one upload must be allowed in flight",
+            text: "[staging]\nkind = \"internal\"\nmax_in_flight = 0\n",
+            expected_error: "max_in_flight must be at least 1",
+        },
+        ParseConfigErrorTestCase {
             description: "unknown size units are rejected",
             text: "[staging]\nkind = \"none\"\n[batching]\nmax_bytes = \"3 parsecs\"\n",
             expected_error: "unknown size unit",

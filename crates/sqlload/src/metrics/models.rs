@@ -5,7 +5,7 @@ use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::registry::Registry;
 
 use crate::batching::models::BufferGauge;
-use crate::http::models::ConnectionCounter;
+use crate::http::models::{ConnectionCounter, InFlight};
 
 /// The stream label every per-stream metric carries.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -28,12 +28,14 @@ pub struct Metrics {
     pub last_delivery: Family<StreamLabel, Gauge>,
     pub connections: Gauge,
     pub buffered_bytes: Gauge,
+    pub in_flight_wait: Gauge,
     counter: ConnectionCounter,
     gauge: BufferGauge,
+    in_flight: InFlight,
 }
 
 impl Metrics {
-    pub fn new(counter: ConnectionCounter, gauge: BufferGauge) -> Self {
+    pub fn new(counter: ConnectionCounter, gauge: BufferGauge, in_flight: InFlight) -> Self {
         let mut registry = Registry::with_prefix("sqlload");
         let family = |registry: &mut Registry, name: &str, help: &str| {
             let metric = Family::<StreamLabel, Counter>::default();
@@ -78,6 +80,12 @@ impl Metrics {
             "Bytes buffered across all streams",
             buffered_bytes.clone(),
         );
+        let in_flight_wait = Gauge::default();
+        registry.register(
+            "in_flight_wait_milliseconds",
+            "Time uploads and loads waited for a staging.max_in_flight slot since start",
+            in_flight_wait.clone(),
+        );
         Self {
             registry,
             rows,
@@ -91,8 +99,10 @@ impl Metrics {
             last_delivery,
             connections,
             buffered_bytes,
+            in_flight_wait,
             counter,
             gauge,
+            in_flight,
         }
     }
 
@@ -100,6 +110,8 @@ impl Metrics {
     pub fn refresh(&self) {
         self.connections.set(self.counter.get() as i64);
         self.buffered_bytes.set(self.gauge.get() as i64);
+        self.in_flight_wait
+            .set(i64::try_from(self.in_flight.waited_ms()).unwrap_or(i64::MAX));
     }
 
     /// The label for a stream.

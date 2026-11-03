@@ -11,6 +11,16 @@ pub(crate) fn plan_for(
     columns: &[(&str, &str)],
     key_pair: bool,
 ) -> Result<Plan, String> {
+    plan_with_pipe(staging, columns, key_pair, None)
+}
+
+/// [`plan_for`] with the stream's default stage pipe already defined as `pipe_definition`.
+pub(crate) fn plan_with_pipe(
+    staging: &str,
+    columns: &[(&str, &str)],
+    key_pair: bool,
+    pipe_definition: Option<&str>,
+) -> Result<Plan, String> {
     let config =
         parse_config(&format!("{BASE}{staging}"), &|_| None).map_err(|error| error.to_string())?;
     let streams = resolve_streams(&config, &["shop.orders".to_owned()])
@@ -23,6 +33,12 @@ pub(crate) fn plan_for(
     existing
         .tables
         .extend((!columns.is_empty()).then_some(("SHOP__ORDERS".to_owned(), table)));
+    existing.pipes.extend(pipe_definition.map(|definition| {
+        (
+            "SHOP__ORDERS_SQLLOAD_PIPE".to_owned(),
+            Some(definition.to_owned()),
+        )
+    }));
     Ok(build_plan(&config, &streams, &existing, key_pair))
 }
 

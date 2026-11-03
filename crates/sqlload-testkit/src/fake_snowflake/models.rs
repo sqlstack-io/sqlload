@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use std::io::Read;
-
-use flate2::read::GzDecoder;
 use serde_json::Value;
+
+use crate::fake_snowflake::_helpers::loading::{ndjson_rows, parquet_rows};
+use crate::fake_snowflake::constants::PARQUET_MAGIC;
 
 /// One fake table: its declared columns and the rows committed to it.
 #[derive(Debug, Clone, Default)]
@@ -49,7 +49,7 @@ pub struct FakeState {
 }
 
 impl FakeState {
-    /// Load one gzip NDJSON object into `table` unless it was loaded before or does not exist.
+    /// Load one gzip NDJSON or Parquet object into `table` unless it was loaded before or does not exist.
     pub fn load_object(&mut self, table: &str, key: &str) {
         if self.loaded.contains(key) {
             return;
@@ -57,18 +57,16 @@ impl FakeState {
         let Some(body) = self.objects.get(key) else {
             return;
         };
-        let mut text = String::new();
-        match GzDecoder::new(body.as_slice()).read_to_string(&mut text) {
-            Ok(_) => {}
-            Err(_) => return,
-        }
-        let rows: Vec<Value> = text
-            .lines()
-            .filter_map(|line| match serde_json::from_str(line) {
-                Ok(value) => Some(value),
-                Err(_) => None,
-            })
-            .collect();
+        let rows = match body.starts_with(PARQUET_MAGIC.as_bytes()) {
+            true => {
+                let columns = self.tables.get(table).map(|found| found.columns.clone());
+                parquet_rows(body, &columns.unwrap_or_default())
+            }
+            false => ndjson_rows(body),
+        };
+        let Some(rows) = rows else {
+            return;
+        };
         self.loaded.insert(key.to_owned());
         self.tables
             .entry(table.to_owned())

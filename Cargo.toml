@@ -20,6 +20,7 @@ arrow-array = "60"
 arrow-schema = "60"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64 = "0.22"
+bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }

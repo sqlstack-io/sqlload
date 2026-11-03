@@ -1,12 +1,10 @@
-//! The column list and expressions that load a Parquet file into the envelope columns.
-
 use crate::config::models::Config;
 use crate::file_format::_helpers::columns::{is_semi_structured, parquet_kind, timestamp_family};
 use crate::file_format::models::{LoadSelect, ParquetKind};
 use crate::naming::main::quote_name::quote_name;
 
 /// Each column cast to its type; JSON text parsed for semi-structured columns, and `exported_at` labelled with `envelope.time_zone` so tables match JSON loads.
-pub fn load_select(config: &Config) -> LoadSelect {
+pub(crate) fn load_select(config: &Config) -> LoadSelect {
     let zone = sql_literal(&config.envelope.time_zone);
     let mut columns: Vec<String> = Vec::new();
     let mut expressions: Vec<String> = Vec::new();
