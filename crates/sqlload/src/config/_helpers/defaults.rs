@@ -17,6 +17,10 @@ pub(crate) fn discovery_interval() -> Duration {
     Duration::from_secs(DEFAULT_DISCOVERY_INTERVAL_SECS)
 }
 
+pub(crate) fn shards() -> u32 {
+    1
+}
+
 pub(crate) fn prefetch_budget() -> ByteSize {
     ByteSize(DEFAULT_PREFETCH_BUDGET)
 }
@@ -59,6 +63,10 @@ pub(crate) fn max_total_bytes() -> ByteSize {
 
 pub(crate) fn max_request_bytes() -> ByteSize {
     ByteSize(DEFAULT_MAX_REQUEST_BYTES)
+}
+
+pub(crate) fn time_zone() -> String {
+    "UTC".to_owned()
 }
 
 pub(crate) fn error_logging() -> bool {

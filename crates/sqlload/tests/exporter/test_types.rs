@@ -57,3 +57,11 @@ pub(crate) struct S3RetryTestCase {
     pub(crate) records: usize,
     pub(crate) expected_rows: usize,
 }
+
+pub(crate) struct ShardingTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) topics: &'static [&'static str],
+    pub(crate) records: usize,
+    pub(crate) shards: u32,
+    pub(crate) expected_streams: usize,
+}

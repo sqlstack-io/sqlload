@@ -16,6 +16,7 @@ use crate::kafka::main::list_topics::list_topics;
 use crate::kafka::main::prefetch_kbytes::prefetch_kbytes;
 use crate::metrics::models::Metrics;
 use crate::naming::main::resolve_streams::resolve_streams;
+use crate::naming::main::shard_of::shard_of;
 use crate::naming::models::Stream;
 use crate::planning::main::apply_plan::apply_plan;
 use crate::planning::main::build_plan::build_plan;
@@ -111,8 +112,12 @@ impl Supervisor {
 
     async fn discover(&mut self, cancel: &CancellationToken) -> Result<(), String> {
         let topics = list_topics(&self.config).await?;
-        let streams =
-            resolve_streams(&self.config, &topics).map_err(|problems| problems.join("; "))?;
+        let source = &self.config.source;
+        let streams: Vec<Stream> = resolve_streams(&self.config, &topics)
+            .map_err(|problems| problems.join("; "))?
+            .into_iter()
+            .filter(|stream| shard_of(&stream.table, source.shards) == source.shard)
+            .collect();
         self.stream_count = streams.len();
         let changed: Vec<Stream> = streams
             .into_iter()

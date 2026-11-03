@@ -22,13 +22,25 @@ pub fn run() -> ExitCode {
         Err(error) => return fail(&format!("cannot start the async runtime: {error}")),
     };
     let outcome = runtime.block_on(async {
-        let config = load_config(&cli.config).map_err(|error| error.to_string())?;
+        let mut config = load_config(&cli.config).map_err(|error| error.to_string())?;
         match cli.command {
             Command::Check => check(&config).await,
             Command::Plan => plan(&config).await,
             Command::Tables { topics_file } => tables(&config, topics_file.as_deref()).await,
             Command::Apply => apply(&config).await,
-            Command::Run { max_duration } => run_export(config, max_duration).await,
+            Command::Run {
+                max_duration,
+                shard,
+            } => {
+                config.source.shard = shard.unwrap_or(config.source.shard);
+                match config.source.shard < config.source.shards {
+                    true => run_export(config, max_duration).await,
+                    false => Err(format!(
+                        "--shard {} must be below source.shards {}",
+                        config.source.shard, config.source.shards
+                    )),
+                }
+            }
             Command::Status => status(&config).await,
         }
     });

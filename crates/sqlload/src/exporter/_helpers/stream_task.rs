@@ -15,7 +15,7 @@ use crate::config::models::{Config, StartFrom, StreamSettings};
 use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{Delivery, DeliveryReport};
 use crate::envelope::main::encode_row::encode_row;
-use crate::envelope::models::KafkaRecord;
+use crate::envelope::models::{KafkaRecord, RowContext};
 use crate::http::models::RetryPolicy;
 use crate::kafka::main::build_consumer::build_consumer;
 use crate::kafka::main::partitions_of::partitions_of;
@@ -64,6 +64,7 @@ struct StreamTask {
     cancel: CancellationToken,
     unwrap: BTreeMap<String, BTreeMap<String, String>>,
     no_unwrap: BTreeMap<String, String>,
+    time_zone: chrono_tz::Tz,
 }
 
 /// Consume, batch, deliver and commit one stream until `cancel` fires.
@@ -93,6 +94,12 @@ pub(crate) async fn run_stream(
     let mut task = StreamTask {
         unwrap,
         no_unwrap: BTreeMap::new(),
+        time_zone: inputs
+            .config
+            .envelope
+            .time_zone
+            .parse()
+            .unwrap_or(chrono_tz::Tz::UTC),
         batcher: Batcher::new(limits, inputs.gauge),
         config: inputs.config,
         stream: inputs.stream,
@@ -196,8 +203,12 @@ impl StreamTask {
         {
             return Ok(());
         }
-        let unwrap = self.unwrap.get(&record.topic).unwrap_or(&self.no_unwrap);
-        let line = encode_row(&self.config.envelope.columns, &record, now_ms(), unwrap);
+        let context = RowContext {
+            exported_at_ms: now_ms(),
+            time_zone: self.time_zone,
+            unwrap: self.unwrap.get(&record.topic).unwrap_or(&self.no_unwrap),
+        };
+        let line = encode_row(&self.config.envelope.columns, &record, &context);
         let row = BatchRow {
             topic: record.topic,
             partition: record.partition,

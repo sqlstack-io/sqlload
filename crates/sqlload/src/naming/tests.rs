@@ -6,5 +6,7 @@ mod qualify_stage;
 mod resolve_streams;
 #[path = "tests/test_resolve_tables.rs"]
 mod resolve_tables;
+#[path = "tests/test_shard_of.rs"]
+mod shard_of;
 #[path = "tests/test_types.rs"]
 mod test_types;

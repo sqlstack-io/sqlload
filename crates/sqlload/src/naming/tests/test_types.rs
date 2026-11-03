@@ -31,3 +31,11 @@ pub(crate) struct QualifyStageTestCase {
     pub(crate) stage: &'static str,
     pub(crate) expected_name: &'static str,
 }
+
+pub(crate) struct ShardTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) before: u32,
+    pub(crate) after: u32,
+    /// The most streams out of 1,000 allowed to change owner.
+    pub(crate) expected_max_moved: usize,
+}

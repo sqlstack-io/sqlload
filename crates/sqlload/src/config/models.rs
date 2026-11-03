@@ -48,6 +48,12 @@ pub struct SourceConfig {
         deserialize_with = "deserialize_duration"
     )]
     pub discovery_interval: Duration,
+    /// How many instances split the streams between them.
+    #[serde(default = "defaults::shards")]
+    pub shards: u32,
+    /// This instance's index below `shards`; `run --shard` sets it.
+    #[serde(default)]
+    pub shard: u32,
     #[serde(default = "defaults::prefetch_budget")]
     pub prefetch_budget: ByteSize,
     #[serde(default = "defaults::startup_batch")]
@@ -217,6 +223,9 @@ pub struct EnvelopeConfig {
     pub columns: Vec<ColumnConfig>,
     #[serde(default = "defaults::error_logging")]
     pub error_logging: bool,
+    /// IANA zone whose UTC offset `exported_at` values carry, e.g. `America/Los_Angeles`.
+    #[serde(default = "defaults::time_zone")]
+    pub time_zone: String,
 }
 
 impl Default for EnvelopeConfig {
@@ -224,6 +233,7 @@ impl Default for EnvelopeConfig {
         Self {
             columns: defaults::columns(),
             error_logging: defaults::error_logging(),
+            time_zone: defaults::time_zone(),
         }
     }
 }

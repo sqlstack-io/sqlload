@@ -43,6 +43,9 @@ pub enum Command {
         /// Stop after this long, e.g. `10m`.
         #[arg(long, value_parser = humantime::parse_duration)]
         max_duration: Option<Duration>,
+        /// This instance's index below `source.shards`.
+        #[arg(long, env = "SQLLOAD_SHARD")]
+        shard: Option<u32>,
     },
     /// Show per-partition lag and committed offsets.
     Status,

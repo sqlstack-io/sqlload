@@ -8,6 +8,7 @@ use sqlload::kafka::main::list_topics::list_topics;
 use sqlload::kafka::main::select_topics::select_topics;
 use sqlload::naming::main::resolve_streams::resolve_streams;
 use sqlload::naming::main::resolve_tables::resolve_tables;
+use sqlload::naming::main::shard_of::shard_of;
 use sqlload::naming::models::{NameSource, TopicTable};
 use sqlload::planning::main::apply_plan::apply_plan;
 use sqlload::planning::main::build_plan::build_plan;
@@ -56,7 +57,12 @@ pub(crate) async fn plan(config: &Config) -> Result<Vec<String>, String> {
     lines.extend(tables.iter().map(topic_line));
     lines.push(String::new());
     lines.push("Objects:".to_owned());
-    lines.extend(plan.streams.iter().flat_map(stream_lines));
+    let shards = config.source.shards;
+    lines.extend(
+        plan.streams
+            .iter()
+            .flat_map(|stream| stream_lines(stream, shards)),
+    );
     let problems = plan.problems();
     lines.push(String::new());
     lines.push(format!(
@@ -83,9 +89,13 @@ fn topic_line(entry: &TopicTable) -> String {
     format!("  {} -> {} ({source})", entry.topic, entry.table)
 }
 
-fn stream_lines(stream: &StreamPlan) -> Vec<String> {
+fn stream_lines(stream: &StreamPlan, shards: u32) -> Vec<String> {
+    let shard = match shards {
+        1 => String::new(),
+        _ => format!(", shard {}", shard_of(&stream.stream.table, shards)),
+    };
     let header = format!(
-        "  {} [{:?}, group {}]",
+        "  {} [{:?}, group {}{shard}]",
         stream.stream.table, stream.load_path, stream.stream.consumer_group
     );
     std::iter::once(header)

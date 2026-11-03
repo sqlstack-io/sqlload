@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 
 use crate::config::models::{ColumnConfig, EnvelopeField};
-use crate::envelope::models::KafkaRecord;
+use crate::envelope::models::{KafkaRecord, RowContext};
 use crate::time_text::main::iso_utc::iso_utc;
 use crate::time_text::main::utc_date::utc_date;
 
@@ -9,8 +9,9 @@ use crate::time_text::main::utc_date::utc_date;
 pub(crate) fn field_value(
     column: &ColumnConfig,
     record: &KafkaRecord,
-    exported_at_ms: i64,
+    context: &RowContext<'_>,
 ) -> Value {
+    let exported_at_ms = context.exported_at_ms;
     match column.field {
         EnvelopeField::Topic => Value::from(record.topic.as_str()),
         EnvelopeField::Partition => Value::from(record.partition),
@@ -20,9 +21,23 @@ pub(crate) fn field_value(
         EnvelopeField::TimestampType => record.timestamp_type.map_or(Value::Null, Value::from),
         EnvelopeField::Value => payload(column, record.value.as_deref()),
         EnvelopeField::Headers => headers(record),
-        EnvelopeField::ExportedAt => Value::from(iso_utc(exported_at_ms)),
+        EnvelopeField::ExportedAt => Value::from(zoned_time(exported_at_ms, context.time_zone)),
         EnvelopeField::Date => Value::from(utc_date(record.timestamp_ms.unwrap_or(exported_at_ms))),
         EnvelopeField::Null => Value::Null,
+    }
+}
+
+/// RFC 3339 with milliseconds and the zone's offset at that instant; `Z` for UTC.
+fn zoned_time(unix_ms: i64, zone: chrono_tz::Tz) -> String {
+    if zone == chrono_tz::Tz::UTC {
+        return iso_utc(unix_ms);
+    }
+    match chrono::DateTime::from_timestamp_millis(unix_ms) {
+        Some(instant) => instant
+            .with_timezone(&zone)
+            .format("%Y-%m-%dT%H:%M:%S%.3f%:z")
+            .to_string(),
+        None => iso_utc(unix_ms),
     }
 }
 

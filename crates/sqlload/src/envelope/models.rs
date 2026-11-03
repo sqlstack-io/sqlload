@@ -17,3 +17,12 @@ pub struct RecordHeader {
     pub name: String,
     pub value: Option<Vec<u8>>,
 }
+
+/// What an encoded row depends on besides the record.
+#[derive(Debug, Clone, Copy)]
+pub struct RowContext<'a> {
+    pub exported_at_ms: i64,
+    pub time_zone: chrono_tz::Tz,
+    /// Columns filled from a member of the JSON value.
+    pub unwrap: &'a std::collections::BTreeMap<String, String>,
+}

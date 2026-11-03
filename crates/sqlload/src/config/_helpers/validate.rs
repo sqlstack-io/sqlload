@@ -14,6 +14,12 @@ pub(crate) fn validate(config: &Config) -> Result<(), ConfigError> {
     problems.extend(staging_problems(config));
     problems.extend(batching_problems(config));
     problems.extend(unwrap_problems(config));
+    if config.envelope.time_zone.parse::<chrono_tz::Tz>().is_err() {
+        problems.push(format!(
+            "envelope.time_zone {:?} is not an IANA time zone",
+            config.envelope.time_zone
+        ));
+    }
     match problems.is_empty() {
         true => Ok(()),
         false => Err(ConfigError::Invalid(problems)),
@@ -43,6 +49,12 @@ fn source_problems(config: &Config) -> Vec<String> {
         if let Err(error) = globset::Glob::new(pattern) {
             problems.push(format!("invalid topic pattern {pattern:?}: {error}"));
         }
+    }
+    if config.source.shards == 0 || config.source.shard >= config.source.shards {
+        problems.push(format!(
+            "source.shard {} must be below source.shards {}",
+            config.source.shard, config.source.shards
+        ));
     }
     if !config.source.consumer_group.contains("{stream}") {
         problems.push("source.consumer_group must contain {stream}".to_owned());
