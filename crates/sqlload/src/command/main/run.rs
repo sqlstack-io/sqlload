@@ -3,8 +3,8 @@
 use std::io::Write;
 use std::process::ExitCode;
 
+use crate::config::main::load_config::load_config;
 use clap::Parser;
-use sqlload::config::main::load_config::load_config;
 
 use crate::command::_helpers::commands::{apply, check, plan, run_export, status, tables};
 use crate::command::_helpers::logging::init_logging;

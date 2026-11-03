@@ -4,6 +4,9 @@
 
 pub mod auth;
 pub mod batching;
+/// The `sqlload` command line; behind the default `cli` feature.
+#[cfg(feature = "cli")]
+pub mod command;
 pub mod config;
 pub mod delivery;
 pub mod envelope;

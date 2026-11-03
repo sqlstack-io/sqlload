@@ -1,22 +1,22 @@
 use std::time::Duration;
 
-use sqlload::config::models::Config;
-use sqlload::exporter::main::build_clients::build_clients;
-use sqlload::exporter::main::run_exporter::run_exporter;
-use sqlload::exporter::models::Clients;
-use sqlload::kafka::main::list_topics::list_topics;
-use sqlload::kafka::main::select_topics::select_topics;
-use sqlload::naming::main::resolve_streams::resolve_streams;
-use sqlload::naming::main::resolve_tables::resolve_tables;
-use sqlload::naming::main::shard_of::shard_of;
-use sqlload::naming::models::{NameSource, TopicTable};
-use sqlload::planning::main::apply_plan::apply_plan;
-use sqlload::planning::main::build_plan::build_plan;
-use sqlload::planning::main::read_existing::read_existing;
-use sqlload::planning::models::{ObjectState, Plan, PlannedObject, StreamPlan};
-use sqlload::status::main::check_connections::check_connections;
-use sqlload::status::main::collect_status::collect_status;
-use sqlload::status::models::{PartitionStatus, StreamStatus};
+use crate::config::models::Config;
+use crate::exporter::main::build_clients::build_clients;
+use crate::exporter::main::run_exporter::run_exporter;
+use crate::exporter::models::Clients;
+use crate::kafka::main::list_topics::list_topics;
+use crate::kafka::main::select_topics::select_topics;
+use crate::naming::main::resolve_streams::resolve_streams;
+use crate::naming::main::resolve_tables::resolve_tables;
+use crate::naming::main::shard_of::shard_of;
+use crate::naming::models::{NameSource, TopicTable};
+use crate::planning::main::apply_plan::apply_plan;
+use crate::planning::main::build_plan::build_plan;
+use crate::planning::main::read_existing::read_existing;
+use crate::planning::models::{ObjectState, Plan, PlannedObject, StreamPlan};
+use crate::status::main::check_connections::check_connections;
+use crate::status::main::collect_status::collect_status;
+use crate::status::models::{PartitionStatus, StreamStatus};
 use tokio_util::sync::CancellationToken;
 
 use crate::command::_helpers::limits::raise_open_file_limit;
@@ -145,7 +145,7 @@ pub(crate) async fn tables(
         None => list_topics(config).await?,
     };
     let streams = resolve_streams(config, &topics).map_err(|problems| problems.join("\n"))?;
-    let mut by_topic: std::collections::BTreeMap<&str, &sqlload::naming::models::Stream> =
+    let mut by_topic: std::collections::BTreeMap<&str, &crate::naming::models::Stream> =
         std::collections::BTreeMap::new();
     for stream in &streams {
         for topic in &stream.topics {

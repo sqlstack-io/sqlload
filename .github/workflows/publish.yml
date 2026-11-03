@@ -177,3 +177,29 @@ jobs:
         with:
           packages-dir: dist
           skip-existing: true
+
+  crates:
+    name: Publish to crates.io
+    needs:
+      - release-tag
+      - wheels
+      - sdist
+    runs-on: ubuntu-latest
+    environment: crates
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-tag.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - name: Exchange the OIDC token for a crates.io token
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Publish sqlload
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+        run: cargo publish --locked -p sqlload
