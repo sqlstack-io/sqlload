@@ -1,0 +1,25 @@
+# Example systemd unit. Install as /etc/systemd/system/sqlload.service, then:
+#   systemctl daemon-reload && systemctl enable --now sqlload
+[Unit]
+Description=sqlload Kafka to Snowflake exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=sqlload
+Group=sqlload
+# Secrets referenced as ${NAME} in the config, e.g. SNOWFLAKE_TOKEN or AWS_ACCESS_KEY_ID.
+EnvironmentFile=/etc/sqlload/sqlload.env
+ExecStart=/usr/local/bin/sqlload -c /etc/sqlload/sqlload.toml --log-format json run
+Restart=always
+RestartSec=10
+# Each stream holds several Kafka sockets and librdkafka threads.
+LimitNOFILE=65536
+TasksMax=infinity
+# Time for the final flush and offset commit after SIGTERM.
+TimeoutStopSec=120
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

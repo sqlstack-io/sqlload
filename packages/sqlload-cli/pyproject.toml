@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "sqlload-cli"
+version = "0.0.1" # x-release-please-version
+description = "Native executable for sqlload. Pre-release, under development."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Rust",
+  "Topic :: Database",
+]
+
+[project.urls]
+Homepage = "https://github.com/sqlstack-io/sqlload"
+Issues = "https://github.com/sqlstack-io/sqlload/issues"
+Repository = "https://github.com/sqlstack-io/sqlload"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "../../crates/sqlload-cli/Cargo.toml"
+# Kafka TLS with OpenSSL built in; SASL PLAIN and SCRAM need nothing else. GSSAPI is left out.
+features = ["ssl-vendored"]
+
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "../../Cargo.toml" },
+  { file = "../../Cargo.lock" },
+  { file = "../../crates/*/Cargo.toml" },
+  { file = "../../crates/*/src/**/*.rs" },
+]

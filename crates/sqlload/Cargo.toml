@@ -1,0 +1,69 @@
+[package]
+name = "sqlload"
+version.workspace = true
+description = "Kafka to Snowflake export engine: discovery, naming, batching and delivery."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# TLS and SASL support in the bundled librdkafka.
+ssl = ["rdkafka/ssl"]
+# TLS with OpenSSL built in, so the binary needs no system OpenSSL (PyPI wheels).
+ssl-vendored = ["rdkafka/ssl-vendored"]
+sasl = ["rdkafka/sasl"]
+# Select the Docker-backed integration tests (`make test-containers`).
+container-tests = []
+
+[dependencies]
+aes.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+flate2.workspace = true
+getrandom.workspace = true
+globset.workspace = true
+hex.workspace = true
+hmac.workspace = true
+humantime.workspace = true
+jsonwebtoken.workspace = true
+parquet.workspace = true
+prometheus-client.workspace = true
+regex.workspace = true
+rdkafka.workspace = true
+reqwest.workspace = true
+rsa.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+toml.workspace = true
+tower-layer.workspace = true
+tower-service.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+sqlload-testkit.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+
+
+[lints]
+workspace = true
+
+[[test]]
+name = "exporter"
+path = "tests/exporter.rs"
+required-features = ["container-tests"]

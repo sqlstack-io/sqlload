@@ -1,0 +1,25 @@
+[package]
+name = "sqlload-testkit"
+version.workspace = true
+description = "Test doubles for sqlload: a fake Snowflake service and a Redpanda container."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum.workspace = true
+bytes.workspace = true
+flate2.workspace = true
+parquet = { workspace = true, features = ["json"] }
+rdkafka.workspace = true
+rsa = { workspace = true, features = ["getrandom"] }
+serde_json.workspace = true
+sqlload.workspace = true
+testcontainers.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true
