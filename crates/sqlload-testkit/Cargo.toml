@@ -11,6 +11,7 @@ rust-version.workspace = true
 [dependencies]
 axum.workspace = true
 flate2.workspace = true
+parquet.workspace = true
 rdkafka.workspace = true
 rsa = { workspace = true, features = ["getrandom"] }
 serde_json.workspace = true

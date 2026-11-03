@@ -8,6 +8,7 @@ pub mod config;
 pub mod delivery;
 pub mod envelope;
 pub mod exporter;
+pub mod file_format;
 pub mod http;
 pub mod kafka;
 pub mod metrics;

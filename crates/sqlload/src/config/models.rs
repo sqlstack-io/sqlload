@@ -128,8 +128,25 @@ pub struct StagingConfig {
     pub retain: Duration,
     #[serde(default)]
     pub load: LoadMethod,
+    /// The staged files' format.
+    #[serde(default)]
+    pub format: FileFormat,
+    /// The most uploads, and separately the most loads, in flight at once across all streams.
+    #[serde(default = "defaults::max_in_flight")]
+    pub max_in_flight: usize,
     #[serde(default)]
     pub s3: Option<S3Config>,
+}
+
+/// How staged files are encoded.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileFormat {
+    /// Gzip newline-delimited JSON, one object per row.
+    #[default]
+    Json,
+    /// Zstd Parquet with the envelope columns; `exported_at` is a UTC timestamp.
+    Parquet,
 }
 
 /// The delivery modes.

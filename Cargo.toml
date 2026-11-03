@@ -16,6 +16,8 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 aes = "0.8"
+arrow-array = "60"
+arrow-schema = "60"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
@@ -28,6 +30,7 @@ hex = "0.4"
 hmac = "0.12"
 humantime = "2"
 jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 prometheus-client = "0.25"
 rdkafka = { version = "0.39", default-features = false, features = ["tokio", "libz", "zstd"] }
 regex = "1"

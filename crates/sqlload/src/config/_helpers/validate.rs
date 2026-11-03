@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::config::constants::{MAX_NAME_LENGTH, S3_PATH_PLACEHOLDERS, STREAMING_REQUEST_LIMIT};
 use crate::config::errors::ConfigError;
-use crate::config::models::{Config, S3Config, StagingKind};
+use crate::config::models::{Config, FileFormat, S3Config, StagingKind};
 
 /// Reject settings that parse but cannot work together.
 pub(crate) fn validate(config: &Config) -> Result<(), ConfigError> {
@@ -134,7 +134,14 @@ fn template_problems(config: &Config) -> Vec<String> {
 
 fn staging_problems(config: &Config) -> Vec<String> {
     let is_s3 = config.staging.kind == StagingKind::S3;
-    match (is_s3, config.staging.s3.is_some()) {
+    let mut problems: Vec<String> = Vec::new();
+    if config.staging.format == FileFormat::Parquet && !is_s3 {
+        problems.push("staging.format = \"parquet\" needs staging.kind = \"s3\"".to_owned());
+    }
+    if config.staging.max_in_flight == 0 {
+        problems.push("staging.max_in_flight must be at least 1".to_owned());
+    }
+    problems.extend(match (is_s3, config.staging.s3.is_some()) {
         (true, false) => vec!["staging.kind = \"s3\" needs a [staging.s3] section".to_owned()],
         (false, true) => vec!["[staging.s3] is only used when staging.kind = \"s3\"".to_owned()],
         _ => config
@@ -143,7 +150,8 @@ fn staging_problems(config: &Config) -> Vec<String> {
             .as_ref()
             .map(s3_problems)
             .unwrap_or_default(),
-    }
+    });
+    problems
 }
 
 fn s3_problems(s3: &S3Config) -> Vec<String> {

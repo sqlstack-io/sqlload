@@ -5,6 +5,8 @@ pub const DEFAULT_DISCOVERY_INTERVAL_SECS: u64 = 300;
 pub const DEFAULT_PREFETCH_BUDGET: u64 = 1024 * 1024 * 1024;
 pub const DEFAULT_STARTUP_BATCH: usize = 20;
 pub const DEFAULT_STARTUP_INTERVAL_MS: u64 = 500;
+/// Uploads, and separately loads, in flight at once across all streams.
+pub const DEFAULT_MAX_IN_FLIGHT: usize = 32;
 pub const DEFAULT_RETAIN_SECS: u64 = 7 * 24 * 3600;
 pub const DEFAULT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 pub const DEFAULT_MAX_ROWS: usize = 100_000;
