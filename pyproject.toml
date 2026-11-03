@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sqlload"
-version = "0.1.0" # x-release-please-version
+version = "0.2.0" # x-release-please-version
 description = "SQL data loading tooling. Pre-release, under development."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,7 +19,7 @@ classifiers = [
   "Topic :: Database",
 ]
 dependencies = [
-  "sqlload-cli==0.1.0", # x-release-please-version
+  "sqlload-cli==0.2.0", # x-release-please-version
 ]
 
 [project.urls]
