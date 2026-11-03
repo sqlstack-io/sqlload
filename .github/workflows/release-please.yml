@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -16,11 +17,75 @@ concurrency:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
+      # An app token, not GITHUB_TOKEN, so the release pull request and its lockfile commit
+      # trigger Verify.
+      - name: Create delivery token
+        id: delivery-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CHIO_DELIVERY_APP_ID }}
+          private-key: ${{ secrets.CHIO_DELIVERY_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: write
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
       - uses: googleapis/release-please-action@v4
         id: release
         with:
+          token: ${{ steps.delivery-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      - name: Publish created release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          gh workflow run publish.yml --repo "${GITHUB_REPOSITORY}" --ref main \
+            -f "tag=${RELEASE_TAG}"
+
+      - name: Resolve release branch
+        id: release_branch
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          RELEASE_PRS: ${{ steps.release.outputs.prs }}
+        run: |
+          release_branch="$(jq -r '.[0].headBranchName // empty' <<< "${RELEASE_PRS}")"
+          if [[ -z "${release_branch}" ]]; then
+            echo "Release Please reported a created PR without a head branch" >&2
+            exit 1
+          fi
+          echo "name=${release_branch}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/checkout@v5
+        if: steps.release.outputs.prs_created == 'true'
+        with:
+          ref: ${{ steps.release_branch.outputs.name }}
+          token: ${{ steps.delivery-token.outputs.token }}
+
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.release.outputs.prs_created == 'true'
+        with:
+          toolchain: 1.95.0
+
+      # Release Please bumps the workspace version; keep Cargo.lock in step with it.
+      - name: Refresh release lockfile
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          RELEASE_BRANCH: ${{ steps.release_branch.outputs.name }}
+        run: |
+          cargo update --workspace
+          if git diff --quiet -- Cargo.lock; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "chore: refresh release lockfile"
+          git push origin "HEAD:${RELEASE_BRANCH}"
