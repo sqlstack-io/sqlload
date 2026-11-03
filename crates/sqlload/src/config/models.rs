@@ -131,12 +131,27 @@ pub struct StagingConfig {
     /// The staged files' format.
     #[serde(default)]
     pub format: FileFormat,
-    /// The most uploads, and separately the most loads, in flight at once across all streams; also the most files per stream awaiting a Snowpipe load report.
+    /// The most uploads, and separately the most loads, in flight at once across all streams.
     #[serde(default = "defaults::max_in_flight")]
     pub max_in_flight: usize,
+    /// Snowpipe loads: the most files per stream sent but not yet committed; a full stream pauses its partitions.
+    #[serde(default = "defaults::max_pending_files")]
+    pub max_pending_files: usize,
     /// What happens when Snowpipe reports that an `insertFiles` file failed to load.
     #[serde(default)]
     pub on_load_error: LoadErrorPolicy,
+    /// Snowpipe loads: how long after a file is sent without a report its load history and stage object are checked.
+    #[serde(
+        default = "defaults::pending_check_after",
+        deserialize_with = "deserialize_duration"
+    )]
+    pub pending_check_after: Duration,
+    /// Snowpipe loads: how often a file still unreported after the first check is checked again.
+    #[serde(
+        default = "defaults::pending_recheck_every",
+        deserialize_with = "deserialize_duration"
+    )]
+    pub pending_recheck_every: Duration,
     #[serde(default)]
     pub s3: Option<S3Config>,
 }

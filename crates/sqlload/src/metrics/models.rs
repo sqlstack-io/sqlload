@@ -29,6 +29,7 @@ pub struct Metrics {
     pub pending_files: Family<StreamLabel, Gauge>,
     pub oldest_pending: Family<StreamLabel, Gauge>,
     pub skipped_files: Family<StreamLabel, Counter>,
+    pub pending_wait: Family<StreamLabel, Counter>,
     pub connections: Gauge,
     pub buffered_bytes: Gauge,
     pub in_flight_wait: Gauge,
@@ -70,6 +71,11 @@ impl Metrics {
             "skipped_files",
             "Staged files Snowpipe failed to load, skipped by on_load_error = \"skip\"",
         );
+        let pending_wait = family(
+            &mut registry,
+            "pending_wait_milliseconds",
+            "Time the stream's partitions were paused because staging.max_pending_files were sent but not committed",
+        );
         let gauges = |registry: &mut Registry, name: &str, help: &str| {
             let metric = Family::<StreamLabel, Gauge>::default();
             registry.register(name, help, metric.clone());
@@ -83,12 +89,12 @@ impl Metrics {
         let pending_files = gauges(
             &mut registry,
             "pending_files",
-            "Staged files sent to Snowpipe whose load is not reported yet; their offsets are not committed",
+            "Staged files sent to Snowpipe whose offsets are not committed yet",
         );
         let oldest_pending = gauges(
             &mut registry,
             "oldest_pending_seconds",
-            "Age of the oldest staged file whose load is not reported yet",
+            "Age of the oldest staged file whose offsets are not committed yet; alert when it keeps growing",
         );
         let connections = Gauge::default();
         registry.register(
@@ -105,7 +111,7 @@ impl Metrics {
         let in_flight_wait = Gauge::default();
         registry.register(
             "in_flight_wait_milliseconds",
-            "Time uploads and loads waited for a staging.max_in_flight slot, and streams for their pending Snowpipe loads, since start",
+            "Time uploads and loads waited for a staging.max_in_flight slot since start",
             in_flight_wait.clone(),
         );
         Self {
@@ -122,6 +128,7 @@ impl Metrics {
             pending_files,
             oldest_pending,
             skipped_files,
+            pending_wait,
             connections,
             buffered_bytes,
             in_flight_wait,
@@ -137,11 +144,6 @@ impl Metrics {
         self.buffered_bytes.set(self.gauge.get() as i64);
         self.in_flight_wait
             .set(i64::try_from(self.in_flight.waited_ms()).unwrap_or(i64::MAX));
-    }
-
-    /// Count time spent waiting for a stream's pending files to drop below `staging.max_in_flight`.
-    pub fn add_in_flight_wait(&self, waited: std::time::Duration) {
-        self.in_flight.add_wait(waited);
     }
 
     /// The label for a stream.

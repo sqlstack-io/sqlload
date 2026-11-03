@@ -26,7 +26,6 @@ use crate::metrics::models::Metrics;
 use crate::naming::models::Stream;
 use crate::time_text::main::now_ms::now_ms;
 
-const CONFIRM_POLL: Duration = Duration::from_secs(1);
 const PRUNE_EVERY: Duration = Duration::from_secs(24 * 3600);
 const SHUTDOWN_CONFIRM_WAIT: Duration = Duration::from_secs(60);
 const KAFKA_TIMEOUT: Duration = Duration::from_secs(10);
@@ -65,6 +64,8 @@ struct StreamTask {
     unwrap: BTreeMap<String, BTreeMap<String, String>>,
     no_unwrap: BTreeMap<String, String>,
     time_zone: chrono_tz::Tz,
+    /// When the stream paused its partitions because its uncommitted files reached `max_pending_files`.
+    paused_since: Option<std::time::Instant>,
 }
 
 /// Consume, batch, deliver and commit one stream until `cancel` fires.
@@ -111,10 +112,15 @@ pub(crate) async fn run_stream(
         committed: BTreeMap::new(),
         retry: RetryPolicy::default(),
         cancel: cancel.clone(),
+        paused_since: None,
     };
     tracing::info!(stream = %task.stream.name, topics = ?task.stream.topics, group = %task.stream.consumer_group, "stream started");
     let outcome = task.run(events, &cancel).await;
-    task.finish().await;
+    let clean = match &outcome {
+        Ok(()) => true,
+        Err(_) => false,
+    };
+    task.finish(clean).await;
     tracing::info!(stream = %task.stream.name, "stream stopped");
     outcome
 }
@@ -125,10 +131,11 @@ impl StreamTask {
         mut events: UnboundedReceiver<RebalanceEvent>,
         cancel: &CancellationToken,
     ) -> Result<(), String> {
-        let mut confirm = interval(CONFIRM_POLL);
+        let mut confirm = interval(self.delivery.confirm_interval());
         confirm.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut prune = interval(PRUNE_EVERY);
         loop {
+            self.pause_when_full();
             let deadline = self.batcher.deadline().map_or_else(
                 || Instant::now() + Duration::from_secs(3600),
                 Instant::from_std,
@@ -137,6 +144,7 @@ impl StreamTask {
                 biased;
                 () = cancel.cancelled() => return Ok(()),
                 Some(event) = events.recv() => self.on_rebalance(event),
+                _ = confirm.tick(), if self.delivery.has_pending() => self.confirm().await?,
                 message = self.consumer.recv() => {
                     let record = message.map(|message| to_record(&message));
                     match record {
@@ -144,11 +152,10 @@ impl StreamTask {
                         Err(error) => tracing::warn!(stream = %self.stream.name, %error, "Kafka consume error"),
                     }
                 }
-                () = sleep_until(deadline), if !self.batcher.is_empty() => {}
-                _ = confirm.tick(), if self.delivery.has_pending() => self.confirm().await?,
+                () = sleep_until(deadline), if !self.batcher.is_empty() && self.paused_since.is_none() => {}
                 _ = prune.tick() => self.prune().await,
             }
-            if self.batcher.is_due(std::time::Instant::now()) {
+            if self.paused_since.is_none() && self.batcher.is_due(std::time::Instant::now()) {
                 self.flush(cancel).await?;
             }
         }
@@ -158,6 +165,9 @@ impl StreamTask {
         match event {
             RebalanceEvent::Assigned(partitions) => {
                 tracing::info!(stream = %self.stream.name, ?partitions, "partitions assigned");
+                if self.paused_since.is_some() {
+                    self.set_paused(true);
+                }
             }
             RebalanceEvent::Revoked(partitions) => {
                 tracing::info!(stream = %self.stream.name, ?partitions, "partitions revoked");
@@ -251,9 +261,6 @@ impl StreamTask {
     }
 
     async fn flush(&mut self, cancel: &CancellationToken) -> Result<(), String> {
-        if self.batcher.is_empty() || !self.wait_for_room(cancel).await? {
-            return Ok(());
-        }
         let Some(batch) = self.batcher.take() else {
             return Ok(());
         };
@@ -289,26 +296,44 @@ impl StreamTask {
         }
     }
 
-    /// Hold new deliveries while the stream's files awaiting a load report fill `staging.max_in_flight`; false when cancelled.
-    async fn wait_for_room(&mut self, cancel: &CancellationToken) -> Result<bool, String> {
-        if !self.delivery.is_full() {
-            return Ok(true);
-        }
-        let started = std::time::Instant::now();
-        tracing::debug!(stream = %self.stream.name, pending = self.delivery.pending_files(), "waiting for Snowpipe to report pending files");
-        let mut room = true;
-        while self.delivery.is_full() {
-            tokio::select! {
-                () = cancel.cancelled() => {
-                    room = false;
-                    break;
-                }
-                () = sleep(CONFIRM_POLL) => {}
+    /// Pause the assigned partitions while the stream's uncommitted files fill `max_pending_files`, and resume once a confirmation frees room; the consumer keeps polling either way, so the group membership holds.
+    fn pause_when_full(&mut self) {
+        let full = self.delivery.is_full();
+        match (full, self.paused_since) {
+            (true, None) => {
+                tracing::info!(stream = %self.stream.name, pending = self.delivery.pending_files(), "pausing partitions until Snowpipe reports pending files");
+                self.paused_since = Some(std::time::Instant::now());
+                self.set_paused(true);
             }
-            self.confirm().await?;
+            (false, Some(since)) => {
+                tracing::info!(stream = %self.stream.name, "resuming partitions");
+                self.paused_since = None;
+                self.set_paused(false);
+                let waited = u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX);
+                self.metrics
+                    .pending_wait
+                    .get_or_create(&Metrics::label(&self.stream.name))
+                    .inc_by(waited);
+            }
+            _ => {}
         }
-        self.metrics.add_in_flight_wait(started.elapsed());
-        Ok(room)
+    }
+
+    fn set_paused(&self, paused: bool) {
+        let assigned = match self.consumer.assignment() {
+            Ok(assigned) => assigned,
+            Err(error) => {
+                tracing::warn!(stream = %self.stream.name, %error, "cannot read the assignment to pause or resume it");
+                return;
+            }
+        };
+        let outcome = match paused {
+            true => self.consumer.pause(&assigned),
+            false => self.consumer.resume(&assigned),
+        };
+        if let Err(error) = outcome {
+            tracing::warn!(stream = %self.stream.name, %error, paused, "cannot pause or resume partitions");
+        }
     }
 
     async fn confirm(&mut self) -> Result<(), String> {
@@ -495,20 +520,31 @@ impl StreamTask {
         }
     }
 
-    async fn finish(&mut self) {
+    /// Deliver what is buffered and wait briefly for confirmations, unless the stream failed; then commit what was confirmed.
+    async fn finish(&mut self, clean: bool) {
+        if clean {
+            self.drain().await;
+        }
+        let committed = std::mem::take(&mut self.committed);
+        self.commit_with(&committed, CommitMode::Sync);
+    }
+
+    async fn drain(&mut self) {
         let never = CancellationToken::new();
         let deadline = std::time::Instant::now() + SHUTDOWN_CONFIRM_WAIT;
         let flushed = tokio::time::timeout(SHUTDOWN_CONFIRM_WAIT, self.flush(&never)).await;
         if !matches!(flushed, Ok(Ok(()))) {
             tracing::warn!(stream = %self.stream.name, "final flush did not finish; unconfirmed rows will be delivered again");
         }
+        let poll = self.delivery.confirm_interval();
         while self.delivery.has_pending() && std::time::Instant::now() < deadline {
             if self.confirm().await.is_err() {
                 break;
             }
-            sleep(CONFIRM_POLL).await;
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if self.delivery.has_pending() {
+                sleep(poll.min(left)).await;
+            }
         }
-        let committed = std::mem::take(&mut self.committed);
-        self.commit_with(&committed, CommitMode::Sync);
     }
 }

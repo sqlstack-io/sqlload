@@ -2,15 +2,18 @@ use std::collections::BTreeMap;
 
 use crate::batching::models::Partition;
 use crate::config::models::LoadErrorPolicy;
-use crate::delivery::constants::{HISTORY_MARGIN, RECEIVED_BEFORE_LOOKBACK, UNREPORTED_AFTER};
-use crate::delivery::models::{FileState, PendingBatch, PendingFile, PendingLoads, Settled};
+use crate::delivery::constants::{CHECK_RETRY, HISTORY_MARGIN, RECEIVED_BEFORE_LOOKBACK};
+use crate::delivery::models::{
+    CheckTiming, FileState, PendingBatch, PendingFile, PendingLoads, Settled,
+};
 use crate::stage_api::models::{FileLoad, LoadStatus};
 
 impl PendingLoads {
-    pub(crate) fn new(policy: LoadErrorPolicy) -> Self {
+    pub(crate) fn new(policy: LoadErrorPolicy, timing: CheckTiming) -> Self {
         Self {
             batches: Default::default(),
             policy,
+            timing,
         }
     }
 
@@ -18,19 +21,16 @@ impl PendingLoads {
         self.batches.is_empty()
     }
 
-    /// Files not settled yet.
+    /// Files sent but not committed yet, including loaded files behind an older pending batch.
     pub(crate) fn file_count(&self) -> usize {
-        self.files().filter(|file| !is_done(file)).count()
+        self.files().count()
     }
 
     pub(crate) fn oldest_sent_ms(&self) -> Option<i64> {
-        self.files()
-            .filter(|file| !is_done(file))
-            .map(|file| file.first_sent_ms)
-            .min()
+        self.files().map(|file| file.first_sent_ms).min()
     }
 
-    /// Track a batch sent to `insertFiles` at `now`; `skipped` are paths the pipe said it had received before.
+    /// Track a batch sent to `insertFiles` at `now`; `skipped` are paths the pipe said it had received before, checked on the next poll.
     pub(crate) fn add(
         &mut self,
         keys: &[String],
@@ -38,25 +38,34 @@ impl PendingLoads {
         offsets: BTreeMap<Partition, i64>,
         now: i64,
     ) {
+        let check_after = self.timing.check_after.as_millis() as i64;
         let files: Vec<PendingFile> = keys
             .iter()
-            .map(|key| PendingFile {
-                key: key.clone(),
-                first_sent_ms: now,
-                sent_ms: now,
-                resent: false,
-                received_before: is_listed(skipped, key),
-                state: FileState::Waiting,
+            .map(|key| {
+                let received_before = is_listed(skipped, key);
+                PendingFile {
+                    key: key.clone(),
+                    first_sent_ms: now,
+                    resent: false,
+                    received_before,
+                    next_check_ms: match received_before {
+                        true => now,
+                        false => now + check_after,
+                    },
+                    last_check_ms: None,
+                    failed_checks: 0,
+                    state: FileState::Waiting,
+                }
             })
             .collect();
         self.batches.push_back(PendingBatch { files, offsets });
     }
 
-    /// Record reported loads; settled files keep their state.
+    /// Record reported loads for files still waiting or loading.
     pub(crate) fn apply(&mut self, loads: &[FileLoad]) {
         for load in loads {
             for file in self.files_mut() {
-                if !same_path(&load.path, &file.key) || is_done(file) {
+                if !same_path(&load.path, &file.key) || !is_unsettled(file) {
                     continue;
                 }
                 file.state = match load.status {
@@ -70,13 +79,43 @@ impl PendingLoads {
         }
     }
 
-    /// Files with no report `UNREPORTED_AFTER` after they were last sent.
+    /// Unsettled files, reported as loading or not at all, whose next check is due.
     pub(crate) fn overdue(&self, now: i64) -> Vec<String> {
-        let limit = UNREPORTED_AFTER.as_millis() as i64;
         self.files()
-            .filter(|file| file.state == FileState::Waiting && now - file.sent_ms >= limit)
+            .filter(|file| is_unsettled(file) && now >= file.next_check_ms)
             .map(|file| file.key.clone())
             .collect()
+    }
+
+    /// The report missed events: check every unsettled file on this poll unless it was checked recently.
+    pub(crate) fn mark_all_due(&mut self, now: i64) {
+        let recent = self.retry_ms();
+        for file in self.files_mut().filter(|file| is_unsettled(file)) {
+            if file.last_check_ms.is_none_or(|last| now - last >= recent) {
+                file.next_check_ms = file.next_check_ms.min(now);
+            }
+        }
+    }
+
+    /// A check found no report and the object in place: check again after `pending_recheck_every`.
+    pub(crate) fn checked(&mut self, keys: &[String], now: i64) {
+        let recheck = self.timing.recheck_every.as_millis() as i64;
+        for file in self.files_mut().filter(|file| keys.contains(&file.key)) {
+            file.last_check_ms = Some(now);
+            file.next_check_ms = now + recheck;
+            file.failed_checks = 0;
+        }
+    }
+
+    /// A check could not run: retry with a doubling delay, at most `pending_recheck_every`.
+    pub(crate) fn check_failed(&mut self, keys: &[String], now: i64) {
+        let retry = self.retry_ms();
+        let recheck = self.timing.recheck_every.as_millis() as i64;
+        for file in self.files_mut().filter(|file| keys.contains(&file.key)) {
+            let factor = 1i64 << file.failed_checks.min(16);
+            file.failed_checks += 1;
+            file.next_check_ms = now + retry.saturating_mul(factor).min(recheck);
+        }
     }
 
     /// Where a history scan for `keys` starts: a day back for files the pipe had received before, otherwise just before the first send.
@@ -93,15 +132,15 @@ impl PendingLoads {
             .min()
     }
 
-    pub(crate) fn was_resent(&self, key: &str) -> bool {
-        self.files().any(|file| file.key == key && file.resent)
+    /// True when the file was sent again, or the pipe already had it, so another `insertFiles` cannot help.
+    pub(crate) fn is_acknowledged(&self, key: &str) -> bool {
+        self.files()
+            .any(|file| file.key == key && (file.resent || file.received_before))
     }
 
-    /// Restart a file's timer after sending it again at `now`.
-    pub(crate) fn resend(&mut self, key: &str, skipped: bool, now: i64) {
+    pub(crate) fn resend(&mut self, key: &str, skipped: bool) {
         for file in self.files_mut().filter(|file| file.key == key) {
             file.resent = true;
-            file.sent_ms = now;
             file.received_before |= skipped;
         }
     }
@@ -158,6 +197,11 @@ impl PendingLoads {
         self.batches.clear();
     }
 
+    /// The first delay after a check that could not run: a minute, or less when checks are configured sooner.
+    fn retry_ms(&self) -> i64 {
+        CHECK_RETRY.min(self.timing.check_after).as_millis() as i64
+    }
+
     fn files(&self) -> impl Iterator<Item = &PendingFile> {
         self.batches.iter().flat_map(|batch| batch.files.iter())
     }
@@ -177,8 +221,12 @@ fn is_done(file: &PendingFile) -> bool {
     matches!(file.state, FileState::Loaded | FileState::Skipped)
 }
 
+fn is_unsettled(file: &PendingFile) -> bool {
+    matches!(file.state, FileState::Waiting | FileState::InProgress)
+}
+
 /// Report paths are relative to the pipe's location, as `insertFiles` paths are; a leading `/` is ignored.
-fn same_path(reported: &str, key: &str) -> bool {
+pub(crate) fn same_path(reported: &str, key: &str) -> bool {
     reported.trim_start_matches('/') == key.trim_start_matches('/')
 }
 

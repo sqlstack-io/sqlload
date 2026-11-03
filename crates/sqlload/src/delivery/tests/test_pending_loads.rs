@@ -1,9 +1,12 @@
 use crate::batching::models::Partition;
 use crate::config::models::LoadErrorPolicy;
 use crate::delivery::models::PendingLoads;
-use crate::delivery::tests::helpers::{MINUTE_MS, SENT_MS, offsets, partition, pending, reports};
+use crate::delivery::tests::helpers::{
+    MINUTE_MS, SECOND_MS, SENT_MS, TIMING, offsets, partition, pending, reports,
+};
 use crate::delivery::tests::test_types::{
-    FailedLoadTestCase, ForgetTestCase, HistoryStartTestCase, PrefixTestCase, UnreportedTestCase,
+    AcknowledgedTestCase, DueTestCase, FailedLoadTestCase, ForgetTestCase, HistoryStartTestCase,
+    PrefixTestCase,
 };
 use crate::stage_api::models::LoadStatus;
 
@@ -14,7 +17,7 @@ fn given_reported_loads_when_settling_then_only_the_loaded_prefix_is_confirmed()
             description: "a later batch that loaded waits for the earlier one",
             reports: &[("2024-03-10/b.json.gz", LoadStatus::Loaded)],
             expected_confirmed: &[],
-            expected_pending_files: 3,
+            expected_pending_files: 4,
         },
         PrefixTestCase {
             description: "two loaded batches in order commit the newest offset per partition",
@@ -33,7 +36,7 @@ fn given_reported_loads_when_settling_then_only_the_loaded_prefix_is_confirmed()
                 ("2024-03-10/b.json.gz", LoadStatus::Loaded),
             ],
             expected_confirmed: &[],
-            expected_pending_files: 2,
+            expected_pending_files: 4,
         },
         PrefixTestCase {
             description: "a report path with a leading slash matches the sent key",
@@ -52,7 +55,7 @@ fn given_reported_loads_when_settling_then_only_the_loaded_prefix_is_confirmed()
                 ("2024-03-10/a2.json.gz", LoadStatus::Loaded),
             ],
             expected_confirmed: &[],
-            expected_pending_files: 3,
+            expected_pending_files: 4,
         },
     ];
     for test_case in &test_cases {
@@ -164,59 +167,184 @@ fn given_a_failed_load_when_settling_then_the_policy_halts_or_skips() {
 }
 
 #[test]
-fn given_unreported_files_when_time_passes_then_they_are_overdue_after_five_minutes() {
+fn given_unsettled_files_when_time_passes_then_checks_are_due_on_their_backoff() {
     let test_cases = [
-        UnreportedTestCase {
-            description: "a file is not overdue just under five minutes after it was sent",
+        DueTestCase {
+            description: "a file is not checked just under five minutes after it was sent",
             reports: &[],
-            resent_at_minutes: &[],
-            now_minute: 4,
+            skipped: &[],
+            checked_at: &[],
+            failed_at: &[],
+            incomplete_at: &[],
+            now_seconds: 299,
             expected_overdue: &[],
         },
-        UnreportedTestCase {
-            description: "a file with no report for five minutes is overdue",
+        DueTestCase {
+            description: "a file with no report is checked five minutes after it was sent",
             reports: &[],
-            resent_at_minutes: &[],
-            now_minute: 5,
+            skipped: &[],
+            checked_at: &[],
+            failed_at: &[],
+            incomplete_at: &[],
+            now_seconds: 300,
             expected_overdue: &["a.json.gz"],
         },
-        UnreportedTestCase {
-            description: "a file reported as loading is never overdue",
+        DueTestCase {
+            description: "a file reported as loading is checked like an unreported one",
             reports: &[("a.json.gz", LoadStatus::InProgress)],
-            resent_at_minutes: &[],
-            now_minute: 30,
-            expected_overdue: &[],
-        },
-        UnreportedTestCase {
-            description: "sending a file again restarts its timer",
-            reports: &[],
-            resent_at_minutes: &[5],
-            now_minute: 9,
-            expected_overdue: &[],
-        },
-        UnreportedTestCase {
-            description: "a file sent again is overdue five minutes later",
-            reports: &[],
-            resent_at_minutes: &[5],
-            now_minute: 10,
+            skipped: &[],
+            checked_at: &[],
+            failed_at: &[],
+            incomplete_at: &[],
+            now_seconds: 300,
             expected_overdue: &["a.json.gz"],
+        },
+        DueTestCase {
+            description: "loaded and failed files are never checked",
+            reports: &[("a.json.gz", LoadStatus::Loaded)],
+            skipped: &[],
+            checked_at: &[],
+            failed_at: &[],
+            incomplete_at: &[],
+            now_seconds: 3_600,
+            expected_overdue: &[],
+        },
+        DueTestCase {
+            description: "a file the pipe received before is checked on the next poll",
+            reports: &[],
+            skipped: &["a.json.gz"],
+            checked_at: &[],
+            failed_at: &[],
+            incomplete_at: &[],
+            now_seconds: 0,
+            expected_overdue: &["a.json.gz"],
+        },
+        DueTestCase {
+            description: "after a check finds the file in place the next one is ten minutes later",
+            reports: &[],
+            skipped: &[],
+            checked_at: &[300],
+            failed_at: &[],
+            incomplete_at: &[],
+            now_seconds: 899,
+            expected_overdue: &[],
+        },
+        DueTestCase {
+            description: "a slow file keeps being checked, never failed",
+            reports: &[],
+            skipped: &[],
+            checked_at: &[300, 900, 1_500],
+            failed_at: &[],
+            incomplete_at: &[],
+            now_seconds: 2_100,
+            expected_overdue: &["a.json.gz"],
+        },
+        DueTestCase {
+            description: "a check that could not run is retried after a minute",
+            reports: &[],
+            skipped: &[],
+            checked_at: &[],
+            failed_at: &[300],
+            incomplete_at: &[],
+            now_seconds: 360,
+            expected_overdue: &["a.json.gz"],
+        },
+        DueTestCase {
+            description: "checks that keep failing back off: one, then two minutes",
+            reports: &[],
+            skipped: &[],
+            checked_at: &[],
+            failed_at: &[300, 360],
+            incomplete_at: &[],
+            now_seconds: 479,
+            expected_overdue: &[],
+        },
+        DueTestCase {
+            description: "an incomplete report makes a file due at once",
+            reports: &[],
+            skipped: &[],
+            checked_at: &[],
+            failed_at: &[],
+            incomplete_at: &[10],
+            now_seconds: 10,
+            expected_overdue: &["a.json.gz"],
+        },
+        DueTestCase {
+            description: "an incomplete report does not recheck a file checked in the last minute",
+            reports: &[],
+            skipped: &[],
+            checked_at: &[300],
+            failed_at: &[],
+            incomplete_at: &[330],
+            now_seconds: 330,
+            expected_overdue: &[],
         },
     ];
+    let keys = ["a.json.gz".to_owned()];
     for test_case in &test_cases {
-        let mut loads = pending(&[(&["a.json.gz"], &[(0, 10)])], LoadErrorPolicy::Halt);
+        let mut loads = PendingLoads::new(LoadErrorPolicy::Halt, TIMING);
+        let skipped: Vec<String> = test_case
+            .skipped
+            .iter()
+            .map(|path| (*path).to_owned())
+            .collect();
+        loads.add(&keys, &skipped, offsets(&[(0, 10)]), SENT_MS);
         loads.apply(&reports(test_case.reports));
-        for minute in test_case.resent_at_minutes {
-            loads.resend("a.json.gz", false, SENT_MS + minute * MINUTE_MS);
+        for second in test_case.checked_at {
+            loads.checked(&keys, SENT_MS + second * SECOND_MS);
         }
-        let overdue = loads.overdue(SENT_MS + test_case.now_minute * MINUTE_MS);
+        for second in test_case.failed_at {
+            loads.check_failed(&keys, SENT_MS + second * SECOND_MS);
+        }
+        for second in test_case.incomplete_at {
+            loads.mark_all_due(SENT_MS + second * SECOND_MS);
+        }
         assert_eq!(
-            overdue, test_case.expected_overdue,
+            loads.overdue(SENT_MS + test_case.now_seconds * SECOND_MS),
+            test_case.expected_overdue,
             "{}",
             test_case.description
         );
+    }
+}
+
+#[test]
+fn given_a_checked_file_when_deciding_to_resend_then_only_unacknowledged_files_are_sent_again() {
+    let test_cases = [
+        AcknowledgedTestCase {
+            description: "a file only sent once is sent again",
+            skipped: &[],
+            resent: &[],
+            expected_acknowledged: false,
+        },
+        AcknowledgedTestCase {
+            description: "a file already sent again keeps waiting",
+            skipped: &[],
+            resent: &["a.json.gz"],
+            expected_acknowledged: true,
+        },
+        AcknowledgedTestCase {
+            description: "a file the pipe received before keeps waiting",
+            skipped: &["/a.json.gz"],
+            resent: &[],
+            expected_acknowledged: true,
+        },
+    ];
+    let keys = ["a.json.gz".to_owned()];
+    for test_case in &test_cases {
+        let mut loads = PendingLoads::new(LoadErrorPolicy::Halt, TIMING);
+        let skipped: Vec<String> = test_case
+            .skipped
+            .iter()
+            .map(|path| (*path).to_owned())
+            .collect();
+        loads.add(&keys, &skipped, offsets(&[(0, 10)]), SENT_MS);
+        for key in test_case.resent {
+            loads.resend(key, false);
+        }
         assert_eq!(
-            loads.was_resent("a.json.gz"),
-            !test_case.resent_at_minutes.is_empty(),
+            loads.is_acknowledged("a.json.gz"),
+            test_case.expected_acknowledged,
             "{}",
             test_case.description
         );
@@ -238,7 +366,7 @@ fn given_overdue_files_when_scanning_history_then_files_received_before_look_bac
         },
     ];
     for test_case in &test_cases {
-        let mut loads = PendingLoads::new(LoadErrorPolicy::Halt);
+        let mut loads = PendingLoads::new(LoadErrorPolicy::Halt, TIMING);
         let keys = ["a.json.gz".to_owned(), "b.json.gz".to_owned()];
         let skipped: Vec<String> = test_case
             .skipped

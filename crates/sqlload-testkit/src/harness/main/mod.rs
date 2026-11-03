@@ -1,3 +1,4 @@
+pub mod read_metrics;
 pub mod start_exporter;
 pub mod start_stack;
 pub mod stop_exporter;

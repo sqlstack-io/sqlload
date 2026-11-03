@@ -42,4 +42,6 @@ pub(crate) struct LoadErrorPolicyTestCase {
     /// Lines added to `[staging]`.
     pub(crate) staging_lines: &'static str,
     pub(crate) expected_policy: LoadErrorPolicy,
+    pub(crate) expected_max_pending_files: usize,
+    pub(crate) expected_check_after: Duration,
 }

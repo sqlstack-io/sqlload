@@ -1,6 +1,7 @@
 use crate::auth::models::Authenticator;
 use crate::batching::models::{Batch, Partition};
 use crate::config::models::{Config, LoadErrorPolicy, OversizedPolicy};
+use crate::delivery::constants::{STAGE_CONFIRM_POLL, STREAMING_CONFIRM_POLL};
 use crate::delivery::errors::DeliveryError;
 use crate::http::models::InFlight;
 use crate::naming::models::Stream;
@@ -72,6 +73,14 @@ pub struct StageDelivery {
 pub struct PendingLoads {
     pub batches: VecDeque<PendingBatch>,
     pub policy: LoadErrorPolicy,
+    pub timing: CheckTiming,
+}
+
+/// When unreported files are checked: first after `check_after`, then every `recheck_every`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CheckTiming {
+    pub check_after: std::time::Duration,
+    pub recheck_every: std::time::Duration,
 }
 
 /// One delivered batch: its files and the offsets to commit once every file is loaded.
@@ -85,13 +94,16 @@ pub struct PendingBatch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingFile {
     pub key: String,
-    /// When the file was first sent, for the oldest-pending age.
+    /// When the file was first sent, for the oldest-pending age and the history lookback.
     pub first_sent_ms: i64,
-    /// When the file was last sent; the unreported timer runs from here.
-    pub sent_ms: i64,
     pub resent: bool,
     /// The pipe said it had received the file before, so its load may be older than this run.
     pub received_before: bool,
+    /// When the file's load history and stage object are next checked, if it is still unreported.
+    pub next_check_ms: i64,
+    pub last_check_ms: Option<i64>,
+    /// Checks in a row that could not run, for their backoff.
+    pub failed_checks: u32,
     pub state: FileState,
 }
 
@@ -200,7 +212,15 @@ impl Delivery {
         }
     }
 
-    /// True when the stream's files awaiting a load report fill `staging.max_in_flight`.
+    /// How often [`Self::poll`] runs while confirmations are pending.
+    pub fn confirm_interval(&self) -> std::time::Duration {
+        match self {
+            Self::Streaming(_) => STREAMING_CONFIRM_POLL,
+            Self::Stage(_) => STAGE_CONFIRM_POLL,
+        }
+    }
+
+    /// True when the stream's files sent but not committed fill `staging.max_pending_files`.
     pub fn is_full(&self) -> bool {
         match self {
             Self::Streaming(_) => false,
@@ -208,7 +228,7 @@ impl Delivery {
         }
     }
 
-    /// Files sent to Snowpipe whose load is not reported yet.
+    /// Files sent to Snowpipe whose offsets are not committed yet.
     pub fn pending_files(&self) -> usize {
         match self {
             Self::Streaming(_) => 0,
@@ -216,7 +236,7 @@ impl Delivery {
         }
     }
 
-    /// When the oldest file awaiting a load report was first sent, in Unix milliseconds.
+    /// When the oldest uncommitted file was first sent, in Unix milliseconds.
     pub fn oldest_pending_ms(&self) -> Option<i64> {
         match self {
             Self::Streaming(_) => None,

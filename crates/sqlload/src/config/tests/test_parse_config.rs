@@ -94,6 +94,16 @@ fn given_invalid_config_text_when_parsing_then_the_error_names_the_problem() {
             expected_error: "max_in_flight must be at least 1",
         },
         ParseConfigErrorTestCase {
+            description: "at least one pending file must be allowed",
+            text: "[staging]\nkind = \"internal\"\nmax_pending_files = 0\n",
+            expected_error: "max_pending_files must be at least 1",
+        },
+        ParseConfigErrorTestCase {
+            description: "pending files must be checked after a positive delay",
+            text: "[staging]\nkind = \"internal\"\npending_check_after = \"0s\"\n",
+            expected_error: "must be positive",
+        },
+        ParseConfigErrorTestCase {
             description: "an unknown load error policy is rejected",
             text: "[staging]\nkind = \"internal\"\non_load_error = \"retry\"\n",
             expected_error: "unknown variant `retry`",
@@ -197,23 +207,29 @@ fn given_source_startup_settings_when_parsing_then_defaults_apply_and_overrides_
 }
 
 #[test]
-fn given_staging_text_when_parsing_then_failed_loads_halt_unless_skip_is_set() -> Result<(), String>
-{
+fn given_staging_text_when_parsing_then_snowpipe_load_settings_have_defaults_and_overrides()
+-> Result<(), String> {
     let test_cases = [
         LoadErrorPolicyTestCase {
-            description: "a failed Snowpipe load stops the stream by default",
+            description: "a failed Snowpipe load stops the stream by default, with 32 pending files checked after five minutes",
             staging_lines: "",
             expected_policy: LoadErrorPolicy::Halt,
+            expected_max_pending_files: 32,
+            expected_check_after: Duration::from_secs(300),
         },
         LoadErrorPolicyTestCase {
-            description: "halt can be set explicitly",
-            staging_lines: "on_load_error = \"halt\"\n",
+            description: "halt and the pending limits can be set explicitly",
+            staging_lines: "on_load_error = \"halt\"\nmax_pending_files = 4\npending_check_after = \"30s\"\n",
             expected_policy: LoadErrorPolicy::Halt,
+            expected_max_pending_files: 4,
+            expected_check_after: Duration::from_secs(30),
         },
         LoadErrorPolicyTestCase {
             description: "skip commits past failed files",
             staging_lines: "on_load_error = \"skip\"\n",
             expected_policy: LoadErrorPolicy::Skip,
+            expected_max_pending_files: 32,
+            expected_check_after: Duration::from_secs(300),
         },
     ];
     for test_case in &test_cases {
@@ -223,7 +239,16 @@ fn given_staging_text_when_parsing_then_failed_loads_halt_unless_skip_is_set() -
         );
         let config = parse_config(&text, &lookup).map_err(|error| error.to_string())?;
         assert_eq!(
-            config.staging.on_load_error, test_case.expected_policy,
+            (
+                config.staging.on_load_error,
+                config.staging.max_pending_files,
+                config.staging.pending_check_after,
+            ),
+            (
+                test_case.expected_policy,
+                test_case.expected_max_pending_files,
+                test_case.expected_check_after,
+            ),
             "{}",
             test_case.description
         );

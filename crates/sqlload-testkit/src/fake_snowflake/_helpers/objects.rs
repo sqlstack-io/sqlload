@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use crate::fake_snowflake::models::{FakePipe, SharedState};
+use crate::fake_snowflake::models::{FakePipe, LoadOutcome, SharedState, StalledFile};
 
 type Outcome = Result<Value, (StatusCode, Value)>;
 
@@ -57,34 +57,33 @@ pub(crate) fn insert_files(state: &SharedState, path: &str, query: &str, body: &
     let mut skipped: Vec<String> = Vec::new();
     for file in files {
         let relative = file["path"].as_str().unwrap_or_default().to_owned();
+        guard.inserted.push(relative.clone());
         if !guard.received.insert((pipe.clone(), relative.clone())) {
             skipped.push(relative);
             continue;
         }
         let key = format!("{}{relative}", found.location);
-        let event = match guard.load_failures.pop_front() {
-            Some(error) => load_event(&relative, "LOAD_FAILED", 0, Some(&error)),
-            None if !guard.objects.contains_key(&key) => {
-                load_event(&relative, "LOAD_FAILED", 0, Some("file not found"))
+        let outcome = guard.load_script.pop_front().unwrap_or(LoadOutcome::Load);
+        match outcome {
+            LoadOutcome::Load => guard.load_file(&pipe, &found.table, &relative, &key),
+            LoadOutcome::Fail(error) => {
+                let event = load_event(&relative, "LOAD_FAILED", 0, Some(error));
+                guard
+                    .load_events
+                    .entry(pipe.clone())
+                    .or_default()
+                    .push(event);
             }
-            None => {
-                let before = guard
-                    .tables
-                    .get(&found.table)
-                    .map_or(0, |table| table.rows.len());
-                guard.load_object(&found.table, &key);
-                let after = guard
-                    .tables
-                    .get(&found.table)
-                    .map_or(0, |table| table.rows.len());
-                load_event(&relative, "LOADED", after - before, None)
+            LoadOutcome::Stall => guard.stalled.push(StalledFile {
+                pipe: pipe.clone(),
+                table: found.table.clone(),
+                path: relative,
+                key,
+            }),
+            LoadOutcome::Lose => {
+                guard.objects.remove(&key);
             }
-        };
-        guard
-            .load_events
-            .entry(pipe.clone())
-            .or_default()
-            .push(event);
+        }
     }
     let mut response = json!({ "responseCode": "SUCCESS" });
     if query.contains("showSkippedFiles=true") {
@@ -116,11 +115,19 @@ pub(crate) fn insert_report(state: &SharedState, path: &str, query: &str) -> Out
     }))
 }
 
-/// `/v1/data/pipes/DB.SCHEMA.PIPE/loadHistoryScan`: every load event, none while reports are withheld.
+/// `/v1/data/pipes/DB.SCHEMA.PIPE/loadHistoryScan`: every load event, none while history is withheld, or a queued failure.
 pub(crate) fn load_history_scan(state: &SharedState, path: &str) -> Outcome {
     let pipe = pipe_name(path, "/loadHistoryScan");
-    let guard = state.lock();
-    let files = match guard.withhold_reports {
+    let mut guard = state.lock();
+    guard.history_scans += 1;
+    if let Some(status) = guard.history_failures.pop_front() {
+        let code = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((
+            code,
+            json!({ "code": "FAKE", "message": "history scan failed" }),
+        ));
+    }
+    let files = match guard.withhold_history {
         true => Vec::new(),
         false => guard.load_events.get(&pipe).cloned().unwrap_or_default(),
     };
@@ -134,7 +141,8 @@ fn parse_mark(mark: &str) -> Option<usize> {
     }
 }
 
-fn load_event(path: &str, status: &str, rows: usize, error: Option<&str>) -> Value {
+/// One `insertReport` file entry.
+pub(crate) fn load_event(path: &str, status: &str, rows: usize, error: Option<&str>) -> Value {
     let mut event = json!({
         "path": path,
         "status": status,

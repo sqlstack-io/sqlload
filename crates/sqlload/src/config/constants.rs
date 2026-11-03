@@ -7,6 +7,10 @@ pub const DEFAULT_STARTUP_BATCH: usize = 20;
 pub const DEFAULT_STARTUP_INTERVAL_MS: u64 = 500;
 /// Uploads, and separately loads, in flight at once across all streams.
 pub const DEFAULT_MAX_IN_FLIGHT: usize = 32;
+/// Snowpipe files per stream sent but not yet committed.
+pub const DEFAULT_MAX_PENDING_FILES: usize = 32;
+pub const DEFAULT_PENDING_CHECK_AFTER_SECS: u64 = 5 * 60;
+pub const DEFAULT_PENDING_RECHECK_EVERY_SECS: u64 = 10 * 60;
 pub const DEFAULT_RETAIN_SECS: u64 = 7 * 24 * 3600;
 pub const DEFAULT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 pub const DEFAULT_MAX_ROWS: usize = 100_000;

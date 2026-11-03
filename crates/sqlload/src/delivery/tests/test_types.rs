@@ -42,12 +42,26 @@ pub(crate) struct FailedLoadTestCase {
     pub(crate) expected_confirmed: &'static [(i32, i64)],
 }
 
-pub(crate) struct UnreportedTestCase {
+pub(crate) struct DueTestCase {
     pub(crate) description: &'static str,
     pub(crate) reports: &'static [(&'static str, LoadStatus)],
-    pub(crate) resent_at_minutes: &'static [i64],
-    pub(crate) now_minute: i64,
+    /// Paths the pipe said it received before.
+    pub(crate) skipped: &'static [&'static str],
+    /// Seconds after sending when a check found the file in place.
+    pub(crate) checked_at: &'static [i64],
+    /// Seconds after sending when a check could not run.
+    pub(crate) failed_at: &'static [i64],
+    /// Seconds after sending when insertReport said it missed events.
+    pub(crate) incomplete_at: &'static [i64],
+    pub(crate) now_seconds: i64,
     pub(crate) expected_overdue: &'static [&'static str],
+}
+
+pub(crate) struct AcknowledgedTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) skipped: &'static [&'static str],
+    pub(crate) resent: &'static [&'static str],
+    pub(crate) expected_acknowledged: bool,
 }
 
 pub(crate) struct ForgetTestCase {

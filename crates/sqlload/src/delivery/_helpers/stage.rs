@@ -1,13 +1,14 @@
 use crate::batching::models::{Batch, BatchRow};
 use crate::config::models::Config;
+use crate::delivery::_helpers::pending_loads::same_path;
 use crate::delivery::_helpers::stage_paths::{
     FolderValues, expired_dates, render_folder, s3_target,
 };
-use crate::delivery::constants::{MAX_HISTORY_PAGES, PRUNE_LOOKBACK};
+use crate::delivery::constants::{FORBIDDEN, MAX_HISTORY_PAGES, PRUNE_LOOKBACK};
 use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{
-    Confirmation, DeliveryReport, PendingLoads, StageClients, StageDelivery, StagedBatch,
-    StagedFile,
+    CheckTiming, Confirmation, DeliveryReport, PendingLoads, StageClients, StageDelivery,
+    StagedBatch, StagedFile,
 };
 use crate::file_format::main::copy_into::copy_into;
 use crate::file_format::main::encode_file::encode_file;
@@ -46,7 +47,11 @@ impl StageDelivery {
             }
             _ => None,
         };
-        let pending = PendingLoads::new(config.staging.on_load_error);
+        let timing = CheckTiming {
+            check_after: config.staging.pending_check_after,
+            recheck_every: config.staging.pending_recheck_every,
+        };
+        let pending = PendingLoads::new(config.staging.on_load_error, timing);
         Ok(Self {
             clients,
             config,
@@ -117,31 +122,43 @@ impl StageDelivery {
     }
 
     pub(crate) fn is_full(&self) -> bool {
-        self.pending.file_count() >= self.config.staging.max_in_flight
+        self.pending.file_count() >= self.config.staging.max_pending_files
     }
 
-    /// Read the pipe's load report and return the offsets of the oldest batches whose files are all loaded.
+    /// Read the pipe's load report, check overdue files, and return the offsets of the oldest batches whose files are all loaded; a failed check never holds back loaded batches.
     pub(crate) async fn poll(&mut self) -> Result<Confirmation, DeliveryError> {
         if self.pending.is_empty() {
             return Ok(Confirmation::default());
         }
         let pipe = self.qualified(&self.stream.pipe);
-        let report = insert_report(&self.pipe_target(&pipe), self.begin_mark.as_deref())
-            .await
-            .map_err(|error| retry("insertReport", &error))?;
-        if report.next_begin_mark.is_some() {
-            self.begin_mark = report.next_begin_mark;
+        let now = now_ms();
+        let mut problem: Option<DeliveryError> = None;
+        match insert_report(&self.pipe_target(&pipe), self.begin_mark.as_deref()).await {
+            Ok(report) => {
+                if report.next_begin_mark.is_some() {
+                    self.begin_mark = report.next_begin_mark;
+                }
+                self.pending.apply(&report.files);
+                if !report.complete {
+                    self.pending.mark_all_due(now);
+                }
+            }
+            Err(error) => problem = Some(report_error("insertReport", &pipe, &error)),
         }
-        self.pending.apply(&report.files);
-        self.check_overdue(&pipe, now_ms()).await?;
+        if let Err(error) = self.check_overdue(&pipe, now).await {
+            problem.get_or_insert(error);
+        }
         let settled = self.pending.settle();
         for (key, reason) in &settled.skipped {
             tracing::warn!(stream = %self.stream.name, file = %key, %reason, "Snowpipe did not load a file; skipping it as on_load_error = \"skip\"");
         }
-        if let Some(reason) = settled.halted.filter(|_| settled.confirmed.is_empty()) {
-            return Err(DeliveryError::Fatal(format!(
-                "Snowpipe did not load {reason}; set on_load_error = \"skip\" to commit past failed files"
-            )));
+        if settled.confirmed.is_empty() {
+            if let Some(reason) = settled.halted {
+                return Err(DeliveryError::Fatal(self.halt_message(&reason)));
+            }
+            if let Some(error) = problem {
+                return Err(error);
+            }
         }
         Ok(Confirmation {
             confirmed: settled.confirmed,
@@ -150,32 +167,40 @@ impl StageDelivery {
         })
     }
 
-    /// Look up files with no report in the load history; send those still in the stage once more and fail the rest.
+    fn halt_message(&self, reason: &str) -> String {
+        format!(
+            "Snowpipe did not load {reason}. Offsets from this file on are not committed, and Snowpipe will not load the same path again. To recover, fix the cause, load the file with COPY INTO {} FROM {} FILES = (...), then restart once with on_load_error = \"skip\"",
+            self.qualified(&self.stream.table),
+            self.pipe_location()
+        )
+    }
+
+    /// The location the stream's pipe loads from; file keys are relative to it.
+    fn pipe_location(&self) -> String {
+        match &self.s3 {
+            Some(target) => format!("@{}/{}", self.external_stage(), target.prefix),
+            None => format!("@{}/", self.qualified(&self.stream.stage)),
+        }
+    }
+
+    /// Look up overdue files in the load history; send files still in the stage once more and keep waiting, and fail files that are gone.
     async fn check_overdue(&mut self, pipe: &str, now: i64) -> Result<(), DeliveryError> {
         let overdue = self.pending.overdue(now);
         let Some(start_ms) = self.pending.history_start(&overdue) else {
             return Ok(());
         };
-        let mut start = iso_utc(start_ms);
-        for _ in 0..MAX_HISTORY_PAGES {
-            let page = load_history_scan(&self.pipe_target(pipe), &start)
-                .await
-                .map_err(|error| retry("loadHistoryScan", &error))?;
-            self.pending.apply(&page.files);
-            match page.range_end {
-                Some(next) if !page.complete && next != start => start = next,
-                _ => break,
-            }
+        if let Err(error) = self.scan_history(pipe, start_ms).await {
+            self.pending.check_failed(&overdue, now);
+            return Err(error);
         }
+        let unreported = self.pending.overdue(now);
+        self.pending.checked(&unreported, now);
         let mut resend: Vec<String> = Vec::new();
-        for key in self.pending.overdue(now) {
-            if self.pending.was_resent(&key) {
-                self.pending
-                    .fail(&key, "not reported by Snowpipe after being sent twice");
-            } else if self.exists(&key).await {
-                resend.push(key);
-            } else {
+        for key in unreported {
+            if !self.exists(&key).await {
                 self.pending.fail(&key, "no longer in the stage");
+            } else if !self.pending.is_acknowledged(&key) {
+                resend.push(key);
             }
         }
         if resend.is_empty() {
@@ -184,17 +209,38 @@ impl StageDelivery {
         tracing::warn!(stream = %self.stream.name, files = ?resend, "Snowpipe has not reported files; sending them again");
         let skipped = insert_files(&self.pipe_target(pipe), &resend)
             .await
-            .map_err(|error| retry("insertFiles", &error))?;
+            .map_err(|error| DeliveryError::Retry(format!("insertFiles failed: {error}")))?;
         for key in &resend {
-            let was_skipped = skipped
-                .iter()
-                .any(|path| path.trim_start_matches('/') == key);
-            self.pending.resend(key, was_skipped, now);
+            let was_skipped = skipped.iter().any(|path| same_path(path, key));
+            self.pending.resend(key, was_skipped);
         }
         Ok(())
     }
 
-    /// Whether a staged file still exists; true when that cannot be told, so it is sent again.
+    /// Apply the pipe's load history from `start_ms`, following incomplete pages.
+    async fn scan_history(&mut self, pipe: &str, start_ms: i64) -> Result<(), DeliveryError> {
+        let mut start = iso_utc(start_ms);
+        for _ in 0..MAX_HISTORY_PAGES {
+            let page = load_history_scan(&self.pipe_target(pipe), &start)
+                .await
+                .map_err(
+                    |error| match report_error("loadHistoryScan", pipe, &error) {
+                        fatal @ DeliveryError::Fatal(_) if error.status() == Some(FORBIDDEN) => {
+                            fatal
+                        }
+                        _ => DeliveryError::Retry(format!("loadHistoryScan failed: {error}")),
+                    },
+                )?;
+            self.pending.apply(&page.files);
+            match page.range_end {
+                Some(next) if !page.complete && next != start => start = next,
+                _ => break,
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a staged file still exists. Only a 404 counts as missing: expired credentials (400), 403 and other errors count as present, deliberately conservative, so the file keeps waiting instead of failing.
     async fn exists(&mut self, key: &str) -> bool {
         let found = match self.s3.clone() {
             Some(target) => head_object(&self.clients.http, &target, key).await,
@@ -473,6 +519,16 @@ fn rows_digest(rows: &[&BatchRow]) -> String {
         hasher.update(format!("{topic}:{partition}:{first}-{last};").as_bytes());
     }
     hex::encode(&hasher.finalize()[..12])
+}
+
+/// A report endpoint failure; a 403 means the role lacks MONITOR on the pipe, which retrying cannot fix.
+fn report_error(action: &str, pipe: &str, error: &ApiError) -> DeliveryError {
+    match error.status() {
+        Some(FORBIDDEN) => DeliveryError::Fatal(format!(
+            "{action} failed: {error}; the role needs MONITOR on pipe {pipe} (and OPERATE for insertFiles)"
+        )),
+        _ => retry(action, error),
+    }
 }
 
 fn retry(action: &str, error: &ApiError) -> DeliveryError {
