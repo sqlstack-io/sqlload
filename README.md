@@ -57,7 +57,7 @@ Each stream has its own Kafka consumer. To keep many streams in one process chea
 
 Kafka TLS and SASL need the `ssl` and `sasl` build features, which the release binaries include.
 
-In `s3` mode, AWS credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` at start. Temporary credentials that expire stop the exporter after the retry window; restart it with fresh ones, or use long-lived keys.
+In `s3` mode, AWS credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` at start, else from the shared credentials file (`AWS_SHARED_CREDENTIALS_FILE`, default `~/.aws/credentials`) under `AWS_PROFILE` or `default`. Temporary credentials that expire stop the exporter after the retry window; restart it with fresh ones, or use long-lived keys.
 
 Topics that share a table through a naming rule must not differ only in case or punctuation, because they would share streaming channel names; `plan` rejects such groups.
 

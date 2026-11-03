@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use crate::auth::models::Secret;
 use crate::config::models::Config;
-use crate::stage_api::models::{AwsCredentials, ObjectTarget};
+use crate::delivery::_helpers::aws_credentials::load_credentials;
+use crate::stage_api::models::ObjectTarget;
 use crate::time_text::main::iso_utc::iso_utc;
 use crate::time_text::main::utc_date::utc_date;
 
@@ -42,16 +42,13 @@ pub(crate) fn render_folder(template: &str, values: &FolderValues<'_>) -> String
     folder
 }
 
-/// The bucket location for a stream in `s3` mode, with credentials from the standard AWS environment variables.
+/// The bucket location in `s3` mode, with credentials from the environment or the shared AWS credentials file.
 pub(crate) fn s3_target(config: &Config) -> Result<ObjectTarget, String> {
     let s3 = config
         .staging
         .s3
         .as_ref()
         .ok_or("staging.kind = \"s3\" needs a [staging.s3] section")?;
-    let variable = environment_variable;
-    let key_id = variable("AWS_ACCESS_KEY_ID").ok_or("AWS_ACCESS_KEY_ID is not set")?;
-    let secret = variable("AWS_SECRET_ACCESS_KEY").ok_or("AWS_SECRET_ACCESS_KEY is not set")?;
     let mut prefix = s3.prefix.trim_matches('/').to_owned();
     if !prefix.is_empty() {
         prefix.push('/');
@@ -65,17 +62,6 @@ pub(crate) fn s3_target(config: &Config) -> Result<ObjectTarget, String> {
         path_style: s3.path_style,
         prefix,
         region: s3.region.clone(),
-        credentials: AwsCredentials {
-            key_id,
-            secret: Secret(secret),
-            session_token: variable("AWS_SESSION_TOKEN").map(Secret),
-        },
+        credentials: load_credentials()?,
     })
-}
-
-fn environment_variable(name: &str) -> Option<String> {
-    match std::env::var(name) {
-        Ok(value) if !value.is_empty() => Some(value),
-        Ok(_) | Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => None,
-    }
 }

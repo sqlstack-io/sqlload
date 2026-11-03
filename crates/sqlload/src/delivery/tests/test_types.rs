@@ -10,3 +10,11 @@ pub(crate) struct RenderFolderTestCase {
     pub(crate) template: &'static str,
     pub(crate) expected_folder: &'static str,
 }
+
+pub(crate) struct ProfileCredentialsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) text: &'static str,
+    pub(crate) profile: &'static str,
+    /// Key id and whether a session token was found, or None when the profile has no keys.
+    pub(crate) expected_keys: Option<(&'static str, bool)>,
+}
