@@ -29,6 +29,8 @@ pub struct Confirmation {
     pub confirmed: BTreeMap<Partition, i64>,
     pub error_rows: u64,
     pub skipped_files: u64,
+    /// A retryable report or check failure from a poll that still confirmed offsets.
+    pub deferred_error: Option<DeliveryError>,
 }
 
 /// The shared clients a stage delivery uses.
@@ -104,6 +106,8 @@ pub struct PendingFile {
     pub last_check_ms: Option<i64>,
     /// Checks in a row that could not run, for their backoff.
     pub failed_checks: u32,
+    /// A received-before file with no load history was already warned about.
+    pub warned_no_history: bool,
     pub state: FileState,
 }
 

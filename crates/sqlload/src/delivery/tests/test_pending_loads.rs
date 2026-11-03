@@ -6,7 +6,7 @@ use crate::delivery::tests::helpers::{
 };
 use crate::delivery::tests::test_types::{
     AcknowledgedTestCase, DueTestCase, FailedLoadTestCase, ForgetTestCase, HistoryStartTestCase,
-    PrefixTestCase,
+    PrefixTestCase, WarnOnceTestCase,
 };
 use crate::stage_api::models::LoadStatus;
 
@@ -309,6 +309,43 @@ fn given_unsettled_files_when_time_passes_then_checks_are_due_on_their_backoff()
 }
 
 #[test]
+fn given_received_before_files_without_history_when_checked_then_each_is_warned_about_once() {
+    let test_cases = [
+        WarnOnceTestCase {
+            description: "a received-before file is warned about on its first check only",
+            skipped: &["a.json.gz"],
+            checks: 2,
+            expected_warnings: &["a.json.gz"],
+        },
+        WarnOnceTestCase {
+            description: "a file sent first by this run is never warned about",
+            skipped: &[],
+            checks: 2,
+            expected_warnings: &[],
+        },
+    ];
+    let keys = ["a.json.gz".to_owned()];
+    for test_case in &test_cases {
+        let mut loads = PendingLoads::new(LoadErrorPolicy::Halt, TIMING);
+        let skipped: Vec<String> = test_case
+            .skipped
+            .iter()
+            .map(|path| (*path).to_owned())
+            .collect();
+        loads.add(&keys, &skipped, offsets(&[(0, 10)]), SENT_MS);
+        let warnings: Vec<String> = (0..test_case.checks)
+            .flat_map(|_| loads.take_unwarned_received_before(&keys))
+            .collect();
+        assert_eq!(
+            warnings, test_case.expected_warnings,
+            "{}",
+            test_case.description
+        );
+        assert!(loads.any_unsettled(&keys), "{}", test_case.description);
+    }
+}
+
+#[test]
 fn given_a_checked_file_when_deciding_to_resend_then_only_unacknowledged_files_are_sent_again() {
     let test_cases = [
         AcknowledgedTestCase {
@@ -360,9 +397,9 @@ fn given_overdue_files_when_scanning_history_then_files_received_before_look_bac
             expected_lookback_minutes: 1,
         },
         HistoryStartTestCase {
-            description: "a file the pipe skipped as received before is looked up a day back",
+            description: "a file the pipe skipped as received before is looked up 14 days back",
             skipped: &["/b.json.gz"],
-            expected_lookback_minutes: 24 * 60,
+            expected_lookback_minutes: 14 * 24 * 60,
         },
     ];
     for test_case in &test_cases {

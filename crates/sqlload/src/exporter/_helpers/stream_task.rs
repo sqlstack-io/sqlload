@@ -306,9 +306,11 @@ impl StreamTask {
                 self.set_paused(true);
             }
             (false, Some(since)) => {
-                tracing::info!(stream = %self.stream.name, "resuming partitions");
+                if !self.set_paused(false) {
+                    return;
+                }
+                tracing::info!(stream = %self.stream.name, "resumed partitions");
                 self.paused_since = None;
-                self.set_paused(false);
                 let waited = u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX);
                 self.metrics
                     .pending_wait
@@ -319,20 +321,25 @@ impl StreamTask {
         }
     }
 
-    fn set_paused(&self, paused: bool) {
+    /// Pause or resume the assigned partitions; false when that failed, so the caller tries again on its next pass.
+    fn set_paused(&self, paused: bool) -> bool {
         let assigned = match self.consumer.assignment() {
             Ok(assigned) => assigned,
             Err(error) => {
                 tracing::warn!(stream = %self.stream.name, %error, "cannot read the assignment to pause or resume it");
-                return;
+                return false;
             }
         };
         let outcome = match paused {
             true => self.consumer.pause(&assigned),
             false => self.consumer.resume(&assigned),
         };
-        if let Err(error) = outcome {
-            tracing::warn!(stream = %self.stream.name, %error, paused, "cannot pause or resume partitions");
+        match outcome {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(stream = %self.stream.name, %error, paused, "cannot pause or resume partitions");
+                false
+            }
         }
     }
 
@@ -350,6 +357,9 @@ impl StreamTask {
                     .skipped_files
                     .get_or_create(&label)
                     .inc_by(confirmation.skipped_files);
+                if let Some(error) = &confirmation.deferred_error {
+                    self.count_error(error);
+                }
                 self.commit(&confirmation.confirmed);
                 Ok(())
             }

@@ -77,3 +77,10 @@ pub(crate) struct HistoryStartTestCase {
     pub(crate) skipped: &'static [&'static str],
     pub(crate) expected_lookback_minutes: i64,
 }
+
+pub(crate) struct WarnOnceTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) skipped: &'static [&'static str],
+    pub(crate) checks: usize,
+    pub(crate) expected_warnings: &'static [&'static str],
+}

@@ -54,6 +54,7 @@ impl PendingLoads {
                     },
                     last_check_ms: None,
                     failed_checks: 0,
+                    warned_no_history: false,
                     state: FileState::Waiting,
                 }
             })
@@ -118,7 +119,7 @@ impl PendingLoads {
         }
     }
 
-    /// Where a history scan for `keys` starts: a day back for files the pipe had received before, otherwise just before the first send.
+    /// Where a history scan for `keys` starts: 14 days back, Snowpipe's load metadata window, for files the pipe had received before, otherwise just before the first send.
     pub(crate) fn history_start(&self, keys: &[String]) -> Option<i64> {
         self.files()
             .filter(|file| keys.contains(&file.key))
@@ -130,6 +131,24 @@ impl PendingLoads {
                 file.first_sent_ms - lookback.as_millis() as i64
             })
             .min()
+    }
+
+    /// True while any of `keys` is still waiting or loading.
+    pub(crate) fn any_unsettled(&self, keys: &[String]) -> bool {
+        self.files()
+            .any(|file| keys.contains(&file.key) && is_unsettled(file))
+    }
+
+    /// Received-before files among `keys` not warned about yet, marked as warned.
+    pub(crate) fn take_unwarned_received_before(&mut self, keys: &[String]) -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        for file in self.files_mut().filter(|file| keys.contains(&file.key)) {
+            if file.received_before && !file.warned_no_history {
+                file.warned_no_history = true;
+                found.push(file.key.clone());
+            }
+        }
+        found
     }
 
     /// True when the file was sent again, or the pipe already had it, so another `insertFiles` cannot help.

@@ -565,7 +565,15 @@ fn given_max_pending_files_reached_when_exporting_to_s3_then_the_stream_pauses_a
             stack.fake.withhold_load_reports(false);
             let expected = test_case.records as i64;
             let after = wait_for_commits(&stack, ORDERS_GROUP, TOPICS[0], expected).await;
+            let rows = stack.fake.rows("ORDERS");
             stop_exporter(running).await?;
+            assert_eq!(rows.len(), test_case.records, "{}", test_case.description);
+            assert_eq!(
+                distinct_positions(&rows),
+                test_case.records,
+                "{}",
+                test_case.description
+            );
             assert_eq!(
                 uploads, test_case.expected_uploads_while_held,
                 "{}",

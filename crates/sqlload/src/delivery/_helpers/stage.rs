@@ -164,12 +164,13 @@ impl StageDelivery {
             confirmed: settled.confirmed,
             error_rows: 0,
             skipped_files: settled.skipped.len() as u64,
+            deferred_error: problem,
         })
     }
 
     fn halt_message(&self, reason: &str) -> String {
         format!(
-            "Snowpipe did not load {reason}. Offsets from this file on are not committed, and Snowpipe will not load the same path again. To recover, fix the cause, load the file with COPY INTO {} FROM {} FILES = (...), then restart once with on_load_error = \"skip\"",
+            "Snowpipe did not load {reason}. Offsets from this file on are not committed. Fix the cause and restart; replays usually get new file names that load normally. Only if the same file is reported failed again, load it with COPY INTO {} FROM {} FILES = (...) and restart once with on_load_error = \"skip\"",
             self.qualified(&self.stream.table),
             self.pipe_location()
         )
@@ -189,12 +190,15 @@ impl StageDelivery {
         let Some(start_ms) = self.pending.history_start(&overdue) else {
             return Ok(());
         };
-        if let Err(error) = self.scan_history(pipe, start_ms).await {
+        if let Err(error) = self.scan_history(pipe, start_ms, &overdue).await {
             self.pending.check_failed(&overdue, now);
             return Err(error);
         }
         let unreported = self.pending.overdue(now);
         self.pending.checked(&unreported, now);
+        for key in self.pending.take_unwarned_received_before(&unreported) {
+            tracing::warn!(stream = %self.stream.name, file = %key, "the pipe received this file name before but its load history has no record of it; it keeps waiting. Include {{date}} in the path template so replays get new file names");
+        }
         let mut resend: Vec<String> = Vec::new();
         for key in unreported {
             if !self.exists(&key).await {
@@ -207,9 +211,13 @@ impl StageDelivery {
             return Ok(());
         }
         tracing::warn!(stream = %self.stream.name, files = ?resend, "Snowpipe has not reported files; sending them again");
-        let skipped = insert_files(&self.pipe_target(pipe), &resend)
-            .await
-            .map_err(|error| DeliveryError::Retry(format!("insertFiles failed: {error}")))?;
+        let skipped = match insert_files(&self.pipe_target(pipe), &resend).await {
+            Ok(skipped) => skipped,
+            Err(error) => {
+                self.pending.check_failed(&resend, now);
+                return Err(DeliveryError::Retry(format!("insertFiles failed: {error}")));
+            }
+        };
         for key in &resend {
             let was_skipped = skipped.iter().any(|path| same_path(path, key));
             self.pending.resend(key, was_skipped);
@@ -217,8 +225,13 @@ impl StageDelivery {
         Ok(())
     }
 
-    /// Apply the pipe's load history from `start_ms`, following incomplete pages.
-    async fn scan_history(&mut self, pipe: &str, start_ms: i64) -> Result<(), DeliveryError> {
+    /// Apply the pipe's load history from `start_ms`, following incomplete pages until every one of `keys` is found.
+    async fn scan_history(
+        &mut self,
+        pipe: &str,
+        start_ms: i64,
+        keys: &[String],
+    ) -> Result<(), DeliveryError> {
         let mut start = iso_utc(start_ms);
         for _ in 0..MAX_HISTORY_PAGES {
             let page = load_history_scan(&self.pipe_target(pipe), &start)
@@ -232,6 +245,9 @@ impl StageDelivery {
                     },
                 )?;
             self.pending.apply(&page.files);
+            if !self.pending.any_unsettled(keys) {
+                break;
+            }
             match page.range_end {
                 Some(next) if !page.complete && next != start => start = next,
                 _ => break,

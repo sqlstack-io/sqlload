@@ -13,7 +13,7 @@ pub const STREAMING_CONFIRM_POLL: Duration = Duration::from_secs(1);
 pub const FORBIDDEN: u16 = 403;
 /// How far before a file was sent a history scan looks for its load.
 pub const HISTORY_MARGIN: Duration = Duration::from_secs(60);
-/// How far back a history scan looks for a file the pipe had received before this run sent it.
-pub const RECEIVED_BEFORE_LOOKBACK: Duration = Duration::from_secs(24 * 3600);
-/// The most history scan pages read for one check.
-pub const MAX_HISTORY_PAGES: usize = 10;
+/// How far back a history scan looks for a file the pipe had received before this run sent it: Snowpipe's 14-day load metadata.
+pub const RECEIVED_BEFORE_LOOKBACK: Duration = Duration::from_secs(14 * 86_400);
+/// The most history scan pages (10,000 entries each) read for one check; the scan stops sooner once every checked file is found.
+pub const MAX_HISTORY_PAGES: usize = 50;
