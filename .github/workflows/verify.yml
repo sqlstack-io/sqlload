@@ -2,9 +2,6 @@ name: Verify
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -15,11 +12,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
-    name: Checks and tests
-    runs-on: ubuntu-latest
+  changes:
+    name: Classify verification scope
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # Pull requests touching only documentation skip the build and test jobs; everything
+      # else, and manual runs, verify in full.
+      - name: Select relevant jobs
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            echo "code=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          code=false
+          changed=false
+          while IFS= read -r -d '' path; do
+            changed=true
+            case "${path}" in
+              docs/*|website/*|*.md|LICENSE|.gitignore)
+                ;;
+              *)
+                code=true
+                ;;
+            esac
+          done < <(git diff --name-only -z "${BASE_SHA}" "${HEAD_SHA}")
+          if [[ "${changed}" != "true" ]]; then
+            code=true
+          fi
+          echo "code=${code}" >> "${GITHUB_OUTPUT}"
+
+  checks:
+    name: Checks and unit tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.95.0
@@ -30,5 +69,46 @@ jobs:
           version: "0.12.9"
       - run: make check-ci
       - run: make test-unit
+
+  containers:
+    name: Container tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: containers
       - run: docker pull redpandadata/redpanda:v25.1.4
       - run: make test-containers
+
+  verify:
+    name: Verify
+    if: always()
+    needs: [changes, checks, containers]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm every required job passed or was skipped for a docs-only change
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          CONTAINERS_RESULT: ${{ needs.containers.result }}
+        run: |
+          if [[ "${CHANGES_RESULT}" != "success" ]]; then
+            echo "Scope classification: ${CHANGES_RESULT}" >&2
+            exit 1
+          fi
+          for result in "${CHECKS_RESULT}" "${CONTAINERS_RESULT}"; do
+            case "${result}" in
+              success|skipped) ;;
+              *)
+                echo "A verification job ended with ${result}" >&2
+                exit 1
+                ;;
+            esac
+          done
