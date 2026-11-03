@@ -12,6 +12,8 @@ rust-version.workspace = true
 default = []
 # TLS and SASL support in the bundled librdkafka.
 ssl = ["rdkafka/ssl"]
+# TLS with OpenSSL built in, so the binary needs no system OpenSSL (PyPI wheels).
+ssl-vendored = ["rdkafka/ssl-vendored"]
 sasl = ["rdkafka/sasl"]
 # Select the Docker-backed integration tests (`make test-containers`).
 container-tests = []

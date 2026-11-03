@@ -16,3 +16,8 @@ target/
 # Editors
 .idea/
 .vscode/
+
+# Python packaging
+dist/
+.venv/
+__pycache__/

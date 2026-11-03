@@ -1,0 +1,176 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release-tag:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release-tag.outputs.tag }}
+      version: ${{ steps.release-tag.outputs.version }}
+    steps:
+      - name: Resolve release tag
+        id: release-tag
+        run: |
+          tag="${{ inputs.tag }}"
+
+          if [[ ! "$tag" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Refusing to publish tag '$tag'. Expected exact v0.MINOR.PATCH semver."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+  release-metadata:
+    name: Validate release metadata
+    needs: release-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-tag.outputs.tag }}
+      - name: Match package versions to release tag
+        env:
+          RELEASE_VERSION: ${{ needs.release-tag.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          expected = os.environ["RELEASE_VERSION"]
+          with Path("pyproject.toml").open("rb") as file:
+              root = tomllib.load(file)["project"]
+          cli_dependency = next(
+              item for item in root["dependencies"] if item.startswith("sqlload-cli==")
+          ).partition("==")[2]
+          with Path("packages/sqlload-cli/pyproject.toml").open("rb") as file:
+              cli_package_version = tomllib.load(file)["project"]["version"]
+          with Path("Cargo.toml").open("rb") as file:
+              workspace_version = tomllib.load(file)["workspace"]["package"]["version"]
+          manifests = [
+              ("root project", root["version"]),
+              ("root CLI dependency", cli_dependency),
+              ("CLI package", cli_package_version),
+              ("Cargo workspace", workspace_version),
+          ]
+          mismatches = [f"{label}={version}" for label, version in manifests if version != expected]
+          if mismatches:
+              raise SystemExit(
+                  f"Release tag version {expected} does not match: {', '.join(mismatches)}"
+              )
+          PY
+
+  wheels:
+    name: Build wheel (${{ matrix.platform.name }})
+    needs: [release-tag, release-metadata]
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64
+          - name: macos-arm64
+            runner: macos-latest
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-tag.outputs.tag }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      # sqlload-cli ships one standalone Rust executable (OpenSSL built in) and links no libpython,
+      # so maturin tags it py3-none-<platform>. The tag is asserted before release.
+      - name: Build native CLI wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out ../../dist
+          target: ${{ matrix.platform.target }}
+          manylinux: "2_28"
+          working-directory: packages/sqlload-cli
+      - name: Assert native CLI wheel is interpreter-agnostic
+        shell: bash
+        run: bash .github/scripts/assert_cli_wheel_tags.sh dist
+      - uses: actions/upload-artifact@v5
+        with:
+          name: wheel-${{ matrix.platform.name }}
+          path: dist
+
+  sdist:
+    name: Build sdists and Python wheel
+    needs: [release-tag, release-metadata]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-tag.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.9"
+      # The sqlload package is pure Python, so one wheel serves every platform.
+      - name: Build Python package sdist and wheel
+        run: uv build --sdist --wheel --out-dir dist
+      - name: Build native CLI sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out ../../dist
+          working-directory: packages/sqlload-cli
+      - uses: actions/upload-artifact@v5
+        with:
+          name: sdist
+          path: dist
+
+  pypi:
+    name: Publish to PyPI
+    needs:
+      - release-tag
+      - wheels
+      - sdist
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-tag.outputs.tag }}
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Assert native CLI wheels are interpreter-agnostic
+        shell: bash
+        run: bash .github/scripts/assert_cli_wheel_tags.sh dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true

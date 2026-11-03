@@ -15,6 +15,7 @@ path = "src/main.rs"
 [features]
 default = []
 ssl = ["sqlload/ssl"]
+ssl-vendored = ["sqlload/ssl-vendored"]
 sasl = ["sqlload/sasl"]
 
 [dependencies]

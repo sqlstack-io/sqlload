@@ -23,6 +23,9 @@ use crate::planning::main::build_plan::build_plan;
 use crate::planning::main::load_path::load_path;
 use crate::planning::main::read_existing::read_existing;
 
+/// How long a stream whose objects do not fit waits before its objects are checked again.
+const INCOMPATIBLE_RECHECK: Duration = Duration::from_secs(3600);
+
 /// How long a replaced stream may take to flush and commit before its successor starts.
 const REPLACE_WAIT: Duration = Duration::from_secs(120);
 
@@ -41,6 +44,7 @@ pub(crate) struct Supervisor {
     running: BTreeMap<String, Running>,
     tasks: JoinSet<(String, Result<(), String>)>,
     stream_count: usize,
+    incompatible: BTreeMap<String, std::time::Instant>,
 }
 
 impl Supervisor {
@@ -58,6 +62,7 @@ impl Supervisor {
             running: BTreeMap::new(),
             tasks: JoinSet::new(),
             stream_count: 0,
+            incompatible: BTreeMap::new(),
         }
     }
 
@@ -126,6 +131,11 @@ impl Supervisor {
                     .get(&stream.name)
                     .is_none_or(|running| running.topics != stream.topics)
             })
+            .filter(|stream| {
+                self.incompatible
+                    .get(&stream.name)
+                    .is_none_or(|checked| checked.elapsed() >= INCOMPATIBLE_RECHECK)
+            })
             .collect();
         if changed.is_empty() {
             return Ok(());
@@ -151,7 +161,7 @@ impl Supervisor {
     }
 
     /// Create missing objects; streams whose existing objects do not fit are left out and logged, so they cannot stop the rest.
-    async fn apply(&self, streams: Vec<Stream>) -> Result<Vec<Stream>, String> {
+    async fn apply(&mut self, streams: Vec<Stream>) -> Result<Vec<Stream>, String> {
         let existing = read_existing(&self.clients.sql, &self.config)
             .await
             .map_err(|error| format!("cannot read existing objects: {error}"))?;
@@ -161,14 +171,22 @@ impl Supervisor {
             &existing,
             self.clients.auth.uses_key_pair(),
         );
+        let incompatible = &mut self.incompatible;
         plan.streams.retain(|stream_plan| {
             let problems: Vec<String> = stream_plan
                 .objects
                 .iter()
                 .flat_map(|object| object.problems())
                 .collect();
-            if !problems.is_empty() {
-                tracing::error!(stream = %stream_plan.stream.name, ?problems, "existing objects do not fit; not exporting this stream");
+            let name = &stream_plan.stream.name;
+            match problems.is_empty() {
+                true => {
+                    incompatible.remove(name);
+                }
+                false => {
+                    tracing::error!(stream = %name, ?problems, "existing objects do not fit; not exporting this stream, checking again in an hour");
+                    incompatible.insert(name.clone(), std::time::Instant::now());
+                }
             }
             problems.is_empty()
         });

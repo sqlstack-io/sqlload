@@ -4,6 +4,14 @@ Export Kafka topics to Snowflake tables. One process watches a set of topics, cr
 
 sqlload is a pre-release. The configuration format may still change.
 
+## Install
+
+```sh
+uv tool install sqlload    # or: pip install sqlload, or: uvx sqlload ...
+```
+
+The `sqlload` package depends on `sqlload-cli`, a wheel holding the native executable (Linux x86_64 and aarch64, macOS arm64); no Python runs while exporting. Kafka TLS uses a built-in OpenSSL, and SASL PLAIN and SCRAM work without system libraries; GSSAPI/Kerberos is not included.
+
 ## How it works
 
 - **Discovery.** Topics matching `source.include` and not `source.exclude` are listed at start and every `discovery_interval`. New topics start exporting without a restart.
