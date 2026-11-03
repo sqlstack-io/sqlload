@@ -1,3 +1,5 @@
+use crate::stage_api::models::LoadStatus;
+
 pub(crate) struct EncryptionTestCase {
     pub(crate) description: &'static str,
     pub(crate) key_bytes: usize,
@@ -26,4 +28,13 @@ pub(crate) struct StageResponseErrorTestCase {
     pub(crate) description: &'static str,
     pub(crate) response: &'static str,
     pub(crate) expected_error: &'static str,
+}
+
+pub(crate) struct LoadReportTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) response: &'static str,
+    /// Path, status and first error of each file.
+    pub(crate) expected_files: &'static [(&'static str, LoadStatus, Option<&'static str>)],
+    pub(crate) expected_begin_mark: Option<&'static str>,
+    pub(crate) expected_complete: bool,
 }

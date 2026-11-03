@@ -3,8 +3,11 @@ use sqlload_testkit::configs::main::s3_config::s3_config;
 use sqlload_testkit::configs::main::streaming_config::streaming_config;
 use sqlload_testkit::configs::models::S3Settings;
 use sqlload_testkit::harness::models::Stack;
+use sqlload_testkit::redpanda::main::committed_offsets::committed_offsets;
 
 pub(crate) const PARTITIONS: i32 = 3;
+/// The consumer group of the `ORDERS` stream.
+pub(crate) const ORDERS_GROUP: &str = "sqlload-orders";
 pub(crate) const FAST: &str = "[batching]\nmax_age = \"1s\"\nmax_rows = 40\n";
 
 /// Streaming configuration for topics matching `include` on this stack, plus `extra` TOML.
@@ -46,4 +49,9 @@ pub(crate) fn run_async<F: std::future::Future<Output = Result<(), String>>>(
         .build()
         .map_err(|error| error.to_string())?;
     runtime.block_on(body)
+}
+
+/// How many records of `topic` the `ORDERS` stream has committed.
+pub(crate) async fn committed(stack: &Stack, topic: &str) -> Result<i64, String> {
+    committed_offsets(&stack.redpanda.brokers, ORDERS_GROUP, topic).await
 }

@@ -141,6 +141,17 @@ fn staging_problems(config: &Config) -> Vec<String> {
     if config.staging.max_in_flight == 0 {
         problems.push("staging.max_in_flight must be at least 1".to_owned());
     }
+    if config.staging.max_pending_files == 0 {
+        problems.push("staging.max_pending_files must be at least 1".to_owned());
+    }
+    if config.staging.pending_check_after.is_zero()
+        || config.staging.pending_recheck_every.is_zero()
+    {
+        problems.push(
+            "staging.pending_check_after and staging.pending_recheck_every must be positive"
+                .to_owned(),
+        );
+    }
     problems.extend(match (is_s3, config.staging.s3.is_some()) {
         (true, false) => vec!["staging.kind = \"s3\" needs a [staging.s3] section".to_owned()],
         (false, true) => vec!["[staging.s3] is only used when staging.kind = \"s3\"".to_owned()],

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde_json::Value;
 
 use crate::fake_snowflake::_helpers::loading::{ndjson_rows, parquet_rows};
+use crate::fake_snowflake::_helpers::objects::load_event;
 use crate::fake_snowflake::constants::PARQUET_MAGIC;
 
 /// One fake table: its declared columns and the rows committed to it.
@@ -46,9 +47,43 @@ pub struct FakeState {
     pub pipes: BTreeMap<String, FakePipe>,
     /// Objects already loaded, which the real load history skips.
     pub loaded: BTreeSet<String>,
+    /// Paths each pipe received through `insertFiles`, which it skips when sent again.
+    pub received: BTreeSet<(String, String)>,
+    /// Snowpipe load events by pipe, as `insertReport` lists them.
+    pub load_events: BTreeMap<String, Vec<Value>>,
+    /// While set, `insertReport` and `loadHistoryScan` report nothing.
+    pub withhold_reports: bool,
+    /// While set, `loadHistoryScan` reports nothing.
+    pub withhold_history: bool,
+    /// What happens to the next files sent to `insertFiles`; files load once it is empty.
+    pub load_script: VecDeque<LoadOutcome>,
+    /// Files accepted but not loaded until [`FakeSnowflake::release_stalled`].
+    pub stalled: Vec<StalledFile>,
+    /// Every path sent to `insertFiles`, in order, including repeats.
+    pub inserted: Vec<String>,
+    /// HTTP statuses for the next `loadHistoryScan` calls.
+    pub history_failures: VecDeque<u16>,
+    pub history_scans: u64,
 }
 
 impl FakeState {
+    /// Load a file sent to `pipe` and record its load event; a missing object fails to load.
+    pub fn load_file(&mut self, pipe: &str, table: &str, path: &str, key: &str) {
+        let event = match self.objects.contains_key(key) {
+            false => load_event(path, "LOAD_FAILED", 0, Some("file not found")),
+            true => {
+                let before = self.tables.get(table).map_or(0, |found| found.rows.len());
+                self.load_object(table, key);
+                let after = self.tables.get(table).map_or(0, |found| found.rows.len());
+                load_event(path, "LOADED", after - before, None)
+            }
+        };
+        self.load_events
+            .entry(pipe.to_owned())
+            .or_default()
+            .push(event);
+    }
+
     /// Load one gzip NDJSON or Parquet object into `table` unless it was loaded before or does not exist.
     pub fn load_object(&mut self, table: &str, key: &str) {
         if self.loaded.contains(key) {
@@ -74,6 +109,28 @@ impl FakeState {
             .rows
             .extend(rows);
     }
+}
+
+/// What the fake Snowpipe does with one file sent to `insertFiles`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadOutcome {
+    /// Load it and report it.
+    Load,
+    /// Report it as failed with this first error.
+    Fail(&'static str),
+    /// Accept it but neither load nor report it until released.
+    Stall,
+    /// Accept it, delete the object and never report it.
+    Lose,
+}
+
+/// A file accepted by `insertFiles` and held back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StalledFile {
+    pub pipe: String,
+    pub table: String,
+    pub path: String,
+    pub key: String,
 }
 
 /// A stage pipe: its table and the object key prefix it loads from.
@@ -134,6 +191,51 @@ impl FakeSnowflake {
             .lock()
             .put_failures
             .extend(std::iter::repeat_n(status, count));
+    }
+
+    /// Hold back Snowpipe load reports while `withhold` is set; files still load.
+    pub fn withhold_load_reports(&self, withhold: bool) {
+        self.state.lock().withhold_reports = withhold;
+    }
+
+    /// Hold back `loadHistoryScan` results while `withhold` is set.
+    pub fn withhold_load_history(&self, withhold: bool) {
+        self.state.lock().withhold_history = withhold;
+    }
+
+    /// Decide what happens to the next files sent to `insertFiles`, in order.
+    pub fn script_loads(&self, outcomes: &[LoadOutcome]) {
+        self.state
+            .lock()
+            .load_script
+            .extend(outcomes.iter().copied());
+    }
+
+    /// Load and report every stalled file.
+    pub fn release_stalled(&self) {
+        let mut state = self.state.lock();
+        let stalled = std::mem::take(&mut state.stalled);
+        for file in stalled {
+            state.load_file(&file.pipe, &file.table, &file.path, &file.key);
+        }
+    }
+
+    /// Make the next `count` `loadHistoryScan` calls fail with HTTP `status`.
+    pub fn fail_next_history_scans(&self, count: usize, status: u16) {
+        self.state
+            .lock()
+            .history_failures
+            .extend(std::iter::repeat_n(status, count));
+    }
+
+    /// Every path sent to `insertFiles`, in order.
+    pub fn inserted(&self) -> Vec<String> {
+        self.state.lock().inserted.clone()
+    }
+
+    /// How many `loadHistoryScan` calls arrived.
+    pub fn history_scans(&self) -> u64 {
+        self.state.lock().history_scans
     }
 
     /// Every stored object key, `bucket/key`.

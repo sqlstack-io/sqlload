@@ -1,3 +1,5 @@
+use sqlload_testkit::fake_snowflake::models::LoadOutcome;
+
 pub(crate) struct DeliveryTestCase {
     pub(crate) description: &'static str,
     pub(crate) topic: &'static str,
@@ -58,6 +60,61 @@ pub(crate) struct S3RetryTestCase {
     pub(crate) status: u16,
     pub(crate) records: usize,
     pub(crate) expected_rows: usize,
+}
+
+pub(crate) struct S3LoadReportTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: usize,
+    /// How long reports are withheld after every row is loaded.
+    pub(crate) withheld_for: std::time::Duration,
+    pub(crate) expected_committed: i64,
+}
+
+pub(crate) struct S3LoadFailureTestCase {
+    pub(crate) description: &'static str,
+    /// Lines added to `[staging]`.
+    pub(crate) staging: &'static str,
+    pub(crate) script: &'static [LoadOutcome],
+    pub(crate) expected_error: &'static str,
+    pub(crate) expected_committed: std::ops::RangeInclusive<i64>,
+}
+
+pub(crate) struct S3SlowLoadTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) staging: &'static str,
+    pub(crate) script: &'static [LoadOutcome],
+    pub(crate) withhold_reports: bool,
+    /// How long the file is held before it is released.
+    pub(crate) held_for: std::time::Duration,
+    /// How often the first file was sent to `insertFiles` in all.
+    pub(crate) expected_sends: usize,
+}
+
+pub(crate) struct S3ScanFailureTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) status: u16,
+    pub(crate) records: usize,
+    /// Records committed once the first batch is: some, not all.
+    pub(crate) expected_committed: std::ops::RangeInclusive<i64>,
+}
+
+pub(crate) struct S3SkipTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records_per_topic: usize,
+    pub(crate) expected_metric: &'static str,
+}
+
+pub(crate) struct S3ShutdownTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: usize,
+    pub(crate) expected_committed: std::ops::RangeInclusive<i64>,
+}
+
+pub(crate) struct S3PauseTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: usize,
+    pub(crate) held_for: std::time::Duration,
+    pub(crate) expected_uploads_while_held: usize,
 }
 
 pub(crate) struct ShardingTestCase {

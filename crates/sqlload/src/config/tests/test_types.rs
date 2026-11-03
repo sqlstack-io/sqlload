@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use crate::config::models::LoadErrorPolicy;
+
 pub(crate) struct ParseConfigTestCase {
     pub(crate) description: &'static str,
     pub(crate) text: &'static str,
@@ -33,4 +35,13 @@ pub(crate) struct StartupSettingsTestCase {
     pub(crate) expected_batch: usize,
     pub(crate) expected_interval: Duration,
     pub(crate) expected_budget: u64,
+}
+
+pub(crate) struct LoadErrorPolicyTestCase {
+    pub(crate) description: &'static str,
+    /// Lines added to `[staging]`.
+    pub(crate) staging_lines: &'static str,
+    pub(crate) expected_policy: LoadErrorPolicy,
+    pub(crate) expected_max_pending_files: usize,
+    pub(crate) expected_check_after: Duration,
 }

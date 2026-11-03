@@ -41,6 +41,25 @@ kind = "none"
 load = "auto"
 # internal: how long dated stage folders are kept.
 retain = "7d"
+# Uploads, and separately loads, in flight at once across all streams.
+max_in_flight = 32
+# Snowpipe loads: Kafka offsets are committed only once Snowpipe reports the files loaded
+# (insertReport). The loading role needs OPERATE on each pipe for insertFiles and MONITOR for
+# insertReport and loadHistoryScan; pipes created by `sqlload apply` are owned by it.
+# The most files per stream sent but not committed yet; a full stream pauses its partitions
+# (time paused: sqlload_pending_wait_milliseconds_total).
+max_pending_files = 32
+# A file Snowpipe reports as failed or partially loaded, or that is gone from the stage:
+# halt stops the stream without committing it; skip logs and counts it, then commits past it.
+# To recover from halt, fix the cause and restart with halt; replays usually get new file names
+# that load normally. Only if the same file is reported failed again, load it with
+# COPY INTO ... FILES = (...) and restart once with skip.
+on_load_error = "halt"
+# Files with no report are checked (load history, then the object) after this long, then
+# again every pending_recheck_every. Slow loads are never failed: alert on
+# sqlload_oldest_pending_seconds instead.
+pending_check_after = "5m"
+pending_recheck_every = "10m"
 
 # [staging.s3]
 # bucket = "my-bucket"

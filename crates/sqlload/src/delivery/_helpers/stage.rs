@@ -1,12 +1,14 @@
 use crate::batching::models::{Batch, BatchRow};
 use crate::config::models::Config;
+use crate::delivery::_helpers::pending_loads::same_path;
 use crate::delivery::_helpers::stage_paths::{
     FolderValues, expired_dates, render_folder, s3_target,
 };
-use crate::delivery::constants::PRUNE_LOOKBACK;
+use crate::delivery::constants::{FORBIDDEN, MAX_HISTORY_PAGES, PRUNE_LOOKBACK};
 use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{
-    DeliveryReport, StageClients, StageDelivery, StagedBatch, StagedFile,
+    CheckTiming, Confirmation, DeliveryReport, PendingLoads, StageClients, StageDelivery,
+    StagedBatch, StagedFile,
 };
 use crate::file_format::main::copy_into::copy_into;
 use crate::file_format::main::encode_file::encode_file;
@@ -18,10 +20,14 @@ use crate::naming::models::Stream;
 use crate::planning::models::LoadPath;
 use crate::sql_api::main::execute_sql::execute_sql;
 use crate::stage_api::constants::CREDENTIAL_MARGIN_MS;
+use crate::stage_api::main::head_object::head_object;
 use crate::stage_api::main::insert_files::insert_files;
+use crate::stage_api::main::insert_report::insert_report;
+use crate::stage_api::main::load_history_scan::load_history_scan;
 use crate::stage_api::main::put_object::put_object;
 use crate::stage_api::main::put_stage_file::put_stage_file;
-use crate::stage_api::models::{ObjectUpload, PipeTarget, PutOutcome, StageInfo};
+use crate::stage_api::models::{ObjectPresence, ObjectUpload, PipeTarget, PutOutcome, StageInfo};
+use crate::time_text::main::iso_utc::iso_utc;
 use crate::time_text::main::now_ms::now_ms;
 use crate::time_text::main::utc_date::utc_date;
 use sha2::{Digest, Sha256};
@@ -41,6 +47,11 @@ impl StageDelivery {
             }
             _ => None,
         };
+        let timing = CheckTiming {
+            check_after: config.staging.pending_check_after,
+            recheck_every: config.staging.pending_recheck_every,
+        };
+        let pending = PendingLoads::new(config.staging.on_load_error, timing);
         Ok(Self {
             clients,
             config,
@@ -49,10 +60,12 @@ impl StageDelivery {
             stage_info: None,
             s3,
             staged: None,
+            pending,
+            begin_mark: None,
         })
     }
 
-    /// Upload the batch as one file per folder and load them; the offsets are confirmed once the load is accepted.
+    /// Upload the batch as one file per folder and load them; COPY loads confirm the offsets at once, `insertFiles` loads after [`Self::poll`] sees them loaded.
     pub(crate) async fn deliver(&mut self, batch: &Batch) -> Result<DeliveryReport, DeliveryError> {
         let parts = self.parts(batch);
         let mut staged = self.staged_batch(batch, &parts);
@@ -81,16 +94,204 @@ impl StageDelivery {
         }
         self.staged = Some(staged.clone());
         let keys: Vec<String> = staged.files.iter().map(|file| file.key.clone()).collect();
-        self.load(&keys).await?;
+        let skipped = self.load(&keys).await?;
         self.staged = None;
+        let confirmed = match self.confirms_later() {
+            true => {
+                self.pending
+                    .add(&keys, &skipped, batch.last_offsets(), now_ms());
+                BTreeMap::new()
+            }
+            false => batch.last_offsets(),
+        };
         Ok(DeliveryReport {
             rows: batch.rows.len() as u64,
             uncompressed_bytes,
             sent_bytes,
             requests: keys.len() as u64,
             skipped_rows: 0,
-            confirmed: batch.last_offsets(),
+            confirmed,
         })
+    }
+
+    fn confirms_later(&self) -> bool {
+        matches!(
+            self.path,
+            LoadPath::StageInsertFiles | LoadPath::S3InsertFiles
+        )
+    }
+
+    pub(crate) fn is_full(&self) -> bool {
+        self.pending.file_count() >= self.config.staging.max_pending_files
+    }
+
+    /// Read the pipe's load report, check overdue files, and return the offsets of the oldest batches whose files are all loaded; a failed check never holds back loaded batches.
+    pub(crate) async fn poll(&mut self) -> Result<Confirmation, DeliveryError> {
+        if self.pending.is_empty() {
+            return Ok(Confirmation::default());
+        }
+        let pipe = self.qualified(&self.stream.pipe);
+        let now = now_ms();
+        let mut problem: Option<DeliveryError> = None;
+        match insert_report(&self.pipe_target(&pipe), self.begin_mark.as_deref()).await {
+            Ok(report) => {
+                if report.next_begin_mark.is_some() {
+                    self.begin_mark = report.next_begin_mark;
+                }
+                self.pending.apply(&report.files);
+                if !report.complete {
+                    self.pending.mark_all_due(now);
+                }
+            }
+            Err(error) => problem = Some(report_error("insertReport", &pipe, &error)),
+        }
+        if let Err(error) = self.check_overdue(&pipe, now).await {
+            problem.get_or_insert(error);
+        }
+        let settled = self.pending.settle();
+        for (key, reason) in &settled.skipped {
+            tracing::warn!(stream = %self.stream.name, file = %key, %reason, "Snowpipe did not load a file; skipping it as on_load_error = \"skip\"");
+        }
+        if settled.confirmed.is_empty() {
+            if let Some(reason) = settled.halted {
+                return Err(DeliveryError::Fatal(self.halt_message(&reason)));
+            }
+            if let Some(error) = problem {
+                return Err(error);
+            }
+        }
+        Ok(Confirmation {
+            confirmed: settled.confirmed,
+            error_rows: 0,
+            skipped_files: settled.skipped.len() as u64,
+            deferred_error: problem,
+        })
+    }
+
+    fn halt_message(&self, reason: &str) -> String {
+        format!(
+            "Snowpipe did not load {reason}. Offsets from this file on are not committed. Fix the cause and restart; replays usually get new file names that load normally. Only if the same file is reported failed again, load it with COPY INTO {} FROM {} FILES = (...) and restart once with on_load_error = \"skip\"",
+            self.qualified(&self.stream.table),
+            self.pipe_location()
+        )
+    }
+
+    /// The location the stream's pipe loads from; file keys are relative to it.
+    fn pipe_location(&self) -> String {
+        match &self.s3 {
+            Some(target) => format!("@{}/{}", self.external_stage(), target.prefix),
+            None => format!("@{}/", self.qualified(&self.stream.stage)),
+        }
+    }
+
+    /// Look up overdue files in the load history; send files still in the stage once more and keep waiting, and fail files that are gone.
+    async fn check_overdue(&mut self, pipe: &str, now: i64) -> Result<(), DeliveryError> {
+        let overdue = self.pending.overdue(now);
+        let Some(start_ms) = self.pending.history_start(&overdue) else {
+            return Ok(());
+        };
+        if let Err(error) = self.scan_history(pipe, start_ms, &overdue).await {
+            self.pending.check_failed(&overdue, now);
+            return Err(error);
+        }
+        let unreported = self.pending.overdue(now);
+        self.pending.checked(&unreported, now);
+        for key in self.pending.take_unwarned_received_before(&unreported) {
+            tracing::warn!(stream = %self.stream.name, file = %key, "the pipe received this file name before but its load history has no record of it; it keeps waiting. Include {{date}} in the path template so replays get new file names");
+        }
+        let mut resend: Vec<String> = Vec::new();
+        for key in unreported {
+            if !self.exists(&key).await {
+                self.pending.fail(&key, "no longer in the stage");
+            } else if !self.pending.is_acknowledged(&key) {
+                resend.push(key);
+            }
+        }
+        if resend.is_empty() {
+            return Ok(());
+        }
+        tracing::warn!(stream = %self.stream.name, files = ?resend, "Snowpipe has not reported files; sending them again");
+        let skipped = match insert_files(&self.pipe_target(pipe), &resend).await {
+            Ok(skipped) => skipped,
+            Err(error) => {
+                self.pending.check_failed(&resend, now);
+                return Err(DeliveryError::Retry(format!("insertFiles failed: {error}")));
+            }
+        };
+        for key in &resend {
+            let was_skipped = skipped.iter().any(|path| same_path(path, key));
+            self.pending.resend(key, was_skipped);
+        }
+        Ok(())
+    }
+
+    /// Apply the pipe's load history from `start_ms`, following incomplete pages until every one of `keys` is found.
+    async fn scan_history(
+        &mut self,
+        pipe: &str,
+        start_ms: i64,
+        keys: &[String],
+    ) -> Result<(), DeliveryError> {
+        let mut start = iso_utc(start_ms);
+        for _ in 0..MAX_HISTORY_PAGES {
+            let page = load_history_scan(&self.pipe_target(pipe), &start)
+                .await
+                .map_err(
+                    |error| match report_error("loadHistoryScan", pipe, &error) {
+                        fatal @ DeliveryError::Fatal(_) if error.status() == Some(FORBIDDEN) => {
+                            fatal
+                        }
+                        _ => DeliveryError::Retry(format!("loadHistoryScan failed: {error}")),
+                    },
+                )?;
+            self.pending.apply(&page.files);
+            if !self.pending.any_unsettled(keys) {
+                break;
+            }
+            match page.range_end {
+                Some(next) if !page.complete && next != start => start = next,
+                _ => break,
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a staged file still exists. Only a 404 counts as missing: expired credentials (400), 403 and other errors count as present, deliberately conservative, so the file keeps waiting instead of failing.
+    async fn exists(&mut self, key: &str) -> bool {
+        let found = match self.s3.clone() {
+            Some(target) => head_object(&self.clients.http, &target, key).await,
+            None => match self.stage_info().await {
+                Ok(stage) => head_object(&self.clients.http, &stage.target, key).await,
+                Err(error) => {
+                    tracing::warn!(stream = %self.stream.name, file = %key, %error, "cannot check whether a staged file exists");
+                    return true;
+                }
+            },
+        };
+        match found {
+            Ok(ObjectPresence::Missing) => false,
+            Ok(ObjectPresence::Found) => true,
+            Ok(ObjectPresence::CredentialsExpired) => {
+                self.stage_info = None;
+                if let (Some(_), Ok(target)) = (&self.s3, s3_target(&self.config)) {
+                    self.s3 = Some(target);
+                }
+                true
+            }
+            Err(error) => {
+                tracing::warn!(stream = %self.stream.name, file = %key, %error, "cannot check whether a staged file exists");
+                true
+            }
+        }
+    }
+
+    fn pipe_target<'a>(&'a self, pipe: &'a str) -> PipeTarget<'a> {
+        PipeTarget {
+            http: &self.clients.http,
+            account_url: &self.clients.account_url,
+            auth: &self.clients.auth,
+            pipe,
+        }
     }
 
     /// One part per topic when the `s3` folder names the topic, otherwise the whole batch.
@@ -226,19 +427,14 @@ impl StageDelivery {
             .ok_or_else(|| DeliveryError::Retry("no stage credentials".to_owned()))
     }
 
-    async fn load(&self, keys: &[String]) -> Result<(), DeliveryError> {
+    /// Load the files; returns the paths an `insertFiles` pipe skipped because it received them before.
+    async fn load(&self, keys: &[String]) -> Result<Vec<String>, DeliveryError> {
         let _slot = self.clients.in_flight.load().await;
         let location = match self.path {
-            LoadPath::S3AutoIngest => return Ok(()),
+            LoadPath::S3AutoIngest => return Ok(Vec::new()),
             LoadPath::StageInsertFiles | LoadPath::S3InsertFiles => {
                 let pipe = self.qualified(&self.stream.pipe);
-                let target = PipeTarget {
-                    http: &self.clients.http,
-                    account_url: &self.clients.account_url,
-                    auth: &self.clients.auth,
-                    pipe: &pipe,
-                };
-                return insert_files(&target, keys)
+                return insert_files(&self.pipe_target(&pipe), keys)
                     .await
                     .map_err(|error| retry("insertFiles", &error));
             }
@@ -274,7 +470,7 @@ impl StageDelivery {
                 .await
                 .map_err(|error| retry("COPY", &error))?;
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
     fn external_stage(&self) -> String {
@@ -339,6 +535,16 @@ fn rows_digest(rows: &[&BatchRow]) -> String {
         hasher.update(format!("{topic}:{partition}:{first}-{last};").as_bytes());
     }
     hex::encode(&hasher.finalize()[..12])
+}
+
+/// A report endpoint failure; a 403 means the role lacks MONITOR on the pipe, which retrying cannot fix.
+fn report_error(action: &str, pipe: &str, error: &ApiError) -> DeliveryError {
+    match error.status() {
+        Some(FORBIDDEN) => DeliveryError::Fatal(format!(
+            "{action} failed: {error}; the role needs MONITOR on pipe {pipe} (and OPERATE for insertFiles)"
+        )),
+        _ => retry(action, error),
+    }
 }
 
 fn retry(action: &str, error: &ApiError) -> DeliveryError {

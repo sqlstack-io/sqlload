@@ -26,6 +26,10 @@ pub struct Metrics {
     pub skipped_rows: Family<StreamLabel, Counter>,
     pub error_rows: Family<StreamLabel, Counter>,
     pub last_delivery: Family<StreamLabel, Gauge>,
+    pub pending_files: Family<StreamLabel, Gauge>,
+    pub oldest_pending: Family<StreamLabel, Gauge>,
+    pub skipped_files: Family<StreamLabel, Counter>,
+    pub pending_wait: Family<StreamLabel, Counter>,
     pub connections: Gauge,
     pub buffered_bytes: Gauge,
     pub in_flight_wait: Gauge,
@@ -62,11 +66,35 @@ impl Metrics {
             "error_rows",
             "Rows Snowflake rejected into the error table",
         );
-        let last_delivery = Family::<StreamLabel, Gauge>::default();
-        registry.register(
+        let skipped_files = family(
+            &mut registry,
+            "skipped_files",
+            "Staged files Snowpipe failed to load, skipped by on_load_error = \"skip\"",
+        );
+        let pending_wait = family(
+            &mut registry,
+            "pending_wait_milliseconds",
+            "Time the stream's partitions were paused because staging.max_pending_files were sent but not committed",
+        );
+        let gauges = |registry: &mut Registry, name: &str, help: &str| {
+            let metric = Family::<StreamLabel, Gauge>::default();
+            registry.register(name, help, metric.clone());
+            metric
+        };
+        let last_delivery = gauges(
+            &mut registry,
             "last_delivery_timestamp_seconds",
             "Unix time of the last successful delivery",
-            last_delivery.clone(),
+        );
+        let pending_files = gauges(
+            &mut registry,
+            "pending_files",
+            "Staged files sent to Snowpipe whose offsets are not committed yet",
+        );
+        let oldest_pending = gauges(
+            &mut registry,
+            "oldest_pending_seconds",
+            "Age of the oldest staged file whose offsets are not committed yet; alert when it keeps growing",
         );
         let connections = Gauge::default();
         registry.register(
@@ -97,6 +125,10 @@ impl Metrics {
             skipped_rows,
             error_rows,
             last_delivery,
+            pending_files,
+            oldest_pending,
+            skipped_files,
+            pending_wait,
             connections,
             buffered_bytes,
             in_flight_wait,
