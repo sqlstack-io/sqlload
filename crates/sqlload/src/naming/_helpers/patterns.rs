@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use regex::Regex;
 
-/// A compiled `match` pattern: `*` is any text, `{name}` captures one or more characters other than `.`.
+/// A compiled `match` pattern: `*` is any text, `{name}` captures one or more characters other than `.`, `{name*}` any text.
 #[derive(Debug)]
 pub(crate) struct TopicPattern {
     regex: Regex,
@@ -19,7 +19,10 @@ impl TopicPattern {
                 let end = body
                     .find('}')
                     .ok_or_else(|| format!("unterminated {{ in pattern {pattern:?}"))?;
-                let name = &body[..end];
+                let (name, class) = match body[..end].strip_suffix('*') {
+                    Some(name) => (name, "."),
+                    None => (&body[..end], "[^.]"),
+                };
                 if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     return Err(format!(
                         "invalid capture name {name:?} in pattern {pattern:?}"
@@ -30,7 +33,7 @@ impl TopicPattern {
                         "capture {name:?} appears twice in pattern {pattern:?}"
                     ));
                 }
-                source.push_str(&format!("(?P<{name}>[^.]+?)"));
+                source.push_str(&format!("(?P<{name}>{class}+?)"));
                 captures.push(name.to_owned());
                 rest = &body[end + 1..];
             } else if let Some(after) = rest.strip_prefix('*') {

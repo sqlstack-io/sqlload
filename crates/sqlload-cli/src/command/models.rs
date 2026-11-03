@@ -30,6 +30,12 @@ pub enum Command {
     Check,
     /// Show each topic's table and the objects that would be created.
     Plan,
+    /// Print `topic<TAB>table<TAB>stream<TAB>group` per topic (`-` when skipped), without Snowflake.
+    Tables {
+        /// Read topic names, one per line, from this file instead of Kafka.
+        #[arg(long)]
+        topics_file: Option<PathBuf>,
+    },
     /// Create missing tables, stages and pipes; never alters or drops.
     Apply,
     /// Export until stopped.

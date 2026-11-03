@@ -11,6 +11,7 @@ pub fn stream_settings(config: &Config, topic: &str) -> StreamSettings {
         max_rows: config.batching.max_rows,
         max_age: config.batching.max_age,
         oversized: config.batching.oversized,
+        unwrap: Default::default(),
     };
     let matching = config
         .topics
@@ -22,6 +23,12 @@ pub fn stream_settings(config: &Config, topic: &str) -> StreamSettings {
         settings.max_rows = entry.max_rows.unwrap_or(settings.max_rows);
         settings.max_age = entry.max_age.unwrap_or(settings.max_age);
         settings.oversized = entry.oversized.unwrap_or(settings.oversized);
+        settings.unwrap.extend(
+            entry
+                .unwrap
+                .iter()
+                .map(|(column, member)| (column.clone(), member.clone())),
+        );
     }
     settings
 }

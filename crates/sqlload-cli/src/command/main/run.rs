@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use sqlload::config::main::load_config::load_config;
 
-use crate::command::_helpers::commands::{apply, check, plan, run_export, status};
+use crate::command::_helpers::commands::{apply, check, plan, run_export, status, tables};
 use crate::command::_helpers::logging::init_logging;
 use crate::command::models::{Cli, Command};
 
@@ -26,6 +26,7 @@ pub fn run() -> ExitCode {
         match cli.command {
             Command::Check => check(&config).await,
             Command::Plan => plan(&config).await,
+            Command::Tables { topics_file } => tables(&config, topics_file.as_deref()).await,
             Command::Apply => apply(&config).await,
             Command::Run { max_duration } => run_export(config, max_duration).await,
             Command::Status => status(&config).await,

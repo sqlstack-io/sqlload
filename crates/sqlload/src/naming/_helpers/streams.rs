@@ -36,7 +36,10 @@ pub(crate) fn build_stream(
     topics: Vec<String>,
 ) -> Result<Stream, String> {
     channel_collision(&table, &topics)?;
-    let name = table.to_ascii_lowercase();
+    let name = table
+        .strip_prefix(config.naming.table_prefix.as_str())
+        .unwrap_or(&table)
+        .to_ascii_lowercase();
     let values = BTreeMap::from([
         ("table".to_owned(), table.clone()),
         ("table_flat".to_owned(), table.replace("__", "_")),

@@ -33,6 +33,34 @@ fn given_topics_when_resolving_tables_then_map_rules_and_default_apply_in_order(
             topics: &["shop.orders.created"],
             expected_tables: &[("shop.orders.created", "NEW_ORDERS")],
         },
+        ResolveTablesTestCase {
+            description: "skip rules leave topics out and earlier rules still win",
+            naming: "[[naming.rules]]\nmatch = \"shop.keep_mapped.*\"\ntable = \"KEPT\"\n[[naming.rules]]\nmatch = \"*_mapped.*\"\nskip = true",
+            topics: &["shop.keep_mapped.prices", "shop.drop_mapped.prices"],
+            expected_tables: &[("shop.keep_mapped.prices", "KEPT")],
+        },
+        ResolveTablesTestCase {
+            description: "a starred capture spans dots",
+            naming: "[[naming.rules]]\nmatch = \"source.kc.{path*}\"\ntable = \"KC__{path}\"",
+            topics: &["source.kc.podgy.bf_placed"],
+            expected_tables: &[("source.kc.podgy.bf_placed", "KC__PODGY__BF_PLACED")],
+        },
+        ResolveTablesTestCase {
+            description: "table_prefix applies to map, rule and default tables",
+            naming: "table_prefix = \"TEST__\"\n[naming.map]\n\"a.b\" = \"MAPPED\"\n[[naming.rules]]\nmatch = \"r.{x}\"\ntable = \"R__{x}\"",
+            topics: &["a.b", "r.s", "d.e"],
+            expected_tables: &[
+                ("a.b", "TEST__MAPPED"),
+                ("r.s", "TEST__R__S"),
+                ("d.e", "TEST__D__E"),
+            ],
+        },
+        ResolveTablesTestCase {
+            description: "invalid names go to the fallback table when one is set",
+            naming: "fallback = \"_UNRECOGNISED__TOPICS\"\n[naming.map]\n\"shop.orders\" = \"SELECT\"",
+            topics: &["shop.orders"],
+            expected_tables: &[("shop.orders", "_UNRECOGNISED__TOPICS")],
+        },
     ];
     for test_case in &test_cases {
         let config = config_with_naming(test_case.naming)?;

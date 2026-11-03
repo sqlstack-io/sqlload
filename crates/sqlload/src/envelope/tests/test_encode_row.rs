@@ -1,6 +1,6 @@
 use crate::envelope::main::encode_row::encode_row;
 use crate::envelope::tests::helpers::{all_columns, record};
-use crate::envelope::tests::test_types::EncodeRowTestCase;
+use crate::envelope::tests::test_types::{EncodeRowTestCase, UnwrapTestCase};
 
 const MARCH_1: i64 = 1_709_251_200_000;
 
@@ -48,7 +48,45 @@ fn given_a_record_when_encoding_then_each_column_holds_its_field() {
             &all_columns(test_case.value_type),
             &record(test_case.key, test_case.value),
             MARCH_1,
+            &std::collections::BTreeMap::new(),
         );
         assert_eq!(row, test_case.expected_row, "{}", test_case.description);
+    }
+}
+
+#[test]
+fn given_unwrap_columns_when_encoding_then_they_hold_a_member_of_the_value_as_json_text() {
+    let test_cases = [
+        UnwrapTestCase {
+            description: "an object member becomes compact JSON text",
+            value: br#"{"value": {"a": 1}, "other": 2}"#,
+            expected_value: r#""{\"a\":1}""#,
+        },
+        UnwrapTestCase {
+            description: "a missing member is null",
+            value: br#"{"other": 2}"#,
+            expected_value: "null",
+        },
+        UnwrapTestCase {
+            description: "a value that is not JSON gives null",
+            value: b"plain text",
+            expected_value: "null",
+        },
+    ];
+    let unwrap = std::collections::BTreeMap::from([("V".to_owned(), "value".to_owned())]);
+    for test_case in &test_cases {
+        let row = encode_row(
+            &all_columns("VARCHAR"),
+            &record(None, Some(test_case.value)),
+            MARCH_1,
+            &unwrap,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&row).unwrap_or_default();
+        assert_eq!(
+            parsed["V"].to_string(),
+            test_case.expected_value,
+            "{}",
+            test_case.description
+        );
     }
 }

@@ -261,6 +261,12 @@ pub enum EnvelopeField {
 pub struct NamingConfig {
     #[serde(default)]
     pub strip_prefix: Option<String>,
+    /// Put in front of every table name; `{stream}` and consumer groups leave it out.
+    #[serde(default)]
+    pub table_prefix: String,
+    /// The table for topics whose derived name is not a valid identifier, instead of failing.
+    #[serde(default)]
+    pub fallback: Option<String>,
     #[serde(default)]
     pub rules: Vec<NamingRule>,
     #[serde(default)]
@@ -279,6 +285,8 @@ impl Default for NamingConfig {
     fn default() -> Self {
         Self {
             strip_prefix: None,
+            table_prefix: String::new(),
+            fallback: None,
             rules: Vec::new(),
             map: BTreeMap::new(),
             unmatched: UnmatchedPolicy::default(),
@@ -289,13 +297,16 @@ impl Default for NamingConfig {
     }
 }
 
-/// A pattern rule: named captures in `match` fill the `table` template.
+/// A pattern rule: named captures in `match` fill the `table` template, or `skip` leaves the topic out.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NamingRule {
     #[serde(rename = "match")]
     pub pattern: String,
-    pub table: String,
+    #[serde(default)]
+    pub table: Option<String>,
+    #[serde(default)]
+    pub skip: bool,
 }
 
 /// What happens to a topic that no rule or map entry names.
@@ -323,6 +334,9 @@ pub struct TopicOverride {
     pub max_age: Option<Duration>,
     #[serde(default)]
     pub oversized: Option<OversizedPolicy>,
+    /// Columns filled from a member of the JSON value instead, e.g. `{ VALUE = "value" }`.
+    #[serde(default)]
+    pub unwrap: BTreeMap<String, String>,
 }
 
 /// The optional metrics and health endpoint.
@@ -341,6 +355,7 @@ pub struct StreamSettings {
     pub max_rows: usize,
     pub max_age: Duration,
     pub oversized: OversizedPolicy,
+    pub unwrap: BTreeMap<String, String>,
 }
 
 /// A byte count written as an integer or as text such as `32MB` or `3.5MiB`.

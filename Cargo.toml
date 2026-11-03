@@ -29,7 +29,7 @@ jsonwebtoken = { version = "11", default-features = false, features = ["use_pem"
 prometheus-client = "0.25"
 rdkafka = { version = "0.39", default-features = false, features = ["tokio", "libz", "zstd"] }
 regex = "1"
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json", "form", "query"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json", "form", "query", "gzip"] }
 rlimit = "0.11"
 rsa = { version = "0.9", features = ["pem"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

@@ -13,6 +13,7 @@ pub(crate) fn validate(config: &Config) -> Result<(), ConfigError> {
     problems.extend(template_problems(config));
     problems.extend(staging_problems(config));
     problems.extend(batching_problems(config));
+    problems.extend(unwrap_problems(config));
     match problems.is_empty() {
         true => Ok(()),
         false => Err(ConfigError::Invalid(problems)),
@@ -56,6 +57,27 @@ fn batching_problems(config: &Config) -> Vec<String> {
     }
     if config.batching.max_rows == 0 || config.batching.max_bytes.0 == 0 {
         problems.push("batching.max_rows and batching.max_bytes must be positive".to_owned());
+    }
+    problems
+}
+
+fn unwrap_problems(config: &Config) -> Vec<String> {
+    let columns: BTreeSet<&str> = config
+        .envelope
+        .columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
+    let mut problems: Vec<String> = Vec::new();
+    for entry in &config.topics {
+        for column in entry.unwrap.keys() {
+            if !columns.contains(column.as_str()) {
+                problems.push(format!(
+                    "topics {:?} unwraps {column:?}, which is not an envelope column",
+                    entry.pattern
+                ));
+            }
+        }
     }
     problems
 }

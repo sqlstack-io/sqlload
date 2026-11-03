@@ -4,6 +4,7 @@ pub enum NameSource {
     Map,
     Rule(String),
     Default,
+    Fallback,
 }
 
 /// The table a topic exports to.
@@ -36,9 +37,17 @@ impl Stream {
     }
 }
 
-/// A compiled naming rule.
+/// A compiled naming rule; no template means matching topics are skipped.
 #[derive(Debug)]
 pub(crate) struct NameRule {
     pub(crate) pattern: crate::naming::_helpers::patterns::TopicPattern,
-    pub(crate) template: String,
+    pub(crate) template: Option<String>,
+}
+
+/// What the naming rules decide for one topic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Resolution {
+    Table(TopicTable),
+    Skipped,
+    Unmatched,
 }

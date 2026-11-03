@@ -5,6 +5,7 @@ use sqlload::exporter::main::build_clients::build_clients;
 use sqlload::exporter::main::run_exporter::run_exporter;
 use sqlload::exporter::models::Clients;
 use sqlload::kafka::main::list_topics::list_topics;
+use sqlload::kafka::main::select_topics::select_topics;
 use sqlload::naming::main::resolve_streams::resolve_streams;
 use sqlload::naming::main::resolve_tables::resolve_tables;
 use sqlload::naming::models::{NameSource, TopicTable};
@@ -77,6 +78,7 @@ fn topic_line(entry: &TopicTable) -> String {
         NameSource::Map => "map".to_owned(),
         NameSource::Rule(template) => format!("rule {template}"),
         NameSource::Default => "default".to_owned(),
+        NameSource::Fallback => "fallback".to_owned(),
     };
     format!("  {} -> {} ({source})", entry.topic, entry.table)
 }
@@ -118,6 +120,38 @@ pub(crate) async fn apply(config: &Config) -> Result<Vec<String>, String> {
         .collect();
     lines.push(format!("{} created", created.len()));
     Ok(lines)
+}
+
+pub(crate) async fn tables(
+    config: &Config,
+    topics_file: Option<&std::path::Path>,
+) -> Result<Vec<String>, String> {
+    let topics = match topics_file {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            select_topics(config, text.split_whitespace().map(str::to_owned).collect())?
+        }
+        None => list_topics(config).await?,
+    };
+    let streams = resolve_streams(config, &topics).map_err(|problems| problems.join("\n"))?;
+    let mut by_topic: std::collections::BTreeMap<&str, &sqlload::naming::models::Stream> =
+        std::collections::BTreeMap::new();
+    for stream in &streams {
+        for topic in &stream.topics {
+            by_topic.insert(topic.as_str(), stream);
+        }
+    }
+    Ok(topics
+        .iter()
+        .map(|topic| match by_topic.get(topic.as_str()) {
+            Some(stream) => format!(
+                "{topic}\t{}\t{}\t{}",
+                stream.table, stream.name, stream.consumer_group
+            ),
+            None => format!("{topic}\t-"),
+        })
+        .collect())
 }
 
 pub(crate) async fn status(config: &Config) -> Result<Vec<String>, String> {

@@ -26,6 +26,16 @@ fn given_grouped_topics_when_resolving_streams_then_names_come_from_templates() 
                 "LEGACY_SHOP_ORDERS_STAGE",
             )],
         },
+        ResolveStreamsTestCase {
+            description: "the stream name and group leave out table_prefix",
+            naming: "table_prefix = \"TEST__\"",
+            topics: &["shop.orders"],
+            expected_streams: &[(
+                "TEST__SHOP__ORDERS",
+                "sqlload-shop__orders",
+                "TEST__SHOP__ORDERS_SQLLOAD_STAGE",
+            )],
+        },
     ];
     for test_case in &test_cases {
         let config = config_with_naming(test_case.naming)?;

@@ -125,7 +125,10 @@ impl Supervisor {
         if changed.is_empty() {
             return Ok(());
         }
-        self.apply(&changed).await?;
+        let changed = self.apply(changed).await?;
+        if changed.is_empty() {
+            return Ok(());
+        }
         let wave = match self.config.source.startup_batch {
             0 => changed.len(),
             size => size,
@@ -142,23 +145,39 @@ impl Supervisor {
         Ok(())
     }
 
-    async fn apply(&self, streams: &[Stream]) -> Result<(), String> {
+    /// Create missing objects; streams whose existing objects do not fit are left out and logged, so they cannot stop the rest.
+    async fn apply(&self, streams: Vec<Stream>) -> Result<Vec<Stream>, String> {
         let existing = read_existing(&self.clients.sql, &self.config)
             .await
             .map_err(|error| format!("cannot read existing objects: {error}"))?;
-        let plan = build_plan(
+        let mut plan = build_plan(
             &self.config,
-            streams,
+            &streams,
             &existing,
             self.clients.auth.uses_key_pair(),
         );
+        plan.streams.retain(|stream_plan| {
+            let problems: Vec<String> = stream_plan
+                .objects
+                .iter()
+                .flat_map(|object| object.problems())
+                .collect();
+            if !problems.is_empty() {
+                tracing::error!(stream = %stream_plan.stream.name, ?problems, "existing objects do not fit; not exporting this stream");
+            }
+            problems.is_empty()
+        });
         let created = apply_plan(&self.clients.sql, &plan)
             .await
             .map_err(|error| error.to_string())?;
         for object in created {
             tracing::info!(kind = %object.kind, name = %object.name, "created");
         }
-        Ok(())
+        Ok(plan
+            .streams
+            .into_iter()
+            .map(|stream_plan| stream_plan.stream)
+            .collect())
     }
 
     async fn start(&mut self, stream: Stream, cancel: &CancellationToken) -> Result<(), String> {

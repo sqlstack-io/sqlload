@@ -57,3 +57,21 @@ fn is_semi_structured(sql_type: &str) -> bool {
     let upper = sql_type.trim().to_ascii_uppercase();
     upper.starts_with("VARIANT") || upper.starts_with("OBJECT") || upper.starts_with("ARRAY")
 }
+
+/// The record's value parsed as JSON, if it is JSON.
+pub(crate) fn parsed_value(record: &KafkaRecord) -> Option<Value> {
+    let bytes = record.value.as_deref()?;
+    match serde_json::from_slice::<Value>(bytes) {
+        Ok(parsed) => Some(parsed),
+        Err(_) => None,
+    }
+}
+
+/// One member of the parsed value: compact JSON text, or the JSON itself for semi-structured columns; null when absent.
+pub(crate) fn member_value(column: &ColumnConfig, parsed: Option<&Value>, member: &str) -> Value {
+    match parsed.and_then(|value| value.get(member)) {
+        None | Some(Value::Null) => Value::Null,
+        Some(found) if is_semi_structured(&column.sql_type) => found.clone(),
+        Some(found) => Value::from(found.to_string()),
+    }
+}

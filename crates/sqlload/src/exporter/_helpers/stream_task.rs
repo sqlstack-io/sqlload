@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::batching::models::{BatchLimits, Batcher};
 use crate::batching::models::{BatchRow, BufferGauge, Partition};
+use crate::config::main::stream_settings::stream_settings;
 use crate::config::models::{Config, StartFrom, StreamSettings};
 use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{Delivery, DeliveryReport};
@@ -61,6 +62,8 @@ struct StreamTask {
     committed: BTreeMap<Partition, i64>,
     retry: RetryPolicy,
     cancel: CancellationToken,
+    unwrap: BTreeMap<String, BTreeMap<String, String>>,
+    no_unwrap: BTreeMap<String, String>,
 }
 
 /// Consume, batch, deliver and commit one stream until `cancel` fires.
@@ -80,7 +83,16 @@ pub(crate) async fn run_stream(
         max_age: inputs.settings.max_age,
         max_total_bytes: inputs.config.batching.max_total_bytes.0,
     };
+    let unwrap: BTreeMap<String, BTreeMap<String, String>> = inputs
+        .stream
+        .topics
+        .iter()
+        .map(|topic| (topic.clone(), stream_settings(&inputs.config, topic).unwrap))
+        .filter(|(_, columns)| !columns.is_empty())
+        .collect();
     let mut task = StreamTask {
+        unwrap,
+        no_unwrap: BTreeMap::new(),
         batcher: Batcher::new(limits, inputs.gauge),
         config: inputs.config,
         stream: inputs.stream,
@@ -184,7 +196,8 @@ impl StreamTask {
         {
             return Ok(());
         }
-        let line = encode_row(&self.config.envelope.columns, &record, now_ms());
+        let unwrap = self.unwrap.get(&record.topic).unwrap_or(&self.no_unwrap);
+        let line = encode_row(&self.config.envelope.columns, &record, now_ms(), unwrap);
         let row = BatchRow {
             topic: record.topic,
             partition: record.partition,

@@ -3,13 +3,20 @@ use std::collections::BTreeMap;
 use crate::config::models::{NamingConfig, UnmatchedPolicy};
 use crate::naming::_helpers::identifiers::to_identifier;
 use crate::naming::_helpers::patterns::{TopicPattern, fill_template};
-use crate::naming::models::{NameRule, NameSource, TopicTable};
+use crate::naming::models::{NameRule, NameSource, Resolution, TopicTable};
 
 /// Compile every naming rule, reporting each invalid pattern.
 pub(crate) fn compile_rules(naming: &NamingConfig) -> Result<Vec<NameRule>, Vec<String>> {
     let mut problems: Vec<String> = Vec::new();
     let mut rules: Vec<NameRule> = Vec::new();
     for rule in &naming.rules {
+        if rule.skip == rule.table.is_some() {
+            problems.push(format!(
+                "naming rule {:?} needs exactly one of table or skip = true",
+                rule.pattern
+            ));
+            continue;
+        }
         match TopicPattern::compile(&rule.pattern) {
             Ok(pattern) => rules.push(NameRule {
                 pattern,
@@ -24,46 +31,52 @@ pub(crate) fn compile_rules(naming: &NamingConfig) -> Result<Vec<NameRule>, Vec<
     }
 }
 
-/// The table for one topic: the map first, then rules in order, then the unmatched policy.
+/// The table for one topic: the map first, then rules in order, then the unmatched policy; every table gets `table_prefix`.
 pub(crate) fn table_for(
     naming: &NamingConfig,
     rules: &[NameRule],
     topic: &str,
-) -> Result<Option<TopicTable>, String> {
+) -> Result<Resolution, String> {
     if let Some(table) = naming.map.get(topic) {
-        return Ok(Some(entry(topic, table.clone(), NameSource::Map)));
+        return Ok(entry(naming, topic, table.clone(), NameSource::Map));
     }
     for rule in rules {
-        if let Some(values) = rule.pattern.matches(topic) {
-            let filled = fill_template(&rule.template, &values)?;
-            return Ok(Some(entry(
-                topic,
-                to_identifier(&filled),
-                NameSource::Rule(rule.template.clone()),
-            )));
-        }
+        let Some(values) = rule.pattern.matches(topic) else {
+            continue;
+        };
+        let Some(template) = &rule.template else {
+            return Ok(Resolution::Skipped);
+        };
+        let filled = fill_template(template, &values)?;
+        return Ok(entry(
+            naming,
+            topic,
+            to_identifier(&filled),
+            NameSource::Rule(template.clone()),
+        ));
     }
     if naming.unmatched == UnmatchedPolicy::Fail {
-        return Ok(None);
+        return Ok(Resolution::Unmatched);
     }
     let stripped = naming
         .strip_prefix
         .as_deref()
         .and_then(|prefix| topic.strip_prefix(prefix))
         .unwrap_or(topic);
-    Ok(Some(entry(
+    Ok(entry(
+        naming,
         topic,
         to_identifier(stripped),
         NameSource::Default,
-    )))
+    ))
 }
 
-fn entry(topic: &str, table: String, source: NameSource) -> TopicTable {
-    TopicTable {
+fn entry(naming: &NamingConfig, topic: &str, table: String, source: NameSource) -> Resolution {
+    Resolution::Table(TopicTable {
         topic: topic.to_owned(),
-        table,
+        table: format!("{}{table}", naming.table_prefix),
         source,
-    }
+    })
 }
 
 /// Tables that several topics reach through the default rule, which is never intentional grouping.
