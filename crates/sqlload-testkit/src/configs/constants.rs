@@ -1,2 +1,2 @@
-/// A throwaway RSA key for key-pair authentication against the fake.
-pub const TEST_KEY: &str = include_str!("data/test_key.p8");
+/// Throwaway RSA key size for key-pair authentication against the fake.
+pub const TEST_KEY_BITS: usize = 2048;

@@ -12,6 +12,7 @@ rust-version.workspace = true
 axum.workspace = true
 flate2.workspace = true
 rdkafka.workspace = true
+rsa = { workspace = true, features = ["getrandom"] }
 serde_json.workspace = true
 sqlload.workspace = true
 testcontainers.workspace = true

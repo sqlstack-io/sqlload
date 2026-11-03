@@ -3,7 +3,9 @@
 use sqlload::config::main::parse_config::parse_config;
 use sqlload::config::models::Config;
 
-use crate::configs::constants::TEST_KEY;
+use rsa::pkcs8::{EncodePrivateKey, LineEnding};
+
+use crate::configs::constants::TEST_KEY_BITS;
 use crate::configs::models::S3Settings;
 use crate::fake_snowflake::constants::FAKE_BUCKET;
 
@@ -15,7 +17,12 @@ pub fn s3_config(
     settings: S3Settings<'_>,
 ) -> Result<Config, String> {
     let key_file = std::env::temp_dir().join(format!("sqlload-test-key-{}.p8", std::process::id()));
-    std::fs::write(&key_file, TEST_KEY).map_err(|error| error.to_string())?;
+    let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, TEST_KEY_BITS)
+        .map_err(|error| error.to_string())?;
+    let pem = key
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|error| error.to_string())?;
+    std::fs::write(&key_file, pem.as_bytes()).map_err(|error| error.to_string())?;
     let text = format!(
         r#"
 [source]

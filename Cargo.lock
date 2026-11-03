@@ -2967,6 +2967,7 @@ dependencies = [
  "axum",
  "flate2",
  "rdkafka",
+ "rsa",
  "serde_json",
  "sqlload",
  "testcontainers",
