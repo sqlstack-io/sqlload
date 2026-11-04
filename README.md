@@ -20,7 +20,7 @@ The `sqlload` package depends on `sqlload-cli`, which holds the native executabl
 ```sh
 make check            # fmt, clippy, fensu
 make test-unit
-make test-containers  # needs Docker
+make test-containers  # needs Docker (Redpanda, Postgres, SeaweedFS)
 ```
 
 ## License

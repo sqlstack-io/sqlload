@@ -19,7 +19,7 @@ required-features = ["cli"]
 doc = false
 
 [features]
-default = ["cli"]
+default = ["cli", "duckdb"]
 # The `sqlload` executable and its command-line parsing.
 cli = ["dep:clap", "dep:rlimit", "dep:tracing-subscriber"]
 # TLS and SASL support in the bundled librdkafka.
@@ -29,7 +29,7 @@ ssl-vendored = ["rdkafka/ssl-vendored"]
 sasl = ["rdkafka/sasl"]
 # Select the Docker-backed integration tests (`make test-containers`).
 container-tests = []
-# DuckDB as a loader destination. Off by default: the bundled DuckDB takes many minutes to compile.
+# DuckDB as a loader destination, compiled from the bundled source (cached in CI after the first build).
 duckdb = ["dep:duckdb"]
 
 [dependencies]
