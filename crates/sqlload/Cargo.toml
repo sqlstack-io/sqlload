@@ -36,14 +36,17 @@ duckdb = ["dep:duckdb"]
 aes.workspace = true
 arrow-array = { workspace = true, features = ["chrono-tz"] }
 arrow-cast.workspace = true
+arrow-csv.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true
+async-compression.workspace = true
 axum.workspace = true
 base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 clap = { workspace = true, optional = true }
+csv-core.workspace = true
 duckdb = { workspace = true, optional = true }
 flate2.workspace = true
 futures-util.workspace = true
@@ -66,9 +69,9 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
 tokio-postgres.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["io"] }
 toml.workspace = true
 tower-layer.workspace = true
 tower-service.workspace = true
@@ -84,6 +87,7 @@ serde_json.workspace = true
 sqlload-testkit.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+zstd.workspace = true
 
 [lints]
 workspace = true

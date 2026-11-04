@@ -4,7 +4,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 
 use crate::file_store::models::{OpenFolder, StoredFile};
-use crate::files_source::_helpers::footers::object_reader;
+use crate::files_source::_helpers::parquet::footers::object_reader;
 use crate::files_source::constants::CONCURRENT_FOOTER_READS;
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::Footer;

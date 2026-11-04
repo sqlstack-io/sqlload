@@ -8,3 +8,10 @@ pub enum FilesError {
     #[error("{key}: {reason}")]
     File { key: String, reason: String },
 }
+
+/// Why a batch could not be shaped for the destination, and the first row (within the batch) at fault when one is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShapeError {
+    pub row: Option<usize>,
+    pub reason: String,
+}

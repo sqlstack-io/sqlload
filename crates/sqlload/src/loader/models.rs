@@ -8,7 +8,7 @@ use crate::file_store::models::OpenFolder;
 use crate::files_destination::models::{
     FilesDestination, PartitionFolder, PendingLoad, TableFiles, TablePath, TableState,
 };
-use crate::files_source::models::{FilesRead, FilesTable, Footer};
+use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, Footer};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
@@ -85,6 +85,7 @@ pub struct FilesSource {
     pub table: FilesTable,
     /// Declared partition columns and their types, by name; a file column of the same name is replaced by the path's value.
     pub partition_types: Vec<(String, ColumnType)>,
+    pub encoding: FilesEncoding,
 }
 
 /// A table that matched a source's selection but is not loaded.

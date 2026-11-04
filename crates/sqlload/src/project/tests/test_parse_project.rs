@@ -127,6 +127,16 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
             },
             expected_value: "Some(\"shop/{table}/day={cursor:date}/\")",
         },
+        ParseProjectTestCase {
+            description: "a files source reads its format, compression and CSV options; unset options keep their defaults",
+            read: |project| format!("{:?}", project.sources["events"].files_encoding()),
+            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"] } }",
+        },
+        ParseProjectTestCase {
+            description: "a files source without settings reads Parquet",
+            read: |project| project.sources["app"].files_encoding().to_string(),
+            expected_value: "parquet",
+        },
     ];
     for test_case in test_cases {
         assert_eq!(
@@ -196,6 +206,36 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "only a parquet format is known",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[targets.lake]\nconnection = \"lake\"\nformat = \"json\"\n",
             expected_message: "unknown variant `json`",
+        },
+        ParseProjectErrorTestCase {
+            description: "compression is for text formats",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\ncompression = \"gzip\"\n",
+            expected_message: "[sources.raw] compression is for ndjson, json and csv files; Parquet files compress inside the file",
+        },
+        ParseProjectErrorTestCase {
+            description: "csv options need format = csv",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"ndjson\"\ncsv = { header = false }\n",
+            expected_message: "[sources.raw] csv is for format = \"csv\", not \"ndjson\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a csv delimiter is one ASCII character",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { delimiter = \"\u{e9}\" }\n",
+            expected_message: "[sources.raw] csv delimiter must be one ASCII character other than a line break",
+        },
+        ParseProjectErrorTestCase {
+            description: "an unknown csv option is rejected",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { seperator = \";\" }\n",
+            expected_message: "unknown field `seperator`",
+        },
+        ParseProjectErrorTestCase {
+            description: "an unknown files format is rejected",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"avro\"\n",
+            expected_message: "unknown variant `avro`",
+        },
+        ParseProjectErrorTestCase {
+            description: "format settings are for files sources",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nformat = \"csv\"\n",
+            expected_message: "[sources.app] format, compression and csv are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "a target cannot load into a source database",

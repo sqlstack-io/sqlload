@@ -65,6 +65,32 @@ pub(crate) struct FilesRun {
     pub(crate) expected_error: &'static str,
 }
 
+/// One JSON or CSV file a files scenario writes, compressed by `encode`.
+pub(crate) struct TextFile {
+    pub(crate) key: &'static str,
+    pub(crate) contents: &'static str,
+    pub(crate) encode: fn(&str) -> Result<bytes::Bytes, String>,
+}
+
+/// One load of a text files scenario, after writing `files`.
+pub(crate) struct TextFilesRun {
+    pub(crate) files: &'static [TextFile],
+    /// Text the plan or load error must contain; empty when the run must succeed.
+    pub(crate) expected_error: &'static str,
+}
+
+pub(crate) struct TextFilesScenarioTestCase {
+    pub(crate) description: &'static str,
+    /// The store and its connection TOML, given the S3 endpoint and a fresh temporary directory.
+    pub(crate) store:
+        fn(&str, &std::path::Path) -> (sqlload::store_paths::models::StoreKind, String),
+    /// Source settings appended after `[sources.scores]`, starting with its format.
+    pub(crate) settings: &'static str,
+    pub(crate) runs: &'static [TextFilesRun],
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 pub(crate) struct FilesScenarioTestCase {
     pub(crate) description: &'static str,
     /// The store and its connection TOML, given the S3 endpoint and a fresh temporary directory.
@@ -148,4 +174,15 @@ pub(crate) struct DebugProjectTestCase {
     /// Each expected line's start, in order.
     pub(crate) expected_lines: &'static [&'static str],
     pub(crate) expected_ok: bool,
+}
+
+/// What a files scenario runs: each run's files, already encoded, and the error it expects.
+pub(crate) struct FilesScenario<'a> {
+    pub(crate) description: &'a str,
+    pub(crate) store:
+        fn(&str, &std::path::Path) -> (sqlload::store_paths::models::StoreKind, String),
+    pub(crate) settings: &'a str,
+    /// Per run: the files written as (key, bytes), and the text its error must contain (empty for none).
+    pub(crate) runs: Vec<(Vec<(&'a str, bytes::Bytes)>, &'a str)>,
+    pub(crate) check_query: &'a str,
 }

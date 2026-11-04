@@ -111,7 +111,8 @@ pub(crate) async fn discover_files_table(
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
     let partition_names: Vec<String> = source.partition_columns.keys().cloned().collect();
-    let table = discover_files(&folder, &partition_names).await?;
+    let encoding = source.files_encoding();
+    let table = discover_files(&folder, &partition_names, &encoding).await?;
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
     }
@@ -143,7 +144,7 @@ pub(crate) async fn discover_files_table(
     let columns: Vec<SourceColumn> = typed
         .map(|(name, column_type)| SourceColumn {
             name,
-            postgres_type: "parquet".to_owned(),
+            postgres_type: encoding.format.to_string(),
             pg_type: PgType::Other,
             column_type,
             nullable: true,
@@ -167,6 +168,7 @@ pub(crate) async fn discover_files_table(
             location,
             table,
             partition_types,
+            encoding,
         },
     ))
 }
@@ -324,6 +326,7 @@ pub(crate) async fn plan_files(
         .collect();
     Ok(select_files(&selection).map(|files| FilesRead {
         files,
+        encoding: request.files.encoding.clone(),
         columns,
         batch_rows: SOURCE_BATCH_ROWS,
     }))

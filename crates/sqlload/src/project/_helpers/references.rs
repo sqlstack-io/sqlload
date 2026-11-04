@@ -1,3 +1,4 @@
+use crate::files_source::models::SourceFormat;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, target_problems,
 };
@@ -96,6 +97,14 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
                     "{place} path and partition_columns are for kind = \"files\""
                 ));
             }
+            if source.format != SourceFormat::Parquet
+                || source.compression.is_some()
+                || source.csv.is_some()
+            {
+                problems.push(format!(
+                    "{place} format, compression and csv are for kind = \"files\""
+                ));
+            }
         }
         SourceKind::Files => {
             if source.path.is_none() {
@@ -104,7 +113,38 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             if !source.include.is_empty() || !source.exclude.is_empty() {
                 problems.push(format!("{place} include and exclude are for database sources; a files source is one table"));
             }
+            problems.extend(encoding_problems(place, source));
         }
+    }
+    problems
+}
+
+/// Settings that do not fit a files source's format.
+fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    if source.format == SourceFormat::Parquet && source.compression.is_some() {
+        problems.push(format!(
+            "{place} compression is for ndjson, json and csv files; Parquet files compress inside the file"
+        ));
+    }
+    match (&source.csv, source.format) {
+        (None, _) => {}
+        (Some(csv), SourceFormat::Csv) => {
+            for (setting, character) in [("delimiter", csv.delimiter), ("quote", csv.quote)] {
+                if !character.is_ascii() || character == '\n' || character == '\r' {
+                    problems.push(format!(
+                        "{place} csv {setting} must be one ASCII character other than a line break, not {character:?}"
+                    ));
+                }
+            }
+            if csv.delimiter == csv.quote {
+                problems.push(format!("{place} csv delimiter and quote must differ"));
+            }
+        }
+        (Some(_), format) => problems.push(format!(
+            "{place} csv is for format = \"csv\", not {format:?}",
+            format = format.to_string()
+        )),
     }
     problems
 }

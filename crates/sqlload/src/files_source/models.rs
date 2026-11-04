@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use parquet::file::metadata::ParquetMetaData;
+use serde::Deserialize;
 
 use crate::column_types::models::ColumnType;
-use crate::file_store::models::StoredFile;
+use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::schema_plan::models::DesiredColumn;
 
 /// A data file and its partition values.
@@ -37,6 +38,7 @@ pub struct FilesTable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilesRead {
     pub files: Vec<DataFile>,
+    pub encoding: FilesEncoding,
     /// Data columns, partition columns and the source-file column, as the table has them.
     pub columns: Vec<DesiredColumn>,
     pub batch_rows: usize,
@@ -70,4 +72,104 @@ pub struct Footer {
     pub relative_key: String,
     pub schema: SchemaRef,
     pub metadata: Arc<ParquetMetaData>,
+}
+
+/// The file formats a files source reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceFormat {
+    #[default]
+    Parquet,
+    /// One JSON object per line.
+    Ndjson,
+    /// JSON objects one after another (over any number of lines), or one top-level array of objects.
+    Json,
+    Csv,
+}
+
+impl std::fmt::Display for SourceFormat {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Parquet => "parquet",
+            Self::Ndjson => "ndjson",
+            Self::Json => "json",
+            Self::Csv => "csv",
+        })
+    }
+}
+
+/// How the files of a text format are compressed; Parquet compresses inside the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Compression {
+    /// By file name: `.gz` is gzip, `.zst` is zstd, anything else is uncompressed.
+    #[default]
+    Auto,
+    None,
+    Gzip,
+    Zstd,
+}
+
+/// The decompression one file is read with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Codec {
+    Plain,
+    Gzip,
+    Zstd,
+}
+
+/// How CSV files are written.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CsvOptions {
+    /// The field separator, one ASCII character.
+    pub delimiter: char,
+    /// Whether the first record holds the column names; without one, columns are `column_1`, `column_2`, ...
+    pub header: bool,
+    /// The quote character, one ASCII character; a quote inside a quoted field is written twice.
+    pub quote: char,
+    /// Field values read as NULL.
+    pub null_values: Vec<String>,
+}
+
+impl Default for CsvOptions {
+    fn default() -> Self {
+        Self {
+            delimiter: ',',
+            header: true,
+            quote: '"',
+            null_values: vec![String::new()],
+        }
+    }
+}
+
+/// How a files source's files are encoded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilesEncoding {
+    pub format: SourceFormat,
+    pub compression: Compression,
+    pub csv: CsvOptions,
+}
+
+impl std::fmt::Display for FilesEncoding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.format, self.compression) {
+            (SourceFormat::Parquet, _) => write!(formatter, "{}", self.format),
+            (format, Compression::Auto) => write!(formatter, "{format}, compression by file name"),
+            (format, Compression::None) => write!(formatter, "{format}, uncompressed"),
+            (format, Compression::Gzip) => write!(formatter, "{format}, gzip"),
+            (format, Compression::Zstd) => write!(formatter, "{format}, zstd"),
+        }
+    }
+}
+
+/// One file of a read, and what its batches are shaped into.
+#[derive(Debug)]
+pub(crate) struct FileRead<'a> {
+    pub(crate) folder: &'a OpenFolder,
+    pub(crate) request: &'a FilesRead,
+    pub(crate) data: &'a DataFile,
+    pub(crate) schema: &'a SchemaRef,
+    /// The file as recorded in the source-file column.
+    pub(crate) file_name: String,
 }

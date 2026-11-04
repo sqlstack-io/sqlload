@@ -105,7 +105,10 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
     };
     let origin = format!("  ({})", spec.strategy_origin);
     let source = match &spec.files {
-        Some(files) => format!("source  files  {}  {}", spec.source_name, files.location),
+        Some(files) => format!(
+            "source  files  {}  {}  {}",
+            spec.source_name, files.location, files.encoding
+        ),
         None => format!(
             "source  postgres  {}  {}",
             spec.source_name,

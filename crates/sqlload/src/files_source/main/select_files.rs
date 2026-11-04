@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::files_source::_helpers::window::in_window;
+use crate::files_source::_helpers::plan::window::in_window;
 use crate::files_source::models::{DataFile, FileSelection};
 
 /// The files of `request` not loaded yet (a loaded file that changed is an error) whose partition cursor (if any) lies in `from <= value < to`.

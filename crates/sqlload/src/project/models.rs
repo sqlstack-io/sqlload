@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::config::models::AuthConfig;
+use crate::files_source::models::{Compression, CsvOptions, FilesEncoding, SourceFormat};
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_duration, deserialize_optional_keys,
@@ -151,7 +152,13 @@ pub struct SourceConfig {
     pub path: Option<String>,
     /// The files' format (files sources).
     #[serde(default)]
-    pub format: FilesFormat,
+    pub format: SourceFormat,
+    /// How JSON and CSV files are compressed; by file name (`.gz`, `.zst`) when omitted (files sources).
+    #[serde(default)]
+    pub compression: Option<Compression>,
+    /// How CSV files are written (files sources with `format = "csv"`).
+    #[serde(default)]
+    pub csv: Option<CsvOptions>,
     /// The folder template for this source's tables in a files target, overriding the target's `path`.
     #[serde(default)]
     pub destination_path: Option<String>,
@@ -176,6 +183,15 @@ pub struct SourceConfig {
 }
 
 impl SourceConfig {
+    /// How a files source's files are encoded, with defaults for what is not set.
+    pub fn files_encoding(&self) -> FilesEncoding {
+        FilesEncoding {
+            format: self.format,
+            compression: self.compression.unwrap_or_default(),
+            csv: self.csv.clone().unwrap_or_default(),
+        }
+    }
+
     /// The destination table name template: as set, or `{source}__{table}` for databases and `{source}` for files.
     pub fn table_name_template(&self) -> &str {
         match (&self.table_name, self.kind) {
@@ -195,7 +211,7 @@ pub enum SourceKind {
     Files,
 }
 
-/// The file formats a files source reads or a files target writes.
+/// The file formats a files target writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilesFormat {
