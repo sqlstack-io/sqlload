@@ -71,6 +71,13 @@ pub(crate) fn object_lines(table: &TablePlan) -> Vec<String> {
             .iter()
             .map(|(column, rule)| format!("excluded  {column} ({rule})")),
     );
+    lines.extend(
+        table
+            .spec
+            .masked
+            .iter()
+            .map(|(column, method)| format!("masked  {column} ({method})")),
+    );
     lines
 }
 

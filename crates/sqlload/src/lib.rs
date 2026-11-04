@@ -17,6 +17,7 @@ pub mod file_format;
 pub mod http;
 pub mod kafka;
 pub mod loader;
+pub mod masking;
 pub mod metrics;
 pub mod naming;
 pub mod planning;

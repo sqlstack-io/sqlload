@@ -45,7 +45,16 @@ pub(crate) fn column_selection(
         .concat(),
         skip_tables_with: source.skip_tables_with_columns.clone(),
     };
-    apply_column_rules(table, &rules)
+    let selection = apply_column_rules(table, &rules)?;
+    Ok(match selection {
+        ColumnSelection::Keep(excluded) => ColumnSelection::Keep(
+            excluded
+                .into_iter()
+                .filter(|(column, _)| !overrides.mask.contains_key(column))
+                .collect(),
+        ),
+        skip => skip,
+    })
 }
 
 /// The table's pinned column types, parsed for `warehouse`.
@@ -62,6 +71,9 @@ pub(crate) fn pinned_types(
             }
             Err(error) => problems.push(format!("column {column}: {error}")),
         }
+    }
+    for column in overrides.mask.keys() {
+        pinned.insert(column.clone(), ColumnType::Text);
     }
     match problems.is_empty() {
         true => Ok(pinned),
@@ -112,6 +124,7 @@ pub(crate) fn build_spec(
         cursor,
         pinned: columns.pinned,
         excluded_columns: columns.excluded,
+        masked: overrides.mask.clone(),
         contract: layered(&settings.contract, &defaults.contract)
             .map(|(value, _)| value)
             .unwrap_or_default(),

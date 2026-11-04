@@ -34,6 +34,7 @@ pub const TABLE_ONLY_KEYS: &[&str] = &[
     "description",
     "name",
     "columns",
+    "mask",
     "exclude_columns",
     "allow_columns",
 ];

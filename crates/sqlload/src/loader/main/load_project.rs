@@ -8,6 +8,7 @@ use crate::loader::_helpers::sources::connect_source;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, LoadResult, ProjectPlan, StagingSession, TablePlan};
+use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::models::CopyRequest;
 use crate::project::models::ProjectConfig;
@@ -85,6 +86,7 @@ async fn load_table(
     };
     let copied = copy_table(client, request, async |batch| {
         session.parts += 1;
+        let batch = mask_batch(batch, &spec.masked)?;
         stage_batch(destination, &session, batch)
             .await
             .map_err(|error| error.to_string())

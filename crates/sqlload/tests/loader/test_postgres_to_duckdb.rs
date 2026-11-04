@@ -33,6 +33,7 @@ write_strategy = "delete_insert"
 cursor_column = "at"
 
 [sources.app.tables."public.stores"]
+mask = { city = "hash" }
 "#;
 
 #[test]
@@ -81,8 +82,14 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
             LoadRunTestCase {
                 description: "replace without a cursor mirrors deletes in the source",
                 source_change: "DELETE FROM public.stores WHERE code = 'Y1';",
+                check_query: "SELECT string_agg(code, ',' ORDER BY code) FROM raw.app__stores",
+                expected_result: "L1",
+            },
+            LoadRunTestCase {
+                description: "a masked column holds the SHA-256 hex of each value",
+                source_change: "",
                 check_query: "SELECT string_agg(code || '@' || city, ',' ORDER BY code) FROM raw.app__stores",
-                expected_result: "L1@Leeds",
+                expected_result: "L1@8593b9db65212160979d946950601c26622a219c80f1f122679eb69ec5b96600",
             },
             LoadRunTestCase {
                 description: "a new source column is added to the table and filled",
