@@ -10,4 +10,5 @@ pub mod qualified_name;
 pub mod sql_literal;
 pub mod staging_table;
 pub mod stored_name;
+pub mod swap_table;
 pub mod write_statements;

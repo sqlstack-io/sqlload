@@ -1,6 +1,9 @@
 /// Suffix of the staging table a load writes into before its strategy runs.
 pub const STAGING_SUFFIX: &str = "__sqlload_staging";
 
+/// Suffix (after the staging table's name) of the table a `replace` builds and swaps in.
+pub const SWAP_SUFFIX: &str = "_swap";
+
 /// Date cursors move back by whole days: a lookback is rounded up to days.
 pub const SECONDS_PER_DAY: u64 = 86_400;
 

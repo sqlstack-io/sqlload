@@ -22,6 +22,7 @@ use crate::snowflake_destination::main::remove_staged::remove_staged;
 use crate::snowflake_destination::main::run_statements::run_statements;
 use crate::snowflake_destination::main::stage_parquet::stage_parquet;
 use crate::write_sql::main::qualified_name::qualified_name;
+use crate::write_sql::main::swap_table::swap_table;
 use crate::write_sql::models::TableName;
 
 /// The table's live columns, `None` if it does not exist.
@@ -102,17 +103,17 @@ pub(crate) async fn finish_staging(
     }
 }
 
-/// Drop the load's staging table and any staged files; best effort, after success or failure.
+/// Drop the load's staging and swap tables and any staged files; best effort, after success or failure.
 pub(crate) async fn cleanup_staging(
     destination: &Destination,
     session: &StagingSession,
     warehouse: Warehouse,
 ) {
-    let drop = format!(
-        "DROP TABLE IF EXISTS {}",
-        qualified_name(&session.staging, warehouse)
-    );
-    if let Err(error) = execute(destination, vec![drop]).await {
+    let drops: Vec<String> = [session.staging.clone(), swap_table(&session.staging)]
+        .iter()
+        .map(|table| format!("DROP TABLE IF EXISTS {}", qualified_name(table, warehouse)))
+        .collect();
+    if let Err(error) = execute(destination, drops).await {
         tracing::warn!(%error, table = %session.staging.table, "cannot drop the staging table");
     }
     if let Destination::Snowflake(snowflake) = destination

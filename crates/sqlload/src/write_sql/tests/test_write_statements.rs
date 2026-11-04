@@ -8,8 +8,10 @@ use crate::write_sql::tests::test_types::WriteStatementsTestCase;
 const SF_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS\" (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", 'load-1', CAST('2026-11-04T10:00:00Z' AS TIMESTAMP_TZ(6)) FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
 const DUCK_INSERT: &str = "INSERT INTO \"raw\".\"app__accounts\" (\"id\", \"profile\", \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\") SELECT \"id\", CAST(\"profile\" AS JSON), \"updated_at\", 'load-1', CAST('2026-11-04T10:00:00Z' AS TIMESTAMP WITH TIME ZONE) FROM \"raw\".\"app__accounts__sqlload_staging_load1\"";
 
+const SF_SWAP_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1_SWAP\" (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", 'load-1', CAST('2026-11-04T10:00:00Z' AS TIMESTAMP_TZ(6)) FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
+
 #[test]
-fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it() {
+fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
     let test_cases = [
         WriteStatementsTestCase {
             description: "append inserts only",
@@ -18,16 +20,13 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
             expected_statements: &["BEGIN", SF_INSERT, "COMMIT"],
         },
         WriteStatementsTestCase {
-            description: "merge deletes matching keys first",
+            description: "merge is one MERGE that updates matches and inserts the rest",
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::Merge {
                 unique_key: vec!["id".to_owned()],
             },
             expected_statements: &[
-                "BEGIN",
-                "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE (\"ID\") IN (SELECT \"ID\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\")",
-                SF_INSERT,
-                "COMMIT",
+                "MERGE INTO \"RAW\".\"APP__ACCOUNTS\" AS __target USING (SELECT \"ID\" AS \"ID\", PARSE_JSON(\"PROFILE\") AS \"PROFILE\", \"UPDATED_AT\" AS \"UPDATED_AT\", 'load-1' AS \"_SQLLOAD_LOAD_ID\", CAST('2026-11-04T10:00:00Z' AS TIMESTAMP_TZ(6)) AS \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\") AS __source ON __target.\"ID\" = __source.\"ID\" WHEN MATCHED THEN UPDATE SET \"PROFILE\" = __source.\"PROFILE\", \"UPDATED_AT\" = __source.\"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\" = __source.\"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" = __source.\"_SQLLOAD_LOADED_AT\" WHEN NOT MATCHED THEN INSERT (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") VALUES (__source.\"ID\", __source.\"PROFILE\", __source.\"UPDATED_AT\", __source.\"_SQLLOAD_LOAD_ID\", __source.\"_SQLLOAD_LOADED_AT\")",
             ],
         },
         WriteStatementsTestCase {
@@ -46,7 +45,7 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
             ],
         },
         WriteStatementsTestCase {
-            description: "replace swaps the whole table inside one transaction",
+            description: "replace on DuckDB is one transaction, which keeps the table's constraints",
             warehouse: Warehouse::DuckDb,
             mode: WriteMode::Replace,
             expected_statements: &[
@@ -54,6 +53,17 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
                 "DELETE FROM \"raw\".\"app__accounts\"",
                 DUCK_INSERT,
                 "COMMIT",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "replace on Snowflake swaps in a copy that keeps the grants",
+            warehouse: Warehouse::Snowflake,
+            mode: WriteMode::Replace,
+            expected_statements: &[
+                "CREATE OR REPLACE TABLE \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1_SWAP\" LIKE \"RAW\".\"APP__ACCOUNTS\" COPY GRANTS",
+                SF_SWAP_INSERT,
+                "ALTER TABLE \"RAW\".\"APP__ACCOUNTS\" SWAP WITH \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1_SWAP\"",
+                "DROP TABLE IF EXISTS \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1_SWAP\"",
             ],
         },
         WriteStatementsTestCase {
