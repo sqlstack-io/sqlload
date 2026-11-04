@@ -1,32 +1,30 @@
 SHELL := /bin/bash
 FENSU := uvx --from 'fensu-cli==0.28.3' fensu
 
-.PHONY: check check-ci test test-unit test-containers test-loader verify
+.PHONY: check check-ci test test-unit test-containers verify
 
-# Local checks also lint the DuckDB destination, which CI skips because the bundled DuckDB is slow to compile.
+# Lints the default build (DuckDB included) and the build without DuckDB, so both keep compiling.
 check:
 	cargo fmt --all
 	cargo clippy --workspace --all-targets --features sqlload/container-tests --quiet -- -D warnings
-	cargo clippy --workspace --all-targets --features sqlload/container-tests,sqlload/duckdb --quiet -- -D warnings
+	cargo clippy -p sqlload --all-targets --no-default-features --features cli,container-tests --quiet -- -D warnings
 	$(FENSU) check
 
 check-ci:
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --features sqlload/container-tests --quiet -- -D warnings
+	cargo clippy -p sqlload --all-targets --no-default-features --features cli,container-tests --quiet -- -D warnings
 	$(FENSU) check
 
 test-unit:
 	cargo test --workspace --lib --quiet
 
-# Needs Docker: starts Redpanda and Postgres containers and a local fake Snowflake, which is also the S3 bucket.
+# Needs Docker: Redpanda, Postgres and SeaweedFS (S3) containers, a local fake Snowflake, and DuckDB.
+# The AWS variables are the test containers' credentials.
 test-containers:
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests --test exporter --quiet -- --test-threads=2
+	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests --test loader --quiet -- --test-threads=2
 
-# Local only (not in CI): the loader's Postgres, SeaweedFS (S3) and DuckDB tests, which need the bundled DuckDB.
-test-loader:
-	cargo test -p sqlload --features duckdb --lib --quiet
-	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,duckdb --test loader --quiet -- --test-threads=2
-
-test: test-unit test-containers test-loader
+test: test-unit test-containers
 
 verify: check-ci test
