@@ -1,10 +1,15 @@
 use std::sync::Arc;
 
-use arrow_array::{Int64Array, RecordBatch, TimestampMicrosecondArray};
+use arrow_array::{Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray};
+use arrow_schema::{DataType, Field, Schema};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use crate::file_store::models::StoredFile;
-use crate::files_destination::models::{PartitionBy, PartitionFolder, TablePath};
+use crate::files_destination::_helpers::parquet_files::new_file;
+use crate::files_destination::models::{FolderClaim, PartitionBy, PartitionFolder, TablePath};
+use crate::files_source::models::Footer;
 use crate::store_paths::models::{Location, StoreKind};
+use crate::write_sql::models::WriteMode;
 
 /// An S3 bucket in eu-west-2.
 pub(crate) fn bucket() -> StoreKind {
@@ -65,4 +70,73 @@ pub(crate) fn location(store: StoreKind, prefix: &str) -> Location {
         store,
         prefix: prefix.to_owned(),
     }
+}
+
+/// A table claiming `prefix` in `store`, from `template` and source schema `schema`.
+pub(crate) fn claim(name: &str, store: StoreKind, prefix: &str, schema: &str) -> FolderClaim {
+    FolderClaim {
+        id: name.to_owned(),
+        name: name.to_owned(),
+        folder: location(store, prefix),
+        template: "{source}/{table}/".to_owned(),
+        schema: schema.to_owned(),
+    }
+}
+
+/// A listed file modified at `modified_ms`.
+pub(crate) fn stored_at(key: &str, modified_ms: i64) -> StoredFile {
+    StoredFile {
+        modified_ms,
+        ..stored(key)
+    }
+}
+
+/// An S3 bucket reached through another endpoint and region.
+pub(crate) fn bucket_elsewhere() -> StoreKind {
+    StoreKind::S3 {
+        bucket: "lake-bucket".to_owned(),
+        region: Some("us-east-1".to_owned()),
+        endpoint: Some("http://127.0.0.1:9000".to_owned()),
+    }
+}
+
+/// A directory store at `root`.
+pub(crate) fn directory(root: &str) -> StoreKind {
+    StoreKind::Filesystem {
+        root: root.to_owned(),
+    }
+}
+
+/// `delete_insert` on `day` over `from <= day < to`.
+pub(crate) fn delete_insert(from: Option<&str>, to: Option<&str>) -> WriteMode {
+    WriteMode::DeleteInsert {
+        cursor_column: "day".to_owned(),
+        from: from.map(str::to_owned),
+        to: to.map(str::to_owned),
+    }
+}
+
+/// The footer of a Parquet file the destination writes, holding text column `code` with `values`.
+pub(crate) fn text_footer(values: &[&str]) -> Result<Footer, String> {
+    let schema = Arc::new(Schema::new(vec![Field::new("code", DataType::Utf8, true)]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(StringArray::from(values.to_vec())) as arrow_array::ArrayRef],
+    )
+    .map_err(|error| error.to_string())?;
+    let mut file = new_file(&schema)?;
+    file.writer
+        .write(&batch)
+        .map_err(|error| error.to_string())?;
+    let bytes = file
+        .writer
+        .into_inner()
+        .map_err(|error| error.to_string())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))
+        .map_err(|error| error.to_string())?;
+    Ok(Footer {
+        relative_key: "part-a-0.parquet".to_owned(),
+        schema: builder.schema().clone(),
+        metadata: builder.metadata().clone(),
+    })
 }

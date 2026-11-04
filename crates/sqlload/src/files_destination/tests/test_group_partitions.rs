@@ -45,6 +45,17 @@ fn given_listed_files_when_grouping_then_partitions_come_oldest_first_and_strays
             expected_problems: "\"soon\" is not a date",
         },
         GroupPartitionsTestCase {
+            description: "escaped folder names are read back as the values written",
+            keys: &[
+                "code=%5Fdraft/part-a-0.parquet",
+                "code=50%25/part-a-0.parquet",
+            ],
+            partition: Some(("code=", PartitionBy::Value)),
+            cursor_type: ColumnType::Text,
+            expected_partitions: &[("50%", 1), ("_draft", 1)],
+            expected_problems: "",
+        },
+        GroupPartitionsTestCase {
             description: "without partitions every file is in one group",
             keys: &["part-a-0.parquet", "part-b-0.parquet"],
             partition: None,

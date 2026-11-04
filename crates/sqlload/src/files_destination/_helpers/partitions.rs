@@ -87,11 +87,11 @@ pub(crate) fn group_partitions(
             ));
             continue;
         };
-        match partition_key(value, partition.by, cursor_type) {
+        match partition_key(&value, partition.by, cursor_type) {
             Ok(key) => grouped
                 .entry(key)
                 .or_insert_with(|| Partition {
-                    value: Some(value.to_owned()),
+                    value: Some(value.clone()),
                     files: Vec::new(),
                 })
                 .files

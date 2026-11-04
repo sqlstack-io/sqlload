@@ -1,7 +1,10 @@
+pub(in crate::loader) mod _files_context;
+pub(in crate::loader) mod _files_repair;
 pub(in crate::loader) mod _files_schema;
 pub(in crate::loader) mod _files_window;
 pub(in crate::loader) mod _load_files;
 pub(in crate::loader) mod _plan_files;
+pub(in crate::loader) mod _table_folder;
 pub mod apply_project;
 pub mod connect_targets;
 pub mod load_project;

@@ -1,3 +1,4 @@
+use crate::files_destination::models::{PendingLoad, PendingPhase};
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
 use crate::loader::models::{FilesOutput, TablePlan};
 use crate::project::models::FilesFormat;
@@ -160,10 +161,29 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
         table
             .output
             .iter()
+            .flat_map(|output| output.pending.iter())
+            .map(pending_line),
+    );
+    lines.extend(
+        table
+            .output
+            .iter()
             .flat_map(|output| output.notes.iter())
             .map(|note| format!("note    {note}")),
     );
     lines
+}
+
+fn pending_line(load: &PendingLoad) -> String {
+    let (stopped, repair) = match load.phase {
+        PendingPhase::Writing => ("while writing", "deletes its"),
+        PendingPhase::Replacing => ("while deleting the files it replaced", "finishes deleting"),
+    };
+    format!(
+        "cleanup load {} stopped {stopped}; load {repair} {} files first",
+        load.load_id,
+        load.deletes.len()
+    )
 }
 
 fn files_line(output: &FilesOutput) -> String {

@@ -9,7 +9,10 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::project::models::WriteStrategy;
 use crate::schema_plan::models::DesiredColumn;
+use crate::store_paths::main::escape_partition_value::escape_partition_value;
+use crate::store_paths::main::unescape_partition_value::unescape_partition_value;
 use crate::store_paths::models::{Location, StoreKind};
+use crate::write_sql::models::WriteMode;
 
 /// A target that writes tables as Parquet files into an s3 or filesystem connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,16 +42,22 @@ pub struct PartitionFolder {
 }
 
 impl PartitionFolder {
-    /// The folder name for partition `value`.
+    /// The folder name for partition `value`, escaped as Hive escapes partition values.
     pub fn name(&self, value: &str) -> String {
-        format!("{}{value}{}", self.prefix, self.suffix)
+        format!(
+            "{}{}{}",
+            self.prefix,
+            escape_partition_value(value),
+            self.suffix
+        )
     }
 
-    /// The partition value of folder `name`, if the name has this folder's shape.
-    pub fn value_of<'a>(&self, name: &'a str) -> Option<&'a str> {
+    /// The partition value of folder `name` (escapes undone), if the name has this folder's shape.
+    pub fn value_of(&self, name: &str) -> Option<String> {
         name.strip_prefix(self.prefix.as_str())?
             .strip_suffix(self.suffix.as_str())
             .filter(|value| !value.is_empty())
+            .map(unescape_partition_value)
     }
 }
 
@@ -185,4 +194,73 @@ pub struct OutputCheck<'a> {
     /// The cursor's type, when the cursor column is loaded.
     pub cursor_type: Option<&'a ColumnType>,
     pub partition: Option<&'a PartitionFolder>,
+}
+
+/// How far an unfinished load got, from its pending marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingPhase {
+    /// Writing its new files: they are incomplete, so they are deleted.
+    Writing,
+    /// Deleting the files it replaces: its new files are complete, so the deletes are finished.
+    Replacing,
+}
+
+/// A load that left its pending marker behind, and the files repairing it deletes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingLoad {
+    pub load_id: String,
+    pub phase: PendingPhase,
+    /// Keys below the table folder that repair deletes: the load's own files while writing, the replaced ones while replacing.
+    pub deletes: Vec<String>,
+}
+
+/// A files table as listed: its trusted files by partition, loads to repair, and whether any data file exists.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TableState {
+    /// Data files, without those an unfinished load leaves for repair to delete.
+    pub listed: TableFiles,
+    pub pending: Vec<PendingLoad>,
+    pub exists: bool,
+}
+
+/// The files a write replaces, worked out before anything is written.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReplacedFiles {
+    /// Replaced whatever the load writes (everything, or partitions in the cursor window).
+    pub always: Vec<String>,
+    /// Each other partition's files, replaced if the load writes rows to it.
+    pub by_partition: BTreeMap<String, Vec<String>>,
+}
+
+impl ReplacedFiles {
+    /// Every replaced key, given the partitions the load wrote.
+    pub fn keys(&self, written: &BTreeSet<String>) -> Vec<String> {
+        let mut keys = self.always.clone();
+        for value in written {
+            keys.extend(self.by_partition.get(value).into_iter().flatten().cloned());
+        }
+        keys
+    }
+}
+
+/// A table's folder, and what is needed to explain a clash with another table's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderClaim {
+    /// Tells tables apart: the source and the source table.
+    pub id: String,
+    /// The table as `plan` names it.
+    pub name: String,
+    pub folder: Location,
+    pub template: String,
+    /// The source table's schema.
+    pub schema: String,
+}
+
+/// What decides the files a write replaces.
+#[derive(Debug, Clone, Copy)]
+pub struct ReplaceRequest<'a> {
+    pub mode: &'a WriteMode,
+    pub listed: &'a TableFiles,
+    pub partition: Option<&'a PartitionFolder>,
+    pub cursor_type: Option<&'a ColumnType>,
 }

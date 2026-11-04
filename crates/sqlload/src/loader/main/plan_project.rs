@@ -2,15 +2,16 @@
 
 use std::collections::BTreeMap;
 
-use crate::files_destination::main::overlapping_folders::overlapping_folders;
+use crate::files_destination::main::folder_conflict::folder_conflict;
+use crate::files_destination::models::FolderClaim;
 use crate::loader::_helpers::resolve::{resolve_tables, source_target};
 use crate::loader::_helpers::sources::{connect_source, discover_files_table, selected};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, PlanOptions, ProjectPlan, SkippedTable};
+use crate::loader::main::_table_folder::table_folder;
+use crate::loader::models::{Destination, PlanOptions, ProjectPlan, SkippedTable, TableSpec};
 use crate::postgres_source::main::read_catalog::read_catalog;
 use crate::project::models::{NewTables, ProjectConfig, SourceKind};
-use crate::store_paths::models::Location;
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
 pub async fn plan_project(
@@ -19,6 +20,7 @@ pub async fn plan_project(
     options: &PlanOptions,
 ) -> Result<ProjectPlan, LoaderError> {
     let mut plan = ProjectPlan::default();
+    let mut claims: Vec<FolderClaim> = Vec::new();
     for (source_name, source) in &project.sources {
         let (discovered, files) = match source.kind {
             SourceKind::Postgres => {
@@ -48,6 +50,7 @@ pub async fn plan_project(
         let resolved = resolve_tables(project, source_name, &discovered);
         plan.problems.extend(resolved.problems);
         plan.skipped.extend(resolved.skipped);
+        claims.extend(folder_claims(&resolved.specs, destinations));
         for mut spec in resolved.specs {
             spec.files = files.clone();
             let qualified = spec.source_table.qualified_name();
@@ -63,7 +66,7 @@ pub async fn plan_project(
                 LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
             })?;
             let table = plan_table(&spec, destination, options).await?;
-            let is_new = table.live.is_none() && !spec.listed;
+            let is_new = !table.exists && !spec.listed;
             match (is_new, spec.new_tables) {
                 (true, NewTables::Skip) => plan.skipped.push(SkippedTable {
                     source_name: source_name.clone(),
@@ -77,24 +80,51 @@ pub async fn plan_project(
             }
         }
     }
-    Ok(block_overlapping(plan))
+    Ok(block_overlapping(plan, &claims))
 }
 
-/// The plan with every files table whose folder overlaps another table's blocked.
-fn block_overlapping(mut plan: ProjectPlan) -> ProjectPlan {
-    let mut folders: Vec<Option<(&str, &Location)>> = Vec::with_capacity(plan.tables.len());
-    for table in &plan.tables {
-        let name = table.spec.destination.table.as_str();
-        folders.push(
-            table
-                .output
-                .as_ref()
-                .map(|output| (name, &output.path.folder)),
+/// The folders files tables write to, whether or not they are selected; warehouse tables and paths that do not resolve claim none.
+fn folder_claims(
+    specs: &[TableSpec],
+    destinations: &BTreeMap<String, Destination>,
+) -> Vec<FolderClaim> {
+    let mut claims: Vec<FolderClaim> = Vec::new();
+    for spec in specs {
+        let Some(Destination::Files(files)) = destinations.get(&spec.target) else {
+            continue;
+        };
+        let name = format!(
+            "{}.{}",
+            spec.source_name,
+            spec.source_table.qualified_name()
         );
+        if let Ok(path) = table_folder(spec, files) {
+            claims.push(FolderClaim {
+                id: name.clone(),
+                name,
+                folder: path.folder,
+                template: spec.destination_path.clone().unwrap_or_default(),
+                schema: spec.source_table.schema.clone(),
+            });
+        }
     }
-    let overlaps = overlapping_folders(&folders);
-    for (table, problem) in plan.tables.iter_mut().zip(overlaps) {
-        if let Some(problem) = problem {
+    claims
+}
+
+/// The plan with every selected files table blocked whose folder clashes with any other configured table's.
+fn block_overlapping(mut plan: ProjectPlan, claims: &[FolderClaim]) -> ProjectPlan {
+    for table in plan
+        .tables
+        .iter_mut()
+        .filter(|table| table.output.is_some())
+    {
+        let id = format!(
+            "{}.{}",
+            table.spec.source_name,
+            table.spec.source_table.qualified_name()
+        );
+        let own = claims.iter().find(|claim| claim.id == id);
+        if let Some(problem) = own.and_then(|own| folder_conflict(own, claims)) {
             table.schema = blocked_plan(vec![problem]);
         }
     }

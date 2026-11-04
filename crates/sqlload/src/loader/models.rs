@@ -5,7 +5,9 @@ use crate::column_types::models::{ColumnType, Warehouse};
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::models::DuckDbDestination;
 use crate::file_store::models::OpenFolder;
-use crate::files_destination::models::{FilesDestination, PartitionFolder, TableFiles, TablePath};
+use crate::files_destination::models::{
+    FilesDestination, PartitionFolder, PendingLoad, TableFiles, TablePath, TableState,
+};
 use crate::files_source::models::{FilesRead, FilesTable, Footer};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
@@ -13,7 +15,7 @@ use crate::project::models::{
     Contract, FilesFormat, NewTables, OnSchemaChange, Policy, WriteStrategy,
 };
 use crate::routing::models::Route;
-use crate::schema_plan::models::{LiveColumn, SchemaPlan};
+use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
 use crate::store_paths::models::Location;
 use crate::write_sql::models::{TableName, WriteMode};
@@ -120,6 +122,8 @@ pub struct TablePlan {
     pub files: Option<FilesRead>,
     /// Where and how the files are written, for a files target.
     pub output: Option<FilesOutput>,
+    /// The destination table exists (a warehouse table, or data files in a files table's folder).
+    pub exists: bool,
 }
 
 /// A files target's side of one table's plan.
@@ -134,6 +138,8 @@ pub struct FilesOutput {
     pub max_footer_reads: usize,
     /// How the strategy writes and replaces files, for `plan`.
     pub notes: Vec<String>,
+    /// Loads that did not finish; `load` repairs them first.
+    pub pending: Vec<PendingLoad>,
 }
 
 /// The plan for a whole project.
@@ -208,11 +214,21 @@ pub struct FilesWindowRequest<'a> {
     pub read_columns: &'a [ReadColumn],
 }
 
-/// A files table as it is now: its files, and its newest partition's footers and schema.
+/// A files table's newest load: its footers and schema.
 #[derive(Debug, Clone)]
 pub struct LiveFiles {
-    pub listed: TableFiles,
     pub footers: Vec<Footer>,
-    /// The merged schema of the newest partition's files; `None` before any file exists.
+    /// The merged schema of the newest load's files in the newest partition; `None` before any file exists.
     pub live: Option<Vec<LiveColumn>>,
+}
+
+/// A files table ready to plan: its columns, path, cursor type, open folder and current state.
+#[derive(Debug, Clone)]
+pub struct FilesContext {
+    pub read_columns: Vec<ReadColumn>,
+    pub desired: Vec<DesiredColumn>,
+    pub path: TablePath,
+    pub cursor_type: Option<ColumnType>,
+    pub folder: OpenFolder,
+    pub state: TableState,
 }

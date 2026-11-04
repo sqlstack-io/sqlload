@@ -5,7 +5,7 @@ use crate::files_destination::_helpers::partitions::{bound_key, partition_key};
 use crate::files_destination::models::PartitionBy;
 
 /// Whether partition `value` lies in `from <= value < to` (each open when `None`).
-pub fn partition_in_window(
+pub(in crate::files_destination) fn partition_in_window(
     value: &str,
     by: PartitionBy,
     cursor_type: &ColumnType,

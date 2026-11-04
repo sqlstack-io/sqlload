@@ -1,7 +1,10 @@
 pub(crate) mod bounds;
+pub(crate) mod loads;
+pub(crate) mod markers;
 pub(crate) mod parquet_files;
 pub(crate) mod partitions;
 pub(crate) mod shape;
+pub(crate) mod spill;
 pub(crate) mod split;
 pub(crate) mod statistics;
 pub(crate) mod template;

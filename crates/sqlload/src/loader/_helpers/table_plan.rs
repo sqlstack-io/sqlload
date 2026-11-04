@@ -70,6 +70,7 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         route: None,
         files: None,
         output: None,
+        exists: false,
     }
 }
 
@@ -93,6 +94,7 @@ pub(crate) async fn plan_table(
             return Ok(TablePlan {
                 spec: spec.clone(),
                 read_columns: Vec::new(),
+                exists: live.is_some(),
                 live,
                 schema: blocked_plan(problems),
                 mode: WriteMode::Append,
@@ -212,6 +214,7 @@ pub(crate) async fn plan_table(
             None
         }
     };
+    let exists = live.is_some();
     Ok(TablePlan {
         spec: spec.clone(),
         read_columns,
@@ -223,5 +226,6 @@ pub(crate) async fn plan_table(
         route,
         files,
         output: None,
+        exists,
     })
 }

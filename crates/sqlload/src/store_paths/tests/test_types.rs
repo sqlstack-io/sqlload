@@ -26,3 +26,9 @@ pub(crate) struct ResolveLocationTestCase {
     /// The location as it prints, or the error text.
     pub(crate) expected_location: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct PartitionValueTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) value: &'static str,
+    pub(crate) expected_escaped: &'static str,
+}

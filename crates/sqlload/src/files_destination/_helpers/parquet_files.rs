@@ -6,27 +6,30 @@ use parquet::file::properties::WriterProperties;
 
 use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
-use crate::files_destination::constants::{PARQUET_SUFFIX, PART_PREFIX};
+use crate::files_destination::constants::{OPEN_FILE_OVERHEAD_BYTES, PARQUET_SUFFIX, PART_PREFIX};
 use crate::files_destination::errors::FilesDestinationError;
 use crate::files_destination::models::{FilesWriter, OpenFile};
 
-/// An empty zstd Parquet file in memory with the table's schema.
+/// An empty zstd Parquet file in memory with the table's schema; statistics are never truncated, so maximums are exact.
 pub(crate) fn new_file(schema: &SchemaRef) -> Result<OpenFile, String> {
     let properties = WriterProperties::builder()
         .set_compression(Compression::ZSTD(ZstdLevel::default()))
+        .set_statistics_truncate_length(None)
+        .set_column_index_truncate_length(None)
         .build();
     ArrowWriter::try_new(Vec::new(), schema.clone(), Some(properties))
         .map(|writer| OpenFile { writer, rows: 0 })
         .map_err(|error| error.to_string())
 }
 
-/// The bytes an open file holds in memory, written or still buffered.
+/// The bytes an open file holds in memory: written, still buffered, and the writer's own overhead.
 pub(crate) fn open_bytes(file: &OpenFile) -> usize {
     file.writer.bytes_written()
         + file
             .writer
             .in_progress_size()
             .max(file.writer.memory_size())
+        + OPEN_FILE_OVERHEAD_BYTES
 }
 
 /// The key of the writer's next file in partition `value`: `<partition folder>/part-<load id>-<n>.parquet`.

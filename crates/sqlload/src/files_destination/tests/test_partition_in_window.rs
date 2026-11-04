@@ -1,5 +1,5 @@
 use crate::column_types::models::ColumnType;
-use crate::files_destination::main::partition_in_window::partition_in_window;
+use crate::files_destination::main::_partition_in_window::partition_in_window;
 use crate::files_destination::models::PartitionBy;
 use crate::files_destination::tests::test_types::PartitionInWindowTestCase;
 

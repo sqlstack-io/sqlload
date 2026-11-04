@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use crate::column_types::models::ColumnType;
-use crate::files_destination::models::PartitionBy;
+use crate::files_destination::models::{FolderClaim, PartitionBy, PendingPhase};
 use crate::project::models::WriteStrategy;
-use crate::store_paths::models::{Location, StoreKind};
+use crate::store_paths::models::StoreKind;
+use crate::write_sql::models::WriteMode;
 
 pub(crate) struct TablePathTestCase {
     pub(crate) description: &'static str,
@@ -71,10 +72,63 @@ pub(crate) struct OutputProblemsTestCase {
     pub(crate) expected_problems: &'static str,
 }
 
-pub(crate) struct OverlappingFoldersTestCase {
+pub(crate) struct FolderConflictTestCase {
     pub(crate) description: &'static str,
-    /// Each table's name and folder; a warehouse table is added after them.
-    pub(crate) tables: Vec<(&'static str, Location)>,
-    /// Per table, text its problem must contain; empty when its folder is its own.
-    pub(crate) expected_problems: &'static [&'static str],
+    pub(crate) claim: FolderClaim,
+    pub(crate) others: Vec<FolderClaim>,
+    /// Text the problem must contain; empty when the folder is the table's own.
+    pub(crate) expected_problem: &'static str,
+}
+
+pub(crate) struct NewestLoadTestCase {
+    pub(crate) description: &'static str,
+    /// Each file's key and modification time.
+    pub(crate) files: &'static [(&'static str, i64)],
+    pub(crate) expected_keys: &'static [&'static str],
+}
+
+pub(crate) struct SpillOrderTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) sizes: &'static [(&'static str, usize)],
+    pub(crate) max_files: usize,
+    pub(crate) max_bytes: usize,
+    pub(crate) expected_spilled: &'static [&'static str],
+}
+
+pub(crate) struct ReplacedFilesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) mode: WriteMode,
+    /// Partitions the load wrote rows to.
+    pub(crate) written: &'static [&'static str],
+    /// The replaced keys, or the error text.
+    pub(crate) expected_keys: Result<&'static [&'static str], &'static str>,
+}
+
+pub(crate) struct FitLiveTypesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) desired: ColumnType,
+    pub(crate) live: ColumnType,
+    pub(crate) expected_type: ColumnType,
+}
+
+pub(crate) struct CheckWindowTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) by: PartitionBy,
+    pub(crate) cursor_type: ColumnType,
+    pub(crate) bounds: (Option<&'static str>, Option<&'static str>),
+    /// Empty when the bounds compare with the partitions.
+    pub(crate) expected_problem: &'static str,
+}
+
+pub(crate) struct MarkerTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) text: String,
+    /// The phase and keys read, or the error text.
+    pub(crate) expected_marker: Result<(PendingPhase, &'static [&'static str]), &'static str>,
+}
+
+pub(crate) struct CursorMaximumTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) values: &'static [&'static str],
+    pub(crate) expected_maximum: Option<&'static str>,
 }

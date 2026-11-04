@@ -8,7 +8,6 @@ use arrow_select::take::take_record_batch;
 
 use crate::files_destination::_helpers::shape::shape_batch;
 use crate::files_destination::models::{FilesWriter, PartitionBy};
-use crate::store_paths::constants::{CURRENT_FOLDER, PARENT_FOLDER};
 
 /// `batch` shaped to the writer's columns and split by partition (one part, keyed `""`, without partitions).
 pub(crate) fn partition_rows(
@@ -53,9 +52,9 @@ pub(crate) fn split_batch(
         let row = u32::try_from(index).map_err(|error| error.to_string())?;
         rows.entry(value.unwrap_or_default()).or_default().push(row);
     }
-    if let Some(value) = rows.keys().find(|value| unusable(value)) {
+    if rows.contains_key("") {
         return Err(format!(
-            "{column} value {value:?} cannot name a partition folder (empty, '.', '..', a '/' or a control character)"
+            "{column} is empty in some rows, which cannot name a partition folder"
         ));
     }
     let mut parts: Vec<(String, RecordBatch)> = Vec::with_capacity(rows.len());
@@ -65,12 +64,4 @@ pub(crate) fn split_batch(
         parts.push((value.to_owned(), part));
     }
     Ok(parts)
-}
-
-fn unusable(value: &str) -> bool {
-    value.is_empty()
-        || value == CURRENT_FOLDER
-        || value == PARENT_FOLDER
-        || value.contains('/')
-        || value.chars().any(char::is_control)
 }

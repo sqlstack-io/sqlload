@@ -30,3 +30,18 @@ pub const UTC_SUFFIX: &str = "+00";
 
 /// Seconds in a day, to turn Parquet date statistics (days since 1970) into dates.
 pub const SECONDS_PER_DAY: i64 = 86_400;
+
+/// The folder below a table's folder holding one marker per load that has not finished.
+pub const PENDING_FOLDER: &str = "_sqlload/pending/";
+
+/// The first line of a pending marker while the load writes its files.
+pub const PENDING_WRITING: &str = "writing";
+
+/// The first line of a pending marker while the load deletes the files it replaces.
+pub const PENDING_REPLACING: &str = "replacing";
+
+/// At most this many partitions have a file open at once; beyond it the largest is written out.
+pub const OPEN_FILES_MAX: usize = 256;
+
+/// Memory an open file holds beyond its buffered data (writer state, page buffers), for the memory estimate.
+pub const OPEN_FILE_OVERHEAD_BYTES: usize = 1024 * 1024;

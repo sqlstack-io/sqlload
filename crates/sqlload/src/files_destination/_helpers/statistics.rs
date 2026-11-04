@@ -27,13 +27,24 @@ pub(crate) fn row_group_maxes(footer: &Footer, column: &str) -> Result<ArrayRef,
     let maxes = converter
         .row_group_maxes(row_groups.iter())
         .map_err(failed)?;
+    let exact = converter
+        .row_group_is_max_value_exact(row_groups.iter())
+        .map_err(failed)?;
     let rows: i64 = row_groups.iter().map(|group| group.num_rows()).sum();
-    match rows > 0 && maxes.null_count() == maxes.len() {
-        true => Err(format!(
+    let inexact = exact.iter().any(|flag| flag != Some(true));
+    match (
+        rows > 0 && maxes.null_count() == maxes.len(),
+        rows > 0 && inexact,
+    ) {
+        (true, _) => Err(format!(
             "{} has no statistics for {column}; give --start-cursor or rewrite with --reload",
             footer.relative_key
         )),
-        false => Ok(maxes),
+        (false, true) => Err(format!(
+            "{}: the maximum of {column} in its statistics is not exact (truncated); give --start-cursor or rewrite with --reload",
+            footer.relative_key
+        )),
+        (false, false) => Ok(maxes),
     }
 }
 
