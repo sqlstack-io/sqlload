@@ -9,6 +9,7 @@ use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_duration, deserialize_optional_keys,
 };
+use crate::project::constants::{DEFAULT_FILES_TABLE_NAME, DEFAULT_TABLE_NAME};
 
 /// A loader project: `sqlload.toml` with `[connections]`, `[targets]` and `[sources]`.
 #[derive(Debug, Clone, Deserialize)]
@@ -110,15 +111,25 @@ pub struct SourceConfig {
     /// The destination schema; the target's `loader_schema` when omitted.
     #[serde(default)]
     pub schema: Option<String>,
-    /// Source tables to sync, as `schema.table` patterns.
+    /// Source tables to sync, as `schema.table` patterns (database sources).
+    #[serde(default)]
     pub include: Vec<String>,
     #[serde(default)]
     pub exclude: Vec<String>,
     #[serde(default)]
     pub new_tables: NewTables,
-    /// The destination table name, with `{source}`, `{schema}` and `{table}`.
-    #[serde(default = "defaults::table_name")]
-    pub table_name: String,
+    /// The destination table name, with `{source}`, `{schema}` and `{table}`; see [`SourceConfig::table_name_template`].
+    #[serde(default)]
+    pub table_name: Option<String>,
+    /// The folder holding the files, relative to the connection (files sources).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The files' format (files sources).
+    #[serde(default)]
+    pub format: FilesFormat,
+    /// Hive `key=value` folders loaded as typed columns (files sources).
+    #[serde(default)]
+    pub partition_columns: BTreeMap<String, String>,
     #[serde(default)]
     pub exclude_columns: Vec<String>,
     #[serde(default)]
@@ -136,11 +147,32 @@ pub struct SourceConfig {
     pub tables: BTreeMap<String, TableOverride>,
 }
 
+impl SourceConfig {
+    /// The destination table name template: as set, or `{source}__{table}` for databases and `{source}` for files.
+    pub fn table_name_template(&self) -> &str {
+        match (&self.table_name, self.kind) {
+            (Some(template), _) => template,
+            (None, SourceKind::Postgres) => DEFAULT_TABLE_NAME,
+            (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
+        }
+    }
+}
+
 /// The declarative source kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Postgres,
+    /// Existing files in an object store or directory.
+    Files,
+}
+
+/// The file formats a files source reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilesFormat {
+    #[default]
+    Parquet,
 }
 
 /// What to do with source tables that match `include` but were not seen before.

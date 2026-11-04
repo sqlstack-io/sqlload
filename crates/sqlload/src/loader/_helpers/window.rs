@@ -22,6 +22,8 @@ pub(crate) struct WindowRequest<'a> {
 /// The source filter, the write mode and a note for `plan`.
 pub(crate) struct Window {
     pub(crate) filter: Option<String>,
+    /// The cursor range read: `from <= cursor < to`, each open when `None`.
+    pub(crate) bounds: (Option<String>, Option<String>),
     pub(crate) mode: WriteMode,
     pub(crate) note: Option<String>,
 }
@@ -146,6 +148,7 @@ pub(crate) async fn cursor_window(
         }
         return Ok(Ok(Window {
             filter: None,
+            bounds: (None, None),
             mode: write_mode(spec, options.reload, None, None),
             note: None,
         }));
@@ -185,6 +188,7 @@ pub(crate) async fn cursor_window(
             from.as_deref().map(|from| (operator, from)),
             to.as_deref(),
         ),
+        bounds: (from.clone(), to.clone()),
         mode: write_mode(spec, options.reload, from, to),
         note: Some(note),
     }))

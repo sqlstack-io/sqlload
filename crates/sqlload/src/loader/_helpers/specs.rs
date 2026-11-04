@@ -148,10 +148,9 @@ pub(crate) fn build_spec(
     if !problems.is_empty() {
         return Err(problems);
     }
-    let name = overrides
-        .name
-        .clone()
-        .unwrap_or_else(|| destination_name(&context.source.table_name, context.name, table));
+    let name = overrides.name.clone().unwrap_or_else(|| {
+        destination_name(context.source.table_name_template(), context.name, table)
+    });
     Ok(TableSpec {
         source_name: context.name.to_owned(),
         source_table: table.clone(),
@@ -183,6 +182,7 @@ pub(crate) fn build_spec(
             .unwrap_or_default(),
         listed: false,
         new_tables: context.source.new_tables,
+        files: None,
     })
 }
 

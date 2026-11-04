@@ -4,6 +4,8 @@
 mod helpers;
 #[path = "loader/test_file_store.rs"]
 mod test_file_store;
+#[path = "loader/test_files_to_duckdb.rs"]
+mod test_files_to_duckdb;
 #[path = "loader/test_loader_edge_cases.rs"]
 mod test_loader_edge_cases;
 #[path = "loader/test_postgres_reader.rs"]

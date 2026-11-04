@@ -6,13 +6,6 @@ pub(crate) struct FolderTestCase {
     pub(crate) expected_folder: Result<&'static str, &'static str>,
 }
 
-pub(crate) struct RenderTemplateTestCase {
-    pub(crate) description: &'static str,
-    pub(crate) template: &'static str,
-    pub(crate) values: &'static [(&'static str, &'static str)],
-    pub(crate) expected_text: Result<&'static str, &'static str>,
-}
-
 pub(crate) struct HiveValuesTestCase {
     pub(crate) description: &'static str,
     pub(crate) key: &'static str,

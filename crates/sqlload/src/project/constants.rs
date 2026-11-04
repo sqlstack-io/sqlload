@@ -23,6 +23,9 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "exclude",
     "new_tables",
     "table_name",
+    "path",
+    "format",
+    "partition_columns",
     "exclude_columns",
     "skip_tables_with_columns",
     "allow_columns",
@@ -54,3 +57,6 @@ pub const DEFAULT_POSTGRES_PORT: u16 = 5432;
 
 /// The destination table name template used when a source sets none.
 pub const DEFAULT_TABLE_NAME: &str = "{source}__{table}";
+
+/// The destination table name template for a files source, which has one table.
+pub const DEFAULT_FILES_TABLE_NAME: &str = "{source}";

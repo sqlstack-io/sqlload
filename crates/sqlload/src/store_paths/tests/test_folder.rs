@@ -1,4 +1,4 @@
-use crate::store_paths::main::folder::folder;
+use crate::store_paths::_helpers::folder::folder;
 use crate::store_paths::tests::test_types::FolderTestCase;
 
 #[test]

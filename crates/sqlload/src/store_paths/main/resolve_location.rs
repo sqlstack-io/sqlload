@@ -1,8 +1,8 @@
 //! Work out which store and folder a path means.
 
+use crate::store_paths::_helpers::folder::folder;
 use crate::store_paths::_helpers::locations::{describe, same_store, url_location};
 use crate::store_paths::errors::PathError;
-use crate::store_paths::main::folder::folder;
 use crate::store_paths::models::{Location, StoreKind};
 
 /// The folder `path` names: relative to `connection` when there is one, otherwise from its scheme.

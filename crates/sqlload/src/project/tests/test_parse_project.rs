@@ -47,7 +47,7 @@ fn given_a_full_project_when_parsing_then_sources_and_table_settings_are_read() 
         },
         ParseProjectTestCase {
             description: "the table name template defaults to source and table",
-            read: |project| project.sources["app"].table_name.clone(),
+            read: |project| project.sources["app"].table_name_template().to_owned(),
             expected_value: "{source}__{table}",
         },
         ParseProjectTestCase {

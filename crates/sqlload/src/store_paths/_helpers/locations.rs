@@ -1,5 +1,5 @@
+use crate::store_paths::_helpers::folder::folder;
 use crate::store_paths::errors::PathError;
-use crate::store_paths::main::folder::folder;
 use crate::store_paths::models::{Location, StoreKind};
 
 /// The location in a URL or absolute path, `None` for a relative path.
