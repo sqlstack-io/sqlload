@@ -1,0 +1,108 @@
+use crate::column_types::models::ColumnType;
+
+/// One column of a source table, as the catalog describes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceColumn {
+    pub name: String,
+    /// The type as Postgres prints it, for example `numeric(18,2)` or `timestamp with time zone`.
+    pub postgres_type: String,
+    /// The Postgres type family, which decides how it can be read.
+    pub pg_type: PgType,
+    /// The portable type it maps to, or why it has none (then a type must be pinned).
+    pub column_type: Result<ColumnType, String>,
+    pub nullable: bool,
+}
+
+/// One source table or view, as the catalog describes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceTable {
+    pub schema: String,
+    pub name: String,
+    pub columns: Vec<SourceColumn>,
+    pub primary_key: Vec<String>,
+    /// The planner's row estimate (`pg_class.reltuples`); negative when never analysed.
+    pub estimated_rows: i64,
+    pub estimated_bytes: i64,
+}
+
+impl SourceTable {
+    /// `schema.name`.
+    pub fn qualified_name(&self) -> String {
+        format!("{}.{}", self.schema, self.name)
+    }
+}
+
+/// The Postgres types SQLLoad reads natively; everything else is read as text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PgType {
+    Bool,
+    Int2,
+    Int4,
+    Int8,
+    Oid,
+    Float4,
+    Float8,
+    Numeric,
+    Text,
+    Varchar,
+    Date,
+    Time,
+    Timestamp,
+    TimestampTz,
+    Json,
+    Uuid,
+    Bytea,
+    Array,
+    /// Enums, intervals, network types, `timetz`, extension types and so on.
+    Other,
+}
+
+/// How a column travels in the binary `COPY` stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WireType {
+    Bool,
+    Int2,
+    Int4,
+    Int8,
+    Float4,
+    Float8,
+    Numeric,
+    /// UTF-8 text: `text`, `varchar`, and anything cast to text in the `COPY` query.
+    Text,
+    Uuid,
+    Bytea,
+    Date,
+    Time,
+    /// `timestamp` and `timestamptz`, both microseconds since 2000-01-01 UTC.
+    Timestamp,
+}
+
+/// One column to read: what to select, how it arrives, and the type to produce.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadColumn {
+    pub name: String,
+    /// The select-list expression, already quoted (for example `"total"` or `"tags"::text`).
+    pub expression: String,
+    pub wire: WireType,
+    pub output: ColumnType,
+}
+
+/// Where and as whom to connect.
+#[derive(Debug, Clone)]
+pub struct PostgresAddress<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub user: &'a str,
+    pub password: Option<&'a str>,
+    pub database: &'a str,
+}
+
+/// What to read from one table.
+#[derive(Debug)]
+pub struct CopyRequest<'a> {
+    pub table: &'a SourceTable,
+    pub columns: Vec<ReadColumn>,
+    /// A condition such as `"updated_at" >= '2026-11-04 09:12:03+00'`, already rendered and quoted.
+    pub filter: Option<String>,
+    pub batch_rows: usize,
+}

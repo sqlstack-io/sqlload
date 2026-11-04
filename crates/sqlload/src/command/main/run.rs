@@ -3,12 +3,13 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use crate::config::main::load_config::load_config;
 use clap::Parser;
 
-use crate::command::_helpers::commands::{apply, check, plan, run_export, status, tables};
+use crate::command::_helpers::exporter_commands::run_exporter_command;
+use crate::command::_helpers::loader_commands::run_loader;
 use crate::command::_helpers::logging::init_logging;
-use crate::command::models::{Cli, Command};
+use crate::command::models::Cli;
+use crate::project::main::is_project::is_project;
 
 /// The `sqlload` entry point: run one subcommand and write its output.
 pub fn run() -> ExitCode {
@@ -22,27 +23,12 @@ pub fn run() -> ExitCode {
         Err(error) => return fail(&format!("cannot start the async runtime: {error}")),
     };
     let outcome = runtime.block_on(async {
-        let mut config = load_config(&cli.config).map_err(|error| error.to_string())?;
-        match cli.command {
-            Command::Check => check(&config).await,
-            Command::Plan => plan(&config).await,
-            Command::Tables { topics_file } => tables(&config, topics_file.as_deref()).await,
-            Command::Apply => apply(&config).await,
-            Command::Run {
-                max_duration,
-                shard,
-            } => {
-                config.source.shard = shard.unwrap_or(config.source.shard);
-                match config.source.shard < config.source.shards {
-                    true => run_export(config, max_duration).await,
-                    false => Err(format!(
-                        "--shard {} must be below source.shards {}",
-                        config.source.shard, config.source.shards
-                    )),
-                }
-            }
-            Command::Status => status(&config).await,
+        let text = std::fs::read_to_string(&cli.config)
+            .map_err(|error| format!("cannot read {}: {error}", cli.config.display()))?;
+        if is_project(&text) {
+            return run_loader(&text, cli.command).await;
         }
+        run_exporter_command(&cli.config, cli.command).await
     });
     match outcome {
         Ok(lines) => {
