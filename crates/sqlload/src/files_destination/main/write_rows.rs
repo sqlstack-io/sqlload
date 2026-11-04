@@ -23,14 +23,28 @@ pub async fn write_rows(
         reason,
     })?;
     for (value, part) in parts {
+        let opens = !writer.open.contains_key(&value);
+        let max_files = match opens {
+            true => OPEN_FILES_MAX - 1,
+            false => OPEN_FILES_MAX,
+        };
+        spill(writer, max_files).await?;
         add_part(writer, value, part).await?;
     }
+    spill(writer, OPEN_FILES_MAX).await
+}
+
+/// Store the largest open files until at most `max_files` stay open, holding at most the memory cap.
+async fn spill(
+    writer: &mut FilesWriter,
+    max_files: usize,
+) -> Result<&mut FilesWriter, FilesDestinationError> {
     let sizes: Vec<(String, usize)> = writer
         .open
         .iter()
         .map(|(value, file)| (value.clone(), open_bytes(file)))
         .collect();
-    for value in spill_order(&sizes, OPEN_FILES_MAX, OPEN_FILES_MAX_BYTES) {
+    for value in spill_order(&sizes, max_files, OPEN_FILES_MAX_BYTES) {
         let Some(file) = writer.open.remove(&value) else {
             continue;
         };

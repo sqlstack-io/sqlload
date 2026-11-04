@@ -132,3 +132,19 @@ pub(crate) struct CursorMaximumTestCase {
     pub(crate) values: &'static [&'static str],
     pub(crate) expected_maximum: Option<&'static str>,
 }
+
+pub(crate) struct WriteRowsTestCase {
+    pub(crate) description: &'static str,
+    /// Distinct partition values in one batch.
+    pub(crate) partitions: usize,
+    pub(crate) expected_open: usize,
+    pub(crate) expected_stored: usize,
+}
+
+pub(crate) struct RepairTestCase {
+    pub(crate) description: &'static str,
+    /// Files in the table folder besides the marker of load `crashed`.
+    pub(crate) keys: &'static [&'static str],
+    /// Keys left after the repair.
+    pub(crate) expected_left: &'static [&'static str],
+}

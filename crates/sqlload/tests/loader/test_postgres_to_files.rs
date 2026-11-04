@@ -236,6 +236,27 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1+run2 2:b,3:c",
         },
         FilesTargetScenarioTestCase {
+            description: "a failed write keeps its marker, and the next load repairs it by load id",
+            store: local_store,
+            setup: "CREATE TABLE public.orders (id int8 PRIMARY KEY, name text, placed_at timestamptz);
+                    INSERT INTO public.orders VALUES (1, 'a', '2026-11-03 10:00:00+00'), (2, 'b', NULL);",
+            target_settings: "",
+            settings: APPEND_BY_DAY,
+            runs: &[
+                FilesTargetRun {
+                    expected_error: "placed_at is NULL in some rows",
+                    ..OK
+                },
+                FilesTargetRun {
+                    source_change: "UPDATE public.orders SET placed_at = '2026-11-04 10:00:00+00' WHERE id = 2;",
+                    expected_plan: "stopped while writing; load deletes its 0 files first",
+                    ..OK
+                },
+            ],
+            check_column: "name",
+            expected_files: "day=2026-11-03 run2 1:a; day=2026-11-04 run2 2:b",
+        },
+        FilesTargetScenarioTestCase {
             description: "a load that stopped while deleting what it replaced is finished by the next load",
             store: seaweedfs_store,
             setup: ORDERS,

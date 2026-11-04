@@ -31,6 +31,20 @@ fn given_a_partitions_files_when_picking_the_newest_load_then_only_its_files_are
             expected_keys: &["export.parquet"],
         },
         NewestLoadTestCase {
+            description: "loads tied at the latest time are all read, whatever their ids",
+            files: &[
+                ("part-ffff-0.parquet", 7),
+                ("part-0000-0.parquet", 7),
+                ("part-0000-1.parquet", 3),
+                ("part-aaaa-0.parquet", 6),
+            ],
+            expected_keys: &[
+                "part-0000-0.parquet",
+                "part-0000-1.parquet",
+                "part-ffff-0.parquet",
+            ],
+        },
+        NewestLoadTestCase {
             description: "no files, no load",
             files: &[],
             expected_keys: &[],

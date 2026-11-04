@@ -1,13 +1,17 @@
 use std::sync::Arc;
 
-use arrow_array::{Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray};
+use arrow_array::{Date32Array, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use crate::file_store::models::StoredFile;
+use crate::column_types::models::ColumnType;
+use crate::file_store::main::open_folder::open_folder;
+use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_destination::_helpers::parquet_files::new_file;
 use crate::files_destination::models::{FolderClaim, PartitionBy, PartitionFolder, TablePath};
 use crate::files_source::models::Footer;
+use crate::schema_plan::main::metadata_columns::metadata_columns;
+use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
 use crate::write_sql::models::WriteMode;
 
@@ -139,4 +143,64 @@ pub(crate) fn text_footer(values: &[&str]) -> Result<Footer, String> {
         schema: builder.schema().clone(),
         metadata: builder.metadata().clone(),
     })
+}
+
+/// Run `body` to completion on a fresh runtime.
+pub(crate) fn block_on<T>(
+    body: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?
+        .block_on(body)
+}
+
+/// A fresh directory store's table folder `orders/`, and the directory to remove afterwards.
+pub(crate) fn scratch_folder() -> Result<(OpenFolder, std::path::PathBuf), String> {
+    let root = std::env::temp_dir().join(format!("sqlload-unit-{}", uuid::Uuid::new_v4()));
+    let folder = open_folder(&Location {
+        store: StoreKind::Filesystem {
+            root: root.display().to_string(),
+        },
+        prefix: "orders/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    Ok((folder, root))
+}
+
+/// A batch of `count` rows, each on its own day from 2026-01-01.
+pub(crate) fn days_batch(count: usize) -> Result<RecordBatch, String> {
+    let ids: Vec<i64> = (0..count)
+        .map(|index| i64::try_from(index).unwrap_or_default())
+        .collect();
+    let days: Vec<i32> = (0..count)
+        .map(|index| 20_454 + i32::try_from(index).unwrap_or_default())
+        .collect();
+    RecordBatch::try_from_iter([
+        (
+            "id",
+            Arc::new(Int64Array::from(ids)) as arrow_array::ArrayRef,
+        ),
+        ("day", Arc::new(Date32Array::from(days))),
+    ])
+    .map_err(|error| error.to_string())
+}
+
+/// `id int`, `day date`, then the metadata columns.
+pub(crate) fn day_columns() -> Vec<DesiredColumn> {
+    let mut columns = vec![
+        DesiredColumn {
+            name: "id".to_owned(),
+            column_type: ColumnType::Int,
+            origin: ColumnOrigin::Source,
+        },
+        DesiredColumn {
+            name: "day".to_owned(),
+            column_type: ColumnType::Date,
+            origin: ColumnOrigin::Source,
+        },
+    ];
+    columns.extend(metadata_columns());
+    columns
 }

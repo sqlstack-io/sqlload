@@ -74,13 +74,9 @@ async fn replace_files(
     Ok(clear_pending(folder, load_id).await?)
 }
 
-/// After a failed write: delete the files written so far, then the marker; if they cannot all be deleted the marker stays, so the next plan or load deletes them.
+/// After a failed write: delete the files known to be written, best effort, and keep the `writing` marker, so the next plan or load deletes by load id any file a failed put still committed.
 async fn abandon(folder: &OpenFolder, writer: &FilesWriter) {
-    let cleaned = match delete_files(folder, &writer.written).await {
-        Ok(()) => clear_pending(folder, &writer.load_id).await,
-        Err(error) => Err(error.into()),
-    };
-    if let Err(error) = cleaned {
+    if let Err(error) = delete_files(folder, &writer.written).await {
         tracing::warn!(%error, folder = %folder.location, "cannot delete the files of a failed load; the next plan or load deletes them");
     }
 }

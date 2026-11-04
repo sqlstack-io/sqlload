@@ -20,6 +20,8 @@ mod output_problems;
 mod partition_in_window;
 #[path = "tests/test_partition_window.rs"]
 mod partition_window;
+#[path = "tests/test_repair_table.rs"]
+mod repair_table;
 #[path = "tests/test_replaced_files.rs"]
 mod replaced_files;
 #[path = "tests/test_spill_order.rs"]
@@ -30,3 +32,5 @@ mod split_batch;
 mod table_path;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_write_rows.rs"]
+mod write_rows;
