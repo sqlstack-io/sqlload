@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0](https://github.com/sqlstack-io/sqlload/compare/v0.3.0...v0.4.0) (2026-11-04)
+
+
+### Features
+
+* **loader:** files sources read NDJSON, JSON and CSV, gzip or zstd compressed ([#18](https://github.com/sqlstack-io/sqlload/issues/18)) ([d12fd41](https://github.com/sqlstack-io/sqlload/commit/d12fd419800195234ca8e505e971483ff7b55141))
+* **loader:** files targets - write Parquet to S3 or a directory ([#14](https://github.com/sqlstack-io/sqlload/issues/14)) ([f434e65](https://github.com/sqlstack-io/sqlload/commit/f434e65f25812deca6818f622fdf2b997cb29807))
+* sqlload debug - validate config and test every connection ([#16](https://github.com/sqlstack-io/sqlload/issues/16)) ([8113e75](https://github.com/sqlstack-io/sqlload/commit/8113e751d17f2a8d1528f0a4ab1534ee2ad27a1b))
+
 ## [0.3.0](https://github.com/sqlstack-io/sqlload/compare/v0.2.0...v0.3.0) (2026-11-04)
 
 
