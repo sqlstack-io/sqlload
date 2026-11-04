@@ -3,6 +3,7 @@ pub mod cursor_maximum;
 pub mod list_table_files;
 pub mod open_writer;
 pub mod output_problems;
+pub mod overlapping_folders;
 pub mod partition_in_window;
 pub mod partition_window;
 pub mod table_path;

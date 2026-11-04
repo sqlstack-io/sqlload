@@ -12,5 +12,7 @@ mod test_loader_edge_cases;
 mod test_postgres_reader;
 #[path = "loader/test_postgres_to_duckdb.rs"]
 mod test_postgres_to_duckdb;
+#[path = "loader/test_postgres_to_files.rs"]
+mod test_postgres_to_files;
 #[path = "loader/test_types.rs"]
 mod test_types;

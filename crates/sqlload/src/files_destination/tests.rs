@@ -4,6 +4,8 @@ mod group_partitions;
 mod helpers;
 #[path = "tests/test_output_problems.rs"]
 mod output_problems;
+#[path = "tests/test_overlapping_folders.rs"]
+mod overlapping_folders;
 #[path = "tests/test_partition_in_window.rs"]
 mod partition_in_window;
 #[path = "tests/test_partition_window.rs"]

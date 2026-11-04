@@ -58,3 +58,11 @@ pub(crate) fn instants_batch(instants: &[Option<i64>]) -> Result<RecordBatch, St
     ])
     .map_err(|error| error.to_string())
 }
+
+/// `prefix` in `store`.
+pub(crate) fn location(store: StoreKind, prefix: &str) -> Location {
+    Location {
+        store,
+        prefix: prefix.to_owned(),
+    }
+}

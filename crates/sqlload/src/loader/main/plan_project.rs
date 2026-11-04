@@ -2,13 +2,15 @@
 
 use std::collections::BTreeMap;
 
+use crate::files_destination::main::overlapping_folders::overlapping_folders;
 use crate::loader::_helpers::resolve::{resolve_tables, source_target};
 use crate::loader::_helpers::sources::{connect_source, discover_files_table, selected};
-use crate::loader::_helpers::table_plan::plan_table;
+use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, PlanOptions, ProjectPlan, SkippedTable};
 use crate::postgres_source::main::read_catalog::read_catalog;
 use crate::project::models::{NewTables, ProjectConfig, SourceKind};
+use crate::store_paths::models::Location;
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
 pub async fn plan_project(
@@ -75,5 +77,26 @@ pub async fn plan_project(
             }
         }
     }
-    Ok(plan)
+    Ok(block_overlapping(plan))
+}
+
+/// The plan with every files table whose folder overlaps another table's blocked.
+fn block_overlapping(mut plan: ProjectPlan) -> ProjectPlan {
+    let mut folders: Vec<Option<(&str, &Location)>> = Vec::with_capacity(plan.tables.len());
+    for table in &plan.tables {
+        let name = table.spec.destination.table.as_str();
+        folders.push(
+            table
+                .output
+                .as_ref()
+                .map(|output| (name, &output.path.folder)),
+        );
+    }
+    let overlaps = overlapping_folders(&folders);
+    for (table, problem) in plan.tables.iter_mut().zip(overlaps) {
+        if let Some(problem) = problem {
+            table.schema = blocked_plan(vec![problem]);
+        }
+    }
+    plan
 }

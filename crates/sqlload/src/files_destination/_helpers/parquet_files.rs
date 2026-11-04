@@ -52,8 +52,6 @@ pub(crate) async fn store_file(
         key: key.to_owned(),
         reason: error.to_string(),
     };
-    let mut writer = file.writer;
-    writer.finish().map_err(failed)?;
-    let bytes = writer.into_inner().map_err(failed)?;
+    let bytes = file.writer.into_inner().map_err(failed)?;
     Ok(write_file(folder, key, Bytes::from(bytes)).await?)
 }
