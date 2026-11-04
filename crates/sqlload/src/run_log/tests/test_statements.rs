@@ -1,6 +1,7 @@
 use crate::column_types::models::Warehouse;
 use crate::run_log::tests::helpers::{
-    append_logged, create_sql, insert_sql, merge_logged, recreate_logged, select_sql, swap_logged,
+    append_logged, create_sql, existing_setup_sql, insert_sql, merge_logged, recreate_logged,
+    select_sql, setup_sql, swap_logged,
 };
 use crate::run_log::tests::test_types::StatementTestCase;
 
@@ -8,6 +9,18 @@ use crate::run_log::tests::test_types::StatementTestCase;
 fn given_a_run_log_when_writing_sql_then_each_warehouse_gets_its_statements() -> Result<(), String>
 {
     let test_cases = [
+        StatementTestCase {
+            description: "a run log the plan did not see is created with its schema",
+            warehouse: Warehouse::DuckDb,
+            build: setup_sql,
+            expected_sql: "CREATE SCHEMA IF NOT EXISTS \"raw\";\nCREATE TABLE IF NOT EXISTS \"raw\".\"_sqlload_runs\" (\"run_id\" VARCHAR, \"event\" VARCHAR, \"source\" VARCHAR, \"source_table\" VARCHAR, \"table_name\" VARCHAR, \"cursor_column\" VARCHAR, \"cursor_before\" VARCHAR, \"cursor_after\" VARCHAR, \"state\" VARCHAR, \"row_count\" VARCHAR, \"note\" VARCHAR, \"recorded_at\" VARCHAR, \"format_version\" VARCHAR, \"record_json\" VARCHAR)",
+        },
+        StatementTestCase {
+            description: "a run log the plan saw needs no CREATE, so roles without CREATE SCHEMA still load",
+            warehouse: Warehouse::Snowflake,
+            build: existing_setup_sql,
+            expected_sql: "",
+        },
         StatementTestCase {
             description: "DuckDB creates a plain table of text columns",
             warehouse: Warehouse::DuckDb,

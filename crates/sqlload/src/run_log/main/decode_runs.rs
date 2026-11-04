@@ -1,5 +1,6 @@
 //! Read run log records back.
 
+use chrono::DateTime;
 use serde_json::Value;
 
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
@@ -32,7 +33,7 @@ fn decode_one(value: Value) -> Result<RunRecord, UnreadableRecord> {
     let field = |name: &str| value.get(name).and_then(Value::as_str).map(str::to_owned);
     let unreadable = |reason: String| UnreadableRecord {
         run_id: field("run_id"),
-        recorded_at: field("recorded_at"),
+        recorded_at: dated(field("recorded_at")),
         reason,
     };
     let version = value
@@ -44,6 +45,25 @@ fn decode_one(value: Value) -> Result<RunRecord, UnreadableRecord> {
             "written by a newer sqlload (format_version {version}, this one reads {RECORD_FORMAT_VERSION}); upgrade sqlload"
         )));
     }
-    serde_json::from_value::<RunRecord>(value.clone())
-        .map_err(|error| unreadable(format!("does not parse: {error}")))
+    let record = serde_json::from_value::<RunRecord>(value.clone())
+        .map_err(|error| unreadable(format!("does not parse: {error}")))?;
+    match DateTime::parse_from_rfc3339(&record.recorded_at) {
+        Ok(_) => Ok(record),
+        Err(error) => Err(unreadable(format!(
+            "recorded_at {:?} is not an RFC 3339 time; {error}",
+            record.recorded_at
+        ))),
+    }
+}
+
+/// `text` when it is an RFC 3339 time, as SQLLoad stamps records; an unreadable record with any other time counts as undated.
+fn dated(text: Option<String>) -> Option<String> {
+    let text = text?;
+    match DateTime::parse_from_rfc3339(&text) {
+        Ok(_) => Some(text),
+        Err(error) => {
+            tracing::debug!(%error, text, "an unreadable run log record's time is not RFC 3339");
+            None
+        }
+    }
 }

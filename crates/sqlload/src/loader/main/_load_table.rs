@@ -108,7 +108,7 @@ async fn load_table(
 ) -> Result<u64, LoaderError> {
     let spec = &table.spec;
     if run.is_some() {
-        ensure_runs_table(spec, destination).await?;
+        ensure_runs_table(table, destination).await?;
     }
     let load_id = uuid::Uuid::new_v4().to_string();
     let loaded_at = now_utc_text();

@@ -99,3 +99,11 @@ pub struct UnreadableRecord {
     pub recorded_at: Option<String>,
     pub reason: String,
 }
+
+/// What creates a run log table that does not exist yet: its schema, the table, and a fallback for the table when the warehouse refuses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunsSetup {
+    pub schema: String,
+    pub create: String,
+    pub fallback: Option<String>,
+}

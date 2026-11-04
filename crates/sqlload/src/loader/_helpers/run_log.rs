@@ -21,25 +21,25 @@ use crate::run_log::main::insert_run::insert_run;
 use crate::run_log::main::next_stamp::next_stamp;
 use crate::run_log::main::record_object_name::record_object_name;
 use crate::run_log::main::runs_location::runs_location;
+use crate::run_log::main::runs_setup::runs_setup;
 use crate::run_log::main::runs_table::runs_table;
-use crate::run_log::main::runs_table_statements::runs_table_statements;
 use crate::run_log::main::select_runs::select_runs;
 use crate::run_log::models::{
     DecodedRuns, RecordTable, RunEvent, RunOutcome, RunRecord, StateEvent, UnreadableRecord,
 };
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
-use crate::write_sql::main::create_schema::create_schema;
 use crate::write_sql::main::cursor_text::cursor_text;
 use crate::write_sql::models::WriteMode;
 
-/// Every record of the table, oldest first, and those that cannot be used; none when the log does not exist (never written, or deleted).
+/// Every record of the table, oldest first, and those that cannot be used, none when the log does not exist (never written, or deleted); and whether a warehouse's `_sqlload_runs` exists.
 pub(crate) async fn read_run_log(
     table: &TablePlan,
     destination: &Destination,
-) -> Result<DecodedRuns, LoaderError> {
+) -> Result<(DecodedRuns, bool), LoaderError> {
     let spec = &table.spec;
     let mut texts: Vec<String> = Vec::new();
+    let mut exists = false;
     match destination {
         Destination::Files(_) => {
             let folder = open_folder(&records_location(table)?)?;
@@ -50,13 +50,14 @@ pub(crate) async fn read_run_log(
         }
         destination => {
             let runs = runs_table(&spec.destination);
-            if live_columns(destination, &runs).await?.is_some() {
+            exists = live_columns(destination, &runs).await?.is_some();
+            if exists {
                 let query = select_runs(&runs, &spec.destination.table, spec.warehouse);
                 texts = text_values(destination, query).await?;
             }
         }
     }
-    Ok(decode_runs(&texts))
+    Ok((decode_runs(&texts), exists))
 }
 
 /// Run records waiting in `replacing` markers of a files table: their loads committed (repair finishes them), so they count before repair writes them.
@@ -129,7 +130,7 @@ pub(crate) async fn append_run(
             Ok(write_file(&folder, &record_object_name(record), Bytes::from(json)).await?)
         }
         destination => {
-            ensure_runs_table(spec, destination).await?;
+            ensure_runs_table(table, destination).await?;
             let insert = insert_run(&runs_table(&spec.destination), record, spec.warehouse)
                 .map_err(LoaderError::Invalid)?;
             execute(destination, vec![insert]).await
@@ -154,38 +155,45 @@ pub(crate) async fn log_empty_run(
     append_run(table, destination, &record).await
 }
 
-/// Create the table's schema and `_sqlload_runs` beside the table if they do not exist (on Snowflake with the longest time travel the edition allows).
+/// Create the table's schema and `_sqlload_runs` beside the table when the plan saw no run log (on Snowflake with the longest time travel the edition allows); nothing once it exists.
 pub(crate) async fn ensure_runs_table(
-    spec: &TableSpec,
+    table: &TablePlan,
     destination: &Destination,
 ) -> Result<(), LoaderError> {
-    execute(
-        destination,
-        vec![create_schema(&spec.destination, spec.warehouse)],
-    )
-    .await?;
-    let (create, fallback) = runs_table_statements(&runs_table(&spec.destination), spec.warehouse);
-    match (execute(destination, vec![create]).await, fallback) {
+    let spec = &table.spec;
+    let exists = table
+        .logged
+        .as_ref()
+        .is_some_and(|logged| logged.runs_table);
+    let Some(setup) = runs_setup(&spec.destination, spec.warehouse, exists) else {
+        return Ok(());
+    };
+    execute(destination, vec![setup.schema]).await?;
+    match (
+        execute(destination, vec![setup.create]).await,
+        setup.fallback,
+    ) {
         (Ok(()), _) => Ok(()),
         (Err(_), Some(fallback)) => execute(destination, vec![fallback]).await,
         (Err(error), None) => Err(error),
     }
 }
 
-/// Before a logged table reads: when its logged cursor disagrees with the data, append a reconciliation adopting the data's position (the data wins) and warn.
+/// Before a logged table reads: when its logged cursor disagrees with the data, append a reconciliation adopting the data's position (the data wins) and warn; returns the reconciliation's time, which the run's record must follow.
 pub(crate) async fn reconcile_before_read(
     table: &TablePlan,
     destination: &Destination,
-) -> Result<(), LoaderError> {
+) -> Result<Option<String>, LoaderError> {
     let Some(record) = reconcile_record(table) else {
-        return Ok(());
+        return Ok(None);
     };
     tracing::warn!(
         table = %table.spec.destination.table,
         "{}",
         record.note.as_deref().unwrap_or_default()
     );
-    append_run(table, destination, &record).await
+    append_run(table, destination, &record).await?;
+    Ok(Some(record.recorded_at))
 }
 
 /// The reconciliation a logged table needs, when its logged cursor disagrees with the data's maximum: the data's position, keeping the logged `ctx.state`.
@@ -253,11 +261,11 @@ pub(crate) fn reset_record(table: &TablePlan, to: Option<&str>) -> Result<RunRec
     ))
 }
 
-/// The record a logged table's load writes with its data: a run (a backfill with `--start/--end-cursor-*`, which never moves the state), from where it read, with the position the function left in `ctx.state` (or the one it started from); `None` when the table is not logged.
+/// The record a logged table's load writes with its data: a run (a backfill with `--start/--end-cursor-*`, which never moves the state), from where it read, with the position the function left in `ctx.state` (or the one it started from), stamped after the log's newest record or the reconciliation this load wrote (`reconciled`, with `state` the position the function left); `None` when the table is not logged.
 pub(crate) fn run_entry(
     load: &PythonLoad<'_>,
     table: &TablePlan,
-    state: Option<String>,
+    (state, reconciled): (Option<String>, Option<String>),
 ) -> Option<RunEntry> {
     let logged = load.table.logged.as_ref()?;
     let spec = &table.spec;
@@ -300,7 +308,7 @@ pub(crate) fn run_entry(
         cursor_type,
         before: window.and_then(|window| window.maximum.clone()),
         replaces: matches!(load.table.mode, WriteMode::Replace | WriteMode::Recreate),
-        newest: newest_stamp(load.table).map(str::to_owned),
+        newest: reconciled.or_else(|| newest_stamp(load.table).map(str::to_owned)),
     })
 }
 
@@ -358,7 +366,7 @@ fn records_location(table: &TablePlan) -> Result<Location, LoaderError> {
     }
 }
 
-/// The newest time in the log, readable or not, which a new record must follow.
+/// The newest time in the log, readable or not, which a new record must follow (unreadable records carry a time only when it is RFC 3339).
 fn newest_stamp(table: &TablePlan) -> Option<&str> {
     let logged = table.logged.as_ref()?;
     let readable = logged

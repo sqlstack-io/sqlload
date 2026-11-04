@@ -10,7 +10,7 @@ pub mod logged_statements;
 pub mod next_stamp;
 pub mod record_object_name;
 pub mod runs_location;
+pub mod runs_setup;
 pub mod runs_table;
-pub mod runs_table_statements;
 pub mod select_runs;
 pub mod unreadable_line;

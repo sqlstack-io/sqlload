@@ -6,8 +6,8 @@ use crate::run_log::main::finished_record::finished_record;
 use crate::run_log::main::insert_run::insert_run;
 use crate::run_log::main::logged_statements::logged_statements;
 use crate::run_log::main::record_object_name::record_object_name;
+use crate::run_log::main::runs_setup::runs_setup;
 use crate::run_log::main::runs_table::runs_table;
-use crate::run_log::main::runs_table_statements::runs_table_statements;
 use crate::run_log::main::select_runs::select_runs;
 use crate::run_log::models::{RunEvent, RunOutcome, RunRecord};
 use crate::run_log::tests::test_types::{CurrentRunTestCase, FinishedRecordTestCase};
@@ -51,12 +51,44 @@ pub(crate) fn insert_sql(warehouse: Warehouse) -> Result<String, String> {
 
 /// The run log table's create statement and its fallback.
 pub(crate) fn create_sql(warehouse: Warehouse) -> Result<String, String> {
-    let (create, fallback) = runs_table_statements(&runs(), warehouse);
-    Ok([Some(create), fallback]
+    let table = TableName {
+        table: "shop__orders".to_owned(),
+        ..runs()
+    };
+    let setup =
+        runs_setup(&table, warehouse, false).ok_or("no setup for a missing run log".to_owned())?;
+    Ok([Some(setup.create), setup.fallback]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
         .join(";\n"))
+}
+
+/// What creating the run log takes when the plan saw none, joined by `;\n`.
+pub(crate) fn setup_sql(warehouse: Warehouse) -> Result<String, String> {
+    Ok(setup_joined(warehouse, false))
+}
+
+/// What creating the run log takes once it exists: nothing.
+pub(crate) fn existing_setup_sql(warehouse: Warehouse) -> Result<String, String> {
+    Ok(setup_joined(warehouse, true))
+}
+
+fn setup_joined(warehouse: Warehouse, exists: bool) -> String {
+    let table = TableName {
+        database: None,
+        schema: "raw".to_owned(),
+        table: "shop__orders".to_owned(),
+    };
+    runs_setup(&table, warehouse, exists)
+        .map(|setup| {
+            [Some(setup.schema), Some(setup.create), setup.fallback]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(";\n")
+        })
+        .unwrap_or_default()
 }
 
 /// The query reading `shop__orders`'s records.

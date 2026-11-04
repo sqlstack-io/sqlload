@@ -63,6 +63,18 @@ fn given_run_log_records_when_deriving_the_state_then_the_newest_non_backfill_re
             expected_run: (Some("a"), &["broken: does not parse", "-: does not parse"]),
         },
         CurrentRunTestCase {
+            description: "a record whose time is not RFC 3339 cannot be ordered, so it is set aside",
+            records: &[
+                ("a", "run", "2026-11-04T10:00:01.000000Z"),
+                ("undated", "run", "zzzz"),
+            ],
+            raw: &[],
+            expected_run: (
+                Some("a"),
+                &["undated: recorded_at \"zzzz\" is not an RFC 3339 time"],
+            ),
+        },
+        CurrentRunTestCase {
             description: "a record a newer sqlload wrote is never guessed at",
             records: &[("a", "run", "2026-11-04T10:00:01.000000Z")],
             raw: &["{\"format_version\": 2, \"run_id\": \"future\", \"event\": \"run\"}"],

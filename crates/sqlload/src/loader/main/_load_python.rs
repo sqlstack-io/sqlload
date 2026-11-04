@@ -19,7 +19,7 @@ use crate::python_sources::models::{CursorRead, TableRead};
 pub(in crate::loader) async fn read_python_table(
     load: &PythonLoad<'_>,
 ) -> Result<PythonRead, LoaderError> {
-    reconcile_before_read(load.table, load.destination).await?;
+    let reconciled = reconcile_before_read(load.table, load.destination).await?;
     let stream = start_read(load.host.clone(), table_read(load)).await?;
     let spilled = spill_batches(stream).await?;
     let state = match load.table.logged {
@@ -43,7 +43,7 @@ pub(in crate::loader) async fn read_python_table(
             table: load.table.clone(),
             changes: Vec::new(),
             note: Some(NO_DATA_NOTE.to_owned()),
-            run: run_entry(load, load.table, state),
+            run: run_entry(load, load.table, (state, reconciled)),
         });
     }
     let table = replan(load, &spilled).await?;
@@ -54,7 +54,7 @@ pub(in crate::loader) async fn read_python_table(
         }
         None => Vec::new(),
     };
-    let run = run_entry(load, &table, state);
+    let run = run_entry(load, &table, (state, reconciled));
     Ok(PythonRead {
         reader: Some(SourceReader::Batches(spilled)),
         table,

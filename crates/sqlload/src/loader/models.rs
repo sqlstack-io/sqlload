@@ -177,6 +177,8 @@ pub struct LoggedPlan {
     pub disagreement: Option<String>,
     /// Records that cannot be used, by `sqlload state show`.
     pub unreadable: Vec<UnreadableRecord>,
+    /// The warehouse's `_sqlload_runs` existed at plan, so loading creates nothing.
+    pub runs_table: bool,
 }
 
 impl RunEntry {

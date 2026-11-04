@@ -19,7 +19,7 @@ pub(in crate::loader) async fn with_run_log(
     if !plan.spec.logged || plan.schema.blocked.is_some() {
         return Ok(plan);
     }
-    let mut log = read_run_log(&plan, destination).await?;
+    let (mut log, runs_table) = read_run_log(&plan, destination).await?;
     let committed = committed_runs(&plan);
     log.records.extend(committed.records);
     log.unreadable.extend(committed.unreadable);
@@ -74,6 +74,7 @@ pub(in crate::loader) async fn with_run_log(
         current,
         disagreement,
         unreadable: log.unreadable,
+        runs_table,
     });
     Ok(plan)
 }

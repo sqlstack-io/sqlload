@@ -78,6 +78,13 @@ def counts(ctx):
     yield {"n": ctx.state["count"]}
 
 
+@api.table(write_strategy="append", cursor_column="at", state="logged")
+def ticks(ctx):
+    remember(ctx)
+    ctx.state = (ctx.state or 0) + 1
+    yield from json.loads((HERE / "data" / "ticks.json").read_text())
+
+
 @api.table(write_strategy="append", state="logged")
 def empty(ctx):
     remember(ctx)
@@ -141,6 +148,7 @@ def make_project(tmp_path: Path, toml: str) -> Path:
 	(tmp_path / "sources" / "api.py").write_text(MODULE)
 	give(tmp_path, "pages", [])
 	give(tmp_path, "events", [])
+	give(tmp_path, "ticks", [])
 	return tmp_path
 
 
@@ -469,3 +477,35 @@ def test_given_no_selection_when_resetting_state_then_it_is_refused(tmp_path: Pa
 	done = sqlload(project, "state", "reset", "--clear", "--yes")
 	assert done.returncode == 1
 	assert "name the sources or tables to reset" in done.stderr, done.stderr
+
+
+def test_given_a_log_stamped_ahead_and_a_disagreement_when_loading_then_the_runs_state_follows_the_reconciliation(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT)
+	give(project, "ticks", [{"id": 1, "at": "2026-01-01T00:00:00Z"}, {"id": 2, "at": "2026-01-02T00:00:00Z"}])
+	ok(project, "load", "api__ticks")
+	execute(project, """UPDATE "RAW"."_sqlload_runs" SET record_json = replace(record_json, '"recorded_at":"2026', '"recorded_at":"2099'), recorded_at = replace(recorded_at, '2026', '2099')""")
+	execute(project, 'DELETE FROM "RAW"."api__ticks" WHERE id = 2')
+	give(project, "ticks", [])
+	ok(project, "load", "api__ticks")
+	ok(project, "load", "api__ticks")
+	assert seen(project, "ticks")["state"] == 2
+	stamps = [at for (at,) in query(project, 'SELECT recorded_at FROM "RAW"."_sqlload_runs" ORDER BY recorded_at')]
+	assert len(set(stamps)) == len(stamps) == 4
+	assert [(event, state) for event, state, _, _ in runs(project, "api__ticks")] == [("run", "1"), ("reconcile", "1"), ("run", "2"), ("run", "3")]
+
+
+def test_given_a_record_whose_time_is_not_rfc_3339_when_resetting_then_the_table_is_unblocked(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT)
+	give(project, "pages", [[{"n": 1}]])
+	ok(project, "load", "api__pages")
+	execute(
+		project,
+		"""INSERT INTO "RAW"."_sqlload_runs" (run_id, table_name, recorded_at, record_json) """
+		"""SELECT 'undated-run', table_name, 'zzzz', replace(replace(record_json, recorded_at, 'zzzz'), run_id, 'undated-run') FROM "RAW"."_sqlload_runs" """,
+	)
+	planned = sqlload(project, "plan", "api__pages")
+	assert planned.returncode == 1
+	assert 'run log record undated-run cannot be used: recorded_at "zzzz" is not an RFC 3339 time' in planned.stdout + planned.stderr
+	ok(project, "state", "reset", "--to", "1", "--yes", "api__pages")
+	ok(project, "load", "api__pages")
+	assert seen(project, "pages")["state"] == 1
