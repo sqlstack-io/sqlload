@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, RecordBatch, StringArray, new_null_array};
+use arrow_array::{Array, ArrayRef, RecordBatch, StringArray, new_null_array};
 use arrow_cast::{CastOptions, cast_with_options};
-use arrow_schema::{Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
+use crate::files_source::errors::ShapeError;
 use crate::files_source::models::DataFile;
 use crate::schema_plan::models::DesiredColumn;
 
@@ -27,7 +28,7 @@ pub(crate) fn shape_batch(
     file: &DataFile,
     file_name: &str,
     schema: &SchemaRef,
-) -> Result<RecordBatch, String> {
+) -> Result<RecordBatch, ShapeError> {
     let mut constants: Vec<(&str, &str)> = file
         .partitions
         .iter()
@@ -40,8 +41,11 @@ pub(crate) fn shape_batch(
         .fields()
         .iter()
         .map(|field| shape_column(batch, &constants, field))
-        .collect::<Result<_, String>>()?;
-    RecordBatch::try_new(schema.clone(), columns).map_err(|error| error.to_string())
+        .collect::<Result<_, ShapeError>>()?;
+    RecordBatch::try_new(schema.clone(), columns).map_err(|error| ShapeError {
+        row: None,
+        reason: error.to_string(),
+    })
 }
 
 /// One output column: a constant (partition value or file name), the file's column cast, or NULLs; a value that does not convert is an error, never NULL.
@@ -49,7 +53,7 @@ fn shape_column(
     batch: &RecordBatch,
     constants: &[(&str, &str)],
     field: &Field,
-) -> Result<ArrayRef, String> {
+) -> Result<ArrayRef, ShapeError> {
     let rows = batch.num_rows();
     let constant = constants.iter().find(|(key, _)| key == field.name());
     let source: ArrayRef = match (constant, batch.column_by_name(field.name())) {
@@ -61,11 +65,22 @@ fn shape_column(
         safe: false,
         ..CastOptions::default()
     };
-    cast_with_options(&source, field.data_type(), &strict).map_err(|error| {
-        format!(
+    cast_with_options(&source, field.data_type(), &strict).map_err(|error| ShapeError {
+        row: failing_row(&source, field.data_type()),
+        reason: format!(
             "{}: cannot convert to {}: {error}",
             field.name(),
             field.data_type()
-        )
+        ),
     })
+}
+
+/// The first value of `source` that does not convert to `data_type`.
+fn failing_row(source: &ArrayRef, data_type: &DataType) -> Option<usize> {
+    match cast_with_options(source, data_type, &CastOptions::default()) {
+        Ok(converted) => {
+            (0..source.len()).find(|row| source.is_valid(*row) && converted.is_null(*row))
+        }
+        Err(_) => None,
+    }
 }

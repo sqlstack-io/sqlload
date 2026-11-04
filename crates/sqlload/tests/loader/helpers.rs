@@ -22,8 +22,8 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    FilesScenarioTestCase, FilesTargetScenarioTestCase, ParquetFile, ScenarioTestCase,
-    WrittenPartition, WrittenRow,
+    FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, ParquetFile,
+    ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -101,6 +101,18 @@ async fn run_once(
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// The rendered plan, or the error that stopped it.
+async fn plan_text(
+    project_text: &str,
+    destinations: &BTreeMap<String, Destination>,
+) -> Result<String, String> {
+    let project = parse_project(project_text, &|_| None).map_err(|error| error.to_string())?;
+    let plan = plan_project(&project, destinations, &PlanOptions::default())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(render_plan(&plan).0.join("\n"))
 }
 
 /// Run a scenario's loads on fresh source tables and a fresh DuckDB; the check query's result.
@@ -215,11 +227,105 @@ pub(crate) async fn run_files_scenario(
     directory: &std::path::Path,
     test_case: &FilesScenarioTestCase,
 ) -> Result<Option<String>, String> {
-    let (store, connection) = (test_case.store)(endpoint, directory);
+    let runs: Vec<WrittenRun<'_>> = test_case
+        .runs
+        .iter()
+        .map(|run| {
+            let files = run
+                .files
+                .iter()
+                .map(|file| Ok((file.key, parquet_bytes(file)?)))
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(WrittenRun {
+                files,
+                expected_error: run.expected_error,
+                expected_plan: "",
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    let scenario = FilesScenario {
+        description: test_case.description,
+        store: test_case.store,
+        settings: test_case.settings,
+        runs,
+        check_query: test_case.check_query,
+    };
+    run_written_files(endpoint, directory, scenario).await
+}
+
+/// Run a JSON or CSV files scenario like [`run_files_scenario`].
+pub(crate) async fn run_text_files_scenario(
+    endpoint: &str,
+    directory: &std::path::Path,
+    test_case: &TextFilesScenarioTestCase,
+) -> Result<Option<String>, String> {
+    let runs: Vec<WrittenRun<'_>> = test_case
+        .runs
+        .iter()
+        .map(|run| {
+            let files = run
+                .files
+                .iter()
+                .map(|file| Ok((file.key, (file.encode)(file.contents)?)))
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(WrittenRun {
+                files,
+                expected_error: run.expected_error,
+                expected_plan: run.expected_plan,
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    let scenario = FilesScenario {
+        description: test_case.description,
+        store: test_case.store,
+        settings: test_case.settings,
+        runs,
+        check_query: test_case.check_query,
+    };
+    run_written_files(endpoint, directory, scenario).await
+}
+
+/// A file as written, uncompressed.
+pub(crate) fn plain(text: &str) -> Result<bytes::Bytes, String> {
+    Ok(bytes::Bytes::from(text.to_owned()))
+}
+
+/// A file gzip-compressed, in two gzip members (as concatenated uploads write them).
+pub(crate) fn gzip(text: &str) -> Result<bytes::Bytes, String> {
+    use std::io::Write;
+    let (first, second) = text.as_bytes().split_at(text.len() / 2);
+    let mut compressed: Vec<u8> = Vec::new();
+    for part in [first, second] {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(part).map_err(|error| error.to_string())?;
+        compressed.extend(encoder.finish().map_err(|error| error.to_string())?);
+    }
+    Ok(bytes::Bytes::from(compressed))
+}
+
+/// A gzip file whose first 10,000 lines (`{"id":0}`, ...) fill the schema sample, so the text comes after it.
+pub(crate) fn after_sample(text: &str) -> Result<bytes::Bytes, String> {
+    let padding: String = (0..10_000).map(|id| format!("{{\"id\":{id}}}\n")).collect();
+    gzip(&format!("{padding}{text}"))
+}
+
+/// A file zstd-compressed.
+pub(crate) fn zstd(text: &str) -> Result<bytes::Bytes, String> {
+    zstd::encode_all(text.as_bytes(), 3)
+        .map(bytes::Bytes::from)
+        .map_err(|error| error.to_string())
+}
+
+async fn run_written_files(
+    endpoint: &str,
+    directory: &std::path::Path,
+    scenario: FilesScenario<'_>,
+) -> Result<Option<String>, String> {
+    let (store, connection) = (scenario.store)(endpoint, directory);
     let prefix = format!("scores-{}/", uuid::Uuid::new_v4());
     let text = format!(
         "[connections.files]\n{}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"{prefix}\"\n{}\n",
-        connection, test_case.settings
+        connection, scenario.settings
     );
     let folder = open_folder(&Location { store, prefix }).map_err(|error| error.to_string())?;
     let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
@@ -229,24 +335,34 @@ pub(crate) async fn run_files_scenario(
     let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
         return Err("no DuckDB destination".to_owned());
     };
-    for (index, run) in test_case.runs.iter().enumerate() {
-        for file in run.files {
-            write_file(&folder, file.key, parquet_bytes(file)?)
+    for (index, run) in scenario.runs.into_iter().enumerate() {
+        let (expected_error, expected_plan) = (run.expected_error, run.expected_plan);
+        for (key, contents) in run.files {
+            write_file(&folder, key, contents)
                 .await
                 .map_err(|error| error.to_string())?;
         }
+        let plan = plan_text(&text, &destinations)
+            .await
+            .unwrap_or_else(|error| error);
+        assert!(
+            plan.contains(expected_plan),
+            "{} run {}: {plan}",
+            scenario.description,
+            index + 1
+        );
         let error = run_once(&text, &destinations, &PlanOptions::default())
             .await
             .err()
             .unwrap_or_default();
         assert!(
-            error.contains(run.expected_error) && error.is_empty() == run.expected_error.is_empty(),
+            error.contains(expected_error) && error.is_empty() == expected_error.is_empty(),
             "{} run {}: {error}",
-            test_case.description,
+            scenario.description,
             index + 1
         );
     }
-    query_text(duckdb, test_case.check_query.to_owned())
+    query_text(duckdb, scenario.check_query.to_owned())
         .await
         .map_err(|error| error.to_string())
 }
@@ -497,9 +613,13 @@ pub(crate) async fn partition_values(
     column: &str,
 ) -> Result<Vec<String>, String> {
     let folder = open_folder(table).map_err(|error| error.to_string())?;
-    let files = discover_files(&folder, &[column.to_owned()])
-        .await
-        .map_err(|error| error.to_string())?;
+    let files = discover_files(
+        &folder,
+        &[column.to_owned()],
+        &sqlload::files_source::models::FilesEncoding::default(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     let mut values: Vec<String> = files
         .files
         .into_iter()

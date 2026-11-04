@@ -25,6 +25,8 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "table_name",
     "path",
     "format",
+    "compression",
+    "csv",
     "destination_path",
     "partition_columns",
     "exclude_columns",

@@ -1,6 +1,6 @@
 //! Combine the schemas of several Parquet footers.
 
-use crate::files_source::_helpers::columns::merge_schema;
+use crate::files_source::_helpers::plan::columns::merge_schema;
 use crate::files_source::models::{FileColumn, Footer};
 
 /// Every column in `footers` (first footer first) with its portable type, and a problem for each column whose type differs between files.

@@ -2,7 +2,7 @@ use arrow_schema::SchemaRef;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 
 use crate::file_store::models::{OpenFolder, StoredFile};
-use crate::files_source::_helpers::object_reader::ObjectFileReader;
+use crate::files_source::_helpers::parquet::object_reader::ObjectFileReader;
 use crate::files_source::errors::FilesError;
 
 /// A reader for one listed Parquet file; its size is known, so no request is spent finding it.

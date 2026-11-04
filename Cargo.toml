@@ -17,8 +17,10 @@ rust-version = "1.95"
 aes = "0.8"
 arrow-array = "60"
 arrow-cast = "60"
+arrow-csv = "60"
 arrow-schema = "60"
 arrow-select = "60"
+async-compression = { version = "0.4", features = ["tokio", "gzip", "zstd"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64 = "0.22"
 bytes = "1"
@@ -26,6 +28,7 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false }
 duckdb = { version = "1.20000", features = ["bundled", "appender-arrow"] }
 clap = { version = "4", features = ["derive", "env"] }
+csv-core = "0.1"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 getrandom = "0.3"
@@ -60,6 +63,7 @@ tower-service = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 uuid = { version = "1", features = ["v4"] }
+zstd = "0.14"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

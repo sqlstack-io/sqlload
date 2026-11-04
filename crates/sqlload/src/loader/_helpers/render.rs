@@ -105,7 +105,10 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
     };
     let origin = format!("  ({})", spec.strategy_origin);
     let source = match &spec.files {
-        Some(files) => format!("source  files  {}  {}", spec.source_name, files.location),
+        Some(files) => format!(
+            "source  files  {}  {}  {}",
+            spec.source_name, files.location, files.encoding
+        ),
         None => format!(
             "source  postgres  {}  {}",
             spec.source_name,
@@ -121,12 +124,25 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             .as_ref()
             .zip(table.files.as_ref())
             .map(|(source, read)| {
+                let skipped = match source.table.skipped {
+                    0 => String::new(),
+                    count => format!(
+                        ", {count} skipped (names that do not fit {})",
+                        source.encoding
+                    ),
+                };
                 format!(
-                    "files   {} to read of {} listed",
+                    "files   {} to read of {} listed{skipped}",
                     read.files.len(),
                     source.table.files.len()
                 )
             }),
+    );
+    lines.extend(
+        spec.files
+            .iter()
+            .flat_map(|source| source.notes.iter())
+            .map(|note| format!("note    {note}")),
     );
     lines.extend(table.output.as_ref().map(files_line));
     lines.extend(table.output.iter().map(|output| {

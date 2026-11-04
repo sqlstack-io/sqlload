@@ -65,6 +65,14 @@ destination_path = "shop/{table}/"
 [sources.app.tables."public.events"]
 destination_path = "shop/{table}/day={cursor:date}/"
 cursor_column = "created_at"
+
+[sources.events]
+kind = "files"
+connection = "lake"
+path = "events/"
+format = "csv"
+compression = "zstd"
+csv = { delimiter = ";", null_values = ["NA", ""] }
 "#;
 
 /// Connections and a target that the error cases' sources can refer to.
