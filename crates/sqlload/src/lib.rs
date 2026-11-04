@@ -1,9 +1,10 @@
-//! Kafka to Snowflake export engine: configuration, naming, batching and delivery.
+//! SQLLoad: the Kafka to Snowflake exporter and the loader engine.
 
 #![forbid(unsafe_code)]
 
 pub mod auth;
 pub mod batching;
+pub mod column_types;
 /// The `sqlload` command line; behind the default `cli` feature.
 #[cfg(feature = "cli")]
 pub mod command;
