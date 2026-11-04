@@ -12,8 +12,9 @@ SQL data loading tooling.
 uv tool install sqlload
 ```
 
-The `sqlload` package depends on `sqlload-cli`, which holds the native executable for Linux
-(x86_64, aarch64) and macOS (arm64).
+The `sqlload` package is a native Python extension (CPython 3.10+) for Linux (x86_64, aarch64)
+and macOS (arm64): its `sqlload` command runs the loader in-process, so Python sources can run.
+`sqlload-cli` holds the same command as a standalone executable, without Python.
 
 ## Development
 
@@ -21,6 +22,7 @@ The `sqlload` package depends on `sqlload-cli`, which holds the native executabl
 make check            # fmt, clippy, fensu
 make test-unit
 make test-containers  # needs Docker (Redpanda, Postgres, SeaweedFS)
+make test-python      # builds the sqlload extension into .venv and runs its tests
 ```
 
 ## License

@@ -2,14 +2,13 @@ use std::collections::HashMap;
 
 use arrow_array::{Array, RecordBatch, StringArray};
 
+use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::_helpers::plan::columns::SampledColumn;
 use crate::files_source::_helpers::text::bytes_reader::open_bytes;
 use crate::files_source::_helpers::text::csv_reader::CsvReader;
-use crate::files_source::_helpers::text::inference::{
-    combine_types, csv_value_type, json_value_type,
-};
+use crate::files_source::_helpers::text::inference::{csv_value_type, json_value_type};
 use crate::files_source::_helpers::text::json_reader::JsonReader;
 use crate::files_source::_helpers::text::json_records::JsonRecord;
 use crate::files_source::constants::SAMPLE_ROWS;
@@ -86,7 +85,7 @@ fn observe(
     match (seen, value_type) {
         (seen, None) => seen,
         (None, Some(value_type)) => Some(Ok(value_type)),
-        (Some(Ok(seen)), Some(value_type)) => Some(Ok(combine_types(seen, value_type))),
+        (Some(Ok(seen)), Some(value_type)) => Some(Ok(combined_type(seen, value_type))),
         (Some(Err(reason)), Some(_)) => Some(Err(reason)),
     }
 }

@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
+use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
-use crate::files_source::_helpers::text::inference::combine_types;
 use crate::files_source::models::FilesRead;
 
 /// What a JSON or CSV read checks: that every key or header is a source column, and that inferred columns' values follow the inference rules.
@@ -52,7 +52,7 @@ impl ColumnChecks {
 /// Whether a value of type `value_type` (`None` for NULL) fits a column inferred as `column_type`: it would not have changed the inferred type.
 pub(crate) fn value_fits(column_type: &ColumnType, value_type: Option<ColumnType>) -> bool {
     value_type
-        .is_none_or(|value_type| combine_types(column_type.clone(), value_type) == *column_type)
+        .is_none_or(|value_type| combined_type(column_type.clone(), value_type) == *column_type)
 }
 
 /// The error for a value that does not fit its inferred type.

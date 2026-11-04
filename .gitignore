@@ -21,3 +21,7 @@ target/
 dist/
 .venv/
 __pycache__/
+
+# Native extension built in place by maturin develop
+packages/sqlload/python/sqlload/*.so
+packages/sqlload/python/sqlload/*.pyd

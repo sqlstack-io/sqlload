@@ -19,7 +19,7 @@
       ],
       "extra-files": [
         { "type": "generic", "path": "Cargo.toml" },
-        { "type": "generic", "path": "pyproject.toml" },
+        { "type": "generic", "path": "packages/sqlload/pyproject.toml" },
         { "type": "generic", "path": "packages/sqlload-cli/pyproject.toml" }
       ]
     }

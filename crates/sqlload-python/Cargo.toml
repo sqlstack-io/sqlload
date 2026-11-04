@@ -1,0 +1,30 @@
+[package]
+name = "sqlload-python"
+version.workspace = true
+description = "The native module of the sqlload Python package: the command line in-process and the Python-to-Arrow crossing."
+edition.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "sqlload_python"
+crate-type = ["cdylib", "rlib"]
+# Tested from Python (packages/sqlload/tests); a Rust test binary would have to link libpython.
+test = false
+doctest = false
+
+[features]
+# TLS with OpenSSL built in, as in the sqlload-cli wheels.
+ssl-vendored = ["sqlload/ssl-vendored"]
+
+[dependencies]
+arrow-array.workspace = true
+arrow-pyarrow.workspace = true
+arrow-schema.workspace = true
+pyo3.workspace = true
+sqlload.workspace = true
+
+[lints]
+workspace = true
