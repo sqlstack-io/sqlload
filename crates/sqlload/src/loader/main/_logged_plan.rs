@@ -1,13 +1,16 @@
 //! Add a logged table's run log to its plan: its current state, a reset to read from, or a disagreement with the data to reconcile.
 
-use crate::loader::_helpers::run_log::{committed_runs, read_run_log};
+use crate::loader::_helpers::run_log::{
+    committed_runs, data_disagreement, read_run_log, unreadable_problems,
+};
+use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, LoggedPlan, PlanOptions, TablePlan};
 use crate::run_log::main::current_run::current_run;
 use crate::run_log::models::RunEvent;
 use crate::write_sql::models::WriteMode;
 
-/// `plan` with its run log when the table is logged: after `sqlload state reset`, the next run reads from the reset position (unless flags choose the window); otherwise a logged cursor that disagrees with the data's maximum is noted, and the data wins.
+/// `plan` with its run log when the table is logged: after `sqlload state reset`, the next run reads from the reset position (unless flags choose the window); otherwise a logged cursor that disagrees with the data's maximum is noted, and the data wins. A record that cannot be read blocks the table until a reset follows it.
 pub(in crate::loader) async fn with_run_log(
     mut plan: TablePlan,
     destination: &Destination,
@@ -16,27 +19,22 @@ pub(in crate::loader) async fn with_run_log(
     if !plan.spec.logged || plan.schema.blocked.is_some() {
         return Ok(plan);
     }
-    let mut records = read_run_log(&plan.spec, destination).await?;
-    records.extend(committed_runs(&plan)?);
-    records.sort_by(|left, right| left.recorded_at.cmp(&right.recorded_at));
-    records.dedup_by(|later, earlier| later.run_id == earlier.run_id);
+    let mut log = read_run_log(&plan, destination).await?;
+    let committed = committed_runs(&plan);
+    log.records.extend(committed.records);
+    log.unreadable.extend(committed.unreadable);
+    log.records.sort_by(|left, right| {
+        (&left.recorded_at, &left.run_id).cmp(&(&right.recorded_at, &right.run_id))
+    });
+    log.records
+        .dedup_by(|later, earlier| later.run_id == earlier.run_id);
+    let records = log.records;
     let current = current_run(&records).cloned();
     let flags = options.reload || options.start_cursor.is_some() || options.end_cursor.is_some();
     let reset = current
         .as_ref()
         .filter(|record| record.event == RunEvent::Reset && !flags);
-    let maximum = plan
-        .window
-        .as_ref()
-        .and_then(|window| window.maximum.clone());
-    let disagreement = match (&current, maximum) {
-        (Some(record), Some(maximum))
-            if reset.is_none() && record.cursor_after.as_ref() != Some(&maximum) =>
-        {
-            Some(maximum)
-        }
-        _ => None,
-    };
+    let disagreement = data_disagreement(&plan, current.as_ref());
     if let (Some(reset), Some(cursor), Some(window)) =
         (reset, plan.spec.cursor.clone(), plan.window.as_mut())
     {
@@ -67,10 +65,15 @@ pub(in crate::loader) async fn with_run_log(
             record.cursor_after.as_deref().unwrap_or("not set"),
         ));
     }
+    let problems = unreadable_problems(&log.unreadable, &records);
+    if !problems.is_empty() {
+        plan.schema = blocked_plan(problems);
+    }
     plan.logged = Some(LoggedPlan {
         records,
         current,
         disagreement,
+        unreadable: log.unreadable,
     });
     Ok(plan)
 }

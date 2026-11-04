@@ -18,7 +18,8 @@ use crate::python_sources::types::PythonHost;
 use crate::routing::models::Route;
 use crate::run_log::main::finished_record::finished_record;
 use crate::run_log::main::later_cursor::later_cursor;
-use crate::run_log::models::{RunOutcome, RunRecord};
+use crate::run_log::main::next_stamp::next_stamp;
+use crate::run_log::models::{RunOutcome, RunRecord, UnreadableRecord};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
 use crate::store_paths::models::Location;
@@ -174,12 +175,18 @@ pub struct LoggedPlan {
     pub current: Option<RunRecord>,
     /// The data's cursor maximum, when it disagrees with the logged cursor: the data wins and the load appends a reconciliation.
     pub disagreement: Option<String>,
+    /// Records that cannot be used, by `sqlload state show`.
+    pub unreadable: Vec<UnreadableRecord>,
 }
 
 impl RunEntry {
     /// The finished record for a run that ended as `outcome`.
     pub fn finished(&self, outcome: RunOutcome) -> RunRecord {
         let before = self.before.clone().filter(|_| !self.replaces);
+        let outcome = RunOutcome {
+            recorded_at: next_stamp(&outcome.recorded_at, self.newest.as_deref()),
+            ..outcome
+        };
         finished_record(&self.record, self.cursor_type.as_ref(), before, outcome)
     }
 
@@ -202,6 +209,8 @@ pub struct RunEntry {
     pub before: Option<String>,
     /// The load replaces every row, so the data's maximum is the loaded rows' maximum.
     pub replaces: bool,
+    /// The log's newest record time, which this record must follow.
+    pub newest: Option<String>,
 }
 
 /// A files target's side of one table's plan.

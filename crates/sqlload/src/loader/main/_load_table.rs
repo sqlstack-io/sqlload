@@ -68,7 +68,7 @@ pub(in crate::loader) async fn load_one(
     };
     let run = read.run.as_ref();
     let Some(reader) = &read.reader else {
-        log_empty_run(run, &table.spec, destination).await?;
+        log_empty_run(run, table, destination).await?;
         return Ok((
             name,
             TableLoaded {
@@ -79,8 +79,8 @@ pub(in crate::loader) async fn load_one(
         ));
     };
     let rows = match (destination, &table.output) {
-        (Destination::Files(files), Some(output)) => {
-            load_files_table(reader, table, (output, files), run).await?
+        (Destination::Files(_), Some(output)) => {
+            load_files_table(reader, table, output, run).await?
         }
         (Destination::Files(_), None) => {
             return Err(LoaderError::Invalid(format!(

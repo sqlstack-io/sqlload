@@ -9,9 +9,7 @@ use crate::files_destination::main::close_writer::close_writer;
 use crate::files_destination::main::mark_pending::mark_pending;
 use crate::files_destination::main::open_writer::open_writer;
 use crate::files_destination::main::write_rows::write_rows;
-use crate::files_destination::models::{
-    FilesDestination, FilesWriter, PendingPhase, PendingRun, WriterRequest,
-};
+use crate::files_destination::models::{FilesWriter, PendingPhase, PendingRun, WriterRequest};
 use crate::loader::_helpers::run_log::{fold_maximum, pending_run};
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::errors::LoaderError;
@@ -28,7 +26,7 @@ use bytes::Bytes;
 pub(in crate::loader) async fn load_files_table(
     reader: &SourceReader,
     table: &TablePlan,
-    (output, destination): (&FilesOutput, &FilesDestination),
+    output: &FilesOutput,
     run: Option<&RunEntry>,
 ) -> Result<u64, LoaderError> {
     let spec = &table.spec;
@@ -53,7 +51,7 @@ pub(in crate::loader) async fn load_files_table(
         loaded_maximum,
         files: writer.written.clone(),
     };
-    let pending_run = pending_run(run, outcome, spec, destination)?;
+    let pending_run = pending_run(run, outcome, &output.path.folder)?;
     let keys = replaced.keys(&writer.partitions);
     replace_files(&folder, &load_id, (&keys, pending_run.as_ref())).await?;
     Ok(rows)

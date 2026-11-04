@@ -67,6 +67,70 @@ def pages(ctx):
 def events(ctx):
     remember(ctx, cursor_value=repr(ctx.cursor_value))
     yield from json.loads((HERE / "data" / "events.json").read_text())
+
+
+@api.table(write_strategy="append", state="logged")
+def counts(ctx):
+    remember(ctx)
+    if ctx.state is None:
+        ctx.state = {}
+    ctx.state["count"] = ctx.state.get("count", 0) + 1
+    yield {"n": ctx.state["count"]}
+
+
+@api.table(write_strategy="append", state="logged")
+def empty(ctx):
+    remember(ctx)
+    ctx.state = "token-1"
+    return
+    yield
+"""
+
+#: Two sources with a `pages` table each, into two targets on one files connection.
+TWO_TARGETS_PROJECT = """\
+python_paths = ["sources"]
+
+[connections.lake]
+kind = "filesystem"
+root = "lake"
+
+[targets.first]
+connection = "lake"
+path = "first/{table}/"
+
+[targets.second]
+connection = "lake"
+path = "second/{table}/"
+"""
+
+TWO_SOURCES_MODULE = """
+import json
+from pathlib import Path
+
+import sqlload as sl
+
+HERE = Path(__file__).resolve().parent.parent
+
+
+def pages_of(name):
+    source = sl.source(name, destination=name, table_name="pages")
+
+    @source.table(name=f"{name}_pages", write_strategy="append", state="logged")
+    def pages(ctx):
+        (HERE / "seen").mkdir(exist_ok=True)
+        (HERE / "seen" / f"{name}.json").write_text(json.dumps({"state": ctx.state}))
+        data = json.loads((HERE / "data" / f"{name}.json").read_text())
+        page = ctx.state or 0
+        for rows in data[page:]:
+            yield rows
+            page += 1
+        ctx.state = page
+
+    return source
+
+
+first = pages_of("first")
+second = pages_of("second")
 """
 
 
@@ -120,7 +184,7 @@ def runs(project: Path, table: str) -> list[tuple[Any, ...]]:
 
 
 def file_runs(project: Path, table: str) -> list[dict[str, Any]]:
-	folder = project / "lake" / "_sqlload" / "runs" / table
+	folder = project / "lake" / table / "_sqlload" / "runs"
 	records = [json.loads(path.read_text()) for path in sorted(folder.glob("*.json"))] if folder.is_dir() else []
 	return sorted(records, key=lambda record: record["recorded_at"])
 
@@ -264,7 +328,7 @@ def test_given_a_files_target_when_loading_twice_then_records_are_objects_and_th
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 2
 	assert file_values(project, "pages") == [1, 2, 3]
-	records = file_runs(project, "api__pages")
+	records = file_runs(project, "pages")
 	assert [(record["event"], record["state"], record["row_count"]) for record in records] == [("run", "2", 2), ("run", "3", 1)]
 	assert all(record["files"] for record in records)
 
@@ -273,7 +337,7 @@ def test_given_a_files_load_that_stops_after_committing_when_loading_again_then_
 	project = make_project(tmp_path, FILES_PROJECT)
 	give(project, "pages", [[{"n": 1}]])
 	ok(project, "load", "api__pages")
-	records = project / "lake" / "_sqlload" / "runs" / "api__pages"
+	records = project / "lake" / "pages" / "_sqlload" / "runs"
 	records.chmod(0o500)
 	give(project, "pages", [[{"n": 1}], [{"n": 2}]])
 	failed = sqlload(project, "load", "api__pages")
@@ -284,7 +348,7 @@ def test_given_a_files_load_that_stops_after_committing_when_loading_again_then_
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 2
 	assert file_values(project, "pages") == [1, 2, 3]
-	assert [record["state"] for record in file_runs(project, "api__pages")] == ["1", "2", "3"]
+	assert [record["state"] for record in file_runs(project, "pages")] == ["1", "2", "3"]
 
 
 def test_given_a_files_target_when_resetting_then_the_reset_is_an_object_and_the_next_run_reads_from_it(tmp_path: Path) -> None:
@@ -294,7 +358,7 @@ def test_given_a_files_target_when_resetting_then_the_reset_is_an_object_and_the
 	ok(project, "state", "reset", "--to", "1", "--yes", "api__pages")
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 1
-	assert [record["event"] for record in file_runs(project, "api__pages")] == ["run", "reset", "run"]
+	assert [record["event"] for record in file_runs(project, "pages")] == ["run", "reset", "run"]
 
 
 @pytest.mark.parametrize(
@@ -321,3 +385,87 @@ def test_given_no_logged_tables_when_showing_state_then_it_says_so(tmp_path: Pat
 	project = make_project(tmp_path, DUCKDB_PROJECT)
 	(project / "sources" / "api.py").write_text("import sqlload as sl\n@sl.table\ndef t(ctx):\n    yield {'n': 1}\n")
 	assert 'no selected table has state = "logged"' in ok(project, "state", "show")
+
+
+def test_given_a_first_run_into_a_new_schema_that_yields_nothing_when_loading_again_then_its_state_was_kept(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT)
+	ok(project, "load", "api__empty")
+	ok(project, "load", "api__empty")
+	assert seen(project, "empty")["state"] == "token-1"
+	assert runs(project, "api__empty") == [("run", '"token-1"', None, "0"), ("run", '"token-1"', None, "0")]
+
+
+def test_given_ctx_state_changed_in_place_when_loading_then_the_change_is_logged(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT)
+	ok(project, "load", "api__counts")
+	ok(project, "load", "api__counts")
+	ok(project, "load", "api__counts")
+	assert seen(project, "counts")["state"] == {"count": 2}
+	assert query(project, 'SELECT n FROM "RAW"."api__counts" ORDER BY n') == [(1,), (2,), (3,)]
+	assert [state for _, state, _, _ in runs(project, "api__counts")] == ['{"count": 1}', '{"count": 2}', '{"count": 3}']
+
+
+def test_given_two_targets_on_one_connection_with_the_same_table_name_when_loading_then_each_keeps_its_own_state(tmp_path: Path) -> None:
+	project = make_project(tmp_path, TWO_TARGETS_PROJECT)
+	(project / "sources" / "api.py").write_text(TWO_SOURCES_MODULE)
+	give(project, "first", [[{"n": 1}], [{"n": 2}], [{"n": 3}]])
+	give(project, "second", [[{"n": 10}]])
+	ok(project, "load", "first")
+	ok(project, "load", "second")
+	give(project, "second", [[{"n": 10}], [{"n": 20}]])
+	ok(project, "load", "second")
+	assert seen(project, "second")["state"] == 1
+	assert [record["state"] for record in file_runs(project, "first/first_pages")] == ["3"]
+	assert [record["state"] for record in file_runs(project, "second/second_pages")] == ["1", "2"]
+
+
+def test_given_an_unreadable_record_when_planning_then_only_that_table_is_blocked_until_a_reset(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT)
+	give(project, "pages", [[{"n": 1}]])
+	ok(project, "load", "api__pages")
+	ok(project, "load", "api__counts")
+	execute(
+		project,
+		"""INSERT INTO "RAW"."_sqlload_runs" (run_id, table_name, recorded_at, record_json) VALUES """
+		"""('broken-run', 'api__pages', '2026-01-01T00:00:00.000000Z', '{"run_id": "broken-run"}'),"""
+		"""('future-run', 'api__pages', '2026-01-01T00:00:01.000000Z', '{"format_version": 99, "run_id": "future-run"}')""",
+	)
+	planned = sqlload(project, "plan")
+	assert planned.returncode == 1
+	assert "run log record broken-run cannot be used: does not parse" in planned.stdout + planned.stderr
+	assert "run log record future-run cannot be used: written by a newer sqlload (format_version 99" in planned.stdout + planned.stderr
+	ok(project, "load", "api__counts")
+	shown = ok(project, "state", "show", "api__pages")
+	assert "broken-run  unreadable: does not parse" in shown and "future-run  unreadable: written by a newer sqlload" in shown
+	ok(project, "state", "reset", "--to", "1", "--yes", "api__pages")
+	ok(project, "load", "api__pages")
+	assert seen(project, "pages")["state"] == 1
+
+
+def test_given_a_log_stamped_in_the_future_when_resetting_then_the_reset_becomes_current(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT)
+	give(project, "pages", [[{"n": 1}], [{"n": 2}], [{"n": 3}]])
+	ok(project, "load", "api__pages")
+	execute(project, """UPDATE "RAW"."_sqlload_runs" SET record_json = replace(record_json, '"recorded_at":"2026', '"recorded_at":"2099'), recorded_at = replace(recorded_at, '2026', '2099')""")
+	ok(project, "state", "reset", "--to", "1", "--yes", "api__pages")
+	ok(project, "load", "api__pages")
+	assert seen(project, "pages")["state"] == 1
+	assert [event for event, *_ in runs(project, "api__pages")] == ["run", "reset", "run"]
+
+
+def test_given_a_pending_reset_when_an_end_cursor_backfill_runs_then_the_reset_is_kept(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT)
+	give(project, "events", [{"id": 1, "at": "2026-01-01T00:00:00Z"}, {"id": 2, "at": "2026-01-05T00:00:00Z"}])
+	ok(project, "load", "api__events")
+	ok(project, "state", "reset", "--to", "2026-01-02T00:00:00Z", "--yes", "api__events")
+	give(project, "events", [])
+	ok(project, "load", "--end-cursor-ts", "2026-01-06T00:00:00Z", "api__events")
+	assert [event for event, *_ in runs(project, "api__events")] == ["run", "reset", "backfill"]
+	assert "(state reset at" in ok(project, "plan", "api__events")
+
+
+def test_given_no_selection_when_resetting_state_then_it_is_refused(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT)
+	done = sqlload(project, "state", "reset", "--clear", "--yes")
+	assert done.returncode == 1
+	assert "name the sources or tables to reset" in done.stderr, done.stderr

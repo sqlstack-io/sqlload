@@ -36,7 +36,7 @@ fn given_a_run_log_when_writing_sql_then_each_warehouse_gets_its_statements() ->
             description: "Snowflake reads a table's records oldest first",
             warehouse: Warehouse::Snowflake,
             build: select_sql,
-            expected_sql: "SELECT \"RECORD_JSON\" FROM \"ANALYTICS\".\"RAW\".\"_SQLLOAD_RUNS\" WHERE \"TABLE_NAME\" = 'shop__orders' ORDER BY \"RECORDED_AT\"",
+            expected_sql: "SELECT \"RECORD_JSON\" FROM \"ANALYTICS\".\"RAW\".\"_SQLLOAD_RUNS\" WHERE \"TABLE_NAME\" = 'shop__orders' ORDER BY \"RECORDED_AT\", \"RUN_ID\"",
         },
         StatementTestCase {
             description: "a transaction gets the record before its COMMIT",

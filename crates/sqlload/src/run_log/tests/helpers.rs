@@ -95,16 +95,27 @@ pub(crate) fn swap_logged(warehouse: Warehouse) -> Result<String, String> {
     Ok(logged_statements(statements, "INSERT INTO runs".to_owned(), warehouse).join(";\n"))
 }
 
-/// The current record's run id among the case's records.
-pub(crate) fn current_run_id(test_case: &CurrentRunTestCase) -> Result<Option<String>, String> {
+/// The current record's run id among the case's records, and the unreadable ones as `<run id>: <reason's start>`.
+pub(crate) fn current_run_id(test_case: &CurrentRunTestCase) -> (Option<String>, Vec<String>) {
     let texts: Vec<String> = test_case
         .records
         .iter()
         .map(|(id, event, at)| record_json(id, event, at))
         .chain(test_case.raw.iter().map(|text| (*text).to_owned()))
         .collect();
-    let records = decode_runs(&texts)?;
-    Ok(current_run(&records).map(|record| record.run_id.clone()))
+    let decoded = decode_runs(&texts);
+    let unreadable = decoded
+        .unreadable
+        .iter()
+        .map(|record| {
+            let reason = record.reason.split([':', ';']).next().unwrap_or_default();
+            format!("{}: {reason}", record.run_id.as_deref().unwrap_or("-"))
+        })
+        .collect();
+    (
+        current_run(&decoded.records).map(|record| record.run_id.clone()),
+        unreadable,
+    )
 }
 
 /// A record in JSON: run `id` of kind `event` at `at`.

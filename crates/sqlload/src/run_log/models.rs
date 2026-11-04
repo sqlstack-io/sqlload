@@ -83,3 +83,19 @@ pub struct StateEvent {
     pub note: String,
     pub recorded_at: String,
 }
+
+/// A table's run log as read: the records that parse, oldest first, and those that do not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DecodedRuns {
+    pub records: Vec<RunRecord>,
+    pub unreadable: Vec<UnreadableRecord>,
+}
+
+/// A record that cannot be used: it does not parse, or a newer SQLLoad wrote it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableRecord {
+    /// Its run id and time, when they can still be read.
+    pub run_id: Option<String>,
+    pub recorded_at: Option<String>,
+    pub reason: String,
+}

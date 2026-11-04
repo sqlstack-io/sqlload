@@ -14,8 +14,23 @@ pub(crate) struct CurrentRunTestCase {
     pub(crate) records: &'static [(&'static str, &'static str, &'static str)],
     /// Further record texts, as read.
     pub(crate) raw: &'static [&'static str],
-    /// The current record's run id, or the error text.
-    pub(crate) expected_run: Result<Option<&'static str>, &'static str>,
+    /// The current record's run id, then each unreadable record as `<run id>: <reason up to its first colon or semicolon>`.
+    pub(crate) expected_run: (Option<&'static str>, &'static [&'static str]),
+}
+
+pub(crate) struct CursorOrderTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) left: &'static str,
+    pub(crate) right: &'static str,
+    pub(crate) column_type: ColumnType,
+    pub(crate) expected_order: std::cmp::Ordering,
+}
+
+pub(crate) struct NextStampTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) now: &'static str,
+    pub(crate) newest: Option<&'static str>,
+    pub(crate) expected_stamp: &'static str,
 }
 
 pub(crate) struct LaterCursorTestCase {

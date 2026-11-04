@@ -75,10 +75,14 @@ def events(ctx: sl.Context):
 ```
 
 Each successful run appends a record to `_sqlload_runs` in the table's schema (or one object under
-`_sqlload/runs/<table>/` in a files target), in the same transaction as the data where the
+`<table folder>/_sqlload/runs/` in a files target), in the same transaction as the data where the
 warehouse allows it, so a failed load never moves the position. A table with a `cursor_column`
 also logs the data's cursor; when the log and the data disagree, the data wins and the load appends
 a visible reconciliation. `sqlload state show`, `verify`, `reconcile --yes` and
 `reset --to VALUE --yes` (or `--clear`) inspect and correct the log; `--reload` starts over.
+`reset` needs the tables or sources to reset named. On a table with a `cursor_column`,
+`reset --to` sets the cursor and keeps `ctx.state`; on one without, it sets `ctx.state` (JSON).
+`--clear` wipes both. A record SQLLoad cannot read (corrupt, or written by a newer version)
+blocks only its table; `state show` lists it and a `reset` starts a new position after it.
 Deleting the log is safe: the next run reads as a stateless one would.
 

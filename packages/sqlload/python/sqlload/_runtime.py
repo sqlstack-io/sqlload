@@ -99,14 +99,19 @@ def start_table(request: str) -> Iterator[Any]:
 
 
 def table_state(table: str) -> str | None:
-	"""The position the table function left in `ctx.state`, as JSON; `None` when it set none."""
+	"""The position the table function left in `ctx.state`, as JSON, when it differs from the one it started with.
+
+	It is read once the function finished, so a position changed in place (`ctx.state["token"] = ...`)
+	counts like one assigned.
+	"""
 	ctx = _contexts.pop(table, None)
-	if ctx is None or not ctx.state_set:
+	if ctx is None or not ctx._logged:
 		return None
 	try:
-		return json.dumps(ctx.state)
+		final = json.dumps(ctx.state)
 	except (TypeError, ValueError) as error:
 		raise TypeError(f"ctx.state of table {table} is not JSON: {error}") from error
+	return final if final != ctx.started_state else None
 
 
 def finish_run() -> None:

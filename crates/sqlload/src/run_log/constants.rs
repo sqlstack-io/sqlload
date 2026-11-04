@@ -1,7 +1,7 @@
 /// The run log table, in the schema of the tables it records.
 pub const RUNS_TABLE: &str = "_sqlload_runs";
 
-/// The folder below a files target's root holding one folder of run records per table.
+/// The folder below a files table's folder holding its run records, beside its pending markers.
 pub const RUNS_FOLDER: &str = "_sqlload/runs/";
 
 /// The version of the record format, written with every record.
@@ -42,3 +42,6 @@ pub const COMMIT_STATEMENT: &str = "COMMIT";
 
 /// How a `MERGE` statement starts.
 pub const MERGE_KEYWORD: &str = "MERGE";
+
+/// How `recorded_at` is written: ISO 8601 UTC with microseconds, so text order is time order.
+pub const RECORDED_AT_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.6fZ";

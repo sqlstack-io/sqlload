@@ -192,6 +192,12 @@ async fn run_state(
         StateAction::Reconcile(args) => (StateKind::Reconcile, args, None),
         StateAction::Reset(reset) => (StateKind::Reset, reset.tables, reset.to),
     };
+    if kind == StateKind::Reset && args.select.is_empty() {
+        return Err(
+            "state reset changes where tables read from next; name the sources or tables to reset"
+                .to_owned(),
+        );
+    }
     let options = PlanOptions {
         select: args.select,
         ..PlanOptions::default()

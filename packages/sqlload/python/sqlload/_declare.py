@@ -4,6 +4,7 @@ A source is a module-level object tables attach to; a table is a decorated gener
 Both are found by scanning the modules under `python_paths`, so declaring one never runs it.
 """
 
+import json
 from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from logging import Logger
@@ -242,7 +243,7 @@ class Context:
 		self._client: Any = None
 		self._logged = logged
 		self._state = state
-		self.state_set = False
+		self.started_state = json.dumps(state)
 
 	@property
 	def state(self) -> Any:
@@ -254,7 +255,6 @@ class Context:
 		if not self._logged:
 			raise AttributeError(f"ctx.state needs state='logged' on table {self.table}")
 		self._state = value
-		self.state_set = True
 
 	@property
 	def connection(self) -> Connection:

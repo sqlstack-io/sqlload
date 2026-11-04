@@ -6,6 +6,7 @@ use crate::loader::_helpers::run_log::{append_run, reconcile_record, reset_recor
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, ProjectPlan, StateKind, StateRequest};
 use crate::run_log::main::describe_state::describe_state;
+use crate::run_log::main::unreadable_line::unreadable_line;
 use crate::run_log::models::RunRecord;
 use crate::write_sql::main::display_name::display_name;
 
@@ -36,6 +37,14 @@ pub async fn state_command(
                     describe_state(logged.current.as_ref())
                 ));
                 lines.extend(logged.records.iter().map(history_line));
+                lines.extend(logged.unreadable.iter().map(unreadable_line));
+                None
+            }
+            StateKind::Verify if table.schema.blocked.is_some() => {
+                ok = false;
+                lines.push(format!(
+                    "{name}  blocked: sqlload state show {name} lists why"
+                ));
                 None
             }
             StateKind::Verify => {
@@ -63,7 +72,7 @@ pub async fn state_command(
         };
         match request.append {
             true => {
-                append_run(&table.spec, destination, &record).await?;
+                append_run(table, destination, &record).await?;
                 lines.push(format!("appended  {name}  {}", event_line(&record)));
             }
             false => lines.push(format!(
