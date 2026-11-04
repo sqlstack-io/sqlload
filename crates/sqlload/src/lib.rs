@@ -21,6 +21,7 @@ pub mod planning;
 pub mod postgres_source;
 pub mod project;
 pub mod routing;
+pub mod schema_plan;
 pub mod similar_names;
 pub mod sql_api;
 pub mod stage_api;
