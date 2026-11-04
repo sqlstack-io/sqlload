@@ -7,7 +7,8 @@ use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
 use crate::loader::_helpers::settings::{cursor, default_strategy, layered, strategy_problems};
 use crate::loader::models::{SettingOrigin, TableSpec};
-use crate::project::models::{SourceConfig, TableOverride};
+use crate::masking::models::MaskRules;
+use crate::project::models::{MaskMethod, SourceConfig, TableOverride, WriteStrategy};
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::write_sql::models::TableName;
 
@@ -128,13 +129,22 @@ pub(crate) fn build_spec(
         });
     let mut problems = strategy_problems(strategy, &unique_key, cursor.as_ref());
     problems.extend(column_reference_problems(table, overrides));
+    let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
         let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.column == *masked);
-        let is_key = unique_key.contains(masked);
+        let is_key = uses_key && unique_key.contains(masked);
         (is_cursor || is_key).then(|| {
             format!("mask {masked}: a masked column cannot be the cursor_column or part of the unique_key")
         })
     }));
+    if context.source.mask_key.is_none()
+        && overrides
+            .mask
+            .values()
+            .any(|method| *method == MaskMethod::Hmac)
+    {
+        problems.push("mask uses \"hmac\" but the source sets no mask_key (for example mask_key = \"${MASK_KEY}\")".to_owned());
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -158,7 +168,10 @@ pub(crate) fn build_spec(
         cursor,
         pinned: columns.pinned,
         excluded_columns: columns.excluded,
-        masked: overrides.mask.clone(),
+        masked: MaskRules {
+            columns: overrides.mask.clone(),
+            key: context.source.mask_key.clone(),
+        },
         contract: layered(&settings.contract, &defaults.contract)
             .map(|(value, _)| value)
             .unwrap_or_default(),

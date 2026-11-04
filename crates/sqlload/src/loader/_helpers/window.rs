@@ -5,6 +5,7 @@ use crate::loader::models::{CursorSpec, Destination, PlanOptions, TableSpec};
 use crate::project::models::WriteStrategy;
 use crate::write_sql::main::cursor_bound::cursor_bound;
 use crate::write_sql::main::cursor_query::cursor_query;
+use crate::write_sql::main::cursor_text::cursor_text;
 use crate::write_sql::models::{CursorQuery, WriteMode};
 
 /// What decides one table's read window.
@@ -66,11 +67,12 @@ async fn lower_bound(
     request: &WindowRequest<'_>,
     cursor: &CursorSpec,
     cursor_type: &ColumnType,
+    start_flag: Option<&str>,
 ) -> Result<Result<(Option<String>, String), String>, LoaderError> {
     let options = request.options;
-    if let Some(start) = &options.start_cursor {
+    if let Some(start) = start_flag {
         return Ok(Ok((
-            Some(start.clone()),
+            Some(start.to_owned()),
             format!("{} from {start} (--start-cursor)", cursor.column),
         )));
     }
@@ -154,15 +156,25 @@ pub(crate) async fn cursor_window(
                 .to_owned(),
         ));
     }
-    let (from, note) = match lower_bound(request, cursor, cursor_type).await? {
-        Ok(bound) => bound,
-        Err(problem) => return Ok(Err(problem)),
+    let flag = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(|text| cursor_text(text, cursor_type))
+            .transpose()
     };
+    let (start_flag, to) = match (flag(&options.start_cursor), flag(&options.end_cursor)) {
+        (Ok(start), Ok(end)) => (start, end),
+        (Err(problem), _) | (_, Err(problem)) => return Ok(Err(problem)),
+    };
+    let (from, note) =
+        match lower_bound(request, cursor, cursor_type, start_flag.as_deref()).await? {
+            Ok(bound) => bound,
+            Err(problem) => return Ok(Err(problem)),
+        };
     let operator = match (spec.strategy, cursor.inclusive, &options.start_cursor) {
         (WriteStrategy::Append, false, None) => ">",
         _ => ">=",
     };
-    let to = options.end_cursor.clone();
     let note = match &to {
         Some(end) => format!("{note}, below {end} (--end-cursor)"),
         None => note,

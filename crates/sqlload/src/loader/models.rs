@@ -4,10 +4,9 @@ use std::time::Duration;
 use crate::column_types::models::{ColumnType, Warehouse};
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::models::DuckDbDestination;
+use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
-use crate::project::models::{
-    Contract, MaskMethod, NewTables, OnSchemaChange, Policy, WriteStrategy,
-};
+use crate::project::models::{Contract, NewTables, OnSchemaChange, Policy, WriteStrategy};
 use crate::routing::models::Route;
 use crate::schema_plan::models::{LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
@@ -57,8 +56,8 @@ pub struct TableSpec {
     pub pinned: BTreeMap<String, ColumnType>,
     /// Source columns not loaded, with the rule that dropped each.
     pub excluded_columns: Vec<(String, String)>,
-    /// Columns loaded masked, read as text.
-    pub masked: BTreeMap<String, MaskMethod>,
+    /// Columns loaded masked (read as text), and the hmac key.
+    pub masked: MaskRules,
     pub contract: Contract,
     pub on_schema_change: OnSchemaChange,
     pub type_change_rebuild: Policy,

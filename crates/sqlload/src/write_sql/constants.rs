@@ -3,3 +3,9 @@ pub const STAGING_SUFFIX: &str = "__sqlload_staging";
 
 /// Date cursors move back by whole days: a lookback is rounded up to days.
 pub const SECONDS_PER_DAY: u64 = 86_400;
+
+/// How cursor timestamps are written in literals (microseconds, no offset).
+pub const CURSOR_TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.6f";
+
+/// Timestamps without an offset accepted on the command line.
+pub const NAIVE_TIMESTAMP_FORMATS: &[&str] = &["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"];

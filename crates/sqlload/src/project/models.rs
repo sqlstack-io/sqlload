@@ -112,6 +112,9 @@ pub struct SourceConfig {
     pub skip_tables_with_columns: Vec<String>,
     #[serde(default)]
     pub allow_columns: Vec<String>,
+    /// The key for `mask = { col = "hmac" }`, normally `${ENV}`.
+    #[serde(default)]
+    pub mask_key: Option<crate::auth::models::Secret>,
     /// Defaults for every table of the source.
     #[serde(flatten)]
     pub defaults: TableSettings,
@@ -188,14 +191,17 @@ pub struct TableOverride {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaskMethod {
-    /// The lowercase hex SHA-256 of the value's text.
+    /// The lowercase hex SHA-256 of the value's text; anyone can recompute it, so guessable values can be recovered.
     Hash,
+    /// The lowercase hex HMAC-SHA256 of the value's text, keyed by the source's `mask_key`.
+    Hmac,
 }
 
 impl std::fmt::Display for MaskMethod {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Hash => "hash",
+            Self::Hmac => "hmac",
         })
     }
 }

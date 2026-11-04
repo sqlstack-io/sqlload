@@ -83,6 +83,7 @@ pub(crate) fn object_lines(table: &TablePlan) -> Vec<String> {
         table
             .spec
             .masked
+            .columns
             .iter()
             .map(|(column, method)| format!("masked  {column} ({method})")),
     );

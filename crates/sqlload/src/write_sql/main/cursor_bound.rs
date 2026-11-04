@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Days, NaiveDate};
 
-use crate::write_sql::constants::SECONDS_PER_DAY;
+use crate::write_sql::constants::{CURSOR_TIMESTAMP_FORMAT, SECONDS_PER_DAY};
 use crate::write_sql::models::CursorValue;
 
 /// `raw` minus `lookback`, as text Postgres and the destination both read the same way.
@@ -24,7 +24,7 @@ pub fn cursor_bound(
                 .map_err(|_| "lookback is too long".to_owned())?;
             let time = DateTime::from_timestamp_micros(micros - back)
                 .ok_or_else(|| format!("cursor maximum {raw:?} is out of range"))?;
-            let text = time.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+            let text = time.format(CURSOR_TIMESTAMP_FORMAT).to_string();
             Ok(match zoned {
                 true => format!("{text}+00"),
                 false => text,

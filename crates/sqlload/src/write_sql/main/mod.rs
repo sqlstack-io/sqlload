@@ -3,6 +3,7 @@ pub mod create_schema;
 pub mod create_table;
 pub mod cursor_bound;
 pub mod cursor_query;
+pub mod cursor_text;
 pub mod display_name;
 pub mod qualified_name;
 pub mod sql_literal;
