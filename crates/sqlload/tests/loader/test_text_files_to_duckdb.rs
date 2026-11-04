@@ -202,10 +202,38 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             runs: &[TextFilesRun {
                 files: &[LATE_KEY],
                 expected_error: "",
-                expected_plan: "",
+                expected_plan: "note    pinned column late was not seen in the sampled files (check the name)",
             }],
             check_query: "SELECT count(*) || ',' || count(late) || ',' || max(late) FROM raw.scores",
             expected_result: "10001,1,x",
+        },
+        TextFilesScenarioTestCase {
+            description: "a key outside the sample that is pinned and masked loads masked",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { late = \"text\" }\nmask = { late = \"hash\" }\n",
+            runs: &[TextFilesRun {
+                files: &[LATE_KEY],
+                expected_error: "",
+                expected_plan: "note    pinned column late was not seen in the sampled files",
+            }],
+            check_query: "SELECT count(late) || ',' || (max(late) = sha256('x')) FROM raw.scores",
+            expected_result: "1,true",
+        },
+        TextFilesScenarioTestCase {
+            description: "a misspelt mask on a JSON source fails the plan with the nearest name, never adding a column",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\nmask = { emial = \"hash\" }\n",
+            runs: &[TextFilesRun {
+                files: &[TextFile {
+                    key: "part-0.ndjson",
+                    contents: "{\"id\":1,\"email\":\"a@example.com\"}\n",
+                    encode: plain,
+                }],
+                expected_error: "mask \"emial\" is not a column of the source table (names are case-sensitive); did you mean \"email\"?",
+                expected_plan: "",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
         },
         TextFilesScenarioTestCase {
             description: "a value outside the sample that does not fit the inferred type fails with its line",

@@ -131,6 +131,12 @@ pub(crate) async fn discover_files_table(
         .collect();
     let overrides = source.tables.get(source_name);
     let pinned_only = pinned_unsampled(overrides, &table, &added, encoding.format);
+    let notes: Vec<String> = pinned_only
+        .iter()
+        .map(|name| {
+            format!("pinned column {name} was not seen in the sampled files (check the name)")
+        })
+        .collect();
     let typed = table
         .columns
         .iter()
@@ -193,11 +199,12 @@ pub(crate) async fn discover_files_table(
             partition_types,
             encoding,
             checks,
+            notes,
         },
     ))
 }
 
-/// Columns a JSON or CSV source's table pins (`columns` or `mask`) that sampling did not see, so a key found only in older files can be pinned.
+/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a `mask` key alone never adds a column, so a misspelt mask stays an error.
 fn pinned_unsampled(
     overrides: Option<&TableOverride>,
     table: &FilesTable,
@@ -215,11 +222,8 @@ fn pinned_unsampled(
     overrides
         .columns
         .keys()
-        .chain(overrides.mask.keys())
         .filter(|name| !added.contains(&name.as_str()) && !sampled.contains(&name.as_str()))
         .cloned()
-        .collect::<std::collections::BTreeSet<String>>()
-        .into_iter()
         .collect()
 }
 

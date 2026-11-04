@@ -138,6 +138,12 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
                 )
             }),
     );
+    lines.extend(
+        spec.files
+            .iter()
+            .flat_map(|source| source.notes.iter())
+            .map(|note| format!("note    {note}")),
+    );
     lines.extend(table.output.as_ref().map(files_line));
     lines.extend(table.output.iter().map(|output| {
         format!(

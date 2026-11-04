@@ -88,6 +88,8 @@ pub struct FilesSource {
     pub encoding: FilesEncoding,
     /// Column names and patterns JSON and CSV reads check keys and headers against.
     pub checks: TextChecks,
+    /// Notes `plan` shows on the table, such as pinned columns no sampled file has.
+    pub notes: Vec<String>,
 }
 
 /// A table that matched a source's selection but is not loaded.
