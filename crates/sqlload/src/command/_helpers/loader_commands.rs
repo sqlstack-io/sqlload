@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::command::models::{Command, LoaderArgs, LoaderRequest};
+use std::collections::BTreeMap;
+
+use crate::command::models::{Command, LoaderArgs, LoaderRequest, StateAction};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
@@ -9,7 +11,8 @@ use crate::loader::main::debug_project::debug_project;
 use crate::loader::main::load_tables::load_tables;
 use crate::loader::main::plan_project::plan_project;
 use crate::loader::main::render_plan::render_plan;
-use crate::loader::models::{LoadRun, PlanOptions};
+use crate::loader::main::state_command::state_command;
+use crate::loader::models::{Destination, LoadRun, PlanOptions, StateKind, StateRequest};
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::project::models::ProjectConfig;
@@ -114,6 +117,9 @@ async fn run_command(
     let destinations = connect_targets(project)
         .await
         .map_err(|error| error.to_string())?;
+    if let Command::State { action } = command {
+        return run_state(project, &destinations, action).await;
+    }
     let (args, applies, loads) = match command {
         Command::Plan(args) => (args, false, false),
         Command::Apply(args) => (args, true, false),
@@ -171,5 +177,44 @@ async fn run_command(
     match ok {
         true => Ok(lines),
         false => Err(format!("{}\nsome tables were not loaded", lines.join("\n"))),
+    }
+}
+
+/// `sqlload state`: plan the selected tables (which reads their run logs), then show, verify, reconcile or reset them.
+async fn run_state(
+    project: &ProjectConfig,
+    destinations: &BTreeMap<String, Destination>,
+    action: StateAction,
+) -> Result<Vec<String>, String> {
+    let (kind, args, to) = match action {
+        StateAction::Show(args) => (StateKind::Show, args, None),
+        StateAction::Verify(args) => (StateKind::Verify, args, None),
+        StateAction::Reconcile(args) => (StateKind::Reconcile, args, None),
+        StateAction::Reset(reset) => (StateKind::Reset, reset.tables, reset.to),
+    };
+    if kind == StateKind::Reset && args.select.is_empty() {
+        return Err(
+            "state reset changes where tables read from next; name the sources or tables to reset"
+                .to_owned(),
+        );
+    }
+    let options = PlanOptions {
+        select: args.select,
+        ..PlanOptions::default()
+    };
+    let plan = plan_project(project, destinations, &options)
+        .await
+        .map_err(|error| error.to_string())?;
+    let request = StateRequest {
+        kind,
+        append: args.yes,
+        to,
+    };
+    let (lines, ok) = state_command(&plan, destinations, &request)
+        .await
+        .map_err(|error| error.to_string())?;
+    match ok {
+        true => Ok(lines),
+        false => Err(lines.join("\n")),
     }
 }

@@ -16,6 +16,8 @@ pub trait PythonHost: Send + Sync + std::fmt::Debug {
     fn discover(&self, root: &Path, python_paths: &[PathBuf]) -> Result<Vec<PythonSource>, String>;
     /// Call a table function and stream what it yields.
     fn read_table(&self, request: &TableRead) -> Result<Box<dyn BatchStream>, String>;
+    /// The position the table function last started for `table` left in `ctx.state`, as JSON text; `None` when it set none.
+    fn table_state(&self, table: &str) -> Result<Option<String>, String>;
     /// Close the clients the run built.
     fn finish(&self);
 }

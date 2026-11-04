@@ -23,6 +23,10 @@ pub struct TableRead {
     /// Connections left out of `connections` because targets write to them.
     pub withheld: Vec<String>,
     pub cursor: Option<CursorRead>,
+    /// Whether the table keeps its position in the run log, so `ctx.state` may be set.
+    pub logged: bool,
+    /// A logged table's position from its run log (`ctx.state`), as JSON text.
+    pub state: Option<String>,
     pub is_reload: bool,
 }
 

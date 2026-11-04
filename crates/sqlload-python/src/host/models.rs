@@ -56,6 +56,15 @@ impl PythonHost for ExtensionHost {
         .map_err(|error| error_text(&error))
     }
 
+    fn table_state(&self, table: &str) -> Result<Option<String>, String> {
+        Python::attach(|py| -> PyResult<Option<String>> {
+            py.import(RUNTIME_MODULE)?
+                .call_method1("table_state", (table,))?
+                .extract()
+        })
+        .map_err(|error| error_text(&error))
+    }
+
     fn finish(&self) {
         let closed = Python::attach(|py| -> PyResult<()> {
             py.import(RUNTIME_MODULE)?.call_method0("finish_run")?;

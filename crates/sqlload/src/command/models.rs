@@ -56,6 +56,47 @@ pub enum Command {
     },
     /// Show per-partition lag and committed offsets.
     Status,
+    /// Inspect or change the run log of `state = "logged"` tables.
+    State {
+        #[command(subcommand)]
+        action: StateAction,
+    },
+}
+
+/// What `sqlload state` does.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum StateAction {
+    /// Show each logged table's run log and current state; read-only.
+    Show(StateArgs),
+    /// Compare each logged table's logged cursor with the data; read-only, exits 1 when they disagree.
+    Verify(StateArgs),
+    /// Append a reconciliation adopting the data's position where the log disagrees (with --yes; otherwise only shows it).
+    Reconcile(StateArgs),
+    /// Append a reset: the next run reads from --to, or from the beginning with --clear (with --yes; otherwise only shows it).
+    Reset(ResetArgs),
+}
+
+/// Table selection for `sqlload state`, and confirmation for the commands that append.
+#[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
+pub struct StateArgs {
+    /// Sources or tables to select; all when empty.
+    pub select: Vec<String>,
+    /// Append the events instead of only showing them.
+    #[arg(long)]
+    pub yes: bool,
+}
+
+/// `sqlload state reset`'s position.
+#[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
+pub struct ResetArgs {
+    #[command(flatten)]
+    pub tables: StateArgs,
+    /// The position to read from next: a cursor value for tables with a cursor_column, else the `ctx.state` value as JSON.
+    #[arg(long, required_unless_present = "clear", conflicts_with = "clear")]
+    pub to: Option<String>,
+    /// Forget the position: the next run reads from the beginning (cursor_start, or everything).
+    #[arg(long)]
+    pub clear: bool,
 }
 
 /// Table selection and policy flags for loader commands.

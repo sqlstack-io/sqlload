@@ -212,6 +212,24 @@ pub struct PendingLoad {
     pub phase: PendingPhase,
     /// Keys below the table folder that repair deletes: the load's own files while writing, the replaced ones while replacing.
     pub deletes: Vec<String>,
+    /// The run record a logged table's load writes once its files are complete; repair writes it if the load stopped first.
+    pub run: Option<PendingRun>,
+}
+
+/// What a pending marker records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Marker {
+    pub phase: PendingPhase,
+    pub keys: Vec<String>,
+    pub run: Option<PendingRun>,
+}
+
+/// A run record waiting in a `replacing` marker: the record object's folder (in the same store), its name and its JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRun {
+    pub prefix: String,
+    pub name: String,
+    pub json: String,
 }
 
 /// A files table as listed: its trusted files by partition, loads to repair, and whether any data file exists.

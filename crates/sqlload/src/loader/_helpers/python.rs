@@ -28,13 +28,16 @@ use crate::write_sql::main::display_name::display_name;
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::stored_name::stored_name;
 use crate::write_sql::models::WriteMode;
+use arrow_array::Array;
 use arrow_array::{
     ArrayRef, Date32Array, RecordBatch, Scalar, StringArray, TimestampMicrosecondArray,
 };
 use arrow_cast::cast::{CastOptions, cast_with_options};
+use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
 use arrow_ord::cmp::{gt, gt_eq, lt};
+use arrow_ord::sort::{SortOptions, sort_to_indices};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::concat::concat_batches;
 use arrow_select::filter::filter_record_batch;
@@ -267,6 +270,39 @@ pub(crate) fn shareable_connection(project: &ProjectConfig, name: &str) -> bool 
         .is_some_and(|connection| FILES_CONNECTION_KINDS.contains(&connection.kind()))
 }
 
+/// The largest non-NULL value of cursor `column` (matched ignoring case) in `batch`, as cursor text; `None` when it has none.
+pub(crate) fn batch_cursor_max(
+    batch: &RecordBatch,
+    column: &str,
+    column_type: &ColumnType,
+) -> Result<Option<String>, String> {
+    let schema = batch.schema();
+    let Some((position, _)) = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .find(|(_, field)| field.name().eq_ignore_ascii_case(column))
+    else {
+        return Ok(None);
+    };
+    let values = batch.column(position);
+    let options = SortOptions {
+        descending: true,
+        nulls_first: false,
+    };
+    let sorted = sort_to_indices(values.as_ref(), Some(options), Some(1))
+        .map_err(|error| error.to_string())?;
+    let Some(index) = sorted.values().first().map(|index| *index as usize) else {
+        return Ok(None);
+    };
+    if values.is_null(index) {
+        return Ok(None);
+    }
+    let formatter = ArrayFormatter::try_new(values.as_ref(), &FormatOptions::default())
+        .map_err(|error| error.to_string())?;
+    cursor_text(&formatter.value(index).to_string(), column_type).map(Some)
+}
+
 /// The portable type of a column the crossing produced.
 pub(crate) fn field_type(field: &Field) -> ColumnType {
     let json = field
@@ -314,6 +350,19 @@ pub(crate) async fn start_read(
     request: TableRead,
 ) -> Result<Box<dyn BatchStream>, LoaderError> {
     tokio::task::spawn_blocking(move || host.read_table(&request))
+        .await
+        .map_err(|error| {
+            LoaderError::Invalid(format!("the table function's thread failed: {error}"))
+        })?
+        .map_err(LoaderError::Invalid)
+}
+
+/// The position the table function left in `ctx.state` once it finished, as JSON text.
+pub(crate) async fn final_state(
+    host: Arc<dyn PythonHost>,
+    table: String,
+) -> Result<Option<String>, LoaderError> {
+    tokio::task::spawn_blocking(move || host.table_state(&table))
         .await
         .map_err(|error| {
             LoaderError::Invalid(format!("the table function's thread failed: {error}"))

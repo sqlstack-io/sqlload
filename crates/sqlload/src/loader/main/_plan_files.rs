@@ -84,6 +84,7 @@ pub(in crate::loader) async fn plan_files_table(
         route: None,
         files: None,
         exists: state.exists,
+        logged: None,
         output: Some(FilesOutput {
             path,
             format: FilesFormat::Parquet,

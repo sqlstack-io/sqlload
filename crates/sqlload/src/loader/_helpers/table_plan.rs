@@ -6,6 +6,7 @@ use crate::loader::_helpers::sources::{FilesPlanRequest, files_read_columns, pla
 use crate::loader::_helpers::window::{Window, WindowRequest, cursor_window};
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::errors::LoaderError;
+use crate::loader::main::_logged_plan::with_run_log;
 use crate::loader::main::_plan_files::plan_files_table;
 use crate::loader::models::{Destination, PlanOptions, ReadWindow, TablePlan, TableSpec};
 use crate::postgres_source::main::plan_read::plan_read;
@@ -78,6 +79,7 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         files: None,
         output: None,
         exists: false,
+        logged: None,
     }
 }
 
@@ -98,10 +100,11 @@ pub(crate) async fn plan_table(
         ));
     }
     let plan = plan_table_once(spec, destination, options).await?;
-    match with_live_columns(spec, plan.live.as_deref()) {
-        Some(augmented) => plan_table_once(&augmented, destination, options).await,
-        None => Ok(plan),
-    }
+    let plan = match with_live_columns(spec, plan.live.as_deref()) {
+        Some(augmented) => plan_table_once(&augmented, destination, options).await?,
+        None => plan,
+    };
+    with_run_log(plan, destination, options).await
 }
 
 /// How a table's columns are read: by name (files and Python tables, whose batches carry the names) or by Postgres expression.
@@ -119,6 +122,7 @@ pub(crate) fn read_window(spec: &TableSpec, window: &Window) -> Option<ReadWindo
         from: window.bounds.0.clone(),
         to: window.bounds.1.clone(),
         inclusive: window.inclusive,
+        maximum: window.maximum.clone(),
     })
 }
 
@@ -147,6 +151,7 @@ async fn plan_table_once(
                 route: None,
                 files: None,
                 output: None,
+                logged: None,
             });
         }
     };
@@ -283,6 +288,7 @@ async fn plan_table_once(
         files,
         output: None,
         exists,
+        logged: None,
     })
 }
 

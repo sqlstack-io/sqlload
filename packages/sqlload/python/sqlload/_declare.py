@@ -4,6 +4,7 @@ A source is a module-level object tables attach to; a table is a decorated gener
 Both are found by scanning the modules under `python_paths`, so declaring one never runs it.
 """
 
+import json
 from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from logging import Logger
@@ -24,6 +25,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"cursor_start",
 		"lookback",
 		"on_schema_change",
+		"state",
 		"type_change_rebuild",
 		"unique_key",
 		"write_strategy",
@@ -206,6 +208,10 @@ class Context:
 	`lookback`, `cursor_start` on a first run, or `--start-cursor-*`); `None` means read everything.
 	Rows outside the window are skipped at load, so a function that ignores it still loads
 	correctly, only slower.
+
+	With `state="logged"`, `state` is the position the last successful run left (`None` on the
+	first run, after `--reload` or `sqlload state reset --clear`); set `ctx.state` to the new
+	position (any JSON value, such as an API sync token) and SQLLoad records it with the data.
 	"""
 
 	def __init__(
@@ -221,6 +227,8 @@ class Context:
 		cursor_inclusive: bool = True,
 		is_reload: bool = False,
 		client_factory: Callable[["Context"], Any] | None = None,
+		logged: bool = False,
+		state: Any = None,
 	) -> None:
 		self.table = table
 		self.source = source
@@ -233,6 +241,20 @@ class Context:
 		self.is_reload = is_reload
 		self._client_factory = client_factory
 		self._client: Any = None
+		self._logged = logged
+		self._state = state
+		self.started_state = json.dumps(state)
+
+	@property
+	def state(self) -> Any:
+		"""The logged position (`state="logged"` tables): where the last successful run left off."""
+		return self._state
+
+	@state.setter
+	def state(self, value: Any) -> None:
+		if not self._logged:
+			raise AttributeError(f"ctx.state needs state='logged' on table {self.table}")
+		self._state = value
 
 	@property
 	def connection(self) -> Connection:

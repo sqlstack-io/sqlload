@@ -274,6 +274,9 @@ pub struct TableSettings {
     /// Let a Python table's `replace` (or `--reload`) empty the table when its function yields no rows.
     #[serde(default)]
     pub allow_empty: Option<bool>,
+    /// Where a Python table's position is kept: derived from the data (default) or in the run log.
+    #[serde(default)]
+    pub state: Option<StateMode>,
 }
 
 /// One table's settings: everything a source can set, plus what only a table can.
@@ -339,6 +342,17 @@ impl std::fmt::Display for WriteStrategy {
             Self::Replace => "replace",
         })
     }
+}
+
+/// Where a table's position between runs is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateMode {
+    /// Derived from the data: the destination's cursor maximum.
+    #[default]
+    Stateless,
+    /// Recorded in the append-only run log (`_sqlload_runs`), for positions the data cannot carry.
+    Logged,
 }
 
 /// Where a table's column definitions come from.

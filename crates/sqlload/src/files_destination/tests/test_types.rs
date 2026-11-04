@@ -123,8 +123,9 @@ pub(crate) struct CheckWindowTestCase {
 pub(crate) struct MarkerTestCase {
     pub(crate) description: &'static str,
     pub(crate) text: String,
-    /// The phase and keys read, or the error text.
-    pub(crate) expected_marker: Result<(PendingPhase, &'static [&'static str]), &'static str>,
+    /// The phase, keys and waiting run record (prefix, name and JSON joined by `|`) read, or the error text.
+    pub(crate) expected_marker:
+        Result<(PendingPhase, &'static [&'static str], Option<&'static str>), &'static str>,
 }
 
 pub(crate) struct CursorMaximumTestCase {
@@ -147,4 +148,14 @@ pub(crate) struct RepairTestCase {
     pub(crate) keys: &'static [&'static str],
     /// Keys left after the repair.
     pub(crate) expected_left: &'static [&'static str],
+}
+
+pub(crate) struct CommittedRepairTestCase {
+    pub(crate) description: &'static str,
+    /// Files in the table folder, the load's and the ones it replaces.
+    pub(crate) keys: &'static [&'static str],
+    pub(crate) replaced: &'static [&'static str],
+    pub(crate) expected_left: &'static [&'static str],
+    /// The run record object's text after repair.
+    pub(crate) expected_record: &'static str,
 }

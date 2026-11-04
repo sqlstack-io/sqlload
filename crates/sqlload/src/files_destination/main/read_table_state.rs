@@ -24,21 +24,21 @@ pub async fn read_table_state(
     let mut pending: Vec<PendingLoad> = Vec::new();
     for marker in list_files(&markers).await? {
         let text = read_file(&markers, &marker.relative_key).await?;
-        let (phase, replaced) =
-            parse_marker(&String::from_utf8_lossy(&text)).map_err(|reason| {
-                FilesDestinationError::Write {
-                    key: format!("{}{}", markers.location, marker.relative_key),
-                    reason,
-                }
-            })?;
-        let deletes = match phase {
+        let marker_read = parse_marker(&String::from_utf8_lossy(&text)).map_err(|reason| {
+            FilesDestinationError::Write {
+                key: format!("{}{}", markers.location, marker.relative_key),
+                reason,
+            }
+        })?;
+        let deletes = match marker_read.phase {
             PendingPhase::Writing => files_of(&files, &marker.relative_key),
-            PendingPhase::Replacing => replaced,
+            PendingPhase::Replacing => marker_read.keys,
         };
         pending.push(PendingLoad {
             load_id: marker.relative_key,
-            phase,
+            phase: marker_read.phase,
             deletes,
+            run: marker_read.run,
         });
     }
     let dropped: BTreeSet<&str> = pending

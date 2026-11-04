@@ -1,16 +1,21 @@
 //! Load one table: read its source (a Python table through the host), stage the rows and apply the write strategy.
 
 use crate::loader::_helpers::destination::{cleanup_staging, execute, finish_staging, stage_batch};
+use crate::loader::_helpers::run_log::{ensure_runs_table, fold_maximum, log_empty_run};
 use crate::loader::_helpers::sources::{open_source, read_source};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_files::load_files_table;
 use crate::loader::main::_load_python::read_python_table;
 use crate::loader::models::{
-    Destination, LoadRun, PythonLoad, PythonRead, SourceReader, StagingSession, TableLoaded,
-    TablePlan,
+    Destination, LoadRun, PythonLoad, PythonRead, RunEntry, SourceReader, StagingSession,
+    TableLoaded, TablePlan,
 };
 use crate::masking::main::mask_batch::mask_batch;
+use crate::run_log::main::insert_run::insert_run;
+use crate::run_log::main::logged_statements::logged_statements;
+use crate::run_log::main::runs_table::runs_table;
+use crate::run_log::models::RunOutcome;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::time_text::main::now_utc_text::now_utc_text;
 use crate::write_sql::main::display_name::display_name;
@@ -53,6 +58,7 @@ pub(in crate::loader) async fn load_one(
             table: planned.clone(),
             changes: Vec::new(),
             note: None,
+            run: None,
         },
     };
     let table = &read.table;
@@ -60,7 +66,9 @@ pub(in crate::loader) async fn load_one(
         (Destination::Files(_), Some(output)) => output.path.folder.to_string(),
         _ => display_name(&table.spec.destination, table.spec.warehouse),
     };
+    let run = read.run.as_ref();
     let Some(reader) = &read.reader else {
+        log_empty_run(run, table, destination).await?;
         return Ok((
             name,
             TableLoaded {
@@ -71,14 +79,16 @@ pub(in crate::loader) async fn load_one(
         ));
     };
     let rows = match (destination, &table.output) {
-        (Destination::Files(_), Some(output)) => load_files_table(reader, table, output).await?,
+        (Destination::Files(_), Some(output)) => {
+            load_files_table(reader, table, output, run).await?
+        }
         (Destination::Files(_), None) => {
             return Err(LoaderError::Invalid(format!(
                 "{}: a files target table has no files planned",
                 table.spec.destination.table
             )));
         }
-        _ => load_table(reader, table, destination).await?,
+        _ => load_table(reader, table, destination, run).await?,
     };
     Ok((
         name,
@@ -94,8 +104,12 @@ async fn load_table(
     reader: &SourceReader,
     table: &TablePlan,
     destination: &Destination,
+    run: Option<&RunEntry>,
 ) -> Result<u64, LoaderError> {
     let spec = &table.spec;
+    if run.is_some() {
+        ensure_runs_table(table, destination).await?;
+    }
     let load_id = uuid::Uuid::new_v4().to_string();
     let loaded_at = now_utc_text();
     let data_columns: Vec<DesiredColumn> = table
@@ -116,22 +130,24 @@ async fn load_table(
         loaded_at,
         parts: 0,
     };
-    let (session, written) = stage_and_write(reader, table, destination, session).await;
+    let (session, written) = stage_and_write(reader, table, (destination, run), session).await;
     cleanup_staging(destination, &session, spec.warehouse).await;
     written
 }
 
-/// Read the source into the staging table, then apply the write strategy in one transaction.
+/// Read the source into the staging table, then apply the write strategy in one transaction, with a logged table's run record in it.
 async fn stage_and_write(
     reader: &SourceReader,
     table: &TablePlan,
-    destination: &Destination,
+    (destination, run): (&Destination, Option<&RunEntry>),
     mut session: StagingSession,
 ) -> (StagingSession, Result<u64, LoaderError>) {
     let spec = &table.spec;
+    let mut loaded_maximum: Option<String> = None;
     let written = async {
         let rows = read_source(reader, table, async |batch| {
             session.parts += 1;
+            loaded_maximum = fold_maximum(run, &batch, loaded_maximum.take())?;
             let batch = mask_batch(batch, &spec.masked)?;
             stage_batch(destination, &session, batch)
                 .await
@@ -150,6 +166,21 @@ async fn stage_and_write(
             },
             &session.staging,
         );
+        let statements = match run {
+            Some(run) => {
+                let record = run.finished(RunOutcome {
+                    run_id: session.load_id.clone(),
+                    recorded_at: now_utc_text(),
+                    rows,
+                    loaded_maximum: loaded_maximum.clone(),
+                    files: Vec::new(),
+                });
+                let insert = insert_run(&runs_table(&spec.destination), &record, spec.warehouse)
+                    .map_err(LoaderError::Invalid)?;
+                logged_statements(statements, insert, spec.warehouse)
+            }
+            None => statements,
+        };
         execute(destination, statements).await?;
         Ok(rows)
     }
