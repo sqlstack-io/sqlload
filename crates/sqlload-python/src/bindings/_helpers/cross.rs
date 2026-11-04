@@ -10,7 +10,7 @@ use crate::bindings::models::BatchStream;
 use crate::crossing::main::table_batches::table_batches;
 use crate::crossing::models::{CrossingOptions, DictCrossing, PanicSite};
 
-/// Start reading `source` (any iterable of table data); `crossing` is `auto`, `walk` or `serialise`; at most `max_queued + parse_threads` batches (a yielded JSON or Arrow object counting as one) wait between the generator and the consumer, besides the one being gathered; `panic_at` (`producer` or `parser`) makes a crossing thread panic, for tests.
+/// Start reading `source` (any iterable of table data); `crossing` is `auto`, `walk` or `serialise`; at most `max_queued + parse_threads` batches (a yielded JSON or Arrow object counting as one) wait between the generator and the consumer, besides the one being gathered; `panic_at` (`producer` or `parser`) makes a crossing thread panic, for tests. When the read ends (finished, failed or dropped), the iterator's `close()` is called if it has one, including an iterator passed in directly (`iter(x) is x`, such as a database cursor or a file).
 #[pyfunction]
 #[pyo3(signature = (source, *, batch_rows = DEFAULT_BATCH_ROWS, max_queued = DEFAULT_MAX_QUEUED, crossing = "auto", parse_threads = None, panic_at = None))]
 pub(crate) fn cross(

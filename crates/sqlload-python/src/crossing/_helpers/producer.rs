@@ -133,13 +133,16 @@ impl<'py> Producer<'py> {
         Err(PyTypeError::new_err(unsupported(item)))
     }
 
-    /// A list of rows: crossed as it is when it fills a batch by itself, else gathered with other rows.
+    /// A list of rows: crossed as it is when it fills a batch by itself, else gathered with other rows, each dict copied (as a single dict is) so a generator may refill it for the next page.
     fn take_list(&mut self, rows: &Bound<'py, PyList>) -> PyResult<bool> {
         if self.pending.is_empty() && rows.len() >= self.options.batch_rows {
             return self.cross_rows(rows);
         }
         for row in rows.iter() {
-            self.pending.append(row)?;
+            match row.cast::<PyDict>() {
+                Ok(dict) => self.pending.append(dict.copy()?)?,
+                Err(_) => self.pending.append(row)?,
+            }
         }
         self.flush_full()
     }

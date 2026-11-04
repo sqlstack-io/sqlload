@@ -18,6 +18,10 @@ def cross(
 	At most `max_queued + parse_threads` batches wait between the generator and the consumer, besides
 	the one being gathered; each yielded JSON bytes or Arrow object counts as one. `panic_at` makes a
 	crossing thread panic, to test that the read fails.
+
+	When the read ends (finished, failed or dropped), `close()` is called on the iterator if it has
+	one, including an iterator passed in directly (`iter(x) is x`, such as a database cursor or a
+	file).
 	"""
 
 class JsonData:

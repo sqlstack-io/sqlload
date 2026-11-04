@@ -272,6 +272,41 @@ def test_given_one_dict_reused_for_every_row_when_crossed_then_each_row_keeps_it
 	assert read(reused(), batch_rows=10, crossing=crossing).column("a").to_pylist() == list(range(25))
 
 
+@pytest.mark.parametrize("crossing", CROSSINGS)
+def test_given_the_same_dicts_refilled_for_every_page_when_crossed_then_each_row_keeps_its_values(crossing: str) -> None:
+	def pages() -> Iterator[list[dict[str, int]]]:
+		page: list[dict[str, int]] = [{}, {}, {}]
+		for number in range(4):
+			for position, row in enumerate(page):
+				row["a"] = number * 3 + position
+			yield page
+
+	assert read(pages(), batch_rows=10, crossing=crossing).column("a").to_pylist() == list(range(12))
+
+
+class Cursor:
+	"""An iterator that is its own iterator, like a database cursor."""
+
+	def __init__(self) -> None:
+		self.rows = iter([{"a": 1}, {"a": 2}])
+		self.closed = threading.Event()
+
+	def __iter__(self) -> "Cursor":
+		return self
+
+	def __next__(self) -> dict[str, int]:
+		return next(self.rows)
+
+	def close(self) -> None:
+		self.closed.set()
+
+
+def test_given_an_iterator_passed_directly_when_the_read_ends_then_it_is_closed() -> None:
+	cursor = Cursor()
+	assert read(cursor).column("a").to_pylist() == [1, 2]
+	assert cursor.closed.wait(2)
+
+
 @pytest.mark.parametrize("site", ["producer", "parser"])
 @pytest.mark.parametrize("crossing", CROSSINGS)
 def test_given_a_crossing_thread_that_panics_when_read_then_the_read_fails(site: str, crossing: str) -> None:
