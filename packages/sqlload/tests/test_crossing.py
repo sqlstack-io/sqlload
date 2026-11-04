@@ -1,12 +1,15 @@
 """The crossing from table generators into Arrow, through the `sqlload._native.cross` test hook."""
 
+import dataclasses
+import enum
 import json as stdlib_json
 import random
 import string
 import threading
 import time
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 import orjson
@@ -196,3 +199,121 @@ def test_given_polars_and_pandas_frames_when_crossed_then_they_match_pyarrow() -
 	assert read(iter([polars.DataFrame(data)])).equals(expected)
 	assert read(iter([pandas.DataFrame(data)])).to_pylist() == expected.to_pylist()
 	assert read(iter([pa.record_batch(data)])).equals(expected)
+
+
+class Colour(enum.Enum):
+	RED = "red"
+	NESTED = {"code": 7}
+
+
+@dataclasses.dataclass
+class Point:
+	x: int
+	label: Colour
+	_hidden: int = 0
+
+
+def numpy_rows() -> list[dict[str, Any]]:
+	"""Rows of values orjson has its own rules for: numpy scalars, enums, dataclasses, dates and decimals, also nested."""
+	np = pytest.importorskip("numpy")
+	london = timezone(timedelta(hours=1))
+	return [
+		{
+			"i": np.int64(i),
+			"f": np.float64(i + 0.5),
+			"f32": np.float32(0.1),
+			"b": np.bool_(i % 2 == 0),
+			"u": np.uint64(2**64 - 1),
+			"colour": Colour.RED,
+			"point": Point(i, Colour.NESTED),
+			"at": datetime(2026, 1, 2, 3, 4, 5, 123, tzinfo=london),
+			"naive": datetime(2026, 1, 2, 3, 4, 5),
+			"day": date(2026, 1, 2),
+			"price": Decimal("1.10"),
+			"nested": {"n": np.int64(i), "c": Colour.RED, "d": date(2026, 1, 2), "p": Decimal("2.50"), "a": np.array([1.5, 2.0], dtype=np.float32)},
+			"nan": np.float64("nan"),
+			"when": np.datetime64("2021-01-01T00:00:00.123456789"),
+		}
+		for i in range(5)
+	]
+
+
+def test_given_orjson_typed_values_when_walked_or_serialised_then_the_tables_are_identical() -> None:
+	rows = numpy_rows()
+	walked = read(iter(rows), crossing="walk")
+	assert read(iter(rows), crossing="serialise").equals(walked, check_metadata=True)
+	types = {field.name: str(field.type) for field in walked.schema}
+	assert types["i"] == "int64" and types["f"] == "double" and types["b"] == "bool"
+	assert types["at"] == "timestamp[us, tz=UTC]"
+	assert walked.column("f32").to_pylist()[0] == 0.1
+	assert walked.column("colour").to_pylist()[0] == "red"
+	assert walked.column("point").to_pylist()[0] == '{"x":0,"label":{"code":7}}'
+	assert walked.column("price").to_pylist()[0] == "1.10"
+	assert walked.column("nested").to_pylist()[0] == '{"n":0,"c":"red","d":"2026-01-02","p":"2.50","a":[1.5,2.0]}'
+
+
+def test_given_a_batch_orjson_refuses_when_serialised_then_the_stream_types_as_if_walked() -> None:
+	rows = numpy_rows()
+	rows[3]["huge"] = 2**65
+	options = {"batch_rows": 2, "parse_threads": 1}
+	serialised = read(iter(rows), crossing="serialise", **options)
+	assert serialised.equals(read(iter(rows), crossing="walk", **options), check_metadata=True)
+	assert serialised.column("huge").to_pylist() == [None, None, None, str(2**65), None]
+
+
+@pytest.mark.parametrize("crossing", CROSSINGS)
+def test_given_one_dict_reused_for_every_row_when_crossed_then_each_row_keeps_its_values(crossing: str) -> None:
+	def reused() -> Iterator[dict[str, int]]:
+		row: dict[str, int] = {}
+		for i in range(25):
+			row["a"] = i
+			yield row
+
+	assert read(reused(), batch_rows=10, crossing=crossing).column("a").to_pylist() == list(range(25))
+
+
+@pytest.mark.parametrize("site", ["producer", "parser"])
+@pytest.mark.parametrize("crossing", CROSSINGS)
+def test_given_a_crossing_thread_that_panics_when_read_then_the_read_fails(site: str, crossing: str) -> None:
+	rows = ({"a": i} for i in range(100))
+	with pytest.raises(ValueError, match=f"panicked: injected {site} panic"):
+		read(rows, batch_rows=10, crossing=crossing, panic_at=site)
+
+
+@pytest.mark.parametrize(("max_queued", "parse_threads"), [(1, 1), (4, 1), (2, 3), (4, 4)])
+def test_given_a_slow_consumer_when_the_generator_runs_ahead_then_queued_batches_stay_within_the_bound(max_queued: int, parse_threads: int) -> None:
+	yielded = [0]
+
+	def endless() -> Iterator[dict[str, int]]:
+		while True:
+			yielded[0] += 1
+			yield {"a": yielded[0]}
+
+	stream = _native.cross(endless(), batch_rows=10, max_queued=max_queued, parse_threads=parse_threads)
+	consumed = next(stream).num_rows
+	time.sleep(0.5)
+	bound = max_queued + parse_threads
+	assert stream.stats()["batches"] - 1 <= bound
+	assert yielded[0] - consumed <= (bound + 1) * 10
+
+
+def test_given_a_consumer_that_stops_early_when_dropped_then_the_generator_is_closed() -> None:
+	closed = threading.Event()
+
+	def endless() -> Iterator[dict[str, int]]:
+		try:
+			while True:
+				yield {"a": 1}
+		finally:
+			closed.set()
+
+	stream = _native.cross(endless(), batch_rows=10, max_queued=1, parse_threads=1)
+	next(stream)
+	del stream
+	assert closed.wait(2)
+
+
+def test_given_a_generator_that_finishes_when_read_then_the_stream_ends_and_stays_ended() -> None:
+	stream = _native.cross(iter([{"a": 1}]))
+	assert [batch.num_rows for batch in stream] == [1]
+	assert list(stream) == []

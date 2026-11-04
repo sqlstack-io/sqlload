@@ -11,8 +11,14 @@ def cross(
 	max_queued: int = 4,
 	crossing: Literal["auto", "walk", "serialise"] = "auto",
 	parse_threads: int | None = None,
+	panic_at: Literal["producer", "parser"] | None = None,
 ) -> BatchStream:
-	"""Read a table generator into Arrow batches (the crossing's test hook)."""
+	"""Read a table generator into Arrow batches (the crossing's test hook).
+
+	At most `max_queued + parse_threads` batches wait between the generator and the consumer, besides
+	the one being gathered; each yielded JSON bytes or Arrow object counts as one. `panic_at` makes a
+	crossing thread panic, to test that the read fails.
+	"""
 
 class JsonData:
 	def __new__(

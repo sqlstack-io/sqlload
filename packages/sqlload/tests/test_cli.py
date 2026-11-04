@@ -1,8 +1,13 @@
 """The `sqlload` console script runs the native command line in-process."""
 
+import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 import sqlload
 
@@ -30,3 +35,23 @@ def test_given_a_bad_flag_when_run_then_the_usage_error_exits_2() -> None:
 
 def test_given_the_version_when_imported_then_it_matches_the_package() -> None:
 	assert run("--version").stdout.strip() == f"sqlload {sqlload.__version__}"
+
+
+def test_given_a_command_waiting_on_the_network_when_interrupted_then_it_ends_at_once(project: Path, tmp_path: Path) -> None:
+	project.write_text(project.read_text().replace('host = "localhost"', 'host = "10.255.255.1"'))
+	home = tmp_path / "home"
+	home.mkdir()
+	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home), "XDG_CACHE_HOME": str(home), "XDG_DATA_HOME": str(home)}
+	process = subprocess.Popen([sqlload.executable(), "debug", "-c", str(project)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+	time.sleep(2)
+	if process.poll() is not None:
+		pytest.skip("the unroutable address failed at once here, so there is nothing to interrupt")
+	process.send_signal(signal.SIGINT)
+	started = time.monotonic()
+	try:
+		_, stderr = process.communicate(timeout=10)
+	finally:
+		process.kill()
+	assert time.monotonic() - started < 3
+	assert process.returncode in (-signal.SIGINT, 128 + signal.SIGINT)
+	assert "Traceback" not in stderr

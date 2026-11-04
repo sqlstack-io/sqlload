@@ -1,5 +1,5 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-use std::sync::mpsc::{SendError, SyncSender};
 use std::time::Instant;
 
 use arrow_array::RecordBatch;
@@ -7,67 +7,106 @@ use arrow_array::ffi_stream::RecordBatchStreamReader;
 use arrow_pyarrow::FromPyArrow;
 use pyo3::exceptions::{PyImportError, PyTypeError};
 use pyo3::pybacked::PyBackedBytes;
-use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyList, PyListMethods, PyString, PyTypeMethods};
+use pyo3::types::{
+    PyAnyMethods, PyBytes, PyDict, PyDictMethods, PyList, PyListMethods, PyString, PyTypeMethods,
+};
 use pyo3::{Bound, Py, PyAny, PyResult, Python};
 use sqlload::row_batches::models::{JsonLayout, JsonRead};
 
 use crate::bindings::models::JsonData;
+use crate::crossing::_helpers::parser::{panic_if, panicked};
 use crate::crossing::_helpers::walk::walk_rows;
 use crate::crossing::errors::CrossError;
-use crate::crossing::models::{Crossed, CrossingOptions, CrossingStats, DictCrossing};
+use crate::crossing::models::{
+    Crossed, CrossingOptions, CrossingStats, DictCrossing, Dispatch, PanicSite,
+};
 
 /// Where the generator's items go: dict yields gather in `pending` until a batch is full.
 struct Producer<'py> {
     py: Python<'py>,
     options: CrossingOptions,
-    sender: SyncSender<Crossed>,
+    dispatch: Dispatch,
     stats: Arc<CrossingStats>,
     pending: Bound<'py, PyList>,
-    dumps: Option<Bound<'py, PyAny>>,
+    /// orjson's `dumps` and its keyword arguments, when dicts cross serialised.
+    dumps: Option<(Bound<'py, PyAny>, Bound<'py, PyDict>)>,
 }
 
-/// Iterate `source` with the GIL held, sending each crossed batch to `sender` with the GIL released; an error ends the read.
+/// Iterate `source` with the GIL held, dispatching each crossed batch with the GIL released, then close it; an error or a panic ends the read.
 pub(crate) fn produce(
     source: Py<PyAny>,
     options: CrossingOptions,
-    sender: SyncSender<Crossed>,
+    dispatch: Dispatch,
     stats: Arc<CrossingStats>,
 ) {
+    let fallback = dispatch.clone();
     Python::attach(|py| {
         let mut producer = Producer {
             py,
             options,
-            sender,
+            dispatch,
             stats,
             pending: PyList::empty(py),
             dumps: None,
         };
-        let read = orjson_dumps(py, options.dict_crossing).and_then(|dumps| {
-            producer.dumps = dumps;
-            producer.run(source.bind(py))
-        });
-        if let Err(error) = read {
-            producer.send(Crossed::Failed(CrossError::Python(error)));
+        let mut iterator = None;
+        let read = catch_unwind(AssertUnwindSafe(|| {
+            producer.dumps = orjson_dumps(py, options.dict_crossing)?;
+            let items = source.bind(py).try_iter()?.into_any();
+            iterator = Some(items.clone());
+            producer.run(&items)
+        }));
+        let failed = match read {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(CrossError::Python(error)),
+            Err(payload) => Some(panicked(&payload)),
+        };
+        if let Some(iterator) = iterator {
+            close(&iterator);
+        }
+        if let Some(error) = failed {
+            py.detach(|| fallback.send(Crossed::Failed(error)));
         }
     });
 }
 
+/// Close a generator the read has stopped iterating, so its `finally` blocks run now.
+fn close(iterator: &Bound<'_, PyAny>) {
+    let py = iterator.py();
+    let closed = match iterator.hasattr("close") {
+        Ok(true) => iterator.call_method0("close").map(|_| ()),
+        Ok(false) => Ok(()),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = closed {
+        error.write_unraisable(py, Some(iterator));
+    }
+}
+
 impl<'py> Producer<'py> {
-    fn run(&mut self, source: &Bound<'py, PyAny>) -> PyResult<()> {
-        for item in source.try_iter()? {
+    fn run(&mut self, items: &Bound<'py, PyAny>) -> PyResult<()> {
+        let mut first = true;
+        for item in items.try_iter()? {
             let item = item?;
             if !self.take(&item)? {
                 return Ok(());
             }
+            if first {
+                panic_if(self.options.panic_at, PanicSite::Producer);
+            }
+            first = false;
         }
-        self.flush()?;
+        if self.flush()? {
+            let dispatch = &self.dispatch;
+            self.py.detach(|| dispatch.finish());
+        }
         Ok(())
     }
 
     /// Handle one yielded item; `false` once the consumer has gone.
     fn take(&mut self, item: &Bound<'py, PyAny>) -> PyResult<bool> {
-        if item.is_instance_of::<PyDict>() {
-            self.pending.append(item)?;
+        if let Ok(row) = item.cast::<PyDict>() {
+            self.pending.append(row.copy()?)?;
             return self.flush_full();
         }
         if let Ok(rows) = item.cast::<PyList>() {
@@ -124,7 +163,7 @@ impl<'py> Producer<'py> {
     fn cross_rows(&mut self, rows: &Bound<'py, PyList>) -> PyResult<bool> {
         let started = Instant::now();
         let serialised = match &self.dumps {
-            Some(dumps) => serialise(dumps, rows)?,
+            Some((dumps, options)) => serialise(dumps, options, rows)?,
             None => None,
         };
         let crossed = match serialised {
@@ -142,35 +181,40 @@ impl<'py> Producer<'py> {
         Ok(self.send(crossed))
     }
 
-    /// Send `crossed` with the GIL released, waiting while the queue is full; `false` once the consumer has gone.
+    /// Dispatch `crossed` with the GIL released, waiting while the queue is full; `false` once the consumer has gone.
     fn send(&self, crossed: Crossed) -> bool {
-        let sender = &self.sender;
-        self.py.detach(|| match sender.send(crossed) {
-            Ok(()) => true,
-            Err(SendError(_)) => false,
-        })
+        let dispatch = &self.dispatch;
+        self.py.detach(|| dispatch.send(crossed))
     }
 }
 
-/// orjson's `dumps` when dicts cross serialised and orjson is installed; without it they are walked.
-fn orjson_dumps(py: Python<'_>, crossing: DictCrossing) -> PyResult<Option<Bound<'_, PyAny>>> {
-    match crossing {
-        DictCrossing::Walk => Ok(None),
+/// orjson's `dumps` and its options (numpy values as numbers, `str()` for unknown types) when dicts cross serialised and orjson is installed; without it they are walked.
+fn orjson_dumps(
+    py: Python<'_>,
+    crossing: DictCrossing,
+) -> PyResult<Option<(Bound<'_, PyAny>, Bound<'_, PyDict>)>> {
+    let orjson = match crossing {
+        DictCrossing::Walk => return Ok(None),
         DictCrossing::Serialise => match py.import("orjson") {
-            Ok(orjson) => orjson.getattr("dumps").map(Some),
-            Err(error) if error.is_instance_of::<PyImportError>(py) => Ok(None),
-            Err(error) => Err(error),
+            Ok(orjson) => orjson,
+            Err(error) if error.is_instance_of::<PyImportError>(py) => return Ok(None),
+            Err(error) => return Err(error),
         },
-    }
+    };
+    let options = PyDict::new(py);
+    options.set_item("default", py.get_type::<PyString>())?;
+    options.set_item("option", orjson.getattr("OPT_SERIALIZE_NUMPY")?)?;
+    Ok(Some((orjson.getattr("dumps")?, options)))
 }
 
-/// `rows` as JSON bytes from orjson (`str()` for types it has no form for); `None` when orjson refuses them (an integer beyond 64 bits, say), so they are walked instead.
+/// `rows` as JSON bytes from orjson; `None` when orjson refuses them (an integer beyond 64 bits, say), so they are walked instead.
 fn serialise<'py>(
     dumps: &Bound<'py, PyAny>,
+    options: &Bound<'py, PyDict>,
     rows: &Bound<'py, PyList>,
 ) -> PyResult<Option<PyBackedBytes>> {
     let py = rows.py();
-    match dumps.call1((rows, py.get_type::<PyString>())) {
+    match dumps.call((rows,), Some(options)) {
         Ok(bytes) => Ok(Some(PyBackedBytes::from(bytes.cast_into::<PyBytes>()?))),
         Err(error) if error.is_instance_of::<PyTypeError>(py) => Ok(None),
         Err(error) => Err(error),

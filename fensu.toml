@@ -108,3 +108,9 @@ rule = "FPRSS120"
 path = "crates/sqlload-python/src/bindings/_helpers/cross.rs"
 symbols = ["cross"]
 reason = "PyO3 maps each of the Python function's keyword-only arguments to one Rust parameter."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSH003"
+path = "crates/sqlload-python/src/crossing/_helpers/parser.rs"
+symbols = ["panic_if"]
+reason = "The crossing's test hook panics on purpose, to prove a panicking crossing thread fails the read instead of ending it early."

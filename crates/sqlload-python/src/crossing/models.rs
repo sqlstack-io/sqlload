@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::time::Duration;
 
 use arrow_array::RecordBatch;
@@ -31,6 +31,40 @@ pub struct CrossingOptions {
     pub dict_crossing: DictCrossing,
     /// Threads parsing crossed batches into Arrow at once.
     pub parse_threads: usize,
+    /// A thread made to panic, to test that a panic fails the read (the crossing's test hook).
+    pub panic_at: Option<PanicSite>,
+}
+
+/// A crossing thread that can be made to panic for tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanicSite {
+    /// The thread iterating the generator, after its first item.
+    Producer,
+    /// A thread parsing crossed batches.
+    Parser,
+}
+
+/// One message of a piece's parsed batches, or of the whole read; a channel closed before `Done` means a thread stopped unexpectedly.
+#[derive(Debug)]
+pub(crate) enum Parsed {
+    Batch(RecordBatch),
+    Failed(CrossError),
+    Done,
+}
+
+/// A piece waiting for a parser thread, and where its batches go.
+#[derive(Debug)]
+pub(crate) struct ParseJob {
+    pub(crate) crossed: Crossed,
+    pub(crate) sender: SyncSender<Parsed>,
+}
+
+/// Hands crossed pieces to the parser threads, registering each in yield order with the thread that passes batches on.
+#[derive(Debug, Clone)]
+pub(crate) struct Dispatch {
+    /// Each piece's batch channel in yield order; `None` marks the end of the generator.
+    pub(crate) order: SyncSender<Option<Receiver<Parsed>>>,
+    pub(crate) jobs: Sender<ParseJob>,
 }
 
 /// One piece of yielded data, crossed into Rust and waiting to be parsed.
@@ -100,22 +134,39 @@ pub enum Polled {
 /// The record batches of one table generator, each typed by inference, and the schema merged from all so far.
 #[derive(Debug)]
 pub struct TableBatches {
-    pub(crate) receiver: Receiver<Result<RecordBatch, CrossError>>,
+    pub(crate) receiver: Receiver<Parsed>,
     pub(crate) schema: Schema,
     pub(crate) stats: Arc<CrossingStats>,
+    /// Whether the read's end marker has arrived.
+    pub(crate) finished: bool,
 }
 
 impl TableBatches {
     /// The next batch, waiting at most `timeout`; call it with the GIL released.
     pub fn poll(&mut self, timeout: Duration) -> Polled {
+        if self.finished {
+            return Polled::Finished;
+        }
         match self.receiver.recv_timeout(timeout) {
-            Ok(Ok(batch)) => {
+            Ok(Parsed::Batch(batch)) => {
                 self.schema = merge_schema(&self.schema, &batch.schema());
                 Polled::Batch(batch)
             }
-            Ok(Err(error)) => Polled::Failed(error),
+            Ok(Parsed::Failed(error)) => {
+                self.finished = true;
+                Polled::Failed(error)
+            }
+            Ok(Parsed::Done) => {
+                self.finished = true;
+                Polled::Finished
+            }
             Err(RecvTimeoutError::Timeout) => Polled::Pending,
-            Err(RecvTimeoutError::Disconnected) => Polled::Finished,
+            Err(RecvTimeoutError::Disconnected) => {
+                self.finished = true;
+                Polled::Failed(CrossError::Data(
+                    "the crossing stopped before the table generator finished".to_owned(),
+                ))
+            }
         }
     }
 

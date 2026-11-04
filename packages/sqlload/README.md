@@ -12,3 +12,19 @@ The package is a native extension (CPython 3.10+, one abi3 wheel per platform fo
 aarch64 and macOS arm64). Its `sqlload` command runs in-process, so Python sources defined with
 `sqlload.source` and `sqlload.table` run in the same process as the loader. The standalone
 executable without Python is the `sqlload-cli` package.
+
+## Table data types
+
+A table function's dicts are typed like JSON: numbers, booleans and text keep their types, nested
+dicts and lists become JSON, and other values become text, so `date`, `datetime` and `Decimal`
+values arrive as text (datetimes with a UTC offset become timestamps). Enums give their values,
+dataclasses become JSON objects, and numpy numbers count as numbers. Arrow input (pyarrow, polars,
+pandas) keeps its own types.
+
+## Upgrading from 0.4
+
+Both this package and `sqlload-cli` install a `sqlload` command. Remove the old one first:
+
+```sh
+pip uninstall sqlload-cli
+```
