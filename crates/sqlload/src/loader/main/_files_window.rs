@@ -1,0 +1,129 @@
+//! Choose a files table's cursor window: whole partitions for delete_insert, rows after the newest files' maximum for append.
+
+use crate::column_types::models::ColumnType;
+use crate::files_destination::main::cursor_maximum::cursor_maximum;
+use crate::files_destination::main::partition_window::partition_window;
+use crate::files_destination::models::PartitionWindowRequest;
+use crate::loader::_helpers::window::{Window, source_filter};
+use crate::loader::models::FilesWindowRequest;
+use crate::project::models::WriteStrategy;
+use crate::write_sql::main::cursor_bound::cursor_bound;
+use crate::write_sql::main::cursor_text::cursor_text;
+use crate::write_sql::models::{CursorValue, WriteMode};
+
+/// The source filter, write mode and `plan` note: partitions from the newest one (`delete_insert`) or rows after the newest files' maximum (`append`).
+pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Result<Window, String> {
+    let (spec, options) = (request.spec, request.options);
+    let backfill = options.start_cursor.is_some() || options.end_cursor.is_some();
+    let (Some(cursor), Some(cursor_type), Some(partition)) =
+        (&spec.cursor, request.cursor_type, request.partition)
+    else {
+        let mode = match (options.reload, spec.strategy) {
+            (true, _) => WriteMode::Recreate,
+            (false, WriteStrategy::Append) => WriteMode::Append,
+            (false, _) => WriteMode::Replace,
+        };
+        return match backfill {
+            true => Err("--start-cursor/--end-cursor need a cursor_column".to_owned()),
+            false => Ok(Window {
+                filter: None,
+                bounds: (None, None),
+                mode,
+                note: None,
+            }),
+        };
+    };
+    if backfill && options.reload {
+        return Err(
+            "--reload rewrites every file, so it takes no --start-cursor/--end-cursor".to_owned(),
+        );
+    }
+    let flag = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(|text| cursor_text(text, cursor_type))
+            .transpose()
+    };
+    let (start, end) = (flag(&options.start_cursor)?, flag(&options.end_cursor)?);
+    let newest = request
+        .listed
+        .partitions
+        .last()
+        .and_then(|partition| partition.value.as_deref())
+        .filter(|_| !options.reload);
+    let column = cursor.column.as_str();
+    let expression = request
+        .read_columns
+        .iter()
+        .find(|read| read.name == column)
+        .map_or(column, |read| read.expression.as_str());
+    let (from, to, note, operator) = match spec.strategy {
+        WriteStrategy::DeleteInsert => {
+            let window = partition_window(&PartitionWindowRequest {
+                by: partition.by,
+                cursor_column: column,
+                cursor_type,
+                newest,
+                lookback: cursor.lookback,
+                start: start.as_deref(),
+                end: end.as_deref(),
+                cursor_start: cursor.start.as_deref(),
+                reload: options.reload,
+            })?;
+            (window.from, window.to, window.note, ">=")
+        }
+        _ => {
+            let value = match cursor_type {
+                ColumnType::TimestampTz => CursorValue::EpochMicros { zoned: true },
+                ColumnType::TimestampNtz => CursorValue::EpochMicros { zoned: false },
+                ColumnType::Date => CursorValue::Date,
+                _ => CursorValue::Plain,
+            };
+            let maximum = match (&start, newest) {
+                (None, Some(_)) => cursor_maximum(request.footers, column, cursor_type)?
+                    .map(|raw| cursor_bound(&raw, value, None))
+                    .transpose()?,
+                _ => None,
+            };
+            let (from, note) = match (start, maximum, &cursor.start) {
+                (Some(start), _, _) => (
+                    Some(start.clone()),
+                    format!("{column} from {start} (--start-cursor)"),
+                ),
+                (None, Some(maximum), _) => (
+                    Some(maximum.clone()),
+                    format!("{column} from {maximum} (maximum in the newest partition's files)"),
+                ),
+                (None, None, Some(start)) => (
+                    Some(start.clone()),
+                    format!("{column} first run, from cursor_start {start}"),
+                ),
+                (None, None, None) => (None, format!("{column} first run, everything")),
+            };
+            let operator = match (cursor.inclusive, &options.start_cursor) {
+                (false, None) => ">",
+                _ => ">=",
+            };
+            (from, end, note, operator)
+        }
+    };
+    let mode = match (options.reload, spec.strategy) {
+        (true, _) => WriteMode::Recreate,
+        (false, WriteStrategy::DeleteInsert) => WriteMode::DeleteInsert {
+            cursor_column: column.to_owned(),
+            from: from.clone(),
+            to: to.clone(),
+        },
+        (false, _) => WriteMode::Append,
+    };
+    Ok(Window {
+        filter: source_filter(
+            expression,
+            from.as_deref().map(|from| (operator, from)),
+            to.as_deref(),
+        ),
+        bounds: (from, to),
+        mode,
+        note: Some(note),
+    })
+}

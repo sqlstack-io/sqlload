@@ -46,7 +46,7 @@ impl std::fmt::Display for ColumnType {
     }
 }
 
-/// An engine SQLLoad reads from or writes to; every engine sqlbuild has an adapter for.
+/// An engine SQLLoad reads from or writes to; every engine sqlbuild has an adapter for, plus Parquet files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Warehouse {
     Snowflake,
@@ -58,6 +58,8 @@ pub enum Warehouse {
     ClickHouse,
     SqlServer,
     Sqlite,
+    /// Parquet files in an object store or directory: no SQL dialect, columns are Arrow types.
+    Parquet,
 }
 
 impl std::fmt::Display for Warehouse {
@@ -72,6 +74,7 @@ impl std::fmt::Display for Warehouse {
             Self::ClickHouse => "ClickHouse",
             Self::SqlServer => "SQL Server",
             Self::Sqlite => "SQLite",
+            Self::Parquet => "Parquet files",
         })
     }
 }

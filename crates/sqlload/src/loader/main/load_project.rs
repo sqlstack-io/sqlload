@@ -6,6 +6,7 @@ use crate::loader::_helpers::clock::now_utc_text;
 use crate::loader::_helpers::destination::{cleanup_staging, execute, finish_staging, stage_batch};
 use crate::loader::_helpers::sources::{open_source, read_source};
 use crate::loader::errors::LoaderError;
+use crate::loader::main::_load_files::load_files_table;
 use crate::loader::models::{
     Destination, LoadResult, ProjectPlan, SourceReader, StagingSession, TablePlan,
 };
@@ -42,11 +43,23 @@ pub async fn load_project(
             LoaderError::Invalid(format!("target {:?} is not connected", table.spec.target))
         })?;
         let reader = open_source(project, source).await?;
-        let rows = load_table(&reader, table, destination).await?;
-        results.push(LoadResult {
-            table: display_name(&table.spec.destination, table.spec.warehouse),
-            rows,
-        });
+        let result = match (destination, &table.output) {
+            (Destination::Files(_), Some(output)) => LoadResult {
+                table: output.path.folder.to_string(),
+                rows: load_files_table(&reader, table, output).await?,
+            },
+            (Destination::Files(_), None) => {
+                return Err(LoaderError::Invalid(format!(
+                    "{}: a files target table has no files planned",
+                    table.spec.destination.table
+                )));
+            }
+            _ => LoadResult {
+                table: display_name(&table.spec.destination, table.spec.warehouse),
+                rows: load_table(&reader, table, destination).await?,
+            },
+        };
+        results.push(result);
     }
     Ok(results)
 }

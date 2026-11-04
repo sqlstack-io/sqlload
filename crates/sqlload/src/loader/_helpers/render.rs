@@ -1,5 +1,6 @@
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
-use crate::loader::models::TablePlan;
+use crate::loader::models::{FilesOutput, TablePlan};
+use crate::project::models::FilesFormat;
 use crate::routing::models::Route;
 use crate::schema_plan::models::TableAction;
 use crate::write_sql::main::display_name::display_name;
@@ -126,6 +127,28 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
                 )
             }),
     );
+    lines.extend(table.output.as_ref().map(files_line));
+    lines.extend(table.output.iter().map(|output| {
+        format!(
+            "footers {} read from the newest partition ({} files listed, max_footer_reads {})",
+            output.footers_read, output.listed, output.max_footer_reads
+        )
+    }));
+    if table.output.is_some() {
+        lines.extend(table.schema.action.summary().into_iter().map(
+            |change| match change.as_str() {
+                "create" => format!(
+                    "schema  first files, {} columns",
+                    table.schema.write_columns.len()
+                ),
+                "recreate" => {
+                    "schema  every file rewritten with the current columns (--reload)".to_owned()
+                }
+                "unchanged" => "schema  as the newest files".to_owned(),
+                _ => format!("schema  new files {change}"),
+            },
+        ));
+    }
     lines.extend(table.route.as_ref().map(route_line));
     lines.extend(
         table
@@ -133,7 +156,25 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             .iter()
             .map(|note| format!("cursor  {note}")),
     );
+    lines.extend(
+        table
+            .output
+            .iter()
+            .flat_map(|output| output.notes.iter())
+            .map(|note| format!("note    {note}")),
+    );
     lines
+}
+
+fn files_line(output: &FilesOutput) -> String {
+    let partition = match &output.path.partition {
+        Some(partition) => format!("  partitions {partition}"),
+        None => String::new(),
+    };
+    let format = match output.format {
+        FilesFormat::Parquet => "parquet (zstd)",
+    };
+    format!("files   {}  {format}{partition}", output.path.folder)
 }
 
 fn route_line(route: &Route) -> String {

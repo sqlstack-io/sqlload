@@ -11,7 +11,7 @@ use crate::write_sql::main::create_schema::create_schema;
 use crate::write_sql::main::create_table::create_table;
 use crate::write_sql::main::display_name::display_name;
 
-/// Apply every unblocked table's schema changes; one line per table changed.
+/// Apply every unblocked table's schema changes; one line per table changed (files targets need none: folders appear with their files).
 pub async fn apply_project(
     plan: &ProjectPlan,
     destinations: &BTreeMap<String, Destination>,
@@ -20,7 +20,7 @@ pub async fn apply_project(
     for table in plan
         .tables
         .iter()
-        .filter(|table| table.schema.blocked.is_none())
+        .filter(|table| table.schema.blocked.is_none() && table.output.is_none())
     {
         let spec = &table.spec;
         let warehouse = spec.warehouse;

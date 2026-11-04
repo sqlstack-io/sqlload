@@ -117,6 +117,20 @@ fn given_a_portable_type_when_mapping_to_a_warehouse_then_the_sql_name_and_loss_
             expected_sql: "GEOGRAPHY",
             expected_lossy: false,
         },
+        WarehouseTypeTestCase {
+            description: "Parquet files hold the Arrow type",
+            column_type: ColumnType::Int,
+            warehouse: Warehouse::Parquet,
+            expected_sql: "Int64",
+            expected_lossy: false,
+        },
+        WarehouseTypeTestCase {
+            description: "Parquet files cannot hold a native type",
+            column_type: ColumnType::Native("GEOGRAPHY".to_owned()),
+            warehouse: Warehouse::Parquet,
+            expected_sql: "native(\"GEOGRAPHY\")",
+            expected_lossy: true,
+        },
     ];
     for test_case in test_cases {
         let mapped = warehouse_type(&test_case.column_type, test_case.warehouse);

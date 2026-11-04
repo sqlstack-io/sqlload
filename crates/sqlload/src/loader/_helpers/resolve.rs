@@ -96,6 +96,8 @@ pub(crate) struct ResolvedTarget {
     pub(crate) warehouse: Warehouse,
     pub(crate) database: Option<String>,
     pub(crate) schema: String,
+    /// The table folder template, for a files target.
+    pub(crate) path: Option<String>,
 }
 
 /// The target `source` loads into: its own, the project default, or the only target.
@@ -126,22 +128,32 @@ pub(crate) fn source_target(
             (Warehouse::Snowflake, Some(database.clone()))
         }
         ConnectionConfig::DuckDb { .. } => (Warehouse::DuckDb, None),
-        ConnectionConfig::Postgres { .. }
-        | ConnectionConfig::S3 { .. }
-        | ConnectionConfig::Filesystem { .. } => {
+        ConnectionConfig::S3 { .. } | ConnectionConfig::Filesystem { .. } => {
+            return Ok(ResolvedTarget {
+                name,
+                warehouse: Warehouse::Parquet,
+                database: None,
+                schema: String::new(),
+                path: Some(target.path_template().to_owned()),
+            });
+        }
+        ConnectionConfig::Postgres { .. } => {
             return Err(format!(
-                "target {name:?} uses a {} connection, which is not a destination yet",
+                "target {name:?} uses a {} connection, which is not a destination",
                 connection.kind()
             ));
         }
     };
+    let schema = source
+        .schema
+        .clone()
+        .or_else(|| target.loader_schema.clone())
+        .ok_or_else(|| format!("target {name:?} has no loader_schema"))?;
     Ok(ResolvedTarget {
         name,
         warehouse,
         database: target.database.clone().or(database),
-        schema: source
-            .schema
-            .clone()
-            .unwrap_or_else(|| target.loader_schema.clone()),
+        schema,
+        path: None,
     })
 }

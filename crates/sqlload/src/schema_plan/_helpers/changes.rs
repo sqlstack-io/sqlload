@@ -1,6 +1,6 @@
 use crate::column_types::main::type_fit::type_fit;
 use crate::column_types::main::warehouse_type::warehouse_type;
-use crate::column_types::models::TypeFit;
+use crate::column_types::models::{TypeFit, Warehouse};
 use crate::project::models::{OnSchemaChange, Policy};
 use crate::schema_plan::constants::ALLOW_REBUILD_FLAG;
 use crate::schema_plan::models::{
@@ -63,9 +63,19 @@ pub(crate) fn existing_column(
         write: true,
         ..ColumnDecision::default()
     };
-    match type_fit(&column.column_type, &live.column_type, rules.warehouse) {
-        TypeFit::Fits => written,
-        TypeFit::WidenInPlace(sql_type) => ColumnDecision {
+    match (
+        type_fit(&column.column_type, &live.column_type, rules.warehouse),
+        rules.warehouse,
+    ) {
+        (TypeFit::Fits, _) => written,
+        (_, Warehouse::Parquet) => ColumnDecision {
+            problem: Some(format!(
+                "{} is {} in the existing files but {} in the source; existing files cannot be altered, so pin the files' type (columns = {{ {} = \"{}\" }}) or rewrite every file with --reload",
+                live.name, live.column_type, column.column_type, column.name, live.column_type
+            )),
+            ..ColumnDecision::default()
+        },
+        (TypeFit::WidenInPlace(sql_type), _) => ColumnDecision {
             change: Some(ColumnChange::Widen {
                 column: live.name.clone(),
                 from: live.column_type.clone(),
@@ -74,8 +84,8 @@ pub(crate) fn existing_column(
             }),
             ..written
         },
-        TypeFit::NeedsRebuild(sql_type) => rebuild(column, live, rules, sql_type),
-        TypeFit::Incompatible => ColumnDecision {
+        (TypeFit::NeedsRebuild(sql_type), _) => rebuild(column, live, rules, sql_type),
+        (TypeFit::Incompatible, _) => ColumnDecision {
             problem: Some(mismatch(column, live)),
             ..ColumnDecision::default()
         },

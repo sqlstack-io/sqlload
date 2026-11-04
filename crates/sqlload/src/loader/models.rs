@@ -5,10 +5,13 @@ use crate::column_types::models::{ColumnType, Warehouse};
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::models::DuckDbDestination;
 use crate::file_store::models::OpenFolder;
-use crate::files_source::models::{FilesRead, FilesTable};
+use crate::files_destination::models::{FilesDestination, PartitionFolder, TableFiles, TablePath};
+use crate::files_source::models::{FilesRead, FilesTable, Footer};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
-use crate::project::models::{Contract, NewTables, OnSchemaChange, Policy, WriteStrategy};
+use crate::project::models::{
+    Contract, FilesFormat, NewTables, OnSchemaChange, Policy, WriteStrategy,
+};
 use crate::routing::models::Route;
 use crate::schema_plan::models::{LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
@@ -69,6 +72,8 @@ pub struct TableSpec {
     pub new_tables: NewTables,
     /// The files behind a files source; `None` for database tables.
     pub files: Option<FilesSource>,
+    /// The table's folder template in a files target; `None` for warehouse targets.
+    pub destination_path: Option<String>,
 }
 
 /// Where a files source's files are and what they hold.
@@ -113,6 +118,22 @@ pub struct TablePlan {
     pub route: Option<Route>,
     /// The files to read, for a files source.
     pub files: Option<FilesRead>,
+    /// Where and how the files are written, for a files target.
+    pub output: Option<FilesOutput>,
+}
+
+/// A files target's side of one table's plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesOutput {
+    pub path: TablePath,
+    pub format: FilesFormat,
+    /// Data files under the table's folder now.
+    pub listed: usize,
+    /// Footers read for the live schema (the newest partition's files).
+    pub footers_read: usize,
+    pub max_footer_reads: usize,
+    /// How the strategy writes and replaces files, for `plan`.
+    pub notes: Vec<String>,
 }
 
 /// The plan for a whole project.
@@ -152,6 +173,8 @@ pub enum Destination {
     #[cfg(feature = "duckdb")]
     DuckDb(DuckDbDestination),
     Snowflake(Box<SnowflakeDestination>),
+    /// Parquet files in an s3 or filesystem connection.
+    Files(Box<FilesDestination>),
 }
 
 /// One load's staging table and the files written for it so far.
@@ -168,4 +191,28 @@ pub struct StagingSession {
 pub enum SourceReader {
     Postgres(tokio_postgres::Client),
     Files(OpenFolder),
+}
+
+/// What decides one files table's cursor window.
+#[derive(Debug, Clone, Copy)]
+pub struct FilesWindowRequest<'a> {
+    pub spec: &'a TableSpec,
+    pub options: &'a PlanOptions,
+    pub cursor_type: Option<&'a ColumnType>,
+    pub partition: Option<&'a PartitionFolder>,
+    /// The table's files now, newest partition last.
+    pub listed: &'a TableFiles,
+    /// The newest partition's footers, whose statistics hold an append cursor's maximum.
+    pub footers: &'a [Footer],
+    /// The source's read columns, holding the cursor's select expression.
+    pub read_columns: &'a [ReadColumn],
+}
+
+/// A files table as it is now: its files, and its newest partition's footers and schema.
+#[derive(Debug, Clone)]
+pub struct LiveFiles {
+    pub listed: TableFiles,
+    pub footers: Vec<Footer>,
+    /// The merged schema of the newest partition's files; `None` before any file exists.
+    pub live: Option<Vec<LiveColumn>>,
 }

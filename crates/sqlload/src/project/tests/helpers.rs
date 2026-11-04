@@ -41,6 +41,32 @@ write_strategy = "append"
 unique_key = ["event_id", "line_no"]
 "#;
 
+/// A project writing Postgres tables as Parquet files to a directory.
+pub(crate) const FILES_PROJECT: &str = r#"
+[connections.app_pg]
+kind = "postgres"
+host = "localhost"
+user = "reader"
+database = "app"
+
+[connections.lake]
+kind = "filesystem"
+root = "/data/lake"
+
+[targets.lake]
+connection = "lake"
+
+[sources.app]
+kind = "postgres"
+connection = "app_pg"
+include = ["public.*"]
+destination_path = "shop/{table}/"
+
+[sources.app.tables."public.events"]
+destination_path = "shop/{table}/day={cursor:date}/"
+cursor_column = "created_at"
+"#;
+
 /// Connections and a target that the error cases' sources can refer to.
 pub(crate) const CONNECTIONS: &str = "[connections.wh]\nkind = \"duckdb\"\npath = \":memory:\"\n[connections.pg]\nkind = \"postgres\"\nhost = \"h\"\nuser = \"u\"\ndatabase = \"d\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 

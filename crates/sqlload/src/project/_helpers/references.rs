@@ -1,4 +1,7 @@
-use crate::project::constants::{TABLE_PLACEHOLDER, WAREHOUSE_CONNECTION_KINDS};
+use crate::project::_helpers::targets::{
+    destination_kind_problems, is_files_target, target_problems,
+};
+use crate::project::constants::TABLE_PLACEHOLDER;
 use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
 
 /// Problems with names one section uses to refer to another.
@@ -12,21 +15,7 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
         ));
     }
     for (name, target) in &project.targets {
-        match project.connections.get(&target.connection) {
-            None => problems.push(format!(
-                "[targets.{name}] connection {:?} is not a [connections] entry",
-                target.connection
-            )),
-            Some(connection) if !WAREHOUSE_CONNECTION_KINDS.contains(&connection.kind()) => {
-                problems.push(format!(
-                    "[targets.{name}] connection {:?} is a {} connection; targets load into {}",
-                    target.connection,
-                    connection.kind(),
-                    WAREHOUSE_CONNECTION_KINDS.join(" or ")
-                ));
-            }
-            Some(_) => {}
-        }
+        problems.extend(target_problems(project, name, target));
     }
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));
@@ -56,12 +45,23 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         }
         Some(_) => {}
     }
-    match source.destination.as_ref().or(project.default_target.as_ref()) {
+    let only_target = (project.targets.len() == 1)
+        .then(|| project.targets.keys().next())
+        .flatten();
+    match source
+        .destination
+        .as_ref()
+        .or(project.default_target.as_ref())
+        .or(only_target)
+    {
         Some(target) if !project.targets.contains_key(target) => {
             problems.push(format!("{place} destination {target:?} is not a [targets] entry"));
         }
-        Some(_) => {}
-        None if project.targets.len() == 1 => {}
+        Some(target) => problems.extend(destination_kind_problems(
+            &place,
+            source,
+            is_files_target(project, target),
+        )),
         None => problems.push(format!(
             "{place} needs a destination: set destination, or default_target when there are several targets"
         )),

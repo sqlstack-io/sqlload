@@ -1,3 +1,8 @@
+use std::sync::Arc;
+
+use arrow_schema::SchemaRef;
+use parquet::file::metadata::ParquetMetaData;
+
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::StoredFile;
 use crate::schema_plan::models::DesiredColumn;
@@ -57,4 +62,12 @@ pub struct FileSelection<'a> {
     pub cursor: Option<(&'a str, &'a ColumnType)>,
     pub from: Option<&'a str>,
     pub to: Option<&'a str>,
+}
+
+/// One Parquet file's footer: its Arrow schema and its metadata (row groups and statistics).
+#[derive(Debug, Clone)]
+pub struct Footer {
+    pub relative_key: String,
+    pub schema: SchemaRef,
+    pub metadata: Arc<ParquetMetaData>,
 }
