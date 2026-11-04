@@ -1,0 +1,8 @@
+//! Docker-backed loader tests against real systems.
+
+#[path = "loader/helpers.rs"]
+mod helpers;
+#[path = "loader/test_postgres_reader.rs"]
+mod test_postgres_reader;
+#[path = "loader/test_types.rs"]
+mod test_types;
