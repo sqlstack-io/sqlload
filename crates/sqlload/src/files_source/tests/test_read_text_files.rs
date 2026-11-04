@@ -8,16 +8,16 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
 -> Result<(), String> {
     let test_cases = [
         ReadTextFilesTestCase {
-            description: "ndjson: nested values stay JSON text, missing keys and nulls are NULL, blank lines are skipped",
+            description: "ndjson: nested values stay JSON text with keys in source order, missing keys and nulls are NULL, blank lines are skipped",
             encoding: encoding(SourceFormat::Ndjson),
             files: &[(
                 "a.ndjson",
-                "{\"id\":1,\"meta\":{\"k\":[1,2]},\"note\":\"x\"}\n\n{\"id\":2,\"note\":null}\r\n{\"id\":3,\"meta\":{},\"note\":\"y\"}",
+                "{\"id\":1,\"meta\":{\"k\":[1,2],\"b\": 1},\"note\":\"x\"}\n\n{\"id\":2,\"note\":null}\r\n{\"id\":3,\"meta\":{},\"note\":\"y\"}",
             )],
             unsampled: &[],
             exclude: &[],
             pinned: &[],
-            expected_rows: Ok("1|{\"k\":[1,2]}|x\n2|NULL|NULL\n3|{}|y"),
+            expected_rows: Ok("1|{\"k\":[1,2],\"b\":1}|x\n2|NULL|NULL\n3|{}|y"),
         },
         ReadTextFilesTestCase {
             description: "a pinned type converts every value; a key repeated in one object keeps its last value",

@@ -61,13 +61,16 @@ pub(crate) fn records_batch(
         .collect();
     let mut values: Vec<Vec<Option<String>>> = vec![vec![None; records.len()]; columns.len()];
     for (row, record) in records.iter().enumerate() {
-        for (key, value) in &record.fields {
+        for (key, value, nested) in &record.fields {
             let Some(position) = index.get(key.as_str()) else {
                 checks.check_name("key", key, record.line)?;
                 continue;
             };
             check_value(checks, key, value, record.line)?;
-            values[*position][row] = value_text(value, &columns[*position].1);
+            values[*position][row] = match nested {
+                Some(text) => Some(text.clone()),
+                None => value_text(value, &columns[*position].1),
+            };
         }
     }
     let fields: Vec<Field> = columns

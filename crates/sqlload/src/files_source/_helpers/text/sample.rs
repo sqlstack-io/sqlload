@@ -40,7 +40,7 @@ pub(crate) fn json_columns(records: &[JsonRecord]) -> Vec<SampledColumn> {
     let mut columns: Vec<SampledColumn> = Vec::new();
     let mut positions: HashMap<&str, usize> = HashMap::new();
     for record in records {
-        for (key, value) in &record.fields {
+        for (key, value, _) in &record.fields {
             let position = *positions.entry(key.as_str()).or_insert_with(|| {
                 columns.push(SampledColumn {
                     name: key.clone(),
