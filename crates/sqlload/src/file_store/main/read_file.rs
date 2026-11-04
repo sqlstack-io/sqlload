@@ -14,7 +14,7 @@ pub async fn read_file(folder: &OpenFolder, relative_key: &str) -> Result<Bytes,
         key: relative_key.to_owned(),
         source,
     };
-    let path = object_path(&folder.location.prefix, relative_key);
+    let path = object_path(&format!("{}{relative_key}", folder.location.prefix)).map_err(failed)?;
     let result = folder.store.get(&path).await.map_err(failed)?;
     result.bytes().await.map_err(failed)
 }

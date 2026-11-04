@@ -14,6 +14,8 @@ pub struct OpenFolder {
 /// One data file under a folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredFile {
+    /// The store path as listed, used for every read so keys are never escaped twice.
+    pub path: object_store::path::Path,
     /// The key relative to the folder, such as `date=2026-11-04/part-0.parquet`.
     pub relative_key: String,
     pub size: u64,

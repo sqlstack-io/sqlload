@@ -126,9 +126,15 @@ pub(crate) async fn discover_files_table(
         })?;
         partition_types.push((name.clone(), parsed.column_type));
     }
+    let added: Vec<&str> = partition_types
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
+        .collect();
     let typed = table
         .columns
         .iter()
+        .filter(|column| !added.contains(&column.name.as_str()))
         .map(|column| (column.name.clone(), column.column_type.clone()))
         .chain(
             partition_types
@@ -259,7 +265,21 @@ pub(crate) async fn plan_files(
             }
         },
     };
-    let skips_loaded = matches!(spec.strategy, WriteStrategy::Append | WriteStrategy::Merge);
+    if spec.strategy == WriteStrategy::Merge {
+        return Ok(Err(
+            "merge is not supported for files sources yet (loaded files would be re-read once their rows are updated); use delete_insert on a partition cursor, or append".to_owned(),
+        ));
+    }
+    let skips_loaded = spec.strategy == WriteStrategy::Append;
+    if skips_loaded
+        && request.live.is_some()
+        && !live_has(request.live, SOURCE_FILE_COLUMN)
+        && !request.options.reload
+    {
+        return Ok(Err(format!(
+            "the table has no {SOURCE_FILE_COLUMN} column, so append cannot tell which files are loaded and would load them all again; run it once with --reload"
+        )));
+    }
     if skips_loaded
         && !request
             .written
@@ -267,7 +287,7 @@ pub(crate) async fn plan_files(
             .any(|name| name == SOURCE_FILE_COLUMN)
     {
         return Ok(Err(format!(
-            "{SOURCE_FILE_COLUMN} must be loaded: append and merge use it to skip files already loaded"
+            "{SOURCE_FILE_COLUMN} must be loaded: append uses it to skip files already loaded"
         )));
     }
     let live_has = |column: &str| live_has(request.live, column);

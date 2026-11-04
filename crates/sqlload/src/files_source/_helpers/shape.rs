@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch, StringArray, new_null_array};
-use arrow_cast::cast;
+use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{Field, Schema, SchemaRef};
 
 use crate::column_types::main::arrow_field::arrow_field;
@@ -44,7 +44,7 @@ pub(crate) fn shape_batch(
     RecordBatch::try_new(schema.clone(), columns).map_err(|error| error.to_string())
 }
 
-/// One output column: a constant (partition value or file name), the file's column cast, or NULLs.
+/// One output column: a constant (partition value or file name), the file's column cast, or NULLs; a value that does not convert is an error, never NULL.
 fn shape_column(
     batch: &RecordBatch,
     constants: &[(&str, &str)],
@@ -57,7 +57,11 @@ fn shape_column(
         (None, Some(column)) => column.clone(),
         (None, None) => return Ok(new_null_array(field.data_type(), rows)),
     };
-    cast(&source, field.data_type()).map_err(|error| {
+    let strict = CastOptions {
+        safe: false,
+        ..CastOptions::default()
+    };
+    cast_with_options(&source, field.data_type(), &strict).map_err(|error| {
         format!(
             "{}: cannot convert to {}: {error}",
             field.name(),

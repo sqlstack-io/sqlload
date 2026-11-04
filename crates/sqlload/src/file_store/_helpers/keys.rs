@@ -2,9 +2,9 @@ use object_store::path::Path;
 
 use crate::file_store::constants::HIDDEN_PREFIXES;
 
-/// The store path for `relative_key` under `prefix`.
-pub(crate) fn object_path(prefix: &str, relative_key: &str) -> Path {
-    Path::from(format!("{prefix}{relative_key}"))
+/// The store path of `key` (a folder prefix plus a relative key), taken as written: nothing is escaped.
+pub(crate) fn object_path(key: &str) -> Result<Path, object_store::Error> {
+    Ok(Path::parse(key.trim_end_matches('/'))?)
 }
 
 /// Whether any folder or the file name of `relative_key` is hidden.

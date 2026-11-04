@@ -1,16 +1,15 @@
 use arrow_schema::SchemaRef;
-use object_store::path::Path;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::_helpers::object_reader::ObjectFileReader;
 use crate::files_source::errors::FilesError;
 
-/// A reader for one Parquet file, sized so no extra request is needed to find its footer.
+/// A reader for one listed Parquet file; its size is known, so no request is spent finding it.
 pub(crate) fn object_reader(folder: &OpenFolder, file: &StoredFile) -> ObjectFileReader {
     ObjectFileReader {
         store: folder.store.clone(),
-        path: Path::from(format!("{}{}", folder.location.prefix, file.relative_key)),
+        path: file.path.clone(),
         size: file.size,
     }
 }

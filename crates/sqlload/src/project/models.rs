@@ -55,7 +55,7 @@ pub enum ConnectionConfig {
         password: Option<crate::auth::models::Secret>,
         database: String,
     },
-    /// An S3 bucket; credentials come from the environment, profile or instance role.
+    /// An S3 bucket; credentials come from `AWS_*` environment variables, web identity, or the instance/container role (AWS profiles and SSO are not read yet).
     S3 {
         bucket: String,
         #[serde(default)]

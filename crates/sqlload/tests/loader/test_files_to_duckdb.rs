@@ -29,19 +29,31 @@ const NOV_5: ParquetFile = ParquetFile {
     extra: Some("z"),
 };
 
+/// A Spark-style escaped folder (`%3A`), which must be read as listed, not escaped again.
+const NOV_6_ESCAPED: ParquetFile = ParquetFile {
+    key: "day=2026-11-06/batch=10%3A00/part-0.parquet",
+    ids: &[6],
+    score: 1.0,
+    extra: Some("w"),
+};
+
 const APPEND_RUNS: &[FilesRun] = &[
     FilesRun {
         files: &[NOV_3, NOV_4],
         expected_error: "",
     },
     FilesRun {
-        files: &[NOV_5],
+        files: &[NOV_5, NOV_6_ESCAPED],
         expected_error: "",
     },
 ];
 
 /// Rows, distinct source files, and the newest `extra`; a column added in later files is NULL for older rows.
 const APPEND_CHECK: &str = "SELECT count(*) || ',' || count(DISTINCT _sqlload_source_file) || ',' || count(extra) || ',' || max(day) FROM raw.scores";
+
+/// `0` while the table was never created.
+const NO_TABLE: &str =
+    "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'";
 
 #[test]
 fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_load_once()
@@ -53,7 +65,7 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
             settings: "write_strategy = \"append\"\npartition_columns = { day = \"date\" }\n",
             runs: APPEND_RUNS,
             check_query: APPEND_CHECK,
-            expected_result: "4,3,2,2026-11-05",
+            expected_result: "5,4,3,2026-11-06",
         },
         FilesScenarioTestCase {
             description: "append from S3 behaves the same",
@@ -61,7 +73,7 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
             settings: "write_strategy = \"append\"\npartition_columns = { day = \"date\" }\n",
             runs: APPEND_RUNS,
             check_query: APPEND_CHECK,
-            expected_result: "4,3,2,2026-11-05",
+            expected_result: "5,4,3,2026-11-06",
         },
         FilesScenarioTestCase {
             description: "delete_insert on a partition cursor replaces the newest partition when its file is rewritten",
@@ -98,6 +110,39 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
             expected_result: "3",
         },
         FilesScenarioTestCase {
+            description: "merge is blocked for files sources",
+            store: local_store,
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\npartition_columns = { day = \"date\" }\n",
+            runs: &[FilesRun {
+                files: &[NOV_3],
+                expected_error: "merge is not supported for files sources",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        FilesScenarioTestCase {
+            description: "a source with no files is an error, never an empty load",
+            store: local_store,
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\n",
+            runs: &[FilesRun {
+                files: &[],
+                expected_error: "no .parquet files found",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        FilesScenarioTestCase {
+            description: "a value that does not fit a pinned type fails the load instead of loading NULL",
+            store: local_store,
+            settings: "write_strategy = \"append\"\npartition_columns = { day = \"date\" }\n[sources.scores.tables.scores]\ncolumns = { extra = \"int\" }\n",
+            runs: &[FilesRun {
+                files: &[NOV_4],
+                expected_error: "extra: cannot convert",
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",
+            expected_result: "0",
+        },
+        FilesScenarioTestCase {
             description: "a cursor that is not a partition column is blocked",
             store: local_store,
             settings: "write_strategy = \"delete_insert\"\ncursor_column = \"id\"\npartition_columns = { day = \"date\" }\n",
@@ -105,7 +150,7 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
                 files: &[NOV_3],
                 expected_error: "must be one of the partition_columns",
             }],
-            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'",
+            check_query: NO_TABLE,
             expected_result: "0",
         },
     ];

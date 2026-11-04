@@ -67,6 +67,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         .iter()
         .map(|(key, day)| DataFile {
             file: StoredFile {
+                path: object_store::path::Path::from(*key),
                 relative_key: (*key).to_owned(),
                 size: 1,
                 etag: None,

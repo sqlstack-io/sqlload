@@ -11,7 +11,7 @@ use crate::file_store::models::OpenFolder;
 use crate::http::main::install_tls_provider::install_tls_provider;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// A client for `location`'s store; S3 credentials come from the environment, profile or instance role.
+/// A client for `location`'s store; S3 credentials come from `AWS_*` variables, web identity or the instance/container role.
 pub fn open_folder(location: &Location) -> Result<OpenFolder, StoreError> {
     let failed = |source: object_store::Error| StoreError::Open {
         location: location.to_string(),

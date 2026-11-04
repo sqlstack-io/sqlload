@@ -76,7 +76,7 @@ pub struct TableSpec {
 pub struct FilesSource {
     pub location: Location,
     pub table: FilesTable,
-    /// Declared partition columns and their types, in path order.
+    /// Declared partition columns and their types, by name; a file column of the same name is replaced by the path's value.
     pub partition_types: Vec<(String, ColumnType)>,
 }
 

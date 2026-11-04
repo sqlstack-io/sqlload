@@ -13,15 +13,16 @@ pub async fn write_file(
     relative_key: &str,
     body: Bytes,
 ) -> Result<(), StoreError> {
-    let path = object_path(&folder.location.prefix, relative_key);
+    let failed = |source: object_store::Error| StoreError::Object {
+        action: "cannot write",
+        key: relative_key.to_owned(),
+        source,
+    };
+    let path = object_path(&format!("{}{relative_key}", folder.location.prefix)).map_err(failed)?;
     folder
         .store
         .put(&path, PutPayload::from(body))
         .await
         .map(|_| ())
-        .map_err(|source| StoreError::Object {
-            action: "cannot write",
-            key: relative_key.to_owned(),
-            source,
-        })
+        .map_err(failed)
 }
