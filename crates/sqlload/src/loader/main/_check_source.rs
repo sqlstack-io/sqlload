@@ -4,13 +4,16 @@ use crate::file_store::main::probe_folder::probe_folder;
 use crate::loader::_helpers::sources::open_source;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::SourceReader;
-use crate::project::models::{ProjectConfig, SourceConfig};
+use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
 
 /// What source `source` reads as, or why it cannot connect.
 pub(in crate::loader) async fn check_source(
     project: &ProjectConfig,
     source: &SourceConfig,
 ) -> Result<String, LoaderError> {
+    if source.kind == SourceKind::Python {
+        return Ok(format!("{} Python tables", source.tables.len()));
+    }
     match open_source(project, source).await? {
         SourceReader::Postgres(client) => {
             let row = client
@@ -23,6 +26,7 @@ pub(in crate::loader) async fn check_source(
             let answer: String = row.get(0);
             Ok(answer.split(" on ").next().unwrap_or_default().to_owned())
         }
+        SourceReader::Batches(_) => Ok("read".to_owned()),
         SourceReader::Files(folder) => {
             let entries = probe_folder(&folder).await?;
             Ok(format!(

@@ -26,6 +26,8 @@ pub(crate) struct Window {
     pub(crate) bounds: (Option<String>, Option<String>),
     pub(crate) mode: WriteMode,
     pub(crate) note: Option<String>,
+    /// Whether the lower bound itself is read.
+    pub(crate) inclusive: bool,
 }
 
 fn write_mode(
@@ -155,6 +157,7 @@ pub(crate) async fn cursor_window(
             bounds: (None, None),
             mode: write_mode(spec, options.reload, None, None),
             note: None,
+            inclusive: true,
         }));
     };
     if backfill && options.reload {
@@ -178,9 +181,13 @@ pub(crate) async fn cursor_window(
             Ok(bound) => bound,
             Err(problem) => return Ok(Err(problem)),
         };
-    let operator = match (spec.strategy, cursor.inclusive, &options.start_cursor) {
-        (WriteStrategy::Append, false, None) => ">",
-        _ => ">=",
+    let inclusive = !matches!(
+        (spec.strategy, cursor.inclusive, &options.start_cursor),
+        (WriteStrategy::Append, false, None)
+    );
+    let operator = match inclusive {
+        true => ">=",
+        false => ">",
     };
     let note = match &to {
         Some(end) => format!("{note}, below {end} (--end-cursor)"),
@@ -195,5 +202,6 @@ pub(crate) async fn cursor_window(
         bounds: (from.clone(), to.clone()),
         mode: write_mode(spec, options.reload, from, to),
         note: Some(note),
+        inclusive,
     }))
 }

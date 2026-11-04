@@ -28,7 +28,7 @@ test-containers:
 # Builds the sqlload extension (debug) into .venv and runs the package's tests.
 test-python:
 	uv venv --quiet --allow-existing --python 3.12 .venv
-	uv pip install --quiet --python .venv/bin/python 'maturin>=1.9,<2' pytest pytest-xdist pyarrow polars pandas orjson
+	uv pip install --quiet --python .venv/bin/python 'maturin>=1.9,<2' pytest pytest-xdist pyarrow polars pandas orjson duckdb
 	cd packages/sqlload && VIRTUAL_ENV=$(CURDIR)/.venv $(CURDIR)/.venv/bin/maturin develop --uv --quiet
 	.venv/bin/python -m pytest packages/sqlload/tests -n auto --dist loadfile
 

@@ -24,7 +24,9 @@ arrow-array.workspace = true
 arrow-pyarrow.workspace = true
 arrow-schema.workspace = true
 pyo3.workspace = true
+serde_json.workspace = true
 sqlload.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

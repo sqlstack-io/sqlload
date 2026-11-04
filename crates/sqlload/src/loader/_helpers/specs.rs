@@ -190,6 +190,7 @@ pub(crate) fn build_spec(
                 .or_else(|| context.source.destination_path.clone())
                 .unwrap_or_else(|| target_path.clone())
         }),
+        python: None,
     })
 }
 

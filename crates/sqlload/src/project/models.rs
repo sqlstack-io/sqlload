@@ -12,7 +12,7 @@ use crate::project::_helpers::serde_values::{
 };
 use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
-    DEFAULT_TABLE_NAME,
+    DEFAULT_PYTHON_TABLE_NAME, DEFAULT_TABLE_NAME,
 };
 
 /// A loader project: `sqlload.toml` with `[connections]`, `[targets]` and `[sources]`.
@@ -31,6 +31,12 @@ pub struct ProjectConfig {
     pub targets: BTreeMap<String, TargetConfig>,
     #[serde(default)]
     pub sources: BTreeMap<String, SourceConfig>,
+    /// Every connection's settings after `${NAME}` interpolation, for Python table functions.
+    #[serde(skip)]
+    pub connection_settings: serde_json::Map<String, serde_json::Value>,
+    /// The file declaring each Python source, by source name.
+    #[serde(skip)]
+    pub python_modules: BTreeMap<String, String>,
 }
 
 /// How to reach one system.
@@ -75,6 +81,14 @@ pub enum ConnectionConfig {
         /// The database file; `:memory:` for an in-memory database.
         path: String,
     },
+    /// An HTTP API, for Python sources; its settings reach table functions as `ctx.connection`.
+    Http {
+        base_url: String,
+        #[serde(default)]
+        token: Option<crate::auth::models::Secret>,
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+    },
 }
 
 impl ConnectionConfig {
@@ -86,6 +100,7 @@ impl ConnectionConfig {
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",
             Self::Filesystem { .. } => "filesystem",
+            Self::Http { .. } => "http",
         }
     }
 }
@@ -128,6 +143,8 @@ impl TargetConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SourceConfig {
     pub kind: SourceKind,
+    /// The connection the source reads; optional for Python sources.
+    #[serde(default)]
     pub connection: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -198,6 +215,7 @@ impl SourceConfig {
             (Some(template), _) => template,
             (None, SourceKind::Postgres) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
+            (None, SourceKind::Python) => DEFAULT_PYTHON_TABLE_NAME,
         }
     }
 }
@@ -209,6 +227,8 @@ pub enum SourceKind {
     Postgres,
     /// Existing files in an object store or directory.
     Files,
+    /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
+    Python,
 }
 
 /// The file formats a files target writes.

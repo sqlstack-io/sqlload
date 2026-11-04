@@ -137,7 +137,7 @@ pub(crate) fn source_target(
                 path: Some(target.path_template().to_owned()),
             });
         }
-        ConnectionConfig::Postgres { .. } => {
+        ConnectionConfig::Postgres { .. } | ConnectionConfig::Http { .. } => {
             return Err(format!(
                 "target {name:?} uses a {} connection, which is not a destination",
                 connection.kind()

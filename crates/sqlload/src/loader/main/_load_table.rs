@@ -1,67 +1,70 @@
-//! Move data for every unblocked table of a plan.
+//! Load one table: read its source (a Python table through the host), stage the rows and apply the write strategy.
 
-use std::collections::BTreeMap;
-
-use crate::loader::_helpers::clock::now_utc_text;
 use crate::loader::_helpers::destination::{cleanup_staging, execute, finish_staging, stage_batch};
 use crate::loader::_helpers::sources::{open_source, read_source};
+use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_files::load_files_table;
+use crate::loader::main::_load_python::read_python_table;
 use crate::loader::models::{
-    Destination, LoadResult, ProjectPlan, SourceReader, StagingSession, TablePlan,
+    Destination, LoadRun, PythonLoad, SourceReader, StagingSession, TablePlan,
 };
 use crate::masking::main::mask_batch::mask_batch;
-use crate::project::models::ProjectConfig;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
+use crate::time_text::main::now_utc_text::now_utc_text;
 use crate::write_sql::main::display_name::display_name;
 use crate::write_sql::main::staging_table::staging_table;
 use crate::write_sql::main::write_statements::write_statements;
 use crate::write_sql::models::WriteStatementsRequest;
 
-/// Load each unblocked table: read the source into a staging table, then apply the write strategy in one transaction.
-pub async fn load_project(
-    project: &ProjectConfig,
-    plan: &ProjectPlan,
-    destinations: &BTreeMap<String, Destination>,
-) -> Result<Vec<LoadResult>, LoaderError> {
-    let mut results: Vec<LoadResult> = Vec::new();
-    for table in plan
-        .tables
-        .iter()
-        .filter(|table| table.schema.blocked.is_none())
-    {
-        let source = project
-            .sources
-            .get(&table.spec.source_name)
-            .ok_or_else(|| {
-                LoaderError::Invalid(format!(
-                    "source {:?} does not exist",
-                    table.spec.source_name
-                ))
-            })?;
-        let destination = destinations.get(&table.spec.target).ok_or_else(|| {
-            LoaderError::Invalid(format!("target {:?} is not connected", table.spec.target))
+/// Load one table; returns its name as reported and the rows loaded.
+pub(in crate::loader) async fn load_one(
+    run: &LoadRun<'_>,
+    planned: &TablePlan,
+) -> Result<(String, u64), LoaderError> {
+    let project = run.project;
+    let source = project
+        .sources
+        .get(&planned.spec.source_name)
+        .ok_or_else(|| {
+            LoaderError::Invalid(format!(
+                "source {:?} does not exist",
+                planned.spec.source_name
+            ))
         })?;
-        let reader = open_source(project, source).await?;
-        let result = match (destination, &table.output) {
-            (Destination::Files(_), Some(output)) => LoadResult {
-                table: output.path.folder.to_string(),
-                rows: load_files_table(&reader, table, output).await?,
-            },
-            (Destination::Files(_), None) => {
-                return Err(LoaderError::Invalid(format!(
-                    "{}: a files target table has no files planned",
-                    table.spec.destination.table
-                )));
-            }
-            _ => LoadResult {
-                table: display_name(&table.spec.destination, table.spec.warehouse),
-                rows: load_table(&reader, table, destination).await?,
-            },
-        };
-        results.push(result);
+    let destination = run.destinations.get(&planned.spec.target).ok_or_else(|| {
+        LoaderError::Invalid(format!("target {:?} is not connected", planned.spec.target))
+    })?;
+    let (reader, replanned) = match (&planned.spec.python, &run.host) {
+        (Some(_), Some(host)) => {
+            let load = PythonLoad {
+                project,
+                table: planned,
+                destination,
+                host: host.clone(),
+                options: run.options,
+            };
+            let (reader, table) = read_python_table(&load).await?;
+            (reader, Some(table))
+        }
+        (Some(_), None) => return Err(LoaderError::Invalid(NO_PYTHON_HOST.to_owned())),
+        (None, _) => (open_source(project, source).await?, None),
+    };
+    let table = replanned.as_ref().unwrap_or(planned);
+    match (destination, &table.output) {
+        (Destination::Files(_), Some(output)) => Ok((
+            output.path.folder.to_string(),
+            load_files_table(&reader, table, output).await?,
+        )),
+        (Destination::Files(_), None) => Err(LoaderError::Invalid(format!(
+            "{}: a files target table has no files planned",
+            table.spec.destination.table
+        ))),
+        _ => Ok((
+            display_name(&table.spec.destination, table.spec.warehouse),
+            load_table(&reader, table, destination).await?,
+        )),
     }
-    Ok(results)
 }
 
 async fn load_table(

@@ -89,3 +89,14 @@ pub enum LogFormat {
     Text,
     Json,
 }
+
+/// A loader command to run on a project's text.
+#[derive(Debug)]
+pub struct LoaderRequest<'a> {
+    pub text: &'a str,
+    /// The project file, whose folder `python_paths` are relative to.
+    pub config: &'a std::path::Path,
+    pub command: Command,
+    /// Runs Python sources; `None` in the standalone executable.
+    pub host: Option<std::sync::Arc<dyn crate::python_sources::types::PythonHost>>,
+}

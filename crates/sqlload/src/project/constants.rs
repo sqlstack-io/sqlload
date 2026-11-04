@@ -36,6 +36,20 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "tables",
 ];
 
+/// Keys a Python source may set (`kind` is added by discovery), besides the table settings.
+pub const PYTHON_SOURCE_KEYS: &[&str] = &[
+    "kind",
+    "connection",
+    "description",
+    "destination",
+    "schema",
+    "destination_path",
+    "exclude_columns",
+    "allow_columns",
+    "mask_key",
+    "tables",
+];
+
 /// Keys only a table may use.
 pub const TABLE_ONLY_KEYS: &[&str] = &[
     "description",
@@ -73,3 +87,6 @@ pub const DEFAULT_TABLE_NAME: &str = "{source}__{table}";
 
 /// The destination table name template for a files source, which has one table.
 pub const DEFAULT_FILES_TABLE_NAME: &str = "{source}";
+
+/// The destination table name template for Python tables: the table's own (unique) name.
+pub const DEFAULT_PYTHON_TABLE_NAME: &str = "{table}";

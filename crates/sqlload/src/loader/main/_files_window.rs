@@ -6,6 +6,7 @@ use crate::files_destination::main::cursor_maximum::cursor_maximum;
 use crate::files_destination::main::partition_window::partition_window;
 use crate::files_destination::models::{PartitionBy, PartitionWindowRequest};
 use crate::loader::_helpers::window::{Window, source_filter};
+use crate::loader::constants::{EXCLUSIVE_BOUND, INCLUSIVE_BOUND};
 use crate::loader::models::FilesWindowRequest;
 use crate::project::models::WriteStrategy;
 use crate::write_sql::main::cursor_bound::cursor_bound;
@@ -31,6 +32,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 bounds: (None, None),
                 mode,
                 note: None,
+                inclusive: true,
             }),
         };
     };
@@ -75,7 +77,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 cursor_start: cursor.start.as_deref(),
                 reload: options.reload,
             })?;
-            (window.from, window.to, window.note, ">=")
+            (window.from, window.to, window.note, INCLUSIVE_BOUND)
         }
         _ => {
             let maximum = match (&start, newest) {
@@ -100,8 +102,8 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 (None, None, None) => (None, format!("{column} first run, everything")),
             };
             let operator = match (cursor.inclusive, &options.start_cursor) {
-                (false, None) => ">",
-                _ => ">=",
+                (false, None) => EXCLUSIVE_BOUND,
+                _ => INCLUSIVE_BOUND,
             };
             (from, end, note, operator)
         }
@@ -125,6 +127,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
         bounds: (from, to),
         mode,
         note: Some(note),
+        inclusive: operator == INCLUSIVE_BOUND,
     })
 }
 

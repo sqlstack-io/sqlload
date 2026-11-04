@@ -4,5 +4,7 @@ mod helpers;
 mod is_project;
 #[path = "tests/test_parse_project.rs"]
 mod parse_project;
+#[path = "tests/test_parse_python_project.rs"]
+mod parse_python_project;
 #[path = "tests/test_types.rs"]
 mod test_types;

@@ -1,9 +1,9 @@
 use crate::files_destination::models::{PendingLoad, PendingPhase};
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
-use crate::loader::models::{FilesOutput, TablePlan};
+use crate::loader::models::{FilesOutput, PythonTable, TablePlan};
 use crate::project::models::FilesFormat;
 use crate::routing::models::Route;
-use crate::schema_plan::models::TableAction;
+use crate::schema_plan::models::{ColumnOrigin, TableAction};
 use crate::write_sql::main::display_name::display_name;
 use crate::write_sql::models::WriteMode;
 
@@ -62,6 +62,7 @@ pub(crate) fn object_lines(table: &TablePlan) -> Vec<String> {
                 table.schema.write_columns.len()
             ),
         ),
+        TableAction::Create if table.spec.python.is_some() => row(&name, &python_create(table)),
         TableAction::Create => row(
             &name,
             &format!(
@@ -104,12 +105,13 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
         WriteMode::Recreate => "recreate from the whole source (--reload)".to_owned(),
     };
     let origin = format!("  ({})", spec.strategy_origin);
-    let source = match &spec.files {
-        Some(files) => format!(
+    let source = match (&spec.files, &spec.python) {
+        (Some(files), _) => format!(
             "source  files  {}  {}  {}",
             spec.source_name, files.location, files.encoding
         ),
-        None => format!(
+        (None, Some(python)) => format!("source  python  {} ({})", python.module, spec.source_name),
+        (None, None) => format!(
             "source  postgres  {}  {}",
             spec.source_name,
             spec.source_table.qualified_name()
@@ -119,6 +121,11 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
         row(&spec.destination.table, &format!("{strategy}{origin}")),
         source,
     ];
+    lines.extend(
+        spec.python
+            .as_ref()
+            .map(|python| python_columns_line(table, python)),
+    );
     lines.extend(
         spec.files
             .as_ref()
@@ -240,4 +247,32 @@ pub(crate) fn warning_lines(table: &TablePlan) -> Vec<Vec<String>> {
         .iter()
         .map(|warning| vec![format!("{}  {warning}", table.spec.destination.table)])
         .collect()
+}
+
+/// A Python table's object line before its first load.
+fn python_create(table: &TablePlan) -> String {
+    let declared = table
+        .schema
+        .write_columns
+        .iter()
+        .filter(|column| column.origin != ColumnOrigin::Metadata)
+        .count();
+    match declared {
+        0 => "create table on first load (columns inferred from the data)".to_owned(),
+        count => {
+            format!("create table ({count} declared columns; the rest inferred on first load)")
+        }
+    }
+}
+
+/// Where a Python table's columns come from.
+fn python_columns_line(table: &TablePlan, python: &PythonTable) -> String {
+    let declared = match python.declared.len() {
+        0 => String::new(),
+        count => format!(", {count} declared"),
+    };
+    match table.exists {
+        true => format!("columns inferred at load and checked against the live table{declared}"),
+        false => format!("columns inferred on first load{declared}"),
+    }
 }

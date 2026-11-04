@@ -26,16 +26,22 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
 
 fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
-    let place = format!("[sources.{name}]");
+    let place = source_place(project, name);
     let expected = match source.kind {
         SourceKind::Postgres => "postgres",
         SourceKind::Files => "s3 or filesystem",
+        SourceKind::Python => "any",
     };
     match project.connections.get(&source.connection) {
+        None if source.connection.is_empty() && source.kind == SourceKind::Python => {}
+        None if source.connection.is_empty() => {
+            problems.push(format!("{place} needs a connection"));
+        }
         None => problems.push(format!(
             "{place} connection {:?} is not a [connections] entry",
             source.connection
         )),
+        Some(_) if source.kind == SourceKind::Python => {}
         Some(connection) if !expected.split(" or ").any(|kind| kind == connection.kind()) => {
             problems.push(format!(
                 "{place} has kind = {:?} but connection {:?} is a {} connection (expected {expected})",
@@ -75,6 +81,15 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Postgres => "postgres",
         SourceKind::Files => "files",
+        SourceKind::Python => "python",
+    }
+}
+
+/// How problems name a source: its TOML section, or the Python file declaring it.
+fn source_place(project: &ProjectConfig, name: &str) -> String {
+    match project.python_modules.get(name) {
+        Some(module) => format!("Python source {name} ({module})"),
+        None => format!("[sources.{name}]"),
     }
 }
 
@@ -115,6 +130,7 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
             problems.extend(encoding_problems(place, source));
         }
+        SourceKind::Python => {}
     }
     problems
 }

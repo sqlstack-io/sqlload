@@ -9,12 +9,12 @@ use crate::files_destination::main::mark_pending::mark_pending;
 use crate::files_destination::main::open_writer::open_writer;
 use crate::files_destination::main::write_rows::write_rows;
 use crate::files_destination::models::{FilesWriter, PendingPhase, WriterRequest};
-use crate::loader::_helpers::clock::now_utc_text;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_repair::files_to_replace;
 use crate::loader::models::{FilesOutput, SourceReader, TablePlan};
 use crate::masking::main::mask_batch::mask_batch;
+use crate::time_text::main::now_utc_text::now_utc_text;
 use crate::write_sql::models::WriteMode;
 
 /// Repair unfinished loads, then write the table's rows as new files and delete the older files they replace; a pending marker records each phase, so an interrupted load is repaired by the next plan or load.

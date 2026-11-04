@@ -7,7 +7,7 @@ use crate::files_destination::main::write_notes::write_notes;
 use crate::files_destination::models::{FilesDestination, TableFiles};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
-use crate::loader::_helpers::table_plan::{blocked_plan, blocked_table};
+use crate::loader::_helpers::table_plan::{blocked_plan, blocked_table, read_window};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_context::files_context;
 use crate::loader::main::_files_schema::files_schema;
@@ -66,6 +66,7 @@ pub(in crate::loader) async fn plan_files_table(
             }
         },
     };
+    let read = window.as_ref().and_then(|window| read_window(spec, window));
     let (source_filter, mode, cursor_note) = match window {
         Some(window) => (window.filter, window.mode, window.note),
         None => (None, WriteMode::Append, None),
@@ -79,6 +80,7 @@ pub(in crate::loader) async fn plan_files_table(
         mode,
         source_filter,
         cursor_note,
+        window: read,
         route: None,
         files: None,
         exists: state.exists,

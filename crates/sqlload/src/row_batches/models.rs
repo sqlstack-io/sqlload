@@ -51,6 +51,21 @@ impl RowColumns {
         self.guess = 0;
     }
 
+    /// About how many bytes the cells hold.
+    pub fn approximate_bytes(&self) -> usize {
+        self.cells
+            .iter()
+            .flatten()
+            .map(|cell| {
+                std::mem::size_of::<Cell>()
+                    + match cell {
+                        Cell::Number(text) | Cell::Text(text) | Cell::Json(text) => text.len(),
+                        Cell::Null | Cell::Bool(_) | Cell::Int(_) | Cell::Float(_) => 0,
+                    }
+            })
+            .sum()
+    }
+
     /// The finished rows.
     pub fn rows(&self) -> usize {
         self.rows

@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use arrow_array::RecordBatch;
@@ -33,6 +33,8 @@ pub struct CrossingOptions {
     pub parse_threads: usize,
     /// A thread made to panic, to test that a panic fails the read (the crossing's test hook).
     pub panic_at: Option<PanicSite>,
+    /// Bytes of crossed data waiting to be parsed before the generator pauses (one piece larger than this still crosses alone).
+    pub max_queued_bytes: usize,
 }
 
 /// A crossing thread that can be made to panic for tests.
@@ -65,6 +67,8 @@ pub(crate) struct Dispatch {
     /// Each piece's batch channel in yield order; `None` marks the end of the generator.
     pub(crate) order: SyncSender<Option<Receiver<Parsed>>>,
     pub(crate) jobs: Sender<ParseJob>,
+    /// Holds the byte budget the generator waits on.
+    pub(crate) stats: Arc<CrossingStats>,
 }
 
 /// One piece of yielded data, crossed into Rust and waiting to be parsed.
@@ -80,9 +84,62 @@ pub(crate) enum Crossed {
     Failed(CrossError),
 }
 
-/// Counters of one table read, for benchmarks and logs.
+impl Crossed {
+    /// About how many bytes the piece holds while it waits (a stream's batches are read later, so count nothing).
+    pub(crate) fn queued_bytes(&self) -> usize {
+        match self {
+            Self::Columns(columns) => columns.approximate_bytes(),
+            Self::Json { bytes, .. } => bytes.len(),
+            Self::ArrowBatch(batch) => batch.get_array_memory_size(),
+            Self::ArrowStream(_) | Self::Failed(_) => 0,
+        }
+    }
+}
+
+/// Bytes of crossed data not parsed yet; the generator waits while a new piece would exceed the limit.
+#[derive(Debug, Default)]
+pub(crate) struct ByteBudget {
+    used: Mutex<usize>,
+    freed: Condvar,
+    limit: usize,
+}
+
+impl ByteBudget {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            used: Mutex::new(0),
+            freed: Condvar::new(),
+            limit,
+        }
+    }
+
+    /// Wait until `bytes` more fit (always when nothing is queued), then count them.
+    pub(crate) fn acquire(&self, bytes: usize) {
+        let Ok(mut used) = self.used.lock() else {
+            return;
+        };
+        while *used > 0 && *used + bytes > self.limit {
+            used = match self.freed.wait(used) {
+                Ok(used) => used,
+                Err(_) => return,
+            };
+        }
+        *used += bytes;
+    }
+
+    /// Stop counting `bytes`, waking a waiting generator.
+    pub(crate) fn release(&self, bytes: usize) {
+        if let Ok(mut used) = self.used.lock() {
+            *used = used.saturating_sub(bytes);
+            self.freed.notify_all();
+        }
+    }
+}
+
+/// Counters of one table read, for benchmarks and logs, and its byte budget.
 #[derive(Debug, Default)]
 pub struct CrossingStats {
+    pub(crate) budget: ByteBudget,
     pub(crate) rows: AtomicU64,
     pub(crate) batches: AtomicU64,
     /// Time spent reading or serialising dicts with the GIL held.

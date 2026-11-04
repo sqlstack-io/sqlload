@@ -1,7 +1,6 @@
 use sqlload::duckdb_destination::main::query_text::query_text;
 use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;
-use sqlload::loader::main::load_project::load_project;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
 use sqlload::loader::models::{Destination, PlanOptions};
@@ -9,7 +8,7 @@ use sqlload::project::main::parse_project::parse_project;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
-use crate::helpers::{duckdb_project, run_async};
+use crate::helpers::{duckdb_project, load_all, run_async};
 use crate::test_types::LoadRunTestCase;
 
 const SETUP: &str = "
@@ -117,7 +116,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
             apply_project(&plan, &destinations)
                 .await
                 .map_err(|error| error.to_string())?;
-            load_project(&project, &plan, &destinations)
+            load_all(&project, &plan, &destinations)
                 .await
                 .map_err(|error| format!("{}: {error}", test_case.description))?;
             let result = query_text(duckdb, test_case.check_query.to_owned())
