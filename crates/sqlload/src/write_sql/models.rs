@@ -1,4 +1,6 @@
-use crate::column_types::models::Warehouse;
+use std::time::Duration;
+
+use crate::column_types::models::{ColumnType, Warehouse};
 use crate::schema_plan::models::DesiredColumn;
 
 /// A destination table.
@@ -37,4 +39,14 @@ pub struct WriteStatementsRequest<'a> {
     pub load_id: &'a str,
     /// The load time as an ISO 8601 UTC timestamp.
     pub loaded_at: &'a str,
+}
+
+/// A cursor position to read from the destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorQuery<'a> {
+    pub table: &'a TableName,
+    pub column: &'a str,
+    pub column_type: &'a ColumnType,
+    pub lookback: Option<Duration>,
+    pub warehouse: Warehouse,
 }

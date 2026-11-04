@@ -26,3 +26,33 @@ pub(crate) fn column_values(batches: &[RecordBatch], column: &str) -> Result<Vec
     }
     Ok(values)
 }
+
+/// A loader project reading `public.*` from the test Postgres into an in-memory DuckDB, plus `extra` TOML.
+pub(crate) fn duckdb_project(port: u16, extra: &str) -> String {
+    format!(
+        r#"
+[connections.app_pg]
+kind = "postgres"
+host = "127.0.0.1"
+port = {port}
+user = "sqlload"
+password = "sqlload"
+database = "app"
+
+[connections.local]
+kind = "duckdb"
+path = ":memory:"
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.app]
+kind = "postgres"
+connection = "app_pg"
+include = ["public.*"]
+exclude_columns = ["*email*"]
+{extra}
+"#
+    )
+}

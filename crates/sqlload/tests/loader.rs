@@ -4,5 +4,7 @@
 mod helpers;
 #[path = "loader/test_postgres_reader.rs"]
 mod test_postgres_reader;
+#[path = "loader/test_postgres_to_duckdb.rs"]
+mod test_postgres_to_duckdb;
 #[path = "loader/test_types.rs"]
 mod test_types;
