@@ -1,3 +1,4 @@
+#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::errors::DuckDbError;
 use crate::http::errors::ApiError;
 use crate::postgres_source::errors::PostgresError;
@@ -7,6 +8,7 @@ use crate::postgres_source::errors::PostgresError;
 pub enum LoaderError {
     #[error(transparent)]
     Postgres(#[from] PostgresError),
+    #[cfg(feature = "duckdb")]
     #[error(transparent)]
     DuckDb(#[from] DuckDbError),
     #[error(transparent)]

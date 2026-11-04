@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::open_duckdb::open_duckdb;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::Destination;
@@ -16,7 +17,14 @@ pub async fn connect_targets(
     let mut destinations: BTreeMap<String, Destination> = BTreeMap::new();
     for (name, target) in &project.targets {
         let destination = match project.connections.get(&target.connection) {
+            #[cfg(feature = "duckdb")]
             Some(ConnectionConfig::DuckDb { path }) => Destination::DuckDb(open_duckdb(path)?),
+            #[cfg(not(feature = "duckdb"))]
+            Some(ConnectionConfig::DuckDb { .. }) => {
+                return Err(LoaderError::Invalid(format!(
+                    "target {name:?}: this sqlload was built without DuckDB (cargo feature \"duckdb\")"
+                )));
+            }
             Some(ConnectionConfig::Snowflake {
                 account,
                 user,
