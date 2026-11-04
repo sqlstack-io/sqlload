@@ -11,17 +11,31 @@ use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 use crate::helpers::run_async;
 use crate::test_types::FileStoreTestCase;
 
+/// The files written that are data; the `_sqlload/` and `.tmp` ones are hidden.
+const DATA_KEYS: &[&str] = &[
+    "date=2026-11-03/part-0.parquet",
+    "date=2026-11-04/part-1.parquet",
+];
+
 #[test]
 fn given_a_store_when_writing_and_listing_files_then_data_files_round_trip_and_hidden_ones_are_skipped()
 -> Result<(), String> {
     let test_cases = [
         FileStoreTestCase {
             description: "S3 through SeaweedFS",
-            store: "s3",
+            store: |endpoint, _| StoreKind::S3 {
+                bucket: "example-bucket-test".to_owned(),
+                region: Some(REGION.to_owned()),
+                endpoint: Some(endpoint.to_owned()),
+            },
+            expected_keys: DATA_KEYS,
         },
         FileStoreTestCase {
             description: "a local directory",
-            store: "filesystem",
+            store: |_, directory| StoreKind::Filesystem {
+                root: directory.display().to_string(),
+            },
+            expected_keys: DATA_KEYS,
         },
     ];
     run_async(async {
@@ -29,16 +43,7 @@ fn given_a_store_when_writing_and_listing_files_then_data_files_round_trip_and_h
         create_bucket(&server, "example-bucket-test").await?;
         let directory = std::env::temp_dir().join(format!("sqlload-store-{}", std::process::id()));
         for test_case in test_cases {
-            let store = match test_case.store {
-                "s3" => StoreKind::S3 {
-                    bucket: "example-bucket-test".to_owned(),
-                    region: Some(REGION.to_owned()),
-                    endpoint: Some(server.endpoint.clone()),
-                },
-                _ => StoreKind::Filesystem {
-                    root: directory.display().to_string(),
-                },
-            };
+            let store = (test_case.store)(&server.endpoint, &directory);
             let folder = open_folder(&Location {
                 store,
                 prefix: "models/scores/".to_owned(),
@@ -61,15 +66,7 @@ fn given_a_store_when_writing_and_listing_files_then_data_files_round_trip_and_h
                 .iter()
                 .map(|file| file.relative_key.as_str())
                 .collect();
-            assert_eq!(
-                keys,
-                [
-                    "date=2026-11-03/part-0.parquet",
-                    "date=2026-11-04/part-1.parquet"
-                ],
-                "{}",
-                test_case.description
-            );
+            assert_eq!(keys, test_case.expected_keys, "{}", test_case.description);
             let body = read_file(&folder, "date=2026-11-04/part-1.parquet")
                 .await
                 .map_err(|error| error.to_string())?;

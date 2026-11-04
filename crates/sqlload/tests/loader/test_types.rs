@@ -44,6 +44,8 @@ pub(crate) struct ScenarioTestCase {
 
 pub(crate) struct FileStoreTestCase {
     pub(crate) description: &'static str,
-    /// `s3` (SeaweedFS) or `filesystem` (a temporary directory).
-    pub(crate) store: &'static str,
+    /// The store under test, given the S3 endpoint and a temporary directory.
+    pub(crate) store: fn(&str, &std::path::Path) -> sqlload::store_paths::models::StoreKind,
+    /// The data files listed after writing, in order.
+    pub(crate) expected_keys: &'static [&'static str],
 }
