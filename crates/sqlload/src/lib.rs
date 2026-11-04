@@ -18,6 +18,7 @@ pub mod kafka;
 pub mod metrics;
 pub mod naming;
 pub mod planning;
+pub mod routing;
 pub mod sql_api;
 pub mod stage_api;
 pub mod status;
