@@ -74,6 +74,9 @@ jobs:
           version: "0.12.9"
       - run: make check-ci
       - run: make test-unit
+      # Builds the sqlload extension (crates/sqlload-python) in the same target directory, so the
+      # rust-cache above covers it, and runs the Python package's tests.
+      - run: make test-python
       - name: Package the crate as crates.io would
         run: cargo publish --dry-run --locked -p sqlload
 

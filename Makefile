@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 FENSU := uvx --from 'fensu-cli==0.28.3' fensu
 
-.PHONY: check check-ci test test-unit test-containers verify
+.PHONY: check check-ci test test-unit test-containers test-python verify
 
 # Lints the default build (DuckDB included) and the build without DuckDB, so both keep compiling.
 check:
@@ -24,6 +24,13 @@ test-unit:
 test-containers:
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests --test exporter --quiet -- --test-threads=2
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests --test loader --quiet -- --test-threads=2
+
+# Builds the sqlload extension (debug) into .venv and runs the package's tests.
+test-python:
+	uv venv --quiet --allow-existing --python 3.12 .venv
+	uv pip install --quiet --python .venv/bin/python 'maturin>=1.9,<2' pytest pytest-xdist pyarrow polars pandas orjson
+	cd packages/sqlload && VIRTUAL_ENV=$(CURDIR)/.venv $(CURDIR)/.venv/bin/maturin develop --uv --quiet
+	.venv/bin/python -m pytest packages/sqlload/tests -n auto --dist loadfile
 
 test: test-unit test-containers
 

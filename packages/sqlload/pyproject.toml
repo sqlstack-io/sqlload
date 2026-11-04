@@ -1,0 +1,46 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "sqlload"
+version = "0.4.0" # x-release-please-version
+description = "SQL data loading tooling. Pre-release, under development."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Topic :: Database",
+]
+# orjson writes gathered dict rows as JSON bytes, which Rust parses without the GIL.
+dependencies = ["orjson>=3.10"]
+
+[project.scripts]
+sqlload = "sqlload._cli:main"
+
+[project.urls]
+Homepage = "https://github.com/sqlstack-io/sqlload"
+Issues = "https://github.com/sqlstack-io/sqlload/issues"
+Repository = "https://github.com/sqlstack-io/sqlload"
+
+[tool.maturin]
+manifest-path = "../../crates/sqlload-python/Cargo.toml"
+module-name = "sqlload._native"
+python-source = "python"
+# Kafka TLS with OpenSSL built in, as in sqlload-cli; SASL PLAIN and SCRAM need nothing else.
+features = ["ssl-vendored"]
+
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "python/**/*.py" },
+  { file = "../../Cargo.toml" },
+  { file = "../../Cargo.lock" },
+  { file = "../../crates/*/Cargo.toml" },
+  { file = "../../crates/*/src/**/*.rs" },
+]

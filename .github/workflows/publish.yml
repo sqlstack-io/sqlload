@@ -50,19 +50,14 @@ jobs:
           from pathlib import Path
 
           expected = os.environ["RELEASE_VERSION"]
-          with Path("pyproject.toml").open("rb") as file:
-              root = tomllib.load(file)["project"]
-          cli_dependency = next(
-              item for item in root["dependencies"] if item.startswith("sqlload-cli==")
-          ).partition("==")[2]
-          with Path("packages/sqlload-cli/pyproject.toml").open("rb") as file:
-              cli_package_version = tomllib.load(file)["project"]["version"]
+          def project_version(path):
+              with Path(path).open("rb") as file:
+                  return tomllib.load(file)["project"]["version"]
           with Path("Cargo.toml").open("rb") as file:
               workspace_version = tomllib.load(file)["workspace"]["package"]["version"]
           manifests = [
-              ("root project", root["version"]),
-              ("root CLI dependency", cli_dependency),
-              ("CLI package", cli_package_version),
+              ("Python package", project_version("packages/sqlload/pyproject.toml")),
+              ("CLI package", project_version("packages/sqlload-cli/pyproject.toml")),
               ("Cargo workspace", workspace_version),
           ]
           mismatches = [f"{label}={version}" for label, version in manifests if version != expected]
@@ -115,13 +110,34 @@ jobs:
       - name: Assert native CLI wheel is interpreter-agnostic
         shell: bash
         run: bash .github/scripts/assert_cli_wheel_tags.sh dist
+      # sqlload is a PyO3 extension built against the stable ABI, so one cp310-abi3 wheel per
+      # platform serves CPython 3.10 and later.
+      - name: Build Python extension wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out ../../dist
+          target: ${{ matrix.platform.target }}
+          manylinux: "2_28"
+          working-directory: packages/sqlload
+          before-script-linux: dnf install -y perl-IPC-Cmd perl-Time-Piece
+      - name: Assert Python extension wheel targets the stable ABI
+        shell: bash
+        run: bash .github/scripts/assert_python_wheel_tags.sh dist
+      - name: Smoke-test the Python extension wheel
+        shell: bash
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/sqlload-*.whl
+          /tmp/smoke/bin/sqlload --help
+          /tmp/smoke/bin/python -c "import sqlload, sqlload._native"
       - uses: actions/upload-artifact@v5
         with:
           name: wheel-${{ matrix.platform.name }}
           path: dist
 
   sdist:
-    name: Build sdists and Python wheel
+    name: Build sdists
     needs: [release-tag, release-metadata]
     runs-on: ubuntu-latest
     steps:
@@ -131,12 +147,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.95.0
-      - uses: astral-sh/setup-uv@v6
+      - name: Build Python extension sdist
+        uses: PyO3/maturin-action@v1
         with:
-          version: "0.12.9"
-      # The sqlload package is pure Python, so one wheel serves every platform.
-      - name: Build Python package sdist and wheel
-        run: uv build --sdist --wheel --out-dir dist
+          command: sdist
+          args: --out ../../dist
+          working-directory: packages/sqlload
       - name: Build native CLI sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -171,6 +187,10 @@ jobs:
       - name: Assert native CLI wheels are interpreter-agnostic
         shell: bash
         run: bash .github/scripts/assert_cli_wheel_tags.sh dist
+
+      - name: Assert Python extension wheels target the stable ABI
+        shell: bash
+        run: bash .github/scripts/assert_python_wheel_tags.sh dist
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

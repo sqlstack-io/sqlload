@@ -102,3 +102,9 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 rule = "FPRSN003"
 path = "crates/sqlload/src/files_source/_helpers/parquet/object_reader.rs"
 reason = "get_bytes, get_byte_ranges and get_metadata are parquet's AsyncFileReader trait methods."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSS120"
+path = "crates/sqlload-python/src/bindings/_helpers/cross.rs"
+symbols = ["cross"]
+reason = "PyO3 maps each of the Python function's keyword-only arguments to one Rust parameter."

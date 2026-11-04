@@ -25,17 +25,6 @@ pub(crate) fn csv_value_type(text: &str) -> ColumnType {
     }
 }
 
-/// One type for a column that held values of both types: int and float make float; any other mix is text.
-pub(crate) fn combine_types(seen: ColumnType, value: ColumnType) -> ColumnType {
-    match (seen, value) {
-        (seen, value) if seen == value => seen,
-        (ColumnType::Int | ColumnType::Float, ColumnType::Int | ColumnType::Float) => {
-            ColumnType::Float
-        }
-        _ => ColumnType::Text,
-    }
-}
-
 /// `int` for an integer that fits 64 bits, `float` for a finite decimal or exponent number, `text` for the rest (larger integers, leading zeros); the syntax is checked first, so parsing fails only on overflow.
 fn number_type(text: &str) -> ColumnType {
     match (is_integer(text), is_float(text)) {
