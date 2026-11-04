@@ -4,8 +4,11 @@ use crate::loader::_helpers::destination::execute;
 use crate::loader::_helpers::python::{
     YieldedData, change_lines, cursor_type_name, declared_problems, inferred_table, refuse_emptying,
 };
-use crate::loader::_helpers::python::{shareable_connection, spill_batches, start_read};
+use crate::loader::_helpers::python::{
+    final_state, shareable_connection, spill_batches, start_read,
+};
 use crate::loader::_helpers::resolve::resolve_tables;
+use crate::loader::_helpers::run_log::{reconcile_before_read, run_entry};
 use crate::loader::_helpers::table_plan::{plan_table, schema_statements};
 use crate::loader::constants::NO_DATA_NOTE;
 use crate::loader::errors::LoaderError;
@@ -16,8 +19,15 @@ use crate::python_sources::models::{CursorRead, TableRead};
 pub(in crate::loader) async fn read_python_table(
     load: &PythonLoad<'_>,
 ) -> Result<PythonRead, LoaderError> {
+    reconcile_before_read(load.table, load.destination).await?;
     let stream = start_read(load.host.clone(), table_read(load)).await?;
     let spilled = spill_batches(stream).await?;
+    let state = match load.table.logged {
+        Some(_) => {
+            final_state(load.host.clone(), load.table.spec.source_table.name.clone()).await?
+        }
+        None => None,
+    };
     if spilled.rows == 0 {
         refuse_emptying(load.table, load.destination).await?;
     }
@@ -33,6 +43,7 @@ pub(in crate::loader) async fn read_python_table(
             table: load.table.clone(),
             changes: Vec::new(),
             note: Some(NO_DATA_NOTE.to_owned()),
+            run: run_entry(load, load.table, state),
         });
     }
     let table = replan(load, &spilled).await?;
@@ -43,11 +54,13 @@ pub(in crate::loader) async fn read_python_table(
         }
         None => Vec::new(),
     };
+    let run = run_entry(load, &table, state);
     Ok(PythonRead {
         reader: Some(SourceReader::Batches(spilled)),
         table,
         changes,
         note: None,
+        run,
     })
 }
 
@@ -86,6 +99,13 @@ fn table_read(load: &PythonLoad<'_>) -> TableRead {
         connections,
         withheld,
         cursor,
+        logged: table.logged.is_some(),
+        state: table
+            .logged
+            .as_ref()
+            .and_then(|logged| logged.current.as_ref())
+            .and_then(|record| record.state.clone())
+            .filter(|_| !load.options.reload),
         is_reload: load.options.reload,
     }
 }
@@ -141,6 +161,7 @@ async fn replan(load: &PythonLoad<'_>, spilled: &SpilledBatches) -> Result<Table
         mode: planned.mode.clone(),
         window: planned.window.clone(),
         cursor_note: planned.cursor_note.clone(),
+        logged: planned.logged.clone(),
         ..replanned
     })
 }

@@ -30,6 +30,7 @@ pub mod project;
 pub mod python_sources;
 pub mod routing;
 pub mod row_batches;
+pub mod run_log;
 pub mod schema_plan;
 pub mod similar_names;
 pub mod snowflake_destination;

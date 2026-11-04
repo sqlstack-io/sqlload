@@ -45,3 +45,6 @@ pub const OPEN_FILES_MAX: usize = 256;
 
 /// Memory an open file holds beyond its buffered data (writer state, page buffers), for the memory estimate.
 pub const OPEN_FILE_OVERHEAD_BYTES: usize = 1024 * 1024;
+
+/// The start of a pending marker line holding a run record (keys never start with `@`).
+pub const PENDING_RUN_PREFIX: &str = "@run\t";

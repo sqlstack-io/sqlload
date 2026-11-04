@@ -41,5 +41,8 @@ pub(crate) async fn run_exporter_command(
             }
         }
         Command::Status => status(&config).await,
+        Command::State { .. } => Err(
+            "state runs on loader projects with state = \"logged\" tables; this file is an exporter configuration".to_owned(),
+        ),
     }
 }

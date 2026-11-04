@@ -60,3 +60,25 @@ so a function that ignores `ctx.cursor_value` still loads correctly.
 `ctx.connection` holds the source's connection settings; `ctx.connection("name")` gives another
 connection's, except connections that a `[targets]` entry writes to, which table functions never
 get.
+
+### Logged state
+
+A table whose position the data cannot carry (an API sync token, say) sets `state="logged"` and
+keeps it in `ctx.state`:
+
+```python
+@shop.table(write_strategy="append", state="logged")
+def events(ctx: sl.Context):
+    page = fetch_events(since=ctx.state)
+    yield from page.items
+    ctx.state = page.next_token
+```
+
+Each successful run appends a record to `_sqlload_runs` in the table's schema (or one object under
+`_sqlload/runs/<table>/` in a files target), in the same transaction as the data where the
+warehouse allows it, so a failed load never moves the position. A table with a `cursor_column`
+also logs the data's cursor; when the log and the data disagree, the data wins and the load appends
+a visible reconciliation. `sqlload state show`, `verify`, `reconcile --yes` and
+`reset --to VALUE --yes` (or `--clear`) inspect and correct the log; `--reload` starts over.
+Deleting the log is safe: the next run reads as a stateless one would.
+

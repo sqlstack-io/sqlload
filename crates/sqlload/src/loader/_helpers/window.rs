@@ -28,6 +28,8 @@ pub(crate) struct Window {
     pub(crate) note: Option<String>,
     /// Whether the lower bound itself is read.
     pub(crate) inclusive: bool,
+    /// The destination's cursor maximum, without lookback, when it was read.
+    pub(crate) maximum: Option<String>,
 }
 
 fn write_mode(
@@ -70,18 +72,19 @@ pub(crate) fn source_filter(
     (!bounds.is_empty()).then(|| bounds.join(" AND "))
 }
 
-/// Where the read starts, and why: a `--start-cursor`, the destination's maximum, `cursor_start`, or nothing.
+/// Where the read starts, and why: a `--start-cursor`, the destination's maximum, `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
 async fn lower_bound(
     request: &WindowRequest<'_>,
     cursor: &CursorSpec,
     cursor_type: &ColumnType,
     start_flag: Option<&str>,
-) -> Result<Result<(Option<String>, String), String>, LoaderError> {
+) -> Result<Result<(Option<String>, String, Option<String>), String>, LoaderError> {
     let options = request.options;
     if let Some(start) = start_flag {
         return Ok(Ok((
             Some(start.to_owned()),
             format!("{} from {start} (--start-cursor)", cursor.column),
+            None,
         )));
     }
     if options.reload || !request.table_exists {
@@ -94,8 +97,9 @@ async fn lower_bound(
             Some(start) => (
                 Some(start.clone()),
                 format!("{} {label}, from cursor_start {start}", cursor.column),
+                None,
             ),
-            None => (None, format!("{} {label}, everything", cursor.column)),
+            None => (None, format!("{} {label}, everything", cursor.column), None),
         }));
     }
     let spec = request.spec;
@@ -116,12 +120,17 @@ async fn lower_bound(
         .lookback
         .map(|lookback| format!(" minus lookback {}", humantime::format_duration(lookback)))
         .unwrap_or_default();
-    let maximum = match single_text(request.destination, query.sql).await? {
-        Some(raw) => match cursor_bound(&raw, query.value, cursor.lookback) {
-            Ok(bound) => Some(bound),
-            Err(problem) => return Ok(Err(problem)),
-        },
-        None => None,
+    let raw = single_text(request.destination, query.sql).await?;
+    let bounds = raw.as_deref().map(|raw| {
+        Ok::<(String, String), String>((
+            cursor_bound(raw, query.value, cursor.lookback)?,
+            cursor_bound(raw, query.value, None)?,
+        ))
+    });
+    let (maximum, data_maximum) = match bounds {
+        Some(Ok((bound, data))) => (Some(bound), Some(data)),
+        Some(Err(problem)) => return Ok(Err(problem)),
+        None => (None, None),
     };
     Ok(Ok(match (maximum, &cursor.start) {
         (Some(maximum), _) => {
@@ -129,13 +138,18 @@ async fn lower_bound(
                 "{} from {maximum} (destination maximum{lookback})",
                 cursor.column
             );
-            (Some(maximum), note)
+            (Some(maximum), note, data_maximum)
         }
         (None, Some(start)) => (
             Some(start.clone()),
             format!("{} empty table, from cursor_start {start}", cursor.column),
+            None,
         ),
-        (None, None) => (None, format!("{} empty table, everything", cursor.column)),
+        (None, None) => (
+            None,
+            format!("{} empty table, everything", cursor.column),
+            None,
+        ),
     }))
 }
 
@@ -158,6 +172,7 @@ pub(crate) async fn cursor_window(
             mode: write_mode(spec, options.reload, None, None),
             note: None,
             inclusive: true,
+            maximum: None,
         }));
     };
     if backfill && options.reload {
@@ -176,7 +191,7 @@ pub(crate) async fn cursor_window(
         (Ok(start), Ok(end)) => (start, end),
         (Err(problem), _) | (_, Err(problem)) => return Ok(Err(problem)),
     };
-    let (from, note) =
+    let (from, note, maximum) =
         match lower_bound(request, cursor, cursor_type, start_flag.as_deref()).await? {
             Ok(bound) => bound,
             Err(problem) => return Ok(Err(problem)),
@@ -203,5 +218,6 @@ pub(crate) async fn cursor_window(
         mode: write_mode(spec, options.reload, from, to),
         note: Some(note),
         inclusive,
+        maximum,
     }))
 }

@@ -8,7 +8,19 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_destination::_helpers::parquet_files::new_file;
-use crate::files_destination::models::{FolderClaim, PartitionBy, PartitionFolder, TablePath};
+use bytes::Bytes;
+
+use crate::file_store::main::list_files::list_files;
+use crate::file_store::main::read_file::read_file;
+use crate::file_store::main::write_file::write_file;
+use crate::files_destination::errors::FilesDestinationError;
+use crate::files_destination::main::mark_pending::mark_pending;
+use crate::files_destination::main::read_table_state::read_table_state;
+use crate::files_destination::main::repair_table::repair_table;
+use crate::files_destination::models::{
+    FolderClaim, PartitionBy, PartitionFolder, PendingPhase, PendingRun, TablePath,
+};
+use crate::files_destination::tests::test_types::CommittedRepairTestCase;
 use crate::files_source::models::Footer;
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
@@ -203,4 +215,62 @@ pub(crate) fn day_columns() -> Vec<DesiredColumn> {
     ];
     columns.extend(metadata_columns());
     columns
+}
+
+/// Write the case's files, mark a committed load replacing `replaced` with a run record, repair the table; the files left and the record object's text.
+pub(crate) fn repair_committed(
+    test_case: &CommittedRepairTestCase,
+) -> Result<(Vec<String>, String), String> {
+    let (folder, root) = scratch_folder()?;
+    let run = PendingRun {
+        prefix: format!("{}_records/", folder.location.prefix),
+        name: "20260101T000000Z-load.json".to_owned(),
+        json: test_case.expected_record.to_owned(),
+    };
+    let records = OpenFolder {
+        store: folder.store.clone(),
+        location: Location {
+            store: folder.location.store.clone(),
+            prefix: run.prefix.clone(),
+        },
+    };
+    let replaced: Vec<String> = test_case
+        .replaced
+        .iter()
+        .map(|key| (*key).to_owned())
+        .collect();
+    let outcome = block_on(async {
+        let failed = |error: FilesDestinationError| error.to_string();
+        for key in test_case.keys {
+            write_file(&folder, key, Bytes::from_static(b"x"))
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        mark_pending(
+            &folder,
+            "load",
+            PendingPhase::Replacing,
+            (&replaced, Some(&run)),
+        )
+        .await
+        .map_err(failed)?;
+        let state = read_table_state(&folder, &orders_path(None), None)
+            .await
+            .map_err(failed)?;
+        repair_table(&folder, &state.pending)
+            .await
+            .map_err(failed)?;
+        let files = list_files(&folder)
+            .await
+            .map_err(|error| error.to_string())?;
+        let record = read_file(&records, &run.name)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok::<(Vec<String>, String), String>((
+            files.into_iter().map(|file| file.relative_key).collect(),
+            String::from_utf8_lossy(&record).into_owned(),
+        ))
+    });
+    let _ = std::fs::remove_dir_all(&root);
+    outcome
 }

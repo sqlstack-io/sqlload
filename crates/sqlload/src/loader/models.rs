@@ -16,6 +16,9 @@ use crate::project::models::{
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::Route;
+use crate::run_log::main::finished_record::finished_record;
+use crate::run_log::main::later_cursor::later_cursor;
+use crate::run_log::models::{RunOutcome, RunRecord};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
 use crate::store_paths::models::Location;
@@ -72,6 +75,8 @@ pub struct TableSpec {
     pub type_change_rebuild: Policy,
     /// Whether a Python table's `replace` may empty the table when its function yields no rows.
     pub allow_empty: bool,
+    /// Whether the table's position is kept in the run log (`state = "logged"`).
+    pub logged: bool,
     /// Listed under `[sources.*.tables]`, so never treated as a new table.
     pub listed: bool,
     pub new_tables: NewTables,
@@ -99,6 +104,8 @@ pub struct ReadWindow {
     pub from: Option<String>,
     pub to: Option<String>,
     pub inclusive: bool,
+    /// The data's cursor maximum without lookback, when the plan read it.
+    pub maximum: Option<String>,
 }
 
 /// Where a files source's files are and what they hold.
@@ -154,6 +161,47 @@ pub struct TablePlan {
     pub output: Option<FilesOutput>,
     /// The destination table exists (a warehouse table, or data files in a files table's folder).
     pub exists: bool,
+    /// The run log of a `state = "logged"` table, read at plan.
+    pub logged: Option<LoggedPlan>,
+}
+
+/// A logged table's run log and what it means for this run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoggedPlan {
+    /// Every record, oldest first.
+    pub records: Vec<RunRecord>,
+    /// The record holding the current state.
+    pub current: Option<RunRecord>,
+    /// The data's cursor maximum, when it disagrees with the logged cursor: the data wins and the load appends a reconciliation.
+    pub disagreement: Option<String>,
+}
+
+impl RunEntry {
+    /// The finished record for a run that ended as `outcome`.
+    pub fn finished(&self, outcome: RunOutcome) -> RunRecord {
+        let before = self.before.clone().filter(|_| !self.replaces);
+        finished_record(&self.record, self.cursor_type.as_ref(), before, outcome)
+    }
+
+    /// Fold one written batch's cursor maximum into `maximum`.
+    pub fn later(&self, maximum: Option<String>, batch_maximum: Option<String>) -> Option<String> {
+        match &self.cursor_type {
+            Some(column_type) => later_cursor(maximum, batch_maximum, column_type),
+            None => None,
+        }
+    }
+}
+
+/// A run record to write with a logged table's data, completed once the rows are written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunEntry {
+    /// The record without its row count, files and cursor after.
+    pub record: RunRecord,
+    pub cursor_type: Option<ColumnType>,
+    /// The data's cursor maximum before the load, which the load keeps unless it replaces the data.
+    pub before: Option<String>,
+    /// The load replaces every row, so the data's maximum is the loaded rows' maximum.
+    pub replaces: bool,
 }
 
 /// A files target's side of one table's plan.
@@ -239,6 +287,8 @@ pub struct PythonRead {
     pub table: TablePlan,
     pub changes: Vec<String>,
     pub note: Option<String>,
+    /// The run record a logged table writes with its data.
+    pub run: Option<RunEntry>,
 }
 
 /// A Python table's yielded data, held in temporary Arrow IPC files until its schema is known.
@@ -315,4 +365,23 @@ pub struct FilesContext {
     pub cursor_type: Option<ColumnType>,
     pub folder: OpenFolder,
     pub state: TableState,
+}
+
+/// What `sqlload state` does to the selected logged tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateKind {
+    Show,
+    Verify,
+    Reconcile,
+    Reset,
+}
+
+/// A `sqlload state` command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateRequest {
+    pub kind: StateKind,
+    /// Append the events (`--yes`) instead of only showing them.
+    pub append: bool,
+    /// The reset position (`--to`); `None` clears it.
+    pub to: Option<String>,
 }

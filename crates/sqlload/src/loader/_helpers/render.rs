@@ -3,6 +3,7 @@ use crate::loader::constants::PLAN_DETAIL_COLUMN;
 use crate::loader::models::{FilesOutput, PythonTable, TablePlan};
 use crate::project::models::FilesFormat;
 use crate::routing::models::Route;
+use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnOrigin, TableAction};
 use crate::write_sql::main::display_name::display_name;
 use crate::write_sql::models::WriteMode;
@@ -181,6 +182,12 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             .iter()
             .map(|note| format!("cursor  {note}")),
     );
+    lines.extend(table.logged.as_ref().map(|logged| {
+        format!(
+            "state   logged: {}",
+            describe_state(logged.current.as_ref())
+        )
+    }));
     lines.extend(
         table
             .output

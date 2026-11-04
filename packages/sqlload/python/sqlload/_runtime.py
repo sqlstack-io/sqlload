@@ -24,6 +24,7 @@ SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-pack
 STANDALONE_TABLE_NAME = "{table}"
 
 _tables: dict[str, Table] = {}
+_contexts: dict[str, Context] = {}
 _clients: dict[str, Any] = {}
 
 
@@ -89,9 +90,23 @@ def start_table(request: str) -> Iterator[Any]:
 		cursor_inclusive=cursor.get("inclusive", True),
 		is_reload=read["is_reload"],
 		client_factory=_shared_client(source) if source is not None and source.client_factory else None,
+		logged=read.get("logged", False),
+		state=json.loads(read["state"]) if read.get("state") is not None else None,
 	)
+	_contexts[table.name] = ctx
 	yielded = table.function(ctx)
 	return iter(()) if yielded is None else iter(yielded)
+
+
+def table_state(table: str) -> str | None:
+	"""The position the table function left in `ctx.state`, as JSON; `None` when it set none."""
+	ctx = _contexts.pop(table, None)
+	if ctx is None or not ctx.state_set:
+		return None
+	try:
+		return json.dumps(ctx.state)
+	except (TypeError, ValueError) as error:
+		raise TypeError(f"ctx.state of table {table} is not JSON: {error}") from error
 
 
 def finish_run() -> None:

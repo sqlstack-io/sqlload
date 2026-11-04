@@ -33,6 +33,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 mode,
                 note: None,
                 inclusive: true,
+                maximum: None,
             }),
         };
     };
@@ -64,6 +65,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
         ColumnType::Text | ColumnType::Varchar(_) => format!("{expression} COLLATE \"C\""),
         _ => expression.to_owned(),
     };
+    let mut data_maximum: Option<String> = None;
     let (from, to, note, operator) = match spec.strategy {
         WriteStrategy::DeleteInsert => {
             let window = partition_window(&PartitionWindowRequest {
@@ -94,7 +96,10 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                     Some(start.clone()),
                     format!("{column} from {start} (--start-cursor)"),
                 ),
-                (None, Some((maximum, note)), _) => (Some(maximum), note),
+                (None, Some((maximum, note)), _) => {
+                    data_maximum = Some(maximum.clone());
+                    (Some(maximum), note)
+                }
                 (None, None, Some(start)) => (
                     Some(start.clone()),
                     format!("{column} first run, from cursor_start {start}"),
@@ -128,6 +133,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
         mode,
         note: Some(note),
         inclusive: operator == INCLUSIVE_BOUND,
+        maximum: data_maximum,
     })
 }
 
