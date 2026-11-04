@@ -85,6 +85,22 @@ fn given_python_sources_when_parsing_the_project_then_they_join_it_under_the_sam
             ),
         },
         ParsePythonProjectTestCase {
+            description: "a Python source may not read the connection a warehouse target loads into",
+            toml: "",
+            sources: r#"[{"name": "shop", "module": "sources/shop.py", "settings": {"connection": "wh", "tables": {}}}]"#,
+            read: |_| String::new(),
+            expected_value: Err(
+                "Python source shop uses connection wh, which target dev loads into; Python code never gets warehouse credentials — give the source its own connection",
+            ),
+        },
+        ParsePythonProjectTestCase {
+            description: "a Python source may read the filesystem connection a files target writes to",
+            toml: "[connections.lake]\nkind = \"filesystem\"\nroot = \"lake\"\n[targets.files]\nconnection = \"lake\"\n",
+            sources: r#"[{"name": "shop", "module": "sources/shop.py", "settings": {"connection": "lake", "destination": "dev", "tables": {}}}]"#,
+            read: |project| project.sources["shop"].connection.clone(),
+            expected_value: Ok("lake"),
+        },
+        ParsePythonProjectTestCase {
             description: "a None setting from Python is refused",
             toml: "",
             sources: r#"[{"name": "a", "module": "sources/a.py", "settings": {"schema": null, "tables": {}}}]"#,

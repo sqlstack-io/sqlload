@@ -12,7 +12,8 @@ use crate::loader::models::{
     Destination, PythonTable, ReadWindow, SpilledBatches, TablePlan, TableSpec,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
-use crate::project::models::SourceConfig;
+use crate::project::constants::FILES_CONNECTION_KINDS;
+use crate::project::models::{ProjectConfig, SourceConfig};
 use crate::python_sources::models::TableRead;
 use crate::python_sources::types::{BatchStream, PythonHost};
 use crate::row_batches::main::conform_batch::conform_batch;
@@ -256,6 +257,14 @@ pub(crate) async fn refuse_emptying(
         )),
         false => Ok(()),
     }
+}
+
+/// Whether a target's connection `name` may also be a Python source's own: only an s3 or filesystem one (project checks refuse the rest).
+pub(crate) fn shareable_connection(project: &ProjectConfig, name: &str) -> bool {
+    project
+        .connections
+        .get(name)
+        .is_some_and(|connection| FILES_CONNECTION_KINDS.contains(&connection.kind()))
 }
 
 /// The portable type of a column the crossing produced.

@@ -4,12 +4,13 @@ use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::route::table_route;
 use crate::loader::_helpers::sources::{FilesPlanRequest, files_read_columns, plan_files};
 use crate::loader::_helpers::window::{Window, WindowRequest, cursor_window};
+use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_plan_files::plan_files_table;
 use crate::loader::models::{Destination, PlanOptions, ReadWindow, TablePlan, TableSpec};
 use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
-use crate::project::models::WriteStrategy;
+use crate::project::models::{Contract, WriteStrategy};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::{
@@ -86,6 +87,16 @@ pub(crate) async fn plan_table(
     destination: &Destination,
     options: &PlanOptions,
 ) -> Result<TablePlan, LoaderError> {
+    let undeclared = spec
+        .python
+        .as_ref()
+        .is_some_and(|python| python.declared.is_empty());
+    if undeclared && spec.contract == Contract::Enforced {
+        return Ok(blocked_table(
+            spec,
+            vec![ENFORCED_UNDECLARED_PROBLEM.to_owned()],
+        ));
+    }
     let plan = plan_table_once(spec, destination, options).await?;
     match with_live_columns(spec, plan.live.as_deref()) {
         Some(augmented) => plan_table_once(&augmented, destination, options).await,

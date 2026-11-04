@@ -2,8 +2,8 @@ use crate::files_source::models::SourceFormat;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, target_problems,
 };
-use crate::project::constants::TABLE_PLACEHOLDER;
-use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
+use crate::project::constants::{FILES_CONNECTION_KINDS, TABLE_PLACEHOLDER};
+use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig, SourceKind};
 
 /// Problems with names one section uses to refer to another.
 pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
@@ -41,7 +41,9 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
             "{place} connection {:?} is not a [connections] entry",
             source.connection
         )),
-        Some(_) if source.kind == SourceKind::Python => {}
+        Some(connection) if source.kind == SourceKind::Python => {
+            problems.extend(shared_warehouse_problems(project, name, source, connection));
+        }
         Some(connection) if !expected.split(" or ").any(|kind| kind == connection.kind()) => {
             problems.push(format!(
                 "{place} has kind = {:?} but connection {:?} is a {} connection (expected {expected})",
@@ -83,6 +85,29 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::Files => "files",
         SourceKind::Python => "python",
     }
+}
+
+/// A Python source reading a connection a warehouse target loads into, whose credentials Python code must never get (a files target's s3 or filesystem connection may be shared).
+fn shared_warehouse_problems(
+    project: &ProjectConfig,
+    name: &str,
+    source: &SourceConfig,
+    connection: &ConnectionConfig,
+) -> Vec<String> {
+    if FILES_CONNECTION_KINDS.contains(&connection.kind()) {
+        return Vec::new();
+    }
+    project
+        .targets
+        .iter()
+        .filter(|(_, target)| target.connection == source.connection)
+        .map(|(target, _)| {
+            format!(
+                "Python source {name} uses connection {}, which target {target} loads into; Python code never gets warehouse credentials — give the source its own connection",
+                source.connection
+            )
+        })
+        .collect()
 }
 
 /// How problems name a source: its TOML section, or the Python file declaring it.

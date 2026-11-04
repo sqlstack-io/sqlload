@@ -610,3 +610,37 @@ def test_given_allow_empty_in_sqlload_toml_when_parsing_then_it_is_an_unknown_ke
 	done = sqlload(project, "debug", "--no-connection")
 	assert done.returncode == 1
 	assert 'unknown key "allow_empty" in [sources.app]' in done.stderr, done.stderr
+
+
+def test_given_a_python_source_on_a_warehouse_targets_connection_when_planning_then_the_project_is_refused(tmp_path: Path) -> None:
+	module = "import sqlload as sl\nshop = sl.source('shop', connection='wh')\nshop.table(name='t')(lambda ctx: [])\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	done = sqlload(project, "plan")
+	assert done.returncode == 1
+	assert "Python source shop uses connection wh, which target dev loads into; Python code never gets warehouse credentials" in done.stderr, done.stderr
+
+
+LAKE_MODULE = """
+import sqlload as sl
+
+lake = sl.source("lake_files", connection="lake")
+
+
+@lake.table(name="listing")
+def listing(ctx):
+    yield {"root": ctx.connection["root"]}
+"""
+
+
+def test_given_a_python_source_on_a_files_targets_connection_when_loading_then_it_reads_that_connection(tmp_path: Path) -> None:
+	project = make_project(tmp_path, FILES_PROJECT, "", module=LAKE_MODULE)
+	load(project)
+	rows = ds.dataset(project / "lake" / "listing", format="parquet").to_table().to_pylist()
+	assert [row["root"] for row in rows] == ["lake"]
+
+
+def test_given_an_enforced_contract_without_declared_columns_when_planning_then_the_table_is_blocked(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(contract='enforced')(rows)\n")
+	done = sqlload(project, "plan")
+	assert done.returncode == 1
+	assert "contract enforced needs declared columns: the first load would create a table with only metadata columns" in done.stdout + done.stderr

@@ -4,7 +4,7 @@ use crate::loader::_helpers::destination::execute;
 use crate::loader::_helpers::python::{
     YieldedData, change_lines, cursor_type_name, declared_problems, inferred_table, refuse_emptying,
 };
-use crate::loader::_helpers::python::{spill_batches, start_read};
+use crate::loader::_helpers::python::{shareable_connection, spill_batches, start_read};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::table_plan::{plan_table, schema_statements};
 use crate::loader::constants::NO_DATA_NOTE;
@@ -51,7 +51,7 @@ pub(in crate::loader) async fn read_python_table(
     })
 }
 
-/// What the table function is called with; connections that targets write to are withheld, except the source's own.
+/// What the table function is called with; connections that targets write to are withheld, except the source's own s3 or filesystem connection.
 fn table_read(load: &PythonLoad<'_>) -> TableRead {
     let table = load.table;
     let spec = &table.spec;
@@ -66,7 +66,9 @@ fn table_read(load: &PythonLoad<'_>) -> TableRead {
         .targets
         .values()
         .map(|target| target.connection.clone())
-        .filter(|name| Some(name) != connection.as_ref())
+        .filter(|name| {
+            Some(name) != connection.as_ref() || !shareable_connection(load.project, name)
+        })
         .collect();
     let mut connections = load.project.connection_settings.clone();
     connections.retain(|name, _| !withheld.contains(name));
