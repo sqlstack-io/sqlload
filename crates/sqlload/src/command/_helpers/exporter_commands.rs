@@ -16,7 +16,10 @@ pub(crate) async fn run_exporter_command(
         return Err("table selection and loader flags apply to loader projects; this file is an exporter configuration".to_owned());
     }
     match command {
-        Command::Check => check(&config).await,
+        Command::Debug {
+            no_connection: true,
+        } => Ok(vec!["ok  config".to_owned()]),
+        Command::Debug { .. } => check(&config).await,
         Command::Plan(_) => plan(&config).await,
         Command::Tables { topics_file } => tables(&config, topics_file.as_deref()).await,
         Command::Apply(_) => apply(&config).await,

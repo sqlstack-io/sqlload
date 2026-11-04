@@ -2,6 +2,8 @@
 
 #[path = "loader/helpers.rs"]
 mod helpers;
+#[path = "loader/test_debug_project.rs"]
+mod test_debug_project;
 #[path = "loader/test_file_store.rs"]
 mod test_file_store;
 #[path = "loader/test_files_to_duckdb.rs"]
