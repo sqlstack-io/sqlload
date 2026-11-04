@@ -18,6 +18,7 @@ pub mod kafka;
 pub mod metrics;
 pub mod naming;
 pub mod planning;
+pub mod postgres_source;
 pub mod project;
 pub mod routing;
 pub mod similar_names;
