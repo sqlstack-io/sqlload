@@ -28,7 +28,10 @@ pub struct SourceTable {
 impl SourceTable {
     /// `schema.name`.
     pub fn qualified_name(&self) -> String {
-        format!("{}.{}", self.schema, self.name)
+        match self.schema.is_empty() {
+            true => self.name.clone(),
+            false => format!("{}.{}", self.schema, self.name),
+        }
     }
 }
 

@@ -1,9 +1,10 @@
 use crate::loader::models::{Destination, TableSpec};
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::{
-    FileFormat, ReaderOffer, Route, RouteOverrides, Store, WriterAccepts,
+    FileFormat, FileSet, ReaderOffer, Route, RouteOverrides, Store, WriterAccepts,
 };
 use crate::snowflake_destination::constants::USER_STAGE;
+use crate::store_paths::models::StoreKind;
 
 /// What a destination can take.
 fn writer_accepts(destination: &Destination) -> WriterAccepts {
@@ -25,16 +26,29 @@ fn writer_accepts(destination: &Destination) -> WriterAccepts {
     }
 }
 
-/// The route a database source's table takes into `destination`.
-pub(crate) fn table_route(spec: &TableSpec, destination: &Destination) -> Result<Route, String> {
-    let reader = ReaderOffer {
+/// What a table's source offers: rows as Arrow, plus the files themselves for a files source.
+fn reader_offer(spec: &TableSpec) -> ReaderOffer {
+    let existing_files = spec.files.as_ref().map(|files| FileSet {
+        store: match files.location.store {
+            StoreKind::S3 { .. } => Store::ObjectStore(files.location.to_string()),
+            StoreKind::Filesystem { .. } => Store::Local(files.location.to_string()),
+        },
+        format: FileFormat::Parquet,
+    });
+    ReaderOffer {
         arrow: true,
+        existing_files,
+        unload_to: Vec::new(),
         estimated_bytes: match u64::try_from(spec.source_table.estimated_bytes) {
             Ok(bytes) => Some(bytes),
             Err(_) => None,
         },
-        ..ReaderOffer::default()
-    };
+    }
+}
+
+/// The route a table's data takes into `destination`.
+pub(crate) fn table_route(spec: &TableSpec, destination: &Destination) -> Result<Route, String> {
+    let reader = reader_offer(spec);
     plan_route(
         &reader,
         &writer_accepts(destination),

@@ -4,12 +4,15 @@ use std::time::Duration;
 use crate::column_types::models::{ColumnType, Warehouse};
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::models::DuckDbDestination;
+use crate::file_store::models::OpenFolder;
+use crate::files_source::models::{FilesRead, FilesTable};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{Contract, NewTables, OnSchemaChange, Policy, WriteStrategy};
 use crate::routing::models::Route;
 use crate::schema_plan::models::{LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
+use crate::store_paths::models::Location;
 use crate::write_sql::models::{TableName, WriteMode};
 
 /// Where a setting's value came from, for `plan`.
@@ -64,6 +67,17 @@ pub struct TableSpec {
     /// Listed under `[sources.*.tables]`, so never treated as a new table.
     pub listed: bool,
     pub new_tables: NewTables,
+    /// The files behind a files source; `None` for database tables.
+    pub files: Option<FilesSource>,
+}
+
+/// Where a files source's files are and what they hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesSource {
+    pub location: Location,
+    pub table: FilesTable,
+    /// Declared partition columns and their types, by name; a file column of the same name is replaced by the path's value.
+    pub partition_types: Vec<(String, ColumnType)>,
 }
 
 /// A table that matched a source's selection but is not loaded.
@@ -97,6 +111,8 @@ pub struct TablePlan {
     pub cursor_note: Option<String>,
     /// How the data moves from the source to the destination.
     pub route: Option<Route>,
+    /// The files to read, for a files source.
+    pub files: Option<FilesRead>,
 }
 
 /// The plan for a whole project.
@@ -146,4 +162,10 @@ pub struct StagingSession {
     /// The load time as an ISO 8601 UTC timestamp, written to every row.
     pub loaded_at: String,
     pub parts: usize,
+}
+
+/// A connected source, ready to read.
+pub enum SourceReader {
+    Postgres(tokio_postgres::Client),
+    Files(OpenFolder),
 }

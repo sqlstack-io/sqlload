@@ -102,14 +102,30 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
         WriteMode::Recreate => "recreate from the whole source (--reload)".to_owned(),
     };
     let origin = format!("  ({})", spec.strategy_origin);
-    let mut lines = vec![
-        row(&spec.destination.table, &format!("{strategy}{origin}")),
-        format!(
+    let source = match &spec.files {
+        Some(files) => format!("source  files  {}  {}", spec.source_name, files.location),
+        None => format!(
             "source  postgres  {}  {}",
             spec.source_name,
             spec.source_table.qualified_name()
         ),
+    };
+    let mut lines = vec![
+        row(&spec.destination.table, &format!("{strategy}{origin}")),
+        source,
     ];
+    lines.extend(
+        spec.files
+            .as_ref()
+            .zip(table.files.as_ref())
+            .map(|(source, read)| {
+                format!(
+                    "files   {} to read of {} listed",
+                    read.files.len(),
+                    source.table.files.len()
+                )
+            }),
+    );
     lines.extend(table.route.as_ref().map(route_line));
     lines.extend(
         table

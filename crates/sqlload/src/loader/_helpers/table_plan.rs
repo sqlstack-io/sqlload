@@ -1,5 +1,6 @@
 use crate::loader::_helpers::destination::live_columns;
 use crate::loader::_helpers::route::table_route;
+use crate::loader::_helpers::sources::{FilesPlanRequest, files_read_columns, plan_files};
 use crate::loader::_helpers::window::{WindowRequest, cursor_window};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, PlanOptions, TablePlan, TableSpec};
@@ -60,7 +61,11 @@ pub(crate) async fn plan_table(
     options: &PlanOptions,
 ) -> Result<TablePlan, LoaderError> {
     let live = live_columns(destination, &spec.destination).await?;
-    let read_columns = match plan_read(&selected_columns(spec), &spec.pinned) {
+    let planned_read = match spec.files {
+        Some(_) => files_read_columns(spec),
+        None => plan_read(&selected_columns(spec), &spec.pinned),
+    };
+    let read_columns = match planned_read {
         Ok(read) => read,
         Err(problems) => {
             return Ok(TablePlan {
@@ -72,6 +77,7 @@ pub(crate) async fn plan_table(
                 source_filter: None,
                 cursor_note: None,
                 route: None,
+                files: None,
             });
         }
     };
@@ -140,14 +146,42 @@ pub(crate) async fn plan_table(
         Some(_) => Ok(None),
         None => cursor_window(&request).await?.map(Some),
     };
-    let (source_filter, mode, cursor_note) = match window {
-        Ok(Some(window)) => (window.filter, window.mode, window.note),
-        Ok(None) => (None, WriteMode::Append, None),
+    let (source_filter, bounds, mode, cursor_note) = match window {
+        Ok(Some(window)) => (window.filter, window.bounds, window.mode, window.note),
+        Ok(None) => (None, (None, None), WriteMode::Append, None),
         Err(problem) => {
             schema = blocked_plan(vec![problem]);
-            (None, WriteMode::Append, None)
+            (None, (None, None), WriteMode::Append, None)
         }
     };
+    let written: Vec<String> = schema
+        .write_columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let files = match (&spec.files, &schema.blocked) {
+        (Some(files), None) => {
+            let request = FilesPlanRequest {
+                spec,
+                files,
+                destination,
+                live: live.as_deref(),
+                read_columns: &read_columns,
+                written: &written,
+                bounds: (bounds.0.as_deref(), bounds.1.as_deref()),
+                options,
+            };
+            match plan_files(&request).await? {
+                Ok(read) => Some(read),
+                Err(problem) => {
+                    schema = blocked_plan(vec![problem]);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let source_filter = source_filter.filter(|_| spec.files.is_none());
     let route = match table_route(spec, destination) {
         Ok(route) => Some(route),
         Err(problem) => {
@@ -164,5 +198,6 @@ pub(crate) async fn plan_table(
         source_filter,
         cursor_note,
         route,
+        files,
     })
 }

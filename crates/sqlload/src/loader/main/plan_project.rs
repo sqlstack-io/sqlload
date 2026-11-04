@@ -2,13 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use crate::loader::_helpers::resolve::resolve_tables;
-use crate::loader::_helpers::sources::{connect_source, selected};
+use crate::loader::_helpers::resolve::{resolve_tables, source_target};
+use crate::loader::_helpers::sources::{connect_source, discover_files_table, selected};
 use crate::loader::_helpers::table_plan::plan_table;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, PlanOptions, ProjectPlan, SkippedTable};
 use crate::postgres_source::main::read_catalog::read_catalog;
-use crate::project::models::{NewTables, ProjectConfig};
+use crate::project::models::{NewTables, ProjectConfig, SourceKind};
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
 pub async fn plan_project(
@@ -18,12 +18,36 @@ pub async fn plan_project(
 ) -> Result<ProjectPlan, LoaderError> {
     let mut plan = ProjectPlan::default();
     for (source_name, source) in &project.sources {
-        let client = connect_source(project, source).await?;
-        let discovered = read_catalog(&client, &source.include, &source.exclude).await?;
+        let (discovered, files) = match source.kind {
+            SourceKind::Postgres => {
+                let client = connect_source(project, source).await?;
+                let discovered = read_catalog(&client, &source.include, &source.exclude).await?;
+                (discovered, None)
+            }
+            SourceKind::Files => {
+                let warehouse = match source_target(project, source) {
+                    Ok(target) => target.warehouse,
+                    Err(problem) => {
+                        plan.problems
+                            .push(format!("[sources.{source_name}]: {problem}"));
+                        continue;
+                    }
+                };
+                match discover_files_table(project, source_name, source, warehouse).await {
+                    Ok((table, files)) => (vec![table], Some(files)),
+                    Err(error) => {
+                        plan.problems
+                            .push(format!("[sources.{source_name}]: {error}"));
+                        continue;
+                    }
+                }
+            }
+        };
         let resolved = resolve_tables(project, source_name, &discovered);
         plan.problems.extend(resolved.problems);
         plan.skipped.extend(resolved.skipped);
-        for spec in resolved.specs {
+        for mut spec in resolved.specs {
+            spec.files = files.clone();
             let qualified = spec.source_table.qualified_name();
             if !selected(
                 &options.select,

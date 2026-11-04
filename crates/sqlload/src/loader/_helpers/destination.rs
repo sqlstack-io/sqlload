@@ -9,12 +9,15 @@ use crate::duckdb_destination::main::describe_table::describe_table as describe_
 use crate::duckdb_destination::main::execute_statements::execute_statements;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::query_text::query_text as query_duckdb;
+#[cfg(feature = "duckdb")]
+use crate::duckdb_destination::main::query_texts::query_texts as query_duckdb_texts;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, StagingSession};
 use crate::schema_plan::models::LiveColumn;
 use crate::snowflake_destination::main::copy_staged::copy_staged;
 use crate::snowflake_destination::main::describe_table::describe_table as describe_snowflake;
 use crate::snowflake_destination::main::query_text::query_text as query_snowflake;
+use crate::snowflake_destination::main::query_texts::query_texts as query_snowflake_texts;
 use crate::snowflake_destination::main::remove_staged::remove_staged;
 use crate::snowflake_destination::main::run_statements::run_statements;
 use crate::snowflake_destination::main::stage_parquet::stage_parquet;
@@ -54,6 +57,18 @@ pub(crate) async fn single_text(
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(query_duckdb(duckdb, query).await?),
         Destination::Snowflake(snowflake) => Ok(query_snowflake(snowflake, &query).await?),
+    }
+}
+
+/// The first column of every row of `query`, as text.
+pub(crate) async fn text_values(
+    destination: &Destination,
+    query: String,
+) -> Result<Vec<String>, LoaderError> {
+    match destination {
+        #[cfg(feature = "duckdb")]
+        Destination::DuckDb(duckdb) => Ok(query_duckdb_texts(duckdb, query).await?),
+        Destination::Snowflake(snowflake) => Ok(query_snowflake_texts(snowflake, &query).await?),
     }
 }
 

@@ -1,5 +1,7 @@
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::errors::DuckDbError;
+use crate::file_store::errors::StoreError;
+use crate::files_source::errors::FilesError;
 use crate::http::errors::ApiError;
 use crate::postgres_source::errors::PostgresError;
 
@@ -13,6 +15,10 @@ pub enum LoaderError {
     DuckDb(#[from] DuckDbError),
     #[error(transparent)]
     Snowflake(#[from] ApiError),
+    #[error(transparent)]
+    Files(#[from] FilesError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
     #[error("{0}")]
     Invalid(String),
 }

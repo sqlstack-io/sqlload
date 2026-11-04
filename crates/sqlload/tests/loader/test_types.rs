@@ -41,3 +41,38 @@ pub(crate) struct ScenarioTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+pub(crate) struct FileStoreTestCase {
+    pub(crate) description: &'static str,
+    /// The store under test, given the S3 endpoint and a temporary directory.
+    pub(crate) store: fn(&str, &std::path::Path) -> sqlload::store_paths::models::StoreKind,
+    /// The data files listed after writing, in order.
+    pub(crate) expected_keys: &'static [&'static str],
+}
+
+/// One Parquet file a files scenario writes: every row gets `score`; `extra` adds a text column.
+pub(crate) struct ParquetFile {
+    pub(crate) key: &'static str,
+    pub(crate) ids: &'static [i64],
+    pub(crate) score: f64,
+    pub(crate) extra: Option<&'static str>,
+}
+
+/// One load of a files scenario, after writing `files`.
+pub(crate) struct FilesRun {
+    pub(crate) files: &'static [ParquetFile],
+    /// Text the plan or load error must contain; empty when the run must succeed.
+    pub(crate) expected_error: &'static str,
+}
+
+pub(crate) struct FilesScenarioTestCase {
+    pub(crate) description: &'static str,
+    /// The store and its connection TOML, given the S3 endpoint and a fresh temporary directory.
+    pub(crate) store:
+        fn(&str, &std::path::Path) -> (sqlload::store_paths::models::StoreKind, String),
+    /// Source settings appended after `[sources.scores]`.
+    pub(crate) settings: &'static str,
+    pub(crate) runs: &'static [FilesRun],
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}

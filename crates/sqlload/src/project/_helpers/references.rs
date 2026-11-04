@@ -1,5 +1,5 @@
 use crate::project::constants::{TABLE_PLACEHOLDER, WAREHOUSE_CONNECTION_KINDS};
-use crate::project::models::{ConnectionConfig, ProjectConfig, SourceKind};
+use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
 
 /// Problems with names one section uses to refer to another.
 pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
@@ -34,24 +34,27 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
     problems
 }
 
-fn source_problems(
-    project: &ProjectConfig,
-    name: &str,
-    source: &crate::project::models::SourceConfig,
-) -> Vec<String> {
+fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     let place = format!("[sources.{name}]");
-    match (project.connections.get(&source.connection), source.kind) {
-        (None, _) => problems.push(format!(
+    let expected = match source.kind {
+        SourceKind::Postgres => "postgres",
+        SourceKind::Files => "s3 or filesystem",
+    };
+    match project.connections.get(&source.connection) {
+        None => problems.push(format!(
             "{place} connection {:?} is not a [connections] entry",
             source.connection
         )),
-        (Some(ConnectionConfig::Postgres { .. }), SourceKind::Postgres) => {}
-        (Some(connection), SourceKind::Postgres) => problems.push(format!(
-            "{place} has kind = \"postgres\" but connection {:?} is a {} connection",
-            source.connection,
-            connection.kind()
-        )),
+        Some(connection) if !expected.split(" or ").any(|kind| kind == connection.kind()) => {
+            problems.push(format!(
+                "{place} has kind = {:?} but connection {:?} is a {} connection (expected {expected})",
+                source_kind_name(source.kind),
+                source.connection,
+                connection.kind()
+            ));
+        }
+        Some(_) => {}
     }
     match source.destination.as_ref().or(project.default_target.as_ref()) {
         Some(target) if !project.targets.contains_key(target) => {
@@ -63,14 +66,45 @@ fn source_problems(
             "{place} needs a destination: set destination, or default_target when there are several targets"
         )),
     }
-    if source.include.is_empty() {
-        problems.push(format!("{place} include is empty, so it selects no tables"));
+    problems.extend(kind_problems(&place, source));
+    problems
+}
+
+fn source_kind_name(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Postgres => "postgres",
+        SourceKind::Files => "files",
     }
-    if !source.table_name.contains(TABLE_PLACEHOLDER) {
-        problems.push(format!(
-            "{place} table_name {:?} must contain {TABLE_PLACEHOLDER}, or every table gets the same name",
-            source.table_name
-        ));
+}
+
+/// Settings each kind requires or rejects.
+fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let template = source.table_name_template();
+    match source.kind {
+        SourceKind::Postgres => {
+            if source.include.is_empty() {
+                problems.push(format!("{place} include is empty, so it selects no tables"));
+            }
+            if !template.contains(TABLE_PLACEHOLDER) {
+                problems.push(format!(
+                    "{place} table_name {template:?} must contain {TABLE_PLACEHOLDER}, or every table gets the same name"
+                ));
+            }
+            if source.path.is_some() || !source.partition_columns.is_empty() {
+                problems.push(format!(
+                    "{place} path and partition_columns are for kind = \"files\""
+                ));
+            }
+        }
+        SourceKind::Files => {
+            if source.path.is_none() {
+                problems.push(format!("{place} kind = \"files\" needs a path"));
+            }
+            if !source.include.is_empty() || !source.exclude.is_empty() {
+                problems.push(format!("{place} include and exclude are for database sources; a files source is one table"));
+            }
+        }
     }
     problems
 }

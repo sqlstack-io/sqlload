@@ -8,3 +8,4 @@ pub mod harness;
 pub mod postgres;
 pub mod records;
 pub mod redpanda;
+pub mod seaweedfs;

@@ -4,13 +4,12 @@ use std::collections::BTreeMap;
 
 use crate::loader::_helpers::clock::now_utc_text;
 use crate::loader::_helpers::destination::{cleanup_staging, execute, finish_staging, stage_batch};
-use crate::loader::_helpers::sources::connect_source;
-use crate::loader::constants::SOURCE_BATCH_ROWS;
+use crate::loader::_helpers::sources::{open_source, read_source};
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, LoadResult, ProjectPlan, StagingSession, TablePlan};
+use crate::loader::models::{
+    Destination, LoadResult, ProjectPlan, SourceReader, StagingSession, TablePlan,
+};
 use crate::masking::main::mask_batch::mask_batch;
-use crate::postgres_source::main::copy_table::copy_table;
-use crate::postgres_source::models::CopyRequest;
 use crate::project::models::ProjectConfig;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::write_sql::main::display_name::display_name;
@@ -42,8 +41,8 @@ pub async fn load_project(
         let destination = destinations.get(&table.spec.target).ok_or_else(|| {
             LoaderError::Invalid(format!("target {:?} is not connected", table.spec.target))
         })?;
-        let client = connect_source(project, source).await?;
-        let rows = load_table(&client, table, destination).await?;
+        let reader = open_source(project, source).await?;
+        let rows = load_table(&reader, table, destination).await?;
         results.push(LoadResult {
             table: display_name(&table.spec.destination, table.spec.warehouse),
             rows,
@@ -53,7 +52,7 @@ pub async fn load_project(
 }
 
 async fn load_table(
-    client: &tokio_postgres::Client,
+    reader: &SourceReader,
     table: &TablePlan,
     destination: &Destination,
 ) -> Result<u64, LoaderError> {
@@ -78,27 +77,21 @@ async fn load_table(
         loaded_at,
         parts: 0,
     };
-    let (session, written) = stage_and_write(client, table, destination, session).await;
+    let (session, written) = stage_and_write(reader, table, destination, session).await;
     cleanup_staging(destination, &session, spec.warehouse).await;
     written
 }
 
 /// Read the source into the staging table, then apply the write strategy in one transaction.
 async fn stage_and_write(
-    client: &tokio_postgres::Client,
+    reader: &SourceReader,
     table: &TablePlan,
     destination: &Destination,
     mut session: StagingSession,
 ) -> (StagingSession, Result<u64, LoaderError>) {
     let spec = &table.spec;
-    let request = CopyRequest {
-        table: &spec.source_table,
-        columns: table.read_columns.clone(),
-        filter: table.source_filter.clone(),
-        batch_rows: SOURCE_BATCH_ROWS,
-    };
     let written = async {
-        let rows = copy_table(client, request, async |batch| {
+        let rows = read_source(reader, table, async |batch| {
             session.parts += 1;
             let batch = mask_batch(batch, &spec.masked)?;
             stage_batch(destination, &session, batch)
