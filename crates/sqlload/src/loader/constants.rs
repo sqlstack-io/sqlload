@@ -27,3 +27,6 @@ pub const UTC_OFFSET_SUFFIX: &str = "+00";
 
 /// The remark for a Python table's first load that yielded no rows and declares no columns, so nothing was created.
 pub const NO_DATA_NOTE: &str = "(table created on first data)";
+
+/// Why an empty Python load fails under `replace`; `{table}` is the table's name.
+pub const EMPTY_REPLACE_PROBLEM: &str = "yielded no rows; replace would empty {table}; set allow_empty=True on the table if an empty result is real";

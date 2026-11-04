@@ -2,11 +2,15 @@ use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
+use crate::loader::_helpers::destination::single_text;
 use crate::loader::constants::{
-    PYTHON_COLUMN_TYPE, SPILL_CHUNK_BYTES, UNKNOWN_CURSOR_TYPE, UTC_OFFSET_SUFFIX,
+    EMPTY_REPLACE_PROBLEM, PYTHON_COLUMN_TYPE, SPILL_CHUNK_BYTES, UNKNOWN_CURSOR_TYPE,
+    UTC_OFFSET_SUFFIX,
 };
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{PythonTable, ReadWindow, SpilledBatches, TablePlan, TableSpec};
+use crate::loader::models::{
+    Destination, PythonTable, ReadWindow, SpilledBatches, TablePlan, TableSpec,
+};
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::models::SourceConfig;
 use crate::python_sources::models::TableRead;
@@ -20,7 +24,9 @@ use crate::similar_names::main::close_name::close_name;
 use crate::write_sql::constants::CURSOR_TIMESTAMP_FORMAT;
 use crate::write_sql::main::cursor_text::cursor_text;
 use crate::write_sql::main::display_name::display_name;
+use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::stored_name::stored_name;
+use crate::write_sql::models::WriteMode;
 use arrow_array::{
     ArrayRef, Date32Array, RecordBatch, Scalar, StringArray, TimestampMicrosecondArray,
 };
@@ -221,6 +227,34 @@ pub(crate) fn change_lines(table: &TablePlan) -> Vec<String> {
             .map(|change| format!("altered  {name}  {change}"))
             .collect(),
         TableAction::Recreate | TableAction::Unchanged => Vec::new(),
+    }
+}
+
+/// Fail when writing no rows would empty a table that has rows: `replace` or `--reload` without `allow_empty` (an empty result must not wipe a table by accident).
+pub(crate) async fn refuse_emptying(
+    table: &TablePlan,
+    destination: &Destination,
+) -> Result<(), LoaderError> {
+    let replaces = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+    if !replaces || table.spec.allow_empty || !table.exists {
+        return Ok(());
+    }
+    let has_rows = match destination {
+        Destination::Files(_) => true,
+        destination => {
+            let query = format!(
+                "SELECT 'x' FROM {} LIMIT 1",
+                qualified_name(&table.spec.destination, table.spec.warehouse)
+            );
+            single_text(destination, query).await?.is_some()
+        }
+    };
+    let name = display_name(&table.spec.destination, table.spec.warehouse);
+    match has_rows {
+        true => Err(LoaderError::Invalid(
+            EMPTY_REPLACE_PROBLEM.replace("{table}", &name),
+        )),
+        false => Ok(()),
     }
 }
 

@@ -51,6 +51,9 @@ pub const PYTHON_SOURCE_KEYS: &[&str] = &[
     "tables",
 ];
 
+/// Table settings only Python sources and tables take.
+pub const PYTHON_SETTING_KEYS: &[&str] = &["allow_empty"];
+
 /// Keys only a table may use.
 pub const TABLE_ONLY_KEYS: &[&str] = &[
     "description",

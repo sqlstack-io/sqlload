@@ -185,6 +185,8 @@ pub(crate) fn build_spec(
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        allow_empty: layered(&settings.allow_empty, &defaults.allow_empty)
+            .is_some_and(|(value, _)| value),
         listed: false,
         new_tables: context.source.new_tables,
         files: None,

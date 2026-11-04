@@ -1,7 +1,7 @@
 use toml::Value;
 
 use crate::project::constants::{
-    PYTHON_SOURCE_KEYS, SOURCE_ONLY_KEYS, TABLE_ONLY_KEYS, TABLE_SETTING_KEYS,
+    PYTHON_SETTING_KEYS, PYTHON_SOURCE_KEYS, SOURCE_ONLY_KEYS, TABLE_ONLY_KEYS, TABLE_SETTING_KEYS,
 };
 use crate::similar_names::main::nearest_name::nearest_name;
 
@@ -16,7 +16,7 @@ pub(crate) fn unknown_keys(value: &Value) -> Vec<String> {
         Some(table) => format!("[sources.{source}.tables.\"{table}\"]"),
         None => format!("[sources.{source}]"),
     };
-    keys_problems(value, &source_keys, &place)
+    keys_problems(value, (&source_keys, &[]), &place)
 }
 
 /// Problems for every setting of Python sources and tables (`value` holds them as `sources`) SQLLoad does not know; `module` names each source's file.
@@ -24,18 +24,20 @@ pub(crate) fn unknown_python_keys(value: &Value, module: &dyn Fn(&str) -> String
     let source_keys: Vec<&str> = PYTHON_SOURCE_KEYS
         .iter()
         .chain(TABLE_SETTING_KEYS)
+        .chain(PYTHON_SETTING_KEYS)
         .copied()
         .collect();
     let place = |source: &str, table: Option<&str>| match table {
         Some(table) => format!("Python table {table} ({})", module(source)),
         None => format!("Python source {source} ({})", module(source)),
     };
-    keys_problems(value, &source_keys, &place)
+    keys_problems(value, (&source_keys, PYTHON_SETTING_KEYS), &place)
 }
 
+/// Problems for unknown keys; `keys` are the source's keys and the keys tables take besides the shared ones.
 fn keys_problems(
     value: &Value,
-    source_keys: &[&str],
+    (source_keys, table_extra): (&[&str], &[&str]),
     place: &dyn Fn(&str, Option<&str>) -> String,
 ) -> Vec<String> {
     let Some(sources) = value.get("sources").and_then(Value::as_table) else {
@@ -44,6 +46,7 @@ fn keys_problems(
     let table_keys: Vec<&str> = TABLE_ONLY_KEYS
         .iter()
         .chain(TABLE_SETTING_KEYS)
+        .chain(table_extra)
         .copied()
         .collect();
     let mut problems: Vec<String> = Vec::new();

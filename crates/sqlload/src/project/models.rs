@@ -271,6 +271,9 @@ pub struct TableSettings {
     pub auto_widen: Option<bool>,
     #[serde(default)]
     pub type_change_rebuild: Option<Policy>,
+    /// Let a Python table's `replace` (or `--reload`) empty the table when its function yields no rows.
+    #[serde(default)]
+    pub allow_empty: Option<bool>,
 }
 
 /// One table's settings: everything a source can set, plus what only a table can.

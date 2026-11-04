@@ -2,7 +2,7 @@
 
 use crate::loader::_helpers::destination::execute;
 use crate::loader::_helpers::python::{
-    YieldedData, change_lines, cursor_type_name, declared_problems, inferred_table,
+    YieldedData, change_lines, cursor_type_name, declared_problems, inferred_table, refuse_emptying,
 };
 use crate::loader::_helpers::python::{spill_batches, start_read};
 use crate::loader::_helpers::resolve::resolve_tables;
@@ -18,6 +18,9 @@ pub(in crate::loader) async fn read_python_table(
 ) -> Result<PythonRead, LoaderError> {
     let stream = start_read(load.host.clone(), table_read(load)).await?;
     let spilled = spill_batches(stream).await?;
+    if spilled.rows == 0 {
+        refuse_emptying(load.table, load.destination).await?;
+    }
     let declared = load
         .table
         .spec

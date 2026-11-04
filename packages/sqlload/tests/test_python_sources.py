@@ -548,3 +548,65 @@ def test_given_environments_and_build_folders_under_python_paths_when_discoverin
 		(project / "sources" / folder / "broken.py").write_text("raise RuntimeError('imported')\n")
 	done = sqlload(project, "plan")
 	assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.parametrize(
+	("settings", "args", "fails", "expected_rows"),
+	[
+		("write_strategy='replace'", (), True, [(1,)]),
+		("write_strategy='append'", ("--reload",), True, [(1,)]),
+		("write_strategy='replace', allow_empty=True", (), False, []),
+		("write_strategy='append'", (), False, [(1,)]),
+		("write_strategy='merge', unique_key='id'", (), False, [(1,)]),
+	],
+	ids=["replace", "reload", "replace allowed", "append", "merge"],
+)
+def test_given_no_rows_when_loading_into_a_table_with_rows_then_only_an_allowed_replace_empties_it(
+	tmp_path: Path, settings: str, args: tuple[str, ...], fails: bool, expected_rows: list[tuple[Any, ...]]
+) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table({settings})(rows)\n")
+	give(project, "rows", [{"id": 1}])
+	load(project)
+	give(project, "rows", [])
+	done = sqlload(project, "load", *args)
+	assert (done.returncode == 1) == fails, done.stdout + done.stderr
+	assert ("yielded no rows; replace would empty RAW.shop__rows; set allow_empty=True" in done.stderr) == fails, done.stderr
+	assert query(project, 'SELECT id FROM "RAW"."shop__rows"') == expected_rows
+
+
+@pytest.mark.parametrize(
+	("settings", "fails", "expected_rows"),
+	[
+		("write_strategy='replace'", True, [(1, "a")]),
+		("write_strategy='replace', allow_empty=True", False, []),
+		("write_strategy='append'", False, [(1, "a")]),
+	],
+	ids=["replace", "replace allowed", "append"],
+)
+def test_given_no_rows_when_loading_into_files_with_rows_then_only_an_allowed_replace_empties_them(
+	tmp_path: Path, settings: str, fails: bool, expected_rows: list[tuple[Any, ...]]
+) -> None:
+	project = make_project(tmp_path, FILES_PROJECT, f"shop.table({settings})(rows)\n")
+	give(project, "rows", [{"id": 1, "v": "a"}])
+	load(project)
+	give(project, "rows", [])
+	done = sqlload(project, "load")
+	assert (done.returncode == 1) == fails, done.stdout + done.stderr
+	assert ("yielded no rows; replace would empty" in done.stderr) == fails, done.stderr
+	assert files_rows(project, "rows") == expected_rows
+
+
+def test_given_allow_empty_on_a_source_with_a_bad_value_when_planning_then_the_setting_is_validated(tmp_path: Path) -> None:
+	module = "import sqlload as sl\nshop = sl.source('shop', allow_empty='yes')\nshop.table(name='t')(lambda ctx: [])\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	done = sqlload(project, "plan")
+	assert done.returncode == 1
+	assert "invalid type: string \"yes\", expected a boolean" in done.stderr, done.stderr
+
+
+def test_given_allow_empty_in_sqlload_toml_when_parsing_then_it_is_an_unknown_key(tmp_path: Path) -> None:
+	toml = DUCKDB_PROJECT + '\n[connections.pg]\nkind = "postgres"\nhost = "h"\nuser = "u"\ndatabase = "d"\n\n[sources.app]\nkind = "postgres"\nconnection = "pg"\ninclude = ["*"]\nallow_empty = true\n'
+	project = make_project(tmp_path, toml, "")
+	done = sqlload(project, "debug", "--no-connection")
+	assert done.returncode == 1
+	assert 'unknown key "allow_empty" in [sources.app]' in done.stderr, done.stderr

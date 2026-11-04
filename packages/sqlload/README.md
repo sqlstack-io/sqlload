@@ -52,7 +52,9 @@ own name.
 
 Columns are inferred from what a table yields (declare types with `columns={...}`, which take
 precedence). A table is created by its first load, never by `apply`; a first load that yields
-no rows creates nothing unless columns are declared. Rows outside the cursor window are skipped,
+no rows creates nothing unless columns are declared. Under `replace` (and `--reload`), a load
+that yields no rows into a table that has rows fails rather than emptying it; set
+`allow_empty=True` on the table or source when an empty result is real. Rows outside the cursor window are skipped,
 so a function that ignores `ctx.cursor_value` still loads correctly.
 
 `ctx.connection` holds the source's connection settings; `ctx.connection("name")` gives another

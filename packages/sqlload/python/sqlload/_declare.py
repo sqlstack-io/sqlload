@@ -16,6 +16,7 @@ _Function = TypeVar("_Function", bound=TableFunction)
 #: Settings a table takes, and a source sets as defaults for its tables (the keys of `sqlload.toml`).
 TABLE_SETTINGS: frozenset[str] = frozenset(
 	{
+		"allow_empty",
 		"append_cursor_inclusive",
 		"auto_widen",
 		"contract",

@@ -70,6 +70,8 @@ pub struct TableSpec {
     pub contract: Contract,
     pub on_schema_change: OnSchemaChange,
     pub type_change_rebuild: Policy,
+    /// Whether a Python table's `replace` may empty the table when its function yields no rows.
+    pub allow_empty: bool,
     /// Listed under `[sources.*.tables]`, so never treated as a new table.
     pub listed: bool,
     pub new_tables: NewTables,
