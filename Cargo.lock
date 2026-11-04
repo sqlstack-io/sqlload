@@ -3676,6 +3676,7 @@ dependencies = [
  "arrow-array",
  "arrow-cast",
  "arrow-schema",
+ "arrow-select",
  "axum",
  "base64 0.22.1",
  "bytes",

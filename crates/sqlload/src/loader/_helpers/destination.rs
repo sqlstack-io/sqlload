@@ -25,6 +25,13 @@ use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::swap_table::swap_table;
 use crate::write_sql::models::TableName;
 
+/// The error for a SQL operation on a files target, which plans and loads without SQL.
+fn no_sql() -> LoaderError {
+    LoaderError::Invalid(
+        "a files target runs no SQL; its tables are planned and loaded as files".to_owned(),
+    )
+}
+
 /// The table's live columns, `None` if it does not exist.
 pub(crate) async fn live_columns(
     destination: &Destination,
@@ -34,6 +41,7 @@ pub(crate) async fn live_columns(
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(describe_duckdb(duckdb, table).await?),
         Destination::Snowflake(snowflake) => Ok(describe_snowflake(snowflake, table).await?),
+        Destination::Files(_) => Err(no_sql()),
     }
 }
 
@@ -46,6 +54,7 @@ pub(crate) async fn execute(
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(execute_statements(duckdb, statements).await?),
         Destination::Snowflake(snowflake) => Ok(run_statements(snowflake, &statements).await?),
+        Destination::Files(_) => Err(no_sql()),
     }
 }
 
@@ -58,6 +67,7 @@ pub(crate) async fn single_text(
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(query_duckdb(duckdb, query).await?),
         Destination::Snowflake(snowflake) => Ok(query_snowflake(snowflake, &query).await?),
+        Destination::Files(_) => Err(no_sql()),
     }
 }
 
@@ -70,6 +80,7 @@ pub(crate) async fn text_values(
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(query_duckdb_texts(duckdb, query).await?),
         Destination::Snowflake(snowflake) => Ok(query_snowflake_texts(snowflake, &query).await?),
+        Destination::Files(_) => Err(no_sql()),
     }
 }
 
@@ -85,6 +96,7 @@ pub(crate) async fn stage_batch(
         Destination::Snowflake(snowflake) => {
             Ok(stage_parquet(snowflake, &session.load_id, session.parts, &batch).await?)
         }
+        Destination::Files(_) => Err(no_sql()),
     }
 }
 
@@ -100,6 +112,7 @@ pub(crate) async fn finish_staging(
         Destination::Snowflake(snowflake) => {
             Ok(copy_staged(snowflake, &session.staging, &session.load_id).await?)
         }
+        Destination::Files(_) => Err(no_sql()),
     }
 }
 

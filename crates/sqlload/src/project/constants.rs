@@ -25,6 +25,7 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "table_name",
     "path",
     "format",
+    "destination_path",
     "partition_columns",
     "exclude_columns",
     "skip_tables_with_columns",
@@ -37,6 +38,7 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
 pub const TABLE_ONLY_KEYS: &[&str] = &[
     "description",
     "name",
+    "destination_path",
     "columns",
     "mask",
     "exclude_columns",
@@ -49,8 +51,17 @@ pub const PROJECT_MARKER_KEYS: &[&str] = &["connections", "targets", "sources"];
 /// The placeholder every destination table name template must contain.
 pub const TABLE_PLACEHOLDER: &str = "{table}";
 
-/// The connection kinds a target may load into.
+/// The warehouse connection kinds a target may load into.
 pub const WAREHOUSE_CONNECTION_KINDS: &[&str] = &["snowflake", "duckdb"];
+
+/// The connection kinds a target writes files into.
+pub const FILES_CONNECTION_KINDS: &[&str] = &["s3", "filesystem"];
+
+/// The table folder template of a files target that sets no `path`.
+pub const DEFAULT_DESTINATION_PATH: &str = "{source}/{table}/";
+
+/// The most Parquet footers `plan` reads for one files table unless the target sets `max_footer_reads`.
+pub const DEFAULT_MAX_FOOTER_READS: usize = 100;
 
 /// The Postgres port used when a connection sets none.
 pub const DEFAULT_POSTGRES_PORT: u16 = 5432;

@@ -20,7 +20,7 @@ pub fn render_plan(plan: &ProjectPlan) -> (Vec<String>, bool) {
         .collect();
     let objects: Vec<_> = ready
         .iter()
-        .filter(|table| table.schema.action != TableAction::Unchanged)
+        .filter(|table| table.schema.action != TableAction::Unchanged && table.output.is_none())
         .copied()
         .collect();
     let ok = blocked.is_empty() && plan.problems.is_empty();

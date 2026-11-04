@@ -1,5 +1,5 @@
 use crate::project::main::parse_project::parse_project;
-use crate::project::tests::helpers::{CONNECTIONS, PROJECT, environment};
+use crate::project::tests::helpers::{CONNECTIONS, FILES_PROJECT, PROJECT, environment};
 use crate::project::tests::test_types::{ParseProjectErrorTestCase, ParseProjectTestCase};
 
 #[test]
@@ -94,6 +94,52 @@ fn given_a_full_project_when_parsing_then_sources_and_table_settings_are_read() 
 }
 
 #[test]
+fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Result<(), String> {
+    let project = parse_project(FILES_PROJECT, &environment).map_err(|error| error.to_string())?;
+    let test_cases = [
+        ParseProjectTestCase {
+            description: "a files target needs no loader_schema",
+            read: |project| format!("{:?}", project.targets["lake"].loader_schema),
+            expected_value: "None",
+        },
+        ParseProjectTestCase {
+            description: "the table folder defaults to source and table",
+            read: |project| project.targets["lake"].path_template().to_owned(),
+            expected_value: "{source}/{table}/",
+        },
+        ParseProjectTestCase {
+            description: "footer reads are capped at 100 by default",
+            read: |project| project.targets["lake"].footer_read_limit().to_string(),
+            expected_value: "100",
+        },
+        ParseProjectTestCase {
+            description: "a source sets the destination path of its tables",
+            read: |project| format!("{:?}", project.sources["app"].destination_path),
+            expected_value: "Some(\"shop/{table}/\")",
+        },
+        ParseProjectTestCase {
+            description: "a table overrides the source's destination path",
+            read: |project| {
+                format!(
+                    "{:?}",
+                    project.sources["app"].tables["public.events"].destination_path
+                )
+            },
+            expected_value: "Some(\"shop/{table}/day={cursor:date}/\")",
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            (test_case.read)(&project),
+            test_case.expected_value,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
     let test_cases = [
         ParseProjectErrorTestCase {
@@ -130,6 +176,49 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "an unknown write strategy is a syntax error",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nwrite_strategy = \"upsert\"\n",
             expected_message: "unknown variant `upsert`",
+        },
+        ParseProjectErrorTestCase {
+            description: "a warehouse target needs a loader_schema",
+            text: "[targets.other]\nconnection = \"wh\"\n",
+            expected_message: "[targets.other] needs a loader_schema",
+        },
+        ParseProjectErrorTestCase {
+            description: "a warehouse target takes no path",
+            text: "[targets.other]\nconnection = \"wh\"\nloader_schema = \"RAW\"\npath = \"{table}/\"\n",
+            expected_message: "[targets.other] path, format and max_footer_reads are for targets on an s3 or filesystem connection",
+        },
+        ParseProjectErrorTestCase {
+            description: "a files target takes no loader_schema",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[targets.lake]\nconnection = \"lake\"\nloader_schema = \"RAW\"\n",
+            expected_message: "[targets.lake] writes files, so it takes no loader_schema or database",
+        },
+        ParseProjectErrorTestCase {
+            description: "only a parquet format is known",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[targets.lake]\nconnection = \"lake\"\nformat = \"json\"\n",
+            expected_message: "unknown variant `json`",
+        },
+        ParseProjectErrorTestCase {
+            description: "a target cannot load into a source database",
+            text: "[targets.other]\nconnection = \"pg\"\nloader_schema = \"RAW\"\n",
+            expected_message: "is a postgres connection; targets load into snowflake or duckdb or write files to s3 or filesystem",
+        },
+        ParseProjectErrorTestCase {
+            description: "destination_path needs a files target",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ndestination_path = \"{table}/\"\n",
+            expected_message: "[sources.app] destination_path is for targets on an s3 or filesystem connection",
+        },
+        ParseProjectErrorTestCase {
+            description: "a table's destination_path needs a files target too",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\ndestination_path = \"{table}/\"\n",
+            expected_message: "[sources.app] destination_path is for targets on an s3 or filesystem connection",
+        },
+        ParseProjectErrorTestCase {
+            description: "a source schema is for warehouse targets",
+            text: concat!(
+                "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[targets.lake]\nconnection = \"lake\"\n",
+                "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ndestination = \"lake\"\ninclude = [\"*\"]\nschema = \"RAW\"\n"
+            ),
+            expected_message: "[sources.app] schema is for warehouse targets",
         },
     ];
     for test_case in test_cases {

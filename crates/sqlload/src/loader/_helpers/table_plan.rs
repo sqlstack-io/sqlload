@@ -3,6 +3,7 @@ use crate::loader::_helpers::route::table_route;
 use crate::loader::_helpers::sources::{FilesPlanRequest, files_read_columns, plan_files};
 use crate::loader::_helpers::window::{WindowRequest, cursor_window};
 use crate::loader::errors::LoaderError;
+use crate::loader::main::_plan_files::plan_files_table;
 use crate::loader::models::{Destination, PlanOptions, TablePlan, TableSpec};
 use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
@@ -15,7 +16,7 @@ use crate::schema_plan::models::{
 use crate::write_sql::models::WriteMode;
 
 /// The source table without its excluded columns.
-fn selected_columns(spec: &TableSpec) -> SourceTable {
+pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {
     let mut table = spec.source_table.clone();
     table.columns.retain(|column| {
         !spec
@@ -26,7 +27,8 @@ fn selected_columns(spec: &TableSpec) -> SourceTable {
     table
 }
 
-fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<DesiredColumn> {
+/// The columns the table should have: the read columns (pinned or from the source), then the metadata columns.
+pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<DesiredColumn> {
     let mut desired: Vec<DesiredColumn> = read
         .iter()
         .map(|column| DesiredColumn {
@@ -42,7 +44,8 @@ fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<DesiredColumn> 
     desired
 }
 
-fn blocked_plan(reasons: Vec<String>) -> SchemaPlan {
+/// A schema plan that stops the table for `reasons`.
+pub(crate) fn blocked_plan(reasons: Vec<String>) -> SchemaPlan {
     SchemaPlan {
         action: TableAction::Unchanged,
         write_columns: Vec::new(),
@@ -54,12 +57,32 @@ fn blocked_plan(reasons: Vec<String>) -> SchemaPlan {
     }
 }
 
+/// A table that cannot load, for `reasons`.
+pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan {
+    TablePlan {
+        spec: spec.clone(),
+        read_columns: Vec::new(),
+        live: None,
+        schema: blocked_plan(reasons),
+        mode: WriteMode::Append,
+        source_filter: None,
+        cursor_note: None,
+        route: None,
+        files: None,
+        output: None,
+        exists: false,
+    }
+}
+
 /// One table's plan against its live destination table.
 pub(crate) async fn plan_table(
     spec: &TableSpec,
     destination: &Destination,
     options: &PlanOptions,
 ) -> Result<TablePlan, LoaderError> {
+    if let Destination::Files(files) = destination {
+        return plan_files_table(spec, files, options).await;
+    }
     let live = live_columns(destination, &spec.destination).await?;
     let planned_read = match spec.files {
         Some(_) => files_read_columns(spec),
@@ -71,6 +94,7 @@ pub(crate) async fn plan_table(
             return Ok(TablePlan {
                 spec: spec.clone(),
                 read_columns: Vec::new(),
+                exists: live.is_some(),
                 live,
                 schema: blocked_plan(problems),
                 mode: WriteMode::Append,
@@ -78,6 +102,7 @@ pub(crate) async fn plan_table(
                 cursor_note: None,
                 route: None,
                 files: None,
+                output: None,
             });
         }
     };
@@ -189,6 +214,7 @@ pub(crate) async fn plan_table(
             None
         }
     };
+    let exists = live.is_some();
     Ok(TablePlan {
         spec: spec.clone(),
         read_columns,
@@ -199,5 +225,7 @@ pub(crate) async fn plan_table(
         cursor_note,
         route,
         files,
+        output: None,
+        exists,
     })
 }

@@ -1,6 +1,7 @@
 use crate::column_types::constants::{
     BIGQUERY_NUMERIC_MAX_INTEGER_DIGITS, BIGQUERY_NUMERIC_MAX_SCALE, SQL_SERVER_MAX_NVARCHAR_LENGTH,
 };
+use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::{ColumnType, Warehouse, WarehouseType};
 
 const UUID_AS_TEXT: &str = "stored as text";
@@ -208,6 +209,17 @@ pub(crate) fn sqlite(column_type: &ColumnType) -> WarehouseType {
     }
 }
 
+/// Parquet files, spelled as the Arrow type the files store; a `native` type has none.
+pub(crate) fn parquet(column_type: &ColumnType) -> WarehouseType {
+    match arrow_field("", column_type) {
+        Some(field) => exact(field.data_type().to_string()),
+        None => lossy(
+            column_type.to_string(),
+            "a native type has no Arrow type, so Parquet files cannot hold it",
+        ),
+    }
+}
+
 /// The mapping for `warehouse`.
 pub(crate) fn for_warehouse(warehouse: Warehouse) -> fn(&ColumnType) -> WarehouseType {
     match warehouse {
@@ -219,5 +231,6 @@ pub(crate) fn for_warehouse(warehouse: Warehouse) -> fn(&ColumnType) -> Warehous
         Warehouse::ClickHouse => clickhouse,
         Warehouse::SqlServer => sql_server,
         Warehouse::Sqlite => sqlite,
+        Warehouse::Parquet => parquet,
     }
 }

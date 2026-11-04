@@ -9,7 +9,10 @@ use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_duration, deserialize_optional_keys,
 };
-use crate::project::constants::{DEFAULT_FILES_TABLE_NAME, DEFAULT_TABLE_NAME};
+use crate::project::constants::{
+    DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
+    DEFAULT_TABLE_NAME,
+};
 
 /// A loader project: `sqlload.toml` with `[connections]`, `[targets]` and `[sources]`.
 #[derive(Debug, Clone, Deserialize)]
@@ -86,16 +89,38 @@ impl ConnectionConfig {
     }
 }
 
-/// Where loaded tables go in one environment.
+/// Where loaded tables go in one environment: a warehouse, or files in an s3 or filesystem connection.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetConfig {
     pub connection: String,
-    /// Overrides the connection's database.
+    /// Overrides the connection's database (warehouse targets).
     #[serde(default)]
     pub database: Option<String>,
-    /// The schema for tables whose source sets none.
-    pub loader_schema: String,
+    /// The schema for tables whose source sets none; required for warehouse targets, rejected for files targets.
+    #[serde(default)]
+    pub loader_schema: Option<String>,
+    /// The folder of each table, a template with `{source}`, `{schema}`, `{table}` and `{cursor}` or `{cursor:date}` (files targets).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The format of the files written (files targets).
+    #[serde(default)]
+    pub format: Option<FilesFormat>,
+    /// The most Parquet footers `plan` reads for one table's schema (files targets).
+    #[serde(default)]
+    pub max_footer_reads: Option<usize>,
+}
+
+impl TargetConfig {
+    /// The table folder template: as set, or `{source}/{table}/`.
+    pub fn path_template(&self) -> &str {
+        self.path.as_deref().unwrap_or(DEFAULT_DESTINATION_PATH)
+    }
+
+    /// The footer read cap: as set, or the default.
+    pub fn footer_read_limit(&self) -> usize {
+        self.max_footer_reads.unwrap_or(DEFAULT_MAX_FOOTER_READS)
+    }
 }
 
 /// A declarative source: where data comes from, and what its tables share (unknown keys are checked by the parser).
@@ -127,6 +152,9 @@ pub struct SourceConfig {
     /// The files' format (files sources).
     #[serde(default)]
     pub format: FilesFormat,
+    /// The folder template for this source's tables in a files target, overriding the target's `path`.
+    #[serde(default)]
+    pub destination_path: Option<String>,
     /// Hive `key=value` folders loaded as typed columns (files sources).
     #[serde(default)]
     pub partition_columns: BTreeMap<String, String>,
@@ -167,7 +195,7 @@ pub enum SourceKind {
     Files,
 }
 
-/// The file formats a files source reads.
+/// The file formats a files source reads or a files target writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilesFormat {
@@ -220,6 +248,9 @@ pub struct TableOverride {
     /// The destination table name, overriding the source's `table_name`.
     #[serde(default)]
     pub name: Option<String>,
+    /// The folder template in a files target, overriding the source's `destination_path`.
+    #[serde(default)]
+    pub destination_path: Option<String>,
     /// Pinned column types, by column name.
     #[serde(default)]
     pub columns: BTreeMap<String, String>,

@@ -1,4 +1,4 @@
-use crate::column_types::models::ColumnType;
+use crate::column_types::models::{ColumnType, Warehouse};
 use crate::project::models::{Contract, OnSchemaChange, Policy};
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::SchemaRules;
@@ -181,6 +181,37 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             expected_blocked: "",
             expected_fix_flag: None,
             expected_warnings: 1,
+        },
+        PlanSchemaTestCase {
+            description: "a type change in Parquet files is blocked, even a widening",
+            desired: vec![source("qty", ColumnType::Int)],
+            live: Some(vec![live("qty", ColumnType::SmallInt)]),
+            rules: SchemaRules {
+                warehouse: Warehouse::Parquet,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "qty is smallint in the existing files but int in the source; existing files cannot be altered",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a new column in Parquet files is added to new files",
+            desired: vec![
+                source("id", ColumnType::Int),
+                source("tier", ColumnType::Text),
+            ],
+            live: Some(vec![live("id", ColumnType::Int)]),
+            rules: SchemaRules {
+                warehouse: Warehouse::Parquet,
+                ..snowflake_rules()
+            },
+            expected_action: &["add column  tier text -> Utf8"],
+            expected_written: &["id", "tier"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
         },
     ];
     for test_case in test_cases {

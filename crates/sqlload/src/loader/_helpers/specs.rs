@@ -183,6 +183,13 @@ pub(crate) fn build_spec(
         listed: false,
         new_tables: context.source.new_tables,
         files: None,
+        destination_path: context.target.path.as_ref().map(|target_path| {
+            overrides
+                .destination_path
+                .clone()
+                .or_else(|| context.source.destination_path.clone())
+                .unwrap_or_else(|| target_path.clone())
+        }),
     })
 }
 

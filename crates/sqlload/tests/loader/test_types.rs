@@ -76,3 +76,66 @@ pub(crate) struct FilesScenarioTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// One `plan` + `apply` + `load` of a files target scenario.
+pub(crate) struct FilesTargetRun {
+    /// SQL run in Postgres first.
+    pub(crate) source_change: &'static str,
+    /// Text the plan or load error must contain; empty when the run must succeed.
+    pub(crate) expected_error: &'static str,
+    /// Text the rendered plan must contain; empty to skip the check.
+    pub(crate) expected_plan: &'static str,
+    /// `--reload`.
+    pub(crate) reload: bool,
+    /// Replaces the scenario's source settings for this run and those after it.
+    pub(crate) settings: Option<&'static str>,
+    /// Tables picked on the command line; empty picks all.
+    pub(crate) select: &'static [&'static str],
+    /// Files put in the table folder first (key, contents), such as a crashed load's marker and files.
+    pub(crate) leftovers: &'static [(&'static str, &'static str)],
+}
+
+pub(crate) struct FilesTargetScenarioTestCase {
+    pub(crate) description: &'static str,
+    /// The store and its connection TOML, given the S3 endpoint and a fresh temporary directory.
+    pub(crate) store:
+        fn(&str, &std::path::Path) -> (sqlload::store_paths::models::StoreKind, String),
+    /// SQL creating the source table `public.orders` in a fresh `public` schema.
+    pub(crate) setup: &'static str,
+    /// TOML added under `[targets.lake]`.
+    pub(crate) target_settings: &'static str,
+    /// Project TOML appended after `[sources.app]`; `PREFIX` is replaced by the scenario's own folder.
+    pub(crate) settings: &'static str,
+    pub(crate) runs: &'static [FilesTargetRun],
+    /// The column shown beside each row's id.
+    pub(crate) check_column: &'static str,
+    /// Per partition folder: the runs that wrote its files, then `id:value` per row; then mixed column types and pending markers, if any.
+    pub(crate) expected_files: &'static str,
+}
+
+/// One row read back from a written file.
+pub(crate) struct WrittenRow {
+    /// The partition folder, `-` without partitions.
+    pub(crate) folder: String,
+    pub(crate) id: String,
+    pub(crate) value: String,
+    pub(crate) load_id: String,
+    /// The Arrow type of the checked column in the row's file, empty when the file lacks it.
+    pub(crate) data_type: String,
+}
+
+/// One partition folder of the written files: the runs whose loads wrote it, and its rows as `(id, "id:value")`.
+#[derive(Default)]
+pub(crate) struct WrittenPartition {
+    pub(crate) runs: std::collections::BTreeSet<usize>,
+    pub(crate) rows: Vec<(i64, String)>,
+}
+
+/// A files target scenario whose partition values are then read back by the files source.
+pub(crate) struct RoundTripTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) scenario: FilesTargetScenarioTestCase,
+    pub(crate) partition_column: &'static str,
+    /// The partition values the files source reads, sorted.
+    pub(crate) expected_values: &'static [&'static str],
+}

@@ -54,7 +54,11 @@ fn write_mode(
 }
 
 /// `"column" >= 'from' AND "column" < 'to'` for Postgres, from the bounds that are set.
-fn source_filter(column: &str, lower: Option<(&str, &str)>, upper: Option<&str>) -> Option<String> {
+pub(crate) fn source_filter(
+    column: &str,
+    lower: Option<(&str, &str)>,
+    upper: Option<&str>,
+) -> Option<String> {
     let literal = |value: &str| format!("'{}'", value.replace('\'', "''"));
     let bounds: Vec<String> = lower
         .map(|(operator, value)| format!("{column} {operator} {}", literal(value)))

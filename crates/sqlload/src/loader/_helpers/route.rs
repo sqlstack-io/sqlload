@@ -14,6 +14,10 @@ fn writer_accepts(destination: &Destination) -> WriterAccepts {
             arrow: true,
             ..WriterAccepts::default()
         },
+        Destination::Files(_) => WriterAccepts {
+            arrow: true,
+            ..WriterAccepts::default()
+        },
         Destination::Snowflake(_) => {
             let stage = Store::InternalStage(format!("@{USER_STAGE}"));
             WriterAccepts {

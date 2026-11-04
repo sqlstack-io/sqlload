@@ -102,13 +102,3 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 rule = "FPRSN003"
 path = "crates/sqlload/src/files_source/_helpers/object_reader.rs"
 reason = "get_bytes, get_byte_ranges and get_metadata are parquet's AsyncFileReader trait methods."
-
-[[targets.rust.rule_exceptions]]
-rule = "FPRSL105"
-path = "crates/sqlload/src/file_store/main/read_file.rs"
-reason = "Used by sqlload's integration tests (and the files destination); those live outside the analysed crate tree."
-
-[[targets.rust.rule_exceptions]]
-rule = "FPRSL105"
-path = "crates/sqlload/src/file_store/main/write_file.rs"
-reason = "Used by sqlload's integration tests (and the files destination); those live outside the analysed crate tree."

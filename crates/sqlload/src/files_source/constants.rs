@@ -12,3 +12,6 @@ pub const PARQUET_SUFFIX: &str = ".parquet";
 
 /// Footers read to work out the schema: the newest files by key, so recent schema changes are seen.
 pub const SCHEMA_SAMPLE_FILES: usize = 20;
+
+/// Footers read at once when a destination reads many.
+pub const CONCURRENT_FOOTER_READS: usize = 16;

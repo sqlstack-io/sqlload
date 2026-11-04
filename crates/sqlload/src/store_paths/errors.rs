@@ -7,6 +7,16 @@ pub enum PathError {
     Empty { path: String, store: &'static str },
     #[error("path {path:?} contains a control character")]
     ControlCharacter { path: String },
+    #[error("template {template:?} uses {{{placeholder}}}, which is not one of: {known}")]
+    UnknownPlaceholder {
+        template: String,
+        placeholder: String,
+        known: String,
+    },
+    #[error("template {template:?} has an unclosed '{{'")]
+    UnclosedPlaceholder { template: String },
+    #[error("value {value:?} for {{{placeholder}}} contains '/', which would add folders")]
+    SlashInValue { placeholder: String, value: String },
     #[error(
         "{url:?} is not a location SQLLoad understands; use s3://bucket/path, file:///abs/path or an absolute path"
     )]

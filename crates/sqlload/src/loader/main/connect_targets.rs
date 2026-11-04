@@ -4,11 +4,13 @@ use std::collections::BTreeMap;
 
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::open_duckdb::open_duckdb;
+use crate::files_destination::models::FilesDestination;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::Destination;
 use crate::project::models::{ConnectionConfig, ProjectConfig};
 use crate::snowflake_destination::main::connect_snowflake::connect_snowflake;
 use crate::snowflake_destination::models::SnowflakeAccount;
+use crate::store_paths::models::StoreKind;
 
 /// One open destination per target, keyed by target name.
 pub async fn connect_targets(
@@ -42,6 +44,26 @@ pub async fn connect_targets(
                 database: target.database.clone().unwrap_or_else(|| database.clone()),
                 base_url: base_url.clone(),
             })?)),
+            Some(ConnectionConfig::S3 {
+                bucket,
+                region,
+                endpoint,
+            }) => Destination::Files(Box::new(FilesDestination {
+                connection: target.connection.clone(),
+                store: StoreKind::S3 {
+                    bucket: bucket.clone(),
+                    region: region.clone(),
+                    endpoint: endpoint.clone(),
+                },
+                max_footer_reads: target.footer_read_limit(),
+            })),
+            Some(ConnectionConfig::Filesystem { root }) => {
+                Destination::Files(Box::new(FilesDestination {
+                    connection: target.connection.clone(),
+                    store: StoreKind::Filesystem { root: root.clone() },
+                    max_footer_reads: target.footer_read_limit(),
+                }))
+            }
             Some(other) => {
                 return Err(LoaderError::Invalid(format!(
                     "target {name:?}: {} destinations are not supported yet",

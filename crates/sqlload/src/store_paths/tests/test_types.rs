@@ -6,6 +6,13 @@ pub(crate) struct FolderTestCase {
     pub(crate) expected_folder: Result<&'static str, &'static str>,
 }
 
+pub(crate) struct RenderTemplateTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) template: &'static str,
+    pub(crate) values: &'static [(&'static str, &'static str)],
+    pub(crate) expected_text: Result<&'static str, &'static str>,
+}
+
 pub(crate) struct HiveValuesTestCase {
     pub(crate) description: &'static str,
     pub(crate) key: &'static str,
@@ -18,4 +25,10 @@ pub(crate) struct ResolveLocationTestCase {
     pub(crate) path: &'static str,
     /// The location as it prints, or the error text.
     pub(crate) expected_location: Result<&'static str, &'static str>,
+}
+
+pub(crate) struct PartitionValueTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) value: &'static str,
+    pub(crate) expected_escaped: &'static str,
 }

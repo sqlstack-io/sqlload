@@ -1,6 +1,7 @@
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::errors::DuckDbError;
 use crate::file_store::errors::StoreError;
+use crate::files_destination::errors::FilesDestinationError;
 use crate::files_source::errors::FilesError;
 use crate::http::errors::ApiError;
 use crate::postgres_source::errors::PostgresError;
@@ -19,6 +20,8 @@ pub enum LoaderError {
     Files(#[from] FilesError),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    FilesDestination(#[from] FilesDestinationError),
     #[error("{0}")]
     Invalid(String),
 }
