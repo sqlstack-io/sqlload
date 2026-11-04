@@ -29,6 +29,8 @@ ssl-vendored = ["rdkafka/ssl-vendored"]
 sasl = ["rdkafka/sasl"]
 # Select the Docker-backed integration tests (`make test-containers`).
 container-tests = []
+# DuckDB as a loader destination. Off by default: the bundled DuckDB takes many minutes to compile.
+duckdb = ["dep:duckdb"]
 
 [dependencies]
 aes.workspace = true
@@ -40,7 +42,7 @@ bytes.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 clap = { workspace = true, optional = true }
-duckdb.workspace = true
+duckdb = { workspace = true, optional = true }
 flate2.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
@@ -90,4 +92,4 @@ required-features = ["container-tests"]
 [[test]]
 name = "loader"
 path = "tests/loader.rs"
-required-features = ["container-tests"]
+required-features = ["container-tests", "duckdb"]

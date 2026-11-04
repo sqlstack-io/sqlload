@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::column_types::models::{ColumnType, Warehouse};
+#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::models::DuckDbDestination;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
@@ -133,6 +134,7 @@ pub struct LoadResult {
 /// An open destination.
 #[derive(Debug, Clone)]
 pub enum Destination {
+    #[cfg(feature = "duckdb")]
     DuckDb(DuckDbDestination),
     Snowflake(Box<SnowflakeDestination>),
 }

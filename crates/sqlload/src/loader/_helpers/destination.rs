@@ -1,9 +1,13 @@
 use arrow_array::RecordBatch;
 
 use crate::column_types::models::Warehouse;
+#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::append_batch::append_batch;
+#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::describe_table::describe_table as describe_duckdb;
+#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::execute_statements::execute_statements;
+#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::query_text::query_text as query_duckdb;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, StagingSession};
@@ -23,6 +27,7 @@ pub(crate) async fn live_columns(
     table: &TableName,
 ) -> Result<Option<Vec<LiveColumn>>, LoaderError> {
     match destination {
+        #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(describe_duckdb(duckdb, table).await?),
         Destination::Snowflake(snowflake) => Ok(describe_snowflake(snowflake, table).await?),
     }
@@ -34,6 +39,7 @@ pub(crate) async fn execute(
     statements: Vec<String>,
 ) -> Result<(), LoaderError> {
     match destination {
+        #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(execute_statements(duckdb, statements).await?),
         Destination::Snowflake(snowflake) => Ok(run_statements(snowflake, &statements).await?),
     }
@@ -45,6 +51,7 @@ pub(crate) async fn single_text(
     query: String,
 ) -> Result<Option<String>, LoaderError> {
     match destination {
+        #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(query_duckdb(duckdb, query).await?),
         Destination::Snowflake(snowflake) => Ok(query_snowflake(snowflake, &query).await?),
     }
@@ -57,6 +64,7 @@ pub(crate) async fn stage_batch(
     batch: RecordBatch,
 ) -> Result<(), LoaderError> {
     match destination {
+        #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(append_batch(duckdb, &session.staging, batch).await?),
         Destination::Snowflake(snowflake) => {
             Ok(stage_parquet(snowflake, &session.load_id, session.parts, &batch).await?)
@@ -70,6 +78,7 @@ pub(crate) async fn finish_staging(
     session: &StagingSession,
 ) -> Result<(), LoaderError> {
     match destination {
+        #[cfg(feature = "duckdb")]
         Destination::DuckDb(_) => Ok(()),
         Destination::Snowflake(_) if session.parts == 0 => Ok(()),
         Destination::Snowflake(snowflake) => {

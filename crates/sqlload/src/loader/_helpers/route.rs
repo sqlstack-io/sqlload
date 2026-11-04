@@ -8,6 +8,7 @@ use crate::snowflake_destination::constants::USER_STAGE;
 /// What a destination can take.
 fn writer_accepts(destination: &Destination) -> WriterAccepts {
     match destination {
+        #[cfg(feature = "duckdb")]
         Destination::DuckDb(_) => WriterAccepts {
             arrow: true,
             ..WriterAccepts::default()

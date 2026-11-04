@@ -10,6 +10,7 @@ pub mod column_types;
 pub mod command;
 pub mod config;
 pub mod delivery;
+#[cfg(feature = "duckdb")]
 pub mod duckdb_destination;
 pub mod envelope;
 pub mod exporter;
