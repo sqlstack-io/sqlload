@@ -3708,7 +3708,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aes",
  "arrow-array",
@@ -3761,7 +3761,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-testkit"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "bytes",
