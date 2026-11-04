@@ -5,7 +5,9 @@ use crate::file_store::models::OpenFolder;
 use crate::files_source::_helpers::columns::merge_schema;
 use crate::files_source::_helpers::footers::footer_schema;
 use crate::files_source::_helpers::partitions::data_file;
-use crate::files_source::constants::{PARQUET_SUFFIX, SCHEMA_SAMPLE_FILES};
+use crate::files_source::constants::{
+    PARQUET_SUFFIX, SCHEMA_SAMPLE_FILES, SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN,
+};
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::{DataFile, FileColumn, FilesTable};
 
@@ -34,10 +36,16 @@ pub async fn discover_files(
             reason: "no .parquet files found; check the source's path (an empty source never empties the destination)".to_owned(),
         });
     }
+    let replaced: Vec<&str> = partition_columns
+        .iter()
+        .map(String::as_str)
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
+        .collect();
     let mut columns: Vec<FileColumn> = Vec::new();
     for data in files.iter().rev().take(SCHEMA_SAMPLE_FILES) {
         let schema = footer_schema(folder, &data.file).await?;
-        let (merged, conflicts) = merge_schema(columns, &schema, &data.file.relative_key);
+        let (merged, conflicts) =
+            merge_schema(columns, &schema, &data.file.relative_key, &replaced);
         columns = merged;
         problems.extend(conflicts);
     }

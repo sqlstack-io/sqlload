@@ -4,14 +4,18 @@ use crate::column_types::main::portable_type::portable_type;
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::FileColumn;
 
-/// `columns` plus `schema`'s new columns, and a problem for each column whose type differs from an earlier file's.
+/// `columns` plus `schema`'s new columns (except `replaced` ones, whose values come from the path), and a problem for each column whose type differs from an earlier file's.
 pub(crate) fn merge_schema(
     mut columns: Vec<FileColumn>,
     schema: &SchemaRef,
     key: &str,
+    replaced: &[&str],
 ) -> (Vec<FileColumn>, Vec<String>) {
     let mut problems: Vec<String> = Vec::new();
     for field in schema.fields() {
+        if replaced.contains(&field.name().as_str()) {
+            continue;
+        }
         let column_type = portable_type(field);
         match columns.iter().find(|column| column.name == *field.name()) {
             None => columns.push(FileColumn {

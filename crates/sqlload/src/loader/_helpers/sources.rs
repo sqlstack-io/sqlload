@@ -113,17 +113,12 @@ pub(crate) async fn discover_files_table(
     let partition_names: Vec<String> = source.partition_columns.keys().cloned().collect();
     let table = discover_files(&folder, &partition_names).await?;
     if let Some(problem) = table.problems.first() {
-        return Err(LoaderError::Invalid(format!(
-            "[sources.{source_name}]: {problem}"
-        )));
+        return Err(LoaderError::Invalid(problem.clone()));
     }
     let mut partition_types: Vec<(String, ColumnType)> = Vec::new();
     for (name, text) in &source.partition_columns {
-        let parsed = parse_type(text, &[warehouse]).map_err(|error| {
-            LoaderError::Invalid(format!(
-                "[sources.{source_name}] partition column {name}: {error}"
-            ))
-        })?;
+        let parsed = parse_type(text, &[warehouse])
+            .map_err(|error| LoaderError::Invalid(format!("partition column {name}: {error}")))?;
         partition_types.push((name.clone(), parsed.column_type));
     }
     let added: Vec<&str> = partition_types

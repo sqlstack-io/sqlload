@@ -33,9 +33,14 @@ pub async fn plan_project(
                         continue;
                     }
                 };
-                let (table, files) =
-                    discover_files_table(project, source_name, source, warehouse).await?;
-                (vec![table], Some(files))
+                match discover_files_table(project, source_name, source, warehouse).await {
+                    Ok((table, files)) => (vec![table], Some(files)),
+                    Err(error) => {
+                        plan.problems
+                            .push(format!("[sources.{source_name}]: {error}"));
+                        continue;
+                    }
+                }
             }
         };
         let resolved = resolve_tables(project, source_name, &discovered);
