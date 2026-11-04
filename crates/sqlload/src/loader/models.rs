@@ -6,6 +6,7 @@ use crate::duckdb_destination::models::DuckDbDestination;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{Contract, NewTables, OnSchemaChange, Policy, WriteStrategy};
 use crate::schema_plan::models::{LiveColumn, SchemaPlan};
+use crate::snowflake_destination::models::SnowflakeDestination;
 use crate::write_sql::models::{TableName, WriteMode};
 
 /// Where a setting's value came from, for `plan`.
@@ -120,4 +121,13 @@ pub struct LoadResult {
 #[derive(Debug, Clone)]
 pub enum Destination {
     DuckDb(DuckDbDestination),
+    Snowflake(Box<SnowflakeDestination>),
+}
+
+/// One load's staging table and the files written for it so far.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagingSession {
+    pub staging: TableName,
+    pub load_id: String,
+    pub parts: usize,
 }

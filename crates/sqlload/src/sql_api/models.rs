@@ -33,6 +33,8 @@ pub struct SqlClient {
     pub(crate) base_url: String,
     pub(crate) auth: Arc<Authenticator>,
     pub(crate) destination: DestinationConfig,
+    /// Run sessions in UTC, so `TIMESTAMP_TZ` values are stored with a `+00:00` offset.
+    pub(crate) utc_sessions: bool,
 }
 
 impl SqlClient {
@@ -46,6 +48,15 @@ impl SqlClient {
             base_url: account_url(destination),
             auth,
             destination: destination.clone(),
+            utc_sessions: false,
+        }
+    }
+
+    /// The same client with every session in UTC.
+    pub fn in_utc(self) -> Self {
+        Self {
+            utc_sessions: true,
+            ..self
         }
     }
 }

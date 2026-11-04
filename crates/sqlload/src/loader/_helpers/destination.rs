@@ -1,12 +1,17 @@
 use arrow_array::RecordBatch;
 
 use crate::duckdb_destination::main::append_batch::append_batch;
-use crate::duckdb_destination::main::describe_table::describe_table;
+use crate::duckdb_destination::main::describe_table::describe_table as describe_duckdb;
 use crate::duckdb_destination::main::execute_statements::execute_statements;
-use crate::duckdb_destination::main::query_text::query_text;
+use crate::duckdb_destination::main::query_text::query_text as query_duckdb;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::Destination;
+use crate::loader::models::{Destination, StagingSession};
 use crate::schema_plan::models::LiveColumn;
+use crate::snowflake_destination::main::copy_staged::copy_staged;
+use crate::snowflake_destination::main::describe_table::describe_table as describe_snowflake;
+use crate::snowflake_destination::main::query_text::query_text as query_snowflake;
+use crate::snowflake_destination::main::run_statements::run_statements;
+use crate::snowflake_destination::main::stage_parquet::stage_parquet;
 use crate::write_sql::models::TableName;
 
 /// The table's live columns, `None` if it does not exist.
@@ -15,17 +20,19 @@ pub(crate) async fn live_columns(
     table: &TableName,
 ) -> Result<Option<Vec<LiveColumn>>, LoaderError> {
     match destination {
-        Destination::DuckDb(duckdb) => Ok(describe_table(duckdb, table).await?),
+        Destination::DuckDb(duckdb) => Ok(describe_duckdb(duckdb, table).await?),
+        Destination::Snowflake(snowflake) => Ok(describe_snowflake(snowflake, table).await?),
     }
 }
 
-/// Run statements in order.
+/// Run statements in order, in one session.
 pub(crate) async fn execute(
     destination: &Destination,
     statements: Vec<String>,
 ) -> Result<(), LoaderError> {
     match destination {
         Destination::DuckDb(duckdb) => Ok(execute_statements(duckdb, statements).await?),
+        Destination::Snowflake(snowflake) => Ok(run_statements(snowflake, &statements).await?),
     }
 }
 
@@ -35,17 +42,35 @@ pub(crate) async fn single_text(
     query: String,
 ) -> Result<Option<String>, LoaderError> {
     match destination {
-        Destination::DuckDb(duckdb) => Ok(query_text(duckdb, query).await?),
+        Destination::DuckDb(duckdb) => Ok(query_duckdb(duckdb, query).await?),
+        Destination::Snowflake(snowflake) => Ok(query_snowflake(snowflake, &query).await?),
     }
 }
 
-/// Add a batch of rows to the staging table.
+/// Add batch number `session.parts` of the load: appended to the staging table, or staged as a Parquet file.
 pub(crate) async fn stage_batch(
     destination: &Destination,
-    staging: &TableName,
+    session: &StagingSession,
     batch: RecordBatch,
 ) -> Result<(), LoaderError> {
     match destination {
-        Destination::DuckDb(duckdb) => Ok(append_batch(duckdb, staging, batch).await?),
+        Destination::DuckDb(duckdb) => Ok(append_batch(duckdb, &session.staging, batch).await?),
+        Destination::Snowflake(snowflake) => {
+            Ok(stage_parquet(snowflake, &session.load_id, session.parts, &batch).await?)
+        }
+    }
+}
+
+/// Make every staged batch visible in the staging table (Snowflake: `COPY` the files).
+pub(crate) async fn finish_staging(
+    destination: &Destination,
+    session: &StagingSession,
+) -> Result<(), LoaderError> {
+    match destination {
+        Destination::DuckDb(_) => Ok(()),
+        Destination::Snowflake(_) if session.parts == 0 => Ok(()),
+        Destination::Snowflake(snowflake) => {
+            Ok(copy_staged(snowflake, &session.staging, &session.load_id).await?)
+        }
     }
 }

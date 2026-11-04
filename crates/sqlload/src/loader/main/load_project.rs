@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 
 use crate::loader::_helpers::clock::now_utc_text;
-use crate::loader::_helpers::destination::{execute, stage_batch};
+use crate::loader::_helpers::destination::{execute, finish_staging, stage_batch};
 use crate::loader::_helpers::sources::connect_source;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, LoadResult, ProjectPlan, TablePlan};
+use crate::loader::models::{Destination, LoadResult, ProjectPlan, StagingSession, TablePlan};
 use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::models::CopyRequest;
 use crate::project::models::ProjectConfig;
@@ -78,13 +78,23 @@ async fn load_table(
         filter: table.source_filter.clone(),
         batch_rows: SOURCE_BATCH_ROWS,
     };
+    let mut session = StagingSession {
+        staging: staging.clone(),
+        load_id: load_id.clone(),
+        parts: 0,
+    };
     let copied = copy_table(client, request, async |batch| {
-        stage_batch(destination, &staging, batch)
+        session.parts += 1;
+        stage_batch(destination, &session, batch)
             .await
             .map_err(|error| error.to_string())
     })
     .await;
-    let rows = match copied {
+    let staged = match copied {
+        Ok(rows) => finish_staging(destination, &session).await.map(|()| rows),
+        Err(error) => Err(error.into()),
+    };
+    let rows = match staged {
         Ok(rows) => rows,
         Err(error) => {
             let drop = format!(
@@ -92,7 +102,7 @@ async fn load_table(
                 qualified_name(&staging, spec.warehouse)
             );
             let _ = execute(destination, vec![drop]).await;
-            return Err(error.into());
+            return Err(error);
         }
     };
     let statements = write_statements(

@@ -20,6 +20,16 @@ pub(crate) fn statement_body(client: &SqlClient, statement: &str) -> Value {
     if let Some(role) = &client.destination.role {
         body["role"] = json!(role);
     }
+    if client.utc_sessions {
+        body["parameters"] = json!({ "TIMEZONE": "UTC" });
+    }
+    body
+}
+
+/// The request body for several statements run in order in one session, so a transaction can span them.
+pub(crate) fn script_body(client: &SqlClient, statements: &[String]) -> Value {
+    let mut body = statement_body(client, &statements.join(";\n"));
+    body["parameters"]["MULTI_STATEMENT_COUNT"] = json!(statements.len().to_string());
     body
 }
 

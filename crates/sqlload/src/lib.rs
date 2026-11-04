@@ -25,6 +25,7 @@ pub mod project;
 pub mod routing;
 pub mod schema_plan;
 pub mod similar_names;
+pub mod snowflake_destination;
 pub mod sql_api;
 pub mod stage_api;
 pub mod status;
