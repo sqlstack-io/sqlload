@@ -26,6 +26,7 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "exclude_columns",
     "skip_tables_with_columns",
     "allow_columns",
+    "mask_key",
     "tables",
 ];
 

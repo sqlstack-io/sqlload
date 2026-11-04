@@ -1,6 +1,7 @@
 use crate::column_types::models::Warehouse;
 use std::time::Duration;
 
+use crate::column_types::models::ColumnType;
 use crate::write_sql::models::{CursorValue, WriteMode};
 
 pub(crate) struct WriteStatementsTestCase {
@@ -23,4 +24,11 @@ pub(crate) struct SqlLiteralTestCase {
     pub(crate) text: &'static str,
     pub(crate) warehouse: Warehouse,
     pub(crate) expected_literal: &'static str,
+}
+
+pub(crate) struct CursorTextTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) text: &'static str,
+    pub(crate) column_type: ColumnType,
+    pub(crate) expected_text: Result<&'static str, &'static str>,
 }

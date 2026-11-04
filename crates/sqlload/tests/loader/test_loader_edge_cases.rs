@@ -190,6 +190,26 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             check_query: "SELECT string_agg(id || name, ',' ORDER BY id) || ' staging:' || (SELECT count(*) FROM information_schema.tables WHERE table_name LIKE '%sqlload_staging%') FROM raw.app__people",
             expected_result: "1Ann,2Bob staging:0",
         },
+        ScenarioTestCase {
+            description: "append into a table that lost its cursor column is blocked, and --reload recovers",
+            setup: "CREATE TABLE public.ticks (seq int8, note text);
+                    INSERT INTO public.ticks VALUES (1, 'a'), (2, 'b');",
+            settings: "write_strategy = \"append\"\ncursor_column = \"seq\"\nappend_cursor_inclusive = false\n[sources.app.tables.\"public.ticks\"]\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    destination_change: "ALTER TABLE raw.app__ticks DROP COLUMN seq",
+                    expected_error: "run it once with --reload",
+                    ..OK
+                },
+                ScenarioRun {
+                    reload: true,
+                    ..OK
+                },
+            ],
+            check_query: "SELECT string_agg(seq || note, ',' ORDER BY seq) FROM raw.app__ticks",
+            expected_result: "1a,2b",
+        },
     ];
     run_async(async {
         let postgres = start_postgres().await?;

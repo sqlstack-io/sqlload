@@ -5,6 +5,7 @@ use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, PlanOptions, TablePlan, TableSpec};
 use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
+use crate::project::models::WriteStrategy;
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::{
@@ -113,6 +114,20 @@ pub(crate) async fn plan_table(
         .iter()
         .find(|column| Some(column.name.as_str()) == cursor_name)
         .map(|column| column.expression.as_str());
+    let lacks_cursor =
+        live.is_some() && cursor_name.is_some() && !cursor_in_table && !options.reload;
+    let restart_duplicates = match spec.strategy {
+        WriteStrategy::Append => true,
+        WriteStrategy::DeleteInsert => options.end_cursor.is_some(),
+        WriteStrategy::Merge | WriteStrategy::Replace => false,
+    };
+    if let Some(name) =
+        cursor_name.filter(|_| lacks_cursor && restart_duplicates && schema.blocked.is_none())
+    {
+        schema = blocked_plan(vec![format!(
+            "the table has no {name} column yet, so this load would read every row again and duplicate the rows already there; run it once with --reload"
+        )]);
+    }
     let request = WindowRequest {
         spec,
         destination,
@@ -121,8 +136,13 @@ pub(crate) async fn plan_table(
         cursor_expression,
         options,
     };
-    let (source_filter, mode, cursor_note) = match cursor_window(&request).await? {
-        Ok(window) => (window.filter, window.mode, window.note),
+    let window = match schema.blocked {
+        Some(_) => Ok(None),
+        None => cursor_window(&request).await?.map(Some),
+    };
+    let (source_filter, mode, cursor_note) = match window {
+        Ok(Some(window)) => (window.filter, window.mode, window.note),
+        Ok(None) => (None, WriteMode::Append, None),
         Err(problem) => {
             schema = blocked_plan(vec![problem]);
             (None, WriteMode::Append, None)
