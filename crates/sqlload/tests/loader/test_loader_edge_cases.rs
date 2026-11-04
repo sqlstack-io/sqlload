@@ -151,6 +151,45 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             check_query: "SELECT string_agg(CAST(day AS VARCHAR) || '=' || total, ',' ORDER BY day) FROM raw.app__days",
             expected_result: "2026-11-01=1,2026-11-02=20,2026-11-03=3",
         },
+        ScenarioTestCase {
+            description: "a mask naming no column stops the plan instead of loading the column in clear",
+            setup: "CREATE TABLE public.users (id int8 PRIMARY KEY, \"Email\" text);",
+            settings: "[sources.app.tables.\"public.users\"]\nmask = { email = \"hash\" }\n",
+            runs: &[ScenarioRun {
+                expected_error: "mask \"email\" is not a column of the source table (names are case-sensitive); did you mean \"Email\"?",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "a masked cursor column is rejected",
+            setup: "CREATE TABLE public.users (id int8 PRIMARY KEY, code text);",
+            settings: "[sources.app.tables.\"public.users\"]\ncursor_column = \"code\"\nmask = { code = \"hash\" }\n",
+            runs: &[ScenarioRun {
+                expected_error: "a masked column cannot be the cursor_column",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "a write that fails inside the transaction keeps the old rows and drops the staging table",
+            setup: "CREATE TABLE public.people (id int8 PRIMARY KEY, name text);
+                    INSERT INTO public.people VALUES (1, 'Ann'), (2, 'Bob');",
+            settings: "[sources.app.tables.\"public.people\"]\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    source_change: "UPDATE public.people SET name = NULL WHERE id = 2;",
+                    destination_change: "ALTER TABLE raw.app__people ALTER COLUMN name SET NOT NULL",
+                    expected_error: "NOT NULL constraint failed",
+                    ..OK
+                },
+            ],
+            check_query: "SELECT string_agg(id || name, ',' ORDER BY id) || ' staging:' || (SELECT count(*) FROM information_schema.tables WHERE table_name LIKE '%sqlload_staging%') FROM raw.app__people",
+            expected_result: "1Ann,2Bob staging:0",
+        },
     ];
     run_async(async {
         let postgres = start_postgres().await?;

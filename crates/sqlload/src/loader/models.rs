@@ -139,5 +139,7 @@ pub enum Destination {
 pub struct StagingSession {
     pub staging: TableName,
     pub load_id: String,
+    /// The load time as an ISO 8601 UTC timestamp, written to every row.
+    pub loaded_at: String,
     pub parts: usize,
 }

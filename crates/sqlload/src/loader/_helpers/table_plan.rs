@@ -91,17 +91,32 @@ pub(crate) async fn plan_table(
             .find(|column| column.name == cursor.column)
             .map(|column| &column.column_type)
     });
-    if let Some(cursor) = spec.cursor.as_ref().filter(|_| cursor_type.is_none()) {
+    let cursor_name = spec.cursor.as_ref().map(|cursor| cursor.column.as_str());
+    let written = cursor_name.is_some_and(|name| {
+        schema
+            .write_columns
+            .iter()
+            .any(|column| column.name == name)
+    });
+    if let Some(name) = cursor_name.filter(|_| !written && schema.blocked.is_none()) {
         schema = blocked_plan(vec![format!(
-            "cursor_column {} is not a loaded column",
-            cursor.column
+            "cursor_column {name} is not written to the table (excluded, not in the enforced contract, or ignored by on_schema_change)"
         )]);
     }
+    let cursor_in_table = live.as_deref().is_some_and(|live| {
+        live.iter()
+            .any(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
+    });
+    let cursor_expression = read_columns
+        .iter()
+        .find(|column| Some(column.name.as_str()) == cursor_name)
+        .map(|column| column.expression.as_str());
     let request = WindowRequest {
         spec,
         destination,
-        table_exists: live.is_some(),
+        table_exists: cursor_in_table,
         cursor_type,
+        cursor_expression,
         options,
     };
     let (source_filter, mode, cursor_note) = match cursor_window(&request).await? {

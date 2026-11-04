@@ -14,10 +14,10 @@ fn given_a_source_type_and_output_when_planning_the_read_then_the_select_express
             expected_result: Ok("\"value\""),
         },
         ReadColumnTestCase {
-            description: "jsonb is read as text",
+            description: "json and jsonb are read through jsonb, which drops duplicate keys",
             pg_type: PgType::Json,
             output: ColumnType::Json,
-            expected_result: Ok("\"value\"::text"),
+            expected_result: Ok("\"value\"::jsonb::text"),
         },
         ReadColumnTestCase {
             description: "an array is read as JSON",

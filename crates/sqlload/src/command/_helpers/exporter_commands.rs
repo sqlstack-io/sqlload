@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::command::_helpers::commands::{apply, check, plan, run_export, status, tables};
-use crate::command::models::Command;
+use crate::command::models::{Command, LoaderArgs};
 use crate::config::main::load_config::load_config;
 
 /// Run an exporter command against the configuration at `path`.
@@ -10,6 +10,11 @@ pub(crate) async fn run_exporter_command(
     command: Command,
 ) -> Result<Vec<String>, String> {
     let mut config = load_config(path).map_err(|error| error.to_string())?;
+    if let Command::Plan(args) | Command::Apply(args) = &command
+        && *args != LoaderArgs::default()
+    {
+        return Err("table selection and loader flags apply to loader projects; this file is an exporter configuration".to_owned());
+    }
     match command {
         Command::Check => check(&config).await,
         Command::Plan(_) => plan(&config).await,

@@ -3,14 +3,13 @@ use serde_json::{Value, json};
 use crate::http::errors::ApiError;
 use crate::http::main::check_response::check_response;
 use crate::sql_api::_helpers::results::{parse_columns, parse_rows};
-use crate::sql_api::constants::STATEMENT_TIMEOUT_SECS;
 use crate::sql_api::models::{SqlClient, SqlRows};
 
 /// The request body for one statement.
 pub(crate) fn statement_body(client: &SqlClient, statement: &str) -> Value {
     let mut body = json!({
         "statement": statement,
-        "timeout": STATEMENT_TIMEOUT_SECS,
+        "timeout": client.timeout_secs,
         "database": client.destination.database,
         "schema": client.destination.schema,
     });

@@ -3,7 +3,7 @@ use crate::column_types::models::Warehouse;
 use crate::write_sql::_helpers::identifiers::{qualified, quote};
 use crate::write_sql::models::WriteStatementsRequest;
 
-/// Rebuild the table from `source` in one statement, so readers never see it empty; then drop `source`.
+/// Rebuild the table from `source` in one statement, so readers never see it empty.
 pub(crate) fn recreate_statements(
     request: &WriteStatementsRequest<'_>,
     source: &str,
@@ -45,5 +45,5 @@ pub(crate) fn recreate_statements(
             )
         }
     };
-    vec![create, format!("DROP TABLE IF EXISTS {source}")]
+    vec![create]
 }

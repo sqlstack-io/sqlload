@@ -2,6 +2,7 @@
 
 use tokio_postgres::{Client, Config, NoTls};
 
+use crate::postgres_source::constants::SESSION_OPTIONS;
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::PostgresAddress;
 
@@ -13,7 +14,8 @@ pub async fn connect_postgres(address: PostgresAddress<'_>) -> Result<Client, Po
         .port(address.port)
         .user(address.user)
         .dbname(address.database)
-        .application_name("sqlload");
+        .application_name("sqlload")
+        .options(SESSION_OPTIONS);
     if let Some(password) = address.password {
         config.password(password);
     }

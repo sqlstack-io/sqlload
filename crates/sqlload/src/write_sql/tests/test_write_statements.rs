@@ -6,7 +6,6 @@ use crate::write_sql::tests::helpers::{accounts, columns};
 use crate::write_sql::tests::test_types::WriteStatementsTestCase;
 
 const SF_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS\" (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", 'load-1', CAST('2026-11-04T10:00:00Z' AS TIMESTAMP_TZ(6)) FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
-const SF_DROP: &str = "DROP TABLE IF EXISTS \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
 const DUCK_INSERT: &str = "INSERT INTO \"raw\".\"app__accounts\" (\"id\", \"profile\", \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\") SELECT \"id\", CAST(\"profile\" AS JSON), \"updated_at\", 'load-1', CAST('2026-11-04T10:00:00Z' AS TIMESTAMP WITH TIME ZONE) FROM \"raw\".\"app__accounts__sqlload_staging_load1\"";
 
 #[test]
@@ -16,7 +15,7 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
             description: "append inserts only",
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::Append,
-            expected_statements: &["BEGIN", SF_INSERT, "COMMIT", SF_DROP],
+            expected_statements: &["BEGIN", SF_INSERT, "COMMIT"],
         },
         WriteStatementsTestCase {
             description: "merge deletes matching keys first",
@@ -29,7 +28,6 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
                 "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE (\"ID\") IN (SELECT \"ID\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\")",
                 SF_INSERT,
                 "COMMIT",
-                SF_DROP,
             ],
         },
         WriteStatementsTestCase {
@@ -45,7 +43,6 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
                 "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE \"UPDATED_AT\" >= CAST('2026-11-04T09:00:00Z' AS TIMESTAMP_TZ(6))",
                 SF_INSERT,
                 "COMMIT",
-                SF_DROP,
             ],
         },
         WriteStatementsTestCase {
@@ -57,7 +54,6 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
                 "DELETE FROM \"raw\".\"app__accounts\"",
                 DUCK_INSERT,
                 "COMMIT",
-                "DROP TABLE IF EXISTS \"raw\".\"app__accounts__sqlload_staging_load1\"",
             ],
         },
         WriteStatementsTestCase {
@@ -73,7 +69,6 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
                 "DELETE FROM \"raw\".\"app__accounts\" WHERE \"updated_at\" >= CAST('2026-11-01' AS TIMESTAMP WITH TIME ZONE) AND \"updated_at\" < CAST('2026-11-02' AS TIMESTAMP WITH TIME ZONE)",
                 DUCK_INSERT,
                 "COMMIT",
-                "DROP TABLE IF EXISTS \"raw\".\"app__accounts__sqlload_staging_load1\"",
             ],
         },
         WriteStatementsTestCase {
@@ -82,7 +77,6 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
             mode: WriteMode::Recreate,
             expected_statements: &[
                 "CREATE OR REPLACE TABLE \"RAW\".\"APP__ACCOUNTS\" (\"ID\" NUMBER(38,0), \"PROFILE\" VARIANT, \"UPDATED_AT\" TIMESTAMP_TZ(6), \"_SQLLOAD_LOAD_ID\" VARCHAR, \"_SQLLOAD_LOADED_AT\" TIMESTAMP_TZ(6)) COPY GRANTS AS SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", 'load-1', CAST('2026-11-04T10:00:00Z' AS TIMESTAMP_TZ(6)) FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"",
-                SF_DROP,
             ],
         },
     ];

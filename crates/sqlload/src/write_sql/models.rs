@@ -53,3 +53,21 @@ pub struct CursorQuery<'a> {
     pub lookback: Option<Duration>,
     pub warehouse: Warehouse,
 }
+
+/// How a cursor query's single value is turned into the lower bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorValue {
+    /// Microseconds since the Unix epoch; `zoned` instants print with `+00`, wall-clock times without.
+    EpochMicros { zoned: bool },
+    /// An ISO `YYYY-MM-DD` date.
+    Date,
+    /// Used as it is (integers, decimals, text).
+    Plain,
+}
+
+/// A query for a cursor's maximum and how to read its result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorRead {
+    pub sql: String,
+    pub value: CursorValue,
+}

@@ -42,9 +42,13 @@ pub(crate) fn with_suffix(table: &TableName, suffix: &str) -> TableName {
     }
 }
 
-/// `text` as a SQL string literal.
-pub(crate) fn literal(text: &str) -> String {
-    format!("'{}'", text.replace('\'', "''"))
+/// `text` as a SQL string literal for `warehouse` (Snowflake also treats `\\` as an escape).
+pub(crate) fn literal(text: &str, warehouse: Warehouse) -> String {
+    let escaped = match warehouse {
+        Warehouse::Snowflake => text.replace('\\', "\\\\"),
+        _ => text.to_owned(),
+    };
+    format!("'{}'", escaped.replace('\'', "''"))
 }
 
 /// The type a staging column has: what the loaded files or batches carry (JSON and UUIDs as text).

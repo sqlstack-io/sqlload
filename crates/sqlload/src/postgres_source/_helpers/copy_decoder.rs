@@ -8,7 +8,7 @@ use crate::column_types::main::arrow_field::arrow_field;
 use crate::postgres_source::_helpers::builders::ColumnBuilder;
 use crate::postgres_source::_helpers::values::{read_i16, read_i32};
 use crate::postgres_source::constants::{
-    COPY_SIGNATURE, COPY_TRAILER, HEADER_EXTENSION_OFFSET, HEADER_FIXED_LENGTH,
+    COPY_SIGNATURE, COPY_TRAILER, HEADER_EXTENSION_OFFSET, HEADER_FIXED_LENGTH, NULL_FIELD_LENGTH,
 };
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::ReadColumn;
@@ -172,10 +172,12 @@ impl CopyDecoder {
             };
             let length = read_i32(length).map_err(|reason| self.stream_error(reason))?;
             offset += 4;
-            let Ok(length) = usize::try_from(length) else {
+            if length == NULL_FIELD_LENGTH {
                 spans.push(None);
                 continue;
-            };
+            }
+            let length = usize::try_from(length)
+                .map_err(|_| self.stream_error(format!("invalid field length {length}")))?;
             if self.buffer.len() < offset + length {
                 return Ok(None);
             }

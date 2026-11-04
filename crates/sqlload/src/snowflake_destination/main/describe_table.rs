@@ -6,6 +6,7 @@ use crate::http::errors::ApiError;
 use crate::schema_plan::models::LiveColumn;
 use crate::snowflake_destination::models::SnowflakeDestination;
 use crate::sql_api::main::execute_sql::execute_sql;
+use crate::write_sql::main::sql_literal::sql_literal;
 use crate::write_sql::main::stored_name::stored_name;
 use crate::write_sql::models::TableName;
 
@@ -14,7 +15,7 @@ pub async fn describe_table(
     destination: &SnowflakeDestination,
     table: &TableName,
 ) -> Result<Option<Vec<LiveColumn>>, ApiError> {
-    let literal = |text: &str| format!("'{}'", text.replace('\'', "''"));
+    let literal = |text: &str| sql_literal(text, Warehouse::Snowflake);
     let database = table.database.as_deref().unwrap_or(&destination.database);
     let query = format!(
         "SELECT COLUMN_NAME, DATA_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH FROM \"{}\".INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} ORDER BY ORDINAL_POSITION",

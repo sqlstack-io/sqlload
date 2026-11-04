@@ -84,7 +84,9 @@ fn read_as(pg_type: PgType, output: &ColumnType, quoted: &str) -> Option<(String
         (ColumnType::Json, PgType::Array) => {
             Some((format!("to_jsonb({quoted})::text"), WireType::Text))
         }
-        (ColumnType::Json, PgType::Json) => cast("text", WireType::Text),
+        (ColumnType::Json, PgType::Json) => {
+            Some((format!("{quoted}::jsonb::text"), WireType::Text))
+        }
         (ColumnType::Uuid, PgType::Uuid) => native(WireType::Uuid),
         (ColumnType::Text | ColumnType::Varchar(_), PgType::Text | PgType::Varchar) => {
             native(WireType::Text)

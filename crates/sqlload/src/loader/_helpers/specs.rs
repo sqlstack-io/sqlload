@@ -10,6 +10,7 @@ use crate::loader::_helpers::settings::{cursor, default_strategy, layered, strat
 use crate::loader::models::{SettingOrigin, TableSpec};
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{SourceConfig, TableOverride};
+use crate::similar_names::main::nearest_name::nearest_name;
 use crate::write_sql::models::TableName;
 
 /// The source a table belongs to and where it loads.
@@ -81,6 +82,33 @@ pub(crate) fn pinned_types(
     }
 }
 
+/// Problems with `columns` and `mask` keys that name no source column, so a typo never loads a column unmasked.
+fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> Vec<String> {
+    let names: Vec<&str> = table
+        .columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
+    let keys = overrides
+        .columns
+        .keys()
+        .map(|key| ("columns", key))
+        .chain(overrides.mask.keys().map(|key| ("mask", key)));
+    keys.filter(|(_, key)| !names.contains(&key.as_str()))
+        .map(|(setting, key)| unknown_column(setting, key, &names))
+        .collect()
+}
+
+fn unknown_column(setting: &str, key: &str, names: &[&str]) -> String {
+    let hint = match nearest_name(key, names.iter().copied()) {
+        Some(nearest) => format!("; did you mean {nearest:?}?"),
+        None => String::new(),
+    };
+    format!(
+        "{setting} {key:?} is not a column of the source table (names are case-sensitive){hint}"
+    )
+}
+
 /// The table's spec with every setting layered (table over source over default), or its problems.
 pub(crate) fn build_spec(
     context: &SourceContext<'_>,
@@ -100,7 +128,15 @@ pub(crate) fn build_spec(
                 SettingOrigin::Default,
             )
         });
-    let problems = strategy_problems(strategy, &unique_key, cursor.as_ref());
+    let mut problems = strategy_problems(strategy, &unique_key, cursor.as_ref());
+    problems.extend(column_reference_problems(table, overrides));
+    problems.extend(overrides.mask.keys().filter_map(|masked| {
+        let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.column == *masked);
+        let is_key = unique_key.contains(masked);
+        (is_cursor || is_key).then(|| {
+            format!("mask {masked}: a masked column cannot be the cursor_column or part of the unique_key")
+        })
+    }));
     if !problems.is_empty() {
         return Err(problems);
     }

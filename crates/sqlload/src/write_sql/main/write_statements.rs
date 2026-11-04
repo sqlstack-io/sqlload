@@ -8,7 +8,7 @@ use crate::write_sql::_helpers::identifiers::{from_staging, literal, qualified, 
 use crate::write_sql::_helpers::recreate::recreate_statements;
 use crate::write_sql::models::{TableName, WriteMode, WriteStatementsRequest};
 
-/// One transaction that applies `request.mode` from `staging`, then drops `staging`.
+/// One transaction that applies `request.mode` from `staging`; the caller drops `staging` afterwards.
 pub fn write_statements(request: &WriteStatementsRequest<'_>, staging: &TableName) -> Vec<String> {
     let warehouse = request.warehouse;
     let target = qualified(request.table, warehouse);
@@ -62,7 +62,7 @@ pub fn write_statements(request: &WriteStatementsRequest<'_>, staging: &TableNam
                     let bound = bound.as_ref()?;
                     Some(format!(
                         "{column} {operator} CAST({} AS {sql_type})",
-                        literal(bound)
+                        literal(bound, warehouse)
                     ))
                 })
                 .collect();
@@ -76,17 +76,16 @@ pub fn write_statements(request: &WriteStatementsRequest<'_>, staging: &TableNam
     statements.extend(delete);
     statements.push(insert);
     statements.push("COMMIT".to_owned());
-    statements.push(format!("DROP TABLE IF EXISTS {source}"));
     statements
 }
 
 fn value_expression(request: &WriteStatementsRequest<'_>, column: &DesiredColumn) -> String {
     let warehouse = request.warehouse;
     match (column.origin, column.name.as_str()) {
-        (ColumnOrigin::Metadata, LOAD_ID_COLUMN) => literal(request.load_id),
+        (ColumnOrigin::Metadata, LOAD_ID_COLUMN) => literal(request.load_id, warehouse),
         (ColumnOrigin::Metadata, LOADED_AT_COLUMN) => format!(
             "CAST({} AS {})",
-            literal(request.loaded_at),
+            literal(request.loaded_at, warehouse),
             warehouse_type(&ColumnType::TimestampTz, warehouse).sql
         ),
         _ => from_staging(&column.name, &column.column_type, warehouse),

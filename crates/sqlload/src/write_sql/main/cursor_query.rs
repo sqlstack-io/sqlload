@@ -2,48 +2,41 @@
 
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::write_sql::_helpers::identifiers::{qualified, quote};
-use crate::write_sql::models::CursorQuery;
+use crate::write_sql::models::{CursorQuery, CursorRead, CursorValue};
 
-/// `MAX(column)` minus `lookback` as text Postgres accepts (UTC wall-clock arithmetic on DuckDB, which lacks ICU); `None` if a lookback needs a time column.
-pub fn cursor_query(request: &CursorQuery<'_>) -> Option<String> {
-    let CursorQuery {
-        table,
-        column,
-        column_type,
-        lookback,
-        warehouse,
-    } = *request;
-    let column = quote(column, warehouse);
-    let target = qualified(table, warehouse);
-    let is_time = matches!(
-        column_type,
-        ColumnType::TimestampTz | ColumnType::TimestampNtz | ColumnType::Date
-    );
-    if lookback.is_some() && !is_time {
-        return None;
-    }
-    let seconds = lookback.map_or(0, |lookback| lookback.as_secs());
-    let maximum = match (warehouse, column_type) {
-        (Warehouse::Snowflake, _) if is_time => {
-            format!("DATEADD(second, -{seconds}, MAX({column}))")
-        }
-        (_, ColumnType::TimestampTz) => {
-            format!("CAST(MAX({column}) AS TIMESTAMP) - INTERVAL '{seconds} seconds'")
-        }
-        _ if is_time => format!("MAX({column}) - INTERVAL '{seconds} seconds'"),
-        _ => format!("MAX({column})"),
-    };
-    Some(match (warehouse, column_type) {
-        (Warehouse::Snowflake, ColumnType::TimestampTz) => format!(
-            "SELECT TO_VARCHAR({maximum}, 'YYYY-MM-DD HH24:MI:SS.FF6 TZH:TZM') FROM {target}"
+/// A query for `MAX(column)` whose text never depends on session time zones or output formats; `None` if a lookback needs a time column.
+pub fn cursor_query(request: &CursorQuery<'_>) -> Option<CursorRead> {
+    let column = quote(request.column, request.warehouse);
+    let target = qualified(request.table, request.warehouse);
+    let snowflake = request.warehouse == Warehouse::Snowflake;
+    let (expression, value) = match request.column_type {
+        ColumnType::TimestampTz | ColumnType::TimestampNtz => (
+            match snowflake {
+                true => format!("DATE_PART(epoch_microsecond, MAX({column}))"),
+                false => format!("CAST(epoch_us(MAX({column})) AS VARCHAR)"),
+            },
+            CursorValue::EpochMicros {
+                zoned: request.column_type == &ColumnType::TimestampTz,
+            },
         ),
-        (Warehouse::Snowflake, ColumnType::TimestampNtz) => {
-            format!("SELECT TO_VARCHAR({maximum}, 'YYYY-MM-DD HH24:MI:SS.FF6') FROM {target}")
-        }
-        (Warehouse::Snowflake, _) => format!("SELECT TO_VARCHAR({maximum}) FROM {target}"),
-        (_, ColumnType::TimestampTz) => {
-            format!("SELECT CAST({maximum} AS VARCHAR) || '+00' FROM {target}")
-        }
-        _ => format!("SELECT CAST({maximum} AS VARCHAR) FROM {target}"),
+        ColumnType::Date => (
+            match snowflake {
+                true => format!("TO_VARCHAR(MAX({column}), 'YYYY-MM-DD')"),
+                false => format!("strftime(MAX({column}), '%Y-%m-%d')"),
+            },
+            CursorValue::Date,
+        ),
+        _ if request.lookback.is_some() => return None,
+        _ => (
+            match snowflake {
+                true => format!("TO_VARCHAR(MAX({column}))"),
+                false => format!("CAST(MAX({column}) AS VARCHAR)"),
+            },
+            CursorValue::Plain,
+        ),
+    };
+    Some(CursorRead {
+        sql: format!("SELECT {expression} FROM {target}"),
+        value,
     })
 }

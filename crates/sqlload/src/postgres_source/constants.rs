@@ -12,6 +12,9 @@ pub const HEADER_EXTENSION_OFFSET: usize = 15;
 /// The tuple field count that marks the end of a binary `COPY` stream.
 pub const COPY_TRAILER: i16 = -1;
 
+/// The field length that marks SQL `NULL` in a binary `COPY` row.
+pub const NULL_FIELD_LENGTH: i32 = -1;
+
 /// Days from 1970-01-01 (Arrow's epoch) to 2000-01-01 (Postgres's).
 pub const POSTGRES_EPOCH_DAYS: i32 = 10_957;
 
@@ -42,6 +45,7 @@ JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
 WHERE c.relkind IN ('r', 'p', 'v', 'm') AND a.attnum > 0 AND NOT a.attisdropped
   AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+  AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND n.nspname NOT LIKE 'pg\\_toast\\_temp\\_%'
   AND NOT c.relispartition
 ORDER BY n.nspname, c.relname, a.attnum";
 
@@ -80,3 +84,6 @@ pub const NATIVE_TYPE_NAMES: &[(&str, PgType)] = &[
     ("uuid", PgType::Uuid),
     ("bytea", PgType::Bytea),
 ];
+
+/// Session settings: UTC so timestamp text and filter literals ignore the server zone; standard strings so `\\` is literal.
+pub const SESSION_OPTIONS: &str = "-c TimeZone=UTC -c standard_conforming_strings=on";

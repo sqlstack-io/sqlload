@@ -3,6 +3,7 @@ use crate::loader::_helpers::destination::single_text;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{CursorSpec, Destination, PlanOptions, TableSpec};
 use crate::project::models::WriteStrategy;
+use crate::write_sql::main::cursor_bound::cursor_bound;
 use crate::write_sql::main::cursor_query::cursor_query;
 use crate::write_sql::models::{CursorQuery, WriteMode};
 
@@ -12,6 +13,8 @@ pub(crate) struct WindowRequest<'a> {
     pub(crate) destination: &'a Destination,
     pub(crate) table_exists: bool,
     pub(crate) cursor_type: Option<&'a ColumnType>,
+    /// The cursor's select expression in the source, which filters compare against.
+    pub(crate) cursor_expression: Option<&'a str>,
     pub(crate) options: &'a PlanOptions,
 }
 
@@ -48,12 +51,7 @@ fn write_mode(
 }
 
 /// `"column" >= 'from' AND "column" < 'to'` for Postgres, from the bounds that are set.
-fn source_filter(
-    cursor: &CursorSpec,
-    lower: Option<(&str, &str)>,
-    upper: Option<&str>,
-) -> Option<String> {
-    let column = format!("\"{}\"", cursor.column.replace('"', "\"\""));
+fn source_filter(column: &str, lower: Option<(&str, &str)>, upper: Option<&str>) -> Option<String> {
     let literal = |value: &str| format!("'{}'", value.replace('\'', "''"));
     let bounds: Vec<String> = lower
         .map(|(operator, value)| format!("{column} {operator} {}", literal(value)))
@@ -108,25 +106,27 @@ async fn lower_bound(
         .lookback
         .map(|lookback| format!(" minus lookback {}", humantime::format_duration(lookback)))
         .unwrap_or_default();
-    Ok(Ok(
-        match (
-            single_text(request.destination, query).await?,
-            &cursor.start,
-        ) {
-            (Some(maximum), _) => {
-                let note = format!(
-                    "{} from {maximum} (destination maximum{lookback})",
-                    cursor.column
-                );
-                (Some(maximum), note)
-            }
-            (None, Some(start)) => (
-                Some(start.clone()),
-                format!("{} empty table, from cursor_start {start}", cursor.column),
-            ),
-            (None, None) => (None, format!("{} empty table, everything", cursor.column)),
+    let maximum = match single_text(request.destination, query.sql).await? {
+        Some(raw) => match cursor_bound(&raw, query.value, cursor.lookback) {
+            Ok(bound) => Some(bound),
+            Err(problem) => return Ok(Err(problem)),
         },
-    ))
+        None => None,
+    };
+    Ok(Ok(match (maximum, &cursor.start) {
+        (Some(maximum), _) => {
+            let note = format!(
+                "{} from {maximum} (destination maximum{lookback})",
+                cursor.column
+            );
+            (Some(maximum), note)
+        }
+        (None, Some(start)) => (
+            Some(start.clone()),
+            format!("{} empty table, from cursor_start {start}", cursor.column),
+        ),
+        (None, None) => (None, format!("{} empty table, everything", cursor.column)),
+    }))
 }
 
 /// The read window for one table, or why it cannot be read as asked.
@@ -169,7 +169,7 @@ pub(crate) async fn cursor_window(
     };
     Ok(Ok(Window {
         filter: source_filter(
-            cursor,
+            request.cursor_expression.unwrap_or_default(),
             from.as_deref().map(|from| (operator, from)),
             to.as_deref(),
         ),

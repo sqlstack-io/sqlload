@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::loader::_helpers::clock::now_utc_text;
-use crate::loader::_helpers::destination::{execute, finish_staging, stage_batch};
+use crate::loader::_helpers::destination::{cleanup_staging, execute, finish_staging, stage_batch};
 use crate::loader::_helpers::sources::connect_source;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
@@ -14,7 +14,6 @@ use crate::postgres_source::models::CopyRequest;
 use crate::project::models::ProjectConfig;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::write_sql::main::display_name::display_name;
-use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::staging_table::staging_table;
 use crate::write_sql::main::write_statements::write_statements;
 use crate::write_sql::models::WriteStatementsRequest;
@@ -73,51 +72,55 @@ async fn load_table(
     let (staging, create) =
         staging_table(&spec.destination, &data_columns, &load_id, spec.warehouse);
     execute(destination, vec![create]).await?;
+    let session = StagingSession {
+        staging: staging.clone(),
+        load_id: load_id.clone(),
+        loaded_at,
+        parts: 0,
+    };
+    let (session, written) = stage_and_write(client, table, destination, session).await;
+    cleanup_staging(destination, &session, spec.warehouse).await;
+    written
+}
+
+/// Read the source into the staging table, then apply the write strategy in one transaction.
+async fn stage_and_write(
+    client: &tokio_postgres::Client,
+    table: &TablePlan,
+    destination: &Destination,
+    mut session: StagingSession,
+) -> (StagingSession, Result<u64, LoaderError>) {
+    let spec = &table.spec;
     let request = CopyRequest {
         table: &spec.source_table,
         columns: table.read_columns.clone(),
         filter: table.source_filter.clone(),
         batch_rows: SOURCE_BATCH_ROWS,
     };
-    let mut session = StagingSession {
-        staging: staging.clone(),
-        load_id: load_id.clone(),
-        parts: 0,
-    };
-    let copied = copy_table(client, request, async |batch| {
-        session.parts += 1;
-        let batch = mask_batch(batch, &spec.masked)?;
-        stage_batch(destination, &session, batch)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    let written = async {
+        let rows = copy_table(client, request, async |batch| {
+            session.parts += 1;
+            let batch = mask_batch(batch, &spec.masked)?;
+            stage_batch(destination, &session, batch)
+                .await
+                .map_err(|error| error.to_string())
+        })
+        .await?;
+        finish_staging(destination, &session).await?;
+        let statements = write_statements(
+            &WriteStatementsRequest {
+                warehouse: spec.warehouse,
+                table: &spec.destination,
+                columns: &table.schema.write_columns,
+                mode: &table.mode,
+                load_id: &session.load_id,
+                loaded_at: &session.loaded_at,
+            },
+            &session.staging,
+        );
+        execute(destination, statements).await?;
+        Ok(rows)
+    }
     .await;
-    let staged = match copied {
-        Ok(rows) => finish_staging(destination, &session).await.map(|()| rows),
-        Err(error) => Err(error.into()),
-    };
-    let rows = match staged {
-        Ok(rows) => rows,
-        Err(error) => {
-            let drop = format!(
-                "DROP TABLE IF EXISTS {}",
-                qualified_name(&staging, spec.warehouse)
-            );
-            let _ = execute(destination, vec![drop]).await;
-            return Err(error);
-        }
-    };
-    let statements = write_statements(
-        &WriteStatementsRequest {
-            warehouse: spec.warehouse,
-            table: &spec.destination,
-            columns: &table.schema.write_columns,
-            mode: &table.mode,
-            load_id: &load_id,
-            loaded_at: &loaded_at,
-        },
-        &staging,
-    );
-    execute(destination, statements).await?;
-    Ok(rows)
+    (session, written)
 }

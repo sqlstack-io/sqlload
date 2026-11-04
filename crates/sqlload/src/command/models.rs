@@ -54,7 +54,7 @@ pub enum Command {
 }
 
 /// Table selection and policy flags for loader commands.
-#[derive(Debug, Clone, Default, clap::Args)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub struct LoaderArgs {
     /// Sources or tables to select (source names, destination table names or `schema.table`); all when empty.
     pub select: Vec<String>,
