@@ -46,15 +46,26 @@ pub(in crate::loader) fn files_schema(
         schema.action = TableAction::Recreate;
     }
     let cursor_name = spec.cursor.as_ref().map(|cursor| cursor.column.as_str());
-    let written: BTreeSet<&str> = schema
+    let written: BTreeSet<String> = schema
         .write_columns
         .iter()
-        .map(|column| column.name.as_str())
+        .map(|column| column.name.to_ascii_lowercase())
         .collect();
     match (schema.blocked.is_none(), cursor_name) {
-        (true, Some(name)) if !written.contains(name) => blocked_plan(vec![format!(
-            "cursor_column {name} is not written to the files (excluded, not in the enforced contract, or ignored by on_schema_change)"
-        )]),
+        (true, Some(name))
+            if spec.python.is_some()
+                && !written.contains(&name.to_ascii_lowercase())
+                && live.is_none() =>
+        {
+            blocked_plan(vec![format!(
+                "{name} is the cursor_column of a Python table, but files targets need its type before the first load: declare it, for example columns={{\"{name}\": \"date\"}}"
+            )])
+        }
+        (true, Some(name)) if !written.contains(&name.to_ascii_lowercase()) => {
+            blocked_plan(vec![format!(
+                "cursor_column {name} is not written to the files (excluded, not in the enforced contract, or ignored by on_schema_change)"
+            )])
+        }
         _ => schema,
     }
 }

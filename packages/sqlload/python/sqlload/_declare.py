@@ -4,7 +4,7 @@ A source is a module-level object tables attach to; a table is a decorated gener
 Both are found by scanning the modules under `python_paths`, so declaring one never runs it.
 """
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from logging import Logger
 from typing import Any, TypeVar, overload
@@ -13,28 +13,41 @@ TableFunction = Callable[["Context"], Iterator[Any]]
 ClientFactory = Callable[["Context"], Any]
 _Function = TypeVar("_Function", bound=TableFunction)
 
-#: Settings a table takes, and a source sets as defaults for its tables.
+#: Settings a table takes, and a source sets as defaults for its tables (the keys of `sqlload.toml`).
 TABLE_SETTINGS: frozenset[str] = frozenset(
 	{
+		"allow_empty",
+		"append_cursor_inclusive",
 		"auto_widen",
-		"columns",
 		"contract",
 		"cursor_column",
 		"cursor_start",
-		"exclude_columns",
-		"flatten",
 		"lookback",
 		"on_schema_change",
-		"schema",
-		"tags",
 		"type_change_rebuild",
 		"unique_key",
 		"write_strategy",
 	}
 )
 
+#: Settings only a table takes.
+TABLE_ONLY_SETTINGS: frozenset[str] = frozenset(
+	{"allow_columns", "columns", "destination_path", "exclude_columns", "mask", "table_name"}
+)
+
 #: Settings only a source takes.
-SOURCE_SETTINGS: frozenset[str] = frozenset({"connection", "destination", "format", "path"})
+SOURCE_SETTINGS: frozenset[str] = frozenset(
+	{
+		"allow_columns",
+		"connection",
+		"destination",
+		"destination_path",
+		"exclude_columns",
+		"mask_key",
+		"schema",
+		"table_name",
+	}
+)
 
 
 @dataclass(frozen=True)
@@ -87,7 +100,7 @@ class Source:
 		**settings: Any,
 	) -> Table | Callable[[TableFunction], Table]:
 		"""Attach a table to this source: `@shop.table` or `@shop.table(unique_key="id", ...)`."""
-		_check_settings(settings, TABLE_SETTINGS, "table")
+		_check_settings(settings, TABLE_SETTINGS | TABLE_ONLY_SETTINGS, "table")
 
 		def attach(table_function: TableFunction) -> Table:
 			declared = Table(
@@ -136,7 +149,7 @@ def table(
 	**settings: Any,
 ) -> Table | Callable[[TableFunction], Table]:
 	"""A standalone table, with the target's defaults: `@sl.table` or `@sl.table(...)`."""
-	_check_settings(settings, TABLE_SETTINGS, "table")
+	_check_settings(settings, TABLE_SETTINGS | TABLE_ONLY_SETTINGS, "table")
 
 	def declare(table_function: TableFunction) -> Table:
 		return Table(
@@ -150,11 +163,21 @@ def table(
 
 
 class Connection(Mapping[str, Any]):
-	"""A connection's resolved settings; calling it looks up another connection by name."""
+	"""A connection's resolved settings; calling it looks up another connection by name.
 
-	def __init__(self, settings: Mapping[str, Any], named: Mapping[str, Mapping[str, Any]]) -> None:
+	Connections that `[targets]` write to are not available to table functions (except a source's
+	own connection), so a table function cannot reach a destination's credentials.
+	"""
+
+	def __init__(
+		self,
+		settings: Mapping[str, Any],
+		named: Mapping[str, Mapping[str, Any]],
+		withheld: Collection[str] = (),
+	) -> None:
 		self._settings = dict(settings)
 		self._named = named
+		self._withheld = frozenset(withheld)
 
 	def __getitem__(self, key: str) -> Any:
 		return self._settings[key]
@@ -166,20 +189,64 @@ class Connection(Mapping[str, Any]):
 		return len(self._settings)
 
 	def __call__(self, name: str) -> "Connection":
+		if name in self._withheld:
+			raise PermissionError(
+				f"connection {name} is used by a [targets] entry; table functions only get connections"
+				" that no target writes to, so they cannot reach a destination's credentials"
+			)
 		if name not in self._named:
 			raise KeyError(f"no connection named {name}")
-		return Connection(self._named[name], self._named)
+		return Connection(self._named[name], self._named, self._withheld)
 
 
-@dataclass
 class Context:
-	"""What a table function receives: its connection and client, the cursor, and a logger."""
+	"""What a table function receives: its connection and client, the cursor window, and a logger.
 
-	connection: Connection
-	logger: Logger
-	client: Any = None
-	cursor_value: Any = None
-	is_reload: bool = False
+	`cursor_value` is where to read from (the destination's maximum of `cursor_column` minus
+	`lookback`, `cursor_start` on a first run, or `--start-cursor-*`); `None` means read everything.
+	Rows outside the window are skipped at load, so a function that ignores it still loads
+	correctly, only slower.
+	"""
+
+	def __init__(
+		self,
+		*,
+		table: str,
+		source: str,
+		connection: Connection,
+		logger: Logger,
+		cursor_column: str | None = None,
+		cursor_value: Any = None,
+		cursor_end: Any = None,
+		cursor_inclusive: bool = True,
+		is_reload: bool = False,
+		client_factory: Callable[["Context"], Any] | None = None,
+	) -> None:
+		self.table = table
+		self.source = source
+		self._connection = connection
+		self.logger = logger
+		self.cursor_column = cursor_column
+		self.cursor_value = cursor_value
+		self.cursor_end = cursor_end
+		self.cursor_inclusive = cursor_inclusive
+		self.is_reload = is_reload
+		self._client_factory = client_factory
+		self._client: Any = None
+
+	@property
+	def connection(self) -> Connection:
+		"""The source's connection settings (empty when it names none); call it with a name for another connection."""
+		return self._connection
+
+	@property
+	def client(self) -> Any:
+		"""The source's client (`@source.client`), built on first use and shared by its tables for the run."""
+		if self._client is None:
+			if self._client_factory is None:
+				raise LookupError(f"the source of table {self.table} declares no @source.client")
+			self._client = self._client_factory(self)
+		return self._client
 
 
 def _check_settings(settings: Mapping[str, Any], allowed: frozenset[str], what: str) -> None:

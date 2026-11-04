@@ -12,8 +12,9 @@ use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, Footer, 
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    Contract, FilesFormat, NewTables, OnSchemaChange, Policy, WriteStrategy,
+    Contract, FilesFormat, NewTables, OnSchemaChange, Policy, ProjectConfig, WriteStrategy,
 };
+use crate::python_sources::types::PythonHost;
 use crate::routing::models::Route;
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
@@ -69,6 +70,8 @@ pub struct TableSpec {
     pub contract: Contract,
     pub on_schema_change: OnSchemaChange,
     pub type_change_rebuild: Policy,
+    /// Whether a Python table's `replace` may empty the table when its function yields no rows.
+    pub allow_empty: bool,
     /// Listed under `[sources.*.tables]`, so never treated as a new table.
     pub listed: bool,
     pub new_tables: NewTables,
@@ -76,6 +79,26 @@ pub struct TableSpec {
     pub files: Option<FilesSource>,
     /// The table's folder template in a files target; `None` for warehouse targets.
     pub destination_path: Option<String>,
+    /// The table function behind a Python table; `None` for declarative sources.
+    pub python: Option<PythonTable>,
+}
+
+/// A table declared in Python: its columns are inferred from what the function yields at load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonTable {
+    /// The file declaring it, relative to the project directory.
+    pub module: String,
+    /// Columns declared with `columns` or `mask`; the rest are inferred at load.
+    pub declared: Vec<String>,
+}
+
+/// The cursor range a load reads: `from <= cursor < to` (`from < cursor` when not inclusive), each open when `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadWindow {
+    pub column: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub inclusive: bool,
 }
 
 /// Where a files source's files are and what they hold.
@@ -121,6 +144,8 @@ pub struct TablePlan {
     pub source_filter: Option<String>,
     /// How the cursor window was chosen, for `plan`.
     pub cursor_note: Option<String>,
+    /// The cursor range read, for sources that filter it themselves (Python tables).
+    pub window: Option<ReadWindow>,
     /// How the data moves from the source to the destination.
     pub route: Option<Route>,
     /// The files to read, for a files source.
@@ -171,10 +196,61 @@ pub struct PlanOptions {
     pub end_cursor: Option<String>,
 }
 
-/// What one table's load did.
+/// What one Python table's load needs.
+#[derive(Debug)]
+pub struct PythonLoad<'a> {
+    pub project: &'a ProjectConfig,
+    pub table: &'a TablePlan,
+    pub destination: &'a Destination,
+    pub host: std::sync::Arc<dyn PythonHost>,
+    pub options: &'a PlanOptions,
+}
+
+/// What a whole load works with.
+#[derive(Debug)]
+pub struct LoadRun<'a> {
+    pub project: &'a ProjectConfig,
+    pub destinations: &'a BTreeMap<String, Destination>,
+    /// Runs Python tables; `None` in the standalone executable.
+    pub host: Option<std::sync::Arc<dyn PythonHost>>,
+    pub options: &'a PlanOptions,
+}
+
+/// One table's load: its rows, or why it failed (other tables still load).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoadResult {
+pub struct TableOutcome {
     pub table: String,
+    pub loaded: Result<TableLoaded, String>,
+}
+
+/// What a table's load did: rows written, schema changes made on the way (Python tables), and a remark for the `loaded` line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TableLoaded {
+    pub rows: u64,
+    /// `created ...` and `altered ...` lines.
+    pub changes: Vec<String>,
+    pub note: Option<String>,
+}
+
+/// A Python table read for its load: its data (`None` when there is nothing to write), its plan for that data, the schema changes made, and a remark.
+#[derive(Debug)]
+pub struct PythonRead {
+    pub reader: Option<SourceReader>,
+    pub table: TablePlan,
+    pub changes: Vec<String>,
+    pub note: Option<String>,
+}
+
+/// A Python table's yielded data, held in temporary Arrow IPC files until its schema is known.
+#[derive(Debug)]
+pub struct SpilledBatches {
+    /// Removed when dropped.
+    pub directory: tempfile::TempDir,
+    pub chunks: Vec<std::path::PathBuf>,
+    /// The schema merged from every batch, with all-NULL columns as text.
+    pub schema: arrow_schema::SchemaRef,
+    /// The columns that only ever held NULL, which take the live or declared type.
+    pub null_columns: std::collections::BTreeSet<String>,
     pub rows: u64,
 }
 
@@ -199,9 +275,12 @@ pub struct StagingSession {
 }
 
 /// A connected source, ready to read.
+#[derive(Debug)]
 pub enum SourceReader {
     Postgres(tokio_postgres::Client),
     Files(OpenFolder),
+    /// A Python table's data, already read and spilled.
+    Batches(SpilledBatches),
 }
 
 /// What decides one files table's cursor window.

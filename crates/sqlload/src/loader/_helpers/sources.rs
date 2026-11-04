@@ -14,6 +14,9 @@ use crate::files_source::models::{
     FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks,
 };
 use crate::loader::_helpers::destination::text_values;
+use crate::loader::_helpers::python::python_tables;
+use crate::loader::_helpers::python::replay_batches;
+use crate::loader::_helpers::resolve::source_target;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -21,6 +24,7 @@ use crate::loader::models::{
 };
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
+use crate::postgres_source::main::read_catalog::read_catalog;
 use crate::postgres_source::models::{
     CopyRequest, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable, WireType,
 };
@@ -101,6 +105,37 @@ pub(crate) async fn open_source(
         SourceKind::Files => Ok(SourceReader::Files(open_folder(&files_location(
             project, source,
         )?)?)),
+        SourceKind::Python => Err(LoaderError::Invalid(
+            "a Python source is read by calling its table functions".to_owned(),
+        )),
+    }
+}
+
+/// A source's tables, and its files for a files source; `Ok(Err(problem))` when they cannot be found.
+pub(crate) async fn source_tables(
+    project: &ProjectConfig,
+    source_name: &str,
+    source: &SourceConfig,
+) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>), String>, LoaderError> {
+    match source.kind {
+        SourceKind::Postgres => {
+            let client = connect_source(project, source).await?;
+            let discovered = read_catalog(&client, &source.include, &source.exclude).await?;
+            Ok(Ok((discovered, None)))
+        }
+        SourceKind::Files => {
+            let warehouse = match source_target(project, source) {
+                Ok(target) => target.warehouse,
+                Err(problem) => return Ok(Err(problem)),
+            };
+            Ok(
+                match discover_files_table(project, source_name, source, warehouse).await {
+                    Ok((table, files)) => Ok((vec![table], Some(files))),
+                    Err(error) => Err(error.to_string()),
+                },
+            )
+        }
+        SourceKind::Python => Ok(Ok((python_tables(source), None))),
     }
 }
 
@@ -431,6 +466,7 @@ pub(crate) async fn read_source(
         (SourceReader::Files(folder), Some(files)) => {
             Ok(read_files(folder, files, on_batch).await?)
         }
+        (SourceReader::Batches(spilled), _) => replay_batches(spilled, table, on_batch).await,
         (SourceReader::Files(_), None) => Err(LoaderError::Invalid(format!(
             "{}: a files source has no files planned",
             table.spec.source_table.qualified_name()

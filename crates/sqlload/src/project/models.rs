@@ -31,6 +31,12 @@ pub struct ProjectConfig {
     pub targets: BTreeMap<String, TargetConfig>,
     #[serde(default)]
     pub sources: BTreeMap<String, SourceConfig>,
+    /// Every connection's settings after `${NAME}` interpolation, for Python table functions.
+    #[serde(skip)]
+    pub connection_settings: serde_json::Map<String, serde_json::Value>,
+    /// The file declaring each Python source, by source name.
+    #[serde(skip)]
+    pub python_modules: BTreeMap<String, String>,
 }
 
 /// How to reach one system.
@@ -75,6 +81,14 @@ pub enum ConnectionConfig {
         /// The database file; `:memory:` for an in-memory database.
         path: String,
     },
+    /// An HTTP API, for Python sources; its settings reach table functions as `ctx.connection`.
+    Http {
+        base_url: String,
+        #[serde(default)]
+        token: Option<crate::auth::models::Secret>,
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+    },
 }
 
 impl ConnectionConfig {
@@ -86,6 +100,7 @@ impl ConnectionConfig {
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",
             Self::Filesystem { .. } => "filesystem",
+            Self::Http { .. } => "http",
         }
     }
 }
@@ -128,6 +143,8 @@ impl TargetConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SourceConfig {
     pub kind: SourceKind,
+    /// The connection the source reads; optional for Python sources.
+    #[serde(default)]
     pub connection: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -192,11 +209,11 @@ impl SourceConfig {
         }
     }
 
-    /// The destination table name template: as set, or `{source}__{table}` for databases and `{source}` for files.
+    /// The destination table name template: as set, or `{source}__{table}` for databases and Python sources and `{source}` for files.
     pub fn table_name_template(&self) -> &str {
         match (&self.table_name, self.kind) {
             (Some(template), _) => template,
-            (None, SourceKind::Postgres) => DEFAULT_TABLE_NAME,
+            (None, SourceKind::Postgres | SourceKind::Python) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
         }
     }
@@ -209,6 +226,8 @@ pub enum SourceKind {
     Postgres,
     /// Existing files in an object store or directory.
     Files,
+    /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
+    Python,
 }
 
 /// The file formats a files target writes.
@@ -252,6 +271,9 @@ pub struct TableSettings {
     pub auto_widen: Option<bool>,
     #[serde(default)]
     pub type_change_rebuild: Option<Policy>,
+    /// Let a Python table's `replace` (or `--reload`) empty the table when its function yields no rows.
+    #[serde(default)]
+    pub allow_empty: Option<bool>,
 }
 
 /// One table's settings: everything a source can set, plus what only a table can.
@@ -261,7 +283,7 @@ pub struct TableOverride {
     pub settings: TableSettings,
     #[serde(default)]
     pub description: Option<String>,
-    /// The destination table name, overriding the source's `table_name`.
+    /// The destination table name, overriding the source's `table_name`; `{source}`, `{schema}` and `{table}` are filled in when it has them.
     #[serde(default)]
     pub name: Option<String>,
     /// The folder template in a files target, overriding the source's `destination_path`.

@@ -77,8 +77,11 @@ jobs:
       # Builds the sqlload extension (crates/sqlload-python) in the same target directory, so the
       # rust-cache above covers it, and runs the Python package's tests.
       - run: make test-python
+      # Checks what crates.io would receive (files, metadata, lockfile) without compiling it again:
+      # the steps above already build it, and recompiling the packaged copy re-unpacks DuckDB's
+      # bundled sources into a cached build folder, which fails when that folder is not empty.
       - name: Package the crate as crates.io would
-        run: cargo publish --dry-run --locked -p sqlload
+        run: cargo publish --dry-run --no-verify --locked -p sqlload
 
   containers:
     name: Container tests

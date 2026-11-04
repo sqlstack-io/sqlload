@@ -1,16 +1,17 @@
-use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
-use serde_json::Value;
+use serde::de::{Deserialize, Deserializer, Error as _, MapAccess, Visitor};
+use serde_json::value::RawValue;
+use serde_json::{Map, Value};
 
 use crate::files_source::_helpers::text::bytes_reader::too_long;
 
-/// One JSON object from a file: its keys and values in file order, and the line it starts on.
+/// One JSON object from a file: its keys and values in file order, and the line it starts on; a nested object or array is an empty placeholder value with its compact source text (keys in file order) beside it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct JsonRecord {
     pub(crate) line: u64,
-    pub(crate) fields: Vec<(String, Value)>,
+    pub(crate) fields: Vec<(String, Value, Option<String>)>,
 }
 
-struct OrderedObject(Vec<(String, Value)>);
+struct OrderedObject(Vec<(String, Value, Option<String>)>);
 
 impl<'de> Deserialize<'de> for OrderedObject {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -28,8 +29,26 @@ impl<'de> Visitor<'de> for ObjectVisitor {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut fields: Vec<(String, Value)> = Vec::new();
-        while let Some(field) = map.next_entry::<String, Value>()? {
+        let mut fields: Vec<(String, Value, Option<String>)> = Vec::new();
+        while let Some((key, raw)) = map.next_entry::<String, Box<RawValue>>()? {
+            let text = raw.get();
+            let field = match text.as_bytes().first() {
+                Some(b'{') => (
+                    key,
+                    Value::Object(Map::new()),
+                    Some(nested_text(text).map_err(A::Error::custom)?),
+                ),
+                Some(b'[') => (
+                    key,
+                    Value::Array(Vec::new()),
+                    Some(nested_text(text).map_err(A::Error::custom)?),
+                ),
+                _ => (
+                    key,
+                    serde_json::from_str::<Value>(text).map_err(A::Error::custom)?,
+                    None,
+                ),
+            };
             fields.push(field);
         }
         Ok(OrderedObject(fields))
@@ -238,4 +257,67 @@ fn parse_record(bytes: &[u8], line: u64) -> Result<JsonRecord, String> {
                 .map_or(text.as_str(), |(reason, _)| reason);
             format!("line {at}: {reason}")
         })
+}
+
+/// The keys and raw values of one JSON object, in file order.
+struct RawEntries(Vec<(String, Box<RawValue>)>);
+
+impl<'de> Deserialize<'de> for RawEntries {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(RawEntriesVisitor)
+    }
+}
+
+struct RawEntriesVisitor;
+
+impl<'de> Visitor<'de> for RawEntriesVisitor {
+    type Value = RawEntries;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut entries: Vec<(String, Box<RawValue>)> = Vec::new();
+        while let Some(entry) = map.next_entry::<String, Box<RawValue>>()? {
+            entries.push(entry);
+        }
+        Ok(RawEntries(entries))
+    }
+}
+
+/// A nested object or array as compact JSON text: keys in file order, a key repeated in one object keeping its last value (in the place of its first), as a JSON parser reads it.
+fn nested_text(text: &str) -> Result<String, serde_json::Error> {
+    match text.as_bytes().first() {
+        Some(b'{') => {
+            let RawEntries(entries) = serde_json::from_str(text)?;
+            let mut unique: Vec<(String, Box<RawValue>)> = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                match unique.iter_mut().find(|(known, _)| *known == key) {
+                    Some(entry) => entry.1 = value,
+                    None => unique.push((key, value)),
+                }
+            }
+            let fields = unique
+                .iter()
+                .map(|(key, value)| {
+                    Ok(format!(
+                        "{}:{}",
+                        serde_json::to_string(key)?,
+                        nested_text(value.get())?
+                    ))
+                })
+                .collect::<Result<Vec<String>, serde_json::Error>>()?;
+            Ok(format!("{{{}}}", fields.join(",")))
+        }
+        Some(b'[') => {
+            let items: Vec<Box<RawValue>> = serde_json::from_str(text)?;
+            let items = items
+                .iter()
+                .map(|item| nested_text(item.get()))
+                .collect::<Result<Vec<String>, serde_json::Error>>()?;
+            Ok(format!("[{}]", items.join(",")))
+        }
+        _ => Ok(text.trim().to_owned()),
+    }
 }

@@ -11,10 +11,10 @@ use sqlload::file_store::main::write_file::write_file;
 use sqlload::files_source::main::discover_files::discover_files;
 use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;
-use sqlload::loader::main::load_project::load_project;
+use sqlload::loader::main::load_tables::load_tables;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
-use sqlload::loader::models::{Destination, PlanOptions};
+use sqlload::loader::models::{Destination, LoadRun, PlanOptions, ProjectPlan};
 use sqlload::project::main::parse_project::parse_project;
 use sqlload::project::models::ProjectConfig;
 use sqlload::store_paths::models::{Location, StoreKind};
@@ -97,10 +97,26 @@ async fn run_once(
     apply_project(&plan, destinations)
         .await
         .map_err(|error| error.to_string())?;
-    load_project(&project, &plan, destinations)
+    load_all(&project, &plan, destinations).await
+}
+
+/// Load every table of `plan`; the first table that failed is the error.
+pub(crate) async fn load_all(
+    project: &ProjectConfig,
+    plan: &ProjectPlan,
+    destinations: &BTreeMap<String, Destination>,
+) -> Result<(), String> {
+    let options = PlanOptions::default();
+    let run = LoadRun {
+        project,
+        destinations,
+        host: None,
+        options: &options,
+    };
+    load_tables(&run, plan)
         .await
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        .into_iter()
+        .try_for_each(|outcome| outcome.loaded.map(|_| ()))
 }
 
 /// The rendered plan, or the error that stopped it.
@@ -413,9 +429,7 @@ async fn plan_apply_load(
         let applied = apply_project(&plan, destinations)
             .await
             .map_err(|error| error.to_string())?;
-        load_project(project, &plan, destinations)
-            .await
-            .map_err(|error| error.to_string())?;
+        load_all(project, &plan, destinations).await?;
         Ok(applied)
     }
     .await;

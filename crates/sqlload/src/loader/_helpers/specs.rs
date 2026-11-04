@@ -148,9 +148,14 @@ pub(crate) fn build_spec(
     if !problems.is_empty() {
         return Err(problems);
     }
-    let name = overrides.name.clone().unwrap_or_else(|| {
-        destination_name(context.source.table_name_template(), context.name, table)
-    });
+    let template = overrides
+        .name
+        .as_deref()
+        .unwrap_or(context.source.table_name_template());
+    let name = match (&overrides.name, template.contains('{')) {
+        (Some(name), false) => name.clone(),
+        _ => destination_name(template, context.name, table),
+    };
     Ok(TableSpec {
         source_name: context.name.to_owned(),
         source_table: table.clone(),
@@ -180,6 +185,8 @@ pub(crate) fn build_spec(
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        allow_empty: layered(&settings.allow_empty, &defaults.allow_empty)
+            .is_some_and(|(value, _)| value),
         listed: false,
         new_tables: context.source.new_tables,
         files: None,
@@ -190,6 +197,7 @@ pub(crate) fn build_spec(
                 .or_else(|| context.source.destination_path.clone())
                 .unwrap_or_else(|| target_path.clone())
         }),
+        python: None,
     })
 }
 

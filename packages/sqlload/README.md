@@ -28,3 +28,35 @@ Both this package and `sqlload-cli` install a `sqlload` command. Remove the old 
 ```sh
 pip uninstall sqlload-cli
 ```
+
+## Python sources
+
+List the folders holding them in `sqlload.toml` (`python_paths = ["sources"]`); every
+`sqlload.source` and `@sqlload.table` found there joins `plan`, `apply` and `load`:
+
+```python
+import sqlload as sl
+
+shop = sl.source("shop", connection="shop", write_strategy="merge")
+
+
+@shop.table(unique_key="order_id", cursor_column="updated_at", lookback="1h")
+def orders(ctx: sl.Context):
+    yield from fetch_orders(ctx.connection["base_url"], updated_after=ctx.cursor_value)
+```
+
+This loads into the table `shop__orders`: like `[sources]` entries, tables are named
+`{source}__{table}` unless the source or the table sets `table_name` (with the same `{source}`,
+`{schema}` and `{table}` placeholders). A `@sqlload.table` declared without a source keeps its
+own name.
+
+Columns are inferred from what a table yields (declare types with `columns={...}`, which take
+precedence). A table is created by its first load, never by `apply`; a first load that yields
+no rows creates nothing unless columns are declared. Under `replace` (and `--reload`), a load
+that yields no rows into a table that has rows fails rather than emptying it; set
+`allow_empty=True` on the table or source when an empty result is real. Rows outside the cursor window are skipped,
+so a function that ignores `ctx.cursor_value` still loads correctly.
+
+`ctx.connection` holds the source's connection settings; `ctx.connection("name")` gives another
+connection's, except connections that a `[targets]` entry writes to, which table functions never
+get.

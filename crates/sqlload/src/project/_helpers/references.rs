@@ -2,8 +2,8 @@ use crate::files_source::models::SourceFormat;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, target_problems,
 };
-use crate::project::constants::TABLE_PLACEHOLDER;
-use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
+use crate::project::constants::{FILES_CONNECTION_KINDS, TABLE_PLACEHOLDER};
+use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig, SourceKind};
 
 /// Problems with names one section uses to refer to another.
 pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
@@ -26,16 +26,24 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
 
 fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
-    let place = format!("[sources.{name}]");
+    let place = source_place(project, name);
     let expected = match source.kind {
         SourceKind::Postgres => "postgres",
         SourceKind::Files => "s3 or filesystem",
+        SourceKind::Python => "any",
     };
     match project.connections.get(&source.connection) {
+        None if source.connection.is_empty() && source.kind == SourceKind::Python => {}
+        None if source.connection.is_empty() => {
+            problems.push(format!("{place} needs a connection"));
+        }
         None => problems.push(format!(
             "{place} connection {:?} is not a [connections] entry",
             source.connection
         )),
+        Some(connection) if source.kind == SourceKind::Python => {
+            problems.extend(shared_warehouse_problems(project, name, source, connection));
+        }
         Some(connection) if !expected.split(" or ").any(|kind| kind == connection.kind()) => {
             problems.push(format!(
                 "{place} has kind = {:?} but connection {:?} is a {} connection (expected {expected})",
@@ -75,6 +83,38 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Postgres => "postgres",
         SourceKind::Files => "files",
+        SourceKind::Python => "python",
+    }
+}
+
+/// A Python source reading a connection a warehouse target loads into, whose credentials Python code must never get (a files target's s3 or filesystem connection may be shared).
+fn shared_warehouse_problems(
+    project: &ProjectConfig,
+    name: &str,
+    source: &SourceConfig,
+    connection: &ConnectionConfig,
+) -> Vec<String> {
+    if FILES_CONNECTION_KINDS.contains(&connection.kind()) {
+        return Vec::new();
+    }
+    project
+        .targets
+        .iter()
+        .filter(|(_, target)| target.connection == source.connection)
+        .map(|(target, _)| {
+            format!(
+                "Python source {name} uses connection {}, which target {target} loads into; Python code never gets warehouse credentials — give the source its own connection",
+                source.connection
+            )
+        })
+        .collect()
+}
+
+/// How problems name a source: its TOML section, or the Python file declaring it.
+fn source_place(project: &ProjectConfig, name: &str) -> String {
+    match project.python_modules.get(name) {
+        Some(module) => format!("Python source {name} ({module})"),
+        None => format!("[sources.{name}]"),
     }
 }
 
@@ -114,6 +154,13 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
                 problems.push(format!("{place} include and exclude are for database sources; a files source is one table"));
             }
             problems.extend(encoding_problems(place, source));
+        }
+        SourceKind::Python => {
+            if source.tables.len() > 1 && !template.contains(TABLE_PLACEHOLDER) {
+                problems.push(format!(
+                    "{place} table_name {template:?} must contain {TABLE_PLACEHOLDER}, or every table gets the same name"
+                ));
+            }
         }
     }
     problems

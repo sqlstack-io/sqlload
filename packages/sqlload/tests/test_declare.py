@@ -23,7 +23,7 @@ def test_given_a_source_when_tables_attach_then_settings_fall_back_to_the_source
 	assert shop_orders.setting("write_strategy") == "merge"
 	assert shop_stores.setting("write_strategy") == "replace"
 	assert shop_orders.setting("lookback") is None
-	ctx = sl.Context(connection=Connection({}, {}), logger=logging.getLogger("test"))
+	ctx = sl.Context(table="shop_orders", source="shop", connection=Connection({}, {}), logger=logging.getLogger("test"))
 	assert list(shop_orders(ctx)) == [{"order_id": 1}]
 
 
@@ -55,3 +55,14 @@ def test_given_a_connection_when_called_by_name_then_another_connection_is_retur
 	assert dict(connection("other")) == {"token": "t"}
 	with pytest.raises(KeyError, match="no connection named missing"):
 		connection("missing")
+
+
+def test_given_a_source_client_when_tables_ask_for_it_then_it_is_built_once() -> None:
+	built: list[int] = []
+	ctx = sl.Context(
+		table="t", source="s", connection=Connection({}, {}), logger=logging.getLogger("test"), client_factory=lambda ctx: built.append(1) or "client"
+	)
+	assert ctx.client == "client" and ctx.client == "client"
+	assert built == [1]
+	with pytest.raises(LookupError, match="declares no @source.client"):
+		_ = sl.Context(table="t", source="s", connection=Connection({}, {}), logger=logging.getLogger("test")).client

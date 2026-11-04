@@ -47,12 +47,14 @@ pub(crate) fn start_parsers(
     Dispatch {
         order: order_sender,
         jobs: job_sender,
+        stats: stats.clone(),
     }
 }
 
 impl Dispatch {
     /// Queue `crossed` for parsing in yield order, waiting while the queue is full; `false` once the consumer has gone. Call it without the GIL.
     pub(crate) fn send(&self, crossed: Crossed) -> bool {
+        self.stats.budget.acquire(crossed.queued_bytes());
         let (piece_sender, piece_receiver) = sync_channel(0);
         match self.order.send(Some(piece_receiver)) {
             Ok(()) => match self.jobs.send(ParseJob {
@@ -103,10 +105,12 @@ fn work(jobs: &Mutex<Receiver<ParseJob>>, stats: &Arc<CrossingStats>, panic_at: 
             sender,
             stats: stats.clone(),
         };
+        let bytes = crossed.queued_bytes();
         let parsed = catch_unwind(AssertUnwindSafe(|| {
             panic_if(panic_at, PanicSite::Parser);
             output.parse_one(crossed)
         }));
+        stats.budget.release(bytes);
         let last = match parsed {
             Ok(Ok(true)) => Parsed::Done,
             Ok(Ok(false)) => continue,

@@ -1,18 +1,20 @@
-//! Parse the given arguments and run one subcommand, for callers that embed the command line.
+//! Parse the given arguments and run one subcommand with a host for Python sources, for the `sqlload` Python package.
 
 use std::ffi::OsString;
 use std::io::Write;
+use std::sync::Arc;
 
 use clap::Parser;
 
 use crate::command::_helpers::exporter_commands::run_exporter_command;
 use crate::command::_helpers::loader_commands::run_loader;
 use crate::command::_helpers::logging::init_logging;
-use crate::command::models::Cli;
+use crate::command::models::{Cli, LoaderRequest};
 use crate::project::main::is_project::is_project;
+use crate::python_sources::types::PythonHost;
 
-/// Run the command line `args` (the program name first) and return its exit code, as the `sqlload` executable would.
-pub fn run_args<I, T>(args: I) -> u8
+/// Run the command line `args` (the program name first) and return its exit code; `host` runs Python sources (the standalone executable has none).
+pub fn run_args_with_host<I, T>(args: I, host: Option<Arc<dyn PythonHost>>) -> u8
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -36,7 +38,13 @@ where
         let text = std::fs::read_to_string(&cli.config)
             .map_err(|error| format!("cannot read {}: {error}", cli.config.display()))?;
         if is_project(&text) {
-            return run_loader(&text, cli.command).await;
+            let request = LoaderRequest {
+                text: &text,
+                config: &cli.config,
+                command: cli.command,
+                host,
+            };
+            return run_loader(request).await;
         }
         run_exporter_command(&cli.config, cli.command).await
     });

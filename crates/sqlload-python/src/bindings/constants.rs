@@ -11,3 +11,6 @@ pub const DEFAULT_DICT_CROSSING: DictCrossing = DictCrossing::Serialise;
 
 /// The most threads parsing one table's batches by default.
 pub const MAX_DEFAULT_PARSE_THREADS: usize = 4;
+
+/// Bytes of crossed data waiting to be parsed before the generator pauses.
+pub const DEFAULT_MAX_QUEUED_BYTES: usize = 256 * 1024 * 1024;

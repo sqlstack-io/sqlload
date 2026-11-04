@@ -1,5 +1,7 @@
+//! The current time as text.
+
 /// The current time as an ISO 8601 UTC timestamp with microseconds.
-pub(crate) fn now_utc_text() -> String {
+pub fn now_utc_text() -> String {
     let micros = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| {

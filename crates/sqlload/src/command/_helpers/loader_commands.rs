@@ -1,12 +1,19 @@
-use crate::command::models::{Command, LoaderArgs};
+use std::path::Path;
+use std::sync::Arc;
+
+use crate::command::models::{Command, LoaderArgs, LoaderRequest};
+use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
 use crate::loader::main::debug_project::debug_project;
-use crate::loader::main::load_project::load_project;
+use crate::loader::main::load_tables::load_tables;
 use crate::loader::main::plan_project::plan_project;
 use crate::loader::main::render_plan::render_plan;
-use crate::loader::models::PlanOptions;
+use crate::loader::models::{LoadRun, PlanOptions};
 use crate::project::main::parse_project::parse_project;
+use crate::project::main::parse_python_project::parse_python_project;
+use crate::project::models::ProjectConfig;
+use crate::python_sources::types::PythonHost;
 
 fn environment_variable(name: &str) -> Option<String> {
     match std::env::var(name) {
@@ -59,17 +66,52 @@ fn timestamp_problem(text: &str) -> Option<String> {
     }
 }
 
-/// Run a loader command against the project in `text`.
-pub(crate) async fn run_loader(text: &str, command: Command) -> Result<Vec<String>, String> {
-    let project = parse_project(text, &environment_variable).map_err(|error| error.to_string())?;
+/// The project in `request.text`, with its Python sources discovered through the host when it has `python_paths`.
+async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfig, String> {
+    let project =
+        parse_project(request.text, &environment_variable).map_err(|error| error.to_string())?;
+    if project.python_paths.is_empty() {
+        return Ok(project);
+    }
+    let Some(host) = request.host.clone() else {
+        return Err(NO_PYTHON_HOST.to_owned());
+    };
+    let root = request
+        .config
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let paths = project.python_paths.clone();
+    let found = tokio::task::spawn_blocking(move || host.discover(&root, &paths))
+        .await
+        .map_err(|error| format!("Python discovery failed: {error}"))??;
+    parse_python_project(request.text, &environment_variable, &found)
+        .map_err(|error| error.to_string())
+}
+
+/// Run a loader command against the project in `request.text`.
+pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<Vec<String>, String> {
+    let project = load_project_config(&request).await?;
+    let outcome = run_command(&project, request.command, request.host.clone()).await;
+    if let Some(host) = request.host {
+        let _ = tokio::task::spawn_blocking(move || host.finish()).await;
+    }
+    outcome
+}
+
+async fn run_command(
+    project: &ProjectConfig,
+    command: Command,
+    host: Option<Arc<dyn PythonHost>>,
+) -> Result<Vec<String>, String> {
     if let Command::Debug { no_connection } = command {
-        let (lines, ok) = debug_project(&project, !no_connection).await;
+        let (lines, ok) = debug_project(project, !no_connection).await;
         return match ok {
             true => Ok(lines),
             false => Err(lines.join("\n")),
         };
     }
-    let destinations = connect_targets(&project)
+    let destinations = connect_targets(project)
         .await
         .map_err(|error| error.to_string())?;
     let (args, applies, loads) = match command {
@@ -84,10 +126,10 @@ pub(crate) async fn run_loader(text: &str, command: Command) -> Result<Vec<Strin
         }
     };
     let options = options(args)?;
-    let plan = plan_project(&project, &destinations, &options)
+    let plan = plan_project(project, &destinations, &options)
         .await
         .map_err(|error| error.to_string())?;
-    let (mut lines, ok) = render_plan(&plan);
+    let (mut lines, mut ok) = render_plan(&plan);
     if !applies {
         return match ok {
             true => Ok(lines),
@@ -100,14 +142,31 @@ pub(crate) async fn run_loader(text: &str, command: Command) -> Result<Vec<Strin
             .map_err(|error| error.to_string())?,
     );
     if loads {
-        let results = load_project(&project, &plan, &destinations)
-            .await
-            .map_err(|error| error.to_string())?;
-        lines.extend(
-            results
-                .iter()
-                .map(|result| format!("loaded  {}  {} rows", result.table, result.rows)),
-        );
+        let run = LoadRun {
+            project,
+            destinations: &destinations,
+            host,
+            options: &options,
+        };
+        for outcome in load_tables(&run, &plan).await {
+            match outcome.loaded {
+                Ok(loaded) => {
+                    lines.extend(loaded.changes);
+                    let note = loaded
+                        .note
+                        .map(|note| format!(" {note}"))
+                        .unwrap_or_default();
+                    lines.push(format!(
+                        "loaded  {}  {} rows{note}",
+                        outcome.table, loaded.rows
+                    ));
+                }
+                Err(reason) => {
+                    ok = false;
+                    lines.push(format!("failed  {}  {reason}", outcome.table));
+                }
+            }
+        }
     }
     match ok {
         true => Ok(lines),

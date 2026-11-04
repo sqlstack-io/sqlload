@@ -8,16 +8,16 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
 -> Result<(), String> {
     let test_cases = [
         ReadTextFilesTestCase {
-            description: "ndjson: nested values stay JSON text, missing keys and nulls are NULL, blank lines are skipped",
+            description: "ndjson: nested values stay JSON text with keys in source order, missing keys and nulls are NULL, blank lines are skipped",
             encoding: encoding(SourceFormat::Ndjson),
             files: &[(
                 "a.ndjson",
-                "{\"id\":1,\"meta\":{\"k\":[1,2]},\"note\":\"x\"}\n\n{\"id\":2,\"note\":null}\r\n{\"id\":3,\"meta\":{},\"note\":\"y\"}",
+                "{\"id\":1,\"meta\":{\"k\":[1,2],\"b\": 1},\"note\":\"x\"}\n\n{\"id\":2,\"note\":null}\r\n{\"id\":3,\"meta\":{},\"note\":\"y\"}",
             )],
             unsampled: &[],
             exclude: &[],
             pinned: &[],
-            expected_rows: Ok("1|{\"k\":[1,2]}|x\n2|NULL|NULL\n3|{}|y"),
+            expected_rows: Ok("1|{\"k\":[1,2],\"b\":1}|x\n2|NULL|NULL\n3|{}|y"),
         },
         ReadTextFilesTestCase {
             description: "a pinned type converts every value; a key repeated in one object keeps its last value",
@@ -174,6 +174,29 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             pinned: &[],
             expected_rows: Err(
                 "a.csv: line 3: id: \"007\" does not fit int, the type inferred from sampled values",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "ndjson: a key repeated in a nested object keeps its last value, in the place of its first",
+            encoding: encoding(SourceFormat::Ndjson),
+            files: &[(
+                "a.ndjson",
+                "{\"id\":1,\"meta\":{\"b\":1,\"a\":[{\"x\":1,\"x\":2}],\"b\":3}}\n",
+            )],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|{\"b\":3,\"a\":[{\"x\":2}]}"),
+        },
+        ReadTextFilesTestCase {
+            description: "a nested value outside the sample that does not fit the inferred type is shown in the error",
+            encoding: encoding(SourceFormat::Ndjson),
+            files: &[("b.ndjson", "{\"id\":1}\n")],
+            unsampled: &[("a.ndjson", "{\"id\":2}\n{\"id\":{\"k\": 1}}\n")],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "a.ndjson: line 2: id: {\"k\":1} does not fit int, the type inferred from sampled values",
             ),
         },
         ReadTextFilesTestCase {

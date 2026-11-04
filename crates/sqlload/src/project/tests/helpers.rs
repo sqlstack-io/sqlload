@@ -82,3 +82,20 @@ pub(crate) const CONNECTIONS: &str = "[connections.wh]\nkind = \"duckdb\"\npath 
 pub(crate) fn environment(name: &str) -> Option<String> {
     Some(format!("<{name}>"))
 }
+
+/// `toml` after [`CONNECTIONS`] parsed with the Python `sources` (the host's JSON), and the value `read` takes from it.
+pub(crate) fn parse_with_python(
+    toml: &str,
+    sources: &str,
+    read: fn(&crate::project::models::ProjectConfig) -> String,
+) -> Result<String, String> {
+    let python: Vec<crate::python_sources::models::PythonSource> =
+        serde_json::from_str(sources).map_err(|error| error.to_string())?;
+    crate::project::main::parse_python_project::parse_python_project(
+        &format!("{CONNECTIONS}{toml}"),
+        &environment,
+        &python,
+    )
+    .map(|project| read(&project))
+    .map_err(|error| error.to_string())
+}
