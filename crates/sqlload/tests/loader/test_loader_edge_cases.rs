@@ -1,17 +1,7 @@
-use sqlload::duckdb_destination::main::execute_statements::execute_statements;
-use sqlload::duckdb_destination::main::query_text::query_text;
-use sqlload::loader::main::apply_project::apply_project;
-use sqlload::loader::main::connect_targets::connect_targets;
-use sqlload::loader::main::load_project::load_project;
-use sqlload::loader::main::plan_project::plan_project;
-use sqlload::loader::main::render_plan::render_plan;
-use sqlload::loader::models::{Destination, PlanOptions};
-use sqlload::project::main::parse_project::parse_project;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
-use tokio_postgres::Client;
 
-use crate::helpers::{duckdb_project, run_async};
+use crate::helpers::{run_async, run_scenario};
 use crate::test_types::{ScenarioRun, ScenarioTestCase};
 
 const OK: ScenarioRun = ScenarioRun {
@@ -19,75 +9,6 @@ const OK: ScenarioRun = ScenarioRun {
     destination_change: "",
     expected_error: "",
 };
-
-/// Plan, apply and load once; the error text when any step fails.
-async fn run_once(
-    project_text: &str,
-    destinations: &std::collections::BTreeMap<String, Destination>,
-) -> Result<(), String> {
-    let project = parse_project(project_text, &|_| None).map_err(|error| error.to_string())?;
-    let plan = plan_project(&project, destinations, &PlanOptions::default())
-        .await
-        .map_err(|error| error.to_string())?;
-    let (lines, ok) = render_plan(&plan);
-    if !ok {
-        return Err(lines.join("\n"));
-    }
-    apply_project(&plan, destinations)
-        .await
-        .map_err(|error| error.to_string())?;
-    load_project(&project, &plan, destinations)
-        .await
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-}
-
-async fn run_scenario(
-    client: &Client,
-    port: u16,
-    test_case: &ScenarioTestCase,
-) -> Result<Option<String>, String> {
-    client
-        .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
-        .await
-        .map_err(|error| error.to_string())?;
-    client
-        .batch_execute(test_case.setup)
-        .await
-        .map_err(|error| error.to_string())?;
-    let text = duckdb_project(port, test_case.settings);
-    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
-    let destinations = connect_targets(&project)
-        .await
-        .map_err(|error| error.to_string())?;
-    let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
-        return Err("no DuckDB destination".to_owned());
-    };
-    for (index, run) in test_case.runs.iter().enumerate() {
-        client
-            .batch_execute(run.source_change)
-            .await
-            .map_err(|error| error.to_string())?;
-        if !run.destination_change.is_empty() {
-            execute_statements(duckdb, vec![run.destination_change.to_owned()])
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        let error = run_once(&text, &destinations)
-            .await
-            .err()
-            .unwrap_or_default();
-        assert!(
-            error.contains(run.expected_error) && error.is_empty() == run.expected_error.is_empty(),
-            "{} run {}: {error}",
-            test_case.description,
-            index + 1
-        );
-    }
-    query_text(duckdb, test_case.check_query.to_owned())
-        .await
-        .map_err(|error| error.to_string())
-}
 
 #[test]
 fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
