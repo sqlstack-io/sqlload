@@ -1,5 +1,5 @@
 use crate::column_types::models::Warehouse;
-use crate::loader::_helpers::columns::ColumnSelection;
+use crate::loader::_helpers::specs::ColumnSelection;
 use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, pinned_types,
 };

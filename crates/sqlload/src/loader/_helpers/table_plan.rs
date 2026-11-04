@@ -1,4 +1,5 @@
 use crate::loader::_helpers::destination::live_columns;
+use crate::loader::_helpers::route::table_route;
 use crate::loader::_helpers::window::{WindowRequest, cursor_window};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, PlanOptions, TablePlan, TableSpec};
@@ -69,6 +70,7 @@ pub(crate) async fn plan_table(
                 mode: WriteMode::Append,
                 source_filter: None,
                 cursor_note: None,
+                route: None,
             });
         }
     };
@@ -126,6 +128,13 @@ pub(crate) async fn plan_table(
             (None, WriteMode::Append, None)
         }
     };
+    let route = match table_route(spec, destination) {
+        Ok(route) => Some(route),
+        Err(problem) => {
+            schema = blocked_plan(vec![problem]);
+            None
+        }
+    };
     Ok(TablePlan {
         spec: spec.clone(),
         read_columns,
@@ -134,5 +143,6 @@ pub(crate) async fn plan_table(
         mode,
         source_filter,
         cursor_note,
+        route,
     })
 }

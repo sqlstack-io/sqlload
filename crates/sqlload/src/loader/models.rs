@@ -7,6 +7,7 @@ use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
     Contract, MaskMethod, NewTables, OnSchemaChange, Policy, WriteStrategy,
 };
+use crate::routing::models::Route;
 use crate::schema_plan::models::{LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
 use crate::write_sql::models::{TableName, WriteMode};
@@ -94,6 +95,8 @@ pub struct TablePlan {
     pub source_filter: Option<String>,
     /// How the cursor window was chosen, for `plan`.
     pub cursor_note: Option<String>,
+    /// How the data moves from the source to the destination.
+    pub route: Option<Route>,
 }
 
 /// The plan for a whole project.

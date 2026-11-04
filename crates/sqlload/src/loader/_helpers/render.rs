@@ -1,5 +1,6 @@
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
 use crate::loader::models::TablePlan;
+use crate::routing::models::Route;
 use crate::schema_plan::models::TableAction;
 use crate::write_sql::main::display_name::display_name;
 use crate::write_sql::models::WriteMode;
@@ -108,6 +109,7 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             spec.source_table.qualified_name()
         ),
     ];
+    lines.extend(table.route.as_ref().map(route_line));
     lines.extend(
         table
             .cursor_note
@@ -115,6 +117,11 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             .map(|note| format!("cursor  {note}")),
     );
     lines
+}
+
+fn route_line(route: &Route) -> String {
+    let steps: Vec<String> = route.steps.iter().map(ToString::to_string).collect();
+    format!("route  {}", steps.join(" -> "))
 }
 
 pub(crate) fn blocked_lines(table: &TablePlan) -> Vec<String> {
