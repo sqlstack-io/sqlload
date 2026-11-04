@@ -21,3 +21,13 @@ pub struct StoredFile {
     pub etag: Option<String>,
     pub modified_ms: i64,
 }
+
+impl StoredFile {
+    /// The file's version: its ETag, or its size and modification time when the store has none.
+    pub fn version(&self) -> String {
+        match &self.etag {
+            Some(etag) => etag.trim_matches('"').to_owned(),
+            None => format!("{}-{}", self.size, self.modified_ms),
+        }
+    }
+}

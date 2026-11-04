@@ -202,22 +202,19 @@ fn parquet_bytes(file: &ParquetFile) -> Result<bytes::Bytes, String> {
     Ok(bytes::Bytes::from(buffer))
 }
 
-/// Run a files scenario: write each run's files under `scores/`, then plan, apply and load into a fresh DuckDB.
+/// Run a files scenario: write each run's files under a fresh `scores-<uuid>/` folder, then plan, apply and load into a fresh DuckDB.
 pub(crate) async fn run_files_scenario(
     endpoint: &str,
     directory: &std::path::Path,
     test_case: &FilesScenarioTestCase,
 ) -> Result<Option<String>, String> {
     let (store, connection) = (test_case.store)(endpoint, directory);
+    let prefix = format!("scores-{}/", uuid::Uuid::new_v4());
     let text = format!(
-        "[connections.files]\n{}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"scores\"\n{}\n",
+        "[connections.files]\n{}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"{prefix}\"\n{}\n",
         connection, test_case.settings
     );
-    let folder = open_folder(&Location {
-        store,
-        prefix: "scores/".to_owned(),
-    })
-    .map_err(|error| error.to_string())?;
+    let folder = open_folder(&Location { store, prefix }).map_err(|error| error.to_string())?;
     let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
     let destinations = connect_targets(&project)
         .await

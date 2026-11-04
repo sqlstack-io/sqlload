@@ -5,7 +5,7 @@ use arrow_cast::cast;
 use arrow_schema::{Field, Schema, SchemaRef};
 
 use crate::column_types::main::arrow_field::arrow_field;
-use crate::files_source::constants::SOURCE_FILE_COLUMN;
+use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
 use crate::files_source::models::DataFile;
 use crate::schema_plan::models::DesiredColumn;
 
@@ -33,7 +33,9 @@ pub(crate) fn shape_batch(
         .iter()
         .map(|(key, value)| (key.as_str(), value.as_str()))
         .collect();
+    let version = file.file.version();
     constants.push((SOURCE_FILE_COLUMN, file_name));
+    constants.push((SOURCE_VERSION_COLUMN, &version));
     let columns: Vec<ArrayRef> = schema
         .fields()
         .iter()

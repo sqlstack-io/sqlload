@@ -81,6 +81,23 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
             expected_result: "1:1.0,2:1.0,3:2.0,4:2.0",
         },
         FilesScenarioTestCase {
+            description: "append stops when a loaded file was rewritten in place",
+            store: seaweedfs_store,
+            settings: "write_strategy = \"append\"\npartition_columns = { day = \"date\" }\n",
+            runs: &[
+                FilesRun {
+                    files: &[NOV_3, NOV_4],
+                    expected_error: "",
+                },
+                FilesRun {
+                    files: &[NOV_4_REWRITTEN],
+                    expected_error: "was rewritten in place",
+                },
+            ],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",
+            expected_result: "3",
+        },
+        FilesScenarioTestCase {
             description: "a cursor that is not a partition column is blocked",
             store: local_store,
             settings: "write_strategy = \"delete_insert\"\ncursor_column = \"id\"\npartition_columns = { day = \"date\" }\n",

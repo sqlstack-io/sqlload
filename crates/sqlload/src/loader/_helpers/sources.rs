@@ -4,11 +4,13 @@ use tokio_postgres::Client;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::main::open_folder::open_folder;
-use crate::files_source::constants::SOURCE_FILE_COLUMN;
+use crate::files_source::constants::{
+    SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
+};
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
-use crate::files_source::models::{FileSelection, FilesRead};
+use crate::files_source::models::{FileSelection, FilesRead, LoadedFile};
 use crate::loader::_helpers::destination::text_values;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
@@ -26,7 +28,7 @@ use crate::project::models::{
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
-use crate::write_sql::main::distinct_query::distinct_query;
+use crate::write_sql::main::loaded_files_query::loaded_files_query;
 
 /// A client for a source's Postgres connection.
 pub(crate) async fn connect_source(
@@ -133,7 +135,10 @@ pub(crate) async fn discover_files_table(
                 .iter()
                 .map(|(name, column_type)| (name.clone(), Ok(column_type.clone()))),
         )
-        .chain([(SOURCE_FILE_COLUMN.to_owned(), Ok(ColumnType::Text))]);
+        .chain([
+            (SOURCE_FILE_COLUMN.to_owned(), Ok(ColumnType::Text)),
+            (SOURCE_VERSION_COLUMN.to_owned(), Ok(ColumnType::Text)),
+        ]);
     let columns: Vec<SourceColumn> = typed
         .map(|(name, column_type)| SourceColumn {
             name,
@@ -208,6 +213,30 @@ pub(crate) struct FilesPlanRequest<'a> {
     pub(crate) options: &'a PlanOptions,
 }
 
+/// A row of the loaded-files query: `file|version`, or just the file when `versioned` is false.
+fn loaded_file(text: String, versioned: bool) -> LoadedFile {
+    match (versioned, text.rsplit_once(VERSION_SEPARATOR)) {
+        (true, Some((name, version))) => LoadedFile {
+            name: name.to_owned(),
+            version: version.to_owned(),
+        },
+        _ => LoadedFile {
+            name: text,
+            version: String::new(),
+        },
+    }
+}
+
+/// Whether the live table has `column`.
+fn live_has(live: Option<&[LiveColumn]>, column: &str) -> bool {
+    match live {
+        Some(live) => live
+            .iter()
+            .any(|existing| existing.name.eq_ignore_ascii_case(column)),
+        None => false,
+    }
+}
+
 /// The files to read, or why the table cannot be loaded.
 pub(crate) async fn plan_files(
     request: &FilesPlanRequest<'_>,
@@ -241,17 +270,25 @@ pub(crate) async fn plan_files(
             "{SOURCE_FILE_COLUMN} must be loaded: append and merge use it to skip files already loaded"
         )));
     }
-    let has_record = request.live.is_some_and(|live| {
-        live.iter()
-            .any(|column| column.name.eq_ignore_ascii_case(SOURCE_FILE_COLUMN))
-    });
-    let loaded = match skips_loaded && has_record && !request.options.reload {
-        true => {
-            let query = distinct_query(&spec.destination, SOURCE_FILE_COLUMN, spec.warehouse);
-            text_values(request.destination, query).await?
-        }
-        false => Vec::new(),
-    };
+    let live_has = |column: &str| live_has(request.live, column);
+    let loaded: Vec<LoadedFile> =
+        match skips_loaded && live_has(SOURCE_FILE_COLUMN) && !request.options.reload {
+            true => {
+                let version = live_has(SOURCE_VERSION_COLUMN).then_some(SOURCE_VERSION_COLUMN);
+                let query = loaded_files_query(
+                    &spec.destination,
+                    SOURCE_FILE_COLUMN,
+                    version,
+                    spec.warehouse,
+                );
+                text_values(request.destination, query)
+                    .await?
+                    .into_iter()
+                    .map(|text| loaded_file(text, version.is_some()))
+                    .collect()
+            }
+            false => Vec::new(),
+        };
     let location = request.files.location.to_string();
     let selection = FileSelection {
         files: &request.files.table.files,

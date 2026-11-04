@@ -37,14 +37,22 @@ pub struct FilesRead {
     pub batch_rows: usize,
 }
 
+/// A source file already in the destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedFile {
+    pub name: String,
+    /// The version it was loaded at; empty for rows loaded before versions were recorded.
+    pub version: String,
+}
+
 /// What decides which files a load reads.
 #[derive(Debug, Clone, Copy)]
 pub struct FileSelection<'a> {
     pub files: &'a [DataFile],
     /// The folder as it prints, the prefix of every recorded source file name.
     pub location: &'a str,
-    /// Source file names already in the destination, skipped.
-    pub loaded: &'a [String],
+    /// Source files already in the destination, with their versions (empty when unknown).
+    pub loaded: &'a [LoadedFile],
     /// The partition column the cursor is on, and its type.
     pub cursor: Option<(&'a str, &'a ColumnType)>,
     pub from: Option<&'a str>,
