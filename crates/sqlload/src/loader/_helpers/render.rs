@@ -52,6 +52,13 @@ fn row(name: &str, detail: &str) -> String {
 pub(crate) fn object_lines(table: &TablePlan) -> Vec<String> {
     let name = display_name(&table.spec.destination, table.spec.warehouse);
     let mut lines = vec![match &table.schema.action {
+        TableAction::Recreate => row(
+            &name,
+            &format!(
+                "recreate table ({} columns, --reload)",
+                table.schema.write_columns.len()
+            ),
+        ),
         TableAction::Create => row(
             &name,
             &format!(
@@ -90,6 +97,7 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
         }
         WriteMode::Append => "append".to_owned(),
         WriteMode::Replace => "replace".to_owned(),
+        WriteMode::Recreate => "recreate from the whole source (--reload)".to_owned(),
     };
     let origin = format!("  ({})", spec.strategy_origin);
     let mut lines = vec![

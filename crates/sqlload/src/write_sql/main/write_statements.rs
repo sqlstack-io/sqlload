@@ -5,6 +5,7 @@ use crate::column_types::models::ColumnType;
 use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::write_sql::_helpers::identifiers::{from_staging, literal, qualified, quote};
+use crate::write_sql::_helpers::recreate::recreate_statements;
 use crate::write_sql::models::{TableName, WriteMode, WriteStatementsRequest};
 
 /// One transaction that applies `request.mode` from `staging`, then drops `staging`.
@@ -35,6 +36,7 @@ pub fn write_statements(request: &WriteStatementsRequest<'_>, staging: &TableNam
             .map_or(ColumnType::Text, |column| column.column_type.clone())
     };
     let delete = match request.mode {
+        WriteMode::Recreate => return recreate_statements(request, &source, &values),
         WriteMode::Append => None,
         WriteMode::Replace => Some(format!("DELETE FROM {target}")),
         WriteMode::Merge { unique_key } => {
@@ -50,15 +52,25 @@ pub fn write_statements(request: &WriteStatementsRequest<'_>, staging: &TableNam
         WriteMode::DeleteInsert {
             cursor_column,
             from,
-        } => Some(match from {
-            None => format!("DELETE FROM {target}"),
-            Some(from) => format!(
-                "DELETE FROM {target} WHERE {} >= CAST({} AS {})",
-                quote(cursor_column, warehouse),
-                literal(from),
-                warehouse_type(&column_type(cursor_column), warehouse).sql
-            ),
-        }),
+            to,
+        } => {
+            let sql_type = warehouse_type(&column_type(cursor_column), warehouse).sql;
+            let column = quote(cursor_column, warehouse);
+            let bounds: Vec<String> = [(from, ">="), (to, "<")]
+                .into_iter()
+                .filter_map(|(bound, operator)| {
+                    let bound = bound.as_ref()?;
+                    Some(format!(
+                        "{column} {operator} CAST({} AS {sql_type})",
+                        literal(bound)
+                    ))
+                })
+                .collect();
+            Some(match bounds.is_empty() {
+                true => format!("DELETE FROM {target}"),
+                false => format!("DELETE FROM {target} WHERE {}", bounds.join(" AND ")),
+            })
+        }
     };
     let mut statements = vec!["BEGIN".to_owned()];
     statements.extend(delete);

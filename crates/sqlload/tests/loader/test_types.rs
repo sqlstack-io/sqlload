@@ -24,6 +24,10 @@ pub(crate) struct ScenarioRun {
     pub(crate) destination_change: &'static str,
     /// Text the plan or load error must contain; empty when the run must succeed.
     pub(crate) expected_error: &'static str,
+    /// `--reload`.
+    pub(crate) reload: bool,
+    /// `--start-cursor-*` and `--end-cursor-*`.
+    pub(crate) window: (Option<&'static str>, Option<&'static str>),
 }
 
 pub(crate) struct ScenarioTestCase {

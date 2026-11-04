@@ -94,6 +94,8 @@ impl std::fmt::Display for ColumnChange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableAction {
     Create,
+    /// Rebuild the existing table from the source with the current columns (`--reload`).
+    Recreate,
     Alter(Vec<ColumnChange>),
     Unchanged,
 }
@@ -103,6 +105,7 @@ impl TableAction {
     pub fn summary(&self) -> Vec<String> {
         match self {
             Self::Create => vec!["create".to_owned()],
+            Self::Recreate => vec!["recreate".to_owned()],
             Self::Unchanged => vec!["unchanged".to_owned()],
             Self::Alter(changes) => changes.iter().map(ToString::to_string).collect(),
         }

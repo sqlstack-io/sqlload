@@ -38,6 +38,7 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
             mode: WriteMode::DeleteInsert {
                 cursor_column: "updated_at".to_owned(),
                 from: Some("2026-11-04T09:00:00Z".to_owned()),
+                to: None,
             },
             expected_statements: &[
                 "BEGIN",
@@ -57,6 +58,31 @@ fn given_a_write_mode_when_building_statements_then_one_transaction_applies_it()
                 DUCK_INSERT,
                 "COMMIT",
                 "DROP TABLE IF EXISTS \"raw\".\"app__accounts__sqlload_staging_load1\"",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "a backfill window bounds the delete on both sides",
+            warehouse: Warehouse::DuckDb,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "updated_at".to_owned(),
+                from: Some("2026-11-01".to_owned()),
+                to: Some("2026-11-02".to_owned()),
+            },
+            expected_statements: &[
+                "BEGIN",
+                "DELETE FROM \"raw\".\"app__accounts\" WHERE \"updated_at\" >= CAST('2026-11-01' AS TIMESTAMP WITH TIME ZONE) AND \"updated_at\" < CAST('2026-11-02' AS TIMESTAMP WITH TIME ZONE)",
+                DUCK_INSERT,
+                "COMMIT",
+                "DROP TABLE IF EXISTS \"raw\".\"app__accounts__sqlload_staging_load1\"",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "recreate rebuilds the table in one statement, keeping grants on Snowflake",
+            warehouse: Warehouse::Snowflake,
+            mode: WriteMode::Recreate,
+            expected_statements: &[
+                "CREATE OR REPLACE TABLE \"RAW\".\"APP__ACCOUNTS\" (\"ID\" NUMBER(38,0), \"PROFILE\" VARIANT, \"UPDATED_AT\" TIMESTAMP_TZ(6), \"_SQLLOAD_LOAD_ID\" VARCHAR, \"_SQLLOAD_LOADED_AT\" TIMESTAMP_TZ(6)) COPY GRANTS AS SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", 'load-1', CAST('2026-11-04T10:00:00Z' AS TIMESTAMP_TZ(6)) FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"",
+                SF_DROP,
             ],
         },
     ];

@@ -61,6 +61,21 @@ pub struct LoaderArgs {
     /// Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would otherwise block.
     #[arg(long)]
     pub allow_type_change_rebuild: bool,
+    /// Rebuild the selected tables from the whole source, with the current columns and types.
+    #[arg(long)]
+    pub reload: bool,
+    /// Backfill from this timestamp (RFC 3339 or a date) instead of the destination's maximum.
+    #[arg(long, conflicts_with = "start_cursor_int")]
+    pub start_cursor_ts: Option<String>,
+    /// Backfill only cursor values below this timestamp (RFC 3339 or a date).
+    #[arg(long, conflicts_with = "end_cursor_int")]
+    pub end_cursor_ts: Option<String>,
+    /// Backfill from this integer cursor value instead of the destination's maximum.
+    #[arg(long)]
+    pub start_cursor_int: Option<i64>,
+    /// Backfill only integer cursor values below this one.
+    #[arg(long)]
+    pub end_cursor_int: Option<i64>,
 }
 
 /// How logs are written.

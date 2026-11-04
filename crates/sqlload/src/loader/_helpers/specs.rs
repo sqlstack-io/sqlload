@@ -5,8 +5,8 @@ use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::columns::{
     ColumnRules, ColumnSelection, apply_column_rules, destination_name,
 };
+use crate::loader::_helpers::resolve::ResolvedTarget;
 use crate::loader::_helpers::settings::{cursor, default_strategy, layered, strategy_problems};
-use crate::loader::_helpers::targets::ResolvedTarget;
 use crate::loader::models::{SettingOrigin, TableSpec};
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{SourceConfig, TableOverride};

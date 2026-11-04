@@ -25,7 +25,7 @@ pub async fn apply_project(
         let spec = &table.spec;
         let warehouse = spec.warehouse;
         let statements: Vec<String> = match &table.schema.action {
-            TableAction::Unchanged => continue,
+            TableAction::Unchanged | TableAction::Recreate => continue,
             TableAction::Create => vec![
                 create_schema(&spec.destination, warehouse),
                 create_table(&spec.destination, &table.schema.write_columns, warehouse),

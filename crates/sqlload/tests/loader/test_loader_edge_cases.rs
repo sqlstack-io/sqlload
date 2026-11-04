@@ -8,6 +8,8 @@ const OK: ScenarioRun = ScenarioRun {
     source_change: "",
     destination_change: "",
     expected_error: "",
+    reload: false,
+    window: (None, None),
 };
 
 #[test]
@@ -27,11 +29,12 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                                     INSERT INTO public.prices VALUES (3, 'NaN', '2026-11-02 00:00:00+00');",
                     destination_change: "",
                     expected_error: "NaN and infinite numerics cannot be loaded",
+                    ..OK
                 },
                 ScenarioRun {
                     source_change: "DELETE FROM public.prices WHERE id = 3;",
                     destination_change: "",
-                    expected_error: "",
+                    ..OK
                 },
             ],
             check_query: "SELECT string_agg(id || '=' || amount, ',' ORDER BY id) || ' staging:' || (SELECT count(*) FROM information_schema.tables WHERE table_name LIKE '%sqlload_staging%') FROM raw.app__prices",
@@ -47,7 +50,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                 ScenarioRun {
                     source_change: "INSERT INTO public.ticks VALUES (3, 'c');",
                     destination_change: "",
-                    expected_error: "",
+                    ..OK
                 },
             ],
             check_query: "SELECT string_agg(seq || note, ',' ORDER BY seq) FROM raw.app__ticks",
@@ -70,6 +73,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                 source_change: "",
                 destination_change: "",
                 expected_error: "lookback re-inserts the window on every run with append",
+                ..OK
             }],
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
             expected_result: "0",
@@ -84,7 +88,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                 ScenarioRun {
                     source_change: "",
                     destination_change: "ALTER TABLE raw.app__stores DROP COLUMN city; ALTER TABLE raw.app__stores ADD COLUMN note VARCHAR",
-                    expected_error: "",
+                    ..OK
                 },
             ],
             check_query: "SELECT string_agg(code || '@' || city || '/' || coalesce(note, 'null'), ',') FROM raw.app__stores",
@@ -106,9 +110,46 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                 source_change: "",
                 destination_change: "",
                 expected_error: "public.unlisted: new table and new_tables = \"fail\"",
+                ..OK
             }],
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
             expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "--reload rebuilds a table whose source type changed incompatibly",
+            setup: "CREATE TABLE public.codes (id int8 PRIMARY KEY, code int4);
+                    INSERT INTO public.codes VALUES (1, 10);",
+            settings: "[sources.app.tables.\"public.codes\"]\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    source_change: "ALTER TABLE public.codes ALTER COLUMN code TYPE text; UPDATE public.codes SET code = 'A-10';",
+                    expected_error: "code is int in the table but text in the source",
+                    ..OK
+                },
+                ScenarioRun {
+                    reload: true,
+                    ..OK
+                },
+            ],
+            check_query: "SELECT string_agg(id || '=' || code || ':' || typeof(code), ',') FROM raw.app__codes",
+            expected_result: "1=A-10:VARCHAR",
+        },
+        ScenarioTestCase {
+            description: "a backfill window replaces only its own range with delete_insert",
+            setup: "CREATE TABLE public.days (day date, total int4);
+                    INSERT INTO public.days VALUES ('2026-11-01', 1), ('2026-11-02', 2), ('2026-11-03', 3);",
+            settings: "[sources.app.tables.\"public.days\"]\nwrite_strategy = \"delete_insert\"\ncursor_column = \"day\"\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    source_change: "UPDATE public.days SET total = total * 10;",
+                    window: (Some("2026-11-02"), Some("2026-11-03")),
+                    ..OK
+                },
+            ],
+            check_query: "SELECT string_agg(CAST(day AS VARCHAR) || '=' || total, ',' ORDER BY day) FROM raw.app__days",
+            expected_result: "2026-11-01=1,2026-11-02=20,2026-11-03=3",
         },
     ];
     run_async(async {

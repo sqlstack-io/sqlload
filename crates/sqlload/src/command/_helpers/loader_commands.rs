@@ -14,10 +14,47 @@ fn environment_variable(name: &str) -> Option<String> {
     }
 }
 
-fn options(args: LoaderArgs) -> PlanOptions {
-    PlanOptions {
+fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
+    let start = cursor_flag(
+        "--start-cursor-ts",
+        args.start_cursor_ts,
+        args.start_cursor_int,
+    )?;
+    let end = cursor_flag("--end-cursor-ts", args.end_cursor_ts, args.end_cursor_int)?;
+    Ok(PlanOptions {
         select: args.select,
         rebuild_allowed: args.allow_type_change_rebuild,
+        reload: args.reload,
+        start_cursor: start,
+        end_cursor: end,
+    })
+}
+
+/// A cursor flag's value as text, checking that a timestamp parses.
+fn cursor_flag(
+    flag: &str,
+    timestamp: Option<String>,
+    integer: Option<i64>,
+) -> Result<Option<String>, String> {
+    match (timestamp, integer) {
+        (Some(text), _) => match timestamp_problem(&text) {
+            None => Ok(Some(text)),
+            Some(problem) => Err(format!(
+                "{flag} {text:?} is not an RFC 3339 timestamp or a date (YYYY-MM-DD): {problem}"
+            )),
+        },
+        (None, integer) => Ok(integer.map(|value| value.to_string())),
+    }
+}
+
+/// Why `text` is not a timestamp or date, if it is not.
+fn timestamp_problem(text: &str) -> Option<String> {
+    let with_zone = chrono::DateTime::parse_from_rfc3339(text);
+    let without_zone = chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f");
+    let date = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d");
+    match (with_zone, without_zone, date) {
+        (Err(error), Err(_), Err(_)) => Some(error.to_string()),
+        _ => None,
     }
 }
 
@@ -38,7 +75,8 @@ pub(crate) async fn run_loader(text: &str, command: Command) -> Result<Vec<Strin
             );
         }
     };
-    let plan = plan_project(&project, &destinations, &options(args))
+    let options = options(args)?;
+    let plan = plan_project(&project, &destinations, &options)
         .await
         .map_err(|error| error.to_string())?;
     let (mut lines, ok) = render_plan(&plan);

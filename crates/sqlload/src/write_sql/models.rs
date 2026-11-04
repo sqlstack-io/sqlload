@@ -19,13 +19,16 @@ pub enum WriteMode {
     Merge {
         unique_key: Vec<String>,
     },
-    /// Rows with `cursor_column >= from` (all rows when `from` is `None`) are replaced by the staged rows.
+    /// Rows with `from <= cursor_column < to` (open-ended when `None`) are replaced by the staged rows.
     DeleteInsert {
         cursor_column: String,
         from: Option<String>,
+        to: Option<String>,
     },
     /// The staged rows become the whole table, atomically.
     Replace,
+    /// The table is rebuilt from the staged rows with the current columns and types (`--reload`), in one statement.
+    Recreate,
 }
 
 /// Everything the statements of one write need.

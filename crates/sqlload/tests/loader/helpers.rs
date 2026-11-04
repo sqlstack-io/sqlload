@@ -75,9 +75,10 @@ exclude_columns = ["*email*"]
 async fn run_once(
     project_text: &str,
     destinations: &BTreeMap<String, Destination>,
+    options: &PlanOptions,
 ) -> Result<(), String> {
     let project = parse_project(project_text, &|_| None).map_err(|error| error.to_string())?;
-    let plan = plan_project(&project, destinations, &PlanOptions::default())
+    let plan = plan_project(&project, destinations, options)
         .await
         .map_err(|error| error.to_string())?;
     let (lines, ok) = render_plan(&plan);
@@ -126,7 +127,13 @@ pub(crate) async fn run_scenario(
         execute_statements(duckdb, hand_edits)
             .await
             .map_err(|error| error.to_string())?;
-        let error = run_once(&text, &destinations)
+        let options = PlanOptions {
+            reload: run.reload,
+            start_cursor: run.window.0.map(str::to_owned),
+            end_cursor: run.window.1.map(str::to_owned),
+            ..PlanOptions::default()
+        };
+        let error = run_once(&text, &destinations, &options)
             .await
             .err()
             .unwrap_or_default();

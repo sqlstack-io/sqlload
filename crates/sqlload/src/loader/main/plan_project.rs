@@ -36,7 +36,7 @@ pub async fn plan_project(
             let destination = destinations.get(&spec.target).ok_or_else(|| {
                 LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
             })?;
-            let table = plan_table(&spec, destination, options.rebuild_allowed).await?;
+            let table = plan_table(&spec, destination, options).await?;
             let is_new = table.live.is_none() && !spec.listed;
             match (is_new, spec.new_tables) {
                 (true, NewTables::Skip) => plan.skipped.push(SkippedTable {

@@ -7,4 +7,4 @@ pub(crate) mod settings;
 pub(crate) mod sources;
 pub(crate) mod specs;
 pub(crate) mod table_plan;
-pub(crate) mod targets;
+pub(crate) mod window;

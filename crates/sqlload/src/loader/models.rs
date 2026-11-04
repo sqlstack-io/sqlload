@@ -112,6 +112,12 @@ pub struct PlanOptions {
     pub select: Vec<String>,
     /// `--allow-type-change-rebuild`.
     pub rebuild_allowed: bool,
+    /// `--reload`: rebuild each selected table from the whole source, ignoring the destination's cursor.
+    pub reload: bool,
+    /// `--start-cursor-*`: read from this cursor value instead of the destination's maximum.
+    pub start_cursor: Option<String>,
+    /// `--end-cursor-*`: read only cursor values below this one.
+    pub end_cursor: Option<String>,
 }
 
 /// What one table's load did.
