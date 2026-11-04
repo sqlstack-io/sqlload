@@ -124,8 +124,15 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             .as_ref()
             .zip(table.files.as_ref())
             .map(|(source, read)| {
+                let skipped = match source.table.skipped {
+                    0 => String::new(),
+                    count => format!(
+                        ", {count} skipped (names that do not fit {})",
+                        source.encoding
+                    ),
+                };
                 format!(
-                    "files   {} to read of {} listed",
+                    "files   {} to read of {} listed{skipped}",
                     read.files.len(),
                     source.table.files.len()
                 )

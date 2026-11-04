@@ -10,7 +10,9 @@ use crate::files_source::constants::{
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
-use crate::files_source::models::{FileSelection, FilesRead, LoadedFile};
+use crate::files_source::models::{
+    FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks,
+};
 use crate::loader::_helpers::destination::text_values;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
@@ -23,7 +25,7 @@ use crate::postgres_source::models::{
     CopyRequest, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable, WireType,
 };
 use crate::project::models::{
-    ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, WriteStrategy,
+    ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride, WriteStrategy,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::store_paths::main::resolve_location::resolve_location;
@@ -127,11 +129,18 @@ pub(crate) async fn discover_files_table(
         .map(|(name, _)| name.as_str())
         .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
         .collect();
+    let overrides = source.tables.get(source_name);
+    let pinned_only = pinned_unsampled(overrides, &table, &added, encoding.format);
     let typed = table
         .columns
         .iter()
         .filter(|column| !added.contains(&column.name.as_str()))
         .map(|column| (column.name.clone(), column.column_type.clone()))
+        .chain(
+            pinned_only
+                .into_iter()
+                .map(|name| (name, Ok(ColumnType::Text))),
+        )
         .chain(
             partition_types
                 .iter()
@@ -150,6 +159,20 @@ pub(crate) async fn discover_files_table(
             nullable: true,
         })
         .collect();
+    let checks = TextChecks {
+        known: columns.iter().map(|column| column.name.clone()).collect(),
+        exclude: [
+            source.exclude_columns.as_slice(),
+            overrides.map_or(&[], |table| table.exclude_columns.as_slice()),
+        ]
+        .concat(),
+        allow: [
+            source.allow_columns.as_slice(),
+            overrides.map_or(&[], |table| table.allow_columns.as_slice()),
+        ]
+        .concat(),
+        inferred: Vec::new(),
+    };
     let source_table = SourceTable {
         schema: String::new(),
         name: source_name.to_owned(),
@@ -169,8 +192,35 @@ pub(crate) async fn discover_files_table(
             table,
             partition_types,
             encoding,
+            checks,
         },
     ))
+}
+
+/// Columns a JSON or CSV source's table pins (`columns` or `mask`) that sampling did not see, so a key found only in older files can be pinned.
+fn pinned_unsampled(
+    overrides: Option<&TableOverride>,
+    table: &FilesTable,
+    added: &[&str],
+    format: SourceFormat,
+) -> Vec<String> {
+    let Some(overrides) = overrides.filter(|_| format != SourceFormat::Parquet) else {
+        return Vec::new();
+    };
+    let sampled: Vec<&str> = table
+        .columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
+    overrides
+        .columns
+        .keys()
+        .chain(overrides.mask.keys())
+        .filter(|name| !added.contains(&name.as_str()) && !sampled.contains(&name.as_str()))
+        .cloned()
+        .collect::<std::collections::BTreeSet<String>>()
+        .into_iter()
+        .collect()
 }
 
 /// The read columns of a files source: the file's types, or the pinned ones (converted while reading).
@@ -324,9 +374,26 @@ pub(crate) async fn plan_files(
             origin: ColumnOrigin::Source,
         })
         .collect();
+    let constants: Vec<&str> = request
+        .files
+        .partition_types
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
+        .collect();
+    let checks = TextChecks {
+        inferred: request
+            .read_columns
+            .iter()
+            .map(|column| column.name.clone())
+            .filter(|name| !spec.pinned.contains_key(name) && !constants.contains(&name.as_str()))
+            .collect(),
+        ..request.files.checks.clone()
+    };
     Ok(select_files(&selection).map(|files| FilesRead {
         files,
         encoding: request.files.encoding.clone(),
+        checks,
         columns,
         batch_rows: SOURCE_BATCH_ROWS,
     }))

@@ -23,7 +23,7 @@ use tokio_postgres::Client;
 
 use crate::test_types::{
     FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, ParquetFile,
-    ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
+    ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -101,6 +101,18 @@ async fn run_once(
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// The rendered plan, or the error that stopped it.
+async fn plan_text(
+    project_text: &str,
+    destinations: &BTreeMap<String, Destination>,
+) -> Result<String, String> {
+    let project = parse_project(project_text, &|_| None).map_err(|error| error.to_string())?;
+    let plan = plan_project(&project, destinations, &PlanOptions::default())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(render_plan(&plan).0.join("\n"))
 }
 
 /// Run a scenario's loads on fresh source tables and a fresh DuckDB; the check query's result.
@@ -215,7 +227,7 @@ pub(crate) async fn run_files_scenario(
     directory: &std::path::Path,
     test_case: &FilesScenarioTestCase,
 ) -> Result<Option<String>, String> {
-    let runs: Vec<(Vec<(&str, bytes::Bytes)>, &str)> = test_case
+    let runs: Vec<WrittenRun<'_>> = test_case
         .runs
         .iter()
         .map(|run| {
@@ -224,7 +236,11 @@ pub(crate) async fn run_files_scenario(
                 .iter()
                 .map(|file| Ok((file.key, parquet_bytes(file)?)))
                 .collect::<Result<Vec<_>, String>>()?;
-            Ok((files, run.expected_error))
+            Ok(WrittenRun {
+                files,
+                expected_error: run.expected_error,
+                expected_plan: "",
+            })
         })
         .collect::<Result<_, String>>()?;
     let scenario = FilesScenario {
@@ -243,7 +259,7 @@ pub(crate) async fn run_text_files_scenario(
     directory: &std::path::Path,
     test_case: &TextFilesScenarioTestCase,
 ) -> Result<Option<String>, String> {
-    let runs: Vec<(Vec<(&str, bytes::Bytes)>, &str)> = test_case
+    let runs: Vec<WrittenRun<'_>> = test_case
         .runs
         .iter()
         .map(|run| {
@@ -252,7 +268,11 @@ pub(crate) async fn run_text_files_scenario(
                 .iter()
                 .map(|file| Ok((file.key, (file.encode)(file.contents)?)))
                 .collect::<Result<Vec<_>, String>>()?;
-            Ok((files, run.expected_error))
+            Ok(WrittenRun {
+                files,
+                expected_error: run.expected_error,
+                expected_plan: run.expected_plan,
+            })
         })
         .collect::<Result<_, String>>()?;
     let scenario = FilesScenario {
@@ -283,6 +303,12 @@ pub(crate) fn gzip(text: &str) -> Result<bytes::Bytes, String> {
     Ok(bytes::Bytes::from(compressed))
 }
 
+/// A gzip file whose first 10,000 lines (`{"id":0}`, ...) fill the schema sample, so the text comes after it.
+pub(crate) fn after_sample(text: &str) -> Result<bytes::Bytes, String> {
+    let padding: String = (0..10_000).map(|id| format!("{{\"id\":{id}}}\n")).collect();
+    gzip(&format!("{padding}{text}"))
+}
+
 /// A file zstd-compressed.
 pub(crate) fn zstd(text: &str) -> Result<bytes::Bytes, String> {
     zstd::encode_all(text.as_bytes(), 3)
@@ -309,12 +335,22 @@ async fn run_written_files(
     let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
         return Err("no DuckDB destination".to_owned());
     };
-    for (index, (files, expected_error)) in scenario.runs.into_iter().enumerate() {
-        for (key, contents) in files {
+    for (index, run) in scenario.runs.into_iter().enumerate() {
+        let (expected_error, expected_plan) = (run.expected_error, run.expected_plan);
+        for (key, contents) in run.files {
             write_file(&folder, key, contents)
                 .await
                 .map_err(|error| error.to_string())?;
         }
+        let plan = plan_text(&text, &destinations)
+            .await
+            .unwrap_or_else(|error| error);
+        assert!(
+            plan.contains(expected_plan),
+            "{} run {}: {plan}",
+            scenario.description,
+            index + 1
+        );
         let error = run_once(&text, &destinations, &PlanOptions::default())
             .await
             .err()

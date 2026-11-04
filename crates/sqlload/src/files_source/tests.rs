@@ -4,9 +4,13 @@ mod discover_text_files;
 mod file_selection;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_merge_columns.rs"]
+mod merge_columns;
 #[path = "tests/test_read_text_files.rs"]
 mod read_text_files;
 #[path = "tests/test_select_files.rs"]
 mod select_files;
+#[path = "tests/test_split_records.rs"]
+mod split_records;
 #[path = "tests/test_types.rs"]
 mod test_types;

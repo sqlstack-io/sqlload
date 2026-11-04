@@ -4,7 +4,7 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::models::OpenFolder;
 use crate::files_source::_helpers::parquet::footers::footer_schema;
 use crate::files_source::_helpers::plan::columns::{
-    SampledColumn, file_columns, merge_columns, schema_columns,
+    ColumnMerge, SampledColumn, case_problems, file_columns, merge_columns, schema_columns,
 };
 use crate::files_source::_helpers::plan::encoding::{file_codec, file_names};
 use crate::files_source::_helpers::plan::partitions::data_file;
@@ -21,36 +21,48 @@ pub async fn discover_files(
     partition_columns: &[String],
     encoding: &FilesEncoding,
 ) -> Result<FilesTable, FilesError> {
-    let (files, mut problems) = listed_files(folder, partition_columns, encoding).await?;
+    let (files, skipped, mut problems) = listed_files(folder, partition_columns, encoding).await?;
     let replaced: Vec<&str> = partition_columns
         .iter()
         .map(String::as_str)
         .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
         .collect();
+    let text_format = encoding.format != SourceFormat::Parquet;
     let mut columns: Vec<SampledColumn> = Vec::new();
     for (data, codec) in files.iter().rev().take(SCHEMA_SAMPLE_FILES) {
         let found = file_columns_of(folder, data, *codec, encoding).await?;
-        let (merged, conflicts) = merge_columns(columns, found, &data.file.relative_key, &replaced);
+        let merge = ColumnMerge {
+            key: &data.file.relative_key,
+            replaced: &replaced,
+            widen_numbers: text_format,
+        };
+        let (merged, conflicts) = merge_columns(columns, found, merge);
         columns = merged;
         problems.extend(conflicts);
+    }
+    if text_format {
+        problems.extend(case_problems(&columns));
     }
     Ok(FilesTable {
         files: files.into_iter().map(|(data, _)| data).collect(),
         columns: file_columns(columns),
         problems,
+        skipped,
     })
 }
 
-/// The listed files `encoding` reads, sorted by key, with their decompression; and a problem for each missing partition folder.
+/// The listed files `encoding` reads, sorted by key, with their decompression; how many others were skipped; and a problem for each missing partition folder.
 async fn listed_files(
     folder: &OpenFolder,
     partition_columns: &[String],
     encoding: &FilesEncoding,
-) -> Result<(Vec<(DataFile, Codec)>, Vec<String>), FilesError> {
+) -> Result<(Vec<(DataFile, Codec)>, usize, Vec<String>), FilesError> {
     let mut files: Vec<(DataFile, Codec)> = Vec::new();
+    let mut skipped: usize = 0;
     let mut problems: Vec<String> = Vec::new();
     for file in list_files(folder).await? {
         let Some(codec) = file_codec(&file.relative_key, encoding) else {
+            skipped += 1;
             continue;
         };
         let (data, problem) = data_file(file, partition_columns);
@@ -65,7 +77,7 @@ async fn listed_files(
                 file_names(encoding)
             ),
         }),
-        false => Ok((files, problems)),
+        false => Ok((files, skipped, problems)),
     }
 }
 

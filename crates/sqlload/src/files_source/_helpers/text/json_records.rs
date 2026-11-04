@@ -1,6 +1,8 @@
 use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
 use serde_json::Value;
 
+use crate::files_source::_helpers::text::bytes_reader::too_long;
+
 /// One JSON object from a file: its keys and values in file order, and the line it starts on.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct JsonRecord {
@@ -41,8 +43,12 @@ enum Layout {
     Unknown,
     /// Objects one after another.
     Objects,
-    /// Inside a top-level array, before an element or a `,`.
-    Array { after_element: bool },
+    /// Just inside a top-level array's `[`.
+    ArrayStart,
+    /// Inside the array, after an element.
+    ArrayElement,
+    /// Inside the array, after a `,`.
+    ArrayComma,
     /// After the top-level array's `]`.
     Closed,
 }
@@ -51,6 +57,7 @@ enum Layout {
 #[derive(Debug)]
 pub(crate) struct JsonSplitter {
     by_line: bool,
+    max_record_bytes: usize,
     layout: Layout,
     record: Vec<u8>,
     record_line: u64,
@@ -63,9 +70,11 @@ pub(crate) struct JsonSplitter {
 }
 
 impl JsonSplitter {
-    pub(crate) fn new(by_line: bool) -> Self {
+    /// `by_line` reads one object per line; an object longer than `max_record_bytes` is an error.
+    pub(crate) fn new(by_line: bool, max_record_bytes: usize) -> Self {
         Self {
             by_line,
+            max_record_bytes,
             layout: Layout::Unknown,
             record: Vec::new(),
             record_line: 1,
@@ -95,7 +104,7 @@ impl JsonSplitter {
         }
         match (self.depth, self.layout) {
             (0, Layout::Unknown | Layout::Objects | Layout::Closed) => Ok(Vec::new()),
-            (0, Layout::Array { .. }) => Err(format!(
+            (0, Layout::ArrayStart | Layout::ArrayElement | Layout::ArrayComma) => Err(format!(
                 "line {}: the file ends before the top-level array's closing ]",
                 self.line
             )),
@@ -110,13 +119,22 @@ impl JsonSplitter {
         let mut rest = chunk;
         while let Some(end) = rest.iter().position(|byte| *byte == b'\n') {
             self.record.extend_from_slice(&rest[..end]);
+            self.check_length(self.line)?;
             let line = std::mem::take(&mut self.record);
             self.line_record(&line)?;
             self.line += 1;
             rest = &rest[end + 1..];
         }
         self.record.extend_from_slice(rest);
-        Ok(())
+        self.check_length(self.line)
+    }
+
+    /// An error once the record being read is longer than the limit.
+    fn check_length(&self, line: u64) -> Result<(), String> {
+        match self.record.len() > self.max_record_bytes {
+            true => Err(too_long(line, self.max_record_bytes)),
+            false => Ok(()),
+        }
     }
 
     fn line_record(&mut self, line: &[u8]) -> Result<(), String> {
@@ -129,15 +147,14 @@ impl JsonSplitter {
     fn push_byte(&mut self, byte: u8) -> Result<(), String> {
         if self.depth > 0 {
             self.record.push(byte);
+            self.check_length(self.record_line)?;
             self.track(byte);
             if self.depth == 0 {
                 let record = std::mem::take(&mut self.record);
                 self.completed
                     .push(parse_record(&record, self.record_line)?);
                 self.layout = match self.layout {
-                    Layout::Array { .. } => Layout::Array {
-                        after_element: true,
-                    },
+                    Layout::ArrayStart | Layout::ArrayComma => Layout::ArrayElement,
                     other => other,
                 };
             }
@@ -175,34 +192,21 @@ impl JsonSplitter {
         match (self.layout, byte) {
             (_, b' ' | b'\t' | b'\r' | b'\n') => Ok(()),
             (Layout::Unknown, b'[') => {
-                self.layout = Layout::Array {
-                    after_element: false,
-                };
+                self.layout = Layout::ArrayStart;
                 Ok(())
             }
-            (
-                Layout::Array {
-                    after_element: true,
-                },
-                b',',
-            ) => {
-                self.layout = Layout::Array {
-                    after_element: false,
-                };
+            (Layout::ArrayElement, b',') => {
+                self.layout = Layout::ArrayComma;
                 Ok(())
             }
-            (Layout::Array { .. }, b']') => {
+            (Layout::ArrayStart | Layout::ArrayElement, b']') => {
                 self.layout = Layout::Closed;
                 Ok(())
             }
-            (
-                Layout::Array {
-                    after_element: true,
-                },
-                _,
-            ) => unexpected("between array elements; expected , or ]"),
+            (Layout::ArrayComma, b']') => unexpected("after a trailing comma; expected an object"),
+            (Layout::ArrayElement, _) => unexpected("between array elements; expected , or ]"),
             (Layout::Closed, _) => unexpected("after the top-level array"),
-            (Layout::Unknown | Layout::Objects | Layout::Array { .. }, b'{') => {
+            (Layout::Unknown | Layout::Objects | Layout::ArrayStart | Layout::ArrayComma, b'{') => {
                 self.layout = match self.layout {
                     Layout::Unknown => Layout::Objects,
                     other => other,
@@ -212,7 +216,7 @@ impl JsonSplitter {
                 self.depth = 1;
                 Ok(())
             }
-            (Layout::Unknown | Layout::Objects | Layout::Array { .. }, _) => {
+            (Layout::Unknown | Layout::Objects | Layout::ArrayStart | Layout::ArrayComma, _) => {
                 unexpected("where a JSON object should start")
             }
         }

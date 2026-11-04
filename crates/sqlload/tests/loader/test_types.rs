@@ -77,6 +77,8 @@ pub(crate) struct TextFilesRun {
     pub(crate) files: &'static [TextFile],
     /// Text the plan or load error must contain; empty when the run must succeed.
     pub(crate) expected_error: &'static str,
+    /// Text the rendered plan must contain (empty matches any).
+    pub(crate) expected_plan: &'static str,
 }
 
 pub(crate) struct TextFilesScenarioTestCase {
@@ -182,7 +184,16 @@ pub(crate) struct FilesScenario<'a> {
     pub(crate) store:
         fn(&str, &std::path::Path) -> (sqlload::store_paths::models::StoreKind, String),
     pub(crate) settings: &'a str,
-    /// Per run: the files written as (key, bytes), and the text its error must contain (empty for none).
-    pub(crate) runs: Vec<(Vec<(&'a str, bytes::Bytes)>, &'a str)>,
+    pub(crate) runs: Vec<WrittenRun<'a>>,
     pub(crate) check_query: &'a str,
+}
+
+/// One run of a [`FilesScenario`].
+pub(crate) struct WrittenRun<'a> {
+    /// The files written first, as (key, bytes).
+    pub(crate) files: Vec<(&'a str, bytes::Bytes)>,
+    /// Text the plan or load error must contain; empty when the run must succeed.
+    pub(crate) expected_error: &'a str,
+    /// Text the rendered plan must contain (empty matches any).
+    pub(crate) expected_plan: &'a str,
 }

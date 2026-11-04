@@ -10,10 +10,15 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
+use crate::files_source::_helpers::text::csv_records::{FirstRecord, QuoteTracker};
+use crate::files_source::_helpers::text::json_records::JsonSplitter;
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::models::{
-    Compression, CsvOptions, FilesEncoding, FilesRead, FilesTable, SourceFormat,
+    Compression, CsvOptions, FilesEncoding, FilesRead, FilesTable, SourceFormat, TextChecks,
+};
+use crate::files_source::tests::test_types::{
+    ReadTextFilesTestCase, SplitJsonTestCase, TrackCsvTestCase,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
@@ -86,12 +91,17 @@ pub(crate) async fn folder_with(
         prefix: "events/".to_owned(),
     })
     .map_err(|error| error.to_string())?;
+    write_files(&folder, files).await?;
+    Ok((folder, root))
+}
+
+async fn write_files(folder: &OpenFolder, files: &[(&str, &str)]) -> Result<(), String> {
     for (key, text) in files {
-        write_file(&folder, key, file_bytes(key, text)?)
+        write_file(folder, key, file_bytes(key, text)?)
             .await
             .map_err(|error| error.to_string())?;
     }
-    Ok((folder, root))
+    Ok(())
 }
 
 /// The table's columns as `name:type`, `name:!` for one without a type.
@@ -110,26 +120,26 @@ pub(crate) fn column_list(table: &FilesTable) -> String {
     columns.join(",")
 }
 
-/// Discover `files` and read every one with the found columns (`pinned` types win); the rows as `|`-separated values (`NULL` for NULL), one per line.
-pub(crate) async fn read_rows(
-    files: &[(&str, &str)],
-    encoding: &FilesEncoding,
-    pinned: &[(&str, ColumnType)],
-) -> Result<String, String> {
-    let (folder, root) = folder_with(files).await?;
-    let result = discover_and_read(&folder, encoding, pinned).await;
+/// Discover the test case's files, add its unsampled files, and read them all with the found columns (pinned types win); the rows as `|`-separated values (`NULL` for NULL), one per line.
+pub(crate) async fn read_rows(test_case: &ReadTextFilesTestCase) -> Result<String, String> {
+    let (folder, root) = folder_with(test_case.files).await?;
+    let result = discover_and_read(&folder, test_case).await;
     let _ = std::fs::remove_dir_all(&root);
     result
 }
 
 async fn discover_and_read(
     folder: &OpenFolder,
-    encoding: &FilesEncoding,
-    pinned: &[(&str, ColumnType)],
+    test_case: &ReadTextFilesTestCase,
 ) -> Result<String, String> {
-    let table = discover_files(folder, &[], encoding)
+    let table = discover_files(folder, &[], &test_case.encoding)
         .await
         .map_err(|error| error.to_string())?;
+    write_files(folder, test_case.unsampled).await?;
+    let listed = discover_files(folder, &[], &test_case.encoding)
+        .await
+        .map_err(|error| error.to_string())?;
+    let pinned = test_case.pinned;
     let columns: Vec<DesiredColumn> = table
         .columns
         .iter()
@@ -143,9 +153,28 @@ async fn discover_and_read(
             origin: ColumnOrigin::Source,
         })
         .collect();
+    let names: Vec<String> = table
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let checks = TextChecks {
+        known: names.clone(),
+        exclude: test_case
+            .exclude
+            .iter()
+            .map(|pattern| (*pattern).to_owned())
+            .collect(),
+        allow: Vec::new(),
+        inferred: names
+            .into_iter()
+            .filter(|name| !pinned.iter().any(|(pinned, _)| pinned == name))
+            .collect(),
+    };
     let request = FilesRead {
-        files: table.files,
-        encoding: encoding.clone(),
+        files: listed.files,
+        encoding: test_case.encoding.clone(),
+        checks,
         columns,
         batch_rows: 2,
     };
@@ -176,4 +205,33 @@ fn row_texts(batch: &RecordBatch) -> Result<Vec<String>, String> {
             values.join("|")
         })
         .collect())
+}
+
+/// The lines of the objects in the test case's file, fed in chunks.
+pub(crate) fn split_json(test_case: &SplitJsonTestCase) -> Result<Vec<u64>, String> {
+    let mut splitter = JsonSplitter::new(test_case.by_line, test_case.max_record_bytes);
+    let mut lines: Vec<u64> = Vec::new();
+    for chunk in test_case.text.as_bytes().chunks(test_case.chunk_bytes) {
+        lines.extend(splitter.push(chunk)?.into_iter().map(|record| record.line));
+    }
+    lines.extend(splitter.finish()?.into_iter().map(|record| record.line));
+    Ok(lines)
+}
+
+/// The first record's fields joined by `|`, once the whole file was followed for open quotes.
+pub(crate) fn read_csv(test_case: &TrackCsvTestCase) -> Result<String, String> {
+    let mut first_record = FirstRecord::new(b',', b'"', test_case.max_record_bytes);
+    let mut tracker = QuoteTracker::new(b',', b'"', test_case.max_record_bytes);
+    let mut first: Option<Vec<String>> = None;
+    for chunk in test_case
+        .text
+        .as_bytes()
+        .chunks(test_case.chunk_bytes)
+        .chain([&b""[..]])
+    {
+        first = first.map_or_else(|| first_record.feed(chunk), |fields| Ok(Some(fields)))?;
+        tracker.push(chunk)?;
+    }
+    tracker.finish()?;
+    Ok(first.unwrap_or_default().join("|"))
 }

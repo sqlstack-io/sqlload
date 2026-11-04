@@ -69,3 +69,13 @@ pub(crate) async fn open_bytes(
         started: false,
     })
 }
+
+/// The error for a record longer than `max_record_bytes`, starting on `line`.
+pub(crate) fn too_long(line: u64, max_record_bytes: usize) -> String {
+    const MIB: usize = 1024 * 1024;
+    let size = match max_record_bytes % MIB {
+        0 => format!("{} MiB", max_record_bytes / MIB),
+        _ => format!("{max_record_bytes} bytes"),
+    };
+    format!("line {line}: a record is longer than {size}")
+}

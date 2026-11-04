@@ -32,6 +32,8 @@ pub struct FilesTable {
     pub columns: Vec<FileColumn>,
     /// Problems found while combining footers (a column with different types in different files).
     pub problems: Vec<String>,
+    /// Listed files skipped because their names do not fit the format and compression.
+    pub skipped: usize,
 }
 
 /// Which files to read and the columns to produce, in table order.
@@ -39,9 +41,24 @@ pub struct FilesTable {
 pub struct FilesRead {
     pub files: Vec<DataFile>,
     pub encoding: FilesEncoding,
+    /// What JSON keys and CSV headers may hold (unused for Parquet).
+    pub checks: TextChecks,
     /// Data columns, partition columns and the source-file column, as the table has them.
     pub columns: Vec<DesiredColumn>,
     pub batch_rows: usize,
+}
+
+/// The columns a JSON or CSV read checks its keys and values against.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextChecks {
+    /// Every column of the source (sampled, pinned, partition and source-file columns, excluded ones too); any other key or header fails the read.
+    pub known: Vec<String>,
+    /// `exclude_columns` patterns: a key or header they match is dropped even when sampling never saw it.
+    pub exclude: Vec<String>,
+    /// `allow_columns` patterns, which win over `exclude`.
+    pub allow: Vec<String>,
+    /// Columns whose types were inferred from sampled values: every value must follow the same rules (pinned columns convert leniently instead).
+    pub inferred: Vec<String>,
 }
 
 /// A source file already in the destination.

@@ -3,7 +3,7 @@ use crate::files_source::models::{CsvOptions, SourceFormat};
 use crate::files_source::tests::helpers::{
     block_on, column_list, csv_encoding, encoding, folder_with,
 };
-use crate::files_source::tests::test_types::DiscoverTextFilesTestCase;
+use crate::files_source::tests::test_types::{DiscoverTextFilesTestCase, SkippedFilesTestCase};
 
 #[test]
 fn given_json_and_csv_files_when_discovering_then_types_are_inferred_conservatively()
@@ -99,6 +99,20 @@ fn given_json_and_csv_files_when_discovering_then_types_are_inferred_conservativ
             expected_problems: "column v is text in newer files but int in a.ndjson; pin a type that holds both",
         },
         DiscoverTextFilesTestCase {
+            description: "JSON and CSV: int in one file and float in another make float",
+            encoding: encoding(SourceFormat::Ndjson),
+            files: &[("a.ndjson", "{\"v\":1.5}\n"), ("b.ndjson", "{\"v\":1}\n")],
+            expected_columns: Ok("v:float"),
+            expected_problems: "",
+        },
+        DiscoverTextFilesTestCase {
+            description: "names that differ only in case are a problem naming both",
+            encoding: encoding(SourceFormat::Csv),
+            files: &[("a.csv", "Id,name\n1,x\n"), ("b.csv", "id,name\n2,y\n")],
+            expected_columns: Ok("id:int,name:text,Id:int"),
+            expected_problems: "columns id and Id differ only in case, which most warehouses cannot hold apart; rename one in the files",
+        },
+        DiscoverTextFilesTestCase {
             description: "json reads a top-level array of objects spanning lines",
             encoding: encoding(SourceFormat::Json),
             files: &[("a.json", "[\n  {\"a\": 1},\n  {\"a\": 2.5}\n]\n")],
@@ -150,6 +164,45 @@ fn given_json_and_csv_files_when_discovering_then_types_are_inferred_conservativ
         );
         assert_eq!(
             problems, test_case.expected_problems,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_files_of_other_formats_when_discovering_then_they_are_counted_as_skipped()
+-> Result<(), String> {
+    let test_cases = [
+        SkippedFilesTestCase {
+            description: "files of another format or with a stray suffix are skipped",
+            encoding: encoding(SourceFormat::Csv),
+            files: &[
+                ("a.csv", "id\n1\n"),
+                ("b.ndjson", "{}\n"),
+                ("c.csv.zst.tmp", ""),
+            ],
+            expected_counts: (1, 2),
+        },
+        SkippedFilesTestCase {
+            description: "nothing is skipped when every file fits",
+            encoding: encoding(SourceFormat::Ndjson),
+            files: &[("a.ndjson", "{}\n"), ("b.jsonl.gz", "{}\n")],
+            expected_counts: (2, 0),
+        },
+    ];
+    for test_case in test_cases {
+        let counts = block_on(async {
+            let (folder, root) = folder_with(test_case.files).await?;
+            let table = discover_files(&folder, &[], &test_case.encoding)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = std::fs::remove_dir_all(&root);
+            table.map(|table| (table.files.len(), table.skipped))
+        })?;
+        assert_eq!(
+            counts, test_case.expected_counts,
             "{}",
             test_case.description
         );

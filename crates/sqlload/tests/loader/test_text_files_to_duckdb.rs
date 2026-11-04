@@ -2,7 +2,8 @@ use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
 use crate::helpers::{
-    gzip, local_store, plain, run_async, run_text_files_scenario, seaweedfs_store, zstd,
+    after_sample, gzip, local_store, plain, run_async, run_text_files_scenario, seaweedfs_store,
+    zstd,
 };
 use crate::test_types::{TextFile, TextFilesRun, TextFilesScenarioTestCase};
 
@@ -33,10 +34,12 @@ const NDJSON_RUNS: &[TextFilesRun] = &[
     TextFilesRun {
         files: &[EVENTS_NOV_3],
         expected_error: "",
+        expected_plan: "",
     },
     TextFilesRun {
         files: &[EVENTS_NOV_4],
         expected_error: "",
+        expected_plan: "",
     },
 ];
 
@@ -62,15 +65,24 @@ const CSV_RUNS: &[TextFilesRun] = &[
     TextFilesRun {
         files: &[SCORES_NOV_3],
         expected_error: "",
+        expected_plan: "",
     },
     TextFilesRun {
         files: &[SCORES_NOV_4],
         expected_error: "",
+        expected_plan: "",
     },
 ];
 
 /// Rows, names in id order (the quoted delimiter kept), the newest timestamp as epoch seconds, the added column's sum, newest partition, and the pinned column's type.
 const CSV_CHECK: &str = "SELECT count(*) || ',' || string_agg(name, '|' ORDER BY id) || ',' || CAST(epoch(max(seen_at)) AS BIGINT) || ',' || sum(score) || ',' || max(day) || ',' || (SELECT typeof(id) FROM raw.scores LIMIT 1) FROM raw.scores";
+
+/// A key the 10,000 sampled lines never have.
+const LATE_KEY: TextFile = TextFile {
+    key: "part-0.ndjson.gz",
+    contents: "{\"id\":10000,\"late\":\"x\"}\n",
+    encode: after_sample,
+};
 
 /// `0` rows.
 const NO_ROWS: &str = "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores";
@@ -120,6 +132,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             store: seaweedfs_store,
             settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n",
             runs: &[TextFilesRun {
+                expected_plan: "",
                 files: &[TextFile {
                     key: "part-0.ndjson",
                     contents: "{\"id\":1}\n{\"id\":2,}\n",
@@ -135,6 +148,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             store: local_store,
             settings: "format = \"csv\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { id = \"int\" }\n",
             runs: &[TextFilesRun {
+                expected_plan: "",
                 files: &[TextFile {
                     key: "part-0.csv.zst",
                     contents: "id,name\n1,a\nx,b\n",
@@ -150,11 +164,124 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             store: local_store,
             settings: "format = \"csv\"\nwrite_strategy = \"append\"\n",
             runs: &[TextFilesRun {
+                expected_plan: "",
                 files: &[EVENTS_NOV_3],
                 expected_error: "no .csv, .csv.gz, .csv.zst files found",
             }],
             check_query: NO_TABLE,
             expected_result: "0",
+        },
+        TextFilesScenarioTestCase {
+            description: "a key first seen after the schema sample fails the load with its line",
+            store: seaweedfs_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n",
+            runs: &[TextFilesRun {
+                files: &[LATE_KEY],
+                expected_error: "part-0.ndjson.gz: line 10001: key late is not in the sampled schema; pin it in columns or add it to exclude_columns",
+                expected_plan: "",
+            }],
+            check_query: NO_ROWS,
+            expected_result: "0",
+        },
+        TextFilesScenarioTestCase {
+            description: "a key outside the sample that exclude_columns matches is dropped",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\nexclude_columns = [\"late\"]\n",
+            runs: &[TextFilesRun {
+                files: &[LATE_KEY],
+                expected_error: "",
+                expected_plan: "",
+            }],
+            check_query: NO_ROWS,
+            expected_result: "10001",
+        },
+        TextFilesScenarioTestCase {
+            description: "a key outside the sample can be pinned",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { late = \"text\" }\n",
+            runs: &[TextFilesRun {
+                files: &[LATE_KEY],
+                expected_error: "",
+                expected_plan: "",
+            }],
+            check_query: "SELECT count(*) || ',' || count(late) || ',' || max(late) FROM raw.scores",
+            expected_result: "10001,1,x",
+        },
+        TextFilesScenarioTestCase {
+            description: "a value outside the sample that does not fit the inferred type fails with its line",
+            store: seaweedfs_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n",
+            runs: &[TextFilesRun {
+                files: &[TextFile {
+                    key: "part-0.ndjson.gz",
+                    contents: "{\"id\":\"10000\"}\n",
+                    encode: after_sample,
+                }],
+                expected_error: "part-0.ndjson.gz: line 10001: id: \"10000\" does not fit int, the type inferred from sampled values",
+                expected_plan: "",
+            }],
+            check_query: NO_ROWS,
+            expected_result: "0",
+        },
+        TextFilesScenarioTestCase {
+            description: "a CSV quoted field the file never closes fails instead of loading one merged row",
+            store: seaweedfs_store,
+            settings: "format = \"csv\"\nwrite_strategy = \"append\"\n",
+            runs: &[TextFilesRun {
+                files: &[TextFile {
+                    key: "part-0.csv",
+                    contents: "a,b\n1,\"abc\n2,x\n3,y\n",
+                    encode: plain,
+                }],
+                expected_error: "part-0.csv: line 2: unterminated quoted field",
+                expected_plan: "",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        TextFilesScenarioTestCase {
+            description: "a headerless CSV of one record without a final line break loads it",
+            store: local_store,
+            settings: "format = \"csv\"\nwrite_strategy = \"append\"\ncsv = { header = false }\n",
+            runs: &[TextFilesRun {
+                files: &[TextFile {
+                    key: "part-0.csv",
+                    contents: "1,2",
+                    encode: plain,
+                }],
+                expected_error: "",
+                expected_plan: "",
+            }],
+            check_query: "SELECT string_agg(column_1 || ',' || column_2, ';') FROM raw.scores",
+            expected_result: "1,2",
+        },
+        TextFilesScenarioTestCase {
+            description: "int in one file and float in another load as float; the plan counts files of other formats",
+            store: seaweedfs_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n",
+            runs: &[TextFilesRun {
+                files: &[
+                    TextFile {
+                        key: "a.ndjson",
+                        contents: "{\"v\":1}\n",
+                        encode: plain,
+                    },
+                    TextFile {
+                        key: "b.ndjson",
+                        contents: "{\"v\":1.5}\n",
+                        encode: plain,
+                    },
+                    TextFile {
+                        key: "notes.txt",
+                        contents: "not data",
+                        encode: plain,
+                    },
+                ],
+                expected_error: "",
+                expected_plan: "files   2 to read of 2 listed, 1 skipped (names that do not fit ndjson",
+            }],
+            check_query: "SELECT sum(v) || ',' || (SELECT typeof(v) FROM raw.scores LIMIT 1) FROM raw.scores",
+            expected_result: "2.5,DOUBLE",
         },
     ];
     run_async(async {

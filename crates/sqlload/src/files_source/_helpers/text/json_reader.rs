@@ -8,7 +8,10 @@ use serde_json::Value;
 
 use crate::column_types::models::ColumnType;
 use crate::files_source::_helpers::text::bytes_reader::BytesReader;
+use crate::files_source::_helpers::text::checks::{ColumnChecks, misfit, value_fits};
+use crate::files_source::_helpers::text::inference::json_value_type;
 use crate::files_source::_helpers::text::json_records::{JsonRecord, JsonSplitter};
+use crate::files_source::constants::MAX_RECORD_BYTES;
 
 /// Reads a JSON file's objects in order, a chunk of bytes at a time.
 pub(crate) struct JsonReader {
@@ -23,7 +26,7 @@ impl JsonReader {
     pub(crate) fn new(bytes: BytesReader, by_line: bool) -> Self {
         Self {
             bytes,
-            splitter: JsonSplitter::new(by_line),
+            splitter: JsonSplitter::new(by_line, MAX_RECORD_BYTES),
             ready: VecDeque::new(),
             finished: false,
         }
@@ -45,10 +48,11 @@ impl JsonReader {
     }
 }
 
-/// `records` as a batch of text columns, one per `columns` entry (a missing key is NULL; a repeated key keeps its last value), and the line each row starts on.
+/// `records` as a batch of text columns, one per `columns` entry (a missing key is NULL; a repeated key keeps its last value), and the line each row starts on; a key the source lacks, or a value that does not fit its inferred type, is an error.
 pub(crate) fn records_batch(
     records: &[JsonRecord],
     columns: &[(String, ColumnType)],
+    checks: &ColumnChecks,
 ) -> Result<(RecordBatch, Vec<u64>), String> {
     let index: HashMap<&str, usize> = columns
         .iter()
@@ -58,9 +62,12 @@ pub(crate) fn records_batch(
     let mut values: Vec<Vec<Option<String>>> = vec![vec![None; records.len()]; columns.len()];
     for (row, record) in records.iter().enumerate() {
         for (key, value) in &record.fields {
-            if let Some(position) = index.get(key.as_str()) {
-                values[*position][row] = value_text(value, &columns[*position].1);
-            }
+            let Some(position) = index.get(key.as_str()) else {
+                checks.check_name("key", key, record.line)?;
+                continue;
+            };
+            check_value(checks, key, value, record.line)?;
+            values[*position][row] = value_text(value, &columns[*position].1);
         }
     }
     let fields: Vec<Field> = columns
@@ -75,6 +82,16 @@ pub(crate) fn records_batch(
     let batch = RecordBatch::try_new_with_options(Arc::new(Schema::new(fields)), arrays, &options)
         .map_err(|error| error.to_string())?;
     Ok((batch, records.iter().map(|record| record.line).collect()))
+}
+
+/// An error when `value` of an inferred column is not what sampling would have inferred (a JSON string in an int column, say).
+fn check_value(checks: &ColumnChecks, key: &str, value: &Value, line: u64) -> Result<(), String> {
+    match checks.inferred_type(key) {
+        Some(column_type) if !value_fits(column_type, json_value_type(value)) => {
+            Err(misfit(line, key, &value.to_string(), column_type))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// A value as text for a column of `column_type`: JSON text for `json` columns, objects and arrays; a string's own text otherwise.

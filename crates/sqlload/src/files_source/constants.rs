@@ -25,6 +25,9 @@ pub const ZSTD_SUFFIX: &str = ".zst";
 /// Records read from each sampled JSON or CSV file to work out its column types.
 pub const SAMPLE_ROWS: usize = 10_000;
 
+/// The longest JSON object or CSV record read, so a broken file (an unclosed quote or brace) fails instead of filling memory.
+pub const MAX_RECORD_BYTES: usize = 64 * 1024 * 1024;
+
 /// Bytes read from a JSON or CSV file (after decompression) at a time.
 pub const READ_CHUNK_BYTES: usize = 256 * 1024;
 

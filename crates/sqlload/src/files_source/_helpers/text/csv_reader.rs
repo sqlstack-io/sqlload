@@ -3,10 +3,11 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_csv::reader::{Decoder, Format, ReaderBuilder};
 use arrow_schema::{DataType, Field, Schema};
-use csv_core::ReadRecordResult;
 use regex::Regex;
 
 use crate::files_source::_helpers::text::bytes_reader::BytesReader;
+use crate::files_source::_helpers::text::csv_records::{FirstRecord, QuoteTracker};
+use crate::files_source::constants::MAX_RECORD_BYTES;
 use crate::files_source::models::CsvOptions;
 
 /// Reads a CSV file's records in order as text columns, a chunk of bytes at a time.
@@ -14,9 +15,12 @@ pub(crate) struct CsvReader {
     bytes: BytesReader,
     /// `None` for a file with no records at all.
     decoder: Option<Decoder>,
+    tracker: QuoteTracker,
     pending: Vec<u8>,
     offset: usize,
     at_end: bool,
+    /// Whether the decoder was told the file ended (an empty `decode`), which completes a last record without a line break.
+    end_sent: bool,
     names: Vec<String>,
     /// The line of the next data record: lines count records, the header included.
     next_line: u64,
@@ -29,15 +33,16 @@ impl CsvReader {
         options: &CsvOptions,
         batch_rows: usize,
     ) -> Result<Self, String> {
+        let delimiter = ascii(options.delimiter, "delimiter")?;
+        let quote = ascii(options.quote, "quote")?;
+        let mut first_record = FirstRecord::new(delimiter, quote, MAX_RECORD_BYTES);
         let mut pending: Vec<u8> = Vec::new();
-        let mut at_end = false;
-        let first = loop {
-            if let Some(first) = first_record(&pending, options, at_end)? {
-                break first;
-            }
+        let (first, at_end) = loop {
             let chunk = bytes.next_chunk().await?;
-            at_end = chunk.is_empty();
             pending.extend_from_slice(&chunk);
+            if let Some(first) = first_record.feed(&chunk)? {
+                break (first, chunk.is_empty());
+            }
         };
         let names = column_names(first, options.header)?;
         let decoder = match names.is_empty() {
@@ -47,9 +52,11 @@ impl CsvReader {
         Ok(Self {
             bytes,
             decoder,
+            tracker: QuoteTracker::new(delimiter, quote, MAX_RECORD_BYTES),
             pending,
             offset: 0,
             at_end,
+            end_sent: false,
             names,
             next_line: 1 + u64::from(options.header),
         })
@@ -71,19 +78,27 @@ impl CsvReader {
                 self.offset = 0;
                 self.at_end = self.pending.is_empty();
             }
-            let decoded = decoder
-                .decode(&self.pending[self.offset..])
-                .map_err(csv_error)?;
-            self.offset += decoded;
-            let input_done = self.at_end && self.offset == self.pending.len();
-            if decoder.capacity() == 0 || input_done {
+            let input = &self.pending[self.offset..];
+            if !input.is_empty() {
+                let decoded = decoder.decode(input).map_err(csv_error)?;
+                self.tracker.push(&input[..decoded])?;
+                self.offset += decoded;
+            } else if self.at_end && !self.end_sent && decoder.capacity() > 0 {
+                decoder.decode(&[]).map_err(csv_error)?;
+                self.end_sent = true;
+            }
+            let done = self.end_sent && self.offset == self.pending.len();
+            if done {
+                self.tracker.finish()?;
+            }
+            if decoder.capacity() == 0 || done {
                 match decoder.flush().map_err(csv_error)? {
                     Some(batch) => {
                         let line = self.next_line;
                         self.next_line += batch.num_rows() as u64;
                         return Ok(Some((batch, line)));
                     }
-                    None if input_done => return Ok(None),
+                    None if done => return Ok(None),
                     None => {}
                 }
             }
@@ -130,52 +145,6 @@ fn ascii(character: char, setting: &str) -> Result<u8, String> {
             "csv {setting} must be one ASCII character, not {character:?}"
         )),
     }
-}
-
-/// The fields of the first record in `bytes`, `Some(empty)` for a file with no records, or `None` when more bytes are needed.
-fn first_record(
-    bytes: &[u8],
-    options: &CsvOptions,
-    at_end: bool,
-) -> Result<Option<Vec<String>>, String> {
-    if bytes.is_empty() && !at_end {
-        return Ok(None);
-    }
-    let mut reader = csv_core::ReaderBuilder::new()
-        .delimiter(ascii(options.delimiter, "delimiter")?)
-        .quote(ascii(options.quote, "quote")?)
-        .build();
-    let mut output: Vec<u8> = vec![0; bytes.len() + 1];
-    let mut ends: Vec<usize> = vec![0; bytes.len() + 1];
-    let (mut input, mut written, mut ended) = (bytes, 0, 0);
-    loop {
-        let (result, read, wrote, fields) =
-            reader.read_record(input, &mut output[written..], &mut ends[ended..]);
-        input = &input[read..];
-        written += wrote;
-        ended += fields;
-        match result {
-            ReadRecordResult::Record => break,
-            ReadRecordResult::End => return Ok(Some(Vec::new())),
-            ReadRecordResult::InputEmpty if at_end => {}
-            ReadRecordResult::InputEmpty => return Ok(None),
-            ReadRecordResult::OutputFull | ReadRecordResult::OutputEndsFull => {
-                return Err("line 1: cannot read the first record".to_owned());
-            }
-        }
-    }
-    let mut start = 0;
-    ends[..ended]
-        .iter()
-        .map(|end| {
-            let field = std::str::from_utf8(&output[start..*end])
-                .map(str::to_owned)
-                .map_err(|_| "line 1: the first record is not UTF-8".to_owned());
-            start = *end;
-            field
-        })
-        .collect::<Result<Vec<String>, String>>()
-        .map(Some)
 }
 
 /// The header's names, checked; or `column_1`, ... for a file without a header.
