@@ -1,4 +1,4 @@
-use crate::column_types::models::{ColumnType, Warehouse};
+use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse};
 
 pub(crate) struct ParseTypeTestCase {
     pub(crate) description: &'static str,
@@ -31,4 +31,19 @@ pub(crate) struct ArrowFieldTestCase {
     /// The field's data type as Arrow prints it, or None when there is no field.
     pub(crate) expected_data_type: Option<&'static str>,
     pub(crate) expected_metadata: Option<&'static str>,
+}
+
+pub(crate) struct LiveTypeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) live: LiveColumnType,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) expected_type: ColumnType,
+}
+
+pub(crate) struct TypeFitTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) desired: ColumnType,
+    pub(crate) live: ColumnType,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) expected_fit: TypeFit,
 }

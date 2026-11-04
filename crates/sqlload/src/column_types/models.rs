@@ -93,3 +93,25 @@ pub struct WarehouseType {
     /// Why the warehouse cannot hold the portable type exactly, if it cannot.
     pub lossy: Option<&'static str>,
 }
+
+/// A column type as a warehouse's information schema reports it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LiveColumnType {
+    pub data_type: String,
+    pub precision: Option<i64>,
+    pub scale: Option<i64>,
+    pub char_length: Option<i64>,
+}
+
+/// Whether a live column can take values of a desired type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeFit {
+    /// The live column already holds every value of the desired type.
+    Fits,
+    /// The column can be widened in place to this warehouse type.
+    WidenInPlace(String),
+    /// Widening needs the table rewritten (Snowflake integer -> decimal, for example).
+    NeedsRebuild(String),
+    /// The types are unrelated or the change would narrow the column.
+    Incompatible,
+}
