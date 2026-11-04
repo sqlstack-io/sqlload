@@ -43,6 +43,7 @@ pub const PYTHON_SOURCE_KEYS: &[&str] = &[
     "description",
     "destination",
     "schema",
+    "table_name",
     "destination_path",
     "exclude_columns",
     "allow_columns",
@@ -87,6 +88,3 @@ pub const DEFAULT_TABLE_NAME: &str = "{source}__{table}";
 
 /// The destination table name template for a files source, which has one table.
 pub const DEFAULT_FILES_TABLE_NAME: &str = "{source}";
-
-/// The destination table name template for Python tables: the table's own (unique) name.
-pub const DEFAULT_PYTHON_TABLE_NAME: &str = "{table}";

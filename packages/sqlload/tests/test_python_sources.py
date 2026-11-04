@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,13 @@ import sqlload as sl
 HERE = Path(__file__).resolve().parent.parent
 
 
+def target_connection(ctx):
+    try:
+        return dict(ctx.connection("wh"))
+    except (PermissionError, KeyError) as error:
+        return f"{type(error).__name__}: {error}"
+
+
 def rows(ctx):
     seen = {
         "cursor_value": repr(ctx.cursor_value),
@@ -62,6 +70,8 @@ def rows(ctx):
         "cursor_column": ctx.cursor_column,
         "is_reload": ctx.is_reload,
         "token": ctx.connection.get("token"),
+        "other": dict(ctx.connection("shop")),
+        "target": target_connection(ctx),
     }
     (HERE / "seen").mkdir(exist_ok=True)
     (HERE / "seen" / f"{ctx.table}.json").write_text(json.dumps(seen))
@@ -151,8 +161,8 @@ def test_given_a_python_table_when_loaded_twice_into_duckdb_then_its_strategy_ap
 	load(project)
 	give(project, "rows", second)
 	load(project)
-	assert query(project, 'SELECT id, v FROM "RAW"."rows" ORDER BY id') == expected
-	assert query(project, 'SELECT count(DISTINCT _sqlload_load_id) FROM "RAW"."rows"')[0][0] >= 1
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows" ORDER BY id') == expected
+	assert query(project, 'SELECT count(DISTINCT _sqlload_load_id) FROM "RAW"."shop__rows"')[0][0] >= 1
 
 
 def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_fit_the_live_types(tmp_path: Path) -> None:
@@ -161,10 +171,10 @@ def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_f
 	load(project)
 	give(project, "rows", [{"id": 2, "code": 7, "meta": {"k": 2}, "extra": True}])
 	done = load(project)
-	assert "loaded  RAW.rows  1 rows" in done.stdout
-	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'rows' ORDER BY ordinal_position")
+	assert "loaded  RAW.shop__rows  1 rows" in done.stdout
+	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
 	assert [name for name, _ in columns] == ["id", "code", "meta", "_sqlload_load_id", "_sqlload_loaded_at", "extra"]
-	assert query(project, 'SELECT id, code, meta, extra FROM "RAW"."rows" ORDER BY id') == [
+	assert query(project, 'SELECT id, code, meta, extra FROM "RAW"."shop__rows" ORDER BY id') == [
 		(1, "x1", '{"k":1}', None),
 		(2, "7", '{"k":2}', True),
 	]
@@ -183,7 +193,7 @@ def test_given_an_incremental_table_when_loading_then_ctx_carries_the_cursor_win
 	load(project, "--start-cursor-ts", "2025-12-01T00:00:00Z", "--end-cursor-ts", "2026-02-01T00:00:00Z")
 	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2025, 12, 1, 0, 0, tzinfo=datetime.timezone.utc)"
 	assert seen(project, "rows")["cursor_end"] == "datetime.datetime(2026, 2, 1, 0, 0, tzinfo=datetime.timezone.utc)"
-	assert query(project, 'SELECT id FROM "RAW"."rows" ORDER BY id') == [(1,), (2,), (3,)]
+	assert query(project, 'SELECT id FROM "RAW"."shop__rows" ORDER BY id') == [(1,), (2,), (3,)]
 
 
 def test_given_a_generator_that_raises_when_loading_then_only_its_table_fails_and_nothing_is_left_behind(tmp_path: Path) -> None:
@@ -192,10 +202,10 @@ def test_given_a_generator_that_raises_when_loading_then_only_its_table_fails_an
 	give(project, "bad", {"rows": [{"id": 1}], "raise": "the API returned 503"})
 	done = sqlload(project, "load")
 	assert done.returncode == 1
-	assert "loaded  RAW.good  1 rows" in done.stdout + done.stderr
-	assert "failed  RAW.bad  RuntimeError: the API returned 503" in done.stdout + done.stderr
+	assert "loaded  RAW.shop__good  1 rows" in done.stdout + done.stderr
+	assert "failed  RAW.shop__bad  RuntimeError: the API returned 503" in done.stdout + done.stderr
 	assert "shop.py" in done.stderr
-	assert query(project, "SELECT table_name FROM information_schema.tables ORDER BY table_name") == [("good",)]
+	assert query(project, "SELECT table_name FROM information_schema.tables ORDER BY table_name") == [("shop__good",)]
 
 
 def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come_from(tmp_path: Path) -> None:
@@ -203,7 +213,7 @@ def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come
 	done = sqlload(project, "plan")
 	assert done.returncode == 0, done.stderr
 	for line in [
-		"create table (1 declared columns; the rest inferred on first load)",
+		"create table on first load (1 declared columns, the rest inferred from the data)",
 		"create table on first load (columns inferred from the data)",
 		"source  python  sources/shop.py (shop)",
 		"columns inferred on first load, 1 declared",
@@ -212,7 +222,7 @@ def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come
 	give(project, "orders", [{"id": 1, "total": 2.5}])
 	give(project, "stores", [{"id": 1}])
 	load(project)
-	assert query(project, "SELECT data_type FROM information_schema.columns WHERE table_name = 'orders' AND column_name = 'total'") == [("DECIMAL(18,2)",)]
+	assert query(project, "SELECT data_type FROM information_schema.columns WHERE table_name = 'shop__orders' AND column_name = 'total'") == [("DECIMAL(18,2)",)]
 	assert "columns inferred at load and checked against the live table" in sqlload(project, "plan", "stores").stdout
 
 
@@ -246,7 +256,7 @@ def test_given_a_selector_when_loading_then_only_the_named_python_table_loads(tm
 	give(project, "a", [{"id": 1}])
 	give(project, "b", [{"id": 1}])
 	done = load(project, "a")
-	assert "RAW.a" in done.stdout and "RAW.b" not in done.stdout
+	assert "RAW.shop__a" in done.stdout and "RAW.shop__b" not in done.stdout
 
 
 def files_rows(project: Path, table: str) -> list[tuple[Any, ...]]:
@@ -288,9 +298,9 @@ def test_given_masked_and_excluded_columns_when_loading_then_values_are_hashed_o
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(mask={'email': 'hash'}, exclude_columns=['secret*'])(rows)\n")
 	give(project, "rows", [{"id": 1, "email": "a@example.com", "secret_note": "x"}])
 	load(project)
-	(email,) = query(project, 'SELECT email FROM "RAW"."rows"')[0]
+	(email,) = query(project, 'SELECT email FROM "RAW"."shop__rows"')[0]
 	assert len(email) == 64 and email != "a@example.com"
-	columns = [name for (name,) in query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'rows'")]
+	columns = [name for (name,) in query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows'")]
 	assert "secret_note" not in columns
 
 
@@ -301,8 +311,8 @@ def test_given_a_type_the_live_column_cannot_hold_when_loading_then_the_table_fa
 	give(project, "rows", [{"id": 2, "amount": 2.5}])
 	done = sqlload(project, "load")
 	assert done.returncode == 1
-	assert "failed  RAW.rows  the yielded data does not fit the table" in done.stderr, done.stderr
-	assert query(project, 'SELECT id, amount FROM "RAW"."rows"') == [(1, 1)]
+	assert "failed  RAW.shop__rows  the yielded data does not fit the table" in done.stderr, done.stderr
+	assert query(project, 'SELECT id, amount FROM "RAW"."shop__rows"') == [(1, 1)]
 
 
 CLIENT_MODULE = '''
@@ -345,4 +355,196 @@ def test_given_a_source_client_when_its_tables_load_then_it_is_built_once_and_cl
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=CLIENT_MODULE)
 	load(project)
 	assert (project / "events.txt").read_text() == "open\nclose\n"
-	assert query(project, 'SELECT url FROM "RAW"."a"') == [("https://api.shop.example",)]
+	assert query(project, 'SELECT url FROM "RAW"."shop__a"') == [("https://api.shop.example",)]
+
+
+def test_given_a_live_table_with_upper_case_columns_when_loading_again_then_columns_match_and_the_live_cursor_type_is_used(tmp_path: Path) -> None:
+	project = make_project(
+		tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='merge', unique_key='seq', cursor_column='updated_at', lookback='1h')(rows)\n"
+	)
+	with duckdb.connect(str(project / "wh.duckdb")) as connection:
+		connection.execute('CREATE SCHEMA "RAW"')
+		connection.execute('CREATE TABLE "RAW"."shop__rows" ("SEQ" BIGINT, "KIND" VARCHAR, "UPDATED_AT" TIMESTAMPTZ)')
+		connection.execute("INSERT INTO \"RAW\".\"shop__rows\" VALUES (1, 'a', '2026-01-02 10:00:00+00')")
+	give(project, "rows", [{"seq": 1, "kind": "A", "updated_at": "2026-01-02T10:00:00Z"}, {"seq": 2, "kind": "b", "updated_at": "2026-01-03T10:00:00Z"}])
+	load(project)
+	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2026, 1, 2, 9, 0, tzinfo=datetime.timezone.utc)"
+	assert query(project, 'SELECT "SEQ", "KIND" FROM "RAW"."shop__rows" ORDER BY 1') == [(1, "A"), (2, "b")]
+	columns = query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
+	assert [name for (name,) in columns] == ["SEQ", "KIND", "UPDATED_AT", "_sqlload_load_id", "_sqlload_loaded_at"]
+
+
+def test_given_a_column_that_is_null_in_every_row_when_loading_again_then_it_takes_the_live_type(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='append')(rows)\n")
+	give(project, "rows", [{"id": 1, "n": 5}])
+	load(project)
+	give(project, "rows", [{"id": 2, "n": None}])
+	load(project)
+	assert query(project, 'SELECT id, n FROM "RAW"."shop__rows" ORDER BY id') == [(1, 5), (2, None)]
+
+
+@pytest.mark.parametrize(
+	"settings",
+	[
+		"columns={'total': 'decimal(18,2)'}, on_schema_change='fail'",
+		"columns={'total': 'decimal(18,2)'}, on_schema_change='ignore'",
+		"write_strategy='append', cursor_column='at', columns={'total': 'decimal(18,2)'}",
+	],
+	ids=["fail", "ignore", "append with a cursor"],
+)
+def test_given_declared_columns_when_applying_then_the_first_load_creates_the_whole_table(tmp_path: Path, settings: str) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table({settings})(rows)\n")
+	applied = sqlload(project, "apply")
+	assert applied.returncode == 0, applied.stderr
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
+	give(project, "rows", [{"id": 1, "total": 2.5, "at": "2026-01-01T00:00:00Z"}])
+	done = load(project)
+	assert "created  RAW.shop__rows  5 columns" in done.stdout
+	assert query(project, 'SELECT id, total, epoch("at") FROM "RAW"."shop__rows"') == [(1, Decimal("2.50"), 1767225600.0)]
+
+
+def test_given_new_fields_when_a_python_table_loads_then_the_changes_are_listed(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='append')(rows)\n")
+	give(project, "rows", [{"id": 1}])
+	load(project)
+	give(project, "rows", [{"id": 2, "extra": "x"}])
+	done = load(project)
+	assert "altered  RAW.shop__rows  add column  extra text -> VARCHAR" in done.stdout, done.stdout
+
+
+@pytest.mark.parametrize(
+	("settings", "rows", "message"),
+	[
+		("mask={'Email': 'hash'}", [{"id": 1, "email": "a@example.com"}], "mask key Email names no column of the data; did you mean email?"),
+		("mask={'ssn': 'hash'}", [{"id": 1, "SSN": "123"}], "mask key ssn names no column of the data; did you mean SSN?"),
+		("mask={'ssn': 'hash'}", [{"id": 1}], "mask ssn names no column of the data"),
+		("columns={'totl': 'int'}", [{"id": 1, "total": 1}], "columns key totl names no column of the data; did you mean total?"),
+	],
+	ids=["mask case", "mask upper case data", "mask missing", "columns typo"],
+)
+def test_given_a_declared_key_the_data_does_not_have_when_loading_then_the_table_fails_and_nothing_loads_unmasked(
+	tmp_path: Path, settings: str, rows: list[dict[str, Any]], message: str
+) -> None:
+	toml = DUCKDB_PROJECT.replace('[targets.dev]', '[connections.keys]\nkind = "http"\nbase_url = "x"\n\n[targets.dev]')
+	project = make_project(tmp_path, toml, f"shop.table({settings})(rows)\n")
+	give(project, "rows", rows)
+	done = sqlload(project, "load")
+	assert done.returncode == 1
+	assert message in done.stderr, done.stderr
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
+
+
+@pytest.mark.parametrize(
+	("settings", "expected_line", "expected_tables"),
+	[
+		("", "loaded  RAW.shop__rows  0 rows (table created on first data)", []),
+		("columns={'id': 'int'}", "loaded  RAW.shop__rows  0 rows", [("id", "BIGINT")]),
+	],
+	ids=["nothing declared", "declared columns"],
+)
+def test_given_a_generator_that_yields_nothing_on_its_first_load_then_the_load_succeeds(
+	tmp_path: Path, settings: str, expected_line: str, expected_tables: list[tuple[str, str]]
+) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table({settings})(rows)\n")
+	give(project, "rows", [])
+	done = load(project)
+	assert expected_line in done.stdout, done.stdout
+	columns = query(
+		project,
+		"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__rows' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\'",
+	)
+	assert columns == expected_tables
+
+
+def test_given_a_files_target_and_an_undeclared_cursor_when_planning_then_it_asks_to_declare_the_cursor(tmp_path: Path) -> None:
+	toml = FILES_PROJECT.replace('path = "{table}/"', 'path = "{table}/day={cursor:date}/"')
+	project = make_project(tmp_path, toml, "shop.table(write_strategy='delete_insert', cursor_column='day')(rows)\n")
+	done = sqlload(project, "plan")
+	assert done.returncode == 1
+	assert 'files targets need its type before the first load: declare it, for example columns={"day": "date"}' in done.stderr, done.stderr
+
+
+@pytest.mark.parametrize(
+	("column_type", "first", "second", "expected"),
+	[
+		("decimal(18,2)", ["1.50", "2.50"], ["1.50", "2.50", "3.50"], [Decimal("1.50"), Decimal("2.50"), Decimal("3.50")]),
+		("smallint", [1, 2], [1, 2, 3], [1, 2, 3]),
+	],
+	ids=["decimal", "smallint"],
+)
+def test_given_a_decimal_or_smallint_cursor_when_appending_again_then_only_new_rows_load(
+	tmp_path: Path, column_type: str, first: list[Any], second: list[Any], expected: list[Any]
+) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(write_strategy='append', cursor_column='v', append_cursor_inclusive=False, columns={{'v': '{column_type}'}})(rows)\n")
+	give(project, "rows", [{"v": value} for value in first])
+	load(project)
+	give(project, "rows", [{"v": value} for value in second])
+	load(project)
+	assert [value for (value,) in query(project, 'SELECT v FROM "RAW"."shop__rows" ORDER BY v')] == expected
+
+
+def test_given_cursor_start_when_the_cursor_type_is_not_known_yet_then_ctx_gets_the_same_type_on_every_run(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='append', cursor_column='at', cursor_start='2026-01-01T00:00:00Z')(rows)\n")
+	give(project, "rows", [])
+	load(project)
+	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)"
+	give(project, "rows", [{"id": 1, "at": "2026-01-05T00:00:00Z"}])
+	load(project)
+	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)"
+	load(project)
+	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2026, 1, 5, 0, 0, tzinfo=datetime.timezone.utc)"
+
+
+def test_given_a_target_connection_when_a_table_function_asks_for_it_then_it_is_withheld(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table()(rows)\n")
+	give(project, "rows", [{"id": 1}])
+	load(project)
+	assert seen(project, "rows")["other"]["base_url"] == "https://api.shop.example"
+	assert seen(project, "rows")["target"].startswith("PermissionError: connection wh is used by a [targets] entry")
+
+
+NAMED_MODULE = """
+import sqlload as sl
+
+shop = sl.source("shop", table_name="api_{table}")
+
+
+@shop.table(name="orders")
+def orders(ctx):
+    yield {"id": 1}
+
+
+@shop.table(name="stores", table_name="{source}_stores_v2")
+def stores(ctx):
+    yield {"id": 1}
+
+
+@sl.table
+def standalone(ctx):
+    yield {"id": 1}
+"""
+
+
+def test_given_table_name_settings_when_loading_then_tables_are_named_from_them(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=NAMED_MODULE)
+	load(project)
+	tables = query(project, "SELECT table_name FROM information_schema.tables ORDER BY table_name")
+	assert tables == [("api_orders",), ("shop_stores_v2",), ("standalone",)]
+
+
+@pytest.mark.parametrize("entry", [".", "..", "sources/../.."], ids=["root", "parent", "escape"])
+def test_given_a_python_path_outside_the_project_folder_when_planning_then_discovery_refuses_it(tmp_path: Path, entry: str) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT.replace('python_paths = ["sources"]', f"python_paths = [{entry!r}]".replace("'", '"')), "")
+	done = sqlload(project, "plan")
+	assert done.returncode == 1
+	assert "DiscoveryError: python_paths entry" in done.stderr, done.stderr
+	assert "must be a folder inside the project folder" in done.stderr
+
+
+def test_given_environments_and_build_folders_under_python_paths_when_discovering_then_they_are_skipped(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "")
+	for folder in [".venv", "venv", "build", "dist", "__pycache__", "lib/site-packages"]:
+		(project / "sources" / folder).mkdir(parents=True)
+		(project / "sources" / folder / "broken.py").write_text("raise RuntimeError('imported')\n")
+	done = sqlload(project, "plan")
+	assert done.returncode == 0, done.stderr

@@ -11,10 +11,17 @@ import sys
 import traceback
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from sqlload._declare import Connection, Context, Source, Table
+
+#: Folders under `python_paths` never imported: virtual environments, build output and caches.
+SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-packages", "node_modules"})
+
+#: The destination name of a table declared without a source: its own name.
+STANDALONE_TABLE_NAME = "{table}"
 
 _tables: dict[str, Table] = {}
 _clients: dict[str, Any] = {}
@@ -47,7 +54,11 @@ def discover(root: str, python_paths: list[str]) -> str:
 		declared.append(_source_declaration(source, relative))
 	for table, relative in standalone.values():
 		declared.append(
-			{"name": table.name, "module": relative, "settings": {"tables": {table.name: _table_settings(table)}}}
+			{
+				"name": table.name,
+				"module": relative,
+				"settings": {"table_name": STANDALONE_TABLE_NAME, "tables": {table.name: _table_settings(table)}},
+			}
 		)
 	for source, _ in sources.values():
 		for table in source.tables:
@@ -63,7 +74,8 @@ def start_table(request: str) -> Iterator[Any]:
 	table = _tables[read["table"]]
 	connections: dict[str, Any] = read["connections"]
 	connection_name = read.get("connection")
-	connection = Connection(connections.get(connection_name, {}) if connection_name else {}, connections)
+	withheld: list[str] = read["withheld"]
+	connection = Connection(connections.get(connection_name, {}) if connection_name else {}, connections, withheld)
 	cursor = read.get("cursor") or {}
 	source = table.source
 	ctx = Context(
@@ -96,15 +108,23 @@ def _module_paths(root: Path, python_paths: list[str]) -> list[Path]:
 	paths: list[Path] = []
 	for entry in python_paths:
 		folder = (root / entry).resolve()
+		if folder == root or root not in folder.parents:
+			raise DiscoveryError(
+				f"python_paths entry {entry!r} must be a folder inside the project folder {root}, not the project folder itself or outside it"
+			)
 		if not folder.is_dir():
 			raise DiscoveryError(f"python_paths entry {entry!r} is not a folder under {root}")
 		for path in sorted(folder.rglob("*.py")):
-			parts = path.relative_to(root).parts
-			if any(part.startswith(".") or part == "__pycache__" for part in parts) or path.name.startswith("_"):
+			folders = path.relative_to(folder).parts[:-1]
+			if any(_skipped(part) for part in folders) or path.name.startswith("_"):
 				continue
 			if path not in paths:
 				paths.append(path)
 	return paths
+
+
+def _skipped(folder: str) -> bool:
+	return folder.startswith(".") or folder.startswith("__") or folder in SKIPPED_FOLDERS
 
 
 def _import(root: Path, module_path: Path, relative: str) -> Any:
@@ -134,6 +154,8 @@ def _source_declaration(source: Source, relative: str) -> dict[str, Any]:
 
 def _table_settings(table: Table) -> dict[str, Any]:
 	settings: dict[str, Any] = {key: _setting(value) for key, value in table.settings.items() if value is not None}
+	if "table_name" in settings:
+		settings["name"] = settings.pop("table_name")
 	if table.description is not None:
 		settings["description"] = table.description
 	return settings
@@ -163,19 +185,51 @@ def _shared_client(source: Source) -> Any:
 
 
 def _cursor_value(text: str | None, column_type: str | None) -> Any:
-	"""A cursor bound in its Python type: int, float, date, or datetime (aware for `timestamp_tz`)."""
+	"""A cursor bound in its Python type: int, float, Decimal, date, or datetime (aware for `timestamp_tz`).
+
+	Before the first load shows the cursor's type (`unknown`), ISO dates and timestamps and integers
+	are read as such, so the value's type matches later runs.
+	"""
 	if text is None:
 		return None
+	kind = column_type or "unknown"
+	if kind.startswith("decimal"):
+		kind = "decimal"
 	try:
-		if column_type in ("int", "smallint"):
+		if kind == "unknown":
+			return _guessed_value(text)
+		if kind in ("int", "smallint"):
 			return int(text)
-		if column_type == "float":
+		if kind == "float":
 			return float(text)
-		if column_type == "date":
+		if kind == "decimal":
+			return Decimal(text)
+		if kind == "date":
 			return date.fromisoformat(text[:10])
-		if column_type in ("timestamp_tz", "timestamp_ntz"):
-			value = datetime.fromisoformat(text.removesuffix("+00").replace("Z", ""))
-			return value.replace(tzinfo=timezone.utc) if column_type == "timestamp_tz" else value
-	except ValueError:
+		if kind in ("timestamp_tz", "timestamp_ntz"):
+			return _timestamp(text, aware=kind == "timestamp_tz")
+	except (ValueError, ArithmeticError):
 		return text
 	return text
+
+
+def _guessed_value(text: str) -> Any:
+	if text.lstrip("-").isdigit():
+		return int(text)
+	if len(text) == 10:
+		return date.fromisoformat(text)
+	value = datetime.fromisoformat(_offset_text(text))
+	return value.astimezone(timezone.utc) if value.tzinfo is not None else value
+
+
+def _offset_text(text: str) -> str:
+	"""`text` with a `Z` or `+00` offset written as `+00:00`, which `fromisoformat` reads on Python 3.10."""
+	normal = text.replace("Z", "+00:00")
+	return normal + ":00" if normal.endswith("+00") else normal
+
+
+def _timestamp(text: str, *, aware: bool) -> datetime:
+	value = datetime.fromisoformat(_offset_text(text))
+	if not aware:
+		return value.replace(tzinfo=None)
+	return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)

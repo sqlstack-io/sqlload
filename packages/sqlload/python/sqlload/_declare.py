@@ -4,7 +4,7 @@ A source is a module-level object tables attach to; a table is a decorated gener
 Both are found by scanning the modules under `python_paths`, so declaring one never runs it.
 """
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from logging import Logger
 from typing import Any, TypeVar, overload
@@ -31,7 +31,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 
 #: Settings only a table takes.
 TABLE_ONLY_SETTINGS: frozenset[str] = frozenset(
-	{"allow_columns", "columns", "destination_path", "exclude_columns", "mask"}
+	{"allow_columns", "columns", "destination_path", "exclude_columns", "mask", "table_name"}
 )
 
 #: Settings only a source takes.
@@ -44,6 +44,7 @@ SOURCE_SETTINGS: frozenset[str] = frozenset(
 		"exclude_columns",
 		"mask_key",
 		"schema",
+		"table_name",
 	}
 )
 
@@ -161,11 +162,21 @@ def table(
 
 
 class Connection(Mapping[str, Any]):
-	"""A connection's resolved settings; calling it looks up another connection by name."""
+	"""A connection's resolved settings; calling it looks up another connection by name.
 
-	def __init__(self, settings: Mapping[str, Any], named: Mapping[str, Mapping[str, Any]]) -> None:
+	Connections that `[targets]` write to are not available to table functions (except a source's
+	own connection), so a table function cannot reach a destination's credentials.
+	"""
+
+	def __init__(
+		self,
+		settings: Mapping[str, Any],
+		named: Mapping[str, Mapping[str, Any]],
+		withheld: Collection[str] = (),
+	) -> None:
 		self._settings = dict(settings)
 		self._named = named
+		self._withheld = frozenset(withheld)
 
 	def __getitem__(self, key: str) -> Any:
 		return self._settings[key]
@@ -177,9 +188,14 @@ class Connection(Mapping[str, Any]):
 		return len(self._settings)
 
 	def __call__(self, name: str) -> "Connection":
+		if name in self._withheld:
+			raise PermissionError(
+				f"connection {name} is used by a [targets] entry; table functions only get connections"
+				" that no target writes to, so they cannot reach a destination's credentials"
+			)
 		if name not in self._named:
 			raise KeyError(f"no connection named {name}")
-		return Connection(self._named[name], self._named)
+		return Connection(self._named[name], self._named, self._withheld)
 
 
 class Context:

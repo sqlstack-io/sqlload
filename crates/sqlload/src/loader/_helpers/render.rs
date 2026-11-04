@@ -70,6 +70,7 @@ pub(crate) fn object_lines(table: &TablePlan) -> Vec<String> {
                 table.schema.write_columns.len()
             ),
         ),
+        _ if table.spec.python.is_some() => row(&name, "alter table at load"),
         _ => row(&name, "alter table"),
     }];
     if let TableAction::Alter(changes) = &table.schema.action {
@@ -259,9 +260,9 @@ fn python_create(table: &TablePlan) -> String {
         .count();
     match declared {
         0 => "create table on first load (columns inferred from the data)".to_owned(),
-        count => {
-            format!("create table ({count} declared columns; the rest inferred on first load)")
-        }
+        count => format!(
+            "create table on first load ({count} declared columns, the rest inferred from the data)"
+        ),
     }
 }
 

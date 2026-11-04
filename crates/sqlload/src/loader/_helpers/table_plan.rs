@@ -155,7 +155,7 @@ async fn plan_table_once(
     let cursor_type = spec.cursor.as_ref().and_then(|cursor| {
         desired
             .iter()
-            .find(|column| column.name == cursor.column)
+            .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
             .map(|column| &column.column_type)
     });
     let unseen_python_cursor =
@@ -170,7 +170,7 @@ async fn plan_table_once(
             schema
                 .write_columns
                 .iter()
-                .any(|column| column.name == name)
+                .any(|column| column.name.eq_ignore_ascii_case(name))
         });
     if let Some(name) = cursor_name.filter(|_| !written && schema.blocked.is_none()) {
         schema = blocked_plan(vec![format!(
@@ -183,7 +183,7 @@ async fn plan_table_once(
     });
     let cursor_expression = read_columns
         .iter()
-        .find(|column| Some(column.name.as_str()) == cursor_name)
+        .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
         .map(|column| column.expression.as_str());
     let lacks_cursor =
         live.is_some() && cursor_name.is_some() && !cursor_in_table && !options.reload;
@@ -275,16 +275,11 @@ async fn plan_table_once(
     })
 }
 
-/// The statements that bring the table's schema in line with its plan (`apply`'s work for one table); `None` when there is nothing to run: unchanged, rebuilt by the load itself, a files target, or a Python table whose columns are only known once it loads.
+/// The statements that bring the table's schema in line with its plan; `None` when there is nothing to run: unchanged, rebuilt by the load itself, or a files target.
 pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     let spec = &table.spec;
     let warehouse = spec.warehouse;
-    let only_metadata = table
-        .schema
-        .write_columns
-        .iter()
-        .all(|column| column.origin == ColumnOrigin::Metadata);
-    if table.output.is_some() || (spec.python.is_some() && only_metadata) {
+    if table.output.is_some() {
         return None;
     }
     match &table.schema.action {

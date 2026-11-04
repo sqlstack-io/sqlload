@@ -2,11 +2,11 @@ use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
-use crate::loader::constants::{PYTHON_COLUMN_TYPE, UNKNOWN_CURSOR_TYPE};
-use crate::loader::constants::{SPILL_CHUNK_BYTES, UTC_OFFSET_SUFFIX};
+use crate::loader::constants::{
+    PYTHON_COLUMN_TYPE, SPILL_CHUNK_BYTES, UNKNOWN_CURSOR_TYPE, UTC_OFFSET_SUFFIX,
+};
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{PythonTable, TableSpec};
-use crate::loader::models::{ReadWindow, SpilledBatches, TablePlan};
+use crate::loader::models::{PythonTable, ReadWindow, SpilledBatches, TablePlan, TableSpec};
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::models::SourceConfig;
 use crate::python_sources::models::TableRead;
@@ -15,12 +15,14 @@ use crate::row_batches::main::conform_batch::conform_batch;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
-use crate::schema_plan::models::LiveColumn;
+use crate::schema_plan::models::{LiveColumn, TableAction};
+use crate::similar_names::main::close_name::close_name;
 use crate::write_sql::constants::CURSOR_TIMESTAMP_FORMAT;
 use crate::write_sql::main::cursor_text::cursor_text;
+use crate::write_sql::main::display_name::display_name;
+use crate::write_sql::main::stored_name::stored_name;
 use arrow_array::{
-    ArrayRef, Date32Array, Float64Array, Int64Array, RecordBatch, Scalar, StringArray,
-    TimestampMicrosecondArray,
+    ArrayRef, Date32Array, RecordBatch, Scalar, StringArray, TimestampMicrosecondArray,
 };
 use arrow_cast::cast::{CastOptions, cast_with_options};
 use arrow_ipc::reader::FileReader;
@@ -30,6 +32,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::concat::concat_batches;
 use arrow_select::filter::filter_record_batch;
 use chrono::{NaiveDate, NaiveDateTime};
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::sync::Arc;
 
@@ -76,7 +79,8 @@ pub(crate) fn with_live_columns(
     let mut added: Vec<SourceColumn> = Vec::new();
     for column in live? {
         if !is_metadata(&column.name) && !has_column(&spec.source_table, &column.name) {
-            added.push(python_column(&column.name, column.column_type.clone()));
+            let name = source_spelling(&column.name, spec);
+            added.push(python_column(&name, column.column_type.clone()));
         }
     }
     if added.is_empty() {
@@ -87,28 +91,86 @@ pub(crate) fn with_live_columns(
     Some(augmented)
 }
 
-/// A Python table as its yielded data shows it: every column of `schema` typed by inference (the live table's type when the inferred one fits it), plus declared columns no row had.
+/// The name a table function most likely yields for live column `stored`: its lower-case form when the warehouse stores that as `stored` (upper case on Snowflake), else `stored` itself.
+pub(crate) fn source_spelling(stored: &str, spec: &TableSpec) -> String {
+    let lower = stored.to_lowercase();
+    match stored_name(&lower, spec.warehouse) == stored {
+        true => lower,
+        false => stored.to_owned(),
+    }
+}
+
+/// What the yielded data showed: its merged schema, the columns that only ever held NULL, and the rows.
+pub(crate) struct YieldedData<'a> {
+    pub(crate) schema: &'a Schema,
+    pub(crate) null_columns: &'a BTreeSet<String>,
+    pub(crate) rows: u64,
+}
+
+/// A Python table as its yielded data shows it: every column of the data typed by inference (the live table's type when the inferred one fits it, or when the column only held NULL), plus declared columns no row had.
 pub(crate) fn inferred_table(
     planned: &SourceTable,
-    schema: &Schema,
+    declared: &[String],
+    data: &YieldedData<'_>,
     live: Option<&[LiveColumn]>,
 ) -> SourceTable {
     let mut columns: Vec<SourceColumn> = Vec::new();
-    for field in schema.fields() {
+    for field in data.schema.fields() {
         if !is_metadata(field.name()) {
-            let column_type = fitting_type(field_type(field), live_type(live, field.name()));
+            let live_type = live_type(live, field.name());
+            let column_type = match (data.null_columns.contains(field.name()), live_type) {
+                (true, Some(live_type)) => live_type,
+                (_, live_type) => fitting_type(field_type(field), live_type),
+            };
             columns.push(python_column(field.name(), column_type));
         }
     }
-    for declared in &planned.columns {
-        if !columns.iter().any(|column| column.name == declared.name) {
-            columns.push(declared.clone());
+    for name in declared {
+        let seen = columns
+            .iter()
+            .any(|column| column.name.eq_ignore_ascii_case(name));
+        let planned_column = planned.columns.iter().find(|column| column.name == *name);
+        if let (false, Some(column)) = (seen, planned_column) {
+            columns.push(column.clone());
         }
     }
     SourceTable {
         columns,
         ..planned.clone()
     }
+}
+
+/// Why the declared `columns` and `mask` keys do not match the data: a key that names no column but is close to one (a different case or a typo), or a masked column the data lacks while it has rows; masking must never miss the real column.
+pub(crate) fn declared_problems(spec: &TableSpec, data: &YieldedData<'_>) -> Vec<String> {
+    let names: Vec<&str> = data
+        .schema
+        .fields()
+        .iter()
+        .map(|field| field.name().as_str())
+        .filter(|name| !is_metadata(name))
+        .collect();
+    let keys = spec
+        .pinned
+        .keys()
+        .filter(|key| !spec.masked.columns.contains_key(*key))
+        .map(|key| ("columns", key))
+        .chain(spec.masked.columns.keys().map(|key| ("mask", key)));
+    let mut problems: Vec<String> = Vec::new();
+    for (setting, key) in keys {
+        if names.contains(&key.as_str()) {
+            continue;
+        }
+        match (close_name(key, names.iter().copied()), setting) {
+            (Some(close), _) => problems.push(format!(
+                "{setting} key {key} names no column of the data; did you mean {close}?"
+            )),
+            (None, "mask") if data.rows > 0 => {
+                problems.push(format!("mask {key} names no column of the data"));
+            }
+            (None, _) => {}
+        }
+    }
+    problems
 }
 
 /// The live table's type of column `name`, if it has one.
@@ -134,11 +196,31 @@ fn has_column(table: &SourceTable, name: &str) -> bool {
         .any(|column| column.name.eq_ignore_ascii_case(name))
 }
 
-/// The planned type of the cursor column, `unknown` before the table's first load.
+/// The planned type of the cursor column (matched ignoring case, as warehouses store names), `unknown` before the table's first load.
 pub(crate) fn cursor_type_name(table: &TablePlan, column: &str) -> String {
-    match table.read_columns.iter().find(|read| read.name == column) {
+    match table
+        .read_columns
+        .iter()
+        .find(|read| read.name.eq_ignore_ascii_case(column))
+    {
         Some(read) => read.output.to_string(),
         None => UNKNOWN_CURSOR_TYPE.to_owned(),
+    }
+}
+
+/// The schema changes the load made, one line each, as `apply` would print them.
+pub(crate) fn change_lines(table: &TablePlan) -> Vec<String> {
+    let name = display_name(&table.spec.destination, table.spec.warehouse);
+    match &table.schema.action {
+        TableAction::Create => vec![format!(
+            "created  {name}  {} columns",
+            table.schema.write_columns.len()
+        )],
+        TableAction::Alter(changes) => changes
+            .iter()
+            .map(|change| format!("altered  {name}  {change}"))
+            .collect(),
+        TableAction::Recreate | TableAction::Unchanged => Vec::new(),
     }
 }
 
@@ -228,10 +310,18 @@ pub(crate) async fn spill_batches(
         }
     }
     spill.write_chunk(directory.path())?;
+    let null_columns: BTreeSet<String> = spill
+        .merged
+        .fields()
+        .iter()
+        .filter(|field| *field.data_type() == DataType::Null)
+        .map(|field| field.name().clone())
+        .collect();
     Ok(SpilledBatches {
         directory,
         chunks: spill.chunks,
         schema: Arc::new(settled_schema(&spill.merged)),
+        null_columns,
         rows: spill.rows,
     })
 }
@@ -294,7 +384,7 @@ pub(crate) async fn replay_batches(
         table
             .read_columns
             .iter()
-            .find(|column| column.name == window.column)
+            .find(|column| column.name.eq_ignore_ascii_case(&window.column))
             .map(|column| column.output.clone())
     });
     let mut rows: u64 = 0;
@@ -375,16 +465,19 @@ fn in_window(
     window: &ReadWindow,
     cursor_type: &ColumnType,
 ) -> Result<RecordBatch, LoaderError> {
-    let Some(column) = batch.column_by_name(&window.column).cloned() else {
+    let schema = batch.schema();
+    let Some((position, _)) = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .find(|(_, field)| field.name().eq_ignore_ascii_case(&window.column))
+    else {
         return Ok(batch.clone());
     };
     let mut kept = batch.clone();
     if let Some(from) = &window.from {
-        let bound = Scalar::new(bound_array(from, cursor_type)?);
-        let column = kept
-            .column_by_name(&window.column)
-            .cloned()
-            .unwrap_or(column.clone());
+        let column = kept.column(position).clone();
+        let bound = Scalar::new(bound_array(from, cursor_type, column.data_type())?);
         let mask = match window.inclusive {
             true => gt_eq(&column, &bound),
             false => gt(&column, &bound),
@@ -393,19 +486,20 @@ fn in_window(
         kept = filter_record_batch(&kept, &mask).map_err(invalid)?;
     }
     if let Some(to) = &window.to {
-        let bound = Scalar::new(bound_array(to, cursor_type)?);
-        let column = kept
-            .column_by_name(&window.column)
-            .cloned()
-            .unwrap_or(column);
+        let column = kept.column(position).clone();
+        let bound = Scalar::new(bound_array(to, cursor_type, column.data_type())?);
         let mask = lt(&column, &bound).map_err(invalid)?;
         kept = filter_record_batch(&kept, &mask).map_err(invalid)?;
     }
     Ok(kept)
 }
 
-/// A cursor bound as a one-value array of the cursor column's Arrow type.
-fn bound_array(text: &str, cursor_type: &ColumnType) -> Result<ArrayRef, LoaderError> {
+/// A cursor bound as a one-value array of the cursor column's Arrow type `data_type`, converted from the bound's text (timestamps and dates parsed, every other type cast).
+pub(crate) fn bound_array(
+    text: &str,
+    cursor_type: &ColumnType,
+    data_type: &DataType,
+) -> Result<ArrayRef, LoaderError> {
     let normal = match text.strip_suffix(UTC_OFFSET_SUFFIX) {
         Some(_) => text.to_owned(),
         None => cursor_text(text, cursor_type).map_err(LoaderError::Invalid)?,
@@ -423,13 +517,7 @@ fn bound_array(text: &str, cursor_type: &ColumnType) -> Result<ArrayRef, LoaderE
         .map(|time| time.and_utc().timestamp_micros())
         .map_err(|_| unreadable())
     };
-    let array: ArrayRef = match cursor_type {
-        ColumnType::Int | ColumnType::SmallInt => Arc::new(Int64Array::from(vec![
-            normal.parse::<i64>().map_err(|_| unreadable())?,
-        ])),
-        ColumnType::Float => Arc::new(Float64Array::from(vec![
-            normal.parse::<f64>().map_err(|_| unreadable())?,
-        ])),
+    let parsed: ArrayRef = match cursor_type {
         ColumnType::TimestampTz => {
             Arc::new(TimestampMicrosecondArray::from(vec![micros()?]).with_timezone("UTC"))
         }
@@ -440,9 +528,13 @@ fn bound_array(text: &str, cursor_type: &ColumnType) -> Result<ArrayRef, LoaderE
             let days = i32::try_from((date - epoch).num_days()).map_err(|_| unreadable())?;
             Arc::new(Date32Array::from(vec![days]))
         }
-        _ => Arc::new(StringArray::from(vec![normal])),
+        _ => Arc::new(StringArray::from(vec![normal.clone()])),
     };
-    Ok(array)
+    let strict = CastOptions {
+        safe: false,
+        ..CastOptions::default()
+    };
+    cast_with_options(&parsed, data_type, &strict).map_err(|_| unreadable())
 }
 
 fn invalid(error: impl std::fmt::Display) -> LoaderError {

@@ -150,7 +150,17 @@ async fn run_command(
         };
         for outcome in load_tables(&run, &plan).await {
             match outcome.loaded {
-                Ok(rows) => lines.push(format!("loaded  {}  {rows} rows", outcome.table)),
+                Ok(loaded) => {
+                    lines.extend(loaded.changes);
+                    let note = loaded
+                        .note
+                        .map(|note| format!(" {note}"))
+                        .unwrap_or_default();
+                    lines.push(format!(
+                        "loaded  {}  {} rows{note}",
+                        outcome.table, loaded.rows
+                    ));
+                }
                 Err(reason) => {
                     ok = false;
                     lines.push(format!("failed  {}  {reason}", outcome.table));

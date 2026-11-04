@@ -10,9 +10,12 @@ shop = sl.source("shop", connection="shop", destination="prod", write_strategy="
 
 
 @shop.table(unique_key="order_id")
-def shop_orders(ctx: sl.Context):
+def orders(ctx: sl.Context):
     yield from ctx.client.get("/orders").json()["items"]
 ```
+
+The table loads into `shop__orders` (`{source}__{table}`, or the `table_name` the source or table
+sets).
 
 A table function yields dicts, lists of dicts, `sl.json(...)` / `sl.ndjson(...)` bytes, or Arrow
 data (pyarrow, polars, pandas); SQLLoad detects which.

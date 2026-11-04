@@ -60,7 +60,7 @@ fn check_output(
     let cursor_name = spec.cursor.as_ref().map(|cursor| cursor.column.as_str());
     let cursor_type = desired
         .iter()
-        .find(|column| Some(column.name.as_str()) == cursor_name)
+        .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
         .map(|column| column.column_type.clone());
     let problems = output_problems(&OutputCheck {
         strategy: spec.strategy,

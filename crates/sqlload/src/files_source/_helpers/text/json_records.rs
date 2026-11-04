@@ -33,8 +33,16 @@ impl<'de> Visitor<'de> for ObjectVisitor {
         while let Some((key, raw)) = map.next_entry::<String, Box<RawValue>>()? {
             let text = raw.get();
             let field = match text.as_bytes().first() {
-                Some(b'{') => (key, Value::Object(Map::new()), Some(compact(text))),
-                Some(b'[') => (key, Value::Array(Vec::new()), Some(compact(text))),
+                Some(b'{') => (
+                    key,
+                    Value::Object(Map::new()),
+                    Some(nested_text(text).map_err(A::Error::custom)?),
+                ),
+                Some(b'[') => (
+                    key,
+                    Value::Array(Vec::new()),
+                    Some(nested_text(text).map_err(A::Error::custom)?),
+                ),
                 _ => (
                     key,
                     serde_json::from_str::<Value>(text).map_err(A::Error::custom)?,
@@ -251,22 +259,65 @@ fn parse_record(bytes: &[u8], line: u64) -> Result<JsonRecord, String> {
         })
 }
 
-/// Valid JSON `text` without the whitespace between tokens.
-fn compact(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let (mut in_string, mut escaped, mut start) = (false, false, 0);
-    for (position, byte) in text.bytes().enumerate() {
-        match (in_string, escaped, byte) {
-            (true, true, _) => escaped = false,
-            (true, false, b'\\') => escaped = true,
-            (_, _, b'"') => in_string = !in_string,
-            (false, _, b' ' | b'\t' | b'\n' | b'\r') => {
-                out.push_str(&text[start..position]);
-                start = position + 1;
-            }
-            _ => {}
-        }
+/// The keys and raw values of one JSON object, in file order.
+struct RawEntries(Vec<(String, Box<RawValue>)>);
+
+impl<'de> Deserialize<'de> for RawEntries {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(RawEntriesVisitor)
     }
-    out.push_str(&text[start..]);
-    out
+}
+
+struct RawEntriesVisitor;
+
+impl<'de> Visitor<'de> for RawEntriesVisitor {
+    type Value = RawEntries;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut entries: Vec<(String, Box<RawValue>)> = Vec::new();
+        while let Some(entry) = map.next_entry::<String, Box<RawValue>>()? {
+            entries.push(entry);
+        }
+        Ok(RawEntries(entries))
+    }
+}
+
+/// A nested object or array as compact JSON text: keys in file order, a key repeated in one object keeping its last value (in the place of its first), as a JSON parser reads it.
+fn nested_text(text: &str) -> Result<String, serde_json::Error> {
+    match text.as_bytes().first() {
+        Some(b'{') => {
+            let RawEntries(entries) = serde_json::from_str(text)?;
+            let mut unique: Vec<(String, Box<RawValue>)> = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                match unique.iter_mut().find(|(known, _)| *known == key) {
+                    Some(entry) => entry.1 = value,
+                    None => unique.push((key, value)),
+                }
+            }
+            let fields = unique
+                .iter()
+                .map(|(key, value)| {
+                    Ok(format!(
+                        "{}:{}",
+                        serde_json::to_string(key)?,
+                        nested_text(value.get())?
+                    ))
+                })
+                .collect::<Result<Vec<String>, serde_json::Error>>()?;
+            Ok(format!("{{{}}}", fields.join(",")))
+        }
+        Some(b'[') => {
+            let items: Vec<Box<RawValue>> = serde_json::from_str(text)?;
+            let items = items
+                .iter()
+                .map(|item| nested_text(item.get()))
+                .collect::<Result<Vec<String>, serde_json::Error>>()?;
+            Ok(format!("[{}]", items.join(",")))
+        }
+        _ => Ok(text.trim().to_owned()),
+    }
 }

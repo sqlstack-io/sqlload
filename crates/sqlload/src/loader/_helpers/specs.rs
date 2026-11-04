@@ -148,9 +148,14 @@ pub(crate) fn build_spec(
     if !problems.is_empty() {
         return Err(problems);
     }
-    let name = overrides.name.clone().unwrap_or_else(|| {
-        destination_name(context.source.table_name_template(), context.name, table)
-    });
+    let template = overrides
+        .name
+        .as_deref()
+        .unwrap_or(context.source.table_name_template());
+    let name = match (&overrides.name, template.contains('{')) {
+        (Some(name), false) => name.clone(),
+        _ => destination_name(template, context.name, table),
+    };
     Ok(TableSpec {
         source_name: context.name.to_owned(),
         source_table: table.clone(),

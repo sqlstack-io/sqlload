@@ -24,3 +24,6 @@ pub const UNKNOWN_CURSOR_TYPE: &str = "unknown";
 
 /// The offset suffix of cursor bounds in UTC, as `cursor_text` writes them.
 pub const UTC_OFFSET_SUFFIX: &str = "+00";
+
+/// The remark for a Python table's first load that yielded no rows and declares no columns, so nothing was created.
+pub const NO_DATA_NOTE: &str = "(table created on first data)";

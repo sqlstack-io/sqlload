@@ -12,7 +12,7 @@ use crate::project::_helpers::serde_values::{
 };
 use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
-    DEFAULT_PYTHON_TABLE_NAME, DEFAULT_TABLE_NAME,
+    DEFAULT_TABLE_NAME,
 };
 
 /// A loader project: `sqlload.toml` with `[connections]`, `[targets]` and `[sources]`.
@@ -209,13 +209,12 @@ impl SourceConfig {
         }
     }
 
-    /// The destination table name template: as set, or `{source}__{table}` for databases and `{source}` for files.
+    /// The destination table name template: as set, or `{source}__{table}` for databases and Python sources and `{source}` for files.
     pub fn table_name_template(&self) -> &str {
         match (&self.table_name, self.kind) {
             (Some(template), _) => template,
-            (None, SourceKind::Postgres) => DEFAULT_TABLE_NAME,
+            (None, SourceKind::Postgres | SourceKind::Python) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
-            (None, SourceKind::Python) => DEFAULT_PYTHON_TABLE_NAME,
         }
     }
 }
@@ -281,7 +280,7 @@ pub struct TableOverride {
     pub settings: TableSettings,
     #[serde(default)]
     pub description: Option<String>,
-    /// The destination table name, overriding the source's `table_name`.
+    /// The destination table name, overriding the source's `table_name`; `{source}`, `{schema}` and `{table}` are filled in when it has them.
     #[serde(default)]
     pub name: Option<String>,
     /// The folder template in a files target, overriding the source's `destination_path`.

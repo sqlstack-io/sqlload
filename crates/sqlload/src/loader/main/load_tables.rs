@@ -13,9 +13,9 @@ pub async fn load_tables(run: &LoadRun<'_>, plan: &ProjectPlan) -> Vec<TableOutc
         .filter(|table| table.schema.blocked.is_none())
     {
         let outcome = match load_one(run, table).await {
-            Ok((name, rows)) => TableOutcome {
+            Ok((name, loaded)) => TableOutcome {
                 table: name,
-                loaded: Ok(rows),
+                loaded: Ok(loaded),
             },
             Err(error) => TableOutcome {
                 table: display_name(&table.spec.destination, table.spec.warehouse),

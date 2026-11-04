@@ -61,12 +61,13 @@ pub(crate) fn records_batch(
         .collect();
     let mut values: Vec<Vec<Option<String>>> = vec![vec![None; records.len()]; columns.len()];
     for (row, record) in records.iter().enumerate() {
-        for (key, value, nested) in &record.fields {
+        for field in &record.fields {
+            let (key, value, nested) = field;
             let Some(position) = index.get(key.as_str()) else {
                 checks.check_name("key", key, record.line)?;
                 continue;
             };
-            check_value(checks, key, value, record.line)?;
+            check_value(checks, field, record.line)?;
             values[*position][row] = match nested {
                 Some(text) => Some(text.clone()),
                 None => value_text(value, &columns[*position].1),
@@ -88,10 +89,15 @@ pub(crate) fn records_batch(
 }
 
 /// An error when `value` of an inferred column is not what sampling would have inferred (a JSON string in an int column, say).
-fn check_value(checks: &ColumnChecks, key: &str, value: &Value, line: u64) -> Result<(), String> {
+fn check_value(
+    checks: &ColumnChecks,
+    (key, value, nested): &(String, Value, Option<String>),
+    line: u64,
+) -> Result<(), String> {
     match checks.inferred_type(key) {
         Some(column_type) if !value_fits(column_type, json_value_type(value)) => {
-            Err(misfit(line, key, &value.to_string(), column_type))
+            let shown = nested.clone().unwrap_or_else(|| value.to_string());
+            Err(misfit(line, key, &shown, column_type))
         }
         _ => Ok(()),
     }

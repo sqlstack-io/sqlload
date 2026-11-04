@@ -18,8 +18,10 @@ pub struct TableRead {
     pub table: String,
     /// The source's connection name, if it names one.
     pub connection: Option<String>,
-    /// Every connection's resolved settings, by name (secrets included: the table function needs them).
+    /// The resolved settings of every connection no target writes to (and the source's own), by name; secrets included, as the table function needs them.
     pub connections: serde_json::Map<String, serde_json::Value>,
+    /// Connections left out of `connections` because targets write to them.
+    pub withheld: Vec<String>,
     pub cursor: Option<CursorRead>,
     pub is_reload: bool,
 }

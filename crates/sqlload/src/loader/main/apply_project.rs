@@ -9,7 +9,7 @@ use crate::loader::models::{Destination, ProjectPlan};
 use crate::schema_plan::models::TableAction;
 use crate::write_sql::main::display_name::display_name;
 
-/// Apply every unblocked table's schema changes; one line per table changed (files targets need none: folders appear with their files; Python tables without declared columns are created by their first load).
+/// Apply every unblocked table's schema changes; one line per table changed (files targets need none: folders appear with their files; Python tables are created and changed by their loads, once their data shows the columns).
 pub async fn apply_project(
     plan: &ProjectPlan,
     destinations: &BTreeMap<String, Destination>,
@@ -18,7 +18,7 @@ pub async fn apply_project(
     for table in plan
         .tables
         .iter()
-        .filter(|table| table.schema.blocked.is_none())
+        .filter(|table| table.schema.blocked.is_none() && table.spec.python.is_none())
     {
         let spec = &table.spec;
         let Some(statements) = schema_statements(table) else {

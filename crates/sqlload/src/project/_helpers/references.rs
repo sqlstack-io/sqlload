@@ -130,7 +130,13 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
             problems.extend(encoding_problems(place, source));
         }
-        SourceKind::Python => {}
+        SourceKind::Python => {
+            if source.tables.len() > 1 && !template.contains(TABLE_PLACEHOLDER) {
+                problems.push(format!(
+                    "{place} table_name {template:?} must contain {TABLE_PLACEHOLDER}, or every table gets the same name"
+                ));
+            }
+        }
     }
     problems
 }

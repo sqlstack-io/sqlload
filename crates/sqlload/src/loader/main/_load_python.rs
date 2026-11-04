@@ -1,28 +1,54 @@
 //! Read a Python table for its load: call its table function, infer the columns from what it yields, plan them against the live table and apply the schema changes.
 
 use crate::loader::_helpers::destination::execute;
-use crate::loader::_helpers::python::{cursor_type_name, inferred_table};
+use crate::loader::_helpers::python::{
+    YieldedData, change_lines, cursor_type_name, declared_problems, inferred_table,
+};
 use crate::loader::_helpers::python::{spill_batches, start_read};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::table_plan::{plan_table, schema_statements};
+use crate::loader::constants::NO_DATA_NOTE;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{PythonLoad, SourceReader, SpilledBatches, TablePlan};
+use crate::loader::models::{PythonLoad, PythonRead, SourceReader, SpilledBatches, TablePlan};
 use crate::python_sources::models::{CursorRead, TableRead};
 
-/// The table's data, read and spilled, and its plan for the columns the data has, with the schema changes applied; a failure leaves the destination untouched.
+/// The table's data, read and spilled, and its plan for the columns the data has, with the schema changes applied (and listed); a failure leaves the destination untouched. A first load without rows or declared columns creates nothing.
 pub(in crate::loader) async fn read_python_table(
     load: &PythonLoad<'_>,
-) -> Result<(SourceReader, TablePlan), LoaderError> {
+) -> Result<PythonRead, LoaderError> {
     let stream = start_read(load.host.clone(), table_read(load)).await?;
     let spilled = spill_batches(stream).await?;
-    let table = replan(load, &spilled).await?;
-    if let Some(statements) = schema_statements(&table) {
-        execute(load.destination, statements).await?;
+    let declared = load
+        .table
+        .spec
+        .python
+        .as_ref()
+        .map_or(0, |python| python.declared.len());
+    if spilled.rows == 0 && load.table.live.is_none() && declared == 0 {
+        return Ok(PythonRead {
+            reader: None,
+            table: load.table.clone(),
+            changes: Vec::new(),
+            note: Some(NO_DATA_NOTE.to_owned()),
+        });
     }
-    Ok((SourceReader::Batches(spilled), table))
+    let table = replan(load, &spilled).await?;
+    let changes = match schema_statements(&table) {
+        Some(statements) => {
+            execute(load.destination, statements).await?;
+            change_lines(&table)
+        }
+        None => Vec::new(),
+    };
+    Ok(PythonRead {
+        reader: Some(SourceReader::Batches(spilled)),
+        table,
+        changes,
+        note: None,
+    })
 }
 
-/// What the table function is called with.
+/// What the table function is called with; connections that targets write to are withheld, except the source's own.
 fn table_read(load: &PythonLoad<'_>) -> TableRead {
     let table = load.table;
     let spec = &table.spec;
@@ -32,6 +58,15 @@ fn table_read(load: &PythonLoad<'_>) -> TableRead {
         .get(&spec.source_name)
         .map(|source| source.connection.clone())
         .filter(|name| !name.is_empty());
+    let withheld: Vec<String> = load
+        .project
+        .targets
+        .values()
+        .map(|target| target.connection.clone())
+        .filter(|name| Some(name) != connection.as_ref())
+        .collect();
+    let mut connections = load.project.connection_settings.clone();
+    connections.retain(|name, _| !withheld.contains(name));
     let cursor = table.window.as_ref().map(|window| CursorRead {
         column: window.column.clone(),
         column_type: cursor_type_name(table, &window.column),
@@ -43,7 +78,8 @@ fn table_read(load: &PythonLoad<'_>) -> TableRead {
         source: spec.source_name.clone(),
         table: spec.source_table.name.clone(),
         connection,
-        connections: load.project.connection_settings.clone(),
+        connections,
+        withheld,
         cursor,
         is_reload: load.options.reload,
     }
@@ -53,7 +89,26 @@ fn table_read(load: &PythonLoad<'_>) -> TableRead {
 async fn replan(load: &PythonLoad<'_>, spilled: &SpilledBatches) -> Result<TablePlan, LoaderError> {
     let planned = load.table;
     let spec = &planned.spec;
-    let table = inferred_table(&spec.source_table, &spilled.schema, planned.live.as_deref());
+    let data = YieldedData {
+        schema: &spilled.schema,
+        null_columns: &spilled.null_columns,
+        rows: spilled.rows,
+    };
+    let problems = declared_problems(spec, &data);
+    if !problems.is_empty() {
+        return Err(LoaderError::Invalid(problems.join("; ")));
+    }
+    let declared = spec
+        .python
+        .as_ref()
+        .map(|python| python.declared.clone())
+        .unwrap_or_default();
+    let table = inferred_table(
+        &spec.source_table,
+        &declared,
+        &data,
+        planned.live.as_deref(),
+    );
     let mut project = load.project.clone();
     if let Some(source) = project.sources.get_mut(&spec.source_name) {
         source.tables.retain(|name, _| *name == table.name);

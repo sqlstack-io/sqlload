@@ -218,7 +218,25 @@ pub struct LoadRun<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableOutcome {
     pub table: String,
-    pub loaded: Result<u64, String>,
+    pub loaded: Result<TableLoaded, String>,
+}
+
+/// What a table's load did: rows written, schema changes made on the way (Python tables), and a remark for the `loaded` line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TableLoaded {
+    pub rows: u64,
+    /// `created ...` and `altered ...` lines.
+    pub changes: Vec<String>,
+    pub note: Option<String>,
+}
+
+/// A Python table read for its load: its data (`None` when there is nothing to write), its plan for that data, the schema changes made, and a remark.
+#[derive(Debug)]
+pub struct PythonRead {
+    pub reader: Option<SourceReader>,
+    pub table: TablePlan,
+    pub changes: Vec<String>,
+    pub note: Option<String>,
 }
 
 /// A Python table's yielded data, held in temporary Arrow IPC files until its schema is known.
@@ -229,6 +247,8 @@ pub struct SpilledBatches {
     pub chunks: Vec<std::path::PathBuf>,
     /// The schema merged from every batch, with all-NULL columns as text.
     pub schema: arrow_schema::SchemaRef,
+    /// The columns that only ever held NULL, which take the live or declared type.
+    pub null_columns: std::collections::BTreeSet<String>,
     pub rows: u64,
 }
 
@@ -253,6 +273,7 @@ pub struct StagingSession {
 }
 
 /// A connected source, ready to read.
+#[derive(Debug)]
 pub enum SourceReader {
     Postgres(tokio_postgres::Client),
     Files(OpenFolder),
