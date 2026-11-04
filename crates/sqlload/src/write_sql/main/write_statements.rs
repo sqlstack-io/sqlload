@@ -1,14 +1,15 @@
 //! The statements that move staged rows into the table.
 
 use crate::column_types::main::warehouse_type::warehouse_type;
-use crate::column_types::models::ColumnType;
+use crate::column_types::models::{ColumnType, Warehouse};
 use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::write_sql::_helpers::identifiers::{from_staging, literal, qualified, quote};
+use crate::write_sql::_helpers::promote::{merge_statement, swap_statements};
 use crate::write_sql::_helpers::recreate::recreate_statements;
 use crate::write_sql::models::{TableName, WriteMode, WriteStatementsRequest};
 
-/// One transaction that applies `request.mode` from `staging`; the caller drops `staging` afterwards.
+/// Atomic statements applying `request.mode` from `staging`; the caller drops `staging` and its swap table.
 pub fn write_statements(request: &WriteStatementsRequest<'_>, staging: &TableName) -> Vec<String> {
     let warehouse = request.warehouse;
     let target = qualified(request.table, warehouse);
@@ -23,11 +24,12 @@ pub fn write_statements(request: &WriteStatementsRequest<'_>, staging: &TableNam
         .iter()
         .map(|column| value_expression(request, column))
         .collect();
-    let insert = format!(
-        "INSERT INTO {target} ({}) SELECT {} FROM {source}",
+    let insert_from = format!(
+        "({}) SELECT {} FROM {source}",
         names.join(", "),
         values.join(", ")
     );
+    let insert = format!("INSERT INTO {target} {insert_from}");
     let column_type = |name: &str| {
         request
             .columns
@@ -37,18 +39,14 @@ pub fn write_statements(request: &WriteStatementsRequest<'_>, staging: &TableNam
     };
     let delete = match request.mode {
         WriteMode::Recreate => return recreate_statements(request, &source, &values),
-        WriteMode::Append => None,
-        WriteMode::Replace => Some(format!("DELETE FROM {target}")),
         WriteMode::Merge { unique_key } => {
-            let key: Vec<String> = unique_key
-                .iter()
-                .map(|name| quote(name, warehouse))
-                .collect();
-            let key = key.join(", ");
-            Some(format!(
-                "DELETE FROM {target} WHERE ({key}) IN (SELECT {key} FROM {source})"
-            ))
+            return vec![merge_statement(request, unique_key, &source, &values)];
         }
+        WriteMode::Replace if warehouse == Warehouse::Snowflake => {
+            return swap_statements(request, staging, &insert_from);
+        }
+        WriteMode::Replace => Some(format!("DELETE FROM {target}")),
+        WriteMode::Append => None,
         WriteMode::DeleteInsert {
             cursor_column,
             from,
