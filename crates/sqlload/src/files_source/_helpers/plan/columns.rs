@@ -2,6 +2,7 @@ use arrow_schema::SchemaRef;
 
 use crate::column_types::main::portable_type::portable_type;
 use crate::column_types::models::ColumnType;
+use crate::files_source::constants::LOADER_COLUMNS;
 use crate::files_source::models::FileColumn;
 
 /// A column seen in sampled files: its type, or `None` while every sampled value was NULL.
@@ -9,6 +10,24 @@ use crate::files_source::models::FileColumn;
 pub(crate) struct SampledColumn {
     pub(crate) name: String,
     pub(crate) column_type: Option<Result<ColumnType, String>>,
+}
+
+/// Whether `name` is one of the loader's own columns, ignoring case.
+pub(crate) fn loader_column(name: &str) -> bool {
+    LOADER_COLUMNS
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(name))
+}
+
+/// `found` without the loader's own columns, and the names of those dropped (as the file spells them).
+pub(crate) fn drop_loader_columns(found: Vec<SampledColumn>) -> (Vec<SampledColumn>, Vec<String>) {
+    let (dropped, kept): (Vec<SampledColumn>, Vec<SampledColumn>) = found
+        .into_iter()
+        .partition(|column| loader_column(&column.name));
+    (
+        kept,
+        dropped.into_iter().map(|column| column.name).collect(),
+    )
 }
 
 /// The columns of a Parquet schema.

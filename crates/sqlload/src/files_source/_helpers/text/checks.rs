@@ -4,6 +4,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
+use crate::files_source::_helpers::plan::columns::loader_column;
 use crate::files_source::models::FilesRead;
 
 /// What a JSON or CSV read checks: that every key or header is a source column, and that inferred columns' values follow the inference rules.
@@ -32,9 +33,10 @@ impl ColumnChecks {
         })
     }
 
-    /// An error for a key (`what` is `key` or `header`) the source has no column for and `exclude_columns` does not drop.
+    /// An error for a key (`what` is `key` or `header`) the source has no column for and neither `exclude_columns` nor the loader-column rule drops.
     pub(crate) fn check_name(&self, what: &str, name: &str, line: u64) -> Result<(), String> {
-        let dropped = self.exclude.is_match(name) && !self.allow.is_match(name);
+        let dropped =
+            (self.exclude.is_match(name) && !self.allow.is_match(name)) || loader_column(name);
         match self.known.contains(name) || dropped {
             true => Ok(()),
             false => Err(format!(

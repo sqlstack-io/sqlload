@@ -34,6 +34,8 @@ pub struct FilesTable {
     pub problems: Vec<String>,
     /// Listed files skipped because their names do not fit the format and compression.
     pub skipped: usize,
+    /// The loader's own columns found in the files (as they spell them), dropped for this load's.
+    pub dropped: Vec<String>,
 }
 
 /// Which files to read and the columns to produce, in table order.

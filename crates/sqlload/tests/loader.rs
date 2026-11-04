@@ -6,6 +6,8 @@ mod helpers;
 mod test_debug_project;
 #[path = "loader/test_file_store.rs"]
 mod test_file_store;
+#[path = "loader/test_files_round_trip.rs"]
+mod test_files_round_trip;
 #[path = "loader/test_files_to_duckdb.rs"]
 mod test_files_to_duckdb;
 #[path = "loader/test_loader_edge_cases.rs"]

@@ -197,3 +197,16 @@ pub(crate) struct WrittenRun<'a> {
     /// Text the rendered plan must contain (empty matches any).
     pub(crate) expected_plan: &'a str,
 }
+
+/// Postgres into a files target, then those files through a files source into DuckDB, loaded twice.
+pub(crate) struct MetadataRoundTripTestCase {
+    pub(crate) description: &'static str,
+    /// SQL creating `public.orders`.
+    pub(crate) setup: &'static str,
+    /// SQL run before the second load.
+    pub(crate) change: &'static str,
+    /// Text the files source's plan shows on the second load.
+    pub(crate) expected_plan: &'static str,
+    /// The DuckDB table's columns, rows, distinct load ids, and rows not stamped by the second load.
+    pub(crate) expected_check: &'static str,
+}
