@@ -15,6 +15,7 @@ pub mod duckdb_destination;
 pub mod envelope;
 pub mod exporter;
 pub mod file_format;
+pub mod file_store;
 pub mod http;
 pub mod kafka;
 pub mod loader;

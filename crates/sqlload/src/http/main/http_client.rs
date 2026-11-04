@@ -4,11 +4,12 @@ use std::time::Duration;
 
 use crate::http::_helpers::counting::CountingLayer;
 use crate::http::errors::ApiError;
+use crate::http::main::install_tls_provider::install_tls_provider;
 use crate::http::models::ConnectionCounter;
 
 /// A pooled HTTP/2-capable client whose new connections are counted in `counter`.
 pub fn build_http_client(counter: &ConnectionCounter) -> Result<reqwest::Client, ApiError> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    install_tls_provider();
     reqwest::Client::builder()
         .connector_layer(CountingLayer(counter.clone()))
         .pool_idle_timeout(Duration::from_secs(90))

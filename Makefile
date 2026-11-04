@@ -22,10 +22,10 @@ test-unit:
 test-containers:
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests --test exporter --quiet -- --test-threads=2
 
-# Local only (not in CI): the loader's Postgres and DuckDB tests, which need the bundled DuckDB.
+# Local only (not in CI): the loader's Postgres, SeaweedFS (S3) and DuckDB tests, which need the bundled DuckDB.
 test-loader:
 	cargo test -p sqlload --features duckdb --lib --quiet
-	cargo test -p sqlload --features container-tests,duckdb --test loader --quiet -- --test-threads=2
+	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,duckdb --test loader --quiet -- --test-threads=2
 
 test: test-unit test-containers test-loader
 

@@ -126,9 +126,12 @@ pub(crate) fn source_target(
             (Warehouse::Snowflake, Some(database.clone()))
         }
         ConnectionConfig::DuckDb { .. } => (Warehouse::DuckDb, None),
-        ConnectionConfig::Postgres { .. } => {
+        ConnectionConfig::Postgres { .. }
+        | ConnectionConfig::S3 { .. }
+        | ConnectionConfig::Filesystem { .. } => {
             return Err(format!(
-                "target {name:?} uses a Postgres connection, which is not a destination yet"
+                "target {name:?} uses a {} connection, which is not a destination yet",
+                connection.kind()
             ));
         }
     };

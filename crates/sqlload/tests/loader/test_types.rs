@@ -41,3 +41,9 @@ pub(crate) struct ScenarioTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+pub(crate) struct FileStoreTestCase {
+    pub(crate) description: &'static str,
+    /// `s3` (SeaweedFS) or `filesystem` (a temporary directory).
+    pub(crate) store: &'static str,
+}

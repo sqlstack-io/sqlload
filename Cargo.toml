@@ -32,6 +32,7 @@ globset = "0.4"
 hex = "0.4"
 hmac = "0.12"
 humantime = "2"
+object_store = { version = "0.14", default-features = false, features = ["aws-base", "reqwest", "ring", "fs"] }
 jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
 parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 prometheus-client = "0.25"

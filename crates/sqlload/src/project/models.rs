@@ -54,6 +54,17 @@ pub enum ConnectionConfig {
         password: Option<crate::auth::models::Secret>,
         database: String,
     },
+    /// An S3 bucket; credentials come from the environment, profile or instance role.
+    S3 {
+        bucket: String,
+        #[serde(default)]
+        region: Option<String>,
+        /// A custom endpoint such as MinIO.
+        #[serde(default)]
+        endpoint: Option<String>,
+    },
+    /// A directory on the machine SQLLoad runs on.
+    Filesystem { root: String },
     #[serde(rename = "duckdb")]
     DuckDb {
         /// The database file; `:memory:` for an in-memory database.
@@ -68,6 +79,8 @@ impl ConnectionConfig {
             Self::Snowflake { .. } => "snowflake",
             Self::Postgres { .. } => "postgres",
             Self::DuckDb { .. } => "duckdb",
+            Self::S3 { .. } => "s3",
+            Self::Filesystem { .. } => "filesystem",
         }
     }
 }

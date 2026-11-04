@@ -51,6 +51,7 @@ hex.workspace = true
 hmac.workspace = true
 humantime.workspace = true
 jsonwebtoken.workspace = true
+object_store.workspace = true
 parquet.workspace = true
 prometheus-client.workspace = true
 regex.workspace = true
@@ -74,6 +75,7 @@ tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true
 
 [dev-dependencies]
+bytes.workspace = true
 arrow-array = { workspace = true, features = ["chrono-tz"] }
 arrow-cast.workspace = true
 serde_json.workspace = true
