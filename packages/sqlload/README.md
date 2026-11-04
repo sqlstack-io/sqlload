@@ -28,3 +28,23 @@ Both this package and `sqlload-cli` install a `sqlload` command. Remove the old 
 ```sh
 pip uninstall sqlload-cli
 ```
+
+## Python sources
+
+List the folders holding them in `sqlload.toml` (`python_paths = ["sources"]`); every
+`sqlload.source` and `@sqlload.table` found there joins `plan`, `apply` and `load`:
+
+```python
+import sqlload as sl
+
+shop = sl.source("shop", connection="shop", write_strategy="merge")
+
+
+@shop.table(unique_key="order_id", cursor_column="updated_at", lookback="1h")
+def shop_orders(ctx: sl.Context):
+    yield from fetch_orders(ctx.connection["base_url"], updated_after=ctx.cursor_value)
+```
+
+Columns are inferred from what a table yields (declare types with `columns={...}`). Rows outside
+the cursor window are skipped, so a function that ignores `ctx.cursor_value` still loads
+correctly.
