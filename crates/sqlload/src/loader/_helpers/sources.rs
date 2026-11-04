@@ -28,6 +28,7 @@ use crate::project::models::{
     ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride, WriteStrategy,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
+use crate::similar_names::main::close_name::close_name;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 use crate::write_sql::main::loaded_files_query::loaded_files_query;
@@ -130,7 +131,7 @@ pub(crate) async fn discover_files_table(
         .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
         .collect();
     let overrides = source.tables.get(source_name);
-    let pinned_only = pinned_unsampled(overrides, &table, &added, encoding.format);
+    let pinned_only = pinned_unsampled(overrides, &table, &added, encoding.format)?;
     let notes: Vec<String> = pinned_only
         .iter()
         .map(|name| {
@@ -204,27 +205,35 @@ pub(crate) async fn discover_files_table(
     ))
 }
 
-/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a `mask` key alone never adds a column, so a misspelt mask stays an error.
+/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column.
 fn pinned_unsampled(
     overrides: Option<&TableOverride>,
     table: &FilesTable,
     added: &[&str],
     format: SourceFormat,
-) -> Vec<String> {
+) -> Result<Vec<String>, LoaderError> {
     let Some(overrides) = overrides.filter(|_| format != SourceFormat::Parquet) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let sampled: Vec<&str> = table
         .columns
         .iter()
         .map(|column| column.name.as_str())
         .collect();
-    overrides
-        .columns
-        .keys()
-        .filter(|name| !added.contains(&name.as_str()) && !sampled.contains(&name.as_str()))
-        .cloned()
-        .collect()
+    let mut unsampled: Vec<String> = Vec::new();
+    for name in overrides.columns.keys() {
+        if added.contains(&name.as_str()) || sampled.contains(&name.as_str()) {
+            continue;
+        }
+        let known = sampled.iter().chain(added).copied();
+        if let Some(close) = close_name(name, known) {
+            return Err(LoaderError::Invalid(format!(
+                "pinned column {name} was not seen in the sampled files; did you mean {close:?}? (pin a name exactly as it appears in the files)"
+            )));
+        }
+        unsampled.push(name.clone());
+    }
+    Ok(unsampled)
 }
 
 /// The read columns of a files source: the file's types, or the pinned ones (converted while reading).

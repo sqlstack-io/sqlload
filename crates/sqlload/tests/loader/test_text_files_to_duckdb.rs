@@ -80,8 +80,15 @@ const CSV_CHECK: &str = "SELECT count(*) || ',' || string_agg(name, '|' ORDER BY
 /// A key the 10,000 sampled lines never have.
 const LATE_KEY: TextFile = TextFile {
     key: "part-0.ndjson.gz",
-    contents: "{\"id\":10000,\"late\":\"x\"}\n",
+    contents: "{\"id\":10000,\"coupon_code\":\"x\"}\n",
     encode: after_sample,
+};
+
+/// One record with an `email` key.
+const EMAIL: TextFile = TextFile {
+    key: "part-0.ndjson",
+    contents: "{\"id\":1,\"email\":\"a@example.com\"}\n",
+    encode: plain,
 };
 
 /// `0` rows.
@@ -177,7 +184,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n",
             runs: &[TextFilesRun {
                 files: &[LATE_KEY],
-                expected_error: "part-0.ndjson.gz: line 10001: key late is not in the sampled schema; pin it in columns or add it to exclude_columns",
+                expected_error: "part-0.ndjson.gz: line 10001: key coupon_code is not in the sampled schema; pin it in columns or add it to exclude_columns",
                 expected_plan: "",
             }],
             check_query: NO_ROWS,
@@ -186,7 +193,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
         TextFilesScenarioTestCase {
             description: "a key outside the sample that exclude_columns matches is dropped",
             store: local_store,
-            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\nexclude_columns = [\"late\"]\n",
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\nexclude_columns = [\"coupon_code\"]\n",
             runs: &[TextFilesRun {
                 files: &[LATE_KEY],
                 expected_error: "",
@@ -198,26 +205,50 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
         TextFilesScenarioTestCase {
             description: "a key outside the sample can be pinned",
             store: local_store,
-            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { late = \"text\" }\n",
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { coupon_code = \"text\" }\n",
             runs: &[TextFilesRun {
                 files: &[LATE_KEY],
                 expected_error: "",
-                expected_plan: "note    pinned column late was not seen in the sampled files (check the name)",
+                expected_plan: "note    pinned column coupon_code was not seen in the sampled files (check the name)",
             }],
-            check_query: "SELECT count(*) || ',' || count(late) || ',' || max(late) FROM raw.scores",
+            check_query: "SELECT count(*) || ',' || count(coupon_code) || ',' || max(coupon_code) FROM raw.scores",
             expected_result: "10001,1,x",
         },
         TextFilesScenarioTestCase {
             description: "a key outside the sample that is pinned and masked loads masked",
             store: local_store,
-            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { late = \"text\" }\nmask = { late = \"hash\" }\n",
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { coupon_code = \"text\" }\nmask = { coupon_code = \"hash\" }\n",
             runs: &[TextFilesRun {
                 files: &[LATE_KEY],
                 expected_error: "",
-                expected_plan: "note    pinned column late was not seen in the sampled files",
+                expected_plan: "note    pinned column coupon_code was not seen in the sampled files",
             }],
-            check_query: "SELECT count(late) || ',' || (max(late) = sha256('x')) FROM raw.scores",
+            check_query: "SELECT count(coupon_code) || ',' || (max(coupon_code) = sha256('x')) FROM raw.scores",
             expected_result: "1,true",
+        },
+        TextFilesScenarioTestCase {
+            description: "a pinned and masked typo of a sampled key fails the plan instead of loading the real key unmasked",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { emial = \"text\" }\nmask = { emial = \"hash\" }\n",
+            runs: &[TextFilesRun {
+                files: &[EMAIL],
+                expected_error: "pinned column emial was not seen in the sampled files; did you mean \"email\"? (pin a name exactly as it appears in the files)",
+                expected_plan: "",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        TextFilesScenarioTestCase {
+            description: "a pinned name differing from a sampled key only in case fails the plan",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { Email = \"text\" }\n",
+            runs: &[TextFilesRun {
+                files: &[EMAIL],
+                expected_error: "pinned column Email was not seen in the sampled files; did you mean \"email\"?",
+                expected_plan: "",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
         },
         TextFilesScenarioTestCase {
             description: "a misspelt mask on a JSON source fails the plan with the nearest name, never adding a column",
