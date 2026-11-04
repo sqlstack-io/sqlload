@@ -69,3 +69,8 @@ pub(crate) fn from_staging(name: &str, column_type: &ColumnType, warehouse: Ware
         _ => column,
     }
 }
+
+/// A live column name, quoted exactly as the warehouse reports it.
+pub(crate) fn quote_live(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}

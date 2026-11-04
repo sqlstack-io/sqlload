@@ -2,7 +2,8 @@
 
 use crate::column_types::models::Warehouse;
 use crate::schema_plan::models::{ColumnChange, LiveColumn};
-use crate::write_sql::_helpers::identifiers::{qualified, quote};
+use crate::write_sql::_helpers::identifiers::{qualified, quote, quote_live};
+use crate::write_sql::_helpers::rebuild::rebuild_statement;
 use crate::write_sql::models::TableName;
 
 /// The statements applying `changes` to `table`, whose current columns are `live`.
@@ -24,7 +25,7 @@ pub fn alter_statements(
             ColumnChange::Widen {
                 column, sql_type, ..
             } => {
-                let column = live_quote(column);
+                let column = quote_live(column);
                 statements.push(match warehouse {
                     Warehouse::Snowflake => {
                         format!(
@@ -40,42 +41,7 @@ pub fn alter_statements(
         }
     }
     if !rebuilt.is_empty() {
-        statements.insert(0, rebuild(&target, live, &rebuilt));
+        statements.insert(0, rebuild_statement(&target, live, &rebuilt));
     }
     statements
-}
-
-/// A live column name, quoted exactly as the warehouse reports it.
-fn live_quote(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-/// A select-list entry keeping `column`, cast when it is one of `rebuilt`.
-fn rebuilt_column(column: &LiveColumn, rebuilt: &[(&str, &str)]) -> String {
-    let name = live_quote(&column.name);
-    match rebuilt.iter().find(|(rebuilt, _)| *rebuilt == column.name) {
-        Some((_, sql_type)) => format!("CAST({name} AS {sql_type}) AS {name}"),
-        None => name,
-    }
-}
-
-/// Rewrite the table with some columns cast to wider types, keeping column order and grants (Snowflake).
-fn rebuild(target: &str, live: &[LiveColumn], rebuilt: &[(&str, &str)]) -> String {
-    let select: Vec<String> = live
-        .iter()
-        .map(|column| {
-            let name = live_quote(&column.name);
-            rebuilt
-                .iter()
-                .find(|(rebuilt, _)| *rebuilt == column.name)
-                .map_or_else(
-                    || name.clone(),
-                    |(_, sql_type)| format!("CAST({name} AS {sql_type}) AS {name}"),
-                )
-        })
-        .collect();
-    format!(
-        "CREATE OR REPLACE TABLE {target} COPY GRANTS AS SELECT {} FROM {target}",
-        select.join(", ")
-    )
 }
