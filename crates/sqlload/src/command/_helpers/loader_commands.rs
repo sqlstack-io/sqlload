@@ -1,6 +1,7 @@
 use crate::command::models::{Command, LoaderArgs};
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
+use crate::loader::main::debug_project::debug_project;
 use crate::loader::main::load_project::load_project;
 use crate::loader::main::plan_project::plan_project;
 use crate::loader::main::render_plan::render_plan;
@@ -61,6 +62,13 @@ fn timestamp_problem(text: &str) -> Option<String> {
 /// Run a loader command against the project in `text`.
 pub(crate) async fn run_loader(text: &str, command: Command) -> Result<Vec<String>, String> {
     let project = parse_project(text, &environment_variable).map_err(|error| error.to_string())?;
+    if let Command::Debug { no_connection } = command {
+        let (lines, ok) = debug_project(&project, !no_connection).await;
+        return match ok {
+            true => Ok(lines),
+            false => Err(lines.join("\n")),
+        };
+    }
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;

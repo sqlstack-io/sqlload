@@ -26,8 +26,13 @@ pub struct Cli {
 /// The subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Validate the configuration and connect to Kafka and Snowflake.
-    Check,
+    /// Validate the configuration and test every connection (`check` is an old name for it).
+    #[command(alias = "check")]
+    Debug {
+        /// Only validate the configuration; connect to nothing.
+        #[arg(long)]
+        no_connection: bool,
+    },
     /// Show what `apply` and `load` would do (exporter: each topic's table and objects).
     Plan(LoaderArgs),
     /// Print `topic<TAB>table<TAB>stream<TAB>group` per topic (`-` when skipped), without Snowflake.

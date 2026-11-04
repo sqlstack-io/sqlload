@@ -139,3 +139,13 @@ pub(crate) struct RoundTripTestCase {
     /// The partition values the files source reads, sorted.
     pub(crate) expected_values: &'static [&'static str],
 }
+
+pub(crate) struct DebugProjectTestCase {
+    pub(crate) description: &'static str,
+    /// TOML added to the Postgres + DuckDB project (`duckdb_project`), given the Postgres port and a directory.
+    pub(crate) extra: fn(u16, &std::path::Path) -> String,
+    pub(crate) connect: bool,
+    /// Each expected line's start, in order.
+    pub(crate) expected_lines: &'static [&'static str],
+    pub(crate) expected_ok: bool,
+}

@@ -1,3 +1,6 @@
+pub(in crate::loader) mod _check_source;
+pub(in crate::loader) mod _check_target;
+pub(in crate::loader) mod _connect_target;
 pub(in crate::loader) mod _files_context;
 pub(in crate::loader) mod _files_repair;
 pub(in crate::loader) mod _files_schema;
@@ -7,6 +10,7 @@ pub(in crate::loader) mod _plan_files;
 pub(in crate::loader) mod _table_folder;
 pub mod apply_project;
 pub mod connect_targets;
+pub mod debug_project;
 pub mod load_project;
 pub mod plan_project;
 pub mod render_plan;
