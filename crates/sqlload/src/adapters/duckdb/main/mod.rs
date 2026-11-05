@@ -1,8 +1,8 @@
-pub mod append_batch;
-pub mod describe_table;
-pub mod execute_statements;
+pub(in crate::adapters) mod _append_batch;
+pub(in crate::adapters) mod _describe_table;
+pub(in crate::adapters) mod _execute_statements;
+pub(in crate::adapters) mod _own_connection;
+pub(in crate::adapters) mod _query_text;
+pub(in crate::adapters) mod _query_texts;
+pub(in crate::adapters) mod _table_shape;
 pub mod open_duckdb;
-pub mod own_connection;
-pub mod query_text;
-pub mod query_texts;
-pub mod table_shape;

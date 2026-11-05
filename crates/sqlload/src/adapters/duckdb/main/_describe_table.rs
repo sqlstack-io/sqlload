@@ -10,7 +10,7 @@ use crate::column_types::models::LiveColumnType;
 use crate::schema_plan::models::LiveColumn;
 
 /// The table's columns in order, or `None` if it does not exist.
-pub async fn describe_table(
+pub(in crate::adapters) async fn describe_table(
     destination: &DuckDbDestination,
     table: &TableName,
 ) -> Result<Option<Vec<LiveColumn>>, DuckDbError> {

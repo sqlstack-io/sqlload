@@ -1,4 +1,4 @@
-use crate::adapters::snowflake::main::direct_problem::direct_problem;
+use crate::adapters::snowflake::main::copy::direct_problem::direct_problem;
 use crate::adapters::snowflake::models::{CopyValue, DirectCheck};
 use crate::adapters::snowflake::tests::helpers::{column, data_file, lake, order_columns, stage};
 use crate::adapters::snowflake::tests::test_types::DirectProblemTestCase;

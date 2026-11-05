@@ -10,7 +10,9 @@ use crate::file_store::main::open_folder::open_folder;
 use crate::store_paths::models::Location;
 
 /// Delete every load folder under `_sqlload/` below the stage URL whose files are all older than a day; returns how many, with SQLLoad's own S3 client.
-pub async fn remove_stale_external(stage: &ExternalStage) -> Result<usize, String> {
+pub(in crate::adapters) async fn remove_stale_external(
+    stage: &ExternalStage,
+) -> Result<usize, String> {
     let folder = open_folder(&Location {
         store: stage.location.store.clone(),
         prefix: format!("{}{EXTERNAL_STAGE_FOLDER}/", stage.location.prefix),

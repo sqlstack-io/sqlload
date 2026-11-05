@@ -7,12 +7,12 @@ use crate::adapters::snowflake::_helpers::create_stage::create_stage;
 use crate::adapters::snowflake::_helpers::step_failure::step_failure;
 use crate::adapters::snowflake::_helpers::table_stage::table_stage;
 use crate::adapters::snowflake::constants::{EXTERNAL_STAGE_FOLDER, STAGE_PROBE_TABLE, USER_STAGE};
-use crate::adapters::snowflake::main::is_not_found::is_not_found;
-use crate::adapters::snowflake::main::show_stages::show_stages;
-use crate::adapters::snowflake::main::stage_lookup::stage_lookup;
-use crate::adapters::snowflake::main::stage_problem::stage_problem;
-use crate::adapters::snowflake::main::stage_reference::stage_reference;
-use crate::adapters::snowflake::main::streaming_client::streaming_client;
+use crate::adapters::snowflake::main::session::is_not_found::is_not_found;
+use crate::adapters::snowflake::main::session::streaming_client::streaming_client;
+use crate::adapters::snowflake::main::stage::show_stages::show_stages;
+use crate::adapters::snowflake::main::stage::stage_lookup::stage_lookup;
+use crate::adapters::snowflake::main::stage::stage_problem::stage_problem;
+use crate::adapters::snowflake::main::stage::stage_reference::stage_reference;
 use crate::adapters::snowflake::models::{
     ExternalStage, ForcedStage, SnowflakeDestination, StageObject, StageRoute,
 };

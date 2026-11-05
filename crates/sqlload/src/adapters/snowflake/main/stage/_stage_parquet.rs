@@ -6,7 +6,7 @@ use crate::stage_api::main::put_stage_file::put_stage_file;
 use crate::stage_api::models::{PutOutcome, StageInfo};
 
 /// Write the file with `known` credentials, fetching new ones when there are none or they expired; returns the credentials that worked, so a batch's files need one fetch.
-pub async fn stage_parquet(
+pub(in crate::adapters) async fn stage_parquet(
     destination: &SnowflakeDestination,
     mut known: Option<StageInfo>,
     file: StagedFile<'_>,

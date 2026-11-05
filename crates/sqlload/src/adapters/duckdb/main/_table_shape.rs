@@ -7,7 +7,7 @@ use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbDestination;
 
 /// `table`'s columns and constraints as DuckDB would create them, and its indexes' statements; `None` when there is no such table.
-pub async fn table_shape(
+pub(in crate::adapters) async fn table_shape(
     destination: &DuckDbDestination,
     table: &TableName,
 ) -> Result<Option<TableShape>, DuckDbError> {

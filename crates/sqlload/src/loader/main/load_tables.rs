@@ -3,7 +3,8 @@
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 
-use crate::loader::_helpers::destination::{clean_stages, clean_staging};
+use crate::loader::_helpers::destination::clean_stages;
+use crate::loader::_helpers::destination::clean_staging;
 use crate::loader::_helpers::table_queue::{TableQueue, load_task, shared_run, thread_count};
 use crate::loader::models::{LoadRun, ProjectPlan, TableOutcome};
 

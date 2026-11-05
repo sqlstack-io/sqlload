@@ -5,7 +5,7 @@ use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbDestination;
 
 /// The first column of every row of `query`, as text; SQL `NULL`s are skipped.
-pub async fn query_texts(
+pub(in crate::adapters) async fn query_texts(
     destination: &DuckDbDestination,
     query: String,
 ) -> Result<Vec<String>, DuckDbError> {

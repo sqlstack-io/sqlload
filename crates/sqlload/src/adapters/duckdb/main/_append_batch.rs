@@ -11,7 +11,7 @@ use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbDestination;
 
 /// Insert `batch` into `table` by column name, inside the connection's open transaction if it has one: columns the batch lacks get their `DEFAULT`, and values are converted to the column's type, so bad JSON or UUIDs fail here.
-pub async fn append_batch(
+pub(in crate::adapters) async fn append_batch(
     destination: &DuckDbDestination,
     table: &TableName,
     batch: RecordBatch,

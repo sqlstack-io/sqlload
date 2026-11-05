@@ -1,12 +1,13 @@
 //! Load one table: read its source (a Python table through the host) and commit its rows batch by batch.
 
 use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::models::Destination;
 use crate::loader::_helpers::publish::publish_table;
 use crate::loader::_helpers::sources::open_source;
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_python::load_python;
-use crate::loader::models::{Destination, LoadRun, PythonLoad, TableLoaded, TablePlan};
+use crate::loader::models::{LoadRun, PythonLoad, TableLoaded, TablePlan};
 
 /// Load one table; returns its name as reported and what the load did.
 pub(in crate::loader) async fn load_one(

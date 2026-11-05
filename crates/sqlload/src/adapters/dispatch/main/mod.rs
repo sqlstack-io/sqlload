@@ -1,1 +1,13 @@
+pub mod append_rows;
+pub mod clean_stage;
+pub mod ddl_guard;
+pub mod drop_stale_staging;
+pub mod execute;
+pub mod execute_ddl;
+pub mod live_columns;
+pub mod single_text;
 pub mod sql_adapter;
+pub mod stage_file;
+pub mod table_destination;
+pub mod table_shape;
+pub mod text_values;

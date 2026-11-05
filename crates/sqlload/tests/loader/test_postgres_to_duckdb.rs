@@ -1,9 +1,10 @@
-use sqlload::adapters::duckdb::main::query_text::query_text;
+use sqlload::adapters::dispatch::main::single_text::single_text;
+use sqlload::adapters::dispatch::models::Destination;
 use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
-use sqlload::loader::models::{Destination, PlanOptions};
+use sqlload::loader::models::PlanOptions;
 use sqlload::project::main::parse_project::parse_project;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
@@ -50,7 +51,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
         let destinations = connect_targets(&project)
             .await
             .map_err(|error| error.to_string())?;
-        let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
+        let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
             return Err("no DuckDB destination".to_owned());
         };
         let test_cases = [
@@ -119,7 +120,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
             load_all(&project, &plan, &destinations)
                 .await
                 .map_err(|error| format!("{}: {error}", test_case.description))?;
-            let result = query_text(duckdb, test_case.check_query.to_owned())
+            let result = single_text(duckdb, test_case.check_query.to_owned())
                 .await
                 .map_err(|error| error.to_string())?;
             assert_eq!(

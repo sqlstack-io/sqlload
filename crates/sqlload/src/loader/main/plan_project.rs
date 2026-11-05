@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::folder_conflict::folder_conflict;
 use crate::adapters::files::models::FolderClaim;
 use crate::loader::_helpers::python::python_table;
@@ -10,7 +11,7 @@ use crate::loader::_helpers::sources::{selected, source_ends, source_tables, unm
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_table_folder::table_folder;
-use crate::loader::models::{Destination, PlanOptions, ProjectPlan, SkippedTable, TableSpec};
+use crate::loader::models::{PlanOptions, ProjectPlan, SkippedTable, TableSpec};
 use crate::project::models::{NewTables, ProjectConfig};
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.

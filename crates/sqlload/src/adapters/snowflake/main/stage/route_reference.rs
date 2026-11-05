@@ -3,7 +3,7 @@
 use crate::adapters::contract::models::TableName;
 use crate::adapters::snowflake::_helpers::table_stage::table_stage;
 use crate::adapters::snowflake::constants::USER_STAGE;
-use crate::adapters::snowflake::main::stage_reference::stage_reference;
+use crate::adapters::snowflake::main::stage::stage_reference::stage_reference;
 use crate::adapters::snowflake::models::StageRoute;
 
 /// The stage `route` loads from, as SQL; `target` is the table loaded, `staging` its staging table if any; `None` for a route without files.
