@@ -6,7 +6,7 @@ use crate::files_destination::main::plan_replaced_files::plan_replaced_files;
 use crate::files_destination::models::{PartitionBy, ReplaceRequest};
 use crate::files_destination::tests::helpers::{delete_insert, orders_path, stored};
 use crate::files_destination::tests::test_types::ReplacedFilesTestCase;
-use crate::write_sql::models::WriteMode;
+use crate::adapters::contract::models::WriteMode;
 
 const KEYS: [&str; 3] = [
     "day=2026-11-03/part-a-0.parquet",

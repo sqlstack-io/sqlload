@@ -25,7 +25,7 @@ use crate::files_source::models::Footer;
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
-use crate::write_sql::models::WriteMode;
+use crate::adapters::contract::models::WriteMode;
 
 /// An S3 bucket in eu-west-2.
 pub(crate) fn bucket() -> StoreKind {

@@ -1,9 +1,9 @@
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::{DataFile, SourceFormat};
 use crate::project::models::MaskMethod;
-use crate::snowflake_destination::models::{SnowflakeDestination, StageRoute};
+use crate::adapters::snowflake::models::{SnowflakeDestination, StageRoute};
 use crate::store_paths::models::Location;
-use crate::write_sql::models::TableName;
+use crate::adapters::contract::models::TableName;
 
 /// Where one column of a direct `COPY` gets its value.
 #[derive(Debug, Clone, PartialEq, Eq)]

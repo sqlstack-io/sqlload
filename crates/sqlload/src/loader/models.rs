@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::models::DuckDbDestination;
+use crate::adapters::duckdb::models::DuckDbDestination;
 use crate::external_stage::models::PlannedStage;
 use crate::file_store::models::OpenFolder;
 use crate::files_destination::models::{
@@ -26,11 +26,11 @@ use crate::run_log::main::later_cursor::later_cursor;
 use crate::run_log::main::next_stamp::next_stamp;
 use crate::run_log::models::{RunOutcome, RunRecord, UnreadableRecord};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
-use crate::snowflake_destination::models::{SnowflakeDestination, StageRoute};
+use crate::adapters::snowflake::models::{SnowflakeDestination, StageRoute};
 use crate::stage_api::models::StageInfo;
 use crate::store_paths::models::Location;
 use crate::streaming_api::models::StreamingClient;
-use crate::write_sql::models::{TableName, WriteMode};
+use crate::adapters::contract::models::{TableName, WriteMode};
 
 /// Where a setting's value came from, for `plan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

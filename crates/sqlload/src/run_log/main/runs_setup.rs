@@ -7,9 +7,9 @@ use crate::run_log::constants::{
 use crate::run_log::main::runs_table::runs_table;
 use crate::run_log::models::RunsSetup;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
-use crate::write_sql::main::create_schema::create_schema;
-use crate::write_sql::main::create_table::create_table;
-use crate::write_sql::models::TableName;
+use crate::adapters::contract::main::create_schema::create_schema;
+use crate::adapters::contract::main::create_table::create_table;
+use crate::adapters::contract::models::TableName;
 
 /// The statements creating the run log beside `table` when the plan saw none (`exists` false); `None` once it exists, so a role without CREATE privileges still loads.
 pub fn runs_setup(table: &TableName, warehouse: Warehouse, exists: bool) -> Option<RunsSetup> {

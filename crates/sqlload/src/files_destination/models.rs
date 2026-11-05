@@ -12,7 +12,7 @@ use crate::schema_plan::models::DesiredColumn;
 use crate::store_paths::main::escape_partition_value::escape_partition_value;
 use crate::store_paths::main::unescape_partition_value::unescape_partition_value;
 use crate::store_paths::models::{Location, StoreKind};
-use crate::write_sql::models::WriteMode;
+use crate::adapters::contract::models::WriteMode;
 
 /// A target that writes tables as Parquet files into an s3 or filesystem connection.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -8,7 +8,7 @@ use crate::loader::models::{Destination, ProjectPlan, StateKind, StateRequest};
 use crate::run_log::main::describe_state::describe_state;
 use crate::run_log::main::unreadable_line::unreadable_line;
 use crate::run_log::models::RunRecord;
-use crate::write_sql::main::display_name::display_name;
+use crate::adapters::contract::main::display_name::display_name;
 
 /// The command's lines, and whether it succeeded (`verify` fails when a log disagrees with its data); `reconcile` and `reset` append only with `request.append`.
 pub async fn state_command(

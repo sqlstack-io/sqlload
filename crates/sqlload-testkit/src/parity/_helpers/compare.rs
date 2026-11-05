@@ -15,9 +15,9 @@ use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
 use sqlload::loader::models::{Destination, LoadRun, PlanOptions};
 use sqlload::project::main::parse_project::parse_project;
-use sqlload::snowflake_destination::main::query_texts::query_texts;
+use sqlload::adapters::snowflake::main::query_texts::query_texts;
 use sqlload::store_paths::models::{Location, StoreKind};
-use sqlload::write_sql::main::stored_name::stored_name;
+use sqlload::adapters::contract::main::stored_name::stored_name;
 use tokio::runtime::Runtime;
 
 use crate::parity::_helpers::files::{case_files, parquet_file};

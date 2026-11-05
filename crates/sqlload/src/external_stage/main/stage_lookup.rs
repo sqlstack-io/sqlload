@@ -3,10 +3,10 @@
 use crate::column_types::models::Warehouse;
 use crate::external_stage::constants::MANAGED_STAGE_NAME;
 use crate::external_stage::models::StageLookup;
-use crate::snowflake_destination::models::{ExternalStage, StageObject};
-use crate::write_sql::main::quoted_identifier::quoted_identifier;
-use crate::write_sql::main::sql_literal::sql_literal;
-use crate::write_sql::main::stored_name::stored_name;
+use crate::adapters::snowflake::models::{ExternalStage, StageObject};
+use crate::adapters::contract::main::quoted_identifier::quoted_identifier;
+use crate::adapters::contract::main::sql_literal::sql_literal;
+use crate::adapters::contract::main::stored_name::stored_name;
 
 /// `SHOW STAGES LIKE ... IN SCHEMA ...` for the stage loads use, and its name as reported.
 pub fn stage_lookup(stage: &ExternalStage) -> StageLookup {

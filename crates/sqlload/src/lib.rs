@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod adapters;
 pub mod auth;
 pub mod batch_plan;
 pub mod batching;
@@ -11,8 +12,6 @@ pub mod column_types;
 pub mod command;
 pub mod config;
 pub mod delivery;
-#[cfg(feature = "duckdb")]
-pub mod duckdb_destination;
 pub mod envelope;
 pub mod exporter;
 pub mod external_stage;
@@ -36,11 +35,9 @@ pub mod row_batches;
 pub mod run_log;
 pub mod schema_plan;
 pub mod similar_names;
-pub mod snowflake_destination;
 pub mod sql_api;
 pub mod stage_api;
 pub mod status;
 pub mod store_paths;
 pub mod streaming_api;
 pub mod time_text;
-pub mod write_sql;

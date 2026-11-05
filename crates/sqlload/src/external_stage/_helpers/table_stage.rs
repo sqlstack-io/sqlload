@@ -1,6 +1,6 @@
 use crate::column_types::models::Warehouse;
-use crate::write_sql::main::quoted_identifier::quoted_identifier;
-use crate::write_sql::models::TableName;
+use crate::adapters::contract::main::quoted_identifier::quoted_identifier;
+use crate::adapters::contract::models::TableName;
 
 /// The table stage of `table` without its `@`, `"DB"."SCHEMA".%"TABLE"`.
 pub(crate) fn table_stage(table: &TableName) -> String {

@@ -1,7 +1,7 @@
 //! Check a stage object against the connection's settings.
 
 use crate::external_stage::models::{ShownStage, StageLookup};
-use crate::snowflake_destination::models::{ExternalStage, StageObject};
+use crate::adapters::snowflake::models::{ExternalStage, StageObject};
 
 /// Why the stage `shown` lists for `lookup` cannot be used: missing, on another URL, or (for the stage SQLLoad creates) with another storage integration.
 pub fn stage_problem(

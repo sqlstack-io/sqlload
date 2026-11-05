@@ -3,10 +3,10 @@
 use crate::column_types::models::Warehouse;
 use crate::run_log::constants::RUNS_COLUMNS;
 use crate::run_log::models::RunRecord;
-use crate::write_sql::main::qualified_name::qualified_name;
-use crate::write_sql::main::sql_literal::sql_literal;
-use crate::write_sql::main::stored_name::stored_name;
-use crate::write_sql::models::TableName;
+use crate::adapters::contract::main::qualified_name::qualified_name;
+use crate::adapters::contract::main::sql_literal::sql_literal;
+use crate::adapters::contract::main::stored_name::stored_name;
+use crate::adapters::contract::models::TableName;
 
 /// `INSERT INTO <runs> (...) VALUES (...)` for `record`, NULL for fields it does not have.
 pub fn insert_run(

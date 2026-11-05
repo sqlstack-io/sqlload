@@ -11,9 +11,9 @@ use crate::loader::errors::LoaderError;
 use crate::loader::main::_connect_target::connect_target;
 use crate::loader::models::Destination;
 use crate::project::models::ProjectConfig;
-use crate::snowflake_destination::constants::EXTERNAL_STAGE_FOLDER;
-use crate::snowflake_destination::main::show_stages::show_stages;
-use crate::snowflake_destination::models::{
+use crate::adapters::snowflake::constants::EXTERNAL_STAGE_FOLDER;
+use crate::adapters::snowflake::main::show_stages::show_stages;
+use crate::adapters::snowflake::models::{
     ExternalStage, ForcedStage, SnowflakeDestination, StageObject,
 };
 use crate::sql_api::main::execute_sql::execute_sql;

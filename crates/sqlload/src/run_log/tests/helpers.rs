@@ -11,7 +11,7 @@ use crate::run_log::main::runs_table::runs_table;
 use crate::run_log::main::select_runs::select_runs;
 use crate::run_log::models::{RunEvent, RunOutcome, RunRecord};
 use crate::run_log::tests::test_types::{CurrentRunTestCase, FinishedRecordTestCase};
-use crate::write_sql::models::TableName;
+use crate::adapters::contract::models::TableName;
 
 /// A run of `shop__orders` with a cursor, a token holding a quote and a backslash, and a note.
 pub(crate) fn sample_record() -> RunRecord {

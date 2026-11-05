@@ -1,5 +1,5 @@
 use crate::external_stage::models::{RouteChoice, StepFailure};
-use crate::snowflake_destination::models::StageRoute;
+use crate::adapters::snowflake::models::StageRoute;
 
 /// The first usable step of `outcomes` (each step's name and what probing it found), with why those before it were passed over. A forced step has no alternative: if it cannot be used, the plan fails with the reason. So does a step whose probe failed for any other reason than privileges or a missing object, which says nothing about the step.
 pub(crate) fn pick_route(

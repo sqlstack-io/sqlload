@@ -6,7 +6,7 @@ use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_python::load_python;
 use crate::loader::models::{Destination, LoadRun, PythonLoad, TableLoaded, TablePlan};
-use crate::write_sql::main::display_name::display_name;
+use crate::adapters::contract::main::display_name::display_name;
 
 /// Load one table; returns its name as reported and what the load did.
 pub(in crate::loader) async fn load_one(

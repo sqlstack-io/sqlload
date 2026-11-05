@@ -9,9 +9,9 @@ use crate::external_stage::constants::{
 };
 use crate::external_stage::models::{CopyBatch, CopyColumn, CopyValue, DirectCopy};
 use crate::files_source::models::DataFile;
-use crate::write_sql::main::qualified_name::qualified_name;
-use crate::write_sql::main::quoted_identifier::quoted_identifier;
-use crate::write_sql::main::sql_literal::sql_literal;
+use crate::adapters::contract::main::qualified_name::qualified_name;
+use crate::adapters::contract::main::quoted_identifier::quoted_identifier;
+use crate::adapters::contract::main::sql_literal::sql_literal;
 
 /// `COPY` statements loading `request.files` into `request.target`, at most 1,000 files and about 900 KiB of SQL each: data columns read by name and cast (JSON parsed), partition values, source file, version per file (matched on `METADATA$FILENAME`, which on an external stage is the bucket-relative key, failing on any other file) and row number, and literals; always `FORCE = TRUE` and `ON_ERROR = ABORT_STATEMENT`.
 pub fn direct_copies(request: &DirectCopy<'_>) -> Result<Vec<CopyBatch>, String> {
