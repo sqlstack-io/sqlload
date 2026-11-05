@@ -4,3 +4,4 @@ pub(in crate::adapters) mod _direct_check;
 pub(in crate::adapters) mod _direct_copies;
 pub(in crate::adapters) mod _direct_problem;
 pub(in crate::adapters) mod _script_copy_rows;
+pub(in crate::adapters) mod _stage_covers;

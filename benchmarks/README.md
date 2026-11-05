@@ -96,8 +96,7 @@ BENCH_ARGS can add `--scenarios` to narrow it to one scenario, as the last `--sc
   `sqlload (external stage)` runs them through the S3 external stage instead of the user stage `@~`.
 - `files_snowflake` also runs ingestr, reading the same Parquet parts from S3.
 - `files_snowflake` loads 10 Parquet parts with sqlload's direct route (Snowflake reads the files
-  itself) and with `shaping = "loader"`. Each run first checks `sqlload plan` names the expected
-  route, and is invalid if not.
+  itself). Each run first checks `sqlload plan` names the expected route, and is invalid if not.
 
 What it touches: test data goes only under `s3://<bucket>/sqlload/bench/`, and the stage's URL is
 `s3://<bucket>/sqlload/`. In Snowflake it drops only its `BENCH_` tables before each

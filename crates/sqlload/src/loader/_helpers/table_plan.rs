@@ -42,6 +42,7 @@ use crate::postgres_source::models::ReadColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::BatchStep;
 use crate::project::models::Contract;
+use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -407,6 +408,9 @@ async fn plan_table_once(
     schema
         .warnings
         .extend(route_warning(stage.as_ref()).map(str::to_owned));
+    schema
+        .warnings
+        .extend(hmac_warnings(spec, stage.as_ref(), destination));
     let route = match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
         Ok(route) => Some(route),
         Err(problem) => {
@@ -490,6 +494,21 @@ fn reader_offer(
         },
     });
     let direct_blocked = read.and_then(|read| direct_blocked(spec, read, stage));
+    let hmac: Vec<&str> = spec
+        .masked
+        .columns
+        .iter()
+        .filter(|(_, method)| **method == MaskMethod::Hmac)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let needs_loader = match (hmac.is_empty(), spec.test_loader_route) {
+        (false, _) => Some(format!(
+            "{} masked with hmac, whose key must never appear in SQL",
+            hmac.join(", ")
+        )),
+        (true, true) => Some("the table sets test_loader_route (tests only)".to_owned()),
+        (true, false) => None,
+    };
     ReaderOffer {
         arrow: true,
         existing_files,
@@ -499,6 +518,11 @@ fn reader_offer(
             Err(_) => None,
         },
         direct_blocked,
+        needs_loader,
+        copy_to_internal_stage: spec
+            .files
+            .as_ref()
+            .is_some_and(|files| files.copy_to_internal_stage),
     }
 }
 
@@ -508,8 +532,34 @@ pub(crate) fn is_direct(route: Option<&Route>) -> bool {
         matches!(
             route.steps.as_slice(),
             [Step::UseFiles(_), Step::DestinationPulls(_)]
+                | [
+                    Step::UseFiles(_),
+                    Step::CopyFiles(_),
+                    Step::DestinationPulls(_)
+                ]
         )
     })
+}
+
+/// A warning for each `hmac`-masked column of a files source whose files `destination` would otherwise read itself: every file then goes through SQLLoad.
+fn hmac_warnings(
+    spec: &TableSpec,
+    stage: Option<&StageRoute>,
+    destination: &Destination,
+) -> Vec<String> {
+    let reads_itself = writer_accepts(destination, stage)
+        .reads_files_itself
+        .is_some();
+    spec.masked
+        .columns
+        .iter()
+        .filter(|(_, method)| reads_itself && spec.files.is_some() && **method == MaskMethod::Hmac)
+        .map(|(name, _)| {
+            format!(
+                "{name}: hmac masking pulls every file through the loader (the key must never be in SQL), which is much slower than a direct load. mask = \"hash\" stays on the direct route."
+            )
+        })
+        .collect()
 }
 
 /// The route a table's data takes into `destination`; `read` is a files table's planned read.

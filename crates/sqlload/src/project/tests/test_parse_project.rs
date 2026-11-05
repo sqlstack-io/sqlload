@@ -205,9 +205,9 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
     }
     let test_cases = [
         ParseProjectErrorTestCase {
-            description: "shaping takes only loader",
-            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshaping = \"sql\"\n",
-            expected_message: "sql",
+            description: "shaping is gone: nothing chooses SQLLoad's route over the warehouse's own read",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshaping = \"loader\"\n",
+            expected_message: "unknown key \"shaping\"",
         },
         ParseProjectErrorTestCase {
             description: "a misspelt source key suggests the right one",

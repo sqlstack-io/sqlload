@@ -26,7 +26,6 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"cursor_start",
 		"lookback",
 		"on_schema_change",
-		"shaping",
 		"state",
 		"type_change_rebuild",
 		"unique_key",

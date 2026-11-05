@@ -116,10 +116,9 @@ def test_given_equal_values_in_different_text_forms_when_comparing_then_they_mat
 @pytest.mark.parametrize(
 	("competitor", "expected_text"),
 	[
-		(SqlLoad(shaping="direct", label="direct"), "destination loads parquet files from"),
-		(SqlLoad(shaping="loader", label="loader"), 'shaping = "loader"'),
+		(SqlLoad(direct=True, label="direct"), "destination loads parquet files from"),
 	],
-	ids=["direct", "loader"],
+	ids=["direct"],
 )
 @pytest.mark.skipif(not SQLLOAD.exists(), reason="the sqlload wheel is not installed")
 def test_given_the_files_to_snowflake_project_when_validated_then_sqlload_accepts_it_and_the_route_is_checked(

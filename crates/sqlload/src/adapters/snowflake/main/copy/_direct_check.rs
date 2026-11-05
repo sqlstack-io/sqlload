@@ -7,11 +7,11 @@ use crate::files_source::models::{DataFile, FilesRead};
 use crate::loader::models::TableSpec;
 use crate::project::models::MaskMethod;
 
-/// Why Snowflake must not `COPY` these of a files table's files straight from `stage`; `refused` is what a batch's own footers refuse, beyond what plan sampled.
+/// Why Snowflake cannot `COPY` these of a files table's files exactly, straight from `stage` (or copied unchanged to an internal stage when `None`); `refused` is what a batch's own footers refuse, beyond what plan sampled.
 pub(in crate::adapters) fn direct_check(
     spec: &TableSpec,
     (read, files, refused): (&FilesRead, &[DataFile], &[(String, String)]),
-    stage: &ExternalStage,
+    stage: Option<&ExternalStage>,
 ) -> Option<String> {
     let source = spec.files.as_ref()?;
     let mut all_refused: Vec<(String, String)> = refused.to_vec();
@@ -27,13 +27,12 @@ pub(in crate::adapters) fn direct_check(
         .map(|(name, method)| (name.clone(), *method))
         .collect();
     direct_problem(&DirectCheck {
-        stage_url: &stage.location,
+        stage_url: stage.map(|stage| &stage.location),
         source: &source.location,
         format: source.encoding.format,
         files,
         columns: &copy_columns(spec, read),
         refused: &all_refused,
         masks: &masks,
-        shaped_by_loader: spec.shaped_by_loader,
     })
 }

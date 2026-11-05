@@ -93,7 +93,7 @@ SCENARIOS: list[Scenario] = [
 		"BENCH_WIDE_NOKEY",
 		source="wide_nokey",
 	),
-	Scenario("files_snowflake", "snowflake", "narrow", "files", "Parquet files in S3 into Snowflake: the direct route and shaping = \"loader\"", "BENCH_PARQUET"),
+	Scenario("files_snowflake", "snowflake", "narrow", "files", "Parquet files in S3 into Snowflake: the direct route", "BENCH_PARQUET"),
 ]
 
 BY_NAME = {scenario.name: scenario for scenario in SCENARIOS}

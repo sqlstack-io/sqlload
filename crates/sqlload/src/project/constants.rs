@@ -11,7 +11,8 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "auto_widen",
     "type_change_rebuild",
     "batch",
-    "shaping",
+    #[cfg(feature = "container-tests")]
+    "test_loader_route",
 ];
 
 /// Keys only a source may use.
@@ -31,6 +32,7 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "csv",
     "destination_path",
     "partition_columns",
+    "copy_to_internal_stage",
     "exclude_columns",
     "skip_tables_with_columns",
     "allow_columns",

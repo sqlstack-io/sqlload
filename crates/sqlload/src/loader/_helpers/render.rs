@@ -211,7 +211,7 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
                 .any(|method| *method == MaskMethod::Hash)
     }) {
         lines.push(
-            "note    hashed columns reach Snowflake in plain text in a temporary table, gone with its session; shaping = \"loader\" keeps them out"
+            "note    hashed columns reach Snowflake in plain text in a temporary table, gone with its session; mask = \"hmac\" keeps them out, through SQLLoad (much slower)"
                 .to_owned(),
         );
     }

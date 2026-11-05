@@ -172,7 +172,11 @@ pub(crate) fn build_spec(
         unique_key,
         cursor,
         batch,
-        shaped_by_loader: layered(&settings.shaping, &defaults.shaping).is_some(),
+        #[cfg(feature = "container-tests")]
+        test_loader_route: layered(&settings.test_loader_route, &defaults.test_loader_route)
+            .is_some_and(|(value, _)| value),
+        #[cfg(not(feature = "container-tests"))]
+        test_loader_route: false,
         source_end: None,
         pinned: columns.pinned,
         excluded_columns: columns.excluded,
