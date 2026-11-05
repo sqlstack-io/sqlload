@@ -86,3 +86,9 @@ pub(crate) struct PromoteTestCase {
     pub(crate) warehouse: Warehouse,
     pub(crate) expected_statements: Vec<String>,
 }
+
+pub(crate) struct KeptColumnsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) new: Vec<crate::schema_plan::models::DesiredColumn>,
+    pub(crate) expected_statements: Vec<String>,
+}

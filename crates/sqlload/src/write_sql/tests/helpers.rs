@@ -55,7 +55,7 @@ pub(crate) fn changed_staging(
         &staging,
         (&old, &new),
         warehouse,
-        false,
+        None,
     )
 }
 

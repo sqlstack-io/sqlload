@@ -15,6 +15,7 @@ use crate::project::models::MaskMethod;
 use crate::routing::models::Route;
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnOrigin, TableAction};
+use crate::snowflake_destination::models::StageRoute;
 use crate::write_sql::main::display_name::display_name;
 use crate::write_sql::main::stored_name::stored_name;
 use crate::write_sql::models::WriteMode;
@@ -296,6 +297,15 @@ fn batch_line(table: &TablePlan) -> String {
                 "{} batches of whole partitions (up to {MAX_BATCH_FILES} files or about 1 GB each){drift}",
                 groups.len()
             )
+        }
+        (_, true)
+            if matches!(
+                table.stage,
+                Some(StageRoute::Streaming { .. } | StageRoute::Insert)
+            ) =>
+        {
+            "about 1 GB at a time into a staging table, copied and swapped in once at the end"
+                .to_owned()
         }
         (_, true) => "about 1 GB at a time into a new table, swapped in once at the end".to_owned(),
         (CommitRule::Ordered { column, .. }, false) => format!(

@@ -1,10 +1,12 @@
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::schema_plan::models::{DesiredColumn, LiveColumn};
+use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::write_sql::_helpers::promote::promote_statements;
 use crate::write_sql::main::build_table::build_table;
 use crate::write_sql::main::staging_changes::staging_changes;
 use crate::write_sql::tests::helpers::{accounts, columns};
-use crate::write_sql::tests::test_types::{BuildTableTestCase, PromoteTestCase};
+use crate::write_sql::tests::test_types::{
+    BuildTableTestCase, KeptColumnsTestCase, PromoteTestCase,
+};
 
 const SF_BUILD: &str = "\"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
 const DUCK_BUILD: &str = "\"raw\".\"app__accounts__sqlload_staging_load1\"";
@@ -158,7 +160,53 @@ fn given_a_build_table_when_a_column_arrives_mid_load_then_it_takes_the_final_ty
             .cloned()
             .collect();
         assert_eq!(
-            staging_changes(&build, (&old, &new), warehouse, true),
+            staging_changes(&build, (&old, &new), warehouse, Some(&[])),
+            test_case.expected_statements,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_build_table_holding_a_column_the_source_lacks_when_changing_it_then_the_column_stays() {
+    let column = |name: &str, column_type: ColumnType| DesiredColumn {
+        name: name.to_owned(),
+        column_type,
+        origin: ColumnOrigin::Source,
+    };
+    let note = LiveColumn {
+        name: "NOTE".to_owned(),
+        column_type: ColumnType::Text,
+    };
+    let old = vec![column("score", ColumnType::Int)];
+    let test_cases = [
+        KeptColumnsTestCase {
+            description: "a rewrite for a wider type keeps it",
+            new: vec![column("score", ColumnType::Float)],
+            expected_statements: vec![format!(
+                "CREATE OR REPLACE TABLE {SF_BUILD} COPY GRANTS AS SELECT CAST(\"SCORE\" AS FLOAT) AS \"SCORE\", \"NOTE\" FROM {SF_BUILD}"
+            )],
+        },
+        KeptColumnsTestCase {
+            description: "the source starting to carry it adds nothing",
+            new: vec![
+                column("score", ColumnType::Int),
+                column("note", ColumnType::Text),
+            ],
+            expected_statements: Vec::new(),
+        },
+    ];
+    for test_case in test_cases {
+        let warehouse = Warehouse::Snowflake;
+        let (build, _) = build_table(&accounts(), (&columns(), None, None), "load-1", warehouse);
+        assert_eq!(
+            staging_changes(
+                &build,
+                (&old, &test_case.new),
+                warehouse,
+                Some(std::slice::from_ref(&note))
+            ),
             test_case.expected_statements,
             "{}",
             test_case.description

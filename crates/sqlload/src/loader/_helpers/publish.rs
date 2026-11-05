@@ -76,6 +76,7 @@ use crate::schema_plan::constants::LOAD_ID_COLUMN;
 use crate::schema_plan::constants::LOADED_AT_COLUMN;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
+use crate::schema_plan::models::LiveColumn;
 use crate::snowflake_destination::constants::STAGE_FOLDER;
 use crate::snowflake_destination::main::copy_staged::copy_staged;
 use crate::snowflake_destination::main::remove_staged::remove_staged;
@@ -458,6 +459,14 @@ impl Publisher {
         if !self.staged.is_empty() {
             self.remove_batch_files().await;
         }
+    }
+
+    /// The live columns a build table started with, which stay; `None` when the table holds staged rows. A `--reload` rebuilds with the current columns only.
+    pub(crate) fn started_with(&self) -> Option<&[LiveColumn]> {
+        self.builds.then(|| match self.table.mode {
+            WriteMode::Replace => self.table.live.as_deref().unwrap_or_default(),
+            _ => &[],
+        })
     }
 
     /// Whether rows go in without files.
@@ -994,7 +1003,7 @@ impl Publisher {
                 staging,
                 (&old, &staged_columns(&replanned)),
                 replanned.spec.warehouse,
-                self.builds,
+                self.started_with(),
             );
             execute_ddl(&self.destination, changes).await?;
         }
