@@ -170,8 +170,10 @@ pub struct DirectCopy<'a> {
     pub files: &'a [DataFile],
     pub columns: &'a [CopyColumn],
     pub encoding: &'a FilesEncoding,
-    /// Columns whose types were inferred from sampled values, whose every value must fit the inferred type (JSON and NDJSON).
+    /// Columns whose types were inferred from sampled values, whose every value must fit the inferred type (JSON, NDJSON and CSV).
     pub inferred: &'a [String],
+    /// CSV files' column names by relative key, which place each column.
+    pub headers: &'a std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// One `COPY` statement and the files it loads.

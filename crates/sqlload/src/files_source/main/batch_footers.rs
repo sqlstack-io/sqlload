@@ -21,7 +21,10 @@ pub async fn batch_footers(
         .buffered(CONCURRENT_FOOTER_READS)
         .try_collect()
         .await?;
-    Ok(BatchFooters(read.into_iter().collect::<BTreeMap<_, _>>()))
+    Ok(BatchFooters {
+        parquet: read.into_iter().collect::<BTreeMap<_, _>>(),
+        headers: BTreeMap::new(),
+    })
 }
 
 async fn read_footer(

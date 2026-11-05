@@ -49,6 +49,10 @@ pub enum ParityFiles {
     NdjsonValues,
     /// JSON files as a top-level array and as objects over several lines.
     JsonLayouts,
+    /// CSV of every inferred type, with quoting, NULLs and a second file whose header orders the columns differently and lacks some.
+    CsvValues,
+    /// CSV whose last record, past the sample, has a value that does not fit its column's inferred type.
+    CsvLateMisfit,
     /// NDJSON whose last record, past the sample, has a key no sampled record has.
     LateKey,
     /// NDJSON whose last record, past the sample, has a value that does not fit its key's inferred type.

@@ -2,7 +2,6 @@
 
 use crate::adapters::snowflake::_helpers::dialect::values::{copyable_type, plain_key};
 use crate::adapters::snowflake::models::{CopyValue, DirectCheck};
-use crate::files_source::models::SourceFormat;
 use crate::project::models::MaskMethod;
 use crate::store_paths::models::StoreKind;
 
@@ -10,12 +9,6 @@ use crate::store_paths::models::StoreKind;
 pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<String> {
     if check.shaped_by_loader {
         return Some("the table sets shaping = \"loader\"".to_owned());
-    }
-    if check.format == SourceFormat::Csv {
-        return Some(format!(
-            "{} files are parsed by SQLLoad, whose type inference and checks differ from Snowflake's",
-            check.format
-        ));
     }
     let (
         StoreKind::S3 {

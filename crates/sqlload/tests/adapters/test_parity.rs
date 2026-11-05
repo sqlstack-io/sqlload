@@ -20,6 +20,8 @@ const NDJSON_LOADER: &str =
 const JSON_FILES: &str = "write_strategy = \"append\"\nformat = \"json\"";
 const JSON_FILES_LOADER: &str =
     "write_strategy = \"append\"\nformat = \"json\"\nshaping = \"loader\"";
+const CSV: &str = "write_strategy = \"append\"\nformat = \"csv\"";
+const CSV_LOADER: &str = "write_strategy = \"append\"\nformat = \"csv\"\nshaping = \"loader\"";
 const NDJSON_PINNED_LOADER: &str = "write_strategy = \"append\"\nformat = \"ndjson\"\nshaping = \"loader\"\n[sources.SOURCE.tables.SOURCE]\ncolumns = { coupon = \"text\" }";
 const BY_DAY: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"day\"";
 const BY_DAY_LOADER: &str =
@@ -188,6 +190,41 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
                 ..BASE
             },
             expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "CSV of every inferred type, read by position from each file's header, with the inferred types checked in SQL",
+            case: ParityCase {
+                name: "csv",
+                files: ParityFiles::CsvValues,
+                left: Side {
+                    settings: CSV,
+                    ..DIRECT
+                },
+                right: Side {
+                    settings: CSV_LOADER,
+                    ..DIRECT
+                },
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "a CSV value past the sample that does not fit its inferred type fails both ways",
+            case: ParityCase {
+                name: "csv_misfit",
+                files: ParityFiles::CsvLateMisfit,
+                left: Side {
+                    settings: CSV,
+                    ..DIRECT
+                },
+                right: Side {
+                    settings: CSV_LOADER,
+                    ..DIRECT
+                },
+                left_is_direct: false,
+                ..BASE
+            },
+            expected_outcome: BOTH_FAIL,
         },
         ParityTestCase {
             description: "decision 125: a key past the sample is found by the batch's key query, added and loaded, as if pinned",

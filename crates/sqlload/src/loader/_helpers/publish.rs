@@ -49,6 +49,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::main::batch_columns::batch_columns;
 use crate::files_source::main::batch_footers::batch_footers;
+use crate::files_source::main::batch_headers::batch_headers;
 use crate::files_source::main::key_columns::key_columns;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
@@ -594,7 +595,29 @@ impl Publisher {
                 }
                 (columns, footers)
             }
-            _ => {
+            SourceFormat::Csv => {
+                let (Some(read), true) = (&self.table.files, is_direct(self.table.route.as_ref()))
+                else {
+                    return Ok(BatchFooters::default());
+                };
+                let headers = batch_headers(folder, files, &source_files.encoding).await?;
+                let mut found: Vec<(String, Option<ColumnType>)> = Vec::new();
+                for name in headers.values().flatten() {
+                    if !found.iter().any(|(seen, _)| seen == name) {
+                        found.push((name.clone(), None));
+                    }
+                }
+                let columns = key_columns(read, &source_files.table.columns, found)
+                    .map_err(LoaderError::Invalid)?;
+                (
+                    columns,
+                    BatchFooters {
+                        headers,
+                        ..BatchFooters::default()
+                    },
+                )
+            }
+            SourceFormat::Json | SourceFormat::Ndjson => {
                 let (Some(read), true) = (&self.table.files, is_direct(self.table.route.as_ref()))
                 else {
                     return Ok(BatchFooters::default());

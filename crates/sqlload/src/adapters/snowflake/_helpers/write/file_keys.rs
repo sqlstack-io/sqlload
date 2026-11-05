@@ -2,7 +2,7 @@
 
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
-use crate::adapters::snowflake::_helpers::dialect::json_values::{
+use crate::adapters::snowflake::_helpers::dialect::text_values::{
     json_file_format, key_type, keys_query,
 };
 use crate::adapters::snowflake::_helpers::dialect::values::plain_key;

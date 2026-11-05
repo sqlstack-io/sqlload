@@ -102,7 +102,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             expected_problem: None,
         },
         DirectProblemTestCase {
-            description: "CSV stays with SQLLoad until its positional COPY lands",
+            description: "CSV loads directly: columns placed by each file's header",
             source: "raw/shop/orders/",
             format: SourceFormat::Csv,
             keys: &["part-0.csv"],
@@ -110,9 +110,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             shaped_by_loader: false,
-            expected_problem: Some(
-                "csv files are parsed by SQLLoad, whose type inference and checks differ from Snowflake's",
-            ),
+            expected_problem: None,
         },
         DirectProblemTestCase {
             description: "files outside the stage url go through SQLLoad",
