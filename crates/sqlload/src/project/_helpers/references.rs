@@ -135,9 +135,12 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
                     "{place} table_name {template:?} must contain {TABLE_PLACEHOLDER}, or every table gets the same name"
                 ));
             }
-            if source.path.is_some() || !source.partition_columns.is_empty() {
+            if source.path.is_some()
+                || !source.partition_columns.is_empty()
+                || source.copy_to_internal_stage
+            {
                 problems.push(format!(
-                    "{place} path and partition_columns are for kind = \"files\""
+                    "{place} path, partition_columns and copy_to_internal_stage are for kind = \"files\""
                 ));
             }
             if source.format != SourceFormat::Parquet

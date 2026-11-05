@@ -295,6 +295,11 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.app] format, compression and csv are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
+            description: "copy_to_internal_stage is for files sources, never silently ignored",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ncopy_to_internal_stage = true\n",
+            expected_message: "[sources.app] path, partition_columns and copy_to_internal_stage are for kind = \"files\"",
+        },
+        ParseProjectErrorTestCase {
             description: "a target cannot load into a source database",
             text: "[targets.other]\nconnection = \"pg\"\nloader_schema = \"RAW\"\n",
             expected_message: "is a postgres connection; targets load into snowflake or duckdb or write files to s3 or filesystem",

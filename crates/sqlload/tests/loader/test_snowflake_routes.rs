@@ -19,12 +19,16 @@ const FILES_STRATEGIES: [&str; 3] = [
     "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\n",
     "write_strategy = \"replace\"\n",
 ];
-const FORMATS: [(&str, &str, RouteFileSet, &str); 5] = [
-    ("parquet, every type", "", every_parquet_type, "note"),
-    ("parquet, every storage", "", every_parquet_storage, "names"),
-    ("ndjson", "format = \"ndjson\"\n", every_ndjson_type, "s"),
-    ("json", "format = \"json\"\n", json_layouts, "v"),
-    ("csv", "format = \"csv\"\n", every_csv_type, "s"),
+const FORMATS: [(&str, &str, (RouteFileSet, &str)); 5] = [
+    ("parquet, every type", "", (every_parquet_type, "note")),
+    (
+        "parquet, every storage",
+        "",
+        (every_parquet_storage, "names"),
+    ),
+    ("ndjson", "format = \"ndjson\"\n", (every_ndjson_type, "s")),
+    ("json", "format = \"json\"\n", (json_layouts, "v")),
+    ("csv", "format = \"csv\"\n", (every_csv_type, "s")),
 ];
 const PULLS_ANY: &str = " files from s3://fake-bucket/src/";
 const READS: &str = " into Arrow";
@@ -89,6 +93,14 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
                 "REMOVE @~/sqlload/",
             ],
             expected_unplanned: &[WRITES_PARQUET],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "copy_to_internal_stage refuses NDJSON at plan, whose later keys it would miss; nothing is uploaded",
+            settings: "write_strategy = \"append\"\nformat = \"ndjson\"\ncopy_to_internal_stage = true",
+            file_set: every_ndjson_type,
+            expected_error: "copy_to_internal_stage cannot load JSON or NDJSON yet",
+            expected_unsent: &["COPY INTO", "/00001/"],
             ..BASE
         },
         RouteTestCase {
@@ -537,7 +549,7 @@ fn given_files_a_warehouse_reads_itself_when_planning_every_format_type_and_stra
     ];
     run_async(async {
         for test_case in &test_cases {
-            for ((format_name, format, file_set, column), strategy) in
+            for ((format_name, format, (file_set, column)), strategy) in
                 FORMATS.iter().flat_map(|format| {
                     FILES_STRATEGIES
                         .iter()

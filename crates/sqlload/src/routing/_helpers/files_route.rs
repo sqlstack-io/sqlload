@@ -12,7 +12,7 @@ pub(crate) fn warehouse_reads(
     files: &FileSet,
     warehouse: &'static str,
 ) -> Result<Route, RouteError> {
-    let pulls = destination_pulls(writer, &files.store, files.format);
+    let pulls = destination_pulls(writer, &files.store, files.format) && !reader.out_of_reach;
     let copies_to = writer
         .copies_files_to
         .as_ref()
@@ -55,7 +55,7 @@ pub(crate) fn other_reads(
     files: &FileSet,
     overrides: RouteOverrides,
 ) -> Result<Route, RouteError> {
-    let pulls = destination_pulls(writer, &files.store, files.format);
+    let pulls = destination_pulls(writer, &files.store, files.format) && !reader.out_of_reach;
     match (pulls, &reader.needs_loader, &reader.direct_blocked) {
         (true, None, None) => Ok(Route {
             steps: vec![

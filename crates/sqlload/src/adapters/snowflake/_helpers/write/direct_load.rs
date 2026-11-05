@@ -69,7 +69,10 @@ impl SnowflakeWriter {
                 uploaded: false,
             },
             None => {
-                let folder = self.upload_unchanged(batch).await?;
+                let folder = format!(
+                    "{STAGE_FOLDER}/{}/{:05}/",
+                    batch.target.load_id, batch.target.batch
+                );
                 CopyPlace {
                     stage: format!("@{USER_STAGE}"),
                     folder: folder.clone(),
@@ -78,7 +81,13 @@ impl SnowflakeWriter {
                 }
             }
         };
-        let loaded = self.copy_from(batch, &place).await;
+        let loaded = match place.uploaded {
+            true => match self.upload_unchanged(batch, &place.folder).await {
+                Ok(()) => self.copy_from(batch, &place).await,
+                Err(error) => Err(error),
+            },
+            false => self.copy_from(batch, &place).await,
+        };
         if place.uploaded
             && let Err(error) = remove_staged(&self.destination, &place.stage, &place.folder).await
         {
@@ -87,15 +96,15 @@ impl SnowflakeWriter {
         loaded
     }
 
-    /// Upload `batch`'s files unchanged to `@~` under this batch's folder, which this returns; nothing is decoded.
-    async fn upload_unchanged(&mut self, batch: &DirectBatch<'_>) -> Result<String, LoaderError> {
+    /// Upload `batch`'s files unchanged to `@~` under `folder`; nothing is decoded.
+    async fn upload_unchanged(
+        &mut self,
+        batch: &DirectBatch<'_>,
+        folder: &str,
+    ) -> Result<(), LoaderError> {
         let source_folder = batch.source_folder.ok_or_else(|| {
             LoaderError::Invalid("copy_to_internal_stage needs the files' folder".to_owned())
         })?;
-        let folder = format!(
-            "{STAGE_FOLDER}/{}/{:05}/",
-            batch.target.load_id, batch.target.batch
-        );
         let mut known = None;
         for data in batch.files {
             let body = read_file(source_folder, &data.file.relative_key)
@@ -109,7 +118,7 @@ impl SnowflakeWriter {
             };
             known = Some(stage_parquet(&self.destination, known, file).await?);
         }
-        Ok(folder)
+        Ok(())
     }
 
     /// The `COPY`s of `batch` from `place`: straight into the target, into the staging or build table, or through a temporary table that hashes.

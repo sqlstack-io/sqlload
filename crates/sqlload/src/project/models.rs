@@ -409,7 +409,7 @@ pub enum BatchStep {
     Duration(std::time::Duration),
     /// An integer cursor's window.
     Integer(u64),
-    /// `"whole"`: no windows and no ordered read; each read commits once.
+    /// `"none"`: no windows and no ordered read; each read commits once.
     Whole,
 }
 

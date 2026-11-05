@@ -406,7 +406,7 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
                 },
                 right: Side {
                     target: "streaming",
-                    settings: APPEND,
+                    settings: LOADER,
                 },
                 left_is_direct: false,
                 ..BASE
@@ -423,7 +423,7 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
                 },
                 right: Side {
                     target: "insert",
-                    settings: APPEND,
+                    settings: LOADER,
                 },
                 left_is_direct: false,
                 ..BASE

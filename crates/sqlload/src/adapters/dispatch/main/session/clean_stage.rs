@@ -9,27 +9,33 @@ use crate::adapters::snowflake::main::stage::_remove_stale_external::remove_stal
 use crate::adapters::snowflake::main::stage::_route_reference::route_reference;
 use crate::adapters::snowflake::models::StageRoute;
 
-/// Remove the load folders failed runs left over a day ago on the stage `route` loads `target` through, once per stage of `connection` (`seen`, returned with this stage added); an external stage keeping its files stays as it is, and a staging table's stage goes with its table. Also returns the stage and what was removed, `None` when there was nothing to clean.
+/// Remove the load folders failed runs left over a day ago on the stage `route` loads `target` through, and on `@~` too when the table's files are copied there (`copies_files`), once per stage of `connection` (`seen`, returned with these stages added); an external stage keeping its files stays as it is, and a staging table's stage goes with its table. Also returns each stage cleaned and what was removed from it.
 pub async fn clean_stage(
     destination: &Destination,
     (connection, route, target): (&str, &StageRoute, &TableName),
+    copies_files: bool,
     mut seen: BTreeSet<String>,
-) -> (BTreeSet<String>, Option<(String, Result<usize, String>)>) {
+) -> (BTreeSet<String>, Vec<(String, Result<usize, String>)>) {
     let Destination::Snowflake(snowflake) = destination else {
-        return (seen, None);
+        return (seen, Vec::new());
     };
-    let Some(reference) = route_reference(route, target, None) else {
-        return (seen, None);
-    };
-    if !seen.insert(format!("{connection}{reference}")) {
-        return (seen, None);
+    let user = copies_files.then_some(&StageRoute::User);
+    let mut cleaned: Vec<(String, Result<usize, String>)> = Vec::new();
+    for route in std::iter::once(route).chain(user) {
+        let Some(reference) = route_reference(route, target, None) else {
+            continue;
+        };
+        if !seen.insert(format!("{connection}{reference}")) {
+            continue;
+        }
+        let removed = match route {
+            StageRoute::External(stage) if stage.keep_staged_files => Ok(0),
+            StageRoute::External(stage) => remove_stale_external(stage).await,
+            _ => remove_stale(snowflake, &reference)
+                .await
+                .map_err(|error| error.to_string()),
+        };
+        cleaned.push((reference, removed));
     }
-    let removed = match route {
-        StageRoute::External(stage) if stage.keep_staged_files => Ok(0),
-        StageRoute::External(stage) => remove_stale_external(stage).await,
-        _ => remove_stale(snowflake, &reference)
-            .await
-            .map_err(|error| error.to_string()),
-    };
-    (seen, Some((reference, removed)))
+    (seen, cleaned)
 }

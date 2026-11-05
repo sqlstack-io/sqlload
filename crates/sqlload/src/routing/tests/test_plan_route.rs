@@ -33,7 +33,7 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             ],
         },
         PlanRouteTestCase {
-            description: "stage = internal stages on the internal stage",
+            description: "an internal stage preference stages on the internal stage",
             reader: streaming_source(),
             writer: warehouse_destination(vec![object_store("s3://lake/sqlload/"), user_stage()]),
             overrides: internal_stage(),
@@ -165,7 +165,7 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             ],
         },
         PlanRouteTestCase {
-            description: "with stage = internal a local directory fetches from the internal stage",
+            description: "preferring the internal stage, a local directory fetches from the internal stage",
             reader: warehouse_source(BIG),
             writer: local_destination(),
             overrides: internal_stage(),
@@ -220,6 +220,16 @@ fn given_an_impossible_combination_when_planning_then_the_error_says_why() {
             writer: warehouse_destination(vec![object_store(LAKE), user_stage()]),
             overrides: RouteOverrides::default(),
             expected_message: "s3://other/events/ cannot be read by Snowflake: no external stage covers it. Fix: add a storage integration that allows this bucket (the fast path), or, if that isn't possible, set copy_to_internal_stage = true",
+        },
+        PlanRouteErrorTestCase {
+            description: "files whose path a stage names but on another S3 endpoint fail as unreadable, never planned as read in place",
+            reader: ReaderOffer {
+                out_of_reach: true,
+                ..files_source("s3://lake/events/", FileFormat::Parquet)
+            },
+            writer: warehouse_destination(vec![object_store(LAKE)]),
+            overrides: RouteOverrides::default(),
+            expected_message: "s3://lake/events/ cannot be read by Snowflake: no external stage covers it",
         },
         PlanRouteErrorTestCase {
             description: "files the warehouse reaches but cannot load exactly fail, never going through SQLLoad",

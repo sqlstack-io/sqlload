@@ -7,6 +7,7 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
 use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
 use crate::adapters::dispatch::main::route::route_warning::route_warning;
+use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
@@ -526,6 +527,10 @@ fn reader_offer(
             .files
             .as_ref()
             .is_some_and(|files| files.copy_to_internal_stage),
+        out_of_reach: spec
+            .files
+            .as_ref()
+            .is_some_and(|files| stage_misses(stage, &files.location)),
     }
 }
 
