@@ -158,11 +158,16 @@ fn run_one(state: &SharedState, body: &[u8]) -> Outcome {
             .filter(|(table, _)| statement.contains(&format!("TABLE_NAME = '{table}'")))
             .flat_map(|(_, found)| found.columns.iter())
             .map(|(column, data_type)| {
+                let numeric = data_type == "NUMBER";
                 vec![
                     json!(column),
                     json!(data_type),
-                    json!(null),
-                    json!(null),
+                    numeric
+                        .then_some("38")
+                        .map_or(json!(null), |digits| json!(digits)),
+                    numeric
+                        .then_some("0")
+                        .map_or(json!(null), |scale| json!(scale)),
                     json!(null),
                 ]
             })
