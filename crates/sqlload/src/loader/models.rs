@@ -511,7 +511,8 @@ pub struct FilesSink {
 /// A connected source, ready to read.
 #[derive(Debug)]
 pub enum SourceReader {
-    Postgres(tokio_postgres::Client),
+    /// The client, and the connections that help it read a large table in parallel.
+    Postgres(tokio_postgres::Client, Vec<tokio_postgres::Client>),
     Files(OpenFolder),
 }
 
