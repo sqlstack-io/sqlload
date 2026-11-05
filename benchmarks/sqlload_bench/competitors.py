@@ -2,6 +2,7 @@
 
 import json
 import os
+from urllib.parse import urlencode
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -99,14 +100,18 @@ def _spec(run_dir: Path, scenario: Scenario, context: Context, **settings: objec
 class SqlLoad(Competitor):
 	"""The sqlload extension wheel built from this repository; its `sqlload load` runs in-process."""
 
-	def __init__(self, *, threads: int | None = None, shaping: str | None = None, label: str = "") -> None:
+	def __init__(self, *, threads: int | None = None, shaping: str | None = None, external: bool = False, label: str = "") -> None:
 		self.threads = threads
 		self.shaping = shaping
+		#: Postgres into Snowflake through the external stage instead of the user stage.
+		self.external = external
 		self.name = f"sqlload ({label})" if label else "sqlload"
 
 	def unsupported(self, scenario: Scenario) -> str | None:
 		if self.threads is not None:
 			return None if scenario.name == "pg_multi" else HIDDEN
+		if self.external:
+			return None if scenario.source else HIDDEN
 		if scenario.name == "files_snowflake":
 			return None if self.shaping else HIDDEN
 		if self.shaping:
@@ -153,7 +158,11 @@ class SqlLoad(Competitor):
 			return self._files_snowflake(scenario, context)
 		if scenario.source:
 			assert context.warehouse is not None
-			return context.warehouse.connection_toml() + "\n" + self._postgres(scenario, context) + f'table_name = "{scenario.table}"\n'
+			stage = context.warehouse.stage_toml() if self.external else ""
+			return (
+				context.warehouse.connection_toml(stage) + "\n" + self._postgres(scenario, context)
+				+ f'\n[sources.app.tables."public.{scenario.source}"]\nname = "{scenario.table}"\n'
+			)
 		text = (
 			f'[connections.wh]\nkind = "duckdb"\npath = "{self.destination(run_dir)}"\n\n'
 			f'[targets.dev]\nconnection = "wh"\nloader_schema = "{SCHEMA}"\n'
@@ -256,7 +265,7 @@ class Ingestr(Competitor):
 	name = "ingestr"
 
 	def unsupported(self, scenario: Scenario) -> str | None:
-		if scenario.name == "pg_multi" or scenario.group == "python" or scenario.name == "files_snowflake":
+		if scenario.name == "pg_multi" or scenario.group == "python":
 			return HIDDEN
 		if scenario.group == "http":
 			return "pending with sqlload's HTTP helpers"
@@ -272,7 +281,17 @@ class Ingestr(Competitor):
 			argv += ["--dest-table", f"{context.warehouse.schema}.{scenario.table}"]
 		else:
 			argv += ["--dest-uri", f"duckdb:///{self.destination(run_dir)}", "--dest-table", f"{SCHEMA}.{scenario.table}"]
-		if scenario.group == "snowflake" or scenario.group == "postgres":
+		if scenario.name == "files_snowflake":
+			assert context.warehouse is not None
+			# Its S3 source takes the keys in the URI, so it goes through the environment too.
+			keys = {
+				"access_key_id": os.environ.get("AWS_ACCESS_KEY_ID", ""),
+				"secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
+				"region": context.warehouse.region,
+			}
+			env["INGESTR_SOURCE_URI"] = "s3://?" + urlencode(keys)
+			argv += ["--source-table", f"{context.warehouse.bucket}/{snowflake.files_key(context.dataset)}*.parquet"]
+		elif scenario.group == "snowflake" or scenario.group == "postgres":
 			assert context.postgres is not None
 			argv += ["--source-uri", context.postgres.dsn, "--source-table", f"public.{scenario.source or scenario.table}"]
 			if scenario.name == "pg_incremental":
@@ -298,6 +317,7 @@ def all_competitors() -> list[Competitor]:
 		SqlLoad(threads=1, label="--threads 1"),
 		SqlLoad(shaping="direct", label="direct"),
 		SqlLoad(shaping="loader", label='shaping = "loader"'),
+		SqlLoad(external=True, label="external stage"),
 		Dlt("pyarrow"),
 		Dlt("connectorx"),
 		Dlt(None),
