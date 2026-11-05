@@ -3,7 +3,7 @@
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::snowflake::_helpers::dialect::text_values::{
-    csv_file_format, csv_value, json_file_format, json_value,
+    csv_field, csv_file_format, csv_value, json_file_format, json_record_guard, json_value,
 };
 use crate::adapters::snowflake::_helpers::dialect::values::partition_text;
 use crate::adapters::snowflake::constants::{
@@ -91,6 +91,7 @@ fn copy_sql(
         .collect();
     let mut names: Vec<String> = Vec::new();
     let mut values: Vec<String> = Vec::new();
+    let mut guarded = false;
     for column in request.columns {
         let sql_type = sql_adapter(snowflake)
             .render_loader_logical_type(&column.column_type)
@@ -113,7 +114,10 @@ fn copy_sql(
                     .position(|name| *name == column.name)
                 {
                     Some(position) => csv_value(
-                        (&column.name, &format!("${}", position + 1)),
+                        (
+                            &column.name,
+                            &csv_field(position + 1, &request.encoding.csv.null_values),
+                        ),
                         (&column.column_type, &sql_type),
                         request.inferred.contains(&column.name),
                     ),
@@ -121,11 +125,15 @@ fn copy_sql(
                 }
             }
             CopyValue::File { .. } if request.encoding.format != SourceFormat::Parquet => {
-                json_value(
+                let value = json_value(
                     (&column.name, &format!("GET($1, {})", literal(&column.name))),
                     (&column.column_type, &sql_type),
                     request.inferred.contains(&column.name),
-                )
+                );
+                match std::mem::replace(&mut guarded, true) {
+                    true => value,
+                    false => json_record_guard(&value, &sql_type),
+                }
             }
             CopyValue::File { .. } if column.column_type == ColumnType::Json => format!(
                 "PARSE_JSON(CAST(GET($1, {}) AS VARCHAR))",

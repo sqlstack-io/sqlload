@@ -209,7 +209,7 @@ async fn self_test(text: &str, live: &Live, tables: (&str, &str)) -> Result<Stri
     })
 }
 
-/// Load the case both ways and compare: `same rows`, `both fail`, or what differed. Its tables and files go whatever happened, a panic included, after its error is printed.
+/// Load the case both ways and compare: `same rows`, `both fail` (not where the left side failed because its SQL does not compile), or what differed. Its tables and files go whatever happened, a panic included, after its error is printed.
 pub(crate) fn run_case(
     runtime: &Runtime,
     live: &Live,
@@ -294,6 +294,9 @@ async fn compare(
         return Ok(format!("the left side did not load directly:\n{left_plan}"));
     }
     match (left, right) {
+        (Some(reason), Some(_)) if reason.contains("SQL compilation error") => {
+            Ok(format!("the left side's SQL does not compile: {reason}"))
+        }
         (Some(_), Some(_)) => Ok("both fail".to_owned()),
         (Some(reason), None) => Ok(format!("only the left side failed: {reason}")),
         (None, Some(reason)) => Ok(format!("only the right side failed: {reason}")),

@@ -642,7 +642,7 @@ pub(crate) fn parquet_file(batch: &RecordBatch, embedded_schema: bool) -> Result
     Ok(Bytes::from(buffer))
 }
 
-/// NDJSON of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans, text from strings, numbers and booleans, RFC 3339 timestamps with offsets before and after 1970, objects and arrays, NULLs and missing keys.
+/// NDJSON of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans, text from strings, numbers and booleans, RFC 3339 timestamps with offsets before and after 1970 and digits below the microsecond, a key given twice, objects and arrays, NULLs and missing keys.
 const NDJSON_VALUES: &str = concat!(
     r#"{"id":1,"n":1,"f":1.5,"b":true,"s":"plain","ts":"2026-11-05T12:00:00.123456Z","o":{"x":1,"y":[1,2]},"mixed":"007","u":"Ünïcødé \"q\" \\ x"}"#,
     "\n",
@@ -651,6 +651,10 @@ const NDJSON_VALUES: &str = concat!(
     r#"{"id":3,"n":null,"f":-0.25,"b":null,"ts":null,"o":null,"mixed":true}"#,
     "\n",
     r#"{"id":4,"n":9223372036854775807,"f":2e10,"s":"x","ts":"2000-01-01T00:00:00+05:30","o":{},"mixed":"text"}"#,
+    "\n",
+    r#"{"id":5,"s":"first","ts":"2026-01-01T00:00:00.1234567Z","s":"last"}"#,
+    "\n",
+    r#"{"id":6,"ts":"1969-12-31T23:59:59.9999999Z"}"#,
     "\n",
 );
 
@@ -670,13 +674,15 @@ fn past_sample(last: &str) -> Bytes {
     Bytes::from(text)
 }
 
-/// CSV of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans in any case, RFC 3339 timestamps with offsets, text that looks like numbers, quoted delimiters, quotes, backslashes, line breaks and spaces, and empty fields as NULL.
+/// CSV of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans in any case, RFC 3339 timestamps with offsets and digits below the microsecond, text that looks like numbers, quoted delimiters, quotes, backslashes, line breaks and spaces, and empty fields, quoted or not, as NULL.
 const CSV_VALUES: &str = concat!(
     "id,n,f,b,s,ts,mixed,u\n",
     "1,1,1.5,true,plain,2026-11-05T12:00:00.123456Z,007,\"Ünïcødé \"\"q\"\" \\ x\"\n",
     "2,-9223372036854775808,3,FALSE,,1969-12-31T23:59:59.999999-02:00,7,\n",
     "3,,-0.25,,\"with, comma\",,True,\"line\nbreak\"\n",
     "4,9223372036854775807,2e10,false,x,2000-01-01T00:00:00+05:30,text,\"   spaced  \"\n",
+    "5,\"\",\"\",\"\",\"\",2026-01-01T00:00:00.1234567Z,\"\",\"\"\n",
+    "6,,,,,1969-12-31T23:59:59.9999999Z,,\n",
 );
 
 /// A CSV file whose header puts the columns in another order and lacks some.

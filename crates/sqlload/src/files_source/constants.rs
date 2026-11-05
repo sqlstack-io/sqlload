@@ -53,3 +53,6 @@ pub const LOADER_COLUMNS: &[&str] = &[
 
 /// The largest decimal precision a direct `COPY` loads exactly.
 pub const MAX_DIRECT_DECIMAL_PRECISION: u8 = 38;
+
+/// The decimal digits of a second a nanosecond time or timestamp holds; a live column with fewer gets values cut to microseconds.
+pub const NANOSECOND_SCALE: u8 = 9;
