@@ -533,17 +533,18 @@ impl Publisher {
         widened.listed = spec.listed;
         let (read_columns, live, schema) =
             replan_columns(&widened, &self.destination, run.options).await?;
+        let read_as: Vec<DesiredColumn> = read_columns
+            .iter()
+            .map(|column| DesiredColumn {
+                name: column.name.clone(),
+                column_type: column.output.clone(),
+                origin: ColumnOrigin::Source,
+            })
+            .collect();
         let replanned = TablePlan {
             spec: widened,
             files: self.table.files.clone().map(|read| FilesRead {
-                columns: read_columns
-                    .iter()
-                    .map(|column| DesiredColumn {
-                        name: column.name.clone(),
-                        column_type: column.output.clone(),
-                        origin: ColumnOrigin::Source,
-                    })
-                    .collect(),
+                columns: read_as,
                 ..read
             }),
             read_columns,

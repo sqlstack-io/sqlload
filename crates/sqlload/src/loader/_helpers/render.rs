@@ -247,10 +247,7 @@ fn batch_line(table: &TablePlan) -> String {
         ),
         (CommitRule::Size, false) => "committing about every 1 GB".to_owned(),
         (CommitRule::Whole, false) => {
-            let estimated = match u64::try_from(spec.source_table.estimated_bytes) {
-                Ok(bytes) => bytes,
-                Err(_) => 0,
-            };
+            let estimated = u64::try_from(spec.source_table.estimated_bytes).unwrap_or_default();
             let large = !table.exists && (spec.python.is_some() || estimated > BATCH_BYTES as u64);
             let hint = match large {
                 true => {
