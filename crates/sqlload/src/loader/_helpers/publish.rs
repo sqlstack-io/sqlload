@@ -138,7 +138,7 @@ use crate::write_sql::main::insert_rows::insert_rows;
 use crate::write_sql::main::sql_literal::sql_literal;
 use crate::write_sql::main::stored_name::stored_name;
 
-/// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`); on Snowflake, a route loading files into the table itself (streaming, `INSERT` and a staging table's stage all go through staging); elsewhere always, as the batch's JSON is checked and its UUIDs converted as it is appended.
+/// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`); on Snowflake, a route loading files into the table itself (streaming, `INSERT` and a staging table's stage all go through staging); elsewhere always, as appending a batch converts its JSON and UUIDs.
 fn writes_directly(table: &TablePlan, destination: &Destination) -> bool {
     let fits = match destination {
         Destination::Snowflake(_) => !matches!(
@@ -366,15 +366,7 @@ impl Publisher {
                     execute(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
                     self.open_transaction = true;
                 }
-                let json: Vec<String> = self
-                    .table
-                    .schema
-                    .write_columns
-                    .iter()
-                    .filter(|column| column.column_type == ColumnType::Json)
-                    .map(|column| column.name.clone())
-                    .collect();
-                append_rows(&self.destination, &into, batch, json).await
+                append_rows(&self.destination, &into, batch).await
             }
         }
     }
