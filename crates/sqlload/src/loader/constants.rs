@@ -39,3 +39,6 @@ pub const NO_STATE: &str = "null";
 
 /// Starts the one snapshot a Postgres table's cursor windows are all read in.
 pub const SNAPSHOT_BEGIN: &str = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
+
+/// Blocking threads beyond one per table loading at once, for the reads and encoding those tables wait on.
+pub const SPARE_BLOCKING_THREADS: usize = 64;

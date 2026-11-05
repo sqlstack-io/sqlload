@@ -105,6 +105,35 @@ def ended(ctx):
     ctx.state = PAGES
 
 
+@api.table(write_strategy="append", state="logged")
+def mutated_before(ctx):
+    for page in range((ctx.state or {}).get("page", 0), PAGES):
+        if page == fail_at():
+            raise RuntimeError(f"page {page} failed")
+        s = ctx.state or {}
+        s["page"] = page + 1
+        ctx.state = s
+        yield from rows(page)
+
+
+@api.table(write_strategy="append", state="logged")
+def mutated_after(ctx):
+    for page in range((ctx.state or {}).get("page", 0), PAGES):
+        if page == fail_at():
+            raise RuntimeError(f"page {page} failed")
+        yield from rows(page)
+        s = ctx.state or {}
+        s["page"] = page + 1
+        ctx.state = s
+
+
+@api.table(write_strategy="append", state="logged")
+def changed_in_place(ctx):
+    ctx.state = ctx.state or {"token": 0}
+    ctx.state["token"] += 1
+    yield {"page": 0, "n": ctx.state["token"]}
+
+
 @api.table(write_strategy="delete_insert", cursor_column="day", cursor_start="2026-11-01", batch="1d")
 def windowed(ctx):
     calls = HERE / "data" / "calls.json"
@@ -260,8 +289,14 @@ def rows_loaded(project: Path, table: str) -> list[tuple[int, int]]:
 
 @pytest.mark.parametrize(
 	("table", "expected_most_extra_rows"),
-	[("before", 2 * PAGE_ROWS), ("after", 2 * PAGE_ROWS), ("ended", 0)],
-	ids=["state set before each page", "state set after each page", "state set only at the end"],
+	[("before", 2 * PAGE_ROWS), ("after", 2 * PAGE_ROWS), ("ended", 0), ("mutated_before", 2 * PAGE_ROWS), ("mutated_after", 2 * PAGE_ROWS)],
+	ids=[
+		"state set before each page",
+		"state set after each page",
+		"state set only at the end",
+		"one object mutated and assigned again before each page",
+		"one object mutated and assigned again after each page",
+	],
 )
 def test_given_a_logged_table_when_a_page_fails_mid_run_then_the_next_run_loses_no_row_and_reloads_at_most_two_pages(
 	project: Path, table: str, expected_most_extra_rows: int
@@ -420,3 +455,24 @@ def test_given_delete_insert_when_a_read_yields_no_rows_then_rows_deleted_upstre
 	done = sqlload(project, "load", "days__rows")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT id FROM "RAW"."days__rows"') == [(1,)]
+
+
+def test_given_a_state_changed_in_place_without_assigning_when_the_run_ends_then_it_is_recorded(project: Path) -> None:
+	for _ in range(2):
+		done = sqlload(project, "load", "api__changed_in_place")
+		assert done.returncode == 0, done.stdout + done.stderr
+	assert [state for (_, state) in records(project, "changed_in_place")] == ['{"token": 1}', '{"token": 2}']
+
+
+def test_given_a_first_load_with_no_rows_when_its_schema_is_new_then_no_schema_is_created(project: Path) -> None:
+	(project / "sources" / "empty.py").write_text(
+		"import sqlload as sl\n"
+		"empty = sl.source('empty', schema='NEVER_MADE')\n"
+		"@empty.table(write_strategy='append')\n"
+		"def nothing(ctx):\n"
+		"    return\n"
+		"    yield\n"
+	)
+	done = sqlload(project, "load", "empty__nothing")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'NEVER_MADE'") == []

@@ -3,7 +3,7 @@
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 
-use crate::loader::_helpers::destination::{clean_stage, prepare_schemas};
+use crate::loader::_helpers::destination::{clean_stage, clean_staging};
 use crate::loader::_helpers::table_queue::{TableQueue, load_task, shared_run, thread_count};
 use crate::loader::models::{LoadRun, ProjectPlan, TableOutcome};
 
@@ -12,7 +12,7 @@ pub async fn load_tables(run: &LoadRun<'_>, plan: &ProjectPlan) -> Vec<TableOutc
     for destination in run.destinations.values() {
         clean_stage(destination).await;
     }
-    prepare_schemas(run, plan).await;
+    clean_staging(run, plan).await;
     let threads = thread_count(run);
     let shared = shared_run(run);
     let mut queue = TableQueue::new(run.project, plan);

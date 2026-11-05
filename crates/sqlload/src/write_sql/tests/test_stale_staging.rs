@@ -25,11 +25,16 @@ fn given_staging_tables_when_a_load_starts_then_only_those_named_older_than_the_
             ],
         },
         StaleStagingTestCase {
-            description: "Snowflake's upper-case names read the same",
+            description: "Snowflake's query chose by last_altered, so the name's time does not matter; a table without the suffix still never goes",
             warehouse: Warehouse::Snowflake,
-            found: &["APP__ACCOUNTS__SQLLOAD_STAGING_20261101000000_ABCD1234"],
+            found: &[
+                "APP__ACCOUNTS__SQLLOAD_STAGING_20261105095959_ABCD1234",
+                "APP__ACCOUNTS__SQLLOAD_STAGING_ABCD1234",
+                "APP__ACCOUNTSXXSQLLOADXSTAGINGX",
+            ],
             expected_statements: &[
-                "DROP TABLE IF EXISTS \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_20261101000000_ABCD1234\"",
+                "DROP TABLE IF EXISTS \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_20261105095959_ABCD1234\"",
+                "DROP TABLE IF EXISTS \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_ABCD1234\"",
             ],
         },
         StaleStagingTestCase {
@@ -88,9 +93,9 @@ fn given_a_schema_when_listing_its_staging_tables_then_snowflake_names_its_datab
             expected_name: "SELECT table_name FROM information_schema.tables WHERE table_schema = 'raw' AND table_name ILIKE '%__sqlload_staging_%'",
         },
         StagingIdTestCase {
-            description: "Snowflake names the connection's database",
+            description: "Snowflake names the connection's database and chooses by last_altered, with no wildcards",
             load_id: "analytics",
-            expected_name: "SELECT table_name FROM \"ANALYTICS\".information_schema.tables WHERE table_schema = 'RAW' AND table_name ILIKE '%__sqlload_staging_%'",
+            expected_name: "SELECT table_name FROM \"ANALYTICS\".information_schema.tables WHERE table_schema = 'RAW' AND CONTAINS(table_name, '__SQLLOAD_STAGING_') AND last_altered < DATEADD(hour, -24, CURRENT_TIMESTAMP())",
         },
     ];
     for test_case in test_cases {

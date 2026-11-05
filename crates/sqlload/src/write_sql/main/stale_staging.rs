@@ -7,7 +7,7 @@ use crate::write_sql::constants::{STAGING_SUFFIX, STAGING_TIME_DIGITS, STAGING_T
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::models::TableName;
 
-/// `DROP` statements for the tables among `found`, in `schema_of`'s schema, named as staging tables with a time before `before`; any other table, or a name without a readable time, stays.
+/// `DROP` statements for the tables among `found`, in `schema_of`'s schema, that are named as staging tables and stale: on Snowflake its query already chose them by when they last changed, elsewhere the time in the name must be before `before`. Any other table, or elsewhere a name without a readable time, stays.
 pub fn stale_staging(
     schema_of: &TableName,
     found: &[String],
@@ -16,7 +16,12 @@ pub fn stale_staging(
 ) -> Vec<String> {
     found
         .iter()
-        .filter(|name| staging_time(name).is_some_and(|time| time < before))
+        .filter(|name| match warehouse {
+            Warehouse::Snowflake => name
+                .to_ascii_lowercase()
+                .contains(&format!("{STAGING_SUFFIX}_")),
+            _ => staging_time(name).is_some_and(|time| time < before),
+        })
         .map(|name| {
             let table = TableName {
                 table: name.clone(),

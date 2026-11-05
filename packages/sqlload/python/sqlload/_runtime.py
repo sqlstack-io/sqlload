@@ -102,19 +102,17 @@ def start_table(request: str) -> Iterator[Any]:
 
 
 def current_state(table: str) -> str | None:
-	"""The value `ctx.state` had one assignment before its current one, as JSON, while the table function runs: rows crossing now commit with it.
+	"""The JSON `ctx.state` was assigned one assignment before its latest, while the table function runs: rows crossing now commit with it.
 
 	Rows a function yields may cross before or after it moves `ctx.state` past them, so only the
 	previous value is sure to cover every row crossed so far, whether the state is set before or
 	after the rows it covers; a resumed run then never skips rows, and may load up to about two
-	pages again."""
+	pages again. Each assignment is kept as JSON, so re-assigning a mutated object leaves the
+	previous value as it was."""
 	ctx = _contexts.get(table)
 	if ctx is None or not ctx._logged:
 		return None
-	try:
-		return json.dumps(ctx._previous_state)
-	except (TypeError, ValueError) as error:
-		raise TypeError(f"ctx.state of table {table} is not JSON: {error}") from error
+	return ctx._previous_assigned_state
 
 
 def table_state(table: str) -> str | None:

@@ -7,9 +7,10 @@ use std::sync::Arc;
 use clap::Parser;
 
 use crate::command::_helpers::exporter_commands::run_exporter_command;
+use crate::command::_helpers::limits::blocking_threads;
 use crate::command::_helpers::loader_commands::run_loader;
 use crate::command::_helpers::logging::init_logging;
-use crate::command::models::{Cli, LoaderRequest};
+use crate::command::models::{Cli, Command, LoaderRequest};
 use crate::project::main::is_project::is_project;
 use crate::python_sources::types::PythonHost;
 
@@ -27,16 +28,24 @@ where
         }
     };
     init_logging(cli.log_format);
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
+    let text = match std::fs::read_to_string(&cli.config) {
+        Ok(text) => text,
+        Err(error) => return fail(&format!("cannot read {}: {error}", cli.config.display())),
+    };
+    let cli_threads = match &cli.command {
+        Command::Plan(args) | Command::Apply(args) | Command::Load(args) => args.threads,
+        _ => None,
+    };
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if let Some(blocking) = blocking_threads(cli_threads, &text) {
+        builder.max_blocking_threads(blocking);
+    }
+    let runtime = match builder.build() {
         Ok(runtime) => runtime,
         Err(error) => return fail(&format!("cannot start the async runtime: {error}")),
     };
     let outcome = runtime.block_on(async {
-        let text = std::fs::read_to_string(&cli.config)
-            .map_err(|error| format!("cannot read {}: {error}", cli.config.display()))?;
         if is_project(&text) {
             let request = LoaderRequest {
                 text: &text,

@@ -247,8 +247,9 @@ class Context:
 		self._client: Any = None
 		self._logged = logged
 		self._state = state
-		self._previous_state = state
 		self.started_state = json.dumps(state)
+		self._assigned_state = self.started_state
+		self._previous_assigned_state = self.started_state
 
 	@property
 	def state(self) -> Any:
@@ -259,7 +260,12 @@ class Context:
 	def state(self, value: Any) -> None:
 		if not self._logged:
 			raise AttributeError(f"ctx.state needs state='logged' on table {self.table}")
-		self._previous_state = self._state
+		try:
+			assigned = json.dumps(value)
+		except (TypeError, ValueError) as error:
+			raise TypeError(f"ctx.state of table {self.table} is not JSON: {error}") from error
+		self._previous_assigned_state = self._assigned_state
+		self._assigned_state = assigned
 		self._state = value
 
 	@property

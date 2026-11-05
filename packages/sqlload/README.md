@@ -106,6 +106,7 @@ A large run commits along the way, each commit with the value `ctx.state` had on
 before its current one, so whether a function sets the state before or after the rows it covers,
 a run that fails part-way never loses rows; under `append`, the next run may load up to about
 two pages again.
+Assign `ctx.state` once per page; assigning more than once per page can lose rows after a crash.
 
 Each successful run appends a record to `_sqlload_runs` in the table's schema (or one object under
 `<table folder>/_sqlload/runs/` in a files target), in the same transaction as the data where the

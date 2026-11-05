@@ -5,7 +5,6 @@ use tokio::sync::OwnedMutexGuard;
 
 use crate::column_types::models::Warehouse;
 use crate::write_sql::constants::STALE_STAGING_HOURS;
-use crate::write_sql::main::create_schema::create_schema;
 use crate::write_sql::main::staging_tables_query::staging_tables_query;
 use crate::write_sql::main::stale_staging::stale_staging;
 
@@ -116,8 +115,8 @@ pub(crate) async fn ddl_guard(destination: &Destination) -> Option<OwnedMutexGua
     }
 }
 
-/// Before tables load at once: create the schemas of tables that do not exist yet (Python tables, which `apply` does not create), so their first loads never race to, and drop staging tables crashed loads left there over a day ago. A failure only warns: the table it concerns reports it, if it matters.
-pub(crate) async fn prepare_schemas(run: &LoadRun<'_>, plan: &ProjectPlan) {
+/// Before a load: drop the staging tables crashed loads left in the schemas it writes to. A failure only warns.
+pub(crate) async fn clean_staging(run: &LoadRun<'_>, plan: &ProjectPlan) {
     let mut schemas: BTreeMap<(String, Option<String>, String), &TablePlan> = BTreeMap::new();
     for table in plan
         .tables
@@ -131,11 +130,6 @@ pub(crate) async fn prepare_schemas(run: &LoadRun<'_>, plan: &ProjectPlan) {
                 name.database.clone(),
                 name.schema.clone(),
             ))
-            .and_modify(|seen| {
-                if !table.exists {
-                    *seen = table;
-                }
-            })
             .or_insert(table);
     }
     for table in schemas.into_values() {
@@ -143,19 +137,13 @@ pub(crate) async fn prepare_schemas(run: &LoadRun<'_>, plan: &ProjectPlan) {
             continue;
         };
         let name = &table.spec.destination;
-        if !table.exists {
-            let create = create_schema(name, table.spec.warehouse);
-            if let Err(error) = execute(destination, vec![create]).await {
-                tracing::warn!(%error, schema = %name.schema, "cannot create the schema before loading");
-            }
-        }
         if let Err(error) = drop_stale_staging(destination, name, table.spec.warehouse).await {
             tracing::warn!(%error, schema = %name.schema, "cannot clean up old staging tables");
         }
     }
 }
 
-/// Drop the staging tables in `name`'s schema that crashed loads left over a day ago.
+/// Drop the staging tables in `name`'s schema that crashed loads left: untouched for a day on Snowflake, named over a day old elsewhere.
 async fn drop_stale_staging(
     destination: &Destination,
     name: &TableName,
