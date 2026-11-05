@@ -104,10 +104,128 @@ jobs:
           docker pull chrislusf/seaweedfs:3.97
       - run: make test-containers
 
+  # Instruction counts of the hot paths (crates/sqlload-benches) under Callgrind, for the head and
+  # the merge base in one job; any benchmark more than 5% slower fails unless the pull request has
+  # the `perf-regression-accepted` label (add it, then re-run this job). Runs on main too, caching
+  # each main commit's counts so pull requests based on it skip building the base.
+  perf:
+    name: Performance gate
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      # Instruction counts only: no cache simulation, which is slower and not gated on.
+      BENCH_ARGS: --output-format=json --callgrind-args=--cache-sim=no
+      RESULTS_KEY: perf-v1-${{ runner.os }}-rust1.95.0-gungraun0.20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf
+      - uses: gungraun/setup-gungraun@v1
+      - name: Select the base
+        id: base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          head=$(git rev-parse HEAD)
+          echo "head=${head}" >> "${GITHUB_OUTPUT}"
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            echo "sha=$(git merge-base "${BASE_SHA}" "${head}")" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Restore the base's counts
+        id: cached
+        if: steps.base.outputs.sha != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: perf-base.jsonl
+          key: ${{ env.RESULTS_KEY }}-${{ steps.base.outputs.sha }}
+      - name: Benchmark the base
+        if: steps.base.outputs.sha != '' && steps.cached.outputs.cache-hit != 'true'
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+          HEAD: ${{ steps.base.outputs.head }}
+        run: |
+          git checkout --quiet --detach "${BASE}"
+          if [[ -d crates/sqlload-benches ]]; then
+            make bench-perf > perf-base.jsonl
+          else
+            echo "The base has no benchmarks." >&2
+            : > perf-base.jsonl
+          fi
+          git checkout --quiet --detach "${HEAD}"
+      - name: Benchmark the head
+        run: make bench-perf > perf-head.jsonl
+      - name: Compare
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Labels are read now, not from the event, so re-running this job after adding the label passes.
+          accept=()
+          if gh api "repos/${REPOSITORY}/issues/${NUMBER}/labels" --jq '.[].name' | grep -qx 'perf-regression-accepted'; then
+            accept=(--accept)
+          fi
+          python3 benchmarks/perf/compare.py --base perf-base.jsonl --head perf-head.jsonl \
+            --threshold 5 --summary "${GITHUB_STEP_SUMMARY}" "${accept[@]}"
+      - name: Report main's counts
+        if: github.event_name != 'pull_request'
+        run: python3 benchmarks/perf/compare.py --base /dev/null --head perf-head.jsonl --base-label "previous run" --summary "${GITHUB_STEP_SUMMARY}"
+      - name: Keep main's counts for pull requests
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: perf-head.jsonl
+          key: ${{ env.RESULTS_KEY }}-${{ steps.base.outputs.head }}
+
+  # Postgres to DuckDB, 1M narrow rows, sqlload alone with a release build: a wall-time figure in
+  # the job summary, not a gate (shared runners are too noisy to gate on time).
+  perf-e2e:
+    name: End-to-end timing (report only)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    # A cold cache compiles DuckDB in release mode (about 25 minutes); warm runs take a few.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bench-release
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.9"
+      - run: docker pull postgres:17-alpine
+      - run: make bench-e2e BENCH_OUT=benchmarks/results/e2e
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "### End-to-end: Postgres to DuckDB, sqlload, 1M narrow rows (not gating)"
+            echo
+            cat benchmarks/results/e2e/results.md 2>/dev/null || echo "No results."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   verify:
     name: Verify
     if: always()
-    needs: [changes, checks, containers]
+    needs: [changes, checks, containers, perf]
     runs-on: ubuntu-24.04
     steps:
       - name: Confirm every required job passed or was skipped for a docs-only change
@@ -115,12 +233,13 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           CHECKS_RESULT: ${{ needs.checks.result }}
           CONTAINERS_RESULT: ${{ needs.containers.result }}
+          PERF_RESULT: ${{ needs.perf.result }}
         run: |
           if [[ "${CHANGES_RESULT}" != "success" ]]; then
             echo "Scope classification: ${CHANGES_RESULT}" >&2
             exit 1
           fi
-          for result in "${CHECKS_RESULT}" "${CONTAINERS_RESULT}"; do
+          for result in "${CHECKS_RESULT}" "${CONTAINERS_RESULT}" "${PERF_RESULT}"; do
             case "${result}" in
               success|skipped) ;;
               *)
