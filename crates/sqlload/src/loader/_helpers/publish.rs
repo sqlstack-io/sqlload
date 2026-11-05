@@ -253,7 +253,7 @@ impl Publisher {
         match &self.destination {
             Destination::Snowflake(_) => {
                 let parts = std::mem::take(&mut self.parts);
-                let (parts, files) = write_part(parts, &batch).map_err(LoaderError::Invalid)?;
+                let (parts, files) = encode(move || write_part(parts, &batch)).await?;
                 self.parts = parts;
                 for body in files {
                     self.put_file(body).await?;
@@ -372,7 +372,7 @@ impl Publisher {
     async fn flush_batch(&mut self) -> Result<(), LoaderError> {
         if let Destination::Snowflake(_) = &self.destination {
             let parts = std::mem::take(&mut self.parts);
-            let (_, file) = finish_part(parts).map_err(LoaderError::Invalid)?;
+            let (_, file) = encode(move || finish_part(parts)).await?;
             if let Some(body) = file {
                 self.put_file(body).await?;
             }
@@ -567,6 +567,18 @@ impl Publisher {
         self.table = replanned;
         Ok(())
     }
+}
+
+/// Run Parquet encoding on a blocking thread, so tables loading at once encode in parallel.
+async fn encode<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, LoaderError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| {
+            LoaderError::Invalid(format!("the Parquet encoding thread failed: {error}"))
+        })?
+        .map_err(LoaderError::Invalid)
 }
 
 /// The write mode of one commit: the planned one, with a `delete_insert` narrowed to the commit's window or partitions.
