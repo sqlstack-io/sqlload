@@ -11,9 +11,10 @@ use crate::loader::_helpers::python::{
     YieldedData, declared_problems, inferred_table, python_tables, source_spelling,
 };
 use crate::loader::_helpers::resolve::resolve_tables;
-use crate::loader::models::TableSpec;
+use crate::loader::models::{PlanDetail, PlanItem, TableSpec};
 use crate::loader::tests::test_types::{
-    BoundArrayTestCase, DeclaredProblemsTestCase, InferredTableTestCase, SourceSpellingTestCase,
+    BoundArrayTestCase, DeclaredProblemsTestCase, InferredTableTestCase, ItemSpec,
+    SourceSpellingTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
@@ -169,4 +170,22 @@ pub(crate) fn bound_text(test_case: &BoundArrayTestCase) -> Result<String, Strin
     let formatter = ArrayFormatter::try_new(array.as_ref(), &FormatOptions::default())
         .map_err(|error| error.to_string())?;
     Ok(format!("{} {}", array.data_type(), formatter.value(0)))
+}
+
+/// `specs` as plan items.
+pub(crate) fn plan_items(specs: &[ItemSpec]) -> Vec<PlanItem> {
+    specs
+        .iter()
+        .map(|(name, action, details)| PlanItem {
+            name: (*name).to_owned(),
+            action: (*action).to_owned(),
+            details: details
+                .iter()
+                .map(|(label, text)| PlanDetail {
+                    label: (*label).to_owned(),
+                    text: (*text).to_owned(),
+                })
+                .collect(),
+        })
+        .collect()
 }

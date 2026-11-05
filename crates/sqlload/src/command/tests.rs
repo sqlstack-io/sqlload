@@ -6,5 +6,7 @@ mod helpers;
 mod load_options;
 #[path = "tests/test_loader_commands.rs"]
 mod loader_commands;
+#[path = "tests/test_output.rs"]
+mod output;
 #[path = "tests/test_types.rs"]
 mod test_types;

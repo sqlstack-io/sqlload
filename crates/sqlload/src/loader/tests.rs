@@ -6,3 +6,5 @@ mod python_columns;
 mod render_tally;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_view_lines.rs"]
+mod view_lines;

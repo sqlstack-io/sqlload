@@ -24,7 +24,7 @@ pub(crate) fn debug_without_host(project: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The command line `argv` (after `sqlload`) on `project` without a Python host: its output, or its error.
+/// The command line `argv` (after `sqlload`) on `project` without a Python host: its output, or its error, then `exit 0` or `exit 1` on its own line.
 pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
     let Ok(cli) = Cli::try_parse_from(["sqlload"].iter().chain(argv)) else {
         return "unparsed".to_owned();
@@ -40,7 +40,10 @@ pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
         .build()
         .map_err(|error| error.to_string())
         .and_then(|runtime| runtime.block_on(run_loader(request)))
-        .map_or_else(|error| error, |(lines, _)| lines.join("\n"))
+        .map_or_else(
+            |error| format!("{error}\nexit 1"),
+            |(lines, ok)| format!("{}\nexit {}", lines.join("\n"), u8::from(!ok)),
+        )
 }
 
 /// The selection and cursor options `sqlload load <argv>` plans with, as `select | exclude | start | end`, or the parse error.

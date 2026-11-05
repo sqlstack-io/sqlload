@@ -8,7 +8,7 @@ use clap::Parser;
 
 use crate::command::_helpers::exporter_commands::run_exporter_command;
 use crate::command::_helpers::limits::blocking_threads;
-use crate::command::_helpers::loader_commands::run_loader;
+use crate::command::_helpers::loader_commands::{json_error, run_loader};
 use crate::command::_helpers::logging::init_logging;
 use crate::command::_helpers::output::print_lines;
 use crate::command::models::{Cli, Command, LoaderRequest};
@@ -31,7 +31,16 @@ where
     init_logging(cli.log_format);
     let text = match std::fs::read_to_string(&cli.config) {
         Ok(text) => text,
-        Err(error) => return fail(&format!("cannot read {}: {error}", cli.config.display())),
+        Err(error) => {
+            let message = format!("cannot read {}: {error}", cli.config.display());
+            return match &cli.command {
+                Command::Plan(args) if args.json => {
+                    print_lines(vec![json_error("config", &message)], true);
+                    1
+                }
+                _ => fail(&message),
+            };
+        }
     };
     let cli_threads = match &cli.command {
         Command::Plan(args) | Command::Apply(args) | Command::Load(args) => args.concurrency,

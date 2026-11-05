@@ -29,6 +29,13 @@ fn given_a_load_when_rendering_its_tally_then_lines_align_and_the_last_counts_th
             expected_output: "created  RAW.A  3 columns\n\n✓ Completed  0.2s",
         },
         RenderTallyTestCase {
+            description: "recreated is the widest verb, and a reason over several lines continues under the first",
+            applied: &["recreated  RAW.A  4 columns"],
+            outcomes: &[("RAW.A", Err("first line\nsecond line"), 0)],
+            elapsed_ms: 1_000,
+            expected_output: "recreated  RAW.A  4 columns\nfailed     RAW.A  first line\n                  second line\n\n✗ Completed with failures  1 failed, 1.0s",
+        },
+        RenderTallyTestCase {
             description: "a million rows",
             applied: &[],
             outcomes: &[("RAW.A", Ok(1_234_567), 2_000)],

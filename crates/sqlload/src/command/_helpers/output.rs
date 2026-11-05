@@ -16,7 +16,7 @@ fn colour(line: &str) -> Option<&'static str> {
 }
 
 /// `line` coloured, with a heading's command note dimmed in place.
-fn paint(line: String) -> String {
+pub(crate) fn paint(line: String) -> String {
     let Some(code) = colour(&line) else {
         return line;
     };

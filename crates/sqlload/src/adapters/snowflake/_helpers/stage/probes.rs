@@ -148,24 +148,26 @@ pub(crate) async fn checked_external(
     stage: &ExternalStage,
 ) -> Result<bool, StepFailure> {
     let reference = stage_reference(stage);
-    checked(snowflake, reference.clone(), async {
-        external_state(snowflake, stage, &reference)
-            .await
-            .map_err(StepFailure::Failed)
-    })
+    checked(
+        snowflake,
+        reference.clone(),
+        external_state(snowflake, stage, &reference),
+    )
     .await
 }
 
+/// The stage's state; a missing integration or a stage that does not match the connection is `Unusable` with the fix, anything that stopped the check is `Failed`.
 async fn external_state(
     snowflake: &SnowflakeDestination,
     stage: &ExternalStage,
     reference: &str,
-) -> Result<bool, String> {
-    let failed = |error: &dyn std::fmt::Display| format!("{reference}: {error}");
+) -> Result<bool, StepFailure> {
+    let failed =
+        |error: &dyn std::fmt::Display| StepFailure::Failed(format!("{reference}: {error}"));
     let folder = open_folder(&stage.location).map_err(|error| failed(&error))?;
-    probe_folder(&folder)
-        .await
-        .map_err(|error| format!("SQLLoad cannot list {}: {error}", stage.location))?;
+    probe_folder(&folder).await.map_err(|error| {
+        StepFailure::Failed(format!("SQLLoad cannot list {}: {error}", stage.location))
+    })?;
     let lookup = stage_lookup(stage);
     let shown = match show_stages(snowflake, &lookup.query).await {
         Ok(shown) => shown,
@@ -189,14 +191,14 @@ async fn external_state(
                 .is_some_and(|name| name.eq_ignore_ascii_case(integration))
         });
         return match visible {
-            false => Err(format!(
+            false => Err(StepFailure::Unusable(format!(
                 "storage integration {integration} does not exist or this role has no USAGE on it"
-            )),
+            ))),
             true => Ok(true),
         };
     }
     if let Some(problem) = stage_problem(stage, &lookup, &shown) {
-        return Err(problem);
+        return Err(StepFailure::Unusable(problem));
     }
     execute_sql(
         &snowflake.sql,

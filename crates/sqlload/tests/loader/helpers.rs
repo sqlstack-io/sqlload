@@ -619,6 +619,17 @@ pub(crate) fn integration(fake: &sqlload_testkit::fake_snowflake::models::FakeSn
     fake.state.lock().integrations.insert("LAKE_INT".to_owned());
 }
 
+/// The integration, and a `_SQLLOAD_STAGE` on the right URL that uses another one.
+pub(crate) fn stage_on_other_integration(
+    fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake,
+) {
+    integration(fake);
+    fake.state.lock().stages.insert(
+        "_SQLLOAD_STAGE".to_owned(),
+        ("s3://fake-bucket/".to_owned(), "OTHER_INT".to_owned()),
+    );
+}
+
 /// The integration, and a load folder a failed run left long ago.
 pub(crate) fn old_leftovers(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
     integration(fake);
