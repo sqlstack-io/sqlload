@@ -29,8 +29,7 @@ pub struct Cli {
 /// The subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Validate the configuration and test every connection (`check` is an old name for it).
-    #[command(alias = "check")]
+    /// Validate the configuration and test every connection.
     Debug {
         /// Only validate the configuration; connect to nothing.
         #[arg(long)]
@@ -121,23 +120,11 @@ pub struct LoaderArgs {
     #[arg(long)]
     pub reload: bool,
     /// Backfill from this cursor value instead of the destination's maximum, typed from each selected table's cursor (an integer, or RFC 3339 or a date).
-    #[arg(long, value_name = "VALUE", conflicts_with_all = ["start_cursor_ts", "start_cursor_int", "end_cursor_ts", "end_cursor_int"])]
+    #[arg(long, value_name = "VALUE")]
     pub start_cursor: Option<String>,
     /// Backfill only cursor values below this one, typed from each selected table's cursor.
-    #[arg(long, value_name = "VALUE", conflicts_with_all = ["start_cursor_ts", "start_cursor_int", "end_cursor_ts", "end_cursor_int"])]
+    #[arg(long, value_name = "VALUE")]
     pub end_cursor: Option<String>,
-    /// Backfill from this timestamp (RFC 3339 or a date) instead of the destination's maximum.
-    #[arg(long, conflicts_with = "start_cursor_int")]
-    pub start_cursor_ts: Option<String>,
-    /// Backfill only cursor values below this timestamp (RFC 3339 or a date).
-    #[arg(long, conflicts_with = "end_cursor_int")]
-    pub end_cursor_ts: Option<String>,
-    /// Backfill from this integer cursor value instead of the destination's maximum.
-    #[arg(long)]
-    pub start_cursor_int: Option<i64>,
-    /// Backfill only integer cursor values below this one.
-    #[arg(long)]
-    pub end_cursor_int: Option<i64>,
     /// The most tables loading at once (default: the project's `concurrency`, else 4); one table's batches always commit one at a time.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     pub concurrency: Option<u16>,

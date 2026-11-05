@@ -324,7 +324,7 @@ def test_given_a_logged_table_setting_state_per_page_when_loading_then_each_comm
 
 
 def test_given_batch_windows_when_loading_a_python_table_then_its_function_is_called_once_per_window(project: Path) -> None:
-	done = sqlload(project, "load", "--end-cursor-ts", "2026-11-04", "api__windowed")
+	done = sqlload(project, "load", "--end-cursor", "2026-11-04", "api__windowed")
 	assert done.returncode == 0, done.stdout + done.stderr
 	calls = json.loads((project / "data" / "calls.json").read_text())
 	assert calls == [["2026-11-01", "2026-11-02"], ["2026-11-02", "2026-11-03"], ["2026-11-03", "2026-11-04"]]

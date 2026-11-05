@@ -20,6 +20,8 @@ const NDJSON_LOADER: &str =
 const JSON_FILES: &str = "write_strategy = \"append\"\nformat = \"json\"";
 const JSON_FILES_LOADER: &str =
     "write_strategy = \"append\"\nformat = \"json\"\ntest_loader_route = true";
+const NDJSON_HASHED: &str = "write_strategy = \"append\"\nformat = \"ndjson\"\n[sources.SOURCE.tables.SOURCE]\nmask = { s = \"hash\" }\ncolumns = { mixed = \"json\" }";
+const NDJSON_HASHED_LOADER: &str = "write_strategy = \"append\"\nformat = \"ndjson\"\ntest_loader_route = true\n[sources.SOURCE.tables.SOURCE]\nmask = { s = \"hash\" }\ncolumns = { mixed = \"json\" }";
 const CSV: &str = "write_strategy = \"append\"\nformat = \"csv\"";
 const CSV_LOADER: &str = "write_strategy = \"append\"\nformat = \"csv\"\ntest_loader_route = true";
 const NDJSON_PINNED_LOADER: &str = "write_strategy = \"append\"\nformat = \"ndjson\"\ntest_loader_route = true\n[sources.SOURCE.tables.SOURCE]\ncolumns = { coupon = \"text\" }";
@@ -326,6 +328,23 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
                 },
                 right: Side {
                     settings: HASHED_LOADER,
+                    ..DIRECT
+                },
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "hash masking next to a JSON column holding strings such as \"007\" and \"text\", a number and a boolean, which keep their JSON types",
+            case: ParityCase {
+                name: "ndjson_hashed",
+                files: ParityFiles::NdjsonValues,
+                left: Side {
+                    settings: NDJSON_HASHED,
+                    ..DIRECT
+                },
+                right: Side {
+                    settings: NDJSON_HASHED_LOADER,
                     ..DIRECT
                 },
                 ..BASE

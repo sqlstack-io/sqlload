@@ -1,9 +1,10 @@
 use crate::helpers::{
     every_csv_type, every_ndjson_type, every_parquet_storage, every_parquet_type, flaky_probes,
-    found, half_float_later, int96_in_a_later_batch, int96_newest, integration, json_layouts,
-    long_names, long_names_with_text, nanos_in_a_later_batch, nanos_newest, no_stage_or_channel,
-    no_stage_or_host, no_user_stage, not_found, not_owned, nothing, old_leftovers, run_async,
-    run_debug, run_route, similar_integration, stage_exists, two_batches, two_days, with_text,
+    found, half_float_later, int96_in_a_later_batch, int96_newest, integration,
+    integration_and_orders, json_layouts, long_names, long_names_with_text, nanos_in_a_later_batch,
+    nanos_newest, no_stage_or_channel, no_stage_or_host, no_user_stage, not_found, not_owned,
+    nothing, old_leftovers, run_async, run_debug, run_route, similar_integration, stage_exists,
+    two_batches, two_days, with_text,
 };
 use crate::test_types::{
     DebugStageTestCase, MaskMatrixTestCase, RouteFileSet, RouteFiles, RouteTestCase,
@@ -50,6 +51,7 @@ const BASE: RouteTestCase = RouteTestCase {
     files: RouteFiles::Directory,
     file_set: two_days,
     prepare: nothing,
+    reload: false,
     expected_error: "",
     expected_plan: &[],
     expected_unplanned: &[],
@@ -362,14 +364,35 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
         RouteTestCase {
-            description: "a hashed batch past 900 KiB in total still goes direct, each statement being within the limit",
+            description: "a hashed batch past one request's size is split over several requests, each hashing its COPYs into a delta table of hashed values that one last request writes from",
             stage: MANAGED,
             settings: "write_strategy = \"append\"\n[sources.orders.tables.orders]\nmask = { extra = \"hash\" }",
             files: RouteFiles::Bucket,
             file_set: long_names_with_text,
             prepare: integration,
-            expected_sent: &["CREATE OR REPLACE TEMPORARY TABLE", "SHA2(\"EXTRA\", 256)"],
+            expected_sent: &[
+                "CREATE OR REPLACE TEMPORARY TABLE",
+                "SHA2(\"EXTRA\", 256)",
+                "_DELTA\"",
+                "INSERT INTO \"DB\".\"RAW\".\"ORDERS\" (",
+                "DROP TABLE IF EXISTS \"DB\".\"RAW\".\"ORDERS__SQLLOAD_STAGING_",
+            ],
             expected_unsent: &["/_sqlload/"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "a direct append past one request's size is split the same way, COPYing into a delta table that one last request writes from",
+            stage: MANAGED,
+            settings: DIRECT,
+            files: RouteFiles::Bucket,
+            file_set: long_names_with_text,
+            prepare: integration,
+            expected_sent: &[
+                "CREATE OR REPLACE TEMPORARY TABLE",
+                "_DELTA\"",
+                "INSERT INTO \"DB\".\"RAW\".\"ORDERS\" (",
+            ],
+            expected_unsent: &["/_sqlload/", "SHA2("],
             ..BASE
         },
         RouteTestCase {
@@ -397,6 +420,38 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             expected_plan: &[PULLS, "in a temporary table, gone with its session"],
             expected_sent: &["CREATE OR REPLACE TEMPORARY TABLE", "SHA2(\"EXTRA\", 256)"],
             expected_unsent: &["TRANSIENT"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "replace on the direct route: each batch COPYs straight into the build table that is swapped in, rows written once",
+            stage: MANAGED,
+            settings: "write_strategy = \"replace\"",
+            files: RouteFiles::Bucket,
+            file_set: two_batches,
+            prepare: integration,
+            expected_plan: &[PULLS],
+            expected_sent: &[
+                "COPY INTO \"DB\".\"RAW\".\"ORDERS__SQLLOAD_STAGING_",
+                "METADATA$FILENAME",
+            ],
+            expected_unsent: &["INSERT INTO", "/_sqlload/", "TEMPORARY TABLE"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "--reload on the direct route: each batch COPYs straight into the build table, which is swapped in once",
+            stage: MANAGED,
+            settings: "write_strategy = \"append\"",
+            files: RouteFiles::Bucket,
+            file_set: two_batches,
+            prepare: integration_and_orders,
+            reload: true,
+            expected_plan: &[PULLS, "recreate from the whole source (--reload)"],
+            expected_sent: &[
+                "COPY INTO \"DB\".\"RAW\".\"ORDERS__SQLLOAD_STAGING_",
+                "SWAP WITH",
+                "METADATA$FILENAME",
+            ],
+            expected_unsent: &["INSERT INTO", "/_sqlload/", "TEMPORARY TABLE"],
             ..BASE
         },
         RouteTestCase {

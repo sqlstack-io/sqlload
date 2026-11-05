@@ -34,8 +34,7 @@ pip uninstall sqlload-cli
 `plan`, `apply` and `load` take selectors positionally or with `--select`/`-s`, and
 `--exclude` to leave tables out: each is a source name, a destination table name or a source's
 `schema.table`. `--start-cursor`/`--end-cursor` backfill a cursor range, typed from each selected
-table's cursor (an integer, an RFC 3339 timestamp or a date); `--start-cursor-ts`/`-int` and
-`--end-cursor-ts`/`-int` set one type explicitly.
+table's cursor (an integer, an RFC 3339 timestamp or a date).
 
 ## Python sources
 

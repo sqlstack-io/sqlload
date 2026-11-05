@@ -20,14 +20,9 @@ fn given_selection_and_cursor_flags_when_parsing_a_load_then_the_plan_options_ho
             expected_options: Ok(" |  | 100 | 2026-11-05"),
         },
         LoadOptionsTestCase {
-            description: "the typed flags still work",
-            argv: &["--start-cursor-int", "7", "--end-cursor-ts", "2026-11-05"],
-            expected_options: Ok(" |  | 7 | 2026-11-05"),
-        },
-        LoadOptionsTestCase {
-            description: "untyped and typed cursor flags cannot be combined",
-            argv: &["--start-cursor", "1", "--end-cursor-int", "5"],
-            expected_options: Err("cannot be used with"),
+            description: "the typed cursor flags are gone",
+            argv: &["--start-cursor-int", "7"],
+            expected_options: Err("unexpected argument '--start-cursor-int'"),
         },
         LoadOptionsTestCase {
             description: "--threads is gone; --concurrency replaces it",

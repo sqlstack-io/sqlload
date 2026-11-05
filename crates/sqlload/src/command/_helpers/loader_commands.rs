@@ -30,52 +30,18 @@ fn environment_variable(name: &str) -> Option<String> {
 
 /// The plan options `args` give.
 pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
-    let start = cursor_flag(
-        "--start-cursor-ts",
-        args.start_cursor_ts,
-        args.start_cursor_int,
-    )?;
-    let end = cursor_flag("--end-cursor-ts", args.end_cursor_ts, args.end_cursor_int)?;
     Ok(PlanOptions {
         select: [args.positional_select, args.select].concat(),
         exclude: args.exclude,
         rebuild_allowed: args.allow_type_change_rebuild,
         reload: args.reload,
-        start_cursor: args.start_cursor.or(start),
-        end_cursor: args.end_cursor.or(end),
+        start_cursor: args.start_cursor,
+        end_cursor: args.end_cursor,
         concurrency: args.concurrency.map(usize::from),
         batch_bytes: args
             .batch_bytes
             .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),
     })
-}
-
-/// A cursor flag's value as text, checking that a timestamp parses.
-fn cursor_flag(
-    flag: &str,
-    timestamp: Option<String>,
-    integer: Option<i64>,
-) -> Result<Option<String>, String> {
-    match (timestamp, integer) {
-        (Some(text), _) => match timestamp_problem(&text) {
-            None => Ok(Some(text)),
-            Some(problem) => Err(format!(
-                "{flag} {text:?} is not an RFC 3339 timestamp or a date (YYYY-MM-DD): {problem}"
-            )),
-        },
-        (None, integer) => Ok(integer.map(|value| value.to_string())),
-    }
-}
-
-/// Why `text` is not a timestamp or date, if it is not.
-fn timestamp_problem(text: &str) -> Option<String> {
-    let with_zone = chrono::DateTime::parse_from_rfc3339(text);
-    let without_zone = chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f");
-    let date = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d");
-    match (with_zone, without_zone, date) {
-        (Err(error), Err(_), Err(_)) => Some(error.to_string()),
-        _ => None,
-    }
 }
 
 /// The project in `request.text`, with its Python sources discovered through the host when it has `python_paths`.

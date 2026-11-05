@@ -254,7 +254,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 ],
             },
             BatchedScenarioTestCase {
-                description: "an integer batch without --end-cursor-int ends at the source's maximum, read at plan",
+                description: "an integer batch without --end-cursor ends at the source's maximum, read at plan",
                 setup: INTEGER,
                 settings: INTEGER_SETTINGS,
                 batch_bytes: None,
