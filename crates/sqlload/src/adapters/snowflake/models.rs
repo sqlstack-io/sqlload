@@ -318,3 +318,22 @@ pub struct DirectBatch<'a> {
     /// The files' own folder, which `copy_to_internal_stage` uploads them from.
     pub source_folder: Option<&'a OpenFolder>,
 }
+
+/// A batch's statements through a temporary table, which hashes masked columns: sent in one request, or split over several through a delta table whose masked columns are already hashed.
+#[derive(Debug)]
+pub(in crate::adapters) struct HashedScript {
+    /// Creates the temporary table the `COPY`s fill with plain values.
+    pub(in crate::adapters) create: String,
+    pub(in crate::adapters) copies: Vec<String>,
+    /// Hashes the temporary table into the target, in one request.
+    pub(in crate::adapters) write: Vec<String>,
+    pub(in crate::adapters) drop_staging: String,
+    /// Creates the transient delta table a split batch hashes into.
+    pub(in crate::adapters) create_delta: String,
+    /// Moves the temporary table into the delta, hashing masked columns; nothing is cast.
+    pub(in crate::adapters) hash_into_delta: Vec<String>,
+    /// Writes the delta into the target.
+    pub(in crate::adapters) finish: Vec<String>,
+    /// Dropped after the split batch, whether or not it loaded; a failed drop only warns.
+    pub(in crate::adapters) drop_delta: String,
+}
