@@ -158,7 +158,7 @@ class SqlLoad(Competitor):
 			return self._files_snowflake(scenario, context)
 		if scenario.source:
 			assert context.warehouse is not None
-			stage = context.warehouse.stage_toml() if self.external else ""
+			stage = context.warehouse.stage_toml() if self.external else '{ type = "internal_user_stage" }'
 			return (
 				context.warehouse.connection_toml(stage) + "\n" + self._postgres(scenario, context)
 				+ f'\n[sources.app.tables."public.{scenario.source}"]\nname = "{scenario.table}"\n'

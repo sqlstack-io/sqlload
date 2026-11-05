@@ -176,8 +176,6 @@ pub struct TablePlan {
     pub commits: CommitRule,
     /// How the rows reach Snowflake.
     pub stage: Option<StageRoute>,
-    /// Why routes earlier in the chain were passed over.
-    pub passed_over: Vec<String>,
     /// The stage `apply` must create.
     pub planned_stage: Option<PlannedStage>,
 }

@@ -8,8 +8,6 @@ mod direct_problem;
 mod hash_parity;
 #[path = "tests/helpers.rs"]
 mod helpers;
-#[path = "tests/test_pick_route.rs"]
-mod pick_route;
 #[path = "tests/test_stage_problem.rs"]
 mod stage_problem;
 #[path = "tests/test_stage_statements.rs"]

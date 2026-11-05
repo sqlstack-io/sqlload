@@ -8,6 +8,7 @@ account = "acct"
 user = "LOADER"
 auth = { method = "key_pair", private_key_file = "${KEY_FILE}" }
 database = "ANALYTICS"
+load_method = { type = "internal_user_stage" }
 
 [connections.app_pg]
 kind = "postgres"

@@ -126,7 +126,6 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         logged: None,
         commits: CommitRule::Whole(WholeReason::Blocked),
         stage: None,
-        passed_over: Vec::new(),
         planned_stage: None,
     }
 }
@@ -272,7 +271,6 @@ async fn plan_table_once(
                 logged: None,
                 commits: CommitRule::Whole(WholeReason::Blocked),
                 stage: None,
-                passed_over: Vec::new(),
                 planned_stage: None,
             });
         }
@@ -404,12 +402,8 @@ async fn plan_table_once(
         }
         Some(_) => None,
     };
-    let (choice, planned_stage) = chosen.unzip();
+    let (stage, planned_stage) = chosen.unzip();
     let planned_stage = planned_stage.flatten();
-    let (stage, passed_over) = match choice {
-        Some(choice) => (Some(choice.route), choice.passed_over),
-        None => (None, Vec::new()),
-    };
     schema
         .warnings
         .extend(route_warning(stage.as_ref()).map(str::to_owned));
@@ -453,7 +447,6 @@ async fn plan_table_once(
         logged: None,
         commits,
         stage,
-        passed_over,
         planned_stage,
     })
 }

@@ -34,7 +34,7 @@ fn no_variables(_: &str) -> Option<String> {
 fn project_text(live: &Live, folder: &str, test_case: &ParityCase, tables: (&str, &str)) -> String {
     let connection = |name: &str, stage: &str| {
         format!(
-            "[connections.{name}]\nkind = \"snowflake\"\naccount = \"{}\"\nuser = \"{}\"\nauth = {}\nrole = \"{}\"\nwarehouse = \"{}\"\ndatabase = \"{}\"\nstage = {stage}\n\n[targets.{name}]\nconnection = \"{name}\"\nloader_schema = \"{}\"\n\n",
+            "[connections.{name}]\nkind = \"snowflake\"\naccount = \"{}\"\nuser = \"{}\"\nauth = {}\nrole = \"{}\"\nwarehouse = \"{}\"\ndatabase = \"{}\"\nload_method = {stage}\n\n[targets.{name}]\nconnection = \"{name}\"\nloader_schema = \"{}\"\n\n",
             live.account,
             live.user,
             live.auth,
@@ -57,12 +57,12 @@ fn project_text(live: &Live, folder: &str, test_case: &ParityCase, tables: (&str
         connection(
             "direct",
             &format!(
-                "{{ kind = \"s3\", url = \"s3://{}/{}\", storage_integration = \"{}\", region = \"{}\" }}",
+                "{{ type = \"external_stage\", url = \"s3://{}/{}\", storage_integration = \"{}\", region = \"{}\" }}",
                 live.bucket, live.prefix, live.integration, live.region
             )
         ),
-        connection("streaming", "{ kind = \"streaming\" }"),
-        connection("insert", "{ kind = \"insert\" }"),
+        connection("streaming", "{ type = \"streaming\" }"),
+        connection("insert", "{ type = \"insert\" }"),
         live.bucket,
         live.region,
         source("left", tables.0, &test_case.left),

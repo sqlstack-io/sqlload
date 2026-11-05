@@ -202,12 +202,6 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
     {
         lines.push(format!("why     {reason}"));
     }
-    lines.extend(
-        table
-            .passed_over
-            .iter()
-            .map(|reason| format!("note    {reason}")),
-    );
     if table.route.as_ref().is_some_and(|route| {
         is_direct(Some(route))
             && spec

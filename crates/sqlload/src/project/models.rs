@@ -42,22 +42,12 @@ pub struct ProjectConfig {
     pub python_modules: BTreeMap<String, String>,
 }
 
-/// The route a Snowflake connection's loads must take; one it cannot use fails at plan, never falling back.
+/// How a Snowflake connection's loads get into Snowflake: required, with no default; one it cannot use fails at plan, never falling back.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum StageConfig {
-    /// The user stage `@~`.
-    User {},
-    /// The table stage `@%table`: the target's for an owned direct append, otherwise the staging table's.
-    Table {},
-    /// Snowpipe Streaming into a transient staging table.
-    Streaming {},
-    /// Batched multi-row `INSERT` into a transient staging table.
-    Insert {},
-    /// A named internal stage.
-    Internal { name: String },
-    /// An external stage on an S3 prefix: SQLLoad writes there itself, and Snowflake loads files of a files source under it directly.
-    S3 {
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LoadMethod {
+    /// An external stage on an S3 prefix: Snowflake reads a files source's files under it directly, and SQLLoad writes other sources' Parquet there.
+    ExternalStage {
         /// The stage's location, `s3://bucket/prefix/`.
         url: String,
         /// The storage integration of the stage SQLLoad creates (`_SQLLOAD_STAGE` in each loader schema).
@@ -76,6 +66,16 @@ pub enum StageConfig {
         #[serde(default)]
         keep_staged_files: bool,
     },
+    /// The user stage `@~`.
+    InternalUserStage {},
+    /// The table stage `@%table`: the target's for an owned direct append, otherwise the staging table's.
+    InternalTableStage {},
+    /// A named internal stage.
+    InternalNamedStage { name: String },
+    /// Snowpipe Streaming into a transient staging table.
+    Streaming {},
+    /// Batched multi-row `INSERT` into a transient staging table (very slow).
+    Insert {},
 }
 
 /// How to reach one system.
@@ -94,9 +94,9 @@ pub enum ConnectionConfig {
         /// Overrides the account URL, for tests.
         #[serde(default)]
         base_url: Option<String>,
-        /// Forces how loads reach Snowflake; without it, the first route the role can use: `@~`, `@%table`, Snowpipe Streaming, then `INSERT`.
+        /// How loads get into Snowflake; required (`None` only so that its absence is reported with a fix).
         #[serde(default)]
-        stage: Option<Box<StageConfig>>,
+        load_method: Option<Box<LoadMethod>>,
     },
     Postgres {
         host: String,

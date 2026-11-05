@@ -1,25 +1,27 @@
 use crate::helpers::{
     flaky_probes, found, half_float_later, int96_in_a_later_batch, int96_newest, integration,
-    long_names, long_names_with_text, nanos_in_a_later_batch, nanos_newest, no_internal_stage,
-    no_stage_or_channel, no_stage_or_host, no_user_stage, not_found, not_owned, nothing,
-    old_leftovers, run_async, run_debug, run_route, similar_integration, stage_exists, two_batches,
-    two_days, with_text,
+    long_names, long_names_with_text, nanos_in_a_later_batch, nanos_newest, no_stage_or_channel,
+    no_stage_or_host, no_user_stage, not_found, not_owned, nothing, old_leftovers, run_async,
+    run_debug, run_route, similar_integration, stage_exists, two_batches, two_days, with_text,
 };
 use crate::test_types::{DebugStageTestCase, RouteFiles, RouteTestCase};
 
-const MANAGED: &str = "{ kind = \"s3\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\" }";
-const KEEPS: &str = "{ kind = \"s3\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\", keep_staged_files = true }";
+const MANAGED: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\" }";
+const KEEPS: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\", keep_staged_files = true }";
 const OWN_STAGE: &str = "COPY INTO \"DB\".\"RAW\".\"ORDERS\"";
 const MANAGED_REF: &str = "FROM @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\"";
 const WRITES_PARQUET: &str = "write Parquet to";
 const PULLS: &str = "destination loads parquet files from s3://fake-bucket/src/";
 
+const USER: &str = "{ type = \"internal_user_stage\" }";
+const TABLE: &str = "{ type = \"internal_table_stage\" }";
+const STREAMING: &str = "{ type = \"streaming\" }";
 const APPEND: &str = "write_strategy = \"append\"";
 const REPLACING: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"day\"";
 
 const BASE: RouteTestCase = RouteTestCase {
     description: "",
-    stage: "",
+    stage: USER,
     settings: APPEND,
     files: RouteFiles::Directory,
     file_set: two_days,
@@ -34,11 +36,11 @@ const BASE: RouteTestCase = RouteTestCase {
 };
 
 #[test]
-fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_route_the_role_can_use()
+fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_its_load_method_sets()
 -> Result<(), String> {
     let test_cases = [
         RouteTestCase {
-            description: "no stage set: @~, one credentials fetch for the plan's probe and one for each of the two batches",
+            description: "@~: one credentials fetch for the plan's probe and one for each of the two batches",
             file_set: two_batches,
             expected_plan: &["write Parquet to internal stage @~"],
             expected_sent: &[
@@ -51,12 +53,16 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "@~ refused: an append into a table this load creates uses its table stage",
+            description: "@~ refused: the plan fails and never falls back",
             prepare: no_user_stage,
-            expected_plan: &[
-                "@~ cannot be used",
-                "write Parquet to internal stage @%table",
-            ],
+            expected_error: "load_method @~ cannot be used",
+            expected_unsent: &["COPY INTO"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "@%table: an append into a table this load creates uses its own table stage",
+            stage: TABLE,
+            expected_plan: &["write Parquet to internal stage @%table"],
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @\"DB\".\"RAW\".%\"ORDERS\"/sqlload/",
@@ -65,9 +71,9 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "@~ refused: a delete_insert uses the staging table's stage, after probing with a temporary table",
+            description: "@%table: a delete_insert uses the staging table's stage, after probing with a temporary table",
+            stage: TABLE,
             settings: REPLACING,
-            prepare: no_user_stage,
             expected_plan: &["the staging table's @%table"],
             expected_sent: &[
                 "CREATE TEMPORARY TABLE IF NOT EXISTS",
@@ -77,7 +83,8 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "an append into a table this role does not own goes through the staging table's stage",
+            description: "@%table: an append into a table this role does not own goes through the staging table's stage",
+            stage: TABLE,
             prepare: not_owned,
             expected_plan: &["the staging table's @%table"],
             expected_sent: &[
@@ -87,14 +94,10 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "no internal stage: Snowpipe Streaming into a staging table, then the usual write",
+            description: "streaming: Snowpipe Streaming into a staging table, then the usual write",
+            stage: STREAMING,
             settings: REPLACING,
-            prepare: no_internal_stage,
-            expected_plan: &[
-                "@~ cannot be used",
-                "@%table cannot be used",
-                "Snowpipe Streaming into a transient staging table",
-            ],
+            expected_plan: &["Snowpipe Streaming into a transient staging table"],
             expected_sent: &[
                 "CREATE OR REPLACE TRANSIENT TABLE",
                 "DELETE FROM \"DB\".\"RAW\".\"ORDERS\"",
@@ -104,7 +107,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         },
         RouteTestCase {
             description: "an append streaming goes through staging too, with rows keyed by stored names and values as text",
-            prepare: no_internal_stage,
+            stage: STREAMING,
             expected_plan: &["Snowpipe Streaming into a transient staging table"],
             expected_sent: &[
                 "INSERT INTO \"DB\".\"RAW\".\"ORDERS\"",
@@ -115,64 +118,35 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "no stage and no streaming: batched INSERT into staging, warned in plan",
+            description: "streaming: its host unreachable fails the plan",
+            stage: STREAMING,
             prepare: no_stage_or_host,
-            expected_plan: &[
-                "batched INSERT into a transient staging table",
-                "rows load by batched INSERT",
-            ],
-            expected_sent: &["FROM VALUES", "INSERT INTO \"DB\".\"RAW\".\"ORDERS\""],
-            expected_unsent: &["COPY INTO"],
+            expected_error: "load_method Snowpipe Streaming cannot be used",
             ..BASE
         },
         RouteTestCase {
-            description: "a chain-chosen stream that will not open drops to INSERT at load",
-            prepare: no_stage_or_channel,
-            expected_plan: &["Snowpipe Streaming into a transient staging table"],
-            expected_sent: &["FROM VALUES"],
-            ..BASE
-        },
-        RouteTestCase {
-            description: "stage = user forces @~: refused, the plan fails and never falls back",
-            stage: "{ kind = \"user\" }",
-            prepare: no_user_stage,
-            expected_error: "stage @~ cannot be used",
-            expected_unsent: &["COPY INTO"],
-            ..BASE
-        },
-        RouteTestCase {
-            description: "stage = table forces @%table, past a working @~",
-            stage: "{ kind = \"table\" }",
-            expected_plan: &["internal stage @%table"],
-            expected_sent: &["FROM @\"DB\".\"RAW\".%\"ORDERS\"/sqlload/"],
-            ..BASE
-        },
-        RouteTestCase {
-            description: "stage = streaming: its host unreachable fails the plan",
-            stage: "{ kind = \"streaming\" }",
-            prepare: no_stage_or_host,
-            expected_error: "stage Snowpipe Streaming cannot be used",
-            ..BASE
-        },
-        RouteTestCase {
-            description: "stage = streaming: a channel that will not open fails the load, with no INSERT",
-            stage: "{ kind = \"streaming\" }",
+            description: "streaming: a channel that will not open fails the load, with no INSERT",
+            stage: STREAMING,
             prepare: no_stage_or_channel,
             expected_error: "Snowpipe Streaming will not open",
             expected_unsent: &["FROM VALUES"],
             ..BASE
         },
         RouteTestCase {
-            description: "stage = insert goes straight to INSERT, with no probes",
-            stage: "{ kind = \"insert\" }",
-            expected_plan: &["batched INSERT"],
-            expected_sent: &["FROM VALUES"],
+            description: "insert goes straight to batched INSERT into staging, warned in plan, with no probes",
+            stage: "{ type = \"insert\" }",
+            expected_plan: &[
+                "batched INSERT into a transient staging table",
+                "rows load by batched INSERT",
+            ],
+            expected_sent: &["FROM VALUES", "INSERT INTO \"DB\".\"RAW\".\"ORDERS\""],
+            expected_unsent: &["COPY INTO"],
             expected_fetches: Some(0),
             ..BASE
         },
         RouteTestCase {
             description: "a named internal stage",
-            stage: "{ kind = \"internal\", name = \"DB.RAW.LOADS\" }",
+            stage: "{ type = \"internal_named_stage\", name = \"DB.RAW.LOADS\" }",
             expected_plan: &["internal stage @DB.RAW.LOADS"],
             expected_sent: &[
                 "FROM @DB.RAW.LOADS/sqlload/",
@@ -182,9 +156,9 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         },
         RouteTestCase {
             description: "a named internal stage refused fails the plan",
-            stage: "{ kind = \"internal\", name = \"DB.RAW.LOADS\" }",
+            stage: "{ type = \"internal_named_stage\", name = \"DB.RAW.LOADS\" }",
             prepare: |fake| fake.state.lock().denied_stages.push("LOADS".to_owned()),
-            expected_error: "stage @DB.RAW.LOADS cannot be used",
+            expected_error: "load_method @DB.RAW.LOADS cannot be used",
             ..BASE
         },
         RouteTestCase {
@@ -324,7 +298,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         RouteTestCase {
             description: "a probe failing for any other reason fails the plan, never changing the route",
             prepare: flaky_probes,
-            expected_error: "cannot check whether @~ can be used",
+            expected_error: "cannot check whether load_method @~ can be used",
             expected_unsent: &["COPY INTO", "FROM VALUES"],
             ..BASE
         },

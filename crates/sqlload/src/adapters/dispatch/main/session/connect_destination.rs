@@ -38,7 +38,7 @@ pub async fn connect_destination(
             warehouse,
             database,
             base_url,
-            stage,
+            load_method,
         }) => Destination::Snowflake(Box::new(connect_snowflake(SnowflakeAccount {
             account: account.clone(),
             user: user.clone(),
@@ -47,22 +47,19 @@ pub async fn connect_destination(
             warehouse: warehouse.clone(),
             database: target.database.clone().unwrap_or_else(|| database.clone()),
             base_url: base_url.clone(),
-            stage: stage
-                .as_ref()
-                .map(|stage| {
-                    forced_stage(
-                        stage,
-                        TableName {
-                            database: Some(
-                                target.database.clone().unwrap_or_else(|| database.clone()),
-                            ),
-                            schema: target.loader_schema.clone().unwrap_or_default(),
-                            table: String::new(),
-                        },
-                    )
-                })
-                .transpose()
-                .map_err(LoaderError::Invalid)?,
+            stage: forced_stage(
+                load_method.as_deref().ok_or_else(|| {
+                    LoaderError::Invalid(format!(
+                        "target {name:?}: its connection has no load_method"
+                    ))
+                })?,
+                TableName {
+                    database: Some(target.database.clone().unwrap_or_else(|| database.clone())),
+                    schema: target.loader_schema.clone().unwrap_or_default(),
+                    table: String::new(),
+                },
+            )
+            .map_err(LoaderError::Invalid)?,
         })?)),
         Some(ConnectionConfig::S3 {
             bucket,

@@ -65,9 +65,9 @@ class Settings:
 			return f'{{ method = "key_pair", private_key_file = "{self.private_key_file}" }}'
 		return f'{{ method = "pat", token = "${{{TOKEN_ENV}}}" }}'
 
-	def connection_toml(self, stage: str = "") -> str:
+	def connection_toml(self, load_method: str) -> str:
 		role = f'role = "{self.role}"\n' if self.role else ""
-		stage_line = f"stage = {stage}\n" if stage else ""
+		stage_line = f"load_method = {load_method}\n"
 		return (
 			f'[connections.wh]\nkind = "snowflake"\naccount = "{self.account}"\nuser = "{self.user}"\n'
 			f'auth = {self.auth_toml()}\n{role}warehouse = "{self.warehouse}"\ndatabase = "{self.database}"\n{stage_line}\n'
@@ -80,7 +80,7 @@ class Settings:
 	def stage_toml(self) -> str:
 		"""The external stage the direct route loads through: an existing one, or one SQLLoad creates."""
 		owned = f'name = "{self.stage_name}"' if self.stage_name else f'storage_integration = "{self.storage_integration}"'
-		return f'{{ kind = "s3", url = "{self.stage_url()}", {owned}, region = "{self.region}" }}'
+		return f'{{ type = "external_stage", url = "{self.stage_url()}", {owned}, region = "{self.region}" }}'
 
 	def files_key(self, dataset: Dataset) -> str:
 		"""The folder of the files scenario's Parquet parts, relative to the bucket."""
