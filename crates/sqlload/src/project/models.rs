@@ -25,16 +25,16 @@ pub struct ProjectConfig {
     /// The target used when a source names none.
     #[serde(default)]
     pub default_target: Option<String>,
-    /// The most tables loading at once (each table's batches still commit one at a time); `--threads` overrides it.
+    /// The most tables loading at once (each table's batches still commit one at a time); `--concurrency` overrides it.
     #[serde(default)]
-    pub threads: Option<usize>,
+    pub concurrency: Option<usize>,
     #[serde(default)]
     pub connections: BTreeMap<String, ConnectionConfig>,
     #[serde(default)]
     pub targets: BTreeMap<String, TargetConfig>,
     #[serde(default)]
     pub sources: BTreeMap<String, SourceConfig>,
-    /// Every connection's settings after `${NAME}` interpolation, for Python table functions.
+    /// Every connection's settings after `${ENV:NAME}` interpolation, for Python table functions.
     #[serde(skip)]
     pub connection_settings: serde_json::Map<String, serde_json::Value>,
     /// The file declaring each Python source, by source name.
@@ -42,22 +42,12 @@ pub struct ProjectConfig {
     pub python_modules: BTreeMap<String, String>,
 }
 
-/// The route a Snowflake connection's loads must take; one it cannot use fails at plan, never falling back.
+/// How a Snowflake connection's loads get into Snowflake: required, with no default; one it cannot use fails at plan, never falling back.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum StageConfig {
-    /// The user stage `@~`.
-    User {},
-    /// The table stage `@%table`: the target's for an owned direct append, otherwise the staging table's.
-    Table {},
-    /// Snowpipe Streaming into a transient staging table.
-    Streaming {},
-    /// Batched multi-row `INSERT` into a transient staging table.
-    Insert {},
-    /// A named internal stage.
-    Internal { name: String },
-    /// An external stage on an S3 prefix: SQLLoad writes there itself, and Snowflake loads files of a files source under it directly.
-    S3 {
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LoadMethod {
+    /// An external stage on an S3 prefix: Snowflake reads a files source's files under it directly, and SQLLoad writes other sources' Parquet there.
+    ExternalStage {
         /// The stage's location, `s3://bucket/prefix/`.
         url: String,
         /// The storage integration of the stage SQLLoad creates (`_SQLLOAD_STAGE` in each loader schema).
@@ -76,6 +66,16 @@ pub enum StageConfig {
         #[serde(default)]
         keep_staged_files: bool,
     },
+    /// The user stage `@~`.
+    InternalUserStage {},
+    /// The table stage `@%table`: the target's for an owned direct append, otherwise the staging table's.
+    InternalTableStage {},
+    /// A named internal stage.
+    InternalNamedStage { name: String },
+    /// Snowpipe Streaming into a transient staging table.
+    Streaming {},
+    /// Batched multi-row `INSERT` into a transient staging table (very slow).
+    Insert {},
 }
 
 /// How to reach one system.
@@ -94,9 +94,9 @@ pub enum ConnectionConfig {
         /// Overrides the account URL, for tests.
         #[serde(default)]
         base_url: Option<String>,
-        /// Forces how loads reach Snowflake; without it, the first route the role can use: `@~`, `@%table`, Snowpipe Streaming, then `INSERT`.
+        /// How loads get into Snowflake; required (`None` only so that its absence is reported with a fix).
         #[serde(default)]
-        stage: Option<Box<StageConfig>>,
+        load_method: Option<Box<LoadMethod>>,
     },
     Postgres {
         host: String,
@@ -121,7 +121,7 @@ pub enum ConnectionConfig {
     #[serde(rename = "duckdb")]
     DuckDb {
         /// The database file; `:memory:` for an in-memory database.
-        path: String,
+        database: String,
     },
     /// An HTTP API, for Python sources; its settings reach table functions as `ctx.connection`.
     Http {
@@ -230,13 +230,16 @@ pub struct SourceConfig {
     /// Hive `key=value` folders loaded as typed columns (files sources).
     #[serde(default)]
     pub partition_columns: BTreeMap<String, String>,
+    /// For files no external stage of the warehouse can read: download them and upload them unchanged to the user stage `@~`, where the warehouse loads them itself (much slower than an external stage; files sources).
+    #[serde(default)]
+    pub copy_to_internal_stage: bool,
     #[serde(default)]
     pub exclude_columns: Vec<String>,
     #[serde(default)]
     pub skip_tables_with_columns: Vec<String>,
     #[serde(default)]
     pub allow_columns: Vec<String>,
-    /// The key for `mask = { col = "hmac" }`, normally `${ENV}`.
+    /// The key for `mask = { col = "hmac" }`, normally `${ENV:MASK_KEY}`.
     #[serde(default)]
     pub mask_key: Option<crate::auth::models::Secret>,
     /// Defaults for every table of the source.
@@ -325,12 +328,13 @@ pub struct TableSettings {
     /// Where a Python table's position is kept: derived from the data (default) or in the run log.
     #[serde(default)]
     pub state: Option<StateMode>,
-    /// `"loader"`: SQLLoad shapes the rows itself, so plain values of masked columns never reach Snowflake.
+    /// Tests only, and absent from released builds: SQLLoad reads a files source's files itself, the reference side of the live parity test.
+    #[cfg(feature = "container-tests")]
     #[serde(default)]
-    pub shaping: Option<Shaping>,
-    /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones.
+    pub test_loader_route: Option<bool>,
+    /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones; `"none"` commits the whole read once.
     #[serde(default, deserialize_with = "deserialize_optional_batch")]
-    pub batch: Option<BatchStep>,
+    pub batch_size: Option<BatchStep>,
 }
 
 /// One table's settings: everything a source can set, plus what only a table can.
@@ -398,21 +402,14 @@ impl std::fmt::Display for WriteStrategy {
     }
 }
 
-/// Who shapes a files source's rows, when it is forced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Shaping {
-    Loader,
-}
-
-/// A cursor table's `batch`: each run reads and commits one cursor window of this size at a time.
+/// A cursor table's `batch_size`: each run reads and commits one cursor window of this size at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BatchStep {
     /// A date or timestamp cursor's window, such as `"1d"`.
     Duration(std::time::Duration),
     /// An integer cursor's window.
     Integer(u64),
-    /// `"whole"`: no windows and no ordered read; each read commits once.
+    /// `"none"`: no windows and no ordered read; each read commits once.
     Whole,
 }
 

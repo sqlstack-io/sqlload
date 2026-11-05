@@ -29,14 +29,24 @@ pub(crate) struct StageStatementTestCase {
     pub(crate) expected_sql: &'static str,
 }
 
+/// Where a direct-copy case's files live and where Snowflake reads them.
+pub(crate) struct CopyFrom {
+    /// The source folder below `s3://lake/`.
+    pub(crate) source: &'static str,
+    pub(crate) stage: &'static str,
+    /// The folder below the stage the files are read from.
+    pub(crate) folder: &'static str,
+    /// What `METADATA$FILENAME` starts with for these files.
+    pub(crate) filename_prefix: &'static str,
+}
+
 pub(crate) struct DirectCopiesTestCase {
     pub(crate) description: &'static str,
     /// File keys below the source folder, each with its `day` partition value.
     pub(crate) files: Vec<(String, &'static str)>,
     pub(crate) columns: Vec<CopyColumn>,
-    /// The source folder below `s3://lake/`; the stage is on `s3://lake/raw/`.
-    pub(crate) source: &'static str,
-    /// The number of statements and the start of the first (or the error text).
+    pub(crate) from: CopyFrom,
+    /// The number of statements and text the first holds (or the error text).
     pub(crate) expected_copies: Result<(usize, &'static str), &'static str>,
 }
 
@@ -49,7 +59,8 @@ pub(crate) struct DirectProblemTestCase {
     pub(crate) columns: Vec<CopyColumn>,
     pub(crate) masks: Vec<(String, MaskMethod)>,
     pub(crate) refused: Vec<(String, String)>,
-    pub(crate) shaped_by_loader: bool,
+    /// Copied unchanged to an internal stage (`copy_to_internal_stage`) instead of read under the stage.
+    pub(crate) copied: bool,
     pub(crate) expected_problem: Option<&'static str>,
 }
 
@@ -65,15 +76,6 @@ pub(crate) struct HashParityTestCase {
     pub(crate) value: &'static str,
     /// The lowercase hex SHA-256 of the value's UTF-8 bytes, as Snowflake's `SHA2(value, 256)` returns it.
     pub(crate) expected_digest: &'static str,
-}
-
-pub(crate) struct PickRouteTestCase {
-    pub(crate) description: &'static str,
-    pub(crate) forced: bool,
-    /// Each step and why it cannot be used (`true` unusable, `false` a failed check), `None` when it can.
-    pub(crate) outcomes: &'static [(&'static str, Option<(bool, &'static str)>)],
-    /// How many steps were passed over, or the failure.
-    pub(crate) expected_choice: Result<usize, &'static str>,
 }
 
 pub(crate) struct StepFailureTestCase {

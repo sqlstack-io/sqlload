@@ -44,7 +44,7 @@ impl SnowflakeWriter {
             in_batch.extend(column.cloned());
         }
         let rows = text_rows(batch).map_err(LoaderError::Invalid)?;
-        if matches!(self.route, Some(StageRoute::Streaming { .. })) {
+        if matches!(self.route, Some(StageRoute::Streaming)) {
             self.open_stream(target, &staging).await?;
         }
         match self.stream.as_mut() {
@@ -73,8 +73,8 @@ impl SnowflakeWriter {
             SnowflakeSql.stored_name(&staging.table)
         );
         let channel = format!("sqlload_{}", target.load_id.replace('-', "_"));
-        match (open_channel(&client, &pipe, &channel).await, &self.route) {
-            (Ok(opened), _) => {
+        match open_channel(&client, &pipe, &channel).await {
+            Ok(opened) => {
                 self.stream = Some(RowStream {
                     client,
                     pipe,
@@ -84,17 +84,7 @@ impl SnowflakeWriter {
                 });
                 Ok(())
             }
-            (
-                Err(error),
-                Some(StageRoute::Streaming {
-                    may_fall_back: true,
-                }),
-            ) => {
-                tracing::warn!(%error, table = %target.table.table, "Snowpipe Streaming will not open; this table loads by batched INSERT");
-                self.route = Some(StageRoute::Insert);
-                Ok(())
-            }
-            (Err(error), _) => Err(LoaderError::Invalid(format!(
+            Err(error) => Err(LoaderError::Invalid(format!(
                 "Snowpipe Streaming will not open for {}: {error}",
                 staging.table
             ))),

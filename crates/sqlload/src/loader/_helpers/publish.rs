@@ -459,10 +459,10 @@ impl Publisher {
         Ok(())
     }
 
-    /// Load a files batch by having the destination `COPY` the files itself, where the plan chose that and the batch's own footers still allow it. `None` when SQLLoad must read this batch itself.
+    /// Load a files batch by having the destination `COPY` the files itself, where the plan chose that; a batch it cannot load that way fails, never going through SQLLoad. `None` when the plan has SQLLoad read the files (`hmac` masking, or a destination that does not read files itself).
     pub(crate) async fn load_direct(
         &mut self,
-        (files, footers): (&[DataFile], &BatchFooters),
+        (files, footers, folder): (&[DataFile], &BatchFooters, Option<&OpenFolder>),
         range: &CommitRange,
     ) -> Result<Option<DirectLoaded>, LoaderError> {
         let Some(read) = &self.table.files else {
@@ -488,8 +488,15 @@ impl Publisher {
             footers,
             mode: &mode,
             live: self.table.live.as_deref(),
+            source_folder: folder,
         };
-        load_files(&mut self.writer, &batch).await
+        match load_files(&mut self.writer, &batch).await? {
+            Some(loaded) => Ok(Some(loaded)),
+            None => Err(LoaderError::Invalid(format!(
+                "{}: the plan has the destination load these files itself, but it cannot, and files never go through SQLLoad instead",
+                self.table.spec.destination.table
+            ))),
+        }
     }
 
     /// Note what a direct batch did; a batch that is not yet committed waits for `cut`.
@@ -833,7 +840,14 @@ async fn feed(
                         true => CommitRange::Planned,
                         false => CommitRange::Values(group.values.clone()),
                     };
-                    match publisher.load_direct((&files, &footers), &range).await? {
+                    let folder = match reader {
+                        SourceReader::Files(folder) => Some(folder),
+                        _ => None,
+                    };
+                    match publisher
+                        .load_direct((&files, &footers, folder), &range)
+                        .await?
+                    {
                         Some(DirectLoaded::Committed(rows)) => {
                             publisher.note_direct(&DirectLoaded::Committed(rows));
                             continue;
@@ -1078,7 +1092,7 @@ impl Publisher {
         Ok(())
     }
 
-    /// Whether a files target's `delete_insert` would end this commit inside a partition it wrote (a `batch` finer than the partition): the commit then waits for the rest of the partition, so a failure leaves its old files in place and none of the new ones.
+    /// Whether a files target's `delete_insert` would end this commit inside a partition it wrote (a `batch_size` finer than the partition): the commit then waits for the rest of the partition, so a failure leaves its old files in place and none of the new ones.
     fn partition_unfinished(&self, range: &CommitRange) -> Result<bool, LoaderError> {
         let (
             Some(sink),

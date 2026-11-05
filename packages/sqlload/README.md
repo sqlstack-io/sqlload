@@ -29,6 +29,14 @@ Both this package and `sqlload-cli` install a `sqlload` command. Remove the old 
 pip uninstall sqlload-cli
 ```
 
+## Selecting tables
+
+`plan`, `apply` and `load` take selectors positionally or with `--select`/`-s`, and
+`--exclude` to leave tables out: each is a source name, a destination table name or a source's
+`schema.table`. `--start-cursor`/`--end-cursor` backfill a cursor range, typed from each selected
+table's cursor (an integer, an RFC 3339 timestamp or a date); `--start-cursor-ts`/`-int` and
+`--end-cursor-ts`/`-int` set one type explicitly.
+
 ## Python sources
 
 List the folders holding them in `sqlload.toml` (`python_paths = ["sources"]`); every
@@ -64,18 +72,18 @@ get.
 ### Batches
 
 A large load commits along the way instead of all at the end, so a failure keeps what committed
-and the next run carries on from there. Tables load at the same time, up to `threads` in
-`sqlload.toml` or `--threads N` (default 4); one table's batches commit one at a time.
+and the next run carries on from there. Tables load at the same time, up to `concurrency` in
+`sqlload.toml` or `--concurrency N` (default 4); one table's batches commit one at a time.
 
 How a table commits, as `plan` shows on its `batch` line:
 
-- `batch = "1d"` (a duration, for date and timestamp cursors) or `batch = 1000` (a step, for integer
+- `batch_size = "1d"` (a duration, for date and timestamp cursors) or `batch_size = 1000` (a step, for integer
   cursors) reads and commits one cursor window at a time, up to 100,000 windows. A Python function
   is called once per window, with `ctx.cursor_value` and `ctx.cursor_end` set to it. A Postgres
-  integer cursor without `--end-cursor-int` ends at its maximum when `plan` ran.
-- Without `batch`, a Postgres table whose cursor leads an index is read in cursor order (NULLs
-  first) and commits about every 1 GB, only between distinct cursor values. `batch = "whole"` opts
-  out, for tables where the ordered read is slower than a scan.
+  integer cursor without `--end-cursor` ends at its maximum when `plan` ran.
+- Without `batch_size`, a Postgres table whose cursor leads an index is read in cursor order (NULLs
+  first) and commits about every 1 GB, only between distinct cursor values. `batch_size = "none"`
+  opts out, for tables where the ordered read is slower than a scan.
 - Any other cursor table commits once per read, as do text cursors and `append` without a cursor
   or logged state, since a rerun could otherwise skip or duplicate rows.
 - Files sources commit at 1,000 files or about 1 GB; under `delete_insert` a partition is never split.
@@ -84,39 +92,42 @@ How a table commits, as `plan` shows on its `batch` line:
 Windows on a Postgres table are read in one `REPEATABLE READ` snapshot, so a row moving between
 windows is read once. That snapshot stays open on the source for the whole table load: it counts
 towards `idle_in_transaction_session_timeout`, and vacuum cannot remove rows it can still see. Use
-a larger `batch` or a narrower range if either matters.
+a larger `batch_size` or a narrower range if either matters.
 
 Tables of a Python source with a `@source.client` run one at a time, because clients are rarely
 thread-safe; set `parallel_tables=True` on the source when its client is.
 
 ### How rows reach Snowflake
 
-With no `stage` on the Snowflake connection, each table takes the first route the role can use, and
-`plan` shows which and why: the user stage `@~`, then `@%table`, then Snowpipe Streaming into a
-transient staging table, then batched `INSERT` (warned in `plan`). `stage = ...` forces a choice; a
-forced route the role cannot use fails at `plan`, and never falls back:
+A Snowflake connection needs `load_method`, with no default: it is how data gets into Snowflake.
+A method the role cannot use fails at `plan`, and never falls back to another:
 
 ```toml
 [connections.wh]
 kind = "snowflake"
 # ...
-stage = { kind = "s3", url = "s3://lake/sqlload/", storage_integration = "LAKE_INT" }
-# or an existing stage: name = "DB.SCHEMA.STAGE"
-# or { kind = "user" }, { kind = "table" }, { kind = "streaming" }, { kind = "insert" },
-#    { kind = "internal", name = "DB.SCHEMA.STAGE" }
+load_method = { type = "external_stage", url = "s3://lake/sqlload/", storage_integration = "LAKE_INT" }
+# or an existing stage: name = "DB.SCHEMA.STAGE" instead of storage_integration
+# or { type = "internal_user_stage" }, { type = "internal_table_stage" },
+#    { type = "internal_named_stage", name = "DB.SCHEMA.STAGE" }, { type = "streaming" },
+#    { type = "insert" } (very slow, warned in plan)
 ```
 
-An `s3` stage needs SQLLoad's own write access to the bucket. `apply` creates `_SQLLOAD_STAGE` in the
+An `external_stage` needs SQLLoad's own write access to the bucket. `apply` creates `_SQLLOAD_STAGE` in the
 loader schema when given a `storage_integration`. Staged files are deleted once their batch commits,
 and the next load removes what failed runs left after a day; `keep_staged_files = true` on the
 stage keeps them and leaves that stage out of the cleanup.
 
-Parquet files of a files source under that URL load directly: Snowflake reads them itself and
-nothing passes through SQLLoad, where tests prove the result is the same as SQLLoad's own; `plan`
-says why a table stays on SQLLoad otherwise. A `hash`-masked column on this route reaches Snowflake
-in plain text, in a temporary table gone with its session, and is hashed there; `hmac` always stays
-on SQLLoad. `shaping = "loader"` on a table or source keeps its rows on SQLLoad, so plain values
-never reach Snowflake.
+Files of a files source (Parquet, JSON, NDJSON or CSV) under that URL load directly: Snowflake
+reads them itself and nothing passes through SQLLoad, with the same values SQLLoad's own reader
+gives, which live tests check. A column the direct `COPY` cannot load exactly (`Float16`, a decimal
+over 38 digits, a nested type) fails `plan`, or the load for a later batch, naming the column: files
+never fall back to SQLLoad. Files no external stage covers fail `plan` too, unless the source sets
+`copy_to_internal_stage = true`.
+
+A `hash`-masked column on this route reaches Snowflake in plain text, in a temporary table gone with
+its session, and is hashed there. `hmac` is the one exception: its key must never appear in SQL, so
+those files go through SQLLoad, which `plan` warns is much slower.
 
 Files sources add `_sqlload_source_row`, a row's number in its file from 1.
 

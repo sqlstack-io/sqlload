@@ -28,7 +28,7 @@ impl TableWriter for SnowflakeWriter {
     fn writes_directly(&self) -> bool {
         !matches!(
             self.route,
-            Some(StageRoute::Streaming { .. } | StageRoute::Insert | StageRoute::StagingTable)
+            Some(StageRoute::Streaming | StageRoute::Insert | StageRoute::StagingTable)
         )
     }
 

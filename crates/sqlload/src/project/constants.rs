@@ -10,8 +10,9 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "on_schema_change",
     "auto_widen",
     "type_change_rebuild",
-    "batch",
-    "shaping",
+    "batch_size",
+    #[cfg(feature = "container-tests")]
+    "test_loader_route",
 ];
 
 /// Keys only a source may use.
@@ -31,6 +32,7 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "csv",
     "destination_path",
     "partition_columns",
+    "copy_to_internal_stage",
     "exclude_columns",
     "skip_tables_with_columns",
     "allow_columns",
@@ -96,8 +98,8 @@ pub const DEFAULT_TABLE_NAME: &str = "{source}__{table}";
 /// The destination table name template for a files source, which has one table.
 pub const DEFAULT_FILES_TABLE_NAME: &str = "{source}";
 
-/// The `batch` value that opts a table out of windows and ordered reads.
-pub const WHOLE_BATCH: &str = "whole";
+/// The `batch_size` value that opts a table out of windows and ordered reads.
+pub const WHOLE_BATCH: &str = "none";
 
-/// The parts of an existing stage's name in a Snowflake connection's `stage`: `DATABASE.SCHEMA.STAGE`.
+/// The parts of an existing stage's name in a Snowflake connection's `load_method`: `DATABASE.SCHEMA.STAGE`.
 pub const STAGE_NAME_PARTS: usize = 3;

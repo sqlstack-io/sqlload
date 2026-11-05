@@ -246,7 +246,7 @@ pub(crate) struct BatchedScenarioTestCase {
     pub(crate) settings: &'static str,
     /// The hidden `--batch-bytes`, so a few rows make several commits.
     pub(crate) batch_bytes: Option<usize>,
-    pub(crate) threads: Option<usize>,
+    pub(crate) concurrency: Option<usize>,
     pub(crate) runs: &'static [BatchedRun],
     /// Each run's `<load error, or ok> => <check query result>`.
     pub(crate) expected_outcomes: &'static [&'static str],
@@ -273,6 +273,17 @@ pub(crate) enum RouteFiles {
 
 /// Makes a routes scenario's source files: each key and its bytes.
 pub(crate) type RouteFileSet = fn() -> Result<Vec<(String, bytes::Bytes)>, String>;
+
+/// One mask, planned for every fixture format under every files strategy.
+pub(crate) struct MaskMatrixTestCase {
+    pub(crate) description: &'static str,
+    /// TOML ending `[sources.orders]`; `COLUMN` stands for the fixture's text column.
+    pub(crate) mask: &'static str,
+    /// Text every plan's route must contain.
+    pub(crate) expected_plan: &'static [&'static str],
+    /// Text no plan's route may contain.
+    pub(crate) expected_unplanned: &'static [&'static str],
+}
 
 /// One load of a files source into the fake Snowflake.
 pub(crate) struct RouteTestCase {

@@ -7,6 +7,7 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
 use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
 use crate::adapters::dispatch::main::route::route_warning::route_warning;
+use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
@@ -42,6 +43,7 @@ use crate::postgres_source::models::ReadColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::BatchStep;
 use crate::project::models::Contract;
+use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -126,7 +128,6 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         logged: None,
         commits: CommitRule::Whole(WholeReason::Blocked),
         stage: None,
-        passed_over: Vec::new(),
         planned_stage: None,
     }
 }
@@ -156,7 +157,7 @@ pub(crate) async fn plan_table(
     with_run_log(plan, destination, options).await
 }
 
-/// Why the table's `batch` setting has no effect, if it has none: a files source commits by whole partitions, `replace` and `--reload` swap the whole table in once, and windows need a cursor.
+/// Why the table's `batch_size` setting has no effect, if it has none: a files source commits by whole partitions, `replace` and `--reload` swap the whole table in once, and windows need a cursor.
 fn ignored_batch(plan: &TablePlan) -> Option<String> {
     let spec = &plan.spec;
     let step = spec.batch?;
@@ -169,7 +170,7 @@ fn ignored_batch(plan: &TablePlan) -> Option<String> {
         }
         _ => return None,
     };
-    Some(format!("batch is ignored: {reason}"))
+    Some(format!("batch_size is ignored: {reason}"))
 }
 
 /// A table's columns and schema plan once more during its load, when its source shows new columns; nothing else about its plan is read or checked again. `known` is the live columns when they are known to be current (a Python table's first batch, just after plan); otherwise one read of them, except that a files target has no SQL to read them with and keeps `stale`, what plan saw.
@@ -272,7 +273,6 @@ async fn plan_table_once(
                 logged: None,
                 commits: CommitRule::Whole(WholeReason::Blocked),
                 stage: None,
-                passed_over: Vec::new(),
                 planned_stage: None,
             });
         }
@@ -404,21 +404,23 @@ async fn plan_table_once(
         }
         Some(_) => None,
     };
-    let (choice, planned_stage) = chosen.unzip();
+    let (stage, planned_stage) = chosen.unzip();
     let planned_stage = planned_stage.flatten();
-    let (stage, passed_over) = match choice {
-        Some(choice) => (Some(choice.route), choice.passed_over),
-        None => (None, Vec::new()),
-    };
     schema
         .warnings
         .extend(route_warning(stage.as_ref()).map(str::to_owned));
-    let route = match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
-        Ok(route) => Some(route),
-        Err(problem) => {
-            schema = blocked_plan(vec![problem]);
-            None
-        }
+    schema
+        .warnings
+        .extend(hmac_warnings(spec, stage.as_ref(), destination));
+    let route = match schema.blocked {
+        Some(_) => None,
+        None => match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
+            Ok(route) => Some(route),
+            Err(problem) => {
+                schema = blocked_plan(vec![problem]);
+                None
+            }
+        },
     };
     let commits = commit_rule(&CommitRequest {
         spec,
@@ -453,7 +455,6 @@ async fn plan_table_once(
         logged: None,
         commits,
         stage,
-        passed_over,
         planned_stage,
     })
 }
@@ -497,6 +498,21 @@ fn reader_offer(
         },
     });
     let direct_blocked = read.and_then(|read| direct_blocked(spec, read, stage));
+    let hmac: Vec<&str> = spec
+        .masked
+        .columns
+        .iter()
+        .filter(|(_, method)| **method == MaskMethod::Hmac)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let needs_loader = match (hmac.is_empty(), spec.test_loader_route) {
+        (false, _) => Some(format!(
+            "{} masked with hmac, whose key must never appear in SQL",
+            hmac.join(", ")
+        )),
+        (true, true) => Some("the table sets test_loader_route (tests only)".to_owned()),
+        (true, false) => None,
+    };
     ReaderOffer {
         arrow: true,
         existing_files,
@@ -506,6 +522,15 @@ fn reader_offer(
             Err(_) => None,
         },
         direct_blocked,
+        needs_loader,
+        copy_to_internal_stage: spec
+            .files
+            .as_ref()
+            .is_some_and(|files| files.copy_to_internal_stage),
+        out_of_reach: spec
+            .files
+            .as_ref()
+            .is_some_and(|files| stage_misses(stage, &files.location)),
     }
 }
 
@@ -515,8 +540,34 @@ pub(crate) fn is_direct(route: Option<&Route>) -> bool {
         matches!(
             route.steps.as_slice(),
             [Step::UseFiles(_), Step::DestinationPulls(_)]
+                | [
+                    Step::UseFiles(_),
+                    Step::CopyFiles(_),
+                    Step::DestinationPulls(_)
+                ]
         )
     })
+}
+
+/// A warning for each `hmac`-masked column of a files source whose files `destination` would otherwise read itself: every file then goes through SQLLoad.
+fn hmac_warnings(
+    spec: &TableSpec,
+    stage: Option<&StageRoute>,
+    destination: &Destination,
+) -> Vec<String> {
+    let reads_itself = writer_accepts(destination, stage)
+        .reads_files_itself
+        .is_some();
+    spec.masked
+        .columns
+        .iter()
+        .filter(|(_, method)| reads_itself && spec.files.is_some() && **method == MaskMethod::Hmac)
+        .map(|(name, _)| {
+            format!(
+                "{name}: hmac masking pulls every file through the loader (the key must never be in SQL), which is much slower than a direct load. mask = \"hash\" stays on the direct route."
+            )
+        })
+        .collect()
 }
 
 /// The route a table's data takes into `destination`; `read` is a files table's planned read.
@@ -768,7 +819,7 @@ pub(crate) struct CommitRequest<'a> {
     pub(crate) mode: &'a WriteMode,
 }
 
-/// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch` windows; an ordered Postgres read (an index leads with a non-text cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads, for `batch = "whole"`, and for `append` without a cursor or logged state, which would have nowhere to resume from; about every 1 GB for other tables without a cursor.
+/// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch_size` windows; an ordered Postgres read (an index leads with a non-text cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads, for `batch_size = "none"`, and for `append` without a cursor or logged state, which would have nowhere to resume from; about every 1 GB for other tables without a cursor.
 pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, String> {
     let spec = request.spec;
     if let Some(files) = request.files {

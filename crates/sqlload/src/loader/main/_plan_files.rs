@@ -106,7 +106,6 @@ pub(in crate::loader) async fn plan_files_table(
         logged: None,
         commits,
         stage: None,
-        passed_over: Vec::new(),
         planned_stage: None,
         output: Some(FilesOutput {
             path,

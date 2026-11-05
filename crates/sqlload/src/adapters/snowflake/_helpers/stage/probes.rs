@@ -46,7 +46,6 @@ pub(crate) fn planned_stage(stage: &ExternalStage) -> Option<PlannedStage> {
 pub(crate) async fn probed_step(
     request: &RouteRequest<'_>,
     step: &ForcedStage,
-    in_chain: bool,
 ) -> Result<StageRoute, StepFailure> {
     let snowflake = request.snowflake;
     match step {
@@ -69,12 +68,10 @@ pub(crate) async fn probed_step(
                 .map_err(|error| step_failure(&error))
         })
         .await
-        .map(|_| StageRoute::Streaming {
-            may_fall_back: in_chain,
-        }),
+        .map(|_| StageRoute::Streaming),
         ForcedStage::Insert => Ok(StageRoute::Insert),
         ForcedStage::External(_) => Err(StepFailure::Failed(
-            "an external stage is not a step of the chain".to_owned(),
+            "an external stage is checked by checked_external".to_owned(),
         )),
     }
 }

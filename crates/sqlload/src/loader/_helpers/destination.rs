@@ -52,15 +52,20 @@ pub(crate) async fn clean_stages(run: &LoadRun<'_>, plan: &ProjectPlan) {
             continue;
         };
         let stage = (table.spec.target.as_str(), route, &table.spec.destination);
-        let (checked, cleaned) = clean_stage(destination, stage, seen).await;
+        let copies_files = table
+            .spec
+            .files
+            .as_ref()
+            .is_some_and(|files| files.copy_to_internal_stage);
+        let (checked, cleaned) = clean_stage(destination, stage, copies_files, seen).await;
         seen = checked;
-        match cleaned {
-            None | Some((_, Ok(0))) => {}
-            Some((stage, Ok(removed))) => {
-                tracing::info!(removed, %stage, "removed load folders failed runs left on the stage")
-            }
-            Some((stage, Err(error))) => {
-                tracing::warn!(%error, %stage, "cannot clean up the stage")
+        for (stage, removed) in cleaned {
+            match removed {
+                Ok(0) => {}
+                Ok(removed) => {
+                    tracing::info!(removed, %stage, "removed load folders failed runs left on the stage")
+                }
+                Err(error) => tracing::warn!(%error, %stage, "cannot clean up the stage"),
             }
         }
     }

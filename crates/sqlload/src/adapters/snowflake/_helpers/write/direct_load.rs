@@ -5,17 +5,23 @@ use crate::adapters::contract::main::staging_id::staging_id;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::snowflake::_helpers::write::copy_columns::copy_columns;
-use crate::adapters::snowflake::constants::{MAX_COPY_SQL_BYTES, MAX_FRACTION_DIGITS};
+use crate::adapters::snowflake::constants::{
+    MAX_COPY_SQL_BYTES, MAX_FRACTION_DIGITS, STAGE_FOLDER, USER_STAGE,
+};
 use crate::adapters::snowflake::main::copy::_copy_rows::copy_rows;
 use crate::adapters::snowflake::main::copy::_direct_check::direct_check;
 use crate::adapters::snowflake::main::copy::_direct_copies::direct_copies;
 use crate::adapters::snowflake::main::copy::_script_copy_rows::script_copy_rows;
+use crate::adapters::snowflake::main::copy::_stage_covers::stage_covers;
+use crate::adapters::snowflake::main::stage::_remove_staged::remove_staged;
+use crate::adapters::snowflake::main::stage::_stage_parquet::stage_parquet;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::{
-    CopyColumn, CopyValue, DirectBatch, DirectCopy, DirectLoaded, SnowflakeSql, SnowflakeWriter,
-    StageRoute,
+    CopyColumn, CopyPlace, CopyValue, DirectBatch, DirectCopy, DirectLoaded, SnowflakeSql,
+    SnowflakeWriter, StageRoute, StagedFile,
 };
 use crate::column_types::models::ColumnType;
+use crate::file_store::main::read_file::read_file;
 use crate::files_source::main::batch_refusals::batch_refusals;
 use crate::files_source::models::FilesRead;
 use crate::loader::errors::LoaderError;
@@ -24,32 +30,110 @@ use crate::project::models::MaskMethod;
 use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 
-/// Load `batch` by having Snowflake `COPY` its files from the external stage the writer loads through, where the batch's own footers still allow it; `None` when SQLLoad must read it itself. A hashed batch's temporary table has its own name, since in the session it would shadow a build table made in the same second.
+/// Load `batch` by having Snowflake `COPY` its files itself: from the external stage the writer loads through where it covers them, otherwise, with `copy_to_internal_stage`, after uploading them unchanged to `@~` (removed once copied). Fails where the batch's own footers do not allow an exact load: files never fall back to SQLLoad. `None` when neither applies.
 impl SnowflakeWriter {
     pub(in crate::adapters) async fn copy_files(
         &mut self,
         batch: &DirectBatch<'_>,
     ) -> Result<Option<DirectLoaded>, LoaderError> {
-        let Some(StageRoute::External(stage)) = &self.route else {
-            return Ok(None);
-        };
         let spec = batch.spec;
-        let read = batch.read;
-        let files = batch.files;
-        let known = spec
-            .files
-            .as_ref()
-            .map_or(&[][..], |files| files.table.columns.as_slice());
-        let refused = batch_refusals(batch.footers, files, known);
-        if let Some(reason) = direct_check(spec, (read, files, &refused), stage) {
-            tracing::warn!(table = %spec.destination.table, %reason, "SQLLoad reads this batch itself");
-            return Ok(None);
-        }
         let Some(spec_files) = spec.files.as_ref() else {
             return Ok(None);
         };
         let source = &spec_files.location;
-        let reference = stage_reference(stage);
+        let covering = match &self.route {
+            Some(StageRoute::External(stage)) if stage_covers(&stage.location, source) => source
+                .prefix
+                .strip_prefix(&stage.location.prefix)
+                .map(|folder| (stage.clone(), folder.to_owned())),
+            _ => None,
+        };
+        if covering.is_none() && !spec_files.copy_to_internal_stage {
+            return Ok(None);
+        }
+        let refused = batch_refusals(batch.footers, batch.files, &spec_files.table.columns);
+        if let Some(reason) = direct_check(
+            spec,
+            (batch.read, batch.files, &refused),
+            covering.as_ref().map(|(stage, _)| stage),
+        ) {
+            return Err(LoaderError::Invalid(format!(
+                "Snowflake cannot load this batch's files exactly by reading them itself, and they never go through SQLLoad instead: {reason}"
+            )));
+        }
+        let place = match &covering {
+            Some((stage, folder)) => CopyPlace {
+                stage: stage_reference(stage),
+                folder: folder.clone(),
+                filename_prefix: source.prefix.clone(),
+                uploaded: false,
+            },
+            None => {
+                let folder = format!(
+                    "{STAGE_FOLDER}/{}/{:05}/",
+                    batch.target.load_id, batch.target.batch
+                );
+                CopyPlace {
+                    stage: format!("@{USER_STAGE}"),
+                    folder: folder.clone(),
+                    filename_prefix: folder,
+                    uploaded: true,
+                }
+            }
+        };
+        let loaded = match place.uploaded {
+            true => match self.upload_unchanged(batch, &place.folder).await {
+                Ok(()) => self.copy_from(batch, &place).await,
+                Err(error) => Err(error),
+            },
+            false => self.copy_from(batch, &place).await,
+        };
+        if place.uploaded
+            && let Err(error) = remove_staged(&self.destination, &place.stage, &place.folder).await
+        {
+            tracing::warn!(%error, load_id = %batch.target.load_id, "cannot remove a batch's uploaded files; the next load removes them after a day");
+        }
+        loaded
+    }
+
+    /// Upload `batch`'s files unchanged to `@~` under `folder`; nothing is decoded.
+    async fn upload_unchanged(
+        &mut self,
+        batch: &DirectBatch<'_>,
+        folder: &str,
+    ) -> Result<(), LoaderError> {
+        let source_folder = batch.source_folder.ok_or_else(|| {
+            LoaderError::Invalid("copy_to_internal_stage needs the files' folder".to_owned())
+        })?;
+        let mut known = None;
+        for data in batch.files {
+            let body = read_file(source_folder, &data.file.relative_key)
+                .await
+                .map_err(|error| LoaderError::Invalid(error.to_string()))?;
+            let key = format!("{folder}{}", data.file.relative_key);
+            let file = StagedFile {
+                stage: USER_STAGE,
+                key: &key,
+                body: &body,
+            };
+            known = Some(stage_parquet(&self.destination, known, file).await?);
+        }
+        Ok(())
+    }
+
+    /// The `COPY`s of `batch` from `place`: straight into the target, into the staging or build table, or through a temporary table that hashes.
+    async fn copy_from(
+        &mut self,
+        batch: &DirectBatch<'_>,
+        place: &CopyPlace,
+    ) -> Result<Option<DirectLoaded>, LoaderError> {
+        let spec = batch.spec;
+        let read = batch.read;
+        let files = batch.files;
+        let Some(spec_files) = spec.files.as_ref() else {
+            return Ok(None);
+        };
+        let source = &spec_files.location;
         let hashes = spec
             .masked
             .columns
@@ -59,8 +143,9 @@ impl SnowflakeWriter {
             |target: &'_ TableName, columns: &[CopyColumn]| -> Result<Vec<String>, LoaderError> {
                 let request = DirectCopy {
                     target,
-                    stage: &reference,
-                    stage_url: &stage.location,
+                    stage: &place.stage,
+                    folder: &place.folder,
+                    filename_prefix: &place.filename_prefix,
                     source,
                     files,
                     columns,
@@ -126,8 +211,10 @@ impl SnowflakeWriter {
                 .iter()
                 .any(|statement| statement.len() > MAX_COPY_SQL_BYTES)
             {
-                tracing::warn!(table = %spec.destination.table, "a hashed batch's statement is too long; SQLLoad reads this batch itself");
-                return Ok(None);
+                return Err(LoaderError::Invalid(format!(
+                    "a hashed batch of {} has a statement over Snowflake's size limit; load fewer files per batch",
+                    spec.destination.table
+                )));
             }
             let rows = script_copy_rows(&self.destination, &script).await?;
             return Ok(Some(match build {

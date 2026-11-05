@@ -1,7 +1,7 @@
 use crate::command::tests::helpers::debug_without_host;
 use crate::command::tests::test_types::LoaderCommandTestCase;
 
-const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\npath = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
+const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 
 #[test]
 fn given_the_standalone_executable_when_a_project_has_python_paths_then_it_says_to_install_the_python_package()
@@ -9,7 +9,7 @@ fn given_the_standalone_executable_when_a_project_has_python_paths_then_it_says_
     let test_cases = [
         LoaderCommandTestCase {
             description: "python_paths need the Python package",
-            project: "python_paths = [\"sources\"]\n[connections.wh]\nkind = \"duckdb\"\npath = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
+            project: "python_paths = [\"sources\"]\n[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
             expected_error: "install it (for example `uv tool install sqlload`)",
         },
         LoaderCommandTestCase {

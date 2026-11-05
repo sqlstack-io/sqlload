@@ -41,6 +41,18 @@ fn given_a_cursor_flag_when_normalising_then_every_system_reads_the_same_bound()
             column_type: ColumnType::Int,
             expected_text: Ok("42"),
         },
+        CursorTextTestCase {
+            description: "an untyped --start-cursor that is not an integer fails for an integer cursor, never reaching SQL",
+            text: "1; DROP TABLE t",
+            column_type: ColumnType::Int,
+            expected_text: Err("is not an integer"),
+        },
+        CursorTextTestCase {
+            description: "a timestamp given to an integer cursor fails",
+            text: "2026-11-04",
+            column_type: ColumnType::SmallInt,
+            expected_text: Err("is not an integer"),
+        },
     ];
     for test_case in test_cases {
         let text = cursor_text(test_case.text, &test_case.column_type);

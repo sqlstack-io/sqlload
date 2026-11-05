@@ -129,7 +129,7 @@ pub(crate) fn build_spec(
         });
     let mut problems = strategy_problems(strategy, &unique_key, cursor.as_ref());
     problems.extend(column_reference_problems(table, overrides));
-    let batch = layered(&settings.batch, &defaults.batch).map(|(value, _)| value);
+    let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
         let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.column == *masked);
@@ -144,7 +144,7 @@ pub(crate) fn build_spec(
             .values()
             .any(|method| *method == MaskMethod::Hmac)
     {
-        problems.push("mask uses \"hmac\" but the source sets no mask_key (for example mask_key = \"${MASK_KEY}\")".to_owned());
+        problems.push("mask uses \"hmac\" but the source sets no mask_key (for example mask_key = \"${ENV:MASK_KEY}\")".to_owned());
     }
     if !problems.is_empty() {
         return Err(problems);
@@ -172,7 +172,11 @@ pub(crate) fn build_spec(
         unique_key,
         cursor,
         batch,
-        shaped_by_loader: layered(&settings.shaping, &defaults.shaping).is_some(),
+        #[cfg(feature = "container-tests")]
+        test_loader_route: layered(&settings.test_loader_route, &defaults.test_loader_route)
+            .is_some_and(|(value, _)| value),
+        #[cfg(not(feature = "container-tests"))]
+        test_loader_route: false,
         source_end: None,
         pinned: columns.pinned,
         excluded_columns: columns.excluded,

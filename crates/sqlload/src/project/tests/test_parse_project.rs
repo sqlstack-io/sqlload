@@ -153,41 +153,48 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
 fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
     let snowflake = |stage: &str| {
         format!(
-            "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"D\"\nstage = {stage}\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n"
+            "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"D\"\nload_method = {stage}\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n"
         )
     };
     let stage_cases = [
         (
             "an s3 stage needs an integration or a name",
-            snowflake("{ kind = \"s3\", url = \"s3://lake/x/\" }"),
+            snowflake("{ type = \"external_stage\", url = \"s3://lake/x/\" }"),
             "needs exactly one of storage_integration",
         ),
         (
             "an s3 stage takes only one of them",
             snowflake(
-                "{ kind = \"s3\", url = \"s3://lake/x/\", storage_integration = \"I\", name = \"D.S.N\" }",
+                "{ type = \"external_stage\", url = \"s3://lake/x/\", storage_integration = \"I\", name = \"D.S.N\" }",
             ),
             "needs exactly one of storage_integration",
         ),
         (
             "an existing stage's name is fully qualified",
-            snowflake("{ kind = \"s3\", url = \"s3://lake/x/\", name = \"N\" }"),
+            snowflake("{ type = \"external_stage\", url = \"s3://lake/x/\", name = \"N\" }"),
             "must be DATABASE.SCHEMA.STAGE",
         ),
         (
             "an s3 stage's url is s3",
-            snowflake("{ kind = \"s3\", url = \"/tmp/x/\", storage_integration = \"I\" }"),
+            snowflake(
+                "{ type = \"external_stage\", url = \"/tmp/x/\", storage_integration = \"I\" }",
+            ),
             "must be an s3:// URL",
         ),
         (
             "keep_staged_files is only for an external stage",
-            snowflake("{ kind = \"user\", keep_staged_files = true }"),
+            snowflake("{ type = \"internal_user_stage\", keep_staged_files = true }"),
             "keep_staged_files",
         ),
         (
-            "an unknown kind is refused",
-            snowflake("{ kind = \"auto\" }"),
+            "an unknown type is refused",
+            snowflake("{ type = \"auto\" }"),
             "auto",
+        ),
+        (
+            "load_method is required, and the error names the fix",
+            snowflake("{ type = \"insert\" }").replace("load_method = { type = \"insert\" }\n", ""),
+            "load_method is required: how should data get into Snowflake? Add one of these to [connections.wh]: load_method = { type = \"external_stage\"",
         ),
     ];
     for (description, text, expected_message) in stage_cases {
@@ -198,9 +205,9 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
     }
     let test_cases = [
         ParseProjectErrorTestCase {
-            description: "shaping takes only loader",
-            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshaping = \"sql\"\n",
-            expected_message: "sql",
+            description: "shaping is gone: nothing chooses SQLLoad's route over the warehouse's own read",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshaping = \"loader\"\n",
+            expected_message: "unknown key \"shaping\"",
         },
         ParseProjectErrorTestCase {
             description: "a misspelt source key suggests the right one",
@@ -286,6 +293,11 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "format settings are for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nformat = \"csv\"\n",
             expected_message: "[sources.app] format, compression and csv are for kind = \"files\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "copy_to_internal_stage is for files sources, never silently ignored",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ncopy_to_internal_stage = true\n",
+            expected_message: "[sources.app] path, partition_columns and copy_to_internal_stage are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "a target cannot load into a source database",

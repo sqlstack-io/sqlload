@@ -1,26 +1,51 @@
 use crate::helpers::{
-    flaky_probes, found, half_float_later, int96_in_a_later_batch, int96_newest, integration,
-    long_names, long_names_with_text, nanos_in_a_later_batch, nanos_newest, no_internal_stage,
-    no_stage_or_channel, no_stage_or_host, no_user_stage, not_found, not_owned, nothing,
-    old_leftovers, run_async, run_debug, run_route, similar_integration, stage_exists, two_batches,
-    two_days, with_text,
+    every_csv_type, every_ndjson_type, every_parquet_storage, every_parquet_type, flaky_probes,
+    found, half_float_later, int96_in_a_later_batch, int96_newest, integration, json_layouts,
+    long_names, long_names_with_text, nanos_in_a_later_batch, nanos_newest, no_stage_or_channel,
+    no_stage_or_host, no_user_stage, not_found, not_owned, nothing, old_leftovers, run_async,
+    run_debug, run_route, similar_integration, stage_exists, two_batches, two_days, with_text,
 };
-use crate::test_types::{DebugStageTestCase, RouteFiles, RouteTestCase};
+use crate::test_types::{
+    DebugStageTestCase, MaskMatrixTestCase, RouteFileSet, RouteFiles, RouteTestCase,
+};
 
-const MANAGED: &str = "{ kind = \"s3\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\" }";
-const KEEPS: &str = "{ kind = \"s3\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\", keep_staged_files = true }";
+const MANAGED: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\" }";
+const KEEPS: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\", keep_staged_files = true }";
 const OWN_STAGE: &str = "COPY INTO \"DB\".\"RAW\".\"ORDERS\"";
 const MANAGED_REF: &str = "FROM @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\"";
 const WRITES_PARQUET: &str = "write Parquet to";
+const FILES_STRATEGIES: [&str; 3] = [
+    "write_strategy = \"append\"\n",
+    "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\n",
+    "write_strategy = \"replace\"\n",
+];
+const FORMATS: [(&str, &str, (RouteFileSet, &str)); 5] = [
+    ("parquet, every type", "", (every_parquet_type, "note")),
+    (
+        "parquet, every storage",
+        "",
+        (every_parquet_storage, "names"),
+    ),
+    ("ndjson", "format = \"ndjson\"\n", (every_ndjson_type, "s")),
+    ("json", "format = \"json\"\n", (json_layouts, "v")),
+    ("csv", "format = \"csv\"\n", (every_csv_type, "s")),
+];
+const PULLS_ANY: &str = " files from s3://fake-bucket/src/";
+const READS: &str = " into Arrow";
 const PULLS: &str = "destination loads parquet files from s3://fake-bucket/src/";
 
-const APPEND: &str = "write_strategy = \"append\"";
-const REPLACING: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"day\"";
+const USER: &str = "{ type = \"internal_user_stage\" }";
+const TABLE: &str = "{ type = \"internal_table_stage\" }";
+const STREAMING: &str = "{ type = \"streaming\" }";
+const VIA_LOADER: &str = "write_strategy = \"append\"\ntest_loader_route = true";
+const DIRECT: &str = "write_strategy = \"append\"";
+const REPLACING: &str =
+    "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\ntest_loader_route = true";
 
 const BASE: RouteTestCase = RouteTestCase {
     description: "",
-    stage: "",
-    settings: APPEND,
+    stage: USER,
+    settings: VIA_LOADER,
     files: RouteFiles::Directory,
     file_set: two_days,
     prepare: nothing,
@@ -34,11 +59,11 @@ const BASE: RouteTestCase = RouteTestCase {
 };
 
 #[test]
-fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_route_the_role_can_use()
+fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_its_load_method_sets()
 -> Result<(), String> {
     let test_cases = [
         RouteTestCase {
-            description: "no stage set: @~, one credentials fetch for the plan's probe and one for each of the two batches",
+            description: "@~: one credentials fetch for the plan's probe and one for each of the two batches",
             file_set: two_batches,
             expected_plan: &["write Parquet to internal stage @~"],
             expected_sent: &[
@@ -51,12 +76,44 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "@~ refused: an append into a table this load creates uses its table stage",
-            prepare: no_user_stage,
-            expected_plan: &[
-                "@~ cannot be used",
-                "write Parquet to internal stage @%table",
+            description: "files no external stage covers fail the plan with the fix, never going through SQLLoad",
+            settings: DIRECT,
+            expected_error: "cannot be read by Snowflake: no external stage covers it. Fix: add a storage integration",
+            expected_unsent: &["COPY INTO"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "copy_to_internal_stage: the files are uploaded unchanged to @~ and Snowflake loads them there, then they are removed",
+            settings: "write_strategy = \"append\"\ncopy_to_internal_stage = true",
+            expected_plan: &["copy_to_internal_stage"],
+            expected_sent: &[
+                OWN_STAGE,
+                "FROM @~/sqlload/",
+                "METADATA$FILENAME",
+                "REMOVE @~/sqlload/",
             ],
+            expected_unplanned: &[WRITES_PARQUET],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "copy_to_internal_stage refuses NDJSON at plan, whose later keys it would miss; nothing is uploaded",
+            settings: "write_strategy = \"append\"\nformat = \"ndjson\"\ncopy_to_internal_stage = true",
+            file_set: every_ndjson_type,
+            expected_error: "copy_to_internal_stage cannot load JSON or NDJSON yet",
+            expected_unsent: &["COPY INTO", "/00001/"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "@~ refused: the plan fails and never falls back",
+            prepare: no_user_stage,
+            expected_error: "load_method @~ cannot be used",
+            expected_unsent: &["COPY INTO"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "@%table: an append into a table this load creates uses its own table stage",
+            stage: TABLE,
+            expected_plan: &["write Parquet to internal stage @%table"],
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @\"DB\".\"RAW\".%\"ORDERS\"/sqlload/",
@@ -65,9 +122,9 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "@~ refused: a delete_insert uses the staging table's stage, after probing with a temporary table",
+            description: "@%table: a delete_insert uses the staging table's stage, after probing with a temporary table",
+            stage: TABLE,
             settings: REPLACING,
-            prepare: no_user_stage,
             expected_plan: &["the staging table's @%table"],
             expected_sent: &[
                 "CREATE TEMPORARY TABLE IF NOT EXISTS",
@@ -77,7 +134,8 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "an append into a table this role does not own goes through the staging table's stage",
+            description: "@%table: an append into a table this role does not own goes through the staging table's stage",
+            stage: TABLE,
             prepare: not_owned,
             expected_plan: &["the staging table's @%table"],
             expected_sent: &[
@@ -87,14 +145,10 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "no internal stage: Snowpipe Streaming into a staging table, then the usual write",
+            description: "streaming: Snowpipe Streaming into a staging table, then the usual write",
+            stage: STREAMING,
             settings: REPLACING,
-            prepare: no_internal_stage,
-            expected_plan: &[
-                "@~ cannot be used",
-                "@%table cannot be used",
-                "Snowpipe Streaming into a transient staging table",
-            ],
+            expected_plan: &["Snowpipe Streaming into a transient staging table"],
             expected_sent: &[
                 "CREATE OR REPLACE TRANSIENT TABLE",
                 "DELETE FROM \"DB\".\"RAW\".\"ORDERS\"",
@@ -104,7 +158,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         },
         RouteTestCase {
             description: "an append streaming goes through staging too, with rows keyed by stored names and values as text",
-            prepare: no_internal_stage,
+            stage: STREAMING,
             expected_plan: &["Snowpipe Streaming into a transient staging table"],
             expected_sent: &[
                 "INSERT INTO \"DB\".\"RAW\".\"ORDERS\"",
@@ -115,64 +169,35 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "no stage and no streaming: batched INSERT into staging, warned in plan",
+            description: "streaming: its host unreachable fails the plan",
+            stage: STREAMING,
             prepare: no_stage_or_host,
-            expected_plan: &[
-                "batched INSERT into a transient staging table",
-                "rows load by batched INSERT",
-            ],
-            expected_sent: &["FROM VALUES", "INSERT INTO \"DB\".\"RAW\".\"ORDERS\""],
-            expected_unsent: &["COPY INTO"],
+            expected_error: "load_method Snowpipe Streaming cannot be used",
             ..BASE
         },
         RouteTestCase {
-            description: "a chain-chosen stream that will not open drops to INSERT at load",
-            prepare: no_stage_or_channel,
-            expected_plan: &["Snowpipe Streaming into a transient staging table"],
-            expected_sent: &["FROM VALUES"],
-            ..BASE
-        },
-        RouteTestCase {
-            description: "stage = user forces @~: refused, the plan fails and never falls back",
-            stage: "{ kind = \"user\" }",
-            prepare: no_user_stage,
-            expected_error: "stage @~ cannot be used",
-            expected_unsent: &["COPY INTO"],
-            ..BASE
-        },
-        RouteTestCase {
-            description: "stage = table forces @%table, past a working @~",
-            stage: "{ kind = \"table\" }",
-            expected_plan: &["internal stage @%table"],
-            expected_sent: &["FROM @\"DB\".\"RAW\".%\"ORDERS\"/sqlload/"],
-            ..BASE
-        },
-        RouteTestCase {
-            description: "stage = streaming: its host unreachable fails the plan",
-            stage: "{ kind = \"streaming\" }",
-            prepare: no_stage_or_host,
-            expected_error: "stage Snowpipe Streaming cannot be used",
-            ..BASE
-        },
-        RouteTestCase {
-            description: "stage = streaming: a channel that will not open fails the load, with no INSERT",
-            stage: "{ kind = \"streaming\" }",
+            description: "streaming: a channel that will not open fails the load, with no INSERT",
+            stage: STREAMING,
             prepare: no_stage_or_channel,
             expected_error: "Snowpipe Streaming will not open",
             expected_unsent: &["FROM VALUES"],
             ..BASE
         },
         RouteTestCase {
-            description: "stage = insert goes straight to INSERT, with no probes",
-            stage: "{ kind = \"insert\" }",
-            expected_plan: &["batched INSERT"],
-            expected_sent: &["FROM VALUES"],
+            description: "insert goes straight to batched INSERT into staging, warned in plan, with no probes",
+            stage: "{ type = \"insert\" }",
+            expected_plan: &[
+                "batched INSERT into a transient staging table",
+                "rows load by batched INSERT",
+            ],
+            expected_sent: &["FROM VALUES", "INSERT INTO \"DB\".\"RAW\".\"ORDERS\""],
+            expected_unsent: &["COPY INTO"],
             expected_fetches: Some(0),
             ..BASE
         },
         RouteTestCase {
             description: "a named internal stage",
-            stage: "{ kind = \"internal\", name = \"DB.RAW.LOADS\" }",
+            stage: "{ type = \"internal_named_stage\", name = \"DB.RAW.LOADS\" }",
             expected_plan: &["internal stage @DB.RAW.LOADS"],
             expected_sent: &[
                 "FROM @DB.RAW.LOADS/sqlload/",
@@ -182,9 +207,9 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         },
         RouteTestCase {
             description: "a named internal stage refused fails the plan",
-            stage: "{ kind = \"internal\", name = \"DB.RAW.LOADS\" }",
+            stage: "{ type = \"internal_named_stage\", name = \"DB.RAW.LOADS\" }",
             prepare: |fake| fake.state.lock().denied_stages.push("LOADS".to_owned()),
-            expected_error: "stage @DB.RAW.LOADS cannot be used",
+            expected_error: "load_method @DB.RAW.LOADS cannot be used",
             ..BASE
         },
         RouteTestCase {
@@ -232,6 +257,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         RouteTestCase {
             description: "files under the stage url load directly: nothing passes through SQLLoad",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             prepare: integration,
             expected_plan: &[PULLS],
@@ -246,6 +272,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         RouteTestCase {
             description: "a column the newest files hold as nanoseconds loads directly, kept whole",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: nanos_newest,
             prepare: integration,
@@ -257,6 +284,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         RouteTestCase {
             description: "a later batch of nanoseconds loads directly like the microsecond batches around it",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: nanos_in_a_later_batch,
             prepare: integration,
@@ -270,33 +298,34 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "an INT96 under an embedded microsecond type stays on SQLLoad, and plan names the column and reason",
+            description: "an INT96 under an embedded microsecond type fails the plan, naming the column and reason, and nothing loads",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: int96_newest,
             prepare: integration,
-            expected_plan: &[WRITES_PARQUET, "at is Timestamp(", "stored as INT96"],
-            expected_unsent: &["METADATA$FILENAME"],
+            expected_error: "cannot load these files exactly by reading them itself",
+            expected_plan: &["at is Timestamp(", "stored as INT96"],
+            expected_unsent: &["COPY INTO", "/_sqlload/"],
             ..BASE
         },
         RouteTestCase {
-            description: "a later batch of INT96 under embedded microseconds goes via SQLLoad, and the clean batches around it stay direct",
+            description: "a later batch of INT96 under embedded microseconds fails the load after the clean batch before it, never going through SQLLoad",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: int96_in_a_later_batch,
             prepare: integration,
+            expected_error: "never go through SQLLoad instead",
             expected_plan: &[PULLS],
-            expected_sent: &[
-                "METADATA$FILENAME = 'src/day=2026-11-01/",
-                "METADATA$FILENAME = 'src/day=2026-11-03/",
-                "/_sqlload/",
-            ],
+            expected_sent: &["METADATA$FILENAME = 'src/day=2026-11-01/"],
+            expected_unsent: &["/_sqlload/", "METADATA$FILENAME = 'src/day=2026-11-03/"],
             ..BASE
         },
         RouteTestCase {
             description: "a stage goes in the target's loader schema, whatever schema the table loads into, and apply creates only that one for it",
             stage: MANAGED,
-            settings: "schema = \"OTHER\"\nwrite_strategy = \"append\"",
+            settings: "schema = \"OTHER\"\nwrite_strategy = \"append\"\ntest_loader_route = true",
             prepare: integration,
             expected_plan: &["\"DB\".\"RAW\".\"_SQLLOAD_STAGE\""],
             expected_sent: &[
@@ -324,7 +353,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         RouteTestCase {
             description: "a probe failing for any other reason fails the plan, never changing the route",
             prepare: flaky_probes,
-            expected_error: "cannot check whether @~ can be used",
+            expected_error: "cannot check whether load_method @~ can be used",
             expected_unsent: &["COPY INTO", "FROM VALUES"],
             ..BASE
         },
@@ -340,14 +369,16 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "shaping = loader keeps them on SQLLoad, and plan says why",
+            description: "hmac masking is the one case files Snowflake reads itself go through SQLLoad, warned in plan",
             stage: MANAGED,
-            settings: "write_strategy = \"append\"\nshaping = \"loader\"",
+            settings: "write_strategy = \"append\"\nmask_key = \"k\"\n[sources.orders.tables.orders]\nmask = { extra = \"hmac\" }",
             files: RouteFiles::Bucket,
+            file_set: with_text,
             prepare: integration,
             expected_plan: &[
                 WRITES_PARQUET,
-                "SQLLoad reads the files because the table sets shaping = \"loader\"",
+                "SQLLoad reads the files because extra masked with hmac, whose key must never appear in SQL",
+                "extra: hmac masking pulls every file through the loader",
             ],
             expected_unsent: &["METADATA$FILENAME"],
             ..BASE
@@ -393,7 +424,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         },
         RouteTestCase {
             description: "and so does the staged route's COPY, with no staging table",
-            settings: "write_strategy = \"append\"\n[sources.orders.tables.orders]\ncolumns = { extra = \"json\" }",
+            settings: "write_strategy = \"append\"\ntest_loader_route = true\n[sources.orders.tables.orders]\ncolumns = { extra = \"json\" }",
             file_set: with_text,
             expected_sent: &[
                 "PARSE_JSON(CAST(GET($1, 'extra') AS VARCHAR))",
@@ -405,6 +436,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         RouteTestCase {
             description: "per-file names passing the statement limit: several COPYs in one transaction",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: long_names,
             prepare: integration,
@@ -413,13 +445,16 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "a later batch the direct checks refuse goes via SQLLoad; the batch before stays direct",
+            description: "a later batch the direct checks refuse fails the load; the batch before loaded directly and nothing goes through SQLLoad",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: half_float_later,
             prepare: integration,
+            expected_error: "never go through SQLLoad instead: ",
             expected_plan: &[PULLS],
-            expected_sent: &["METADATA$FILENAME", "/_sqlload/"],
+            expected_sent: &["METADATA$FILENAME"],
+            expected_unsent: &["/_sqlload/"],
             ..BASE
         },
     ];
@@ -483,6 +518,79 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
                 test_case.description
             );
             assert!(outcome.sequence_ids_rise, "{}", test_case.description);
+        }
+        Ok(())
+    })
+}
+
+/// Every format and type the fixtures hold, under every strategy a files source takes (merge is refused for files sources), each `FORMATS` entry naming a text column to mask, unmasked, hashed and hmac-masked: only hmac reaches SQLLoad's reader.
+#[test]
+fn given_files_a_warehouse_reads_itself_when_planning_every_format_type_and_strategy_then_only_hmac_reaches_sqlloads_reader()
+-> Result<(), String> {
+    let test_cases = [
+        MaskMatrixTestCase {
+            description: "unmasked",
+            mask: "",
+            expected_plan: &[PULLS_ANY],
+            expected_unplanned: &[READS],
+        },
+        MaskMatrixTestCase {
+            description: "hash",
+            mask: "[sources.orders.tables.orders]\nmask = { COLUMN = \"hash\" }",
+            expected_plan: &[PULLS_ANY],
+            expected_unplanned: &[READS],
+        },
+        MaskMatrixTestCase {
+            description: "hmac",
+            mask: "mask_key = \"k\"\n[sources.orders.tables.orders]\nmask = { COLUMN = \"hmac\" }",
+            expected_plan: &[READS],
+            expected_unplanned: &[PULLS_ANY],
+        },
+    ];
+    run_async(async {
+        for test_case in &test_cases {
+            for ((format_name, format, (file_set, column)), strategy) in
+                FORMATS.iter().flat_map(|format| {
+                    FILES_STRATEGIES
+                        .iter()
+                        .map(move |strategy| (format, strategy))
+                })
+            {
+                let mask = test_case.mask.replace("COLUMN", column);
+                let route_case = RouteTestCase {
+                    description: format!(
+                        "{}, {format_name}: {strategy}{mask}",
+                        test_case.description
+                    )
+                    .leak(),
+                    stage: MANAGED,
+                    settings: format!("{format}{strategy}{mask}").leak(),
+                    files: RouteFiles::Bucket,
+                    file_set: *file_set,
+                    prepare: integration,
+                    ..BASE
+                };
+                let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+                let outcome = run_route(directory.path(), &route_case).await?;
+                assert_eq!(
+                    not_found(std::slice::from_ref(&outcome.plan), test_case.expected_plan),
+                    Vec::<&str>::new(),
+                    "{}: {} {}",
+                    route_case.description,
+                    outcome.plan,
+                    outcome.error
+                );
+                assert_eq!(
+                    found(
+                        std::slice::from_ref(&outcome.plan),
+                        test_case.expected_unplanned
+                    ),
+                    Vec::<&str>::new(),
+                    "{}: {}",
+                    route_case.description,
+                    outcome.plan
+                );
+            }
         }
         Ok(())
     })

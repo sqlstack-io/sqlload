@@ -70,9 +70,9 @@ pub struct TableSpec {
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
-    /// `shaping = "loader"`: Snowflake never reads the files itself.
-    pub shaped_by_loader: bool,
-    /// Where an integer `batch`'s windows end without `--end-cursor-int`: the Postgres source's cursor maximum, read at plan.
+    /// Tests only (`test_loader_route`, absent from released builds): SQLLoad reads a files source's files itself, the reference side of the live parity test.
+    pub test_loader_route: bool,
+    /// Where an integer `batch_size`'s windows end without `--end-cursor-int`: the Postgres source's cursor maximum, read at plan.
     pub source_end: Option<SourceEnd>,
     pub pinned: BTreeMap<String, ColumnType>,
     /// Source columns not loaded, with the rule that dropped each.
@@ -129,6 +129,8 @@ pub struct FilesSource {
     pub checks: TextChecks,
     /// Notes `plan` shows on the table, such as pinned columns no sampled file has.
     pub notes: Vec<String>,
+    /// `copy_to_internal_stage`: files no external stage reads are uploaded unchanged to an internal stage, and loaded from there by the warehouse.
+    pub copy_to_internal_stage: bool,
 }
 
 /// A table that matched a source's selection but is not loaded.
@@ -176,8 +178,6 @@ pub struct TablePlan {
     pub commits: CommitRule,
     /// How the rows reach Snowflake.
     pub stage: Option<StageRoute>,
-    /// Why routes earlier in the chain were passed over.
-    pub passed_over: Vec<String>,
     /// The stage `apply` must create.
     pub planned_stage: Option<PlannedStage>,
 }
@@ -263,16 +263,18 @@ pub struct ProjectPlan {
 pub struct PlanOptions {
     /// Source names, destination table names or `schema.table` source names; empty selects everything.
     pub select: Vec<String>,
+    /// Tables `--exclude` leaves out, named the same ways; it wins over `select`.
+    pub exclude: Vec<String>,
     /// `--allow-type-change-rebuild`.
     pub rebuild_allowed: bool,
     /// `--reload`: rebuild each selected table from the whole source, ignoring the destination's cursor.
     pub reload: bool,
-    /// `--start-cursor-*`: read from this cursor value instead of the destination's maximum.
+    /// `--start-cursor` (or `-ts`/`-int`): read from this cursor value instead of the destination's maximum.
     pub start_cursor: Option<String>,
-    /// `--end-cursor-*`: read only cursor values below this one.
+    /// `--end-cursor` (or `-ts`/`-int`): read only cursor values below this one.
     pub end_cursor: Option<String>,
-    /// `--threads`: the most tables loading at once, overriding the project's `threads`.
-    pub threads: Option<usize>,
+    /// `--concurrency`: the most tables loading at once, overriding the project's `concurrency`.
+    pub concurrency: Option<usize>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
     pub batch_bytes: Option<usize>,
 }
@@ -351,7 +353,7 @@ pub struct PythonFeed {
     pub reconciled: Option<String>,
 }
 
-/// A Postgres table's integer cursor as plan found it, ending its `batch` windows.
+/// A Postgres table's integer cursor as plan found it, ending its `batch_size` windows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceEnd {
     /// The table has no cursor value, so there is nothing to read.
@@ -363,7 +365,7 @@ pub enum SourceEnd {
 /// How a table's rows are cut into commits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitRule {
-    /// Each window of the table's `batch`, read and committed by itself.
+    /// Each window of the table's `batch_size`, read and committed by itself.
     Windows(WindowPlan),
     /// Read in cursor order (an index leads with the cursor, NULLs first), committing about every 1 GB, only between distinct cursor values; `delete_insert` replaces `[previous cut, next cut)` each time.
     Ordered {
@@ -387,7 +389,7 @@ pub enum WholeReason {
     TextCursor,
     /// `append` without a cursor: a rerun after a partial commit would duplicate what committed.
     AppendWithoutCursor,
-    /// `batch = "whole"`.
+    /// `batch_size = "none"`.
     Chosen,
     /// The table cannot load, so it has no commits.
     Blocked,

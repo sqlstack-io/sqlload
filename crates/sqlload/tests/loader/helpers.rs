@@ -69,7 +69,7 @@ database = "app"
 
 [connections.local]
 kind = "duckdb"
-path = ":memory:"
+database = ":memory:"
 
 [targets.dev]
 connection = "local"
@@ -180,7 +180,7 @@ pub(crate) async fn run_batched(
         let options = PlanOptions {
             end_cursor: run.end_cursor.map(str::to_owned),
             batch_bytes: test_case.batch_bytes,
-            threads: test_case.threads,
+            concurrency: test_case.concurrency,
             ..PlanOptions::default()
         };
         let plan = plan_project(&project, &destinations, &options)
@@ -370,7 +370,7 @@ pub(crate) async fn run_large_partition(
     let scenario = FilesScenario {
         description: test_case.description,
         store: local_store,
-        settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\nbatch = \"1d\"\n",
+        settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\nbatch_size = \"1d\"\n",
         runs: vec![
             WrittenRun {
                 files: first,
@@ -491,7 +491,7 @@ async fn run_written_files(
     let (store, connection) = (scenario.store)(endpoint, directory);
     let prefix = format!("scores-{}/", uuid::Uuid::new_v4());
     let text = format!(
-        "[connections.files]\n{}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"{prefix}\"\n{}\n",
+        "[connections.files]\n{}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"{prefix}\"\n{}\n",
         connection, scenario.settings
     );
     let folder = open_folder(&Location { store, prefix }).map_err(|error| error.to_string())?;
@@ -787,7 +787,7 @@ pub(crate) async fn run_debug(
     (test_case.prepare)(&fake);
     let base = fake.base_url.clone();
     let text = format!(
-        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\nstage = {}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
+        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\nload_method = {}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
         stage.replace("FAKE", &base)
     );
     let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
@@ -808,7 +808,7 @@ pub(crate) async fn run_source_row_upgrade(
     })
     .map_err(|error| error.to_string())?;
     let text = format!(
-        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
+        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
         test_case.settings
     );
     let project_destinations =
@@ -922,6 +922,43 @@ pub(crate) fn half_float_file(key: &str) -> Result<(String, bytes::Bytes), Strin
     Ok((key.to_owned(), bytes::Bytes::from(buffer)))
 }
 
+/// The parity fixture `files` in one `day` folder.
+fn fixture_in_a_day(
+    files: sqlload_testkit::parity::models::ParityFiles,
+) -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(
+        sqlload_testkit::parity::main::fixture_files::fixture_files(files)?
+            .into_iter()
+            .map(|(key, body)| (format!("day=2026-11-01/{key}"), body))
+            .collect(),
+    )
+}
+
+/// Parquet of every type the direct `COPY` loads.
+pub(crate) fn every_parquet_type() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::EveryType)
+}
+
+/// Parquet of every physical storage of those types.
+pub(crate) fn every_parquet_storage() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::StoredTypes)
+}
+
+/// NDJSON of every inferred type.
+pub(crate) fn every_ndjson_type() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::NdjsonValues)
+}
+
+/// `json` files in both layouts.
+pub(crate) fn json_layouts() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::JsonLayouts)
+}
+
+/// CSV of every inferred type.
+pub(crate) fn every_csv_type() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::CsvValues)
+}
+
 /// Load the case's files into a fresh fake Snowflake; what was planned and sent, and what stayed staged.
 pub(crate) async fn run_route(
     directory: &std::path::Path,
@@ -958,7 +995,7 @@ pub(crate) async fn run_route(
     ][usize::from(test_case.files == RouteFiles::Bucket)]
     .clone();
     let stage = [
-        format!("stage = {}\n", test_case.stage.replace("FAKE", &base)),
+        format!("load_method = {}\n", test_case.stage.replace("FAKE", &base)),
         String::new(),
     ][usize::from(test_case.stage.is_empty())]
     .clone();
@@ -1273,7 +1310,7 @@ pub(crate) async fn run_metadata_round_trip(
     let target_text = files_target_project(port, &connection, "", "write_strategy = \"replace\"")
         .replace("PREFIX", &prefix);
     let source_text = format!(
-        "[connections.lake]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"{prefix}/app/orders/\"\nwrite_strategy = \"replace\"\n"
+        "[connections.lake]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"{prefix}/app/orders/\"\nwrite_strategy = \"replace\"\n"
     );
     let target_project =
         parse_project(&target_text, &|_| None).map_err(|error| error.to_string())?;

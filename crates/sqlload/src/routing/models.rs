@@ -69,8 +69,14 @@ pub struct ReaderOffer {
     pub unload_to: Vec<Store>,
     /// The data's estimated size, when the source knows it.
     pub estimated_bytes: Option<u64>,
-    /// Why the destination must not read `existing_files` itself even where it can reach them (SQLLoad would load them differently).
+    /// Why the destination cannot load `existing_files` exactly by reading them itself.
     pub direct_blocked: Option<String>,
+    /// Why SQLLoad must read `existing_files` itself even where the destination could: the only case is `hmac` masking, whose key must never appear in SQL.
+    pub needs_loader: Option<String>,
+    /// `copy_to_internal_stage`: files the destination cannot reach are uploaded unchanged to a store it can, never read by SQLLoad.
+    pub copy_to_internal_stage: bool,
+    /// The destination's store paths name `existing_files`, but it cannot read them (the same bucket on another endpoint).
+    pub out_of_reach: bool,
 }
 
 /// What a destination can take.
@@ -86,6 +92,10 @@ pub struct WriterAccepts {
     pub staging: Vec<Store>,
     /// How it takes rows when no store is usable, such as Snowpipe Streaming.
     pub rows_into: Option<String>,
+    /// A cloud warehouse's name: a files source reaches it only by its own read, never through SQLLoad, unless `ReaderOffer::needs_loader` says why.
+    pub reads_files_itself: Option<&'static str>,
+    /// Where files the destination cannot reach are uploaded unchanged for `copy_to_internal_stage`.
+    pub copies_files_to: Option<Store>,
 }
 
 /// How a warehouse source is read.
@@ -128,6 +138,8 @@ pub enum Step {
     FileReader(FileFormat),
     /// Adapter: Arrow batches are written as Parquet into a store.
     ParquetWriter(Store),
+    /// The files are copied unchanged into a store the destination reads (`copy_to_internal_stage`); nothing is decoded.
+    CopyFiles(Store),
     /// The destination reads the files itself; no data passes through SQLLoad.
     DestinationPulls(FileSet),
     /// The destination takes Arrow batches.
@@ -146,6 +158,7 @@ impl std::fmt::Display for Step {
             }
             Self::FileReader(format) => write!(formatter, "read {format} into Arrow"),
             Self::ParquetWriter(store) => write!(formatter, "write Parquet to {store}"),
+            Self::CopyFiles(store) => write!(formatter, "copy the files unchanged to {store}"),
             Self::DestinationPulls(files) => {
                 write!(
                     formatter,

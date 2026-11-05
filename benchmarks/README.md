@@ -38,7 +38,7 @@ uses DuckDB 2.0.0 and reads every loader's output. Each loader therefore writes 
 | `pg_wide` | Postgres, 1M rows, 40 columns including jsonb | same |
 | `pg_wide_nokey` | the wide rows in a table with no primary key (ingestr loads such tables differently) | same |
 | `pg_incremental` | load, append 1% new rows, load again; the second load is timed | same |
-| `pg_multi` | the 10M narrow rows split over 8 tables | sqlload, default threads and `--threads 1` |
+| `pg_multi` | the 10M narrow rows split over 8 tables | sqlload, default concurrency and `--concurrency 1` |
 | `files_parquet`, `files_csv`, `files_ndjson` | the same rows in 10 local part files | sqlload, dlt, ingestr |
 | `py_flat`, `py_nested` | a generator of pages of dicts, 1M rows each | sqlload, dlt |
 | `py_bytes` | the flat rows as 4 MiB chunks of NDJSON | sqlload (`sl.ndjson`), dlt |
@@ -96,8 +96,7 @@ BENCH_ARGS can add `--scenarios` to narrow it to one scenario, as the last `--sc
   `sqlload (external stage)` runs them through the S3 external stage instead of the user stage `@~`.
 - `files_snowflake` also runs ingestr, reading the same Parquet parts from S3.
 - `files_snowflake` loads 10 Parquet parts with sqlload's direct route (Snowflake reads the files
-  itself) and with `shaping = "loader"`. Each run first checks `sqlload plan` names the expected
-  route, and is invalid if not.
+  itself). Each run first checks `sqlload plan` names the expected route, and is invalid if not.
 
 What it touches: test data goes only under `s3://<bucket>/sqlload/bench/`, and the stage's URL is
 `s3://<bucket>/sqlload/`. In Snowflake it drops only its `BENCH_` tables before each

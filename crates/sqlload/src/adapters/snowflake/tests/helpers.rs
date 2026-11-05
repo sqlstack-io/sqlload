@@ -1,13 +1,13 @@
 use crate::adapters::contract::models::TableName;
 use crate::adapters::snowflake::_helpers::stage::create_stage::create_stage;
-use crate::adapters::snowflake::_helpers::stage::pick_route::pick_route;
 use crate::adapters::snowflake::_helpers::stage::stale_folders::stale_folders;
 use crate::adapters::snowflake::main::copy::_copy_staged::copy_staged;
 use crate::adapters::snowflake::main::stage::_stage_lookup::stage_lookup;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::CopyStaged;
-use crate::adapters::snowflake::models::{CopyColumn, CopyValue, StepFailure};
-use crate::adapters::snowflake::models::{ExternalStage, StageObject, StageRoute};
+use crate::adapters::snowflake::models::{CopyColumn, CopyValue};
+use crate::adapters::snowflake::models::{ExternalStage, StageObject};
+use crate::adapters::snowflake::tests::test_types::CopyFrom;
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
@@ -16,6 +16,22 @@ use crate::http::errors::ApiError;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
 use chrono::{DateTime, Utc};
+
+/// Files under the managed stage on `s3://lake/raw/`, read where they are.
+pub(crate) const EXTERNAL: CopyFrom = CopyFrom {
+    source: "raw/shop/orders/",
+    stage: "@\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"",
+    folder: "shop/orders/",
+    filename_prefix: "raw/shop/orders/",
+};
+
+/// Files of `s3://lake/other/` no stage covers, copied unchanged to `@~` for batch 1 of load `L`.
+pub(crate) const INTERNAL: CopyFrom = CopyFrom {
+    source: "other/",
+    stage: "@~",
+    folder: "sqlload/L/00001/",
+    filename_prefix: "sqlload/L/00001/",
+};
 
 /// The `COPY` statements for `files` staged parts of batch 1 of load `load-1`: how many, and the first.
 pub(crate) fn copies(files: usize) -> (usize, String) {
@@ -206,20 +222,21 @@ pub(crate) fn managed_reference() -> String {
     stage_reference(&stage())
 }
 
-/// The direct copies of the case's files from `s3://lake/raw/shop/orders/` (or `source`) into `shop__orders`: how many statements, and the first.
+/// The direct copies of the case's files from `from` into `shop__orders`: how many statements, and the first.
 pub(crate) fn direct_sql(
     files: &[(String, &str)],
     columns: &[crate::adapters::snowflake::models::CopyColumn],
-    source: &Location,
+    from: &CopyFrom,
 ) -> Result<(usize, String), String> {
     let files: Vec<DataFile> = files.iter().map(|(key, day)| data_file(key, day)).collect();
-    let stage = stage();
+    let source = lake(from.source);
     let batches = crate::adapters::snowflake::main::copy::_direct_copies::direct_copies(
         &crate::adapters::snowflake::models::DirectCopy {
             target: &orders(),
-            stage: "@\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"",
-            stage_url: &stage.location,
-            source,
+            stage: from.stage,
+            folder: from.folder,
+            filename_prefix: from.filename_prefix,
+            source: &source,
             files: &files,
             columns,
             encoding: &crate::files_source::models::FilesEncoding::default(),
@@ -294,28 +311,6 @@ pub(crate) fn snowflake_hash_sql() -> String {
         (None, true),
     );
     statements.join(";")
-}
-
-/// What `pick_route` says for steps that found `outcomes` (`None` a usable route, `Some((true, reason))` an unusable step, `Some((false, reason))` a failed check): the route and those passed over, or the failure.
-pub(crate) fn picked(
-    forced: bool,
-    outcomes: &[(&str, Option<(bool, &str)>)],
-) -> Result<(String, Vec<String>), String> {
-    let steps: Vec<(String, Result<StageRoute, StepFailure>)> = outcomes
-        .iter()
-        .map(|(step, problem)| {
-            let outcome = problem.map_or(Ok(StageRoute::User), |(unusable, reason)| {
-                Err([
-                    StepFailure::Failed(reason.to_owned()),
-                    StepFailure::Unusable(reason.to_owned()),
-                ][usize::from(unusable)]
-                .clone())
-            });
-            ((*step).to_owned(), outcome)
-        })
-        .collect();
-    let choice = pick_route(forced, steps)?;
-    Ok((format!("{:?}", choice.route), choice.passed_over))
 }
 
 /// A status error with this HTTP status and service code.

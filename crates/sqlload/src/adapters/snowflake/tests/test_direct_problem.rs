@@ -18,7 +18,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             columns: order_columns(),
             masks: Vec::new(),
             refused: vec![("name".to_owned(), "Timestamp(ns)".to_owned())],
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: Some(
                 "name is Timestamp(ns) in the files, which the direct COPY does not load exactly",
             ),
@@ -31,19 +31,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             columns: order_columns(),
             masks: Vec::new(),
             refused: vec![("excluded".to_owned(), "UInt64".to_owned())],
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: None,
-        },
-        DirectProblemTestCase {
-            description: "shaping = loader forces SQLLoad's route, whatever else fits",
-            source: "raw/shop/orders/",
-            format: SourceFormat::Parquet,
-            keys: &["day=2026-11-04/part-0.parquet"],
-            columns: order_columns(),
-            masks: Vec::new(),
-            refused: Vec::new(),
-            shaped_by_loader: true,
-            expected_problem: Some("the table sets shaping = \"loader\""),
         },
         DirectProblemTestCase {
             description: "JSON pinned over a text column loads directly, parsed",
@@ -61,7 +50,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             )],
             masks: Vec::new(),
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -76,7 +65,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             )],
             masks: Vec::new(),
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -87,7 +76,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             columns: order_columns(),
             masks: vec![("name".to_owned(), MaskMethod::Hash)],
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -98,7 +87,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             columns: order_columns(),
             masks: Vec::new(),
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -109,7 +98,31 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             columns: order_columns(),
             masks: Vec::new(),
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
+            expected_problem: None,
+        },
+        DirectProblemTestCase {
+            description: "copy_to_internal_stage refuses NDJSON, whose later keys only a stage-wide key query finds",
+            source: "other/orders/",
+            format: SourceFormat::Ndjson,
+            keys: &["part-0.ndjson"],
+            columns: order_columns(),
+            masks: Vec::new(),
+            refused: Vec::new(),
+            copied: true,
+            expected_problem: Some(
+                "copy_to_internal_stage cannot load JSON or NDJSON yet: keys first seen after plan's sample would be missed; add a storage integration for these files instead",
+            ),
+        },
+        DirectProblemTestCase {
+            description: "copy_to_internal_stage takes CSV, and a source folder a stage path could not name, since only the uploaded keys are named",
+            source: "other folder/orders/",
+            format: SourceFormat::Csv,
+            keys: &["part-0.csv"],
+            columns: order_columns(),
+            masks: Vec::new(),
+            refused: Vec::new(),
+            copied: true,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -120,7 +133,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             columns: order_columns(),
             masks: Vec::new(),
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: Some("the files are outside the stage url s3://lake/raw/"),
         },
         DirectProblemTestCase {
@@ -131,7 +144,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             columns: order_columns(),
             masks: Vec::new(),
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: Some(
                 "batch=10%3A00/part-0.parquet has characters a stage path cannot name exactly",
             ),
@@ -144,7 +157,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             columns: order_columns(),
             masks: vec![("name".to_owned(), MaskMethod::Hmac)],
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: Some(
                 "name is masked with hmac, which Snowflake cannot compute without its key in SQL",
             ),
@@ -165,7 +178,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             )],
             masks: vec![("id".to_owned(), MaskMethod::Hash)],
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: Some(
                 "id is hashed but is not text in the files; SQLLoad hashes its text",
             ),
@@ -186,7 +199,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             )],
             masks: Vec::new(),
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: Some("id is int in the files but loads as text; SQLLoad converts it"),
         },
         DirectProblemTestCase {
@@ -205,7 +218,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             )],
             masks: Vec::new(),
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: Some("meta is uuid, which the direct COPY does not load exactly"),
         },
         DirectProblemTestCase {
@@ -216,7 +229,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             columns: vec![column("code", ColumnType::Varchar(4), CopyValue::Partition)],
             masks: Vec::new(),
             refused: Vec::new(),
-            shaped_by_loader: false,
+            copied: false,
             expected_problem: Some(
                 "code is varchar(4), which the direct COPY does not load exactly",
             ),
@@ -230,14 +243,13 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             .map(|key| data_file(key, "2026-11-04"))
             .collect();
         let problem = direct_problem(&DirectCheck {
-            stage_url: &stage.location,
+            stage_url: [Some(&stage.location), None][usize::from(test_case.copied)],
             source: &lake(test_case.source),
             format: test_case.format,
             files: &files,
             columns: &test_case.columns,
             masks: &test_case.masks,
             refused: &test_case.refused,
-            shaped_by_loader: test_case.shaped_by_loader,
         });
         assert_eq!(
             problem.as_deref(),

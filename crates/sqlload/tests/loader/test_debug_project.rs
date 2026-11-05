@@ -46,7 +46,7 @@ fn given_a_loader_project_when_debugging_then_every_connection_is_checked_and_re
         DebugProjectTestCase {
             description: "--no-connection only checks the configuration and flags unused connections",
             extra: |_, _| {
-                "[connections.spare]\nkind = \"duckdb\"\npath = \":memory:\"\n".to_owned()
+                "[connections.spare]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n".to_owned()
             },
             connect: false,
             expected_lines: &[

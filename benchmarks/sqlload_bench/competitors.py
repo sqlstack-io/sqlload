@@ -100,21 +100,22 @@ def _spec(run_dir: Path, scenario: Scenario, context: Context, **settings: objec
 class SqlLoad(Competitor):
 	"""The sqlload extension wheel built from this repository; its `sqlload load` runs in-process."""
 
-	def __init__(self, *, threads: int | None = None, shaping: str | None = None, external: bool = False, label: str = "") -> None:
-		self.threads = threads
-		self.shaping = shaping
+	def __init__(self, *, concurrency: int | None = None, direct: bool = False, external: bool = False, label: str = "") -> None:
+		self.concurrency = concurrency
+		#: Files in S3 into Snowflake, which Snowflake reads itself.
+		self.direct = direct
 		#: Postgres into Snowflake through the external stage instead of the user stage.
 		self.external = external
 		self.name = f"sqlload ({label})" if label else "sqlload"
 
 	def unsupported(self, scenario: Scenario) -> str | None:
-		if self.threads is not None:
+		if self.concurrency is not None:
 			return None if scenario.name == "pg_multi" else HIDDEN
 		if self.external:
 			return None if scenario.source else HIDDEN
 		if scenario.name == "files_snowflake":
-			return None if self.shaping else HIDDEN
-		if self.shaping:
+			return None if self.direct else HIDDEN
+		if self.direct:
 			return HIDDEN
 		return scenario.pending or None
 
@@ -127,14 +128,13 @@ class SqlLoad(Competitor):
 		return f"{SCHEMA}.{scenario.table}"
 
 	def invocation(self, scenario: Scenario, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
-		argv = [str(SQLLOAD), "load", *(["--threads", str(self.threads)] if self.threads else [])]
+		argv = [str(SQLLOAD), "load", *(["--concurrency", str(self.concurrency)] if self.concurrency else [])]
 		return Invocation(argv, self._project_dir(scenario, context, run_dir), self._env(scenario, run_dir))
 
 	def plan_invocation(self, scenario: Scenario, context: Context, run_dir: Path) -> tuple[Invocation, str] | None:
 		if scenario.name != "files_snowflake":
 			return None
-		expected = 'shaping = "loader"' if self.shaping == "loader" else "destination loads parquet files from"
-		return Invocation([str(SQLLOAD), "plan"], self._project_dir(scenario, context, run_dir), self._env(scenario, run_dir)), expected
+		return Invocation([str(SQLLOAD), "plan"], self._project_dir(scenario, context, run_dir), self._env(scenario, run_dir)), "destination loads parquet files from"
 
 	def _env(self, scenario: Scenario, run_dir: Path) -> dict[str, str]:
 		extra = {"PGPASSWORD": pg.PASSWORD}
@@ -158,13 +158,13 @@ class SqlLoad(Competitor):
 			return self._files_snowflake(scenario, context)
 		if scenario.source:
 			assert context.warehouse is not None
-			stage = context.warehouse.stage_toml() if self.external else ""
+			stage = context.warehouse.stage_toml() if self.external else '{ type = "internal_user_stage" }'
 			return (
 				context.warehouse.connection_toml(stage) + "\n" + self._postgres(scenario, context)
 				+ f'\n[sources.app.tables."public.{scenario.source}"]\nname = "{scenario.table}"\n'
 			)
 		text = (
-			f'[connections.wh]\nkind = "duckdb"\npath = "{self.destination(run_dir)}"\n\n'
+			f'[connections.wh]\nkind = "duckdb"\ndatabase = "{self.destination(run_dir)}"\n\n'
 			f'[targets.dev]\nconnection = "wh"\nloader_schema = "{SCHEMA}"\n'
 		)
 		if scenario.group == "postgres":
@@ -183,7 +183,7 @@ class SqlLoad(Competitor):
 		include = "public.multi_*" if scenario.name == "pg_multi" else f"public.{scenario.source or scenario.table}"
 		text = (
 			f'[connections.app_pg]\nkind = "postgres"\nhost = "127.0.0.1"\nport = {context.postgres.port}\n'
-			f'user = "{pg.USER}"\npassword = "${{PGPASSWORD}}"\ndatabase = "{pg.DATABASE}"\n\n'
+			f'user = "{pg.USER}"\npassword = "${{ENV:PGPASSWORD}}"\ndatabase = "{pg.DATABASE}"\n\n'
 			f'[sources.app]\nkind = "postgres"\nconnection = "app_pg"\ninclude = ["{include}"]\n'
 		)
 		if scenario.name == "pg_incremental":
@@ -194,12 +194,11 @@ class SqlLoad(Competitor):
 	def _files_snowflake(self, scenario: Scenario, context: Context) -> str:
 		settings = context.warehouse
 		assert settings is not None
-		shaping = 'shaping = "loader"\n' if self.shaping == "loader" else ""
 		key = snowflake.files_key(context.dataset)
 		return settings.connection_toml(settings.stage_toml()) + (
 			f'\n[connections.lake]\nkind = "s3"\nbucket = "{settings.bucket}"\nregion = "{settings.region}"\n\n'
 			f'[sources.files]\nkind = "files"\nconnection = "lake"\npath = "{key}"\nformat = "parquet"\n'
-			f'table_name = "{scenario.table}"\nwrite_strategy = "append"\n{shaping}'
+			f'table_name = "{scenario.table}"\nwrite_strategy = "append"\n'
 		)
 
 	@staticmethod
@@ -314,9 +313,8 @@ class Ingestr(Competitor):
 def all_competitors() -> list[Competitor]:
 	return [
 		SqlLoad(),
-		SqlLoad(threads=1, label="--threads 1"),
-		SqlLoad(shaping="direct", label="direct"),
-		SqlLoad(shaping="loader", label='shaping = "loader"'),
+		SqlLoad(concurrency=1, label="--concurrency 1"),
+		SqlLoad(direct=True, label="direct"),
 		SqlLoad(external=True, label="external stage"),
 		Dlt("pyarrow"),
 		Dlt("connectorx"),

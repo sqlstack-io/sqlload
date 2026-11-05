@@ -280,6 +280,7 @@ pub(crate) fn files_source_parts(
             encoding,
             checks,
             notes,
+            copy_to_internal_stage: source.copy_to_internal_stage,
         },
     ))
 }
@@ -583,7 +584,7 @@ pub(crate) async fn read_source(
     }
 }
 
-/// `specs` with `source_end` filled for the selected Postgres tables whose integer `batch` has no `--end-cursor-int` to end its windows: the cursor's current maximum, read once at plan; the source is connected only when one needs it.
+/// `specs` with `source_end` filled for the selected Postgres tables whose integer `batch_size` has no `--end-cursor-int` to end its windows: the cursor's current maximum, read once at plan; the source is connected only when one needs it.
 pub(crate) async fn source_ends(
     project: &ProjectConfig,
     (source_name, source): (&str, &SourceConfig),
@@ -610,10 +611,12 @@ pub(crate) async fn source_ends(
         });
         let wanted = matches!(spec.batch, Some(BatchStep::Integer(_)))
             && selected(
-                &options.select,
-                source_name,
-                &spec.destination.table,
-                &spec.source_table.qualified_name(),
+                options,
+                (
+                    source_name,
+                    &spec.destination.table,
+                    &spec.source_table.qualified_name(),
+                ),
             );
         let Some(column) = integer_cursor.filter(|_| wanted) else {
             continue;
@@ -648,6 +651,7 @@ pub(crate) fn unmatched_selectors(
     options
         .select
         .iter()
+        .chain(&options.exclude)
         .filter(|selector| !known.contains(&selector.as_str()))
         .map(
             |selector| match nearest_name(selector, known.iter().copied()) {
@@ -658,15 +662,14 @@ pub(crate) fn unmatched_selectors(
         .collect()
 }
 
-/// Whether `selectors` pick a table, by source name, destination name or `schema.table`.
+/// Whether `--select` picks a table and `--exclude` does not, each by source name, destination name or `schema.table`; no `--select` picks every table.
 pub(crate) fn selected(
-    selectors: &[String],
-    source: &str,
-    destination: &str,
-    source_table: &str,
+    options: &PlanOptions,
+    (source, destination, source_table): (&str, &str, &str),
 ) -> bool {
-    selectors.is_empty()
-        || selectors.iter().any(|selector| {
-            selector == source || selector == destination || selector == source_table
-        })
+    let picks = |selector: &String| {
+        selector == source || selector == destination || selector == source_table
+    };
+    (options.select.is_empty() || options.select.iter().any(picks))
+        && !options.exclude.iter().any(picks)
 }

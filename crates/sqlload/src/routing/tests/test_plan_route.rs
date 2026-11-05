@@ -1,5 +1,5 @@
 use crate::routing::main::plan_route::plan_route;
-use crate::routing::models::{FileFormat, ReadVia, RouteOverrides, StagePreference};
+use crate::routing::models::{FileFormat, ReadVia, ReaderOffer, RouteOverrides, StagePreference};
 use crate::routing::tests::helpers::{
     LAKE, clickhouse_destination, database_destination, files_source, internal_stage,
     local_destination, object_store, streaming_source, user_stage, warehouse_destination,
@@ -7,6 +7,7 @@ use crate::routing::tests::helpers::{
 };
 use crate::routing::tests::test_types::{PlanRouteErrorTestCase, PlanRouteTestCase};
 
+const HMAC: &str = "email masked with hmac, whose key must never appear in SQL";
 const SMALL: Option<u64> = Some(1024 * 1024);
 const BIG: Option<u64> = Some(10 * 1024 * 1024 * 1024);
 
@@ -32,7 +33,7 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             ],
         },
         PlanRouteTestCase {
-            description: "stage = internal stages on the internal stage",
+            description: "an internal stage preference stages on the internal stage",
             reader: streaming_source(),
             writer: warehouse_destination(vec![object_store("s3://lake/sqlload/"), user_stage()]),
             overrides: internal_stage(),
@@ -64,8 +65,11 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             ],
         },
         PlanRouteTestCase {
-            description: "existing files the warehouse cannot reach are read and restaged",
-            reader: files_source("s3://other/events/", FileFormat::Json),
+            description: "existing files the warehouse cannot reach are read and restaged only for hmac",
+            reader: ReaderOffer {
+                needs_loader: Some(HMAC.to_owned()),
+                ..files_source("s3://other/events/", FileFormat::Json)
+            },
             writer: warehouse_destination(vec![object_store(LAKE)]),
             overrides: RouteOverrides::default(),
             expected_steps: &[
@@ -73,6 +77,32 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
                 "read json into Arrow",
                 "write Parquet to s3://lake/",
                 "destination loads parquet files from s3://lake/",
+            ],
+        },
+        PlanRouteTestCase {
+            description: "files the warehouse reads itself, but hmac-masked, go through SQLLoad",
+            reader: ReaderOffer {
+                needs_loader: Some(HMAC.to_owned()),
+                ..files_source("s3://lake/events/", FileFormat::Parquet)
+            },
+            writer: warehouse_destination(vec![object_store(LAKE)]),
+            overrides: RouteOverrides::default(),
+            expected_steps: &[
+                "use parquet files in s3://lake/events/",
+                "read parquet into Arrow",
+                "write Parquet to s3://lake/",
+                "destination loads parquet files from s3://lake/",
+            ],
+        },
+        PlanRouteTestCase {
+            description: "files a non-warehouse destination cannot read itself are read by SQLLoad",
+            reader: files_source("s3://other/events/", FileFormat::Csv),
+            writer: database_destination(),
+            overrides: RouteOverrides::default(),
+            expected_steps: &[
+                "use csv files in s3://other/events/",
+                "read csv into Arrow",
+                "destination takes Arrow",
             ],
         },
         PlanRouteTestCase {
@@ -135,7 +165,7 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             ],
         },
         PlanRouteTestCase {
-            description: "with stage = internal a local directory fetches from the internal stage",
+            description: "preferring the internal stage, a local directory fetches from the internal stage",
             reader: warehouse_source(BIG),
             writer: local_destination(),
             overrides: internal_stage(),
@@ -183,6 +213,33 @@ fn given_an_impossible_combination_when_planning_then_the_error_says_why() {
             writer: warehouse_destination(Vec::new()),
             overrides: RouteOverrides::default(),
             expected_message: "neither Arrow nor staged Parquet",
+        },
+        PlanRouteErrorTestCase {
+            description: "files no stage of the warehouse covers fail, never going through SQLLoad",
+            reader: files_source("s3://other/events/", FileFormat::Parquet),
+            writer: warehouse_destination(vec![object_store(LAKE), user_stage()]),
+            overrides: RouteOverrides::default(),
+            expected_message: "s3://other/events/ cannot be read by Snowflake: no external stage covers it. Fix: add a storage integration that allows this bucket (the fast path), or, if that isn't possible, set copy_to_internal_stage = true",
+        },
+        PlanRouteErrorTestCase {
+            description: "files whose path a stage names but on another S3 endpoint fail as unreadable, never planned as read in place",
+            reader: ReaderOffer {
+                out_of_reach: true,
+                ..files_source("s3://lake/events/", FileFormat::Parquet)
+            },
+            writer: warehouse_destination(vec![object_store(LAKE)]),
+            overrides: RouteOverrides::default(),
+            expected_message: "s3://lake/events/ cannot be read by Snowflake: no external stage covers it",
+        },
+        PlanRouteErrorTestCase {
+            description: "files the warehouse reaches but cannot load exactly fail, never going through SQLLoad",
+            reader: ReaderOffer {
+                direct_blocked: Some("half is Float16 in the files".to_owned()),
+                ..files_source("s3://lake/events/", FileFormat::Parquet)
+            },
+            writer: warehouse_destination(vec![object_store(LAKE)]),
+            overrides: RouteOverrides::default(),
+            expected_message: "the destination cannot load these files exactly by reading them itself: half is Float16 in the files",
         },
         PlanRouteErrorTestCase {
             description: "a source with nothing to offer",

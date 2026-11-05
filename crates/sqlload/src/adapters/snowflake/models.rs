@@ -28,8 +28,8 @@ pub struct SnowflakeDestination {
     pub database: String,
     /// Held while a load's tables change the schema, one at a time.
     pub ddl: Arc<tokio::sync::Mutex<()>>,
-    /// The route the connection's `stage` forces, if any.
-    pub stage: Option<ForcedStage>,
+    /// The route the connection's `load_method` sets.
+    pub stage: ForcedStage,
     /// What this run's plan already found out about stages, by what was probed: usable (and whether `apply` must create it), or why not.
     pub stage_checks: Arc<Mutex<BTreeMap<String, Result<bool, StepFailure>>>>,
     /// What a streaming client for this account needs.
@@ -37,7 +37,7 @@ pub struct SnowflakeDestination {
     pub config: DestinationConfig,
 }
 
-/// The route a connection's `stage` forces.
+/// The route a connection's `load_method` sets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForcedStage {
     User,
@@ -82,10 +82,8 @@ pub enum StageRoute {
     TargetTable,
     /// The staging table's `@%table`, which the load always owns.
     StagingTable,
-    /// Snowpipe Streaming into the staging table; `may_fall_back` (the chain chose it, nothing forced it) lets a channel that will not open drop to `INSERT`.
-    Streaming {
-        may_fall_back: bool,
-    },
+    /// Snowpipe Streaming into the staging table.
+    Streaming,
     /// Batched multi-row `INSERT` into the staging table.
     Insert,
 }
@@ -100,7 +98,7 @@ pub struct SnowflakeAccount {
     pub warehouse: Option<String>,
     pub database: String,
     pub base_url: Option<String>,
-    pub stage: Option<ForcedStage>,
+    pub stage: ForcedStage,
 }
 
 /// One batch's staged files and where they load.
@@ -163,9 +161,12 @@ pub struct CopyColumn {
 pub struct DirectCopy<'a> {
     /// The table copied into: the target itself (`append`) or the load's staging table.
     pub target: &'a TableName,
-    /// The stage, as SQL (`@"DB"."SCHEMA"."_SQLLOAD_STAGE"`).
+    /// The stage, as SQL (`@"DB"."SCHEMA"."_SQLLOAD_STAGE"` or `@~`).
     pub stage: &'a str,
-    pub stage_url: &'a Location,
+    /// The files' folder below the stage, which `FILES` names them in.
+    pub folder: &'a str,
+    /// What `METADATA$FILENAME` starts each file's name with: the folder's bucket-relative key on an external stage, the folder itself on an internal one.
+    pub filename_prefix: &'a str,
     /// The files source's folder.
     pub source: &'a Location,
     pub files: &'a [DataFile],
@@ -188,7 +189,8 @@ pub struct CopyBatch {
 /// What decides whether Snowflake can load a files source's files itself, exactly as SQLLoad would.
 #[derive(Debug, Clone, Copy)]
 pub struct DirectCheck<'a> {
-    pub stage_url: &'a Location,
+    /// The external stage's URL the files are read under; `None` for files copied unchanged to an internal stage.
+    pub stage_url: Option<&'a Location>,
     pub source: &'a Location,
     pub format: SourceFormat,
     pub files: &'a [DataFile],
@@ -197,8 +199,6 @@ pub struct DirectCheck<'a> {
     pub refused: &'a [(String, String)],
     /// Masked columns and how.
     pub masks: &'a [(String, MaskMethod)],
-    /// `shaping = "loader"`.
-    pub shaped_by_loader: bool,
 }
 
 /// How SQLLoad finds a stage object, and what it must point at.
@@ -216,13 +216,6 @@ pub struct ShownStage {
     pub name: String,
     pub url: String,
     pub storage_integration: String,
-}
-
-/// The route plan chose for a table's rows, and why earlier steps of the chain were passed over.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteChoice {
-    pub route: StageRoute,
-    pub passed_over: Vec<String>,
 }
 
 /// A stage `apply` creates.
@@ -283,6 +276,19 @@ pub struct SnowflakeWriter {
     pub uploads: tokio::task::JoinSet<Result<(), LoaderError>>,
 }
 
+/// Where a direct batch's `COPY` reads its files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyPlace {
+    /// The stage, as SQL.
+    pub stage: String,
+    /// The files' folder below the stage.
+    pub folder: String,
+    /// What `METADATA$FILENAME` starts each file's name with.
+    pub filename_prefix: String,
+    /// The files were uploaded to an internal stage for this batch, and are removed after it.
+    pub uploaded: bool,
+}
+
 /// What a direct batch's `COPY` did, with the rows it loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectLoaded {
@@ -309,4 +315,6 @@ pub struct DirectBatch<'a> {
     pub mode: &'a WriteMode,
     /// The live table's columns as plan read them.
     pub live: Option<&'a [LiveColumn]>,
+    /// The files' own folder, which `copy_to_internal_stage` uploads them from.
+    pub source_folder: Option<&'a OpenFolder>,
 }
