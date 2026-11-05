@@ -8,7 +8,7 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
-use crate::files_destination::models::{PendingPhase, PendingRun};
+use crate::files_destination::models::PendingPhase;
 use crate::loader::_helpers::destination::{execute, live_columns, text_values};
 use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::errors::LoaderError;
@@ -304,6 +304,7 @@ pub(crate) fn run_entry(
             files: Vec::new(),
             note: None,
             recorded_at: String::new(),
+            batch: None,
         },
         cursor_type,
         before: window.and_then(|window| window.maximum.clone()),
@@ -326,23 +327,6 @@ pub(crate) fn fold_maximum(
     };
     let batch_maximum = batch_cursor_max(batch, column, column_type)?;
     Ok(run.later(maximum, batch_maximum))
-}
-
-/// A logged table's finished files load as its run record waits in the load's marker: the object's folder under the target's root, name and JSON; `None` when the table is not logged.
-pub(crate) fn pending_run(
-    run: Option<&RunEntry>,
-    outcome: RunOutcome,
-    table_folder: &Location,
-) -> Result<Option<PendingRun>, LoaderError> {
-    let Some(run) = run else {
-        return Ok(None);
-    };
-    let record = run.finished(outcome);
-    Ok(Some(PendingRun {
-        prefix: runs_location(table_folder).prefix,
-        name: record_object_name(&record),
-        json: record_json(&record)?,
-    }))
 }
 
 /// What a record says about the table of `spec`.

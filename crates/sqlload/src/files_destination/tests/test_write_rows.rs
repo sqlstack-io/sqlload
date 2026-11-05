@@ -34,6 +34,7 @@ fn given_one_batch_with_many_partitions_when_writing_then_open_files_stay_under_
             cursor_column: Some("day"),
             columns: &columns,
             load_id: "load",
+            file_id: "load",
             loaded_at: "2026-11-04T00:00:00.000000Z",
         })?;
         let batch = days_batch(test_case.partitions)?;

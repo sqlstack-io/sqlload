@@ -63,7 +63,9 @@ fn given_a_postgres_table_of_every_type_when_copied_then_each_value_arrives_exac
             table,
             columns,
             filter: None,
+            order_by: None,
             batch_rows: 2,
+            batch_bytes: usize::MAX,
         };
         let rows = copy_table(&client, request, async |batch| {
             batches.push(batch);

@@ -30,6 +30,7 @@ pub(crate) fn sample_record() -> RunRecord {
         files: Vec::new(),
         note: None,
         recorded_at: "2026-11-04T10:00:00.000000Z".to_owned(),
+        batch: None,
     }
 }
 

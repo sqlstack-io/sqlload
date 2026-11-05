@@ -122,6 +122,9 @@ pub struct LoaderArgs {
     /// Backfill only integer cursor values below this one.
     #[arg(long)]
     pub end_cursor_int: Option<i64>,
+    /// The most tables loading at once (default: the project's `threads`, else 4); one table's batches always commit one at a time.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    pub threads: Option<u16>,
 }
 
 /// How logs are written.

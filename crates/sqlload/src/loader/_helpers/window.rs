@@ -53,6 +53,7 @@ fn write_mode(
                 .unwrap_or_default(),
             from,
             to,
+            values: Vec::new(),
         },
     }
 }

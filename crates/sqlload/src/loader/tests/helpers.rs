@@ -37,6 +37,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
             })
             .collect(),
         primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
         estimated_rows: -1,
         estimated_bytes: -1,
     };

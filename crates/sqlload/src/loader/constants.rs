@@ -33,3 +33,6 @@ pub const EMPTY_REPLACE_PROBLEM: &str = "yielded no rows; replace would empty {t
 
 /// Why a Python table with an enforced contract needs declared columns.
 pub const ENFORCED_UNDECLARED_PROBLEM: &str = "contract enforced needs declared columns: the first load would create a table with only metadata columns";
+
+/// The most tables loading at once when neither `threads` nor `--threads` says.
+pub const DEFAULT_THREADS: usize = 4;

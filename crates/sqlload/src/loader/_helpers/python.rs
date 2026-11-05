@@ -61,6 +61,7 @@ pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
             name: name.clone(),
             columns,
             primary_key: Vec::new(),
+            indexed_columns: Vec::new(),
             estimated_rows: -1,
             estimated_bytes: -1,
         });

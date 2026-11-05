@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod auth;
+pub mod batch_plan;
 pub mod batching;
 pub mod column_types;
 /// The `sqlload` command line; behind the default `cli` feature.
@@ -24,6 +25,7 @@ pub mod loader;
 pub mod masking;
 pub mod metrics;
 pub mod naming;
+pub mod parquet_parts;
 pub mod planning;
 pub mod postgres_source;
 pub mod project;

@@ -10,6 +10,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "on_schema_change",
     "auto_widen",
     "type_change_rebuild",
+    "batch",
 ];
 
 /// Keys only a source may use.

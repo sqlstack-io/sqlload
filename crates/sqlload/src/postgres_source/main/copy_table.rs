@@ -9,7 +9,7 @@ use crate::postgres_source::_helpers::type_map::quote_identifier;
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::CopyRequest;
 
-/// Read `request.table` with binary `COPY`, passing each batch to `on_batch`; returns the row count.
+/// Read `request.table` with binary `COPY`, passing each batch (at most `batch_rows` rows, about `batch_bytes` bytes) to `on_batch`; returns the row count.
 pub async fn copy_table(
     client: &Client,
     request: CopyRequest<'_>,
@@ -26,8 +26,13 @@ pub async fn copy_table(
         .as_ref()
         .map(|filter| format!(" WHERE {filter}"))
         .unwrap_or_default();
+    let order = request
+        .order_by
+        .as_ref()
+        .map(|column| format!(" ORDER BY {column}"))
+        .unwrap_or_default();
     let sql = format!(
-        "COPY (SELECT {} FROM {}.{}{filter}) TO STDOUT (FORMAT binary)",
+        "COPY (SELECT {} FROM {}.{}{filter}{order}) TO STDOUT (FORMAT binary)",
         select.join(", "),
         quote_identifier(&request.table.schema),
         quote_identifier(&request.table.name),
@@ -42,7 +47,7 @@ pub async fn copy_table(
     };
     while let Some(chunk) = stream.next().await {
         decoder.push(&chunk?)?;
-        if decoder.rows() >= request.batch_rows {
+        if decoder.rows() >= request.batch_rows || decoder.bytes() >= request.batch_bytes {
             total += decoder.rows() as u64;
             on_batch(decoder.take_batch()?).await.map_err(sink_error)?;
         }

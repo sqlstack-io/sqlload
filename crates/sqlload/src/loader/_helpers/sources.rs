@@ -11,7 +11,7 @@ use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
 use crate::files_source::models::{
-    FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks,
+    DataFile, FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks,
 };
 use crate::loader::_helpers::destination::text_values;
 use crate::loader::_helpers::python::python_tables;
@@ -22,6 +22,7 @@ use crate::loader::errors::LoaderError;
 use crate::loader::models::{
     Destination, FilesSource, PlanOptions, SourceReader, TablePlan, TableSpec,
 };
+use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::main::read_catalog::read_catalog;
@@ -226,6 +227,7 @@ pub(crate) async fn discover_files_table(
         name: source_name.to_owned(),
         columns,
         primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
         estimated_rows: -1,
         estimated_bytes: table
             .files
@@ -453,10 +455,22 @@ pub(crate) async fn plan_files(
     }))
 }
 
-/// Read `table`'s data from `reader`, passing each batch to `on_batch`; returns the row count.
+/// Which part of a table's planned read one pass reads: a cursor window's filter, an order, or some of a files source's files.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ReadPart {
+    /// The Postgres filter; `None` reads the plan's.
+    pub(crate) filter: Option<String>,
+    /// `ORDER BY` this quoted column.
+    pub(crate) order_by: Option<String>,
+    /// The files to read; `None` reads every planned file.
+    pub(crate) files: Option<Vec<DataFile>>,
+}
+
+/// Read `part` of `table`'s data from `reader`, passing each batch to `on_batch`; returns the row count.
 pub(crate) async fn read_source(
     reader: &SourceReader,
     table: &TablePlan,
+    part: ReadPart,
     on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), String>,
 ) -> Result<u64, LoaderError> {
     match (reader, &table.files) {
@@ -464,13 +478,22 @@ pub(crate) async fn read_source(
             let request = CopyRequest {
                 table: &table.spec.source_table,
                 columns: table.read_columns.clone(),
-                filter: table.source_filter.clone(),
+                filter: part.filter.or_else(|| table.source_filter.clone()),
+                order_by: part.order_by,
                 batch_rows: SOURCE_BATCH_ROWS,
+                batch_bytes: DEFAULT_BATCH_BYTES,
             };
             Ok(copy_table(client, request, on_batch).await?)
         }
         (SourceReader::Files(folder), Some(files)) => {
-            Ok(read_files(folder, files, on_batch).await?)
+            let read = match part.files {
+                Some(subset) => FilesRead {
+                    files: subset,
+                    ..files.clone()
+                },
+                None => files.clone(),
+            };
+            Ok(read_files(folder, &read, on_batch).await?)
         }
         (SourceReader::Batches(spilled), _) => replay_batches(spilled, table, on_batch).await,
         (SourceReader::Files(_), None) => Err(LoaderError::Invalid(format!(

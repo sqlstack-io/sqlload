@@ -119,6 +119,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             cursor_column: column.to_owned(),
             from: from.clone(),
             to: to.clone(),
+            values: Vec::new(),
         },
         (false, _) => WriteMode::Append,
     };

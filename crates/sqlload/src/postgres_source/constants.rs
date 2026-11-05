@@ -24,6 +24,9 @@ pub const POSTGRES_EPOCH_MICROS: i64 = 946_684_800_000_000;
 /// Rows per Arrow batch read from Postgres.
 pub const DEFAULT_BATCH_ROWS: usize = 65_536;
 
+/// Bytes per Arrow batch read from Postgres (64 MiB), however few rows that is.
+pub const DEFAULT_BATCH_BYTES: usize = 64 * 1024 * 1024;
+
 /// Decimal digits per base-10000 `numeric` digit.
 pub const NUMERIC_DIGIT_WIDTH: i32 = 4;
 
@@ -59,6 +62,18 @@ CROSS JOIN LATERAL unnest(k.conkey) WITH ORDINALITY AS key(attnum, position)
 JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = key.attnum
 WHERE k.contype = 'p'
 ORDER BY n.nspname, c.relname, key.position";
+
+/// Columns leading a valid, whole-table btree index, by table: reading in their order is cheap.
+pub const CATALOG_INDEXED_COLUMNS_SQL: &str = "
+SELECT DISTINCT n.nspname, c.relname, a.attname
+FROM pg_catalog.pg_index i
+JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
+JOIN pg_catalog.pg_am am ON am.oid = ic.relam
+JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = i.indkey[0]
+WHERE am.amname = 'btree' AND i.indisvalid AND i.indpred IS NULL
+ORDER BY 1, 2, 3";
 
 /// `pg_type.typcategory` for arrays.
 pub const ARRAY_CATEGORY: &str = "A";

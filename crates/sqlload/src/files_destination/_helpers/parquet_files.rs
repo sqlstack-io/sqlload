@@ -40,7 +40,7 @@ pub(crate) fn next_key(writer: &FilesWriter, value: &str) -> String {
     };
     format!(
         "{folder}{PART_PREFIX}{}-{}{PARQUET_SUFFIX}",
-        writer.load_id,
+        writer.file_id,
         writer.written.len()
     )
 }

@@ -1,4 +1,5 @@
 use crate::column_types::models::ColumnType;
+use crate::loader::_helpers::commits::{CommitRequest, commit_rule};
 use crate::loader::_helpers::destination::live_columns;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::route::table_route;
@@ -8,7 +9,9 @@ use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_logged_plan::with_run_log;
 use crate::loader::main::_plan_files::plan_files_table;
-use crate::loader::models::{Destination, PlanOptions, ReadWindow, TablePlan, TableSpec};
+use crate::loader::models::{
+    CommitRule, Destination, PlanOptions, ReadWindow, TablePlan, TableSpec,
+};
 use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{Contract, WriteStrategy};
@@ -80,6 +83,7 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         output: None,
         exists: false,
         logged: None,
+        commits: CommitRule::Whole,
     }
 }
 
@@ -152,6 +156,7 @@ async fn plan_table_once(
                 files: None,
                 output: None,
                 logged: None,
+                commits: CommitRule::Whole,
             });
         }
     };
@@ -275,6 +280,23 @@ async fn plan_table_once(
         }
     };
     let exists = live.is_some();
+    let commits = commit_rule(&CommitRequest {
+        spec,
+        window: read.as_ref(),
+        cursor_type,
+        read_columns: &read_columns,
+        files: files.as_ref(),
+        mode: &mode,
+    });
+    let commits = match commits {
+        Ok(commits) => commits,
+        Err(problem) => {
+            if schema.blocked.is_none() {
+                schema = blocked_plan(vec![problem]);
+            }
+            CommitRule::Whole
+        }
+    };
     Ok(TablePlan {
         spec: spec.clone(),
         read_columns,
@@ -289,6 +311,7 @@ async fn plan_table_once(
         output: None,
         exists,
         logged: None,
+        commits,
     })
 }
 

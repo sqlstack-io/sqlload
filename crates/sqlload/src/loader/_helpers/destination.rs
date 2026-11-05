@@ -1,6 +1,5 @@
 use arrow_array::RecordBatch;
 
-use crate::column_types::models::Warehouse;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::append_batch::append_batch;
 #[cfg(feature = "duckdb")]
@@ -8,21 +7,20 @@ use crate::duckdb_destination::main::describe_table::describe_table as describe_
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::execute_statements::execute_statements;
 #[cfg(feature = "duckdb")]
+use crate::duckdb_destination::main::own_connection::own_connection;
+#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::query_text::query_text as query_duckdb;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::query_texts::query_texts as query_duckdb_texts;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, StagingSession};
+use crate::loader::models::Destination;
 use crate::schema_plan::models::LiveColumn;
-use crate::snowflake_destination::main::copy_staged::copy_staged;
 use crate::snowflake_destination::main::describe_table::describe_table as describe_snowflake;
 use crate::snowflake_destination::main::query_text::query_text as query_snowflake;
 use crate::snowflake_destination::main::query_texts::query_texts as query_snowflake_texts;
-use crate::snowflake_destination::main::remove_staged::remove_staged;
+use crate::snowflake_destination::main::remove_stale::remove_stale;
 use crate::snowflake_destination::main::run_statements::run_statements;
 use crate::snowflake_destination::main::stage_parquet::stage_parquet;
-use crate::write_sql::main::qualified_name::qualified_name;
-use crate::write_sql::main::swap_table::swap_table;
 use crate::write_sql::models::TableName;
 
 /// The error for a SQL operation on a files target, which plans and loads without SQL.
@@ -84,55 +82,53 @@ pub(crate) async fn text_values(
     }
 }
 
-/// Add batch number `session.parts` of the load: appended to the staging table, or staged as a Parquet file.
-pub(crate) async fn stage_batch(
+/// The destination for one table's load: DuckDB gets a connection of its own, so the table's transactions never mix with another table loading at the same time.
+pub(crate) fn table_destination(destination: &Destination) -> Result<Destination, LoaderError> {
+    match destination {
+        #[cfg(feature = "duckdb")]
+        Destination::DuckDb(duckdb) => Ok(Destination::DuckDb(own_connection(duckdb)?)),
+        other => Ok(other.clone()),
+    }
+}
+
+/// Append `batch` to `table` by column name (DuckDB, which takes Arrow directly).
+pub(crate) async fn append_rows(
     destination: &Destination,
-    session: &StagingSession,
+    table: &TableName,
     batch: RecordBatch,
 ) -> Result<(), LoaderError> {
     match destination {
         #[cfg(feature = "duckdb")]
-        Destination::DuckDb(duckdb) => Ok(append_batch(duckdb, &session.staging, batch).await?),
-        Destination::Snowflake(snowflake) => {
-            Ok(stage_parquet(snowflake, &session.load_id, session.parts, &batch).await?)
-        }
-        Destination::Files(_) => Err(no_sql()),
+        Destination::DuckDb(duckdb) => Ok(append_batch(duckdb, table, batch).await?),
+        _ => Err(LoaderError::Invalid(
+            "only DuckDB takes Arrow batches directly".to_owned(),
+        )),
     }
 }
 
-/// Make every staged batch visible in the staging table (Snowflake: `COPY` the files).
-pub(crate) async fn finish_staging(
+/// Upload one staged Parquet file to `key` on the user stage (Snowflake).
+pub(crate) async fn stage_file(
     destination: &Destination,
-    session: &StagingSession,
+    key: &str,
+    body: &[u8],
 ) -> Result<(), LoaderError> {
     match destination {
-        #[cfg(feature = "duckdb")]
-        Destination::DuckDb(_) => Ok(()),
-        Destination::Snowflake(_) if session.parts == 0 => Ok(()),
-        Destination::Snowflake(snowflake) => {
-            Ok(copy_staged(snowflake, &session.staging, &session.load_id).await?)
-        }
-        Destination::Files(_) => Err(no_sql()),
+        Destination::Snowflake(snowflake) => Ok(stage_parquet(snowflake, key, body).await?),
+        _ => Err(no_sql()),
     }
 }
 
-/// Drop the load's staging and swap tables and any staged files; best effort, after success or failure.
-pub(crate) async fn cleanup_staging(
-    destination: &Destination,
-    session: &StagingSession,
-    warehouse: Warehouse,
-) {
-    let drops: Vec<String> = [session.staging.clone(), swap_table(&session.staging)]
-        .iter()
-        .map(|table| format!("DROP TABLE IF EXISTS {}", qualified_name(table, warehouse)))
-        .collect();
-    if let Err(error) = execute(destination, drops).await {
-        tracing::warn!(%error, table = %session.staging.table, "cannot drop the staging table");
-    }
-    if let Destination::Snowflake(snowflake) = destination
-        && session.parts > 0
-        && let Err(error) = remove_staged(snowflake, &session.load_id).await
-    {
-        tracing::warn!(%error, load_id = %session.load_id, "cannot remove the staged files");
+/// Remove the load folders failed runs left on the user stage over a day ago; a failure only warns.
+pub(crate) async fn clean_stage(destination: &Destination) {
+    let Destination::Snowflake(snowflake) = destination else {
+        return;
+    };
+    match remove_stale(snowflake).await {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(
+            removed,
+            "removed load folders failed runs left on the user stage"
+        ),
+        Err(error) => tracing::warn!(%error, "cannot clean up the user stage"),
     }
 }

@@ -50,6 +50,9 @@ pub struct RunRecord {
     pub note: Option<String>,
     /// When the record was made: ISO 8601 UTC with microseconds, so text order is time order.
     pub recorded_at: String,
+    /// The run's commit this record went with, from 1, when the run committed in batches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<u64>,
 }
 
 /// What a finished run adds to its record.

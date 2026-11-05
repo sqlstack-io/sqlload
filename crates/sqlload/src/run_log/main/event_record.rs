@@ -20,5 +20,6 @@ pub fn event_record(table: &RecordTable, event: StateEvent) -> RunRecord {
         files: Vec::new(),
         note: Some(event.note),
         recorded_at: event.recorded_at,
+        batch: None,
     }
 }

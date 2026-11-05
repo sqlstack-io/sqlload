@@ -38,6 +38,7 @@ fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         reload: args.reload,
         start_cursor: start,
         end_cursor: end,
+        threads: args.threads.map(usize::from),
     })
 }
 

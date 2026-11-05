@@ -26,6 +26,8 @@ pub(crate) struct CopyDecoder {
     header_read: bool,
     finished: bool,
     rows: usize,
+    /// Bytes of the rows decoded since the last batch (each field's bytes and length), about what the batch holds in Arrow.
+    bytes: usize,
 }
 
 impl CopyDecoder {
@@ -56,6 +58,7 @@ impl CopyDecoder {
             header_read: false,
             finished: false,
             rows: 0,
+            bytes: 0,
         })
     }
 
@@ -65,6 +68,10 @@ impl CopyDecoder {
     }
 
     /// Whether the stream's trailer has been read.
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
+    }
+
     pub(crate) fn finished(&self) -> bool {
         self.finished
     }
@@ -87,6 +94,7 @@ impl CopyDecoder {
             .map(ColumnBuilder::finish)
             .collect();
         self.rows = 0;
+        self.bytes = 0;
         RecordBatch::try_new(self.schema.clone(), arrays).map_err(|error| PostgresError::Batch {
             table: self.table.clone(),
             reason: error.to_string(),
@@ -159,6 +167,7 @@ impl CopyDecoder {
         }
         self.buffer.advance(end);
         self.rows += 1;
+        self.bytes += end;
         Ok(true)
     }
 

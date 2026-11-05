@@ -4,5 +4,7 @@ pub mod describe_table;
 pub mod query_text;
 pub mod query_texts;
 pub mod remove_staged;
+pub mod remove_stale;
 pub mod run_statements;
 pub mod stage_parquet;
+pub mod stale_folders;
