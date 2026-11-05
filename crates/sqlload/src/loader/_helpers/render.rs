@@ -68,9 +68,9 @@ fn aligned(left: &str, right: &str) -> String {
     }
 }
 
-/// `name` padded so `detail` starts in the plan's detail column (after a branch prefix).
+/// `name` padded so `detail` starts in the plan's detail column (after a branch prefix), or two spaces after a name too long for it.
 fn row(name: &str, detail: &str) -> String {
-    format!("{name:<width$}{detail}", width = PLAN_DETAIL_COLUMN - 4)
+    format!("{name:<width$}  {detail}", width = PLAN_DETAIL_COLUMN - 6)
 }
 
 fn detail(label: &str, text: impl Into<String>) -> PlanDetail {
@@ -665,7 +665,7 @@ fn counted(count: usize, (one, many): (&str, &str)) -> String {
     }
 }
 
-/// The plan's sections: what `apply` creates or changes, what `load` moves, and what stops or should be known.
+/// The plan's sections: what `apply` creates or changes, what `load` moves, and what stops or should be known; tables stopped for the same reasons share one `Errors` item.
 pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
     let ready: Vec<_> = plan
         .tables
@@ -695,12 +695,18 @@ pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
             })
             .count();
     let alters = stages.len() + changed.len() - creates;
-    let errors: Vec<PlanItem> = plan
+    let mut errors: Vec<PlanItem> = Vec::new();
+    for item in plan
         .tables
         .iter()
         .filter_map(blocked_item)
         .chain(plan.problems.iter().map(|problem| problem_item(problem)))
-        .collect();
+    {
+        match errors.iter_mut().find(|seen| seen.details == item.details) {
+            Some(seen) => seen.name = format!("{}, {}", seen.name, item.name),
+            None => errors.push(item),
+        }
+    }
     let clauses = [
         (creates, ("object to create", "objects to create")),
         (alters, ("to alter", "to alter")),

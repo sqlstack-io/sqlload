@@ -54,8 +54,13 @@ pub const PARALLEL_READ_MIN_BYTES: i64 = 128 * 1024 * 1024;
 
 /// ANSI escapes for coloured output.
 pub const BOLD: &str = "\x1b[1m";
+/// Dimmed text: a heading's command note.
 pub const DIM: &str = "\x1b[2m";
+/// Errors and failures.
 pub const RED: &str = "\x1b[38;5;167m";
+/// A complete plan or load.
 pub const GREEN: &str = "\x1b[32m";
+/// Warnings.
 pub const YELLOW: &str = "\x1b[33m";
+/// Back to plain text.
 pub const RESET: &str = "\x1b[0m";

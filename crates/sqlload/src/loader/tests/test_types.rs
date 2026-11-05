@@ -59,3 +59,23 @@ pub(crate) struct RenderTallyTestCase {
     pub(crate) elapsed_ms: u64,
     pub(crate) expected_output: &'static str,
 }
+
+/// A plan item: its name, its action, and each detail's label and text.
+pub(crate) type ItemSpec = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+/// A plan view built from items, and the exact text `plan` prints for it.
+pub(crate) struct ViewLinesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) ok: bool,
+    pub(crate) summary: &'static str,
+    pub(crate) selected: usize,
+    pub(crate) objects: &'static [ItemSpec],
+    pub(crate) loads: &'static [ItemSpec],
+    pub(crate) errors: &'static [ItemSpec],
+    pub(crate) warnings: &'static [ItemSpec],
+    pub(crate) expected_output: &'static str,
+}

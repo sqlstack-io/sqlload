@@ -53,12 +53,21 @@ pub fn render_tally(
         });
     }
     let name_width = lines.iter().map(|line| line.name.len()).max().unwrap_or(0);
+    let verb_width = lines
+        .iter()
+        .map(|line| line.verb.len())
+        .chain(["created".len()])
+        .max()
+        .unwrap_or(0);
+    let continued = format!("\n{:width$}", "", width = verb_width + name_width + 4);
     let mut out: Vec<String> = lines
         .iter()
         .map(|line| {
             format!(
-                "{:<8} {:<name_width$}  {}",
-                line.verb, line.name, line.detail
+                "{:<verb_width$}  {:<name_width$}  {}",
+                line.verb,
+                line.name,
+                line.detail.replace('\n', &continued)
             )
             .trim_end()
             .to_owned()

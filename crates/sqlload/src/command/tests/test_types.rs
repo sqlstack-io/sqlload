@@ -21,6 +21,16 @@ pub(crate) struct LoadOptionsTestCase {
 
 pub(crate) struct PlanFailureTestCase {
     pub(crate) description: &'static str,
+    pub(crate) project: &'static str,
     pub(crate) argv: &'static [&'static str],
+    /// How the output starts.
     pub(crate) expected_output: &'static str,
+    /// The last line: `exit 0` or `exit 1`.
+    pub(crate) expected_exit: &'static str,
+}
+
+pub(crate) struct PaintTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) line: &'static str,
+    pub(crate) expected_line: &'static str,
 }

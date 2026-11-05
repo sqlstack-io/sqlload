@@ -2,6 +2,7 @@ use crate::command::tests::helpers::{debug_without_host, run_without_host};
 use crate::command::tests::test_types::{LoaderCommandTestCase, PlanFailureTestCase};
 
 const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
+const NO_LOAD_METHOD: &str = "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 
 #[test]
 fn given_the_standalone_executable_when_a_project_has_python_paths_then_it_says_to_install_the_python_package()
@@ -30,25 +31,49 @@ fn given_the_standalone_executable_when_a_project_has_python_paths_then_it_says_
 }
 
 #[test]
-fn given_a_snowflake_connection_without_load_method_when_planning_then_the_plan_fails_naming_the_fix()
- {
-    let project = "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
+fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_error_and_exits_1() {
     let test_cases = [
         PlanFailureTestCase {
             description: "text: an Errors section with the reason and the fix, and no error: prefix",
+            project: NO_LOAD_METHOD,
             argv: &["plan"],
             expected_output: "Errors (1)\n└── connection wh\n    ├── reason  load_method is required: how should data get into Snowflake?\n    └── fix     add one of these to [connections.wh]:\n                load_method = { type = \"external_stage\", url = \"s3://...\", storage_integration = \"...\" }   (fastest)\n                load_method = { type = \"internal_user_stage\" }   (no setup)\n\n✗ Plan failed with errors",
+            expected_exit: "exit 1",
         },
         PlanFailureTestCase {
-            description: "--json: sqlbuild's error shape",
+            description: "--json: sqlbuild's error shape, the reason in message and the fix in help",
+            project: NO_LOAD_METHOD,
             argv: &["plan", "--json"],
-            expected_output: "{\"error\":{\"code\":\"config\",\"help\":null,\"message\":\"invalid project:\\n  - connection wh: load_method is required",
+            expected_output: "{\"error\":{\"code\":\"config\",\"help\":\"add one of these to [connections.wh]:\\nload_method = { type = \\\"external_stage\\\"",
+            expected_exit: "exit 1",
+        },
+        PlanFailureTestCase {
+            description: "--json: a failure after the project parses is a JSON error too, never bare text",
+            project: "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"/no/such/folder/wh.duckdb\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
+            argv: &["plan", "--json"],
+            expected_output: "{\"error\":{\"code\":\"plan\",\"help\":null,\"message\":\"",
+            expected_exit: "exit 1",
+        },
+        PlanFailureTestCase {
+            description: "--json on apply is refused before the project is read",
+            project: NO_LOAD_METHOD,
+            argv: &["apply", "--json"],
+            expected_output: "--json applies to plan only",
+            expected_exit: "exit 1",
+        },
+        PlanFailureTestCase {
+            description: "a plan with nothing selected is complete and exits 0",
+            project: TARGET,
+            argv: &["plan"],
+            expected_output: "Plan ready  0 selected",
+            expected_exit: "exit 0",
         },
     ];
     for test_case in test_cases {
-        let output = run_without_host(project, test_case.argv);
+        let output = run_without_host(test_case.project, test_case.argv);
         assert!(
-            output.starts_with(test_case.expected_output),
+            output.starts_with(test_case.expected_output)
+                && output.ends_with(test_case.expected_exit),
             "{}: {output}",
             test_case.description
         );

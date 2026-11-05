@@ -4,7 +4,7 @@ use crate::helpers::{
     integration_and_orders, json_layouts, long_names, long_names_with_text, nanos_in_a_later_batch,
     nanos_newest, no_stage_or_channel, no_stage_or_host, no_user_stage, not_found, not_owned,
     nothing, old_leftovers, run_async, run_debug, run_route, similar_integration, stage_exists,
-    two_batches, two_days, with_text,
+    stage_on_other_integration, two_batches, two_days, with_text,
 };
 use crate::test_types::{
     DebugStageTestCase, MaskMatrixTestCase, RouteFileSet, RouteFiles, RouteTestCase,
@@ -251,6 +251,14 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             stage: KEEPS,
             prepare: old_leftovers,
             expected_staged_left: 2,
+            ..BASE
+        },
+        RouteTestCase {
+            description: "a stage on another integration fails the plan with the reason and the fix, not as a check that could not run",
+            stage: MANAGED,
+            prepare: stage_on_other_integration,
+            expected_error: "cannot be used: stage _SQLLOAD_STAGE uses storage integration OTHER_INT, but the connection names LAKE_INT\n    └── fix     drop the stage so SQLLoad recreates it, or correct storage_integration",
+            expected_unsent: &["COPY INTO"],
             ..BASE
         },
         RouteTestCase {

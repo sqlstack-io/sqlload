@@ -67,8 +67,15 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
         .map_err(|error| error.to_string())
 }
 
-/// Run a loader command against the project in `request.text`: the lines to print, and whether it succeeded.
+/// Run a loader command against the project in `request.text`: the lines to print, and whether it succeeded. Under `plan --json` every failure is a JSON error document.
 pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String>, bool), String> {
+    let json = match &request.command {
+        Command::Plan(args) => args.json,
+        Command::Apply(args) | Command::Load(args) if args.json => {
+            return Err("--json applies to plan only".to_owned());
+        }
+        _ => false,
+    };
     let project = match load_project_config(&request).await {
         Ok(project) => project,
         Err(error) => return config_failure(&request.command, error),
@@ -77,7 +84,36 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String
     if let Some(host) = request.host {
         let _ = tokio::task::spawn_blocking(move || host.finish()).await;
     }
-    outcome
+    match (outcome, json) {
+        (Err(error), true) => Ok((vec![json_error("plan", &error)], false)),
+        (outcome, _) => outcome,
+    }
+}
+
+/// Each problem in `error`: one per line of an `invalid project` list, else the whole error.
+fn problems(error: &str) -> Vec<String> {
+    match error.strip_prefix("invalid project:\n  - ") {
+        Some(listed) => listed.split("\n  - ").map(str::to_owned).collect(),
+        None => vec![error.to_owned()],
+    }
+}
+
+/// `error` in sqlbuild's error shape, `{"error": {"code", "message", "help"}}`: each problem's reason in `message` and its fix (the text after `Fix:`) in `help`, `null` when none has one.
+pub(crate) fn json_error(code: &str, error: &str) -> String {
+    let mut messages: Vec<String> = Vec::new();
+    let mut helps: Vec<String> = Vec::new();
+    for problem in problems(error) {
+        match problem.split_once(" Fix: ") {
+            Some((reason, fix)) => {
+                messages.push(reason.trim_end_matches('.').to_owned());
+                helps.push(fix.to_owned());
+            }
+            None => messages.push(problem),
+        }
+    }
+    let help = (!helps.is_empty()).then(|| helps.join("\n"));
+    serde_json::json!({ "error": { "code": code, "message": messages.join("\n"), "help": help } })
+        .to_string()
 }
 
 /// A project that does not parse: a failed plan's `Errors` for `plan`, `apply` and `load` (as JSON for `plan --json`), else the error.
@@ -85,20 +121,10 @@ fn config_failure(command: &Command, error: String) -> Result<(Vec<String>, bool
     let (Command::Plan(args) | Command::Apply(args) | Command::Load(args)) = command else {
         return Err(error);
     };
-    let problems: Vec<String> = match error.strip_prefix("invalid project:\n  - ") {
-        Some(listed) => listed.split("\n  - ").map(str::to_owned).collect(),
-        None => vec![error.clone()],
-    };
     match args.json {
-        true => Ok((
-            vec![
-                serde_json::json!({ "error": { "code": "config", "message": error, "help": null } })
-                    .to_string(),
-            ],
-            false,
-        )),
+        true => Ok((vec![json_error("config", &error)], false)),
         false => Ok(render_plan(&ProjectPlan {
-            problems,
+            problems: problems(&error),
             ..ProjectPlan::default()
         })),
     }
@@ -135,9 +161,6 @@ async fn run_command(
             );
         }
     };
-    if args.json && applies {
-        return Err("--json applies to plan only".to_owned());
-    }
     let json = args.json;
     let started = std::time::Instant::now();
     let options = options(args)?;
