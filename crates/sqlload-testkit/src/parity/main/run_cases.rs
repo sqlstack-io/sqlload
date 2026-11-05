@@ -7,7 +7,7 @@ use crate::parity::_helpers::compare::run_case;
 use crate::parity::_helpers::live_settings::live_settings;
 use crate::parity::models::ParityCase;
 
-/// Each case's outcome by name (`same rows`, `both fail`, or what differed), all of them run and printed, so one run shows everything to remove from the direct route; none without `SQLLOAD_PARITY_ACCOUNT`, which skips the test.
+/// Each case's outcome by name (`same rows`, `both fail`, or what differed), all of them run and printed, so one run shows everything to remove from the direct route; none without `SQLLOAD_PARITY_ACCOUNT`, which skips the test; `SQLLOAD_PARITY_ONLY` (names, comma-separated) runs just those cases.
 pub fn run_cases(cases: &[ParityCase]) -> Result<BTreeMap<String, String>, String> {
     let mut outcomes: BTreeMap<String, String> = BTreeMap::new();
     let Some(live) = live_settings()? else {
@@ -21,7 +21,10 @@ pub fn run_cases(cases: &[ParityCase]) -> Result<BTreeMap<String, String>, Strin
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;
-    for case in cases {
+    let only = std::env::var("SQLLOAD_PARITY_ONLY").unwrap_or_default();
+    let chosen =
+        |case: &&ParityCase| only.is_empty() || only.split(',').any(|name| name == case.name);
+    for case in cases.iter().filter(chosen) {
         let outcome = match run_case(&runtime, &live, case) {
             Ok(outcome) => outcome,
             Err(reason) => format!("the case could not run: {reason}"),

@@ -45,9 +45,10 @@ impl SnowflakeWriter {
             tracing::warn!(table = %spec.destination.table, %reason, "SQLLoad reads this batch itself");
             return Ok(None);
         }
-        let Some(source) = spec.files.as_ref().map(|files| &files.location) else {
+        let Some(spec_files) = spec.files.as_ref() else {
             return Ok(None);
         };
+        let source = &spec_files.location;
         let reference = stage_reference(stage);
         let hashes = spec
             .masked
@@ -63,6 +64,8 @@ impl SnowflakeWriter {
                     source,
                     files,
                     columns,
+                    encoding: &spec_files.encoding,
+                    inferred: &read.checks.inferred,
                 };
                 let batches = direct_copies(&request).map_err(LoaderError::Invalid)?;
                 Ok(batches.into_iter().map(|batch| batch.sql).collect())

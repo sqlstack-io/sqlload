@@ -15,6 +15,7 @@ use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
 use crate::adapters::dispatch::main::session::table_destination::table_destination;
 use crate::adapters::dispatch::main::session::table_shape::table_shape;
+use crate::adapters::dispatch::main::write::file_keys::file_keys;
 use crate::adapters::dispatch::main::write::load_files::load_files;
 use crate::adapters::dispatch::main::write::open_table_writer::open_table_writer;
 use crate::adapters::dispatch::models::Destination;
@@ -48,6 +49,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::main::batch_columns::batch_columns;
 use crate::files_source::main::batch_footers::batch_footers;
+use crate::files_source::main::key_columns::key_columns;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, SourceFormat};
@@ -565,7 +567,7 @@ impl Publisher {
 }
 
 impl Publisher {
-    /// Before a files batch: read its Parquet files' footers once and combine them with the columns known so far; when they add columns, plan the table for them (one read of the live columns) and apply the schema changes once, to the table and the staging table. Returns the footers, which reading the files reuses.
+    /// Before a files batch: read its Parquet files' footers once, or have the destination list a JSON batch's keys where it reads the files itself (its `COPY` would skip a key it is not given), and combine them with the columns known so far; when they add columns, plan the table for them (one read of the live columns) and apply the schema changes once, to the table and the staging table. Returns the footers, which reading the files reuses.
     async fn widen_for(
         &mut self,
         run: &LoadRun<'_>,
@@ -573,25 +575,38 @@ impl Publisher {
         files: &[DataFile],
     ) -> Result<BatchFooters, LoaderError> {
         let spec = &self.table.spec;
-        let Some(source_files) = spec
-            .files
-            .as_ref()
-            .filter(|source| source.encoding.format == SourceFormat::Parquet)
-        else {
+        let Some(source_files) = spec.files.as_ref() else {
             return Ok(BatchFooters::default());
         };
-        let footers = batch_footers(folder, files).await?;
-        let replaced: Vec<&str> = source_files
-            .partition_types
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
-            .collect();
-        let (columns, problems) =
-            batch_columns(&footers, files, &source_files.table.columns, &replaced);
-        if !problems.is_empty() {
-            return Err(LoaderError::Invalid(problems.join("; ")));
-        }
+        let (columns, footers) = match source_files.encoding.format {
+            SourceFormat::Parquet => {
+                let footers = batch_footers(folder, files).await?;
+                let replaced: Vec<&str> = source_files
+                    .partition_types
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
+                    .collect();
+                let (columns, problems) =
+                    batch_columns(&footers, files, &source_files.table.columns, &replaced);
+                if !problems.is_empty() {
+                    return Err(LoaderError::Invalid(problems.join("; ")));
+                }
+                (columns, footers)
+            }
+            _ => {
+                let (Some(read), true) = (&self.table.files, is_direct(self.table.route.as_ref()))
+                else {
+                    return Ok(BatchFooters::default());
+                };
+                let Some(found) = file_keys(&self.writer, spec, files).await? else {
+                    return Ok(BatchFooters::default());
+                };
+                let columns = key_columns(read, &source_files.table.columns, found)
+                    .map_err(LoaderError::Invalid)?;
+                (columns, BatchFooters::default())
+            }
+        };
         if columns == source_files.table.columns {
             return Ok(footers);
         }

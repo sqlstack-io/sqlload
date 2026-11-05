@@ -2,6 +2,7 @@
 
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::snowflake::_helpers::dialect::json_values::{json_file_format, json_value};
 use crate::adapters::snowflake::_helpers::dialect::values::partition_text;
 use crate::adapters::snowflake::constants::{
     COPY_OPTIONS, MAX_COPY_SQL_BYTES, MAX_FILES_PER_COPY, PARQUET_COPY_FORMAT,
@@ -10,7 +11,7 @@ use crate::adapters::snowflake::constants::{
 use crate::adapters::snowflake::models::SnowflakeSql;
 use crate::adapters::snowflake::models::{CopyBatch, CopyColumn, CopyValue, DirectCopy};
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::files_source::models::{DataFile, StoredRead};
+use crate::files_source::models::{DataFile, SourceFormat, StoredRead};
 
 /// `COPY` statements loading `request.files` into `request.target`, at most 1,000 files and about 900 KiB of SQL each: data columns read by name and cast (JSON parsed), partition values, source file, version per file (matched on `METADATA$FILENAME`, which on an external stage is the bucket-relative key, failing on any other file) and row number, and literals; always `FORCE = TRUE` and `ON_ERROR = ABORT_STATEMENT`.
 pub(in crate::adapters) fn direct_copies(
@@ -83,6 +84,13 @@ fn copy_sql(request: &DirectCopy<'_>, folder: &str, files: &[DataFile]) -> Resul
             Ok(format!("CASE {} ELSE {otherwise} END", arms.join(" ")))
         };
         let value = match &column.value {
+            CopyValue::File { .. } if request.encoding.format != SourceFormat::Parquet => {
+                json_value(
+                    (&column.name, &format!("GET($1, {})", literal(&column.name))),
+                    (&column.column_type, &sql_type),
+                    request.inferred.contains(&column.name),
+                )
+            }
             CopyValue::File { .. } if column.column_type == ColumnType::Json => format!(
                 "PARSE_JSON(CAST(GET($1, {}) AS VARCHAR))",
                 literal(&column.name)
@@ -121,8 +129,15 @@ fn copy_sql(request: &DirectCopy<'_>, folder: &str, files: &[DataFile]) -> Resul
         .iter()
         .map(|data| literal(&data.file.relative_key))
         .collect();
+    let file_format = match request.encoding.format {
+        SourceFormat::Parquet => PARQUET_COPY_FORMAT.to_owned(),
+        _ => format!(
+            "FILE_FORMAT = ({})",
+            json_file_format(request.encoding.compression)
+        ),
+    };
     Ok(format!(
-        "COPY INTO {} ({}) FROM (SELECT {} FROM {}/{folder}) FILES = ({}) {PARQUET_COPY_FORMAT} {COPY_OPTIONS}",
+        "COPY INTO {} ({}) FROM (SELECT {} FROM {}/{folder}) FILES = ({}) {file_format} {COPY_OPTIONS}",
         sql_adapter(snowflake).render_qualified_name(request.target),
         names.join(", "),
         values.join(", "),

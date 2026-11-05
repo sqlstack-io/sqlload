@@ -21,13 +21,36 @@ pub(crate) fn case_files(
     files: ParityFiles,
     embedded_schema: bool,
 ) -> Result<Vec<(&'static str, Bytes)>, String> {
-    if files == ParityFiles::Int96Timestamps {
-        return Ok(vec![("part-0.parquet", int96_file()?)]);
+    match files {
+        ParityFiles::Int96Timestamps => return Ok(vec![("part-0.parquet", int96_file()?)]),
+        ParityFiles::NdjsonValues => {
+            return Ok(vec![("part-0.ndjson", Bytes::from(NDJSON_VALUES))]);
+        }
+        ParityFiles::JsonLayouts => {
+            return Ok(vec![
+                ("array.json", Bytes::from(JSON_ARRAY)),
+                ("lines.json", Bytes::from(JSON_OBJECTS)),
+            ]);
+        }
+        ParityFiles::LateKey => {
+            return Ok(vec![(
+                "part-0.ndjson",
+                past_sample(r#""qty":1,"coupon":"X1""#),
+            )]);
+        }
+        ParityFiles::LateMisfit => {
+            return Ok(vec![("part-0.ndjson", past_sample(r#""qty":"x""#))]);
+        }
+        _ => {}
     }
     let batches = match files {
         ParityFiles::NanoTimestamps => nano_timestamps(),
         ParityFiles::StoredTypes => stored_types(),
-        ParityFiles::Int96Timestamps => Ok(Vec::new()),
+        ParityFiles::Int96Timestamps
+        | ParityFiles::NdjsonValues
+        | ParityFiles::JsonLayouts
+        | ParityFiles::LateKey
+        | ParityFiles::LateMisfit => Ok(Vec::new()),
         ParityFiles::EveryType => every_type(),
         ParityFiles::Hashed => hashed_values(),
         ParityFiles::Json => json_values(),
@@ -601,4 +624,32 @@ pub(crate) fn parquet_file(batch: &RecordBatch, embedded_schema: bool) -> Result
     writer.write(batch).map_err(|error| error.to_string())?;
     writer.close().map_err(|error| error.to_string())?;
     Ok(Bytes::from(buffer))
+}
+
+/// NDJSON of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans, text from strings, numbers and booleans, RFC 3339 timestamps with offsets before and after 1970, objects and arrays, NULLs and missing keys.
+const NDJSON_VALUES: &str = concat!(
+    r#"{"id":1,"n":1,"f":1.5,"b":true,"s":"plain","ts":"2026-11-05T12:00:00.123456Z","o":{"x":1,"y":[1,2]},"mixed":"007","u":"Ünïcødé \"q\" \\ x"}"#,
+    "\n",
+    r#"{"id":2,"n":-9223372036854775808,"f":3,"b":false,"s":"","ts":"1969-12-31T23:59:59.999999-02:00","o":[1,{"a":null}],"mixed":7,"u":null}"#,
+    "\n",
+    r#"{"id":3,"n":null,"f":-0.25,"b":null,"ts":null,"o":null,"mixed":true}"#,
+    "\n",
+    r#"{"id":4,"n":9223372036854775807,"f":2e10,"s":"x","ts":"2000-01-01T00:00:00+05:30","o":{},"mixed":"text"}"#,
+    "\n",
+);
+
+/// A `json` file holding one top-level array of objects.
+const JSON_ARRAY: &str = r#"[{"id":1,"v":"a"},{"id":2,"v":"b"}]"#;
+
+/// A `json` file holding objects one after another, one over two lines.
+const JSON_OBJECTS: &str = "{\"id\":3,\"v\":\"c\"}\n{\"id\":4,\n\"v\":\"d\"}\n";
+
+/// NDJSON with more records than sampling reads, `id` and `qty` ints, the last record's keys after `id` being `last`.
+fn past_sample(last: &str) -> Bytes {
+    let mut text = String::new();
+    for id in 1..=10_000 {
+        text.push_str(&format!("{{\"id\":{id},\"qty\":{id}}}\n"));
+    }
+    text.push_str(&format!("{{\"id\":10001,{last}}}\n"));
+    Bytes::from(text)
 }

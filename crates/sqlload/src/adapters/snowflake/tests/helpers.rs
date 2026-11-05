@@ -222,6 +222,8 @@ pub(crate) fn direct_sql(
             source,
             files: &files,
             columns,
+            encoding: &crate::files_source::models::FilesEncoding::default(),
+            inferred: &[],
         },
     )?;
     Ok((

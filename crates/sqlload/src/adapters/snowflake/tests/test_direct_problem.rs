@@ -91,7 +91,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             expected_problem: None,
         },
         DirectProblemTestCase {
-            description: "JSON stays with SQLLoad's own parsing",
+            description: "NDJSON loads directly: the COPY checks inferred types itself",
             source: "raw/shop/orders/",
             format: SourceFormat::Ndjson,
             keys: &["part-0.ndjson"],
@@ -99,8 +99,19 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             shaped_by_loader: false,
+            expected_problem: None,
+        },
+        DirectProblemTestCase {
+            description: "CSV stays with SQLLoad until its positional COPY lands",
+            source: "raw/shop/orders/",
+            format: SourceFormat::Csv,
+            keys: &["part-0.csv"],
+            columns: order_columns(),
+            masks: Vec::new(),
+            refused: Vec::new(),
+            shaped_by_loader: false,
             expected_problem: Some(
-                "ndjson files are parsed by SQLLoad, whose type inference and checks differ from Snowflake's",
+                "csv files are parsed by SQLLoad, whose type inference and checks differ from Snowflake's",
             ),
         },
         DirectProblemTestCase {

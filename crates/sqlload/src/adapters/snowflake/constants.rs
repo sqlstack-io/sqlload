@@ -86,3 +86,16 @@ pub const REFUSAL_PHRASES: &[&str] = &["insufficient privileges", "not authorize
 
 /// Digits after the second Snowflake's times and timestamps hold at most, which SQLLoad's new columns use.
 pub const MAX_FRACTION_DIGITS: u8 = 9;
+
+/// An RFC 3339 timestamp with an offset, as SQLLoad's JSON inference recognises one (`T`, `t` or a space between date and time).
+pub const RFC3339_PATTERN: &str = "[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})";
+
+/// The largest and smallest integers SQLLoad's JSON inference reads as `int`; others are text.
+pub const MAX_JSON_INT: &str = "9223372036854775807";
+pub const MIN_JSON_INT: &str = "-9223372036854775808";
+
+/// Starts the error a direct `COPY` raises for a value that does not fit its column's inferred type.
+pub const MISFIT_MARKER: &str = "sqlload: ";
+
+/// The temporary file format a JSON batch's key query reads the stage with, in the loader schema; it goes with the session.
+pub const KEYS_FILE_FORMAT: &str = "_SQLLOAD_KEYS";
