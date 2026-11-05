@@ -474,6 +474,8 @@ pub(crate) struct ReadPart {
     pub(crate) order_by: Option<String>,
     /// The files to read; `None` reads every planned file.
     pub(crate) files: Option<Vec<DataFile>>,
+    /// A smaller byte cap for the source's batches than the usual 64 MiB (the hidden `--batch-bytes`, for tests).
+    pub(crate) batch_bytes: Option<usize>,
 }
 
 /// Read `part` of `table`'s data from `reader`, passing each batch to `on_batch`; returns the row count.
@@ -491,7 +493,9 @@ pub(crate) async fn read_source(
                 filter: part.filter.or_else(|| table.source_filter.clone()),
                 order_by: part.order_by,
                 batch_rows: SOURCE_BATCH_ROWS,
-                batch_bytes: DEFAULT_BATCH_BYTES,
+                batch_bytes: part
+                    .batch_bytes
+                    .map_or(DEFAULT_BATCH_BYTES, |bytes| bytes.min(DEFAULT_BATCH_BYTES)),
             };
             Ok(copy_table(client, request, on_batch).await?)
         }

@@ -623,12 +623,14 @@ async fn feed(
     mut publisher: Publisher,
     run: &LoadRun<'_>,
 ) -> (Publisher, Result<u64, LoaderError>) {
+    let batch_bytes = run.options.batch_bytes;
     let fed = async {
         match &table.commits {
             CommitRule::Windows(windows) => {
                 for window in windows {
                     let part = ReadPart {
                         filter: window_filter(table, window),
+                        batch_bytes,
                         ..ReadPart::default()
                     };
                     read_source(reader, table, part, async |batch| {
@@ -673,6 +675,7 @@ async fn feed(
             CommitRule::Ordered { column } => {
                 let part = ReadPart {
                     order_by: Some(format!("\"{}\"", column.replace('"', "\"\""))),
+                    batch_bytes,
                     ..ReadPart::default()
                 };
                 let mut last: Option<String> = None;
@@ -699,7 +702,11 @@ async fn feed(
                 .await?;
             }
             CommitRule::Size => {
-                read_source(reader, table, ReadPart::default(), async |batch| {
+                let part = ReadPart {
+                    batch_bytes,
+                    ..ReadPart::default()
+                };
+                read_source(reader, table, part, async |batch| {
                     stage(&mut publisher, batch).await?;
                     match publisher.full() {
                         true => publisher
@@ -712,7 +719,11 @@ async fn feed(
                 .await?;
             }
             CommitRule::Whole => {
-                read_source(reader, table, ReadPart::default(), async |batch| {
+                let part = ReadPart {
+                    batch_bytes,
+                    ..ReadPart::default()
+                };
+                read_source(reader, table, part, async |batch| {
                     stage(&mut publisher, batch).await
                 })
                 .await?;

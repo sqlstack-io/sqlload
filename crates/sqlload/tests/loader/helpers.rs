@@ -22,9 +22,9 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, MetadataRoundTripTestCase,
-    ParquetFile, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
-    WrittenRun,
+    BatchedScenarioTestCase, FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase,
+    MetadataRoundTripTestCase, ParquetFile, ScenarioTestCase, TextFilesScenarioTestCase,
+    WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -107,17 +107,102 @@ pub(crate) async fn load_all(
     plan: &ProjectPlan,
     destinations: &BTreeMap<String, Destination>,
 ) -> Result<(), String> {
-    let options = PlanOptions::default();
+    load_with(project, plan, destinations, &PlanOptions::default()).await
+}
+
+/// Load every table of `plan` with `options`; every failed table is in the error.
+async fn load_with(
+    project: &ProjectConfig,
+    plan: &ProjectPlan,
+    destinations: &BTreeMap<String, Destination>,
+    options: &PlanOptions,
+) -> Result<(), String> {
     let run = LoadRun {
         project,
         destinations,
         host: None,
-        options: &options,
+        options,
     };
-    load_tables(&run, plan)
+    let failures: Vec<String> = load_tables(&run, plan)
         .await
         .into_iter()
-        .try_for_each(|outcome| outcome.loaded.map(|_| ()))
+        .filter_map(|outcome| {
+            outcome
+                .loaded
+                .err()
+                .map(|reason| format!("{}: {reason}", outcome.table))
+        })
+        .collect();
+    match failures.is_empty() {
+        true => Ok(()),
+        false => Err(failures.join("\n")),
+    }
+}
+
+/// Run a batched scenario on fresh source tables and a fresh DuckDB, checking the destination after each run.
+pub(crate) async fn run_batched(
+    client: &Client,
+    port: u16,
+    test_case: &BatchedScenarioTestCase,
+) -> Result<(), String> {
+    client
+        .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
+        .await
+        .map_err(|error| error.to_string())?;
+    client
+        .batch_execute(test_case.setup)
+        .await
+        .map_err(|error| error.to_string())?;
+    let text = duckdb_project(port, test_case.settings);
+    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
+        return Err("no DuckDB destination".to_owned());
+    };
+    for (index, run) in test_case.runs.iter().enumerate() {
+        client
+            .batch_execute(run.source_change)
+            .await
+            .map_err(|error| error.to_string())?;
+        let hand_edits: Vec<String> = run
+            .destination_change
+            .split_terminator(';')
+            .map(str::to_owned)
+            .collect();
+        execute_statements(duckdb, hand_edits)
+            .await
+            .map_err(|error| error.to_string())?;
+        let options = PlanOptions {
+            end_cursor: run.end_cursor.map(str::to_owned),
+            batch_bytes: test_case.batch_bytes,
+            threads: test_case.threads,
+            ..PlanOptions::default()
+        };
+        let plan = plan_project(&project, &destinations, &options)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (lines, ok) = render_plan(&plan);
+        ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+        apply_project(&plan, &destinations)
+            .await
+            .map_err(|error| error.to_string())?;
+        let error = load_with(&project, &plan, &destinations, &options)
+            .await
+            .err()
+            .unwrap_or_default();
+        let place = format!("{} run {}", test_case.description, index + 1);
+        assert!(
+            error.contains(run.expected_error) && error.is_empty() == run.expected_error.is_empty(),
+            "{place}: {error}"
+        );
+        let result = query_text(duckdb, run.check_query.to_owned())
+            .await
+            .map_err(|error| error.to_string())?;
+        assert_eq!(result.as_deref(), Some(run.expected_result), "{place}");
+    }
+    Ok(())
 }
 
 /// The rendered plan, or the error that stopped it.

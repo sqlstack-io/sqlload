@@ -210,3 +210,30 @@ pub(crate) struct MetadataRoundTripTestCase {
     /// The DuckDB table's columns, rows, distinct load ids, and rows not stamped by the second load.
     pub(crate) expected_check: &'static str,
 }
+
+/// One run of a batched scenario: a source change, the load, and what the destination holds after it.
+pub(crate) struct BatchedRun {
+    /// SQL run in Postgres first.
+    pub(crate) source_change: &'static str,
+    /// SQL run in the DuckDB destination first (a hand edit, such as a unique index that makes a later batch fail).
+    pub(crate) destination_change: &'static str,
+    /// Text the load error must contain; empty when every table must load.
+    pub(crate) expected_error: &'static str,
+    /// `--end-cursor-*`.
+    pub(crate) end_cursor: Option<&'static str>,
+    /// A query on DuckDB after the run and its single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
+/// Loads that commit in batches, run in order on fresh source tables and a fresh DuckDB.
+pub(crate) struct BatchedScenarioTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) setup: &'static str,
+    /// Project TOML appended after `[sources.app]`.
+    pub(crate) settings: &'static str,
+    /// The hidden `--batch-bytes`, so a few rows make several commits.
+    pub(crate) batch_bytes: Option<usize>,
+    pub(crate) threads: Option<usize>,
+    pub(crate) runs: &'static [BatchedRun],
+}

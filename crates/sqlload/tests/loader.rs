@@ -2,6 +2,8 @@
 
 #[path = "loader/helpers.rs"]
 mod helpers;
+#[path = "loader/test_batched_loads.rs"]
+mod test_batched_loads;
 #[path = "loader/test_debug_project.rs"]
 mod test_debug_project;
 #[path = "loader/test_file_store.rs"]
