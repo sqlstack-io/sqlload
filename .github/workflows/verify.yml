@@ -123,7 +123,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: e2e
-      - run: docker pull postgres:17-alpine
+      - run: docker pull postgres:17
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.9"
