@@ -10,6 +10,8 @@ mod helpers;
 mod sql_literal;
 #[path = "tests/test_staging_changes.rs"]
 mod staging_changes;
+#[path = "tests/test_stale_staging.rs"]
+mod stale_staging;
 #[path = "tests/test_types.rs"]
 mod test_types;
 #[path = "tests/test_write_statements.rs"]

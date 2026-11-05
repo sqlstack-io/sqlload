@@ -50,3 +50,16 @@ pub(crate) struct StagingChangesTestCase {
     pub(crate) new_types: &'static [ColumnType],
     pub(crate) expected_statements: &'static [&'static str],
 }
+
+pub(crate) struct StaleStagingTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) found: &'static [&'static str],
+    pub(crate) expected_statements: &'static [&'static str],
+}
+
+pub(crate) struct StagingIdTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) load_id: &'static str,
+    pub(crate) expected_name: &'static str,
+}

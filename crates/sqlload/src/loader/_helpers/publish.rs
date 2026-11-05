@@ -23,6 +23,8 @@ use crate::files_destination::models::ReplacedFiles;
 use crate::files_destination::models::WriterRequest;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
 use crate::files_source::main::batch_columns::batch_columns;
+use crate::files_source::main::batch_footers::batch_footers;
+use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, SourceFormat};
 use crate::loader::_helpers::destination::append_rows;
@@ -227,6 +229,7 @@ impl Publisher {
             state: committed_state.clone(),
             committed_state,
             open_transaction: false,
+            stage: None,
             batch_bytes: options.batch_bytes.unwrap_or(BATCH_BYTES),
             files,
         })
@@ -372,7 +375,8 @@ impl Publisher {
     async fn put_file(&mut self, body: Vec<u8>) -> Result<(), LoaderError> {
         let name = format!("part-{:05}.parquet", self.staged.len() + 1);
         let key = format!("{}{name}", self.batch_folder());
-        stage_file(&self.destination, &key, &body).await?;
+        let known = self.stage.take();
+        self.stage = Some(stage_file(&self.destination, known, &key, &body).await?);
         self.staged.push(name);
         Ok(())
     }
@@ -419,6 +423,7 @@ impl Publisher {
         self.batch_rows = 0;
         self.arrow_bytes = 0;
         self.staged.clear();
+        self.stage = None;
         self.parts = PartWriter::default();
         Ok(())
     }
@@ -488,21 +493,22 @@ impl Publisher {
 }
 
 impl Publisher {
-    /// Before a files batch: combine its Parquet files' footers with the columns known so far; when they add columns, plan the table for them (one read of the live columns) and apply the schema changes once, to the table and the staging table.
+    /// Before a files batch: read its Parquet files' footers once and combine them with the columns known so far; when they add columns, plan the table for them (one read of the live columns) and apply the schema changes once, to the table and the staging table. Returns the footers, which reading the files reuses.
     async fn widen_for(
         &mut self,
         run: &LoadRun<'_>,
         folder: &StoreFolder,
         files: &[DataFile],
-    ) -> Result<(), LoaderError> {
+    ) -> Result<BatchFooters, LoaderError> {
         let spec = &self.table.spec;
         let Some(source_files) = spec
             .files
             .as_ref()
             .filter(|source| source.encoding.format == SourceFormat::Parquet)
         else {
-            return Ok(());
+            return Ok(BatchFooters::default());
         };
+        let footers = batch_footers(folder, files).await?;
         let replaced: Vec<&str> = source_files
             .partition_types
             .iter()
@@ -510,12 +516,12 @@ impl Publisher {
             .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
             .collect();
         let (columns, problems) =
-            batch_columns(folder, files, &source_files.table.columns, &replaced).await?;
+            batch_columns(&footers, files, &source_files.table.columns, &replaced);
         if !problems.is_empty() {
             return Err(LoaderError::Invalid(problems.join("; ")));
         }
         if columns == source_files.table.columns {
-            return Ok(());
+            return Ok(footers);
         }
         let source = run.project.sources.get(&spec.source_name).ok_or_else(|| {
             LoaderError::Invalid(format!("source {:?} does not exist", spec.source_name))
@@ -585,7 +591,8 @@ impl Publisher {
             execute_ddl(&self.destination, changes).await?;
         }
         self.table = replanned;
-        self.widen_files().await
+        self.widen_files().await?;
+        Ok(footers)
     }
 }
 
@@ -702,11 +709,15 @@ async fn feed(
                         .iter()
                         .filter_map(|index| planned.and_then(|files| files.get(*index)).cloned())
                         .collect();
-                    if let SourceReader::Files(folder) = reader {
-                        publisher.widen_for(run, folder, &files).await?;
-                    }
+                    let footers = match reader {
+                        SourceReader::Files(folder) => {
+                            publisher.widen_for(run, folder, &files).await?
+                        }
+                        _ => BatchFooters::default(),
+                    };
                     let part = ReadPart {
                         files: Some(files),
+                        footers,
                         ..ReadPart::default()
                     };
                     let current = publisher.table.clone();

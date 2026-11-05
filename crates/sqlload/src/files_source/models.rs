@@ -1,3 +1,4 @@
+use parquet::arrow::arrow_reader::ArrowReaderMetadata;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
@@ -49,6 +50,10 @@ pub struct FilesRead {
     pub columns: Vec<DesiredColumn>,
     pub batch_rows: usize,
 }
+
+/// One batch's Parquet footers by relative key, read once; a file missing here has its footer read when it is.
+#[derive(Debug, Clone, Default)]
+pub struct BatchFooters(pub std::collections::BTreeMap<String, ArrowReaderMetadata>);
 
 /// The columns a JSON or CSV read checks its keys and values against.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

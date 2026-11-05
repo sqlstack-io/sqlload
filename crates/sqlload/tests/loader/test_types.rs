@@ -221,8 +221,8 @@ pub(crate) struct BatchedRun {
     pub(crate) end_cursor: Option<&'static str>,
     /// A query on DuckDB after the run, giving one text result.
     pub(crate) check_query: &'static str,
-    /// Add the plan's `batch` line to the run's outcome.
-    pub(crate) show_batch: bool,
+    /// Add the plan line holding this text to the run's outcome, from that text on; empty adds none.
+    pub(crate) show: &'static str,
 }
 
 /// Loads that commit in batches, run in order on fresh source tables and a fresh DuckDB.
@@ -243,6 +243,8 @@ pub(crate) struct BatchedScenarioTestCase {
 pub(crate) struct LargePartitionTestCase {
     pub(crate) description: &'static str,
     pub(crate) files: usize,
+    /// Text the second run's plan must contain.
+    pub(crate) expected_plan: &'static str,
     /// Rows, rows with `extra`, distinct source files and the distinct ids, after both runs.
     pub(crate) expected_result: &'static str,
 }

@@ -26,6 +26,7 @@ use crate::run_log::main::next_stamp::next_stamp;
 use crate::run_log::models::{RunOutcome, RunRecord, UnreadableRecord};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
+use crate::stage_api::models::StageInfo;
 use crate::store_paths::models::Location;
 use crate::write_sql::models::{TableName, WriteMode};
 
@@ -248,6 +249,8 @@ pub struct ProjectPlan {
     pub skipped: Vec<SkippedTable>,
     /// Problems with the project's settings for particular tables.
     pub problems: Vec<String>,
+    /// Things to know that block nothing, such as a selector matching no table.
+    pub warnings: Vec<String>,
 }
 
 /// Choices for one `plan`, `apply` or `load`.
@@ -427,6 +430,8 @@ pub struct Publisher {
     pub staging: Option<TableName>,
     /// The batch being filled, from 1.
     pub batch: u64,
+    /// Snowflake: the upload credentials this batch fetched, for all its files.
+    pub stage: Option<StageInfo>,
     /// Snowflake: the batch's Parquet being written, and the names of its files staged so far.
     pub parts: PartWriter,
     pub staged: Vec<String>,

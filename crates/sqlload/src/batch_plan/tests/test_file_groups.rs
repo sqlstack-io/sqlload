@@ -1,16 +1,7 @@
-use crate::batch_plan::tests::helpers::{groups, owned_groups};
+use crate::batch_plan::tests::helpers::{eu, groups, owned_groups};
 use crate::batch_plan::tests::test_types::{FileGroupsTestCase, PartitionFiles};
 
 const GB: u64 = 1000 * 1000 * 1000;
-
-const fn eu(day: &'static str, files: usize) -> PartitionFiles {
-    PartitionFiles {
-        region: "eu",
-        day,
-        files,
-        file_bytes: 1,
-    }
-}
 
 #[test]
 fn given_partitioned_files_when_grouping_them_then_batches_hold_whole_partitions_up_to_1000_files_or_1_gb()

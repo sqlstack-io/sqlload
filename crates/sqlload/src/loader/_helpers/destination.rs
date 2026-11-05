@@ -30,6 +30,7 @@ use crate::snowflake_destination::main::query_texts::query_texts as query_snowfl
 use crate::snowflake_destination::main::remove_stale::remove_stale;
 use crate::snowflake_destination::main::run_statements::run_statements;
 use crate::snowflake_destination::main::stage_parquet::stage_parquet;
+use crate::stage_api::models::StageInfo;
 use crate::write_sql::models::TableName;
 
 /// The error for a SQL operation on a files target, which plans and loads without SQL.
@@ -198,14 +199,15 @@ pub(crate) async fn append_rows(
     }
 }
 
-/// Upload one staged Parquet file to `key` on the user stage (Snowflake).
+/// Upload one staged Parquet file to `key` on the user stage (Snowflake), with the batch's `known` credentials; returns them for its next file.
 pub(crate) async fn stage_file(
     destination: &Destination,
+    known: Option<StageInfo>,
     key: &str,
     body: &[u8],
-) -> Result<(), LoaderError> {
+) -> Result<StageInfo, LoaderError> {
     match destination {
-        Destination::Snowflake(snowflake) => Ok(stage_parquet(snowflake, key, body).await?),
+        Destination::Snowflake(snowflake) => Ok(stage_parquet(snowflake, known, key, body).await?),
         _ => Err(no_sql()),
     }
 }

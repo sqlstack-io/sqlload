@@ -15,7 +15,8 @@ use crate::files_source::_helpers::text::json_records::JsonSplitter;
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::models::{
-    Compression, CsvOptions, FilesEncoding, FilesRead, FilesTable, SourceFormat, TextChecks,
+    BatchFooters, Compression, CsvOptions, FilesEncoding, FilesRead, FilesTable, SourceFormat,
+    TextChecks,
 };
 use crate::files_source::tests::test_types::{
     ReadTextFilesTestCase, SplitJsonTestCase, TrackCsvTestCase,
@@ -179,10 +180,15 @@ async fn discover_and_read(
         batch_rows: 2,
     };
     let mut lines: Vec<String> = Vec::new();
-    read_files(folder, &request, async |batch: RecordBatch| {
-        lines.extend(row_texts(&batch)?);
-        Ok(())
-    })
+    read_files(
+        folder,
+        &request,
+        &BatchFooters::default(),
+        async |batch: RecordBatch| {
+            lines.extend(row_texts(&batch)?);
+            Ok(())
+        },
+    )
     .await
     .map_err(|error| error.to_string())?;
     Ok(lines.join("\n"))
@@ -234,4 +240,54 @@ pub(crate) fn read_csv(test_case: &TrackCsvTestCase) -> Result<String, String> {
     }
     tracker.finish()?;
     Ok(first.unwrap_or_default().join("|"))
+}
+
+/// A Parquet file whose footer breaks after `batch_footers` read it (when `reuse`), read back: only reading the footer again can fail. The rows read, or `failed`.
+pub(crate) async fn read_with_broken_footer(reuse: bool) -> Result<String, String> {
+    let (folder, root) = folder_with(&[]).await?;
+    let result = break_footer_and_read(&folder, reuse).await;
+    let _ = std::fs::remove_dir_all(&root);
+    result
+}
+
+async fn break_footer_and_read(folder: &OpenFolder, reuse: bool) -> Result<String, String> {
+    let values: arrow_array::ArrayRef =
+        std::sync::Arc::new(arrow_array::Int64Array::from(vec![1, 2, 3]));
+    let batch = RecordBatch::try_from_iter([("id", values)]).map_err(|error| error.to_string())?;
+    let mut body: Vec<u8> = Vec::new();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut body, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    let body_bytes = Bytes::from(body.clone());
+    write_file(folder, "part.parquet", body_bytes)
+        .await
+        .map_err(|error| error.to_string())?;
+    let encoding = FilesEncoding::default();
+    let listed = discover_files(folder, &[], &encoding)
+        .await
+        .map_err(|error| error.to_string())?;
+    let footers = crate::files_source::main::batch_footers::batch_footers(folder, &listed.files)
+        .await
+        .map_err(|error| error.to_string())?;
+    let kept = [BatchFooters::default(), footers][usize::from(reuse)].clone();
+    let broken_from = body.len() - 4;
+    body[broken_from..].fill(0);
+    write_file(folder, "part.parquet", Bytes::from(body))
+        .await
+        .map_err(|error| error.to_string())?;
+    let request = FilesRead {
+        files: listed.files,
+        encoding,
+        checks: TextChecks::default(),
+        columns: vec![DesiredColumn {
+            name: "id".to_owned(),
+            column_type: ColumnType::Int,
+            origin: ColumnOrigin::Source,
+        }],
+        batch_rows: 10,
+    };
+    Ok(read_files(folder, &request, &kept, async |_| Ok(()))
+        .await
+        .map_or_else(|_| "failed".to_owned(), |rows| rows.to_string()))
 }

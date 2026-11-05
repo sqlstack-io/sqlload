@@ -53,3 +53,9 @@ pub(crate) fn changed_staging(
         .collect();
     crate::write_sql::main::staging_changes::staging_changes(&staging, (&old, &new), warehouse)
 }
+
+/// 2026-11-05 10:00 UTC.
+pub(crate) fn ten_oclock() -> Result<chrono::NaiveDateTime, String> {
+    chrono::NaiveDateTime::parse_from_str("2026-11-05 10:00:00", "%Y-%m-%d %H:%M:%S")
+        .map_err(|error| error.to_string())
+}

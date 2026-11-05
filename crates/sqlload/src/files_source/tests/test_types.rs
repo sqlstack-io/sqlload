@@ -97,3 +97,11 @@ pub(crate) struct LoaderColumnsTestCase {
     /// The columns kept, then those dropped as the file spells them.
     pub(crate) expected_columns: (&'static [&'static str], &'static [&'static str]),
 }
+
+pub(crate) struct BatchFootersTestCase {
+    pub(crate) description: &'static str,
+    /// Read the footer before the file's own footer is broken, and reuse it.
+    pub(crate) reuse: bool,
+    /// The rows read, or `failed`.
+    pub(crate) expected_outcome: &'static str,
+}

@@ -61,6 +61,34 @@ so a function that ignores `ctx.cursor_value` still loads correctly.
 connection's, except connections that a `[targets]` entry writes to, which table functions never
 get.
 
+### Batches
+
+A large load commits along the way instead of all at the end, so a failure keeps what committed
+and the next run carries on from there. Tables load at the same time, up to `threads` in
+`sqlload.toml` or `--threads N` (default 4); one table's batches commit one at a time.
+
+How a table commits, as `plan` shows on its `batch` line:
+
+- `batch = "1d"` (a duration, for date and timestamp cursors) or `batch = 1000` (a step, for integer
+  cursors) reads and commits one cursor window at a time, up to 100,000 windows. A Python function
+  is called once per window, with `ctx.cursor_value` and `ctx.cursor_end` set to it. A Postgres
+  integer cursor without `--end-cursor-int` ends at its maximum when `plan` ran.
+- Without `batch`, a Postgres table whose cursor leads an index is read in cursor order (NULLs
+  first) and commits about every 1 GB, only between distinct cursor values. `batch = "whole"` opts
+  out, for tables where the ordered read is slower than a scan.
+- Any other cursor table commits once per read, as do text cursors and `append` without a cursor
+  or logged state, since a rerun could otherwise skip or duplicate rows.
+- Files sources commit at 1,000 files or about 1 GB; under `delete_insert` a partition is never split.
+- `replace` and `--reload` swap the whole table in once, at the end.
+
+Windows on a Postgres table are read in one `REPEATABLE READ` snapshot, so a row moving between
+windows is read once. That snapshot stays open on the source for the whole table load: it counts
+towards `idle_in_transaction_session_timeout`, and vacuum cannot remove rows it can still see. Use
+a larger `batch` or a narrower range if either matters.
+
+Tables of a Python source with a `@source.client` run one at a time, because clients are rarely
+thread-safe; set `parallel_tables=True` on the source when its client is.
+
 ### Logged state
 
 A table whose position the data cannot carry (an API sync token, say) sets `state="logged"` and

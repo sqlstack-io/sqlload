@@ -58,6 +58,67 @@ const DELETE_INSERT_RUNS: &[FilesTargetRun] = &[
     },
 ];
 
+/// `orders` reads `10 / d`, so a row with `d = 0` fails the read of the window holding it.
+const ORDERS_BY_HOUR: &str = "CREATE TABLE public.orders_raw (id int8, name text, placed_at timestamptz NOT NULL, d int4);
+CREATE VIEW public.orders AS SELECT id, name, placed_at, 10 / d AS v FROM public.orders_raw;
+INSERT INTO public.orders_raw VALUES (1, 'a', '2026-11-03 01:00:00+00', 1), (2, 'b', '2026-11-03 07:00:00+00', 1);";
+
+/// `batch` finer than the `{cursor:date}` partition.
+const DELETE_INSERT_BY_DAY_IN_WINDOWS: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"placed_at\"\nbatch = \"6h\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n";
+
+const FAILS_IN_WINDOW_2: FilesTargetRun = FilesTargetRun {
+    source_change: "UPDATE public.orders_raw SET name = 'a2' WHERE id = 1; UPDATE public.orders_raw SET d = 0 WHERE id = 2;",
+    expected_error: "Postgres query failed",
+    settings: Some(DELETE_INSERT_BY_DAY_IN_WINDOWS),
+    ..OK
+};
+
+#[test]
+fn given_a_batch_finer_than_the_partition_when_a_window_fails_then_the_partition_keeps_its_old_files()
+-> Result<(), String> {
+    let test_cases = [
+        FilesTargetScenarioTestCase {
+            description: "window 1 of the day committed nothing, so a failure on window 2 leaves the day as it was",
+            store: local_store,
+            setup: ORDERS_BY_HOUR,
+            target_settings: "",
+            settings: DELETE_INSERT_BY_DAY,
+            runs: &[OK, FAILS_IN_WINDOW_2],
+            check_column: "name",
+            expected_files: "day=2026-11-03 run1 1:a,2:b pending:1",
+        },
+        FilesTargetScenarioTestCase {
+            description: "the next run replaces the whole day in one commit",
+            store: local_store,
+            setup: ORDERS_BY_HOUR,
+            target_settings: "",
+            settings: DELETE_INSERT_BY_DAY,
+            runs: &[
+                OK,
+                FAILS_IN_WINDOW_2,
+                FilesTargetRun {
+                    source_change: "UPDATE public.orders_raw SET d = 1 WHERE id = 2;",
+                    ..OK
+                },
+            ],
+            check_column: "name",
+            expected_files: "day=2026-11-03 run3 1:a2,2:b",
+        },
+    ];
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        for test_case in &test_cases {
+            let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let (files, _) =
+                run_files_target_scenario(&client, postgres.port, "", directory.path(), test_case)
+                    .await?;
+            assert_eq!(files, test_case.expected_files, "{}", test_case.description);
+        }
+        Ok(())
+    })
+}
+
 #[test]
 fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_right_parquet_files()
 -> Result<(), String> {

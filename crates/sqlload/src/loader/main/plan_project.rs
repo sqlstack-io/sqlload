@@ -6,7 +6,7 @@ use crate::files_destination::main::folder_conflict::folder_conflict;
 use crate::files_destination::models::FolderClaim;
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::resolve_tables;
-use crate::loader::_helpers::sources::{selected, source_ends, source_tables};
+use crate::loader::_helpers::sources::{selected, source_ends, source_tables, unmatched_selectors};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_table_folder::table_folder;
@@ -21,6 +21,7 @@ pub async fn plan_project(
 ) -> Result<ProjectPlan, LoaderError> {
     let mut plan = ProjectPlan::default();
     let mut claims: Vec<FolderClaim> = Vec::new();
+    let mut names: Vec<(String, String)> = Vec::new();
     for (source_name, source) in &project.sources {
         let (discovered, files) = match source_tables(project, source_name, source).await? {
             Ok(found) => found,
@@ -35,6 +36,12 @@ pub async fn plan_project(
         plan.problems.extend(resolved.problems);
         plan.skipped.extend(resolved.skipped);
         claims.extend(folder_claims(&resolved.specs, destinations));
+        names.extend(resolved.specs.iter().map(|spec| {
+            (
+                spec.destination.table.clone(),
+                spec.source_table.qualified_name(),
+            )
+        }));
         let specs = source_ends(project, (source_name, source), resolved.specs, options).await?;
         for mut spec in specs {
             spec.files = files.clone();
@@ -66,6 +73,8 @@ pub async fn plan_project(
             }
         }
     }
+    plan.warnings
+        .extend(unmatched_selectors(project, options, &names));
     Ok(block_overlapping(plan, &claims))
 }
 

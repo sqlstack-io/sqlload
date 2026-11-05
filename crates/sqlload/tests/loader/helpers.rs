@@ -200,13 +200,13 @@ pub(crate) async fn run_batched(
             .await
             .map_err(|error| error.to_string())?
             .unwrap_or_default();
-        let batch_line = lines
+        let shown = lines
             .iter()
-            .filter(|_| run.show_batch)
-            .filter_map(|line| line.split_once("batch   "))
-            .map(|(_, rest)| format!(" | batch   {rest}"))
+            .filter(|_| !run.show.is_empty())
+            .filter_map(|line| line.split_once(run.show))
+            .map(|(_, rest)| format!(" | {}{rest}", run.show))
             .collect::<String>();
-        outcomes.push(format!("{error} => {result}{batch_line}"));
+        outcomes.push(format!("{error} => {result}{shown}"));
     }
     Ok(outcomes)
 }
@@ -368,7 +368,7 @@ pub(crate) async fn run_large_partition(
     let scenario = FilesScenario {
         description: test_case.description,
         store: local_store,
-        settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\n",
+        settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\nbatch = \"1d\"\n",
         runs: vec![
             WrittenRun {
                 files: first,
@@ -378,7 +378,7 @@ pub(crate) async fn run_large_partition(
             WrittenRun {
                 files: vec![(rewritten.key, parquet_bytes(&rewritten)?)],
                 expected_error: "",
-                expected_plan: "",
+                expected_plan: test_case.expected_plan,
             },
         ],
         check_query: "SELECT count(*) || ',' || count(extra) || ',' || count(DISTINCT _sqlload_source_file) || ',' || string_agg(DISTINCT CAST(id AS VARCHAR), '/' ORDER BY CAST(id AS VARCHAR)) FROM raw.scores",

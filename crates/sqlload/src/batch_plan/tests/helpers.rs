@@ -107,3 +107,13 @@ pub(crate) fn owned_groups(expected: &[(usize, &[&str])]) -> Vec<(usize, Vec<Str
 fn owned(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
+
+/// `files` tiny files of `day` in region `eu`.
+pub(crate) const fn eu(day: &'static str, files: usize) -> PartitionFiles {
+    PartitionFiles {
+        region: "eu",
+        day,
+        files,
+        file_bytes: 1,
+    }
+}

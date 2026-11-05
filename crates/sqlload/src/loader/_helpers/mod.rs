@@ -7,3 +7,4 @@ pub(crate) mod run_log;
 pub(crate) mod sources;
 pub(crate) mod specs;
 pub(crate) mod table_plan;
+pub(crate) mod table_queue;

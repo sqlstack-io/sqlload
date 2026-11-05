@@ -11,7 +11,8 @@ use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
 use crate::files_source::models::{
-    DataFile, FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks,
+    BatchFooters, DataFile, FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat,
+    TextChecks,
 };
 use crate::loader::_helpers::destination::text_values;
 use crate::loader::_helpers::python::python_tables;
@@ -35,6 +36,7 @@ use crate::project::models::{
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::similar_names::main::close_name::close_name;
+use crate::similar_names::main::nearest_name::nearest_name;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 use crate::write_sql::main::loaded_files_query::loaded_files_query;
@@ -476,6 +478,8 @@ pub(crate) struct ReadPart {
     pub(crate) order_by: Option<String>,
     /// The files to read; `None` reads every planned file.
     pub(crate) files: Option<Vec<DataFile>>,
+    /// The Parquet footers already read for `files`.
+    pub(crate) footers: BatchFooters,
     /// A smaller byte cap for the source's batches than the usual 64 MiB (the hidden `--batch-bytes`, for tests).
     pub(crate) batch_bytes: Option<usize>,
 }
@@ -502,14 +506,14 @@ pub(crate) async fn read_source(
             Ok(copy_table(client, request, on_batch).await?)
         }
         (SourceReader::Files(folder), Some(files)) => {
-            let read = match part.files {
+            let read = match part.files.clone() {
                 Some(subset) => FilesRead {
                     files: subset,
                     ..files.clone()
                 },
                 None => files.clone(),
             };
-            Ok(read_files(folder, &read, on_batch).await?)
+            Ok(read_files(folder, &read, &part.footers, on_batch).await?)
         }
         (SourceReader::Files(_), None) => Err(LoaderError::Invalid(format!(
             "{}: a files source has no files planned",
@@ -567,6 +571,30 @@ pub(crate) async fn source_ends(
         );
     }
     Ok(specs)
+}
+
+/// A warning for each selector matching no source or table, with the nearest name: `load` would otherwise say only `0 selected`.
+pub(crate) fn unmatched_selectors(
+    project: &ProjectConfig,
+    options: &PlanOptions,
+    names: &[(String, String)],
+) -> Vec<String> {
+    let known: Vec<&str> = names
+        .iter()
+        .flat_map(|(destination, source_table)| [destination.as_str(), source_table.as_str()])
+        .chain(project.sources.keys().map(String::as_str))
+        .collect();
+    options
+        .select
+        .iter()
+        .filter(|selector| !known.contains(&selector.as_str()))
+        .map(
+            |selector| match nearest_name(selector, known.iter().copied()) {
+                Some(nearest) => format!("no table matches {selector}; did you mean {nearest}?"),
+                None => format!("no table matches {selector}"),
+            },
+        )
+        .collect()
 }
 
 /// Whether `selectors` pick a table, by source name, destination name or `schema.table`.
