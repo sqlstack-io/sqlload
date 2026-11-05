@@ -20,6 +20,16 @@ pub(crate) struct CopyDecoderTestCase {
     pub(crate) expected_rows: usize,
 }
 
+pub(crate) struct DecodeCopyTestCase {
+    pub(crate) description: &'static str,
+    /// The stream, cut short by this many bytes.
+    pub(crate) cut: usize,
+    /// Rows and bytes that close a batch.
+    pub(crate) limits: (usize, usize),
+    /// Rows per batch, or the error text.
+    pub(crate) expected_result: Result<&'static [usize], &'static str>,
+}
+
 pub(crate) struct ReadColumnTestCase {
     pub(crate) description: &'static str,
     pub(crate) pg_type: PgType,

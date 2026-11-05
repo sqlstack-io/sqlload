@@ -274,8 +274,13 @@ pub(crate) fn wide_stream(rows: u64) -> CopyStream {
 pub(crate) fn narrow_batch(rows: u64) -> RecordBatch {
     let stream = narrow_stream(rows);
     let chunks = stream.chunks.iter().map(Vec::as_slice);
-    let mut batches = decode_copy("public.narrow", stream.columns, chunks, usize::MAX)
-        .unwrap_or_else(|error| panic!("the narrow stream decodes: {error}"));
+    let mut batches = decode_copy(
+        "public.narrow",
+        stream.columns,
+        chunks,
+        (usize::MAX, usize::MAX),
+    )
+    .unwrap_or_else(|error| panic!("the narrow stream decodes: {error}"));
     batches
         .pop()
         .unwrap_or_else(|| panic!("the narrow stream has rows"))

@@ -28,6 +28,7 @@ use sqlload::files_source::models::{
 use sqlload::parquet_parts::main::finish_part::finish_part;
 use sqlload::parquet_parts::main::write_part::write_part;
 use sqlload::parquet_parts::models::PartWriter;
+use sqlload::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use sqlload::postgres_source::main::decode_copy::decode_copy;
 use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::conform_batch::conform_batch;
@@ -47,7 +48,7 @@ const CROSSING_ROWS: usize = 10_000;
 const TEXT_FILES: u64 = 4;
 const ROWS_PER_TEXT_FILE: u64 = 2_500;
 
-// Teardowns (not measured) check each benchmark did all its work.
+/// A teardown (not measured): check the benchmark decoded all `ROWS` rows.
 fn expect_rows<const ROWS: usize>(batches: Vec<RecordBatch>) {
     let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     assert_eq!(rows, ROWS, "rows produced");
@@ -87,8 +88,13 @@ fn postgres_copy_to_arrow(stream: CopyStream) -> Vec<RecordBatch> {
 
 fn decode(stream: CopyStream) -> Vec<RecordBatch> {
     let chunks = stream.chunks.iter().map(Vec::as_slice);
-    decode_copy("public.bench", stream.columns, chunks, BATCH_ROWS)
-        .unwrap_or_else(|error| panic!("{error}"))
+    decode_copy(
+        "public.bench",
+        stream.columns,
+        chunks,
+        (BATCH_ROWS, DEFAULT_BATCH_BYTES),
+    )
+    .unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// A runtime, an in-memory folder, the table's columns and its rows.

@@ -192,9 +192,10 @@ def main(argv: list[str] | None = None) -> int:
 					continue
 				results.append(result)
 				active.append((competitor, result))
-			# Warm-ups first, then measured runs round-robin so drift in machine load spreads over every loader.
+			# Warm-ups first, then measured runs with the starting loader rotated each round, so neither drift nor position favours one.
 			for attempt in range(args.warmup + args.runs):
-				for competitor, result in active:
+				shift = attempt % len(active) if active else 0
+				for competitor, result in active[shift:] + active[:shift]:
 					if result.status == "failed":
 						continue
 					run_dir = work / scenario.name / competitor.name.replace(" ", "_").replace("(", "").replace(")", "")
