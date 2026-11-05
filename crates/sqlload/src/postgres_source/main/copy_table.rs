@@ -2,10 +2,12 @@
 
 use arrow_array::RecordBatch;
 use futures_util::{StreamExt, pin_mut};
-use tokio_postgres::Client;
+use tokio::sync::mpsc::Sender;
+use tokio_postgres::{Client, CopyOutStream};
 
 use crate::postgres_source::_helpers::copy_decoder::CopyDecoder;
 use crate::postgres_source::_helpers::type_map::quote_identifier;
+use crate::postgres_source::constants::COPY_QUEUE_BATCHES;
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::CopyRequest;
 
@@ -37,17 +39,48 @@ pub async fn copy_table(
         quote_identifier(&request.table.schema),
         quote_identifier(&request.table.name),
     );
-    let mut decoder = CopyDecoder::new(&table, request.columns)?;
+    let decoder = CopyDecoder::new(&table, request.columns)?;
     let stream = client.copy_out(&sql).await?;
+    let request_limits = (request.batch_rows, request.batch_bytes, table.clone());
+    let (batches, mut queued) = tokio::sync::mpsc::channel::<RecordBatch>(COPY_QUEUE_BATCHES);
+    let read = send_batches(stream, decoder, &request_limits, batches);
+    let consume = async move {
+        while let Some(batch) = queued.recv().await {
+            on_batch(batch).await.map_err(PostgresError::Consumer)?;
+        }
+        Ok::<(), PostgresError>(())
+    };
+    let (total, consumed) = tokio::join!(read, consume);
+    consumed?;
+    total
+}
+
+/// Decode `stream` into `batches` until it ends: the total rows, or why it stopped.
+async fn send_batches(
+    stream: CopyOutStream,
+    mut decoder: CopyDecoder,
+    (batch_rows, batch_bytes, table): &(usize, usize, String),
+    batches: Sender<RecordBatch>,
+) -> Result<u64, PostgresError> {
     pin_mut!(stream);
     let mut total: u64 = 0;
-    while let Some(chunk) = stream.next().await {
+    let closed = || PostgresError::Consumer("the batch consumer stopped".to_owned());
+    loop {
+        let next = tokio::select! {
+            biased;
+            next = stream.next() => next,
+            () = batches.closed() => return Err(closed()),
+        };
+        let Some(chunk) = next else {
+            break;
+        };
         decoder.push(&chunk?)?;
-        if decoder.rows() >= request.batch_rows || decoder.bytes() >= request.batch_bytes {
+        if decoder.rows() >= *batch_rows || decoder.bytes() >= *batch_bytes {
             total += decoder.rows() as u64;
-            on_batch(decoder.take_batch()?)
+            batches
+                .send(decoder.take_batch()?)
                 .await
-                .map_err(PostgresError::Consumer)?;
+                .map_err(|_| closed())?;
         }
     }
     if !decoder.finished() {
@@ -58,9 +91,10 @@ pub async fn copy_table(
     }
     if decoder.rows() > 0 {
         total += decoder.rows() as u64;
-        on_batch(decoder.take_batch()?)
+        batches
+            .send(decoder.take_batch()?)
             .await
-            .map_err(PostgresError::Consumer)?;
+            .map_err(|_| closed())?;
     }
     Ok(total)
 }
