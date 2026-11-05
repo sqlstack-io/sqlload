@@ -2,7 +2,7 @@
 
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::loader::_helpers::publish::publish_table;
-use crate::loader::_helpers::sources::open_source;
+use crate::loader::_helpers::sources::{open_source, source_readers};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_python::load_python;
@@ -44,7 +44,7 @@ pub(in crate::loader) async fn load_one(
         }
         (Some(_), None) => return Err(LoaderError::Invalid(NO_PYTHON_HOST.to_owned())),
         (None, _) => {
-            let reader = open_source(project, source).await?;
+            let reader = open_source(project, source, source_readers(planned)).await?;
             TableLoaded {
                 rows: publish_table(&reader, planned, (destination, run)).await?,
                 changes: Vec::new(),

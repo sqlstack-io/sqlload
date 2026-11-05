@@ -6,8 +6,9 @@ use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
+use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::is_direct;
-use crate::loader::constants::PLAN_DETAIL_COLUMN;
+use crate::loader::constants::{PARALLEL_READERS, PLAN_DETAIL_COLUMN};
 use crate::loader::models::{
     CommitRule, FilesOutput, PythonTable, SourceEnd, TablePlan, WholeReason,
 };
@@ -229,6 +230,11 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             "note    the windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)"
                 .to_owned(),
         );
+    }
+    if source_readers(table) > 1 {
+        lines.push(format!(
+            "note    read over up to {PARALLEL_READERS} connections in one snapshot, each a range of the table's pages, when it is a plain table of 128 MiB or more on Postgres 14+"
+        ));
     }
     lines.extend(
         table
