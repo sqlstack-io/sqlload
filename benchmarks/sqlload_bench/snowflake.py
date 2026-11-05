@@ -31,6 +31,17 @@ FROM {table}
 """
 NARROW_COLUMNS = ("id", "customer_name", "created_at", "amount", "is_active", "quantity")
 
+# The same quantities as `datagen.WIDE_CHECKSUM`; JSON is read whether a loader stored it as VARIANT or text.
+WIDE_CHECKSUM = """
+SELECT count(*), sum({id}), sum({c_int_01}), sum(to_number(substr(md5({c_text_01}), 1, 12), 'XXXXXXXXXXXX')),
+  sum(round({c_num_01}, 4)), sum(date_part(epoch_millisecond, {c_ts_02})), sum(iff({c_bool_01}, 1, 0)),
+  sum(parse_json(to_varchar({c_json_01})):n::number)
+FROM {table}
+"""
+WIDE_COLUMNS = ("id", "c_int_01", "c_text_01", "c_num_01", "c_ts_02", "c_bool_01", "c_json_01")
+#: Each dataset's checksum and the columns it reads.
+CHECKSUMS = {"narrow": (NARROW_CHECKSUM, NARROW_COLUMNS), "wide": (WIDE_CHECKSUM, WIDE_COLUMNS)}
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -171,7 +182,7 @@ def same_numbers(got: list[Any], expected: list[str]) -> bool:
 		return False
 
 
-def check(settings: Settings, table: str, expected: list[str]) -> tuple[bool, str]:
+def check(settings: Settings, table: str, kind: str, expected: list[str]) -> tuple[bool, str]:
 	"""Whether `table` holds the rows: its columns are found whatever case the loader gave them."""
 	with connect(settings) as connection:
 		cursor = connection.cursor()
@@ -184,12 +195,13 @@ def check(settings: Settings, table: str, expected: list[str]) -> tuple[bool, st
 		if not found:
 			return False, f"no table {table} in {settings.schema}"
 		names = {column.lower(): column for _, column in found}
-		quoted = {column: f'"{names[column]}"' for column in NARROW_COLUMNS if column in names}
-		absent = [column for column in NARROW_COLUMNS if column not in names]
+		checksum, columns = CHECKSUMS[kind]
+		quoted = {column: f'"{names[column]}"' for column in columns if column in names}
+		absent = [column for column in columns if column not in names]
 		if absent:
 			return False, f"{table} has no columns {absent}"
 		relation = f'"{settings.database}"."{settings.schema}"."{found[0][0]}"'
-		cursor.execute(NARROW_CHECKSUM.format(table=relation, **quoted))
+		cursor.execute(checksum.format(table=relation, **quoted))
 		got = list(cursor.fetchone() or ())
 	if same_numbers(got, expected):
 		return True, ""

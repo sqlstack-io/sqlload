@@ -81,6 +81,7 @@ def _spec(run_dir: Path, scenario: Scenario, context: Context, **settings: objec
 	spec = {
 		"scenario": scenario.name,
 		"table": scenario.table,
+		"source": scenario.source or scenario.table,
 		"schema": SCHEMA,
 		"destination": str(Competitor.destination(run_dir)),
 		"data": str(context.dataset.root),
@@ -150,7 +151,7 @@ class SqlLoad(Competitor):
 		"""The `sqlload.toml` of this load."""
 		if scenario.name == "files_snowflake":
 			return self._files_snowflake(scenario, context)
-		if scenario.name == "pg_snowflake":
+		if scenario.source:
 			assert context.warehouse is not None
 			return context.warehouse.connection_toml() + "\n" + self._postgres(scenario, context) + f'table_name = "{scenario.table}"\n'
 		text = (
@@ -170,7 +171,7 @@ class SqlLoad(Competitor):
 	@staticmethod
 	def _postgres(scenario: Scenario, context: Context) -> str:
 		assert context.postgres is not None
-		include = "public.multi_*" if scenario.name == "pg_multi" else "public.narrow" if scenario.group == "snowflake" else f"public.{scenario.table}"
+		include = "public.multi_*" if scenario.name == "pg_multi" else f"public.{scenario.source or scenario.table}"
 		text = (
 			f'[connections.app_pg]\nkind = "postgres"\nhost = "127.0.0.1"\nport = {context.postgres.port}\n'
 			f'user = "{pg.USER}"\npassword = "${{PGPASSWORD}}"\ndatabase = "{pg.DATABASE}"\n\n'
@@ -218,7 +219,7 @@ class Dlt(Competitor):
 	def unsupported(self, scenario: Scenario) -> str | None:
 		if scenario.name == "pg_multi":
 			return HIDDEN
-		if scenario.group == "postgres" or scenario.name == "pg_snowflake":
+		if scenario.group == "postgres" or scenario.source:
 			return None if self.backend else HIDDEN
 		if self.backend or scenario.name == "files_snowflake":
 			return HIDDEN
@@ -273,8 +274,7 @@ class Ingestr(Competitor):
 			argv += ["--dest-uri", f"duckdb:///{self.destination(run_dir)}", "--dest-table", f"{SCHEMA}.{scenario.table}"]
 		if scenario.group == "snowflake" or scenario.group == "postgres":
 			assert context.postgres is not None
-			source = "narrow" if scenario.group == "snowflake" else scenario.table
-			argv += ["--source-uri", context.postgres.dsn, "--source-table", f"public.{source}"]
+			argv += ["--source-uri", context.postgres.dsn, "--source-table", f"public.{scenario.source or scenario.table}"]
 			if scenario.name == "pg_incremental":
 				# ingestr keeps no high-water mark: the caller passes the interval. The harness gives
 				# the first appended row's created_at, which every base row is below.

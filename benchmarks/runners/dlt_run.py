@@ -17,8 +17,7 @@ def source(spec: dict) -> object:
 	scenario, table = spec["scenario"], spec["table"]
 	if scenario.startswith("pg_"):
 		incremental = dlt.sources.incremental("id") if scenario == "pg_incremental" else None
-		source_table = "narrow" if scenario == "pg_snowflake" else table
-		return sql_table(credentials=spec["dsn"], schema="public", table=source_table, backend=spec["backend"], incremental=incremental).with_name(table)
+		return sql_table(credentials=spec["dsn"], schema="public", table=spec["source"], backend=spec["backend"], incremental=incremental).with_name(table)
 	if scenario.startswith("files_"):
 		file_format = scenario.removeprefix("files_")
 		reader = {"parquet": read_parquet, "csv": read_csv, "ndjson": read_jsonl}[file_format]()
