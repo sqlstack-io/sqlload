@@ -161,17 +161,18 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
             origin: ColumnOrigin::Source,
         })
         .collect();
+    let read: Vec<&str> = table
+        .read_columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
     columns.extend(
         table
             .schema
             .write_columns
             .iter()
             .filter(|column| {
-                column.origin == ColumnOrigin::Metadata
-                    && !table
-                        .read_columns
-                        .iter()
-                        .any(|read| read.name == column.name)
+                column.origin == ColumnOrigin::Metadata && !read.contains(&column.name.as_str())
             })
             .cloned(),
     );
