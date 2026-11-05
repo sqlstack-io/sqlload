@@ -11,8 +11,6 @@ use crate::write_sql::main::stale_staging::stale_staging;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::append_batch::append_batch;
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::main::check_json::check_json;
-#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::describe_table::describe_table as describe_duckdb;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::execute_statements::execute_statements;
@@ -191,19 +189,15 @@ pub(crate) async fn table_shape(
     }
 }
 
-/// Append `batch` to `table` by column name (DuckDB, which takes Arrow directly), once its `json` columns are checked.
+/// Append `batch` to `table` by column name (DuckDB, which takes Arrow directly).
 pub(crate) async fn append_rows(
     destination: &Destination,
     table: &TableName,
     batch: RecordBatch,
-    json: Vec<String>,
 ) -> Result<(), LoaderError> {
     match destination {
         #[cfg(feature = "duckdb")]
-        Destination::DuckDb(duckdb) => {
-            check_json(duckdb, &batch, json).await?;
-            Ok(append_batch(duckdb, table, batch).await?)
-        }
+        Destination::DuckDb(duckdb) => Ok(append_batch(duckdb, table, batch).await?),
         _ => Err(LoaderError::Invalid(
             "only DuckDB takes Arrow batches directly".to_owned(),
         )),
