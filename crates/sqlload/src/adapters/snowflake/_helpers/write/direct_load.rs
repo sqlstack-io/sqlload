@@ -193,9 +193,15 @@ impl SnowflakeWriter {
                 .staging
                 .cloned()
                 .filter(|_| batch.target.builds);
-            let mode = match build {
-                Some(_) => &WriteMode::Append,
-                None => batch.mode,
+            let mode = match (&build, batch.mode) {
+                (Some(_), _) => &WriteMode::Append,
+                (None, WriteMode::Replace | WriteMode::Recreate) => {
+                    return Err(LoaderError::Invalid(format!(
+                        "{} replaces the table but has no build table to load into; use load_method external_stage or an internal stage",
+                        spec.destination.table
+                    )));
+                }
+                (None, mode) => mode,
             };
             let target = build.as_ref().unwrap_or(&spec.destination);
             let write_into =
@@ -355,7 +361,7 @@ fn held_types(columns: &[DesiredColumn]) -> Vec<DesiredColumn> {
         .collect()
 }
 
-/// The columns a staging table holds, as the staged rows carry them: JSON and UUIDs as text.
+/// The columns a staging table holds, as the staged rows carry them: JSON and UUIDs as text; also the columns that write a table of `held_types` on with no cast.
 fn staged_as_text(columns: &[DesiredColumn]) -> Vec<DesiredColumn> {
     columns
         .iter()
