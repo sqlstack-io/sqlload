@@ -584,10 +584,10 @@ pub(crate) fn long_names() -> Result<Vec<(String, bytes::Bytes)>, String> {
     day_files("2026-11-01", (300, 1500), None)
 }
 
-/// A full first batch of plain files, then a batch holding one the direct `COPY` must not load; the newest files, which planning samples, are plain.
-pub(crate) fn binary_later() -> Result<Vec<(String, bytes::Bytes)>, String> {
+/// A full first batch of plain files, then a batch holding one the direct `COPY` must not load (`Float16`); the newest files, which planning samples, are plain.
+pub(crate) fn half_float_later() -> Result<Vec<(String, bytes::Bytes)>, String> {
     let mut files = day_files("2026-11-01", (1000, 0), None)?;
-    files.push(binary_file("day=2026-11-02/part-0.parquet")?);
+    files.push(half_float_file("day=2026-11-02/part-0.parquet")?);
     files.extend(day_files("2026-11-03", (25, 0), None)?);
     Ok(files)
 }
@@ -904,12 +904,15 @@ pub(crate) fn day_files(
         .collect()
 }
 
-/// One Parquet file with a binary column, which the direct `COPY` does not load exactly.
-pub(crate) fn binary_file(key: &str) -> Result<(String, bytes::Bytes), String> {
+/// One Parquet file with a `Float16` column, which makes Snowflake reject the whole file, so the direct `COPY` never loads it.
+pub(crate) fn half_float_file(key: &str) -> Result<(String, bytes::Bytes), String> {
     let ids: arrow_array::ArrayRef = std::sync::Arc::new(arrow_array::Int64Array::from(vec![1]));
-    let blobs: arrow_array::ArrayRef =
-        std::sync::Arc::new(arrow_array::BinaryArray::from_vec(vec![b"x".as_slice()]));
-    let batch = RecordBatch::try_from_iter([("id", ids), ("blob", blobs)])
+    let halves = arrow_cast::cast(
+        &arrow_array::Float32Array::from(vec![1.5]),
+        &arrow_schema::DataType::Float16,
+    )
+    .map_err(|error| error.to_string())?;
+    let batch = RecordBatch::try_from_iter([("id", ids), ("half", halves)])
         .map_err(|error| error.to_string())?;
     let mut buffer: Vec<u8> = Vec::new();
     let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, batch.schema(), None)

@@ -1,5 +1,5 @@
 use crate::helpers::{
-    binary_later, flaky_probes, found, int96_in_a_later_batch, int96_newest, integration,
+    flaky_probes, found, half_float_later, int96_in_a_later_batch, int96_newest, integration,
     long_names, long_names_with_text, nanos_in_a_later_batch, nanos_newest, no_internal_stage,
     no_stage_or_channel, no_stage_or_host, no_user_stage, not_found, not_owned, nothing,
     old_leftovers, run_async, run_debug, run_route, similar_integration, stage_exists, two_batches,
@@ -244,21 +244,18 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "a column the newest files hold as nanoseconds stays on SQLLoad, and plan names the column and type",
+            description: "a column the newest files hold as nanoseconds loads directly, kept whole",
             stage: MANAGED,
             files: RouteFiles::Bucket,
             file_set: nanos_newest,
             prepare: integration,
-            expected_plan: &[
-                WRITES_PARQUET,
-                "at is Timestamp(ns",
-                "does not load exactly",
-            ],
-            expected_unsent: &["METADATA$FILENAME"],
+            expected_plan: &[PULLS],
+            expected_unplanned: &["does not load exactly"],
+            expected_sent: &["METADATA$FILENAME", "TIMESTAMP_NTZ(9)"],
             ..BASE
         },
         RouteTestCase {
-            description: "a later batch of nanoseconds goes via SQLLoad, and the clean batches around it stay direct",
+            description: "a later batch of nanoseconds loads directly like the microsecond batches around it",
             stage: MANAGED,
             files: RouteFiles::Bucket,
             file_set: nanos_in_a_later_batch,
@@ -266,9 +263,10 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             expected_plan: &[PULLS],
             expected_sent: &[
                 "METADATA$FILENAME = 'src/day=2026-11-01/",
+                "METADATA$FILENAME = 'src/day=2026-11-02/",
                 "METADATA$FILENAME = 'src/day=2026-11-03/",
-                "/_sqlload/",
             ],
+            expected_unsent: &["/_sqlload/"],
             ..BASE
         },
         RouteTestCase {
@@ -277,11 +275,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             files: RouteFiles::Bucket,
             file_set: int96_newest,
             prepare: integration,
-            expected_plan: &[
-                WRITES_PARQUET,
-                "at is Timestamp(",
-                "with no millisecond or microsecond timestamp logical type",
-            ],
+            expected_plan: &[WRITES_PARQUET, "at is Timestamp(", "stored as INT96"],
             expected_unsent: &["METADATA$FILENAME"],
             ..BASE
         },
@@ -422,7 +416,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             description: "a later batch the direct checks refuse goes via SQLLoad; the batch before stays direct",
             stage: MANAGED,
             files: RouteFiles::Bucket,
-            file_set: binary_later,
+            file_set: half_float_later,
             prepare: integration,
             expected_plan: &[PULLS],
             expected_sent: &["METADATA$FILENAME", "/_sqlload/"],

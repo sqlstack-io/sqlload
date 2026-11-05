@@ -102,7 +102,7 @@ pub(crate) fn arrow_read(data_type: &DataType) -> StoredRead {
     }
 }
 
-/// How a stage read returns column `stored`, which an embedded Arrow schema reads as `data_type`, or why a direct `COPY` cannot load it exactly (decision 96; live, 2026-11-05). With `USE_LOGICAL_TYPE`, every timestamp, time and date the file annotates reads exactly, nanoseconds and INT96 included; a bare INT64 under an Arrow timestamp or `Date64` is converted from its Arrow unit; any other column without the logical type its Arrow type needs is refused.
+/// How a stage read returns column `stored`, which an embedded Arrow schema reads as `data_type`, or why a direct `COPY` cannot load it exactly (decision 96; live, 2026-11-05). With `USE_LOGICAL_TYPE`, every timestamp, time and date the file annotates reads exactly, nanoseconds and INT96 included (INT96 only where SQLLoad reads it at nanoseconds too: no embedded type, or one of nanoseconds); a bare INT64 under an Arrow timestamp or `Date64` is converted from its Arrow unit; any other column without the logical type its Arrow type needs is refused.
 pub(crate) fn stored_read(
     data_type: &DataType,
     stored: Option<&ParquetType>,
@@ -122,7 +122,9 @@ pub(crate) fn stored_read(
                 _ => Some(StoredRead::Plain),
             }
         }
-        (DataType::Timestamp(..), None, Some(PhysicalType::INT96)) => Some(StoredRead::Nanos),
+        (DataType::Timestamp(TimeUnit::Nanosecond, _), None, Some(PhysicalType::INT96)) => {
+            Some(StoredRead::Nanos)
+        }
         (DataType::Timestamp(unit, _), None, Some(PhysicalType::INT64)) => {
             Some(StoredRead::Epoch(match unit {
                 TimeUnit::Second => 0,
