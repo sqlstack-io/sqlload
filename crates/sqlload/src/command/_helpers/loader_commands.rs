@@ -5,8 +5,6 @@ use std::collections::BTreeMap;
 
 use crate::adapters::dispatch::models::Destination;
 use crate::command::models::{Command, LoaderArgs, LoaderRequest, StateAction};
-use crate::loader::_helpers::plan_view::failed_lines;
-use crate::loader::_helpers::render::thousands;
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
@@ -17,7 +15,7 @@ use crate::loader::main::plan_project::plan_project;
 use crate::loader::main::render_plan::render_plan;
 use crate::loader::main::render_tally::render_tally;
 use crate::loader::main::state_command::state_command;
-use crate::loader::models::{LoadRun, PlanOptions, StateKind, StateRequest, TallyLine};
+use crate::loader::models::{LoadRun, PlanOptions, ProjectPlan, StateKind, StateRequest};
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::project::models::ProjectConfig;
@@ -133,22 +131,10 @@ fn config_failure(command: &Command, error: String) -> Result<(Vec<String>, bool
             ],
             false,
         )),
-        false => Ok((failed_lines(&problems), false)),
-    }
-}
-
-/// `created  name  detail` as a tally line; a line without a detail keeps its name whole.
-fn tally_line(line: &str) -> TallyLine {
-    let mut parts = line.splitn(3, "  ");
-    let verb = match parts.next().unwrap_or_default() {
-        "created" => "created",
-        "recreated" => "recreated",
-        _ => "altered",
-    };
-    TallyLine {
-        verb,
-        name: parts.next().unwrap_or_default().to_owned(),
-        detail: parts.next().unwrap_or_default().to_owned(),
+        false => Ok(render_plan(&ProjectPlan {
+            problems,
+            ..ProjectPlan::default()
+        })),
     }
 }
 
@@ -200,45 +186,22 @@ async fn run_command(
     if !applies {
         return Ok((lines, planned));
     }
-    let mut tally: Vec<TallyLine> = apply_project(&plan, &destinations)
+    let applied = apply_project(&plan, &destinations)
         .await
-        .map_err(|error| error.to_string())?
-        .iter()
-        .map(|line| tally_line(line))
-        .collect();
-    let mut rows: u64 = 0;
-    if loads {
-        let run = LoadRun {
-            project,
-            destinations: &destinations,
-            host,
-            options: &options,
-        };
-        for outcome in load_tables(&run, &plan).await {
-            let seconds = format!("{:.1}s", outcome.elapsed.as_secs_f64());
-            match outcome.loaded {
-                Ok(loaded) => {
-                    tally.extend(loaded.changes.iter().map(|line| tally_line(line)));
-                    rows += loaded.rows;
-                    let note = loaded
-                        .note
-                        .map(|note| format!(" {note}"))
-                        .unwrap_or_default();
-                    tally.push(TallyLine {
-                        verb: "loaded",
-                        name: outcome.table,
-                        detail: format!("{} rows{note}  {seconds}", thousands(loaded.rows)),
-                    });
-                }
-                Err(reason) => tally.push(TallyLine {
-                    verb: "failed",
-                    name: outcome.table,
-                    detail: reason,
-                }),
-            }
+        .map_err(|error| error.to_string())?;
+    let outcomes = match loads {
+        true => {
+            let run = LoadRun {
+                project,
+                destinations: &destinations,
+                host,
+                options: &options,
+            };
+            load_tables(&run, &plan).await
         }
-    }
-    let (tallied, completed) = render_tally(&tally, (rows, started.elapsed()));
+        false => Vec::new(),
+    };
+    let (tallied, completed) = render_tally(&applied, &outcomes, started.elapsed());
     lines.extend(tallied);
     Ok((lines, planned && completed))
 }

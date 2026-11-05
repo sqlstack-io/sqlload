@@ -3,4 +3,5 @@ pub(crate) mod exporter_commands;
 pub(crate) mod limits;
 pub(crate) mod loader_commands;
 pub(crate) mod logging;
+pub(crate) mod output;
 pub(crate) mod signals;

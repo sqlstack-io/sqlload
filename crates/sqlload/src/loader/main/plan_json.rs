@@ -1,6 +1,6 @@
 //! `sqlload plan --json`.
 
-use crate::loader::_helpers::plan_view::plan_view;
+use crate::loader::_helpers::render::plan_view;
 use crate::loader::models::ProjectPlan;
 
 /// The plan as one indented JSON document, and whether every selected table can load.
