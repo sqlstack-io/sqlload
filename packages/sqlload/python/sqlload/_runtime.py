@@ -8,6 +8,7 @@ import importlib
 import json
 import logging
 import sys
+import threading
 import traceback
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
@@ -26,6 +27,8 @@ STANDALONE_TABLE_NAME = "{table}"
 _tables: dict[str, Table] = {}
 _contexts: dict[str, Context] = {}
 _clients: dict[str, Any] = {}
+#: Held while a client is built, since tables of one source load at the same time.
+_clients_lock = threading.Lock()
 
 
 class DiscoveryError(Exception):
@@ -207,10 +210,11 @@ def _setting(value: Any) -> Any:
 
 def _shared_client(source: Source) -> Any:
 	def build(ctx: Context) -> Any:
-		if source.name not in _clients:
-			assert source.client_factory is not None
-			_clients[source.name] = source.client_factory(ctx)
-		return _clients[source.name]
+		with _clients_lock:
+			if source.name not in _clients:
+				assert source.client_factory is not None
+				_clients[source.name] = source.client_factory(ctx)
+			return _clients[source.name]
 
 	return build
 

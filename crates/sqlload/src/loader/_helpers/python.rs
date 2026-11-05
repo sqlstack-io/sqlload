@@ -679,7 +679,10 @@ impl PythonFeed {
             self.plan_data(load, false).await?;
         }
         let schema: SchemaRef = Arc::new(settled_schema(&self.merged));
-        let read = window.map(|window| self.read_window(window));
+        let read = match window {
+            Some(window) => Some(self.read_window(window)),
+            None => self.table.window.clone(),
+        };
         let (typed, outside) = typed_batch(&batch, &self.table, &schema, read.as_ref())?;
         self.outside += outside as u64;
         let sized = self.table.commits == CommitRule::Size;

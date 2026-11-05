@@ -150,7 +150,7 @@ impl Publisher {
         run: Option<RunEntry>,
     ) -> Result<Self, LoaderError> {
         let destination = table_destination(destination)?;
-        if run.is_some() {
+        if run.is_some() && !matches!(destination, Destination::Files(_)) {
             ensure_runs_table(&table, &destination).await?;
         }
         let load_id = uuid::Uuid::new_v4().to_string();
