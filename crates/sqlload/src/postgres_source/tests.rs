@@ -1,5 +1,7 @@
 #[path = "tests/test_copy_decoder.rs"]
 mod copy_decoder;
+#[path = "tests/test_decode_copy.rs"]
+mod decode_copy;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_read_column.rs"]
