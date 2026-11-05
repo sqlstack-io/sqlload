@@ -1,7 +1,9 @@
 use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
-use crate::helpers::{local_store, run_async, run_files_scenario, seaweedfs_store};
+use crate::helpers::{
+    local_store, run_async, run_files_scenario, run_large_partition, seaweedfs_store,
+};
 use crate::test_types::{FilesRun, FilesScenarioTestCase, ParquetFile};
 
 const NOV_3: ParquetFile = ParquetFile {
@@ -171,4 +173,20 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
         }
         Ok(())
     })
+}
+
+#[test]
+fn given_a_partition_of_more_than_1000_files_when_delete_insert_loads_it_then_it_commits_once_with_its_new_columns()
+-> Result<(), String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let result = run_async(async {
+        let result = run_large_partition(directory.path()).await?;
+        assert_eq!(
+            result.as_deref(),
+            Some("1003,1001,1002,7/8/9"),
+            "every file of the large partition loads once, with the column only its files have; the rewritten neighbour replaces only its own partition"
+        );
+        Ok(())
+    });
+    result
 }

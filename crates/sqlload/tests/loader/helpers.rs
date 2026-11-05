@@ -323,6 +323,62 @@ fn parquet_bytes(file: &ParquetFile) -> Result<bytes::Bytes, String> {
     Ok(bytes::Bytes::from(buffer))
 }
 
+/// A `delete_insert` files source into DuckDB with one partition of 1,001 files that alone have an `extra` column (outside the newest files the plan samples), then that partition's neighbour rewritten; the check query's result.
+pub(crate) async fn run_large_partition(
+    directory: &std::path::Path,
+) -> Result<Option<String>, String> {
+    let wide: Vec<(String, ParquetFile)> = (1..=1001)
+        .map(|id| {
+            (
+                format!("day=2026-11-01/part-{id:05}.parquet"),
+                ParquetFile {
+                    key: "",
+                    ids: &[],
+                    score: id as f64,
+                    extra: Some("x"),
+                },
+            )
+        })
+        .collect();
+    let mut first: Vec<(&str, bytes::Bytes)> = Vec::new();
+    for (key, file) in &wide {
+        first.push((
+            key.as_str(),
+            parquet_bytes(&ParquetFile { ids: &[7], ..*file })?,
+        ));
+    }
+    let late = ParquetFile {
+        key: "day=2026-11-02/part-0.parquet",
+        ids: &[8],
+        score: 0.0,
+        extra: None,
+    };
+    first.push((late.key, parquet_bytes(&late)?));
+    let rewritten = ParquetFile {
+        ids: &[8, 9],
+        ..late
+    };
+    let scenario = FilesScenario {
+        description: "a partition of more than 1,000 files",
+        store: local_store,
+        settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\n",
+        runs: vec![
+            WrittenRun {
+                files: first,
+                expected_error: "",
+                expected_plan: "2 batches of whole partitions (up to 1000 files each); each batch's footers are combined",
+            },
+            WrittenRun {
+                files: vec![(rewritten.key, parquet_bytes(&rewritten)?)],
+                expected_error: "",
+                expected_plan: "",
+            },
+        ],
+        check_query: "SELECT count(*) || ',' || count(extra) || ',' || count(DISTINCT _sqlload_source_file) || ',' || string_agg(DISTINCT CAST(id AS VARCHAR), '/' ORDER BY CAST(id AS VARCHAR)) FROM raw.scores",
+    };
+    run_written_files("", directory, scenario).await
+}
+
 /// Run a files scenario: write each run's files under a fresh `scores-<uuid>/` folder, then plan, apply and load into a fresh DuckDB.
 pub(crate) async fn run_files_scenario(
     endpoint: &str,
