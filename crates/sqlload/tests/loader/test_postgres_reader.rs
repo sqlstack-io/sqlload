@@ -255,11 +255,25 @@ fn given_a_table_over_the_split_size_when_copied_then_each_reader_takes_a_range_
             SplitReadTestCase {
                 description: "a helper splits the read in two ranges",
                 helpers: 1,
+                filter: None,
+                expected_rows: SPLIT_ROWS,
+                expected_sum: SPLIT_ROWS * (SPLIT_ROWS + 1) / 2,
+                expected_copies: 2,
+            },
+            SplitReadTestCase {
+                description: "a filter narrows each range",
+                helpers: 1,
+                filter: Some("id % 2 = 0"),
+                expected_rows: SPLIT_ROWS / 2,
+                expected_sum: SPLIT_ROWS / 2 * (SPLIT_ROWS / 2 + 1),
                 expected_copies: 2,
             },
             SplitReadTestCase {
                 description: "no helper reads in one pass",
                 helpers: 0,
+                filter: None,
+                expected_rows: SPLIT_ROWS,
+                expected_sum: SPLIT_ROWS * (SPLIT_ROWS + 1) / 2,
                 expected_copies: 1,
             },
         ];
@@ -272,7 +286,7 @@ fn given_a_table_over_the_split_size_when_copied_then_each_reader_takes_a_range_
                 table,
                 columns: plan_read(table, &BTreeMap::new())
                     .map_err(|problems| problems.join("; "))?,
-                filter: None,
+                filter: test_case.filter.map(str::to_owned),
                 order_by: None,
                 batch_rows: 1_000,
                 batch_bytes: usize::MAX,
@@ -296,20 +310,24 @@ fn given_a_table_over_the_split_size_when_copied_then_each_reader_takes_a_range_
                 .iter()
                 .map(|id| id.parse::<i64>().map_err(|error| error.to_string()))
                 .sum::<Result<i64, String>>()?;
-            assert_eq!(rows, SPLIT_ROWS as u64, "{}", test_case.description);
-            assert_eq!(ids.len(), SPLIT_ROWS as usize, "{}", test_case.description);
+            assert_eq!(
+                rows, test_case.expected_rows as u64,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(
+                ids.len(),
+                test_case.expected_rows as usize,
+                "{}",
+                test_case.description
+            );
             assert_eq!(
                 distinct.len(),
-                SPLIT_ROWS as usize,
+                test_case.expected_rows as usize,
                 "{}",
                 test_case.description
             );
-            assert_eq!(
-                sum,
-                SPLIT_ROWS * (SPLIT_ROWS + 1) / 2,
-                "{}",
-                test_case.description
-            );
+            assert_eq!(sum, test_case.expected_sum, "{}", test_case.description);
             assert_eq!(
                 copies.first(),
                 Some(&test_case.expected_copies),

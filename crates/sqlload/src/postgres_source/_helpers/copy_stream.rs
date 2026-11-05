@@ -13,44 +13,51 @@ use crate::postgres_source::constants::{COPY_READ_AHEAD_BYTES, COPY_READ_AHEAD_G
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::CopyRequest;
 
-/// Start one `COPY` per reader, each with its filter, sending its batches to `batches`.
+/// Start one `COPY` per reader, each with its filter, sending its batches to `batches`, or the error that stopped it.
 pub(crate) async fn start_reads(
     readers: &[&Client],
     filters: Vec<Option<String>>,
     request: &CopyRequest<'_>,
-    batches: &Sender<RecordBatch>,
-) -> Result<Vec<JoinHandle<Result<u64, PostgresError>>>, PostgresError> {
+    batches: &Sender<Result<RecordBatch, PostgresError>>,
+) -> Result<Vec<JoinHandle<u64>>, PostgresError> {
     let table = request.table.qualified_name();
     let mut reads = Vec::with_capacity(readers.len());
     for (reader, filter) in readers.iter().zip(filters) {
         let decoder = CopyDecoder::new(&table, request.columns.clone())?;
         let stream = reader.copy_out(&copy_sql(request, filter)).await?;
         let limits = (request.batch_rows, request.batch_bytes, table.clone());
-        reads.push(tokio::spawn(send_batches(
-            stream,
-            decoder,
-            limits,
-            batches.clone(),
-        )));
+        let read = send_batches(stream, decoder, limits, batches.clone());
+        reads.push(tokio::spawn(report(read, batches.clone())));
     }
     Ok(reads)
 }
 
-/// Wait for every read and add its rows to `outcome`; the first error wins.
+/// Wait for every read and add its rows to `outcome`, which already holds any read's error.
 pub(crate) async fn join_reads(
     mut outcome: Result<u64, PostgresError>,
-    reads: Vec<JoinHandle<Result<u64, PostgresError>>>,
+    reads: Vec<JoinHandle<u64>>,
 ) -> Result<u64, PostgresError> {
     for read in reads {
         let read = read
             .await
-            .unwrap_or_else(|error| Err(PostgresError::Consumer(error.to_string())));
-        outcome = match (outcome, read) {
-            (Ok(total), Ok(rows)) => Ok(total + rows),
-            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
-        };
+            .map_err(|error| PostgresError::Consumer(error.to_string()));
+        outcome = outcome.and_then(|total| read.map(|rows| total + rows));
     }
     outcome
+}
+
+/// The rows `read` sent, passing its error to `batches` instead, so the consumer stops at the first failed read.
+async fn report(
+    read: impl Future<Output = Result<u64, PostgresError>>,
+    batches: Sender<Result<RecordBatch, PostgresError>>,
+) -> u64 {
+    match read.await {
+        Ok(rows) => rows,
+        Err(error) => {
+            let _ = batches.send(Err(error)).await;
+            0
+        }
+    }
 }
 
 /// Decode `stream` into `batches` until it ends: the total rows, or why it stopped. The socket is read by a task of its own, so Postgres keeps sending while chunks are decoded.
@@ -58,7 +65,7 @@ async fn send_batches(
     stream: CopyOutStream,
     mut decoder: CopyDecoder,
     (batch_rows, batch_bytes, table): (usize, usize, String),
-    batches: Sender<RecordBatch>,
+    batches: Sender<Result<RecordBatch, PostgresError>>,
 ) -> Result<u64, PostgresError> {
     let (sender, mut chunks) = tokio::sync::mpsc::channel(COPY_READ_AHEAD_GROUPS);
     let socket = tokio::spawn(read_chunks(stream, sender));
@@ -79,7 +86,7 @@ async fn send_batches(
                 if decoder.rows() >= batch_rows || decoder.bytes() >= batch_bytes {
                     total += decoder.rows() as u64;
                     batches
-                        .send(decoder.take_batch()?)
+                        .send(Ok(decoder.take_batch()?))
                         .await
                         .map_err(|_| closed())?;
                 }
@@ -94,7 +101,7 @@ async fn send_batches(
         if decoder.rows() > 0 {
             total += decoder.rows() as u64;
             batches
-                .send(decoder.take_batch()?)
+                .send(Ok(decoder.take_batch()?))
                 .await
                 .map_err(|_| closed())?;
         }

@@ -235,7 +235,7 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
     }
     if source_readers(table) > 1 {
         lines.push(format!(
-            "note    read over {PARALLEL_READERS} connections in one snapshot, each a range of the table's pages (one connection for a view or before Postgres 14)"
+            "note    read over up to {PARALLEL_READERS} connections in one snapshot, each a range of the table's pages, when it is a plain table of 128 MiB or more on Postgres 14+"
         ));
     }
     lines.extend(

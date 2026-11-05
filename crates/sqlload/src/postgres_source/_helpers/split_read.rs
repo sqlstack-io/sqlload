@@ -80,31 +80,32 @@ fn range_filters(request: &CopyRequest<'_>, ranges: Option<&Vec<String>>) -> Vec
         .collect()
 }
 
-/// The readers for `request` (the client, plus helpers for a split read) and each one's filter; a split read's readers share one snapshot.
+/// The readers for `request` (the client, plus helpers for a split read) and each one's filter; a split read's readers share one snapshot, and one that cannot share it falls back to the client alone.
 pub(crate) async fn split_readers<'a>(
     client: &'a Client,
     request: &CopyRequest<'a>,
 ) -> Result<(Vec<&'a Client>, Vec<Option<String>>), PostgresError> {
-    let ranges = page_ranges(client, request).await?;
-    let readers: Vec<&Client> = std::iter::once(client)
-        .chain(request.helpers)
+    let mut ranges = page_ranges(client, request).await?;
+    let helpers: Vec<&Client> = request
+        .helpers
+        .iter()
+        .take(ranges.as_ref().map_or(0, |ranges| ranges.len() - 1))
+        .collect();
+    let readers: Vec<&Client> = std::iter::once(client).chain(helpers).collect();
+    if ranges.is_some() && share_snapshot(&readers).await.is_err() {
+        end_all(&readers, "ROLLBACK").await?;
+        ranges = None;
+    }
+    let readers: Vec<&Client> = readers
+        .into_iter()
         .take(ranges.as_ref().map_or(1, Vec::len))
         .collect();
-    if ranges.is_some() {
-        share_snapshot(&readers).await?;
-    }
     Ok((readers, range_filters(request, ranges.as_ref())))
 }
 
-/// End a split read's shared snapshot on every reader: commit when `outcome` succeeded, else roll back and keep its error.
-pub(crate) async fn end_snapshot(
-    readers: &[&Client],
-    outcome: Result<u64, PostgresError>,
-) -> Result<u64, PostgresError> {
-    match outcome {
-        Ok(total) => end_all(readers, "COMMIT").await.map(|()| total),
-        Err(error) => end_all(readers, "ROLLBACK").await.and(Err(error)),
-    }
+/// Commit a split read's shared snapshot on every reader; the first error wins.
+pub(crate) async fn end_snapshot(readers: &[&Client]) -> Result<(), PostgresError> {
+    end_all(readers, "COMMIT").await
 }
 
 /// Run `ending` on every reader, each one even after a failure; the first error wins.
