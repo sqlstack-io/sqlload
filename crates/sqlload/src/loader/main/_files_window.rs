@@ -5,7 +5,7 @@ use crate::files_destination::main::check_window::check_window;
 use crate::files_destination::main::cursor_maximum::cursor_maximum;
 use crate::files_destination::main::partition_window::partition_window;
 use crate::files_destination::models::{PartitionBy, PartitionWindowRequest};
-use crate::loader::_helpers::window::{Window, source_filter};
+use crate::loader::_helpers::table_plan::{Window, source_filter};
 use crate::loader::constants::{EXCLUSIVE_BOUND, INCLUSIVE_BOUND};
 use crate::loader::models::FilesWindowRequest;
 use crate::project::models::WriteStrategy;
@@ -119,7 +119,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             cursor_column: column.to_owned(),
             from: from.clone(),
             to: to.clone(),
-            values: Vec::new(),
+            values: vec![],
         },
         (false, _) => WriteMode::Append,
     };

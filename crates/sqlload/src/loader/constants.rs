@@ -33,3 +33,6 @@ pub const ENFORCED_UNDECLARED_PROBLEM: &str = "contract enforced needs declared 
 
 /// The most tables loading at once when neither `threads` nor `--threads` says.
 pub const DEFAULT_THREADS: usize = 4;
+
+/// The JSON a table function's `ctx.state` holds when it holds nothing.
+pub const NO_STATE: &str = "null";

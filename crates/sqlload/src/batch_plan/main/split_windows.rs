@@ -69,7 +69,7 @@ fn time_bounds(
     let is_date = match cursor_type {
         Some(ColumnType::Date) => true,
         Some(ColumnType::TimestampTz | ColumnType::TimestampNtz) => false,
-        None => NaiveDate::parse_from_str(from, "%Y-%m-%d").is_ok(),
+        None => !from.contains([' ', 'T']),
         Some(other) => {
             return Err(format!(
                 "a duration batch needs a date or timestamp cursor, but the cursor is {other}; give an integer step"
@@ -78,7 +78,7 @@ fn time_bounds(
     };
     let delta = TimeDelta::from_std(step).map_err(|error| error.to_string())?;
     if is_date {
-        if step.as_secs() % SECONDS_PER_DAY != 0 || step.subsec_nanos() != 0 {
+        if !step.as_secs().is_multiple_of(SECONDS_PER_DAY) || step.subsec_nanos() != 0 {
             return Err(format!(
                 "a date cursor's batch must be whole days, not {}",
                 humantime::format_duration(step)

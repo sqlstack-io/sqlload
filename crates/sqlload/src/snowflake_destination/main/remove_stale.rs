@@ -1,9 +1,9 @@
 //! Clean up the load folders failed runs left on the user stage.
 
 use crate::http::errors::ApiError;
+use crate::snowflake_destination::_helpers::stale_folders::stale_folders;
 use crate::snowflake_destination::constants::{STAGE_FOLDER, STALE_STAGE_HOURS, USER_STAGE};
 use crate::snowflake_destination::main::remove_staged::remove_staged;
-use crate::snowflake_destination::main::stale_folders::stale_folders;
 use crate::snowflake_destination::models::SnowflakeDestination;
 use crate::sql_api::main::execute_sql::execute_sql;
 

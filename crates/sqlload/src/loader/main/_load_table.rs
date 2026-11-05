@@ -1,6 +1,6 @@
 //! Load one table: read its source (a Python table through the host) and commit its rows batch by batch.
 
-use crate::loader::_helpers::feed::publish_table;
+use crate::loader::_helpers::publish::publish_table;
 use crate::loader::_helpers::sources::open_source;
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;

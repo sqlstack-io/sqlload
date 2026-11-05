@@ -7,7 +7,7 @@ use crate::files_destination::main::write_notes::write_notes;
 use crate::files_destination::models::{FilesDestination, TableFiles};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
-use crate::loader::_helpers::commits::{CommitRequest, commit_rule};
+use crate::loader::_helpers::table_plan::{CommitRequest, commit_rule};
 use crate::loader::_helpers::table_plan::{blocked_plan, blocked_table, read_window};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_context::files_context;

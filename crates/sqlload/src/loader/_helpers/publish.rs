@@ -1,38 +1,86 @@
-use std::collections::BTreeSet;
-use std::sync::Arc;
-
-use arrow_array::{Array, ArrayRef, RecordBatch, StringArray, TimestampMicrosecondArray};
-use arrow_schema::{Field, Schema};
-use chrono::DateTime;
-
 use crate::batch_plan::constants::BATCH_BYTES;
+use crate::batch_plan::main::cut_index::cut_index;
+use crate::batch_plan::main::last_value::last_value;
+use crate::batch_plan::models::CursorWindow;
 use crate::column_types::models::ColumnType;
+use crate::file_store::main::delete_files::delete_files;
 use crate::file_store::main::open_folder::open_folder;
-use crate::loader::_helpers::destination::{append_rows, execute, stage_file, table_destination};
-use crate::loader::_helpers::run_log::{append_run, ensure_runs_table, fold_maximum};
+use crate::file_store::main::write_file::write_file;
+use crate::file_store::models::OpenFolder;
+use crate::files_destination::main::clear_pending::clear_pending;
+use crate::files_destination::main::close_writer::close_writer;
+use crate::files_destination::main::mark_pending::mark_pending;
+use crate::files_destination::main::open_writer::open_writer;
+use crate::files_destination::main::write_rows::write_rows;
+use crate::files_destination::models::FilesWriter;
+use crate::files_destination::models::PartitionFolder;
+use crate::files_destination::models::PendingPhase;
+use crate::files_destination::models::PendingRun;
+use crate::files_destination::models::ReplacedFiles;
+use crate::files_destination::models::WriterRequest;
+use crate::files_source::models::DataFile;
+use crate::loader::_helpers::destination::append_rows;
+use crate::loader::_helpers::destination::execute;
+use crate::loader::_helpers::destination::stage_file;
+use crate::loader::_helpers::destination::table_destination;
+use crate::loader::_helpers::run_log::append_run;
+use crate::loader::_helpers::run_log::ensure_runs_table;
+use crate::loader::_helpers::run_log::fold_maximum;
+use crate::loader::_helpers::sources::ReadPart;
+use crate::loader::_helpers::sources::read_source;
+use crate::loader::_helpers::table_plan::source_filter;
+use crate::loader::constants::EXCLUSIVE_BOUND;
+use crate::loader::constants::INCLUSIVE_BOUND;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_repair::files_to_replace;
-use crate::loader::models::{CommitRange, Destination, FilesSink, Publisher, RunEntry, TablePlan};
+use crate::loader::models::CommitRange;
+use crate::loader::models::CommitRule;
+use crate::loader::models::Destination;
+use crate::loader::models::FilesSink;
+use crate::loader::models::Publisher;
+use crate::loader::models::RunEntry;
+use crate::loader::models::SourceReader;
+use crate::loader::models::TablePlan;
 use crate::masking::main::mask_batch::mask_batch;
 use crate::parquet_parts::main::finish_part::finish_part;
 use crate::parquet_parts::main::write_part::write_part;
 use crate::parquet_parts::models::PartWriter;
-use crate::run_log::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
+use crate::run_log::constants::BEGIN_STATEMENT;
+use crate::run_log::constants::COMMIT_STATEMENT;
 use crate::run_log::main::insert_run::insert_run;
 use crate::run_log::main::logged_statements::logged_statements;
+use crate::run_log::main::record_object_name::record_object_name;
+use crate::run_log::main::runs_location::runs_location;
 use crate::run_log::main::runs_table::runs_table;
-use crate::run_log::models::{RunOutcome, RunRecord};
-use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
-use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
+use crate::run_log::models::RunOutcome;
+use crate::run_log::models::RunRecord;
+use crate::schema_plan::constants::LOAD_ID_COLUMN;
+use crate::schema_plan::constants::LOADED_AT_COLUMN;
+use crate::schema_plan::models::ColumnOrigin;
+use crate::schema_plan::models::DesiredColumn;
 use crate::snowflake_destination::constants::STAGE_FOLDER;
 use crate::snowflake_destination::main::copy_staged::copy_staged;
 use crate::snowflake_destination::main::remove_staged::remove_staged;
+use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::staging_table::staging_table;
 use crate::write_sql::main::swap_table::swap_table;
 use crate::write_sql::main::write_statements::write_statements;
-use crate::write_sql::models::{TableName, WriteMode, WriteStatementsRequest};
+use crate::write_sql::models::TableName;
+use crate::write_sql::models::WriteMode;
+use crate::write_sql::models::WriteStatementsRequest;
+use arrow_array::Array;
+use arrow_array::ArrayRef;
+use arrow_array::RecordBatch;
+use arrow_array::StringArray;
+use arrow_array::TimestampMicrosecondArray;
+use arrow_schema::Field;
+use arrow_schema::Schema;
+use bytes::Bytes;
+use chrono::DateTime;
+use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and no column the write must convert in SQL (JSON on Snowflake, which `PARSE_JSON` turns into a `VARIANT`; JSON and UUIDs on DuckDB, which arrive as text).
 fn writes_directly(table: &TablePlan, destination: &Destination) -> bool {
@@ -443,4 +491,337 @@ fn commit_mode(planned: &WriteMode, range: Option<CommitRange>) -> WriteMode {
         }
         (planned, _) => planned.clone(),
     }
+}
+
+/// Load a table's rows from `reader` commit by commit, as its plan cuts them; a failure stops the table there, keeping what committed before.
+pub(crate) async fn publish_table(
+    reader: &SourceReader,
+    table: &TablePlan,
+    destination: &Destination,
+    run: Option<&RunEntry>,
+) -> Result<u64, LoaderError> {
+    let publisher = Publisher::open(table.clone(), destination, run.cloned()).await?;
+    let published = feed(reader, table, publisher).await;
+    let (mut publisher, result) = published;
+    publisher.close().await;
+    result
+}
+
+/// Pass the rows to `publisher`, cutting commits where the plan says; returns the publisher for its clean-up, and the rows committed.
+async fn feed(
+    reader: &SourceReader,
+    table: &TablePlan,
+    mut publisher: Publisher,
+) -> (Publisher, Result<u64, LoaderError>) {
+    let fed = async {
+        match &table.commits {
+            CommitRule::Windows(windows) => {
+                for window in windows {
+                    let part = ReadPart {
+                        filter: window_filter(table, window),
+                        ..ReadPart::default()
+                    };
+                    read_source(reader, table, part, async |batch| {
+                        stage(&mut publisher, batch).await
+                    })
+                    .await?;
+                    publisher
+                        .cut(CommitRange::Window {
+                            from: window.from.clone(),
+                            to: window.to.clone(),
+                        })
+                        .await?;
+                }
+            }
+            CommitRule::FileGroups(groups) => {
+                let planned = table.files.as_ref().map(|files| files.files.as_slice());
+                for group in groups {
+                    let files: Vec<DataFile> = group
+                        .files
+                        .iter()
+                        .filter_map(|index| planned.and_then(|files| files.get(*index)).cloned())
+                        .collect();
+                    let part = ReadPart {
+                        files: Some(files),
+                        ..ReadPart::default()
+                    };
+                    read_source(reader, table, part, async |batch| {
+                        stage(&mut publisher, batch).await
+                    })
+                    .await?;
+                    let range = match group.values.is_empty() {
+                        true => CommitRange::Planned,
+                        false => CommitRange::Values(group.values.clone()),
+                    };
+                    publisher.cut(range).await?;
+                }
+            }
+            CommitRule::Ordered { column } => {
+                let part = ReadPart {
+                    order_by: Some(format!("\"{}\"", column.replace('"', "\"\""))),
+                    ..ReadPart::default()
+                };
+                let mut last: Option<String> = None;
+                read_source(reader, table, part, async |batch| {
+                    let values = batch
+                        .column_by_name(column)
+                        .cloned()
+                        .ok_or_else(|| format!("the read has no cursor column {column}"))?;
+                    let at = match publisher.full() {
+                        true => cut_index(values.as_ref(), last.as_deref())?,
+                        false => batch.num_rows(),
+                    };
+                    last = last_value(values.as_ref())?.or(last.take());
+                    stage(&mut publisher, batch.slice(0, at)).await?;
+                    if at < batch.num_rows() {
+                        publisher
+                            .cut(CommitRange::Planned)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        stage(&mut publisher, batch.slice(at, batch.num_rows() - at)).await?;
+                    }
+                    Ok(())
+                })
+                .await?;
+            }
+            CommitRule::Size => {
+                read_source(reader, table, ReadPart::default(), async |batch| {
+                    stage(&mut publisher, batch).await?;
+                    match publisher.full() {
+                        true => publisher
+                            .cut(CommitRange::Planned)
+                            .await
+                            .map_err(|error| error.to_string()),
+                        false => Ok(()),
+                    }
+                })
+                .await?;
+            }
+            CommitRule::Whole => {
+                read_source(reader, table, ReadPart::default(), async |batch| {
+                    stage(&mut publisher, batch).await
+                })
+                .await?;
+            }
+        }
+        publisher.finish(None).await
+    }
+    .await;
+    (publisher, fed)
+}
+
+async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), String> {
+    publisher
+        .stage(batch, None)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The Postgres filter reading one cursor window.
+fn window_filter(table: &TablePlan, window: &CursorWindow) -> Option<String> {
+    let cursor = table.spec.cursor.as_ref()?;
+    let expression = table
+        .read_columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
+        .map(|column| column.expression.clone())?;
+    let operator = match window.inclusive {
+        true => INCLUSIVE_BOUND,
+        false => EXCLUSIVE_BOUND,
+    };
+    source_filter(
+        &expression,
+        window.from.as_deref().map(|from| (operator, from)),
+        window.to.as_deref(),
+    )
+}
+
+/// The replaced files a commit deletes: those of the partitions it wrote, and, at the last commit, every other file the load replaces (everything for `replace`, the window's partitions for `delete_insert`); never one already deleted.
+fn commit_deletes(
+    replaced: &ReplacedFiles,
+    partition: Option<&PartitionFolder>,
+    (written, last): (&BTreeSet<String>, bool),
+    deleted: &BTreeSet<String>,
+) -> Vec<String> {
+    let folders: Vec<String> = match partition {
+        Some(partition) => written
+            .iter()
+            .map(|value| format!("{}/", partition.name(value)))
+            .collect(),
+        None => Vec::new(),
+    };
+    let mut keys: Vec<String> = written
+        .iter()
+        .flat_map(|value| replaced.by_partition.get(value).into_iter().flatten())
+        .cloned()
+        .collect();
+    for key in &replaced.always {
+        let written_folder = folders.iter().any(|folder| key.starts_with(folder));
+        if last || written_folder {
+            keys.push(key.clone());
+        }
+    }
+    keys.retain(|key| !deleted.contains(key));
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+impl Publisher {
+    /// Add a batch to the commit's files, starting them (and marking the commit as writing) on its first batch.
+    pub(crate) async fn stage_files(&mut self, batch: RecordBatch) -> Result<(), LoaderError> {
+        let writer = match self.files.as_mut().and_then(|sink| sink.writer.take()) {
+            Some(writer) => writer,
+            None => self.open_files().await?,
+        };
+        let mut writer = writer;
+        let written = write_rows(&mut writer, batch).await.map(|_| ());
+        if let Some(sink) = self.files.as_mut() {
+            sink.writer = Some(writer);
+        }
+        Ok(written?)
+    }
+
+    /// A writer for the next commit's files, whose pending marker says they are being written.
+    async fn open_files(&mut self) -> Result<FilesWriter, LoaderError> {
+        let sink = self.sink()?;
+        let file_id = format!("{}.{:05}", self.load_id, self.commits + 1);
+        let spec = &self.table.spec;
+        let writer = open_writer(WriterRequest {
+            folder: sink.folder.clone(),
+            path: &sink.output.path,
+            cursor_column: spec.cursor.as_ref().map(|cursor| cursor.column.as_str()),
+            columns: &self.table.schema.write_columns,
+            load_id: &self.load_id,
+            file_id: &file_id,
+            loaded_at: &self.loaded_at,
+        })
+        .map_err(LoaderError::Invalid)?;
+        mark_pending(&sink.folder, &file_id, PendingPhase::Writing, (&[], None)).await?;
+        Ok(writer)
+    }
+
+    /// Commit the files written since the last commit: store the open ones, record the files they replace (and a logged table's record) in the marker, which commits them; then write the record, delete the replaced files and the marker. The last commit of a `replace` with no rows still stores one empty file, so the table keeps its columns.
+    pub(crate) async fn commit_files(&mut self, last: bool) -> Result<(), LoaderError> {
+        let writer = match (
+            self.files.as_mut().and_then(|sink| sink.writer.take()),
+            last && self.at_end,
+        ) {
+            (Some(writer), _) => Some(writer),
+            (None, true) if self.committed_rows == 0 => Some(self.open_files().await?),
+            (None, _) => None,
+        };
+        let Some(mut writer) = writer else {
+            return self.delete_leftovers(last).await;
+        };
+        let keep_schema = self.at_end && self.committed_rows == 0;
+        close_writer(&mut writer, keep_schema).await?;
+        let sink = self.sink()?;
+        let keys = commit_deletes(
+            &sink.replaced,
+            sink.output.path.partition.as_ref(),
+            (&writer.partitions, last),
+            &sink.deleted,
+        );
+        let run = match &self.run {
+            Some(_) => {
+                let mut record = self.record(self.waiting_rows)?;
+                record.files = writer.written.clone();
+                Some(PendingRun {
+                    prefix: runs_location(&self.sink()?.output.path.folder).prefix,
+                    name: record_object_name(&record),
+                    json: serde_json::to_string(&record)
+                        .map_err(|error| LoaderError::Invalid(error.to_string()))?,
+                })
+            }
+            None => None,
+        };
+        let sink = self.sink()?;
+        let folder = sink.folder.clone();
+        replace_files(&folder, &writer.file_id, (&keys, run.as_ref())).await?;
+        if let Some(sink) = self.files.as_mut() {
+            sink.deleted.extend(keys);
+        }
+        self.committed_rows += self.waiting_rows;
+        self.waiting_rows = 0;
+        self.commits += 1;
+        self.committed_state = self.state.clone();
+        Ok(())
+    }
+
+    /// Whether the last commit still has replaced files to delete that no partition written took with it.
+    pub(crate) fn leftover_deletes(&self) -> bool {
+        self.files.as_ref().is_some_and(|sink| {
+            !commit_deletes(
+                &sink.replaced,
+                None,
+                (&BTreeSet::new(), true),
+                &sink.deleted,
+            )
+            .is_empty()
+        })
+    }
+
+    /// At the last commit, delete the replaced files no commit deleted, under a marker of their own.
+    async fn delete_leftovers(&mut self, last: bool) -> Result<(), LoaderError> {
+        let sink = self.sink()?;
+        let keys = commit_deletes(
+            &sink.replaced,
+            None,
+            (&BTreeSet::new(), last),
+            &sink.deleted,
+        );
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let file_id = format!("{}.{:05}", self.load_id, self.commits + 1);
+        replace_files(&sink.folder.clone(), &file_id, (&keys, None)).await?;
+        if let Some(sink) = self.files.as_mut() {
+            sink.deleted.extend(keys);
+        }
+        Ok(())
+    }
+
+    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored.
+    pub(crate) async fn abandon_files(&mut self) {
+        let Some(sink) = self.files.as_mut() else {
+            return;
+        };
+        let Some(writer) = sink.writer.take() else {
+            return;
+        };
+        if let Err(error) = delete_files(&sink.folder, &writer.written).await {
+            tracing::warn!(error = %error, folder = %sink.folder.location, "cannot delete the files of a failed load; the next plan or load deletes them");
+        }
+    }
+
+    fn sink(&self) -> Result<&FilesSink, LoaderError> {
+        self.files.as_ref().ok_or_else(|| {
+            LoaderError::Invalid(format!(
+                "{}: a files target table has no files planned",
+                self.table.spec.destination.table
+            ))
+        })
+    }
+}
+
+/// Record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
+async fn replace_files(
+    folder: &OpenFolder,
+    file_id: &str,
+    (keys, run): (&[String], Option<&PendingRun>),
+) -> Result<(), LoaderError> {
+    mark_pending(folder, file_id, PendingPhase::Replacing, (keys, run)).await?;
+    if let Some(run) = run {
+        let records = OpenFolder {
+            store: folder.store.clone(),
+            location: Location {
+                store: folder.location.store.clone(),
+                prefix: run.prefix.clone(),
+            },
+        };
+        write_file(&records, &run.name, Bytes::from(run.json.clone())).await?;
+    }
+    delete_files(folder, keys).await?;
+    Ok(clear_pending(folder, file_id).await?)
 }

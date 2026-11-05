@@ -27,13 +27,8 @@ pub fn write_part(
     let mut writer = match parts.open.take() {
         Some(writer) => writer,
         None => {
-            let properties = WriterProperties::builder()
-                .set_compression(Compression::ZSTD(ZstdLevel::default()))
-                .set_max_row_group_row_count(Some(ROW_GROUP_ROWS))
-                .build();
             parts.schema = Some(batch.schema());
-            ArrowWriter::try_new(Vec::new(), batch.schema(), Some(properties))
-                .map_err(|error| error.to_string())?
+            new_writer(batch)?
         }
     };
     writer.write(batch).map_err(|error| error.to_string())?;
@@ -48,4 +43,14 @@ pub fn write_part(
         finished.extend(file);
     }
     Ok((parts, finished))
+}
+
+/// A zstd Parquet writer in memory for `batch`'s schema, with row groups of at most 1M rows.
+fn new_writer(batch: &RecordBatch) -> Result<ArrowWriter<Vec<u8>>, String> {
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(ZstdLevel::default()))
+        .set_max_row_group_row_count(Some(ROW_GROUP_ROWS))
+        .build();
+    ArrowWriter::try_new(Vec::new(), batch.schema(), Some(properties))
+        .map_err(|error| error.to_string())
 }

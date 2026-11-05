@@ -1,5 +1,3 @@
-//! Find the load folders failed runs left on the user stage.
-
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -7,7 +5,7 @@ use chrono::{DateTime, Utc};
 use crate::snowflake_destination::constants::STAGE_FOLDER;
 
 /// The load folders (`sqlload/<load id>/`) among `listed` (each file's name and `last_modified`, as `LIST @~/sqlload/` shows them) whose newest file is older than `before`; a file whose time cannot be read keeps its folder.
-pub fn stale_folders(listed: &[(String, String)], before: DateTime<Utc>) -> Vec<String> {
+pub(crate) fn stale_folders(listed: &[(String, String)], before: DateTime<Utc>) -> Vec<String> {
     let mut newest: BTreeMap<String, Option<DateTime<Utc>>> = BTreeMap::new();
     for (name, modified) in listed {
         let mut parts = name.split('/');
