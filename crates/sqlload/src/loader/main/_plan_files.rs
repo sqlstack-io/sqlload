@@ -19,7 +19,7 @@ use crate::loader::models::{
 };
 use crate::project::models::FilesFormat;
 use crate::schema_plan::models::LiveColumn;
-use crate::write_sql::models::WriteMode;
+use crate::adapters::contract::models::WriteMode;
 
 /// One table's plan against the files already in its folder.
 pub(in crate::loader) async fn plan_files_table(

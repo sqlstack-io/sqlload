@@ -39,7 +39,7 @@ use crate::similar_names::main::close_name::close_name;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
-use crate::write_sql::main::loaded_files_query::loaded_files_query;
+use crate::adapters::contract::main::loaded_files_query::loaded_files_query;
 
 /// A client for a source's Postgres connection.
 pub(crate) async fn connect_source(

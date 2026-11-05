@@ -1,4 +1,4 @@
-use sqlload::duckdb_destination::main::query_text::query_text;
+use sqlload::adapters::duckdb::main::query_text::query_text;
 use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::main::plan_project::plan_project;

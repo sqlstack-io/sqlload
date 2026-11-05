@@ -2,9 +2,9 @@
 
 use crate::external_stage::_helpers::table_stage::table_stage;
 use crate::external_stage::main::stage_reference::stage_reference;
-use crate::snowflake_destination::constants::USER_STAGE;
-use crate::snowflake_destination::models::StageRoute;
-use crate::write_sql::models::TableName;
+use crate::adapters::snowflake::constants::USER_STAGE;
+use crate::adapters::snowflake::models::StageRoute;
+use crate::adapters::contract::models::TableName;
 
 /// The stage `route` loads from, as SQL; `target` is the table loaded, `staging` its staging table if any; `None` for a route without files.
 pub fn route_reference(

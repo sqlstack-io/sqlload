@@ -77,23 +77,23 @@ use crate::schema_plan::constants::LOADED_AT_COLUMN;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
-use crate::snowflake_destination::constants::STAGE_FOLDER;
-use crate::snowflake_destination::main::copy_staged::copy_staged;
-use crate::snowflake_destination::main::remove_staged::remove_staged;
+use crate::adapters::snowflake::constants::STAGE_FOLDER;
+use crate::adapters::snowflake::main::copy_staged::copy_staged;
+use crate::adapters::snowflake::main::remove_staged::remove_staged;
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
-use crate::write_sql::constants::SWAP_SUFFIX;
-use crate::write_sql::main::build_table::build_table;
-use crate::write_sql::main::commit_statements::commit_statements;
-use crate::write_sql::main::cursor_text::cursor_text;
-use crate::write_sql::main::qualified_name::qualified_name;
-use crate::write_sql::main::staging_changes::staging_changes;
-use crate::write_sql::main::staging_id::staging_id;
-use crate::write_sql::main::staging_table::staging_table;
-use crate::write_sql::models::TableName;
-use crate::write_sql::models::TableShape;
-use crate::write_sql::models::WriteMode;
-use crate::write_sql::models::WriteStatementsRequest;
+use crate::adapters::contract::constants::SWAP_SUFFIX;
+use crate::adapters::contract::main::build_table::build_table;
+use crate::adapters::contract::main::commit_statements::commit_statements;
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::main::qualified_name::qualified_name;
+use crate::adapters::contract::main::staging_changes::staging_changes;
+use crate::adapters::contract::main::staging_id::staging_id;
+use crate::adapters::contract::main::staging_table::staging_table;
+use crate::adapters::contract::models::TableName;
+use crate::adapters::contract::models::TableShape;
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::WriteStatementsRequest;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
@@ -122,21 +122,21 @@ use crate::loader::_helpers::table_plan::{copy_columns, direct_check, is_direct}
 use crate::loader::models::{DirectLoaded, RowStream, TableSpec};
 use crate::project::models::MaskMethod;
 use crate::row_batches::main::text_rows::text_rows;
-use crate::snowflake_destination::constants::{
+use crate::adapters::snowflake::constants::{
     EXTERNAL_STAGE_FOLDER, STREAM_COMMIT_WAIT_SECS, STREAM_PIPE_SUFFIX, STREAM_POLL_MILLIS,
     STREAM_REQUEST_BYTES,
 };
-use crate::snowflake_destination::main::copy_rows::copy_rows;
-use crate::snowflake_destination::main::script_copy_rows::script_copy_rows;
-use crate::snowflake_destination::main::streaming_client::streaming_client;
-use crate::snowflake_destination::models::{CopyStaged, StageRoute, StagedFile};
+use crate::adapters::snowflake::main::copy_rows::copy_rows;
+use crate::adapters::snowflake::main::script_copy_rows::script_copy_rows;
+use crate::adapters::snowflake::main::streaming_client::streaming_client;
+use crate::adapters::snowflake::models::{CopyStaged, StageRoute, StagedFile};
 use crate::streaming_api::main::append_rows::append_rows as append_stream_rows;
 use crate::streaming_api::main::channel_statuses::channel_statuses;
 use crate::streaming_api::main::open_channel::open_channel;
 use crate::streaming_api::models::AppendRequest;
-use crate::write_sql::main::insert_rows::insert_rows;
-use crate::write_sql::main::sql_literal::sql_literal;
-use crate::write_sql::main::stored_name::stored_name;
+use crate::adapters::contract::main::insert_rows::insert_rows;
+use crate::adapters::contract::main::sql_literal::sql_literal;
+use crate::adapters::contract::main::stored_name::stored_name;
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`); on Snowflake, a route loading files into the table itself (streaming, `INSERT` and a staging table's stage all go through staging); elsewhere always, as appending a batch converts its JSON and UUIDs.
 fn writes_directly(table: &TablePlan, destination: &Destination) -> bool {

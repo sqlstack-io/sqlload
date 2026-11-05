@@ -11,19 +11,19 @@ use crate::external_stage::main::stage_reference::stage_reference;
 use crate::external_stage::models::{PlannedStage, RouteRequest, StepFailure};
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::probe_folder::probe_folder;
-use crate::snowflake_destination::constants::{
+use crate::adapters::snowflake::constants::{
     EXTERNAL_STAGE_FOLDER, STAGE_PROBE_TABLE, USER_STAGE,
 };
-use crate::snowflake_destination::main::show_stages::show_stages;
-use crate::snowflake_destination::main::streaming_client::streaming_client;
-use crate::snowflake_destination::models::{
+use crate::adapters::snowflake::main::show_stages::show_stages;
+use crate::adapters::snowflake::main::streaming_client::streaming_client;
+use crate::adapters::snowflake::models::{
     ExternalStage, ForcedStage, SnowflakeDestination, StageObject, StageRoute,
 };
 use crate::sql_api::main::execute_sql::execute_sql;
 use crate::streaming_api::main::ingest_host::ingest_host;
-use crate::write_sql::main::create_schema::create_schema;
-use crate::write_sql::main::qualified_name::qualified_name;
-use crate::write_sql::models::TableName;
+use crate::adapters::contract::main::create_schema::create_schema;
+use crate::adapters::contract::main::qualified_name::qualified_name;
+use crate::adapters::contract::models::TableName;
 
 pub(crate) fn step_name(step: &ForcedStage) -> String {
     match step {

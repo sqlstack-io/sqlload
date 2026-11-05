@@ -57,17 +57,17 @@ use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::SchemaPlan;
 use crate::schema_plan::models::SchemaRules;
 use crate::schema_plan::models::TableAction;
-use crate::snowflake_destination::constants::USER_STAGE;
-use crate::snowflake_destination::models::{ExternalStage, StageRoute};
+use crate::adapters::snowflake::constants::USER_STAGE;
+use crate::adapters::snowflake::models::{ExternalStage, StageRoute};
 use crate::store_paths::models::StoreKind;
-use crate::write_sql::main::alter_statements::alter_statements;
-use crate::write_sql::main::create_schema::create_schema;
-use crate::write_sql::main::create_table::create_table;
-use crate::write_sql::main::cursor_bound::cursor_bound;
-use crate::write_sql::main::cursor_query::cursor_query;
-use crate::write_sql::main::cursor_text::cursor_text;
-use crate::write_sql::models::CursorQuery;
-use crate::write_sql::models::WriteMode;
+use crate::adapters::contract::main::alter_statements::alter_statements;
+use crate::adapters::contract::main::create_schema::create_schema;
+use crate::adapters::contract::main::create_table::create_table;
+use crate::adapters::contract::main::cursor_bound::cursor_bound;
+use crate::adapters::contract::main::cursor_query::cursor_query;
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::CursorQuery;
+use crate::adapters::contract::models::WriteMode;
 
 /// The source table without its excluded columns.
 pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {

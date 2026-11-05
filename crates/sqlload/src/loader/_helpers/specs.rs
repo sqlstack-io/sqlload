@@ -8,7 +8,7 @@ use crate::project::models::{
     MaskMethod, SourceConfig, StateMode, TableOverride, TableSettings, WriteStrategy,
 };
 use crate::similar_names::main::nearest_name::nearest_name;
-use crate::write_sql::models::TableName;
+use crate::adapters::contract::models::TableName;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
 use std::collections::BTreeMap;
 

@@ -4,7 +4,7 @@ use crate::column_types::models::ColumnType;
 use crate::files_destination::models::{FolderClaim, PartitionBy, PendingPhase};
 use crate::project::models::WriteStrategy;
 use crate::store_paths::models::StoreKind;
-use crate::write_sql::models::WriteMode;
+use crate::adapters::contract::models::WriteMode;
 
 pub(crate) struct TablePathTestCase {
     pub(crate) description: &'static str,

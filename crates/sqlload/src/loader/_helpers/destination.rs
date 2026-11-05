@@ -4,38 +4,38 @@ use arrow_array::RecordBatch;
 use tokio::sync::OwnedMutexGuard;
 
 use crate::column_types::models::Warehouse;
-use crate::write_sql::constants::STALE_STAGING_HOURS;
-use crate::write_sql::main::staging_tables_query::staging_tables_query;
-use crate::write_sql::main::stale_staging::stale_staging;
+use crate::adapters::contract::constants::STALE_STAGING_HOURS;
+use crate::adapters::contract::main::staging_tables_query::staging_tables_query;
+use crate::adapters::contract::main::stale_staging::stale_staging;
 
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::main::append_batch::append_batch;
+use crate::adapters::duckdb::main::append_batch::append_batch;
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::main::describe_table::describe_table as describe_duckdb;
+use crate::adapters::duckdb::main::describe_table::describe_table as describe_duckdb;
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::main::execute_statements::execute_statements;
+use crate::adapters::duckdb::main::execute_statements::execute_statements;
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::main::own_connection::own_connection;
+use crate::adapters::duckdb::main::own_connection::own_connection;
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::main::query_text::query_text as query_duckdb;
+use crate::adapters::duckdb::main::query_text::query_text as query_duckdb;
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::main::query_texts::query_texts as query_duckdb_texts;
+use crate::adapters::duckdb::main::query_texts::query_texts as query_duckdb_texts;
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::main::table_shape::table_shape as duckdb_table_shape;
+use crate::adapters::duckdb::main::table_shape::table_shape as duckdb_table_shape;
 use crate::external_stage::main::route_reference::route_reference;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, LoadRun, ProjectPlan, TablePlan};
 use crate::schema_plan::models::LiveColumn;
-use crate::snowflake_destination::main::describe_table::describe_table as describe_snowflake;
-use crate::snowflake_destination::main::query_text::query_text as query_snowflake;
-use crate::snowflake_destination::main::query_texts::query_texts as query_snowflake_texts;
-use crate::snowflake_destination::main::remove_stale::remove_stale;
-use crate::snowflake_destination::main::remove_stale_external::remove_stale_external;
-use crate::snowflake_destination::main::run_statements::run_statements;
-use crate::snowflake_destination::main::stage_parquet::stage_parquet;
-use crate::snowflake_destination::models::{StageRoute, StagedFile};
+use crate::adapters::snowflake::main::describe_table::describe_table as describe_snowflake;
+use crate::adapters::snowflake::main::query_text::query_text as query_snowflake;
+use crate::adapters::snowflake::main::query_texts::query_texts as query_snowflake_texts;
+use crate::adapters::snowflake::main::remove_stale::remove_stale;
+use crate::adapters::snowflake::main::remove_stale_external::remove_stale_external;
+use crate::adapters::snowflake::main::run_statements::run_statements;
+use crate::adapters::snowflake::main::stage_parquet::stage_parquet;
+use crate::adapters::snowflake::models::{StageRoute, StagedFile};
 use crate::stage_api::models::StageInfo;
-use crate::write_sql::models::{TableName, TableShape};
+use crate::adapters::contract::models::{TableName, TableShape};
 
 /// The error for a SQL operation on a files target, which plans and loads without SQL.
 fn no_sql() -> LoaderError {

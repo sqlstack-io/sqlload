@@ -3,7 +3,7 @@
 use crate::files_destination::main::_partition_in_window::partition_in_window;
 use crate::files_destination::main::check_window::check_window;
 use crate::files_destination::models::{ReplaceRequest, ReplacedFiles};
-use crate::write_sql::models::WriteMode;
+use crate::adapters::contract::models::WriteMode;
 
 /// None for append, all for replace, partitions in the window (and any other the load writes to) for delete_insert.
 pub fn plan_replaced_files(request: &ReplaceRequest<'_>) -> Result<ReplacedFiles, String> {

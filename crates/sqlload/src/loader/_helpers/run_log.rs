@@ -29,8 +29,8 @@ use crate::run_log::models::{
 };
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
-use crate::write_sql::main::cursor_text::cursor_text;
-use crate::write_sql::models::WriteMode;
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::WriteMode;
 
 /// Every record of the table, oldest first, and those that cannot be used, none when the log does not exist (never written, or deleted); and whether a warehouse's `_sqlload_runs` exists.
 pub(crate) async fn read_run_log(

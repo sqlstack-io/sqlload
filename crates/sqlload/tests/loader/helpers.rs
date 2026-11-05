@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use arrow_array::RecordBatch;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
-use sqlload::duckdb_destination::main::execute_statements::execute_statements;
-use sqlload::duckdb_destination::main::query_text::query_text;
+use sqlload::adapters::duckdb::main::execute_statements::execute_statements;
+use sqlload::adapters::duckdb::main::query_text::query_text;
 use sqlload::file_store::main::list_files::list_files;
 use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::read_file::read_file;

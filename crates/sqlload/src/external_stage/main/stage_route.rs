@@ -5,7 +5,7 @@ use crate::external_stage::_helpers::probes::{
     checked_external, planned_stage, probed_step, step_name,
 };
 use crate::external_stage::models::{PlannedStage, RouteChoice, RouteRequest, StepFailure};
-use crate::snowflake_destination::models::{ForcedStage, StageRoute};
+use crate::adapters::snowflake::models::{ForcedStage, StageRoute};
 
 /// The table's route: what the connection's `stage` forces (failing with the reason if it cannot be used), else the first of `@~`, `@%table`, Snowpipe Streaming and `INSERT` the role can use; a probe failing for any other reason than privileges or a missing object fails the plan. Each probe changes nothing and is asked once per run. Also the stage `apply` must create, if any.
 pub async fn stage_route(

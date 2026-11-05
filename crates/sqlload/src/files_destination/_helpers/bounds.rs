@@ -5,9 +5,9 @@ use chrono::{Days, NaiveDateTime};
 use crate::column_types::models::ColumnType;
 use crate::files_destination::constants::{MIDNIGHT, UTC_SUFFIX};
 use crate::files_destination::models::PartitionBy;
-use crate::write_sql::constants::CURSOR_TIMESTAMP_FORMAT;
-use crate::write_sql::main::cursor_bound::cursor_bound;
-use crate::write_sql::models::CursorValue;
+use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
+use crate::adapters::contract::main::cursor_bound::cursor_bound;
+use crate::adapters::contract::models::CursorValue;
 
 fn zone(cursor_type: &ColumnType) -> &'static str {
     match cursor_type {

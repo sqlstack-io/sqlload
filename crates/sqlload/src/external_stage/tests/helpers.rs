@@ -7,9 +7,9 @@ use crate::external_stage::models::{CopyColumn, CopyValue, StepFailure};
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
 use crate::http::errors::ApiError;
-use crate::snowflake_destination::models::{ExternalStage, StageObject, StageRoute};
+use crate::adapters::snowflake::models::{ExternalStage, StageObject, StageRoute};
 use crate::store_paths::models::{Location, StoreKind};
-use crate::write_sql::models::TableName;
+use crate::adapters::contract::models::TableName;
 
 /// `s3://lake/<prefix>`.
 pub(crate) fn lake(prefix: &str) -> Location {
@@ -198,8 +198,8 @@ pub(crate) fn rust_hash(value: &str) -> Result<String, String> {
 pub(crate) fn snowflake_hash_sql() -> String {
     use crate::column_types::models::Warehouse;
     use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
-    use crate::write_sql::main::commit_statements::commit_statements;
-    use crate::write_sql::models::{WriteMode, WriteStatementsRequest};
+    use crate::adapters::contract::main::commit_statements::commit_statements;
+    use crate::adapters::contract::models::{WriteMode, WriteStatementsRequest};
     let columns = vec![DesiredColumn {
         name: "name".to_owned(),
         column_type: ColumnType::Text,

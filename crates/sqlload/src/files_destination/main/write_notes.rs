@@ -1,6 +1,6 @@
 //! Describe how a write mode changes a files table.
 
-use crate::write_sql::models::WriteMode;
+use crate::adapters::contract::models::WriteMode;
 
 /// What `mode` does to the table's existing files, for `plan`.
 pub fn write_notes(mode: &WriteMode) -> Vec<String> {

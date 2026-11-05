@@ -9,9 +9,9 @@ use crate::loader::_helpers::table_plan::{Window, source_filter};
 use crate::loader::constants::{EXCLUSIVE_BOUND, INCLUSIVE_BOUND};
 use crate::loader::models::FilesWindowRequest;
 use crate::project::models::WriteStrategy;
-use crate::write_sql::main::cursor_bound::cursor_bound;
-use crate::write_sql::main::cursor_text::cursor_text;
-use crate::write_sql::models::{CursorValue, WriteMode};
+use crate::adapters::contract::main::cursor_bound::cursor_bound;
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::{CursorValue, WriteMode};
 
 /// The source filter, write mode and `plan` note: partitions from the newest one (`delete_insert`) or rows after the newest files' maximum (`append`).
 pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Result<Window, String> {
