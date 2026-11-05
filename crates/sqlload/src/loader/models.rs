@@ -437,6 +437,10 @@ pub struct Publisher {
     pub direct: bool,
     /// Only the end of the run commits (`replace` and `--reload`, which swap or rebuild the whole table).
     pub at_end: bool,
+    /// `replace` or `--reload` building the table it swaps in: batches land in `staging` in their final types.
+    pub builds: bool,
+    /// The indexes to re-create on the build table once it is swapped in.
+    pub indexes: Vec<String>,
     pub staging: Option<TableName>,
     /// The batch being filled, from 1.
     pub batch: u64,

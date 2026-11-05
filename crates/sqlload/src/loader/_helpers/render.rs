@@ -1,4 +1,6 @@
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
+use crate::column_types::main::warehouse_type::warehouse_type;
+use crate::column_types::models::{ColumnType, Warehouse};
 use crate::external_stage::models::PlannedStage;
 use crate::files_destination::models::{PendingLoad, PendingPhase};
 use crate::files_source::models::SourceFormat;
@@ -14,6 +16,7 @@ use crate::routing::models::Route;
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnOrigin, TableAction};
 use crate::write_sql::main::display_name::display_name;
+use crate::write_sql::main::stored_name::stored_name;
 use crate::write_sql::models::WriteMode;
 
 /// A section: a heading with an optional right-aligned note, then each item as a tree branch.
@@ -187,6 +190,9 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             },
         ));
     }
+    if reload_moves_columns(table) {
+        lines.push("schema  changed columns move to the end of the column order".to_owned());
+    }
     lines.extend(table.route.as_ref().map(route_line));
     if let Some(reason) = table
         .route
@@ -291,9 +297,7 @@ fn batch_line(table: &TablePlan) -> String {
                 groups.len()
             )
         }
-        (_, true) => {
-            "about 1 GB at a time into the staging table, swapped in once at the end".to_owned()
-        }
+        (_, true) => "about 1 GB at a time into a new table, swapped in once at the end".to_owned(),
         (CommitRule::Ordered { column, .. }, false) => format!(
             "read in {column} order (an index leads with it, NULLs first), committing about every 1 GB between distinct values{}",
             match table.mode {
@@ -354,6 +358,26 @@ fn files_line(output: &FilesOutput) -> String {
         FilesFormat::Parquet => "parquet (zstd)",
     };
     format!("files   {}  {format}{partition}", output.path.folder)
+}
+
+/// Whether a Snowflake `--reload` re-adds any column, as its build table starts `LIKE` the table to keep the grants.
+fn reload_moves_columns(table: &TablePlan) -> bool {
+    let warehouse = table.spec.warehouse;
+    let Some(live) = &table.live else {
+        return false;
+    };
+    if table.mode != WriteMode::Recreate || warehouse != Warehouse::Snowflake {
+        return false;
+    }
+    let sql = |column_type: &ColumnType| warehouse_type(column_type, warehouse).sql;
+    for column in &table.schema.write_columns {
+        let name = stored_name(&column.name, warehouse);
+        let known = live.iter().find(|known| known.name == name);
+        if known.is_none_or(|known| sql(&known.column_type) != sql(&column.column_type)) {
+            return true;
+        }
+    }
+    false
 }
 
 fn route_line(route: &Route) -> String {

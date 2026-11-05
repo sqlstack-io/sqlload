@@ -11,6 +11,8 @@ use crate::write_sql::main::stale_staging::stale_staging;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::append_batch::append_batch;
 #[cfg(feature = "duckdb")]
+use crate::duckdb_destination::main::check_json::check_json;
+#[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::describe_table::describe_table as describe_duckdb;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::execute_statements::execute_statements;
@@ -20,6 +22,8 @@ use crate::duckdb_destination::main::own_connection::own_connection;
 use crate::duckdb_destination::main::query_text::query_text as query_duckdb;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::query_texts::query_texts as query_duckdb_texts;
+#[cfg(feature = "duckdb")]
+use crate::duckdb_destination::main::table_shape::table_shape as duckdb_table_shape;
 use crate::external_stage::main::route_reference::route_reference;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, LoadRun, ProjectPlan, TablePlan};
@@ -33,7 +37,7 @@ use crate::snowflake_destination::main::run_statements::run_statements;
 use crate::snowflake_destination::main::stage_parquet::stage_parquet;
 use crate::snowflake_destination::models::{StageRoute, StagedFile};
 use crate::stage_api::models::StageInfo;
-use crate::write_sql::models::TableName;
+use crate::write_sql::models::{TableName, TableShape};
 
 /// The error for a SQL operation on a files target, which plans and loads without SQL.
 fn no_sql() -> LoaderError {
@@ -175,15 +179,31 @@ pub(crate) fn table_destination(destination: &Destination) -> Result<Destination
     }
 }
 
-/// Append `batch` to `table` by column name (DuckDB, which takes Arrow directly).
+/// What a rebuild of `table` must carry over itself: nothing where the warehouse copies a table's shape (Snowflake's `LIKE`).
+pub(crate) async fn table_shape(
+    destination: &Destination,
+    table: &TableName,
+) -> Result<Option<TableShape>, LoaderError> {
+    match destination {
+        #[cfg(feature = "duckdb")]
+        Destination::DuckDb(duckdb) => Ok(duckdb_table_shape(duckdb, table).await?),
+        _ => Ok(None),
+    }
+}
+
+/// Append `batch` to `table` by column name (DuckDB, which takes Arrow directly), once its `json` columns are checked.
 pub(crate) async fn append_rows(
     destination: &Destination,
     table: &TableName,
     batch: RecordBatch,
+    json: Vec<String>,
 ) -> Result<(), LoaderError> {
     match destination {
         #[cfg(feature = "duckdb")]
-        Destination::DuckDb(duckdb) => Ok(append_batch(duckdb, table, batch).await?),
+        Destination::DuckDb(duckdb) => {
+            check_json(duckdb, &batch, json).await?;
+            Ok(append_batch(duckdb, table, batch).await?)
+        }
         _ => Err(LoaderError::Invalid(
             "only DuckDB takes Arrow batches directly".to_owned(),
         )),

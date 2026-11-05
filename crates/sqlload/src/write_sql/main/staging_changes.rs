@@ -1,18 +1,24 @@
 //! Bring a load's staging table in line with a widened plan.
 
-use crate::column_types::models::Warehouse;
+use crate::column_types::main::warehouse_type::warehouse_type;
+use crate::column_types::models::{ColumnType, Warehouse};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 use crate::write_sql::_helpers::identifiers::{qualified, quote, quote_live, staging_type};
 use crate::write_sql::_helpers::rebuild::rebuild_statement;
 use crate::write_sql::main::stored_name::stored_name;
 use crate::write_sql::models::TableName;
 
-/// The statements changing `staging`, made for `old` columns, to hold `new` ones: columns added, and changed types cast in place (DuckDB) or by rewriting the staging table (Snowflake, whose `ALTER` cannot widen a number to a float); none when nothing changed.
+/// The statements changing `staging`, made for `old` columns, to hold `new` ones: columns added, and changed types cast in place (DuckDB) or by rewriting the staging table (Snowflake, whose `ALTER` cannot widen a number to a float); none when nothing changed. A build table (`built`) holds the table's own types, not text for JSON and UUIDs.
 pub fn staging_changes(
     staging: &TableName,
     (old, new): (&[DesiredColumn], &[DesiredColumn]),
     warehouse: Warehouse,
+    built: bool,
 ) -> Vec<String> {
+    let staging_type = |column_type: &ColumnType, warehouse: Warehouse| match built {
+        true => warehouse_type(column_type, warehouse).sql,
+        false => staging_type(column_type, warehouse),
+    };
     let target = qualified(staging, warehouse);
     let mut statements: Vec<String> = Vec::new();
     let mut rebuilt: Vec<(String, String)> = Vec::new();

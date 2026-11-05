@@ -371,18 +371,18 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "a hashed column under replace, which spans commits, stays on SQLLoad",
+            description: "a hashed column under replace: each batch's temporary table is hashed into the table that is swapped in",
             stage: MANAGED,
             settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nmask = { extra = \"hash\" }",
             files: RouteFiles::Bucket,
             file_set: with_text,
             prepare: integration,
-            expected_plan: &[
-                WRITES_PARQUET,
-                "extra is hashed and the table is rewritten as a whole",
+            expected_plan: &[PULLS, "in a temporary table, gone with its session"],
+            expected_sent: &[
+                "CREATE OR REPLACE TEMPORARY TABLE",
+                "SHA2(\"EXTRA\", 256)",
+                "SWAP WITH",
             ],
-            expected_unplanned: &["in a temporary table"],
-            expected_unsent: &["SHA2("],
             ..BASE
         },
         RouteTestCase {

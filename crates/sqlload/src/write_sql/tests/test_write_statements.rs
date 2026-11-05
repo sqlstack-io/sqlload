@@ -46,17 +46,6 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             ],
         },
         WriteStatementsTestCase {
-            description: "replace on DuckDB is one transaction, which keeps the table's constraints",
-            warehouse: Warehouse::DuckDb,
-            mode: WriteMode::Replace,
-            expected_statements: &[
-                "BEGIN",
-                "DELETE FROM \"raw\".\"app__accounts\"",
-                DUCK_INSERT,
-                "COMMIT",
-            ],
-        },
-        WriteStatementsTestCase {
             description: "replace on Snowflake swaps in a copy that keeps the grants",
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::Replace,
@@ -118,6 +107,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             columns: &columns,
             mode: &test_case.mode,
             hashed: &[],
+            built: None,
         };
         assert_eq!(
             write_statements(&request, &staging),

@@ -42,6 +42,17 @@ pub struct WriteStatementsRequest<'a> {
     pub mode: &'a WriteMode,
     /// Columns staged in plain text that the write hashes in SQL (`hash` masking on the direct route): the lowercase hex SHA-256 of their text.
     pub hashed: &'a [String],
+    /// The batches went straight into `staging`, built in the table's shape: the write only swaps it in, so no row is written twice, then re-creates these indexes.
+    pub built: Option<&'a [String]>,
+}
+
+/// What a table rebuilt beside itself must keep, where the warehouse cannot copy it (DuckDB).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableShape {
+    /// The `(...)` of its `CREATE TABLE`: columns and constraints.
+    pub definition: String,
+    /// The statements creating its indexes.
+    pub indexes: Vec<String>,
 }
 
 /// A cursor position to read from the destination.

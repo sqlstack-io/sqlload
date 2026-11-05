@@ -425,7 +425,7 @@ async fn plan_table_once(
                 .to_owned(),
         );
     }
-    let route = match table_route(spec, (files.as_ref(), &mode), stage.as_ref(), destination) {
+    let route = match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
         Ok(route) => Some(route),
         Err(problem) => {
             schema = blocked_plan(vec![problem]);
@@ -541,7 +541,7 @@ fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> Writ
 /// What a table's source offers: rows as Arrow, plus the files themselves for a files source, with why the destination must not read them itself.
 fn reader_offer(
     spec: &TableSpec,
-    (read, mode): (Option<&FilesRead>, &WriteMode),
+    read: Option<&FilesRead>,
     stage: Option<&StageRoute>,
 ) -> ReaderOffer {
     let existing_files = spec.files.as_ref().map(|files| FileSet {
@@ -557,7 +557,7 @@ fn reader_offer(
     });
     let direct_blocked = match (read, stage) {
         (Some(read), Some(StageRoute::External(stage))) => {
-            direct_check(spec, (read, read.files.as_slice(), &[]), mode, stage)
+            direct_check(spec, (read, read.files.as_slice(), &[]), stage)
         }
         _ => None,
     };
@@ -577,7 +577,6 @@ fn reader_offer(
 pub(crate) fn direct_check(
     spec: &TableSpec,
     (read, files, refused): (&FilesRead, &[DataFile], &[(String, String)]),
-    mode: &WriteMode,
     stage: &ExternalStage,
 ) -> Option<String> {
     let source = spec.files.as_ref()?;
@@ -601,7 +600,6 @@ pub(crate) fn direct_check(
         columns: &copy_columns(spec, read),
         refused: &all_refused,
         masks: &masks,
-        whole_table: matches!(mode, WriteMode::Replace | WriteMode::Recreate),
         shaped_by_loader: spec.shaped_by_loader,
     })
 }
@@ -661,7 +659,7 @@ pub(crate) fn is_direct(route: Option<&Route>) -> bool {
 /// The route a table's data takes into `destination`; `read` is a files table's planned read.
 pub(crate) fn table_route(
     spec: &TableSpec,
-    read: (Option<&FilesRead>, &WriteMode),
+    read: Option<&FilesRead>,
     stage: Option<&StageRoute>,
     destination: &Destination,
 ) -> Result<Route, String> {

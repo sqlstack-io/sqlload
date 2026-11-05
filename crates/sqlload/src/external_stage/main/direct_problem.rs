@@ -76,11 +76,6 @@ pub fn direct_problem(check: &DirectCheck<'_>) -> Option<String> {
                     "{name} is hashed but is not text in the files; SQLLoad hashes its text"
                 ));
             }
-            MaskMethod::Hash if check.whole_table => {
-                return Some(format!(
-                    "{name} is hashed and the table is rewritten as a whole, so its plain values could not stay in one session's temporary table"
-                ));
-            }
             MaskMethod::Hash => {}
         }
     }
