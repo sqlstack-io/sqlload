@@ -129,6 +129,7 @@ pub(crate) fn delete_insert(from: Option<&str>, to: Option<&str>) -> WriteMode {
         cursor_column: "day".to_owned(),
         from: from.map(str::to_owned),
         to: to.map(str::to_owned),
+        values: Vec::new(),
     }
 }
 

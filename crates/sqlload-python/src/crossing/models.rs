@@ -50,6 +50,8 @@ pub enum PanicSite {
 #[derive(Debug)]
 pub(crate) enum Parsed {
     Batch(RecordBatch),
+    /// `ctx.state` (as JSON) when the piece whose batches came just before crossed.
+    State(String),
     Failed(CrossError),
     Done,
 }
@@ -64,8 +66,8 @@ pub(crate) struct ParseJob {
 /// Hands crossed pieces to the parser threads, registering each in yield order with the thread that passes batches on.
 #[derive(Debug, Clone)]
 pub(crate) struct Dispatch {
-    /// Each piece's batch channel in yield order; `None` marks the end of the generator.
-    pub(crate) order: SyncSender<Option<Receiver<Parsed>>>,
+    /// Each piece's batch channel in yield order, with `ctx.state` when it crossed; `None` marks the end of the generator.
+    pub(crate) order: SyncSender<Option<(Receiver<Parsed>, Option<String>)>>,
     pub(crate) jobs: Sender<ParseJob>,
     /// Holds the byte budget the generator waits on.
     pub(crate) stats: Arc<CrossingStats>,
@@ -182,6 +184,8 @@ pub struct StatsSnapshot {
 #[derive(Debug)]
 pub enum Polled {
     Batch(RecordBatch),
+    /// `ctx.state` (as JSON) once every batch of the rows that crossed with it has come.
+    State(String),
     Failed(CrossError),
     /// Nothing arrived within the timeout.
     Pending,
@@ -209,6 +213,7 @@ impl TableBatches {
                 self.schema = merge_schema(&self.schema, &batch.schema());
                 Polled::Batch(batch)
             }
+            Ok(Parsed::State(state)) => Polled::State(state),
             Ok(Parsed::Failed(error)) => {
                 self.finished = true;
                 Polled::Failed(error)
@@ -247,7 +252,7 @@ impl Iterator for TableBatches {
             match self.poll(Duration::from_secs(3600)) {
                 Polled::Batch(batch) => return Some(Ok(batch)),
                 Polled::Failed(error) => return Some(Err(error)),
-                Polled::Pending => {}
+                Polled::Pending | Polled::State(_) => {}
                 Polled::Finished => return None,
             }
         }

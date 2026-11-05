@@ -8,7 +8,7 @@ use crate::config::models::AuthConfig;
 use crate::files_source::models::{Compression, CsvOptions, FilesEncoding, SourceFormat};
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
-    deserialize_optional_duration, deserialize_optional_keys,
+    deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
 };
 use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
@@ -25,6 +25,9 @@ pub struct ProjectConfig {
     /// The target used when a source names none.
     #[serde(default)]
     pub default_target: Option<String>,
+    /// The most tables loading at once (each table's batches still commit one at a time); `--threads` overrides it.
+    #[serde(default)]
+    pub threads: Option<usize>,
     #[serde(default)]
     pub connections: BTreeMap<String, ConnectionConfig>,
     #[serde(default)]
@@ -143,6 +146,12 @@ impl TargetConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SourceConfig {
     pub kind: SourceKind,
+    /// A Python source declares a `@source.client`, which its tables share; added by discovery.
+    #[serde(default)]
+    pub shared_client: bool,
+    /// Let the tables of a Python source that shares a client load at the same time; off because clients are rarely thread-safe.
+    #[serde(default)]
+    pub parallel_tables: bool,
     /// The connection the source reads; optional for Python sources.
     #[serde(default)]
     pub connection: String,
@@ -277,6 +286,9 @@ pub struct TableSettings {
     /// Where a Python table's position is kept: derived from the data (default) or in the run log.
     #[serde(default)]
     pub state: Option<StateMode>,
+    /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones.
+    #[serde(default, deserialize_with = "deserialize_optional_batch")]
+    pub batch: Option<BatchStep>,
 }
 
 /// One table's settings: everything a source can set, plus what only a table can.
@@ -342,6 +354,17 @@ impl std::fmt::Display for WriteStrategy {
             Self::Replace => "replace",
         })
     }
+}
+
+/// A cursor table's `batch`: each run reads and commits one cursor window of this size at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchStep {
+    /// A date or timestamp cursor's window, such as `"1d"`.
+    Duration(std::time::Duration),
+    /// An integer cursor's window.
+    Integer(u64),
+    /// `"whole"`: no windows and no ordered read; each read commits once.
+    Whole,
 }
 
 /// Where a table's position between runs is kept.

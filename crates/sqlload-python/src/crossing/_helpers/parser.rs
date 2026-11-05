@@ -52,11 +52,11 @@ pub(crate) fn start_parsers(
 }
 
 impl Dispatch {
-    /// Queue `crossed` for parsing in yield order, waiting while the queue is full; `false` once the consumer has gone. Call it without the GIL.
-    pub(crate) fn send(&self, crossed: Crossed) -> bool {
+    /// Queue `crossed` (with `ctx.state` as it crossed, for logged tables) for parsing in yield order, waiting while the queue is full; `false` once the consumer has gone. Call it without the GIL.
+    pub(crate) fn send(&self, crossed: Crossed, state: Option<String>) -> bool {
         self.stats.budget.acquire(crossed.queued_bytes());
         let (piece_sender, piece_receiver) = sync_channel(0);
-        match self.order.send(Some(piece_receiver)) {
+        match self.order.send(Some((piece_receiver, state))) {
             Ok(()) => match self.jobs.send(ParseJob {
                 crossed,
                 sender: piece_sender,
@@ -121,10 +121,13 @@ fn work(jobs: &Mutex<Receiver<ParseJob>>, stats: &Arc<CrossingStats>, panic_at: 
     }
 }
 
-/// Pass each piece's batches on in yield order, stopping after the first error, at the end marker, or when the consumer has gone.
-fn collect(order: Receiver<Option<Receiver<Parsed>>>, sender: &SyncSender<Parsed>) {
+/// Pass each piece's batches on in yield order, then the `ctx.state` it crossed with, stopping after the first error, at the end marker, or when the consumer has gone.
+fn collect(
+    order: Receiver<Option<(Receiver<Parsed>, Option<String>)>>,
+    sender: &SyncSender<Parsed>,
+) {
     for piece in order {
-        let Some(piece) = piece else {
+        let Some((piece, state)) = piece else {
             let _ = sender.send(Parsed::Done);
             return;
         };
@@ -135,7 +138,15 @@ fn collect(order: Receiver<Option<Receiver<Parsed>>>, sender: &SyncSender<Parsed
                         return;
                     }
                 }
-                Ok(Parsed::Done) => break,
+                Ok(Parsed::Done) => {
+                    if let Some(state) = state
+                        && let Err(SendError(_)) = sender.send(Parsed::State(state))
+                    {
+                        return;
+                    }
+                    break;
+                }
+                Ok(Parsed::State(_)) => {}
                 Ok(failed @ Parsed::Failed(_)) => {
                     let _ = sender.send(failed);
                     return;

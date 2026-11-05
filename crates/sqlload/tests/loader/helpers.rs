@@ -22,9 +22,9 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, MetadataRoundTripTestCase,
-    ParquetFile, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
-    WrittenRun,
+    BatchedScenarioTestCase, FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase,
+    LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile, ScenarioTestCase,
+    TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -107,17 +107,108 @@ pub(crate) async fn load_all(
     plan: &ProjectPlan,
     destinations: &BTreeMap<String, Destination>,
 ) -> Result<(), String> {
-    let options = PlanOptions::default();
+    load_with(project, plan, destinations, &PlanOptions::default()).await
+}
+
+/// Load every table of `plan` with `options`; every failed table is in the error.
+async fn load_with(
+    project: &ProjectConfig,
+    plan: &ProjectPlan,
+    destinations: &BTreeMap<String, Destination>,
+    options: &PlanOptions,
+) -> Result<(), String> {
     let run = LoadRun {
         project,
         destinations,
         host: None,
-        options: &options,
+        options,
     };
-    load_tables(&run, plan)
+    let failures: Vec<String> = load_tables(&run, plan)
         .await
         .into_iter()
-        .try_for_each(|outcome| outcome.loaded.map(|_| ()))
+        .filter_map(|outcome| {
+            outcome
+                .loaded
+                .err()
+                .map(|reason| format!("{}: {reason}", outcome.table))
+        })
+        .collect();
+    failures
+        .is_empty()
+        .then_some(())
+        .ok_or_else(|| failures.join("\n"))
+}
+
+/// Run a batched scenario on fresh source tables and a fresh DuckDB; returns each run's outcome as `<load error, or ok> => <check query result>`, the error cut to its first two parts (`table: what failed`), which stay the same from run to run.
+pub(crate) async fn run_batched(
+    client: &Client,
+    port: u16,
+    test_case: &BatchedScenarioTestCase,
+) -> Result<Vec<String>, String> {
+    client
+        .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
+        .await
+        .map_err(|error| error.to_string())?;
+    client
+        .batch_execute(test_case.setup)
+        .await
+        .map_err(|error| error.to_string())?;
+    let text = duckdb_project(port, test_case.settings);
+    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
+        return Err("no DuckDB destination".to_owned());
+    };
+    let mut outcomes: Vec<String> = Vec::new();
+    for run in test_case.runs {
+        client
+            .batch_execute(run.source_change)
+            .await
+            .map_err(|error| error.to_string())?;
+        let hand_edits: Vec<String> = run
+            .destination_change
+            .split_terminator(';')
+            .map(str::to_owned)
+            .collect();
+        execute_statements(duckdb, hand_edits)
+            .await
+            .map_err(|error| error.to_string())?;
+        let options = PlanOptions {
+            end_cursor: run.end_cursor.map(str::to_owned),
+            batch_bytes: test_case.batch_bytes,
+            threads: test_case.threads,
+            ..PlanOptions::default()
+        };
+        let plan = plan_project(&project, &destinations, &options)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (lines, ok) = render_plan(&plan);
+        ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+        apply_project(&plan, &destinations)
+            .await
+            .map_err(|error| error.to_string())?;
+        let error = load_with(&project, &plan, &destinations, &options)
+            .await
+            .err()
+            .map_or_else(
+                || "ok".to_owned(),
+                |error| error.splitn(3, ": ").take(2).collect::<Vec<_>>().join(": "),
+            );
+        let result = query_text(duckdb, run.check_query.to_owned())
+            .await
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        let shown = lines
+            .iter()
+            .filter(|_| !run.show.is_empty())
+            .filter_map(|line| line.split_once(run.show))
+            .map(|(_, rest)| format!(" | {}{rest}", run.show))
+            .collect::<String>();
+        outcomes.push(format!("{error} => {result}{shown}"));
+    }
+    Ok(outcomes)
 }
 
 /// The rendered plan, or the error that stopped it.
@@ -236,6 +327,63 @@ fn parquet_bytes(file: &ParquetFile) -> Result<bytes::Bytes, String> {
     writer.write(&batch).map_err(|error| error.to_string())?;
     writer.close().map_err(|error| error.to_string())?;
     Ok(bytes::Bytes::from(buffer))
+}
+
+/// A `delete_insert` files source into DuckDB with one partition of `test_case.files` files that alone have an `extra` column (outside the newest files the plan samples), then that partition's neighbour rewritten; the check query's result.
+pub(crate) async fn run_large_partition(
+    directory: &std::path::Path,
+    test_case: &LargePartitionTestCase,
+) -> Result<Option<String>, String> {
+    let wide: Vec<(String, ParquetFile)> = (1..=test_case.files)
+        .map(|id| {
+            (
+                format!("day=2026-11-01/part-{id:05}.parquet"),
+                ParquetFile {
+                    key: "",
+                    ids: &[],
+                    score: id as f64,
+                    extra: Some("x"),
+                },
+            )
+        })
+        .collect();
+    let mut first: Vec<(&str, bytes::Bytes)> = Vec::new();
+    for (key, file) in &wide {
+        first.push((
+            key.as_str(),
+            parquet_bytes(&ParquetFile { ids: &[7], ..*file })?,
+        ));
+    }
+    let late = ParquetFile {
+        key: "day=2026-11-02/part-0.parquet",
+        ids: &[8],
+        score: 0.0,
+        extra: None,
+    };
+    first.push((late.key, parquet_bytes(&late)?));
+    let rewritten = ParquetFile {
+        ids: &[8, 9],
+        ..late
+    };
+    let scenario = FilesScenario {
+        description: test_case.description,
+        store: local_store,
+        settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\nbatch = \"1d\"\n",
+        runs: vec![
+            WrittenRun {
+                files: first,
+                expected_error: "",
+                expected_plan: "2 batches of whole partitions (up to 1000 files or about 1 GB each); each batch's footers are combined",
+            },
+            WrittenRun {
+                files: vec![(rewritten.key, parquet_bytes(&rewritten)?)],
+                expected_error: "",
+                expected_plan: test_case.expected_plan,
+            },
+        ],
+        check_query: "SELECT count(*) || ',' || count(extra) || ',' || count(DISTINCT _sqlload_source_file) || ',' || string_agg(DISTINCT CAST(id AS VARCHAR), '/' ORDER BY CAST(id AS VARCHAR)) FROM raw.scores",
+    };
+    run_written_files("", directory, scenario).await
 }
 
 /// Run a files scenario: write each run's files under a fresh `scores-<uuid>/` folder, then plan, apply and load into a fresh DuckDB.

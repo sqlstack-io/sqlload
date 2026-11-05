@@ -8,6 +8,7 @@ import importlib
 import json
 import logging
 import sys
+import threading
 import traceback
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
@@ -26,6 +27,8 @@ STANDALONE_TABLE_NAME = "{table}"
 _tables: dict[str, Table] = {}
 _contexts: dict[str, Context] = {}
 _clients: dict[str, Any] = {}
+#: Held while a client is built, since tables of one source load at the same time.
+_clients_lock = threading.Lock()
 
 
 class DiscoveryError(Exception):
@@ -98,6 +101,20 @@ def start_table(request: str) -> Iterator[Any]:
 	return iter(()) if yielded is None else iter(yielded)
 
 
+def current_state(table: str) -> str | None:
+	"""The JSON `ctx.state` was assigned one assignment before its latest, while the table function runs: rows crossing now commit with it.
+
+	Rows a function yields may cross before or after it moves `ctx.state` past them, so only the
+	previous value is sure to cover every row crossed so far, whether the state is set before or
+	after the rows it covers; a resumed run then never skips rows, and may load up to about two
+	pages again. Each assignment is kept as JSON, so re-assigning a mutated object leaves the
+	previous value as it was."""
+	ctx = _contexts.get(table)
+	if ctx is None or not ctx._logged:
+		return None
+	return ctx._previous_assigned_state
+
+
 def table_state(table: str) -> str | None:
 	"""The position the table function left in `ctx.state`, as JSON, when it differs from the one it started with.
 
@@ -168,6 +185,8 @@ def _source_declaration(source: Source, relative: str) -> dict[str, Any]:
 	settings: dict[str, Any] = {key: _setting(value) for key, value in source.settings.items() if value is not None}
 	if source.description is not None:
 		settings["description"] = source.description
+	if source.client_factory is not None:
+		settings["shared_client"] = True
 	settings["tables"] = {table.name: _table_settings(table) for table in source.tables}
 	return {"name": source.name, "module": relative, "settings": settings}
 
@@ -196,10 +215,11 @@ def _setting(value: Any) -> Any:
 
 def _shared_client(source: Source) -> Any:
 	def build(ctx: Context) -> Any:
-		if source.name not in _clients:
-			assert source.client_factory is not None
-			_clients[source.name] = source.client_factory(ctx)
-		return _clients[source.name]
+		with _clients_lock:
+			if source.name not in _clients:
+				assert source.client_factory is not None
+				_clients[source.name] = source.client_factory(ctx)
+			return _clients[source.name]
 
 	return build
 

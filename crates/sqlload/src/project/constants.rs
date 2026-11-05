@@ -10,6 +10,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "on_schema_change",
     "auto_widen",
     "type_change_rebuild",
+    "batch",
 ];
 
 /// Keys only a source may use.
@@ -48,6 +49,8 @@ pub const PYTHON_SOURCE_KEYS: &[&str] = &[
     "exclude_columns",
     "allow_columns",
     "mask_key",
+    "shared_client",
+    "parallel_tables",
     "tables",
 ];
 
@@ -91,3 +94,6 @@ pub const DEFAULT_TABLE_NAME: &str = "{source}__{table}";
 
 /// The destination table name template for a files source, which has one table.
 pub const DEFAULT_FILES_TABLE_NAME: &str = "{source}";
+
+/// The `batch` value that opts a table out of windows and ordered reads.
+pub const WHOLE_BATCH: &str = "whole";

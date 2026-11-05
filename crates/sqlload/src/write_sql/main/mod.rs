@@ -1,4 +1,5 @@
 pub mod alter_statements;
+pub mod commit_statements;
 pub mod create_schema;
 pub mod create_table;
 pub mod cursor_bound;
@@ -8,7 +9,10 @@ pub mod display_name;
 pub mod loaded_files_query;
 pub mod qualified_name;
 pub mod sql_literal;
+pub mod staging_changes;
+pub mod staging_id;
 pub mod staging_table;
+pub mod staging_tables_query;
+pub mod stale_staging;
 pub mod stored_name;
 pub mod swap_table;
-pub mod write_statements;

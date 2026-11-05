@@ -31,6 +31,7 @@ pub fn open_writer(request: WriterRequest<'_>) -> Result<FilesWriter, String> {
         cursor_column: request.cursor_column.map(str::to_owned),
         schema: Arc::new(Schema::new(fields)),
         load_id: request.load_id.to_owned(),
+        file_id: request.file_id.to_owned(),
         loaded_at_micros,
         open: BTreeMap::new(),
         written: Vec::new(),

@@ -2,6 +2,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
+use crate::project::constants::WHOLE_BATCH;
+use crate::project::models::BatchStep;
+
 /// Deserialize an optional duration written as text such as `1h` or `2d`.
 pub(crate) fn deserialize_optional_duration<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -9,6 +12,36 @@ pub(crate) fn deserialize_optional_duration<'de, D: Deserializer<'de>>(
     Option::<String>::deserialize(deserializer)?
         .map(|text| humantime::parse_duration(&text).map_err(serde::de::Error::custom))
         .transpose()
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum BatchText {
+    Duration(String),
+    Integer(u64),
+}
+
+/// Deserialize a `batch`: a duration written as text (`"1d"`), a positive integer step, or `"whole"`.
+pub(crate) fn deserialize_optional_batch<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BatchStep>, D::Error> {
+    match Option::<BatchText>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(BatchText::Integer(0)) => {
+            Err(serde::de::Error::custom("batch must be a positive step"))
+        }
+        Some(BatchText::Integer(step)) => Ok(Some(BatchStep::Integer(step))),
+        Some(BatchText::Duration(text)) if text == WHOLE_BATCH => Ok(Some(BatchStep::Whole)),
+        Some(BatchText::Duration(text)) => match humantime::parse_duration(&text) {
+            Ok(step) if step.is_zero() => Err(serde::de::Error::custom(
+                "batch must be a positive duration",
+            )),
+            Ok(step) => Ok(Some(BatchStep::Duration(step))),
+            Err(error) => Err(serde::de::Error::custom(format!(
+                "batch {text:?} is not a duration such as \"1d\" or \"whole\": {error}"
+            ))),
+        },
+    }
 }
 
 #[derive(Deserialize)]

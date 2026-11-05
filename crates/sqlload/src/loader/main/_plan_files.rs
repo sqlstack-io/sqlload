@@ -7,13 +7,15 @@ use crate::files_destination::main::write_notes::write_notes;
 use crate::files_destination::models::{FilesDestination, TableFiles};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
+use crate::loader::_helpers::table_plan::{CommitRequest, commit_rule};
 use crate::loader::_helpers::table_plan::{blocked_plan, blocked_table, read_window};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_context::files_context;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_files_window::files_window;
 use crate::loader::models::{
-    FilesContext, FilesOutput, FilesWindowRequest, LiveFiles, PlanOptions, TablePlan, TableSpec,
+    CommitRule, FilesContext, FilesOutput, FilesWindowRequest, LiveFiles, PlanOptions, TablePlan,
+    TableSpec, WholeReason,
 };
 use crate::project::models::FilesFormat;
 use crate::schema_plan::models::LiveColumn;
@@ -72,6 +74,23 @@ pub(in crate::loader) async fn plan_files_table(
         None => (None, WriteMode::Append, None),
     };
     let notes = write_notes(&mode);
+    let commits = commit_rule(&CommitRequest {
+        spec,
+        window: read.as_ref(),
+        cursor_type: cursor_type.as_ref(),
+        read_columns: &read_columns,
+        files: None,
+        mode: &mode,
+    });
+    let commits = match commits {
+        Ok(commits) => commits,
+        Err(problem) => {
+            if schema.blocked.is_none() {
+                schema = blocked_plan(vec![problem]);
+            }
+            CommitRule::Whole(WholeReason::Blocked)
+        }
+    };
     Ok(TablePlan {
         spec: spec.clone(),
         read_columns,
@@ -85,6 +104,7 @@ pub(in crate::loader) async fn plan_files_table(
         files: None,
         exists: state.exists,
         logged: None,
+        commits,
         output: Some(FilesOutput {
             path,
             format: FilesFormat::Parquet,

@@ -27,3 +27,35 @@ pub(crate) fn columns() -> Vec<DesiredColumn> {
     columns.extend(metadata_columns());
     columns
 }
+
+/// The statements changing the staging table made for `id int, score int` to hold `new_types` (`id`, `score`, then `note`).
+pub(crate) fn changed_staging(
+    new_types: &[ColumnType],
+    warehouse: crate::column_types::models::Warehouse,
+) -> Vec<String> {
+    let staging = TableName {
+        table: "app__accounts__sqlload_staging_load1".to_owned(),
+        ..accounts()
+    };
+    let column = |name: &str, column_type: ColumnType| DesiredColumn {
+        name: name.to_owned(),
+        column_type,
+        origin: ColumnOrigin::Source,
+    };
+    let old = vec![
+        column("id", ColumnType::Int),
+        column("score", ColumnType::Int),
+    ];
+    let new: Vec<DesiredColumn> = ["id", "score", "note"]
+        .iter()
+        .zip(new_types)
+        .map(|(name, column_type)| column(name, column_type.clone()))
+        .collect();
+    crate::write_sql::main::staging_changes::staging_changes(&staging, (&old, &new), warehouse)
+}
+
+/// 2026-11-05 10:00 UTC.
+pub(crate) fn ten_oclock() -> Result<chrono::NaiveDateTime, String> {
+    chrono::NaiveDateTime::parse_from_str("2026-11-05 10:00:00", "%Y-%m-%d %H:%M:%S")
+        .map_err(|error| error.to_string())
+}

@@ -10,9 +10,6 @@ pub const INCLUSIVE_BOUND: &str = ">=";
 /// The comparison reading only values after a cursor's lower bound.
 pub const EXCLUSIVE_BOUND: &str = ">";
 
-/// Arrow bytes of yielded Python data held in memory before they are written to a temporary file as one chunk; replayed chunks become the staged batches.
-pub const SPILL_CHUNK_BYTES: usize = 128 * 1024 * 1024;
-
 /// The source type label Python columns carry.
 pub const PYTHON_COLUMN_TYPE: &str = "python";
 
@@ -33,3 +30,15 @@ pub const EMPTY_REPLACE_PROBLEM: &str = "yielded no rows; replace would empty {t
 
 /// Why a Python table with an enforced contract needs declared columns.
 pub const ENFORCED_UNDECLARED_PROBLEM: &str = "contract enforced needs declared columns: the first load would create a table with only metadata columns";
+
+/// The most tables loading at once when neither `threads` nor `--threads` says.
+pub const DEFAULT_THREADS: usize = 4;
+
+/// The JSON a table function's `ctx.state` holds when it holds nothing.
+pub const NO_STATE: &str = "null";
+
+/// Starts the one snapshot a Postgres table's cursor windows are all read in.
+pub const SNAPSHOT_BEGIN: &str = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
+
+/// Blocking threads beyond one per table loading at once, for the reads and encoding those tables wait on.
+pub const SPARE_BLOCKING_THREADS: usize = 64;

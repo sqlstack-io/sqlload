@@ -129,6 +129,7 @@ pub(crate) fn build_spec(
         });
     let mut problems = strategy_problems(strategy, &unique_key, cursor.as_ref());
     problems.extend(column_reference_problems(table, overrides));
+    let batch = layered(&settings.batch, &defaults.batch).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
         let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.column == *masked);
@@ -170,6 +171,8 @@ pub(crate) fn build_spec(
         strategy_origin,
         unique_key,
         cursor,
+        batch,
+        source_end: None,
         pinned: columns.pinned,
         excluded_columns: columns.excluded,
         masked: MaskRules {

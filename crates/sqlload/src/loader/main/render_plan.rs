@@ -66,9 +66,11 @@ pub fn render_plan(plan: &ProjectPlan) -> (Vec<String>, bool) {
             .map(|problem| vec![problem.clone()])
             .collect(),
     ));
-    let warnings: Vec<Vec<String>> = ready
+    let warnings: Vec<Vec<String>> = plan
+        .warnings
         .iter()
-        .flat_map(|table| warning_lines(table))
+        .map(|warning| vec![warning.clone()])
+        .chain(ready.iter().flat_map(|table| warning_lines(table)))
         .collect();
     lines.extend(tree(
         &format!("Warnings ({})", warnings.len()),

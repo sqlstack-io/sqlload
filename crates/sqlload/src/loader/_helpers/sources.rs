@@ -11,28 +11,32 @@ use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
 use crate::files_source::models::{
-    FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks,
+    BatchFooters, DataFile, FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat,
+    TextChecks,
 };
 use crate::loader::_helpers::destination::text_values;
 use crate::loader::_helpers::python::python_tables;
-use crate::loader::_helpers::python::replay_batches;
 use crate::loader::_helpers::resolve::source_target;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    Destination, FilesSource, PlanOptions, SourceReader, TablePlan, TableSpec,
+    Destination, FilesSource, PlanOptions, SourceEnd, SourceReader, TablePlan, TableSpec,
 };
+use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
+use crate::postgres_source::main::cursor_end::cursor_end;
 use crate::postgres_source::main::read_catalog::read_catalog;
 use crate::postgres_source::models::{
     CopyRequest, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable, WireType,
 };
 use crate::project::models::{
-    ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride, WriteStrategy,
+    BatchStep, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride,
+    WriteStrategy,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::similar_names::main::close_name::close_name;
+use crate::similar_names::main::nearest_name::nearest_name;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 use crate::write_sql::main::loaded_files_query::loaded_files_query;
@@ -154,6 +158,17 @@ pub(crate) async fn discover_files_table(
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
     }
+    files_source_parts(source_name, source, warehouse, (location, table))
+}
+
+/// A files source's table and files from the files found: the file columns, partition columns and source-file columns as one source table.
+pub(crate) fn files_source_parts(
+    source_name: &str,
+    source: &SourceConfig,
+    warehouse: Warehouse,
+    (location, table): (Location, FilesTable),
+) -> Result<(SourceTable, FilesSource), LoaderError> {
+    let encoding = source.files_encoding();
     let mut partition_types: Vec<(String, ColumnType)> = Vec::new();
     for (name, text) in &source.partition_columns {
         let parsed = parse_type(text, &[warehouse])
@@ -226,6 +241,7 @@ pub(crate) async fn discover_files_table(
         name: source_name.to_owned(),
         columns,
         primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
         estimated_rows: -1,
         estimated_bytes: table
             .files
@@ -453,10 +469,26 @@ pub(crate) async fn plan_files(
     }))
 }
 
-/// Read `table`'s data from `reader`, passing each batch to `on_batch`; returns the row count.
+/// Which part of a table's planned read one pass reads: a cursor window's filter, an order, or some of a files source's files.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ReadPart {
+    /// The Postgres filter; `None` reads the plan's.
+    pub(crate) filter: Option<String>,
+    /// `ORDER BY` this quoted column.
+    pub(crate) order_by: Option<String>,
+    /// The files to read; `None` reads every planned file.
+    pub(crate) files: Option<Vec<DataFile>>,
+    /// The Parquet footers already read for `files`.
+    pub(crate) footers: BatchFooters,
+    /// A smaller byte cap for the source's batches than the usual 64 MiB (the hidden `--batch-bytes`, for tests).
+    pub(crate) batch_bytes: Option<usize>,
+}
+
+/// Read `part` of `table`'s data from `reader`, passing each batch to `on_batch`; returns the row count.
 pub(crate) async fn read_source(
     reader: &SourceReader,
     table: &TablePlan,
+    part: ReadPart,
     on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), String>,
 ) -> Result<u64, LoaderError> {
     match (reader, &table.files) {
@@ -464,20 +496,105 @@ pub(crate) async fn read_source(
             let request = CopyRequest {
                 table: &table.spec.source_table,
                 columns: table.read_columns.clone(),
-                filter: table.source_filter.clone(),
+                filter: part.filter.or_else(|| table.source_filter.clone()),
+                order_by: part.order_by,
                 batch_rows: SOURCE_BATCH_ROWS,
+                batch_bytes: part
+                    .batch_bytes
+                    .map_or(DEFAULT_BATCH_BYTES, |bytes| bytes.min(DEFAULT_BATCH_BYTES)),
             };
             Ok(copy_table(client, request, on_batch).await?)
         }
         (SourceReader::Files(folder), Some(files)) => {
-            Ok(read_files(folder, files, on_batch).await?)
+            let read = match part.files.clone() {
+                Some(subset) => FilesRead {
+                    files: subset,
+                    ..files.clone()
+                },
+                None => files.clone(),
+            };
+            Ok(read_files(folder, &read, &part.footers, on_batch).await?)
         }
-        (SourceReader::Batches(spilled), _) => replay_batches(spilled, table, on_batch).await,
         (SourceReader::Files(_), None) => Err(LoaderError::Invalid(format!(
             "{}: a files source has no files planned",
             table.spec.source_table.qualified_name()
         ))),
     }
+}
+
+/// `specs` with `source_end` filled for the selected Postgres tables whose integer `batch` has no `--end-cursor-int` to end its windows: the cursor's current maximum, read once at plan; the source is connected only when one needs it.
+pub(crate) async fn source_ends(
+    project: &ProjectConfig,
+    (source_name, source): (&str, &SourceConfig),
+    mut specs: Vec<TableSpec>,
+    options: &PlanOptions,
+) -> Result<Vec<TableSpec>, LoaderError> {
+    if source.kind != SourceKind::Postgres || options.end_cursor.is_some() {
+        return Ok(specs);
+    }
+    let mut client: Option<Client> = None;
+    for spec in &mut specs {
+        let integer_cursor = spec.cursor.as_ref().and_then(|cursor| {
+            spec.source_table
+                .columns
+                .iter()
+                .find(|column| column.name == cursor.column)
+                .filter(|column| {
+                    matches!(
+                        column.column_type,
+                        Ok(ColumnType::Int | ColumnType::SmallInt)
+                    )
+                })
+                .map(|column| column.name.clone())
+        });
+        let wanted = matches!(spec.batch, Some(BatchStep::Integer(_)))
+            && selected(
+                &options.select,
+                source_name,
+                &spec.destination.table,
+                &spec.source_table.qualified_name(),
+            );
+        let Some(column) = integer_cursor.filter(|_| wanted) else {
+            continue;
+        };
+        if client.is_none() {
+            client = Some(connect_source(project, source).await?);
+        }
+        let Some(connected) = &client else {
+            continue;
+        };
+        spec.source_end = Some(
+            match cursor_end(connected, &spec.source_table, &column).await? {
+                Some((maximum, end)) => SourceEnd::Maximum { maximum, end },
+                None => SourceEnd::Empty,
+            },
+        );
+    }
+    Ok(specs)
+}
+
+/// A warning for each selector matching no source or table, with the nearest name: `load` would otherwise say only `0 selected`.
+pub(crate) fn unmatched_selectors(
+    project: &ProjectConfig,
+    options: &PlanOptions,
+    names: &[(String, String)],
+) -> Vec<String> {
+    let known: Vec<&str> = names
+        .iter()
+        .flat_map(|(destination, source_table)| [destination.as_str(), source_table.as_str()])
+        .chain(project.sources.keys().map(String::as_str))
+        .collect();
+    options
+        .select
+        .iter()
+        .filter(|selector| !known.contains(&selector.as_str()))
+        .map(
+            |selector| match nearest_name(selector, known.iter().copied()) {
+                Some(nearest) => format!("no table matches {selector}; did you mean {nearest}?"),
+                None => format!("no table matches {selector}"),
+            },
+        )
+        .collect()
 }
 
 /// Whether `selectors` pick a table, by source name, destination name or `schema.table`.

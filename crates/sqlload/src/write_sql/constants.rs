@@ -12,3 +12,12 @@ pub const CURSOR_TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.6f";
 
 /// Timestamps without an offset accepted on the command line.
 pub const NAIVE_TIMESTAMP_FORMATS: &[&str] = &["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"];
+
+/// Hours after which a staging table is a crashed load's, dropped at the start of the next load.
+pub const STALE_STAGING_HOURS: i64 = 24;
+
+/// How a staging table's name holds its load's start time.
+pub const STAGING_TIME_FORMAT: &str = "%Y%m%d%H%M%S";
+
+/// The length of that time.
+pub const STAGING_TIME_DIGITS: usize = 14;

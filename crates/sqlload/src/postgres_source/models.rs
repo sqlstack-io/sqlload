@@ -20,6 +20,8 @@ pub struct SourceTable {
     pub name: String,
     pub columns: Vec<SourceColumn>,
     pub primary_key: Vec<String>,
+    /// Columns that lead a btree index, so reading the table in their order is cheap.
+    pub indexed_columns: Vec<String>,
     /// The planner's row estimate (`pg_class.reltuples`); negative when never analysed.
     pub estimated_rows: i64,
     pub estimated_bytes: i64,
@@ -107,5 +109,9 @@ pub struct CopyRequest<'a> {
     pub columns: Vec<ReadColumn>,
     /// A condition such as `"updated_at" >= '2026-11-04 09:12:03+00'`, already rendered and quoted.
     pub filter: Option<String>,
+    /// `ORDER BY` this column (a quoted name), for reads that commit along the way in cursor order.
+    pub order_by: Option<String>,
     pub batch_rows: usize,
+    /// A batch ends once its rows hold about this many bytes, even with fewer than `batch_rows` rows.
+    pub batch_bytes: usize,
 }

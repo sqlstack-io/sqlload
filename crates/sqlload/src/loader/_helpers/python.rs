@@ -1,49 +1,86 @@
+use crate::batch_plan::main::window_at::window_at;
+use crate::batch_plan::models::CursorWindow;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
+use crate::loader::_helpers::destination::execute_ddl;
 use crate::loader::_helpers::destination::single_text;
-use crate::loader::constants::{
-    EMPTY_REPLACE_PROBLEM, PYTHON_COLUMN_TYPE, SPILL_CHUNK_BYTES, UNKNOWN_CURSOR_TYPE,
-    UTC_OFFSET_SUFFIX,
-};
+use crate::loader::_helpers::publish::staged_columns;
+use crate::loader::_helpers::resolve::resolve_tables;
+use crate::loader::_helpers::run_log::log_empty_run;
+use crate::loader::_helpers::run_log::run_entry;
+use crate::loader::_helpers::table_plan::replan_columns;
+use crate::loader::_helpers::table_plan::schema_statements;
+use crate::loader::constants::EMPTY_REPLACE_PROBLEM;
+use crate::loader::constants::NO_DATA_NOTE;
+use crate::loader::constants::NO_STATE;
+use crate::loader::constants::PYTHON_COLUMN_TYPE;
+use crate::loader::constants::UNKNOWN_CURSOR_TYPE;
+use crate::loader::constants::UTC_OFFSET_SUFFIX;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{
-    Destination, PythonTable, ReadWindow, SpilledBatches, TablePlan, TableSpec,
-};
-use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
+use crate::loader::models::CommitRange;
+use crate::loader::models::CommitRule;
+use crate::loader::models::Destination;
+use crate::loader::models::Publisher;
+use crate::loader::models::PythonFeed;
+use crate::loader::models::PythonLoad;
+use crate::loader::models::PythonTable;
+use crate::loader::models::ReadWindow;
+use crate::loader::models::TableLoaded;
+use crate::loader::models::TablePlan;
+use crate::loader::models::TableSpec;
+use crate::postgres_source::models::PgType;
+use crate::postgres_source::models::SourceColumn;
+use crate::postgres_source::models::SourceTable;
 use crate::project::constants::FILES_CONNECTION_KINDS;
-use crate::project::models::{ProjectConfig, SourceConfig};
+use crate::project::models::ProjectConfig;
+use crate::project::models::SourceConfig;
+use crate::python_sources::models::CursorRead;
 use crate::python_sources::models::TableRead;
-use crate::python_sources::types::{BatchStream, PythonHost};
+use crate::python_sources::types::BatchStream;
+use crate::python_sources::types::PythonHost;
+use crate::python_sources::types::Streamed;
 use crate::row_batches::main::conform_batch::conform_batch;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
-use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
-use crate::schema_plan::models::{LiveColumn, TableAction};
+use crate::schema_plan::constants::LOAD_ID_COLUMN;
+use crate::schema_plan::constants::LOADED_AT_COLUMN;
+use crate::schema_plan::models::LiveColumn;
+use crate::schema_plan::models::TableAction;
 use crate::similar_names::main::close_name::close_name;
 use crate::write_sql::constants::CURSOR_TIMESTAMP_FORMAT;
 use crate::write_sql::main::cursor_text::cursor_text;
 use crate::write_sql::main::display_name::display_name;
 use crate::write_sql::main::qualified_name::qualified_name;
+use crate::write_sql::main::staging_changes::staging_changes;
 use crate::write_sql::main::stored_name::stored_name;
 use crate::write_sql::models::WriteMode;
 use arrow_array::Array;
-use arrow_array::{
-    ArrayRef, Date32Array, RecordBatch, Scalar, StringArray, TimestampMicrosecondArray,
-};
-use arrow_cast::cast::{CastOptions, cast_with_options};
-use arrow_cast::display::{ArrayFormatter, FormatOptions};
-use arrow_ipc::reader::FileReader;
-use arrow_ipc::writer::FileWriter;
-use arrow_ord::cmp::{gt, gt_eq, lt};
-use arrow_ord::sort::{SortOptions, sort_to_indices};
-use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
-use arrow_select::concat::concat_batches;
+use arrow_array::ArrayRef;
+use arrow_array::Date32Array;
+use arrow_array::RecordBatch;
+use arrow_array::Scalar;
+use arrow_array::StringArray;
+use arrow_array::TimestampMicrosecondArray;
+use arrow_cast::cast::CastOptions;
+use arrow_cast::cast::cast_with_options;
+use arrow_cast::display::ArrayFormatter;
+use arrow_cast::display::FormatOptions;
+use arrow_ord::cmp::gt;
+use arrow_ord::cmp::gt_eq;
+use arrow_ord::cmp::lt;
+use arrow_ord::sort::SortOptions;
+use arrow_ord::sort::sort_to_indices;
+use arrow_schema::DataType;
+use arrow_schema::Field;
+use arrow_schema::Schema;
+use arrow_schema::SchemaRef;
+use arrow_schema::TimeUnit;
 use arrow_select::filter::filter_record_batch;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDate;
+use chrono::NaiveDateTime;
 use std::collections::BTreeSet;
-use std::fs::File;
 use std::sync::Arc;
 
 /// A Python source's tables as planning sees them before any data: the declared (`columns`) and masked columns only.
@@ -61,6 +98,7 @@ pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
             name: name.clone(),
             columns,
             primary_key: Vec::new(),
+            indexed_columns: Vec::new(),
             estimated_rows: -1,
             estimated_bytes: -1,
         });
@@ -370,143 +408,28 @@ pub(crate) async fn final_state(
         .map_err(LoaderError::Invalid)
 }
 
-/// Read every batch the table function yields into temporary Arrow IPC files of about [`SPILL_CHUNK_BYTES`] each, merging their schemas; the first error stops the read.
-pub(crate) async fn spill_batches(
-    mut stream: Box<dyn BatchStream>,
-) -> Result<SpilledBatches, LoaderError> {
-    let directory = tempfile::Builder::new()
-        .prefix("sqlload-python-")
-        .tempdir()
-        .map_err(|error| LoaderError::Invalid(format!("cannot create a spill folder: {error}")))?;
-    let mut spill = Spill {
-        merged: Schema::empty(),
-        pending: Vec::new(),
-        pending_bytes: 0,
-        chunks: Vec::new(),
-        rows: 0,
-    };
-    loop {
-        let (returned, next) = tokio::task::spawn_blocking(move || {
-            let next = stream.next_batch();
-            (stream, next)
-        })
-        .await
-        .map_err(|error| {
-            LoaderError::Invalid(format!("the table function's thread failed: {error}"))
-        })?;
-        stream = returned;
-        match next {
-            None => break,
-            Some(Err(reason)) => return Err(LoaderError::Invalid(reason)),
-            Some(Ok(batch)) => spill.add(batch, directory.path())?,
-        }
-    }
-    spill.write_chunk(directory.path())?;
-    let null_columns: BTreeSet<String> = spill
-        .merged
-        .fields()
-        .iter()
-        .filter(|field| *field.data_type() == DataType::Null)
-        .map(|field| field.name().clone())
-        .collect();
-    Ok(SpilledBatches {
-        directory,
-        chunks: spill.chunks,
-        schema: Arc::new(settled_schema(&spill.merged)),
-        null_columns,
-        rows: spill.rows,
-    })
-}
-
-/// Batches waiting to be written as one chunk, and the chunks written.
-struct Spill {
-    merged: Schema,
-    pending: Vec<RecordBatch>,
-    pending_bytes: usize,
-    chunks: Vec<std::path::PathBuf>,
-    rows: u64,
-}
-
-impl Spill {
-    fn add(&mut self, batch: RecordBatch, directory: &std::path::Path) -> Result<(), LoaderError> {
-        self.merged = merge_schema(&self.merged, &batch.schema());
-        self.rows += batch.num_rows() as u64;
-        self.pending_bytes += batch.get_array_memory_size();
-        self.pending.push(batch);
-        match self.pending_bytes >= SPILL_CHUNK_BYTES {
-            true => self.write_chunk(directory),
-            false => Ok(()),
-        }
-    }
-
-    /// Write the pending batches as one batch in one IPC file, in the schema merged so far.
-    fn write_chunk(&mut self, directory: &std::path::Path) -> Result<(), LoaderError> {
-        if self.pending.is_empty() {
-            return Ok(());
-        }
-        let schema: SchemaRef = Arc::new(self.merged.clone());
-        let conformed: Vec<RecordBatch> = self
-            .pending
-            .drain(..)
-            .map(|batch| conform_batch(&batch, &schema))
-            .collect::<Result<_, String>>()
-            .map_err(LoaderError::Invalid)?;
-        self.pending_bytes = 0;
-        let chunk = concat_batches(&schema, &conformed).map_err(invalid)?;
-        let path = directory.join(format!("{:06}.arrow", self.chunks.len()));
-        let file = File::create(&path).map_err(|error| {
-            LoaderError::Invalid(format!("cannot write {}: {error}", path.display()))
-        })?;
-        let mut writer = FileWriter::try_new(file, &schema).map_err(invalid)?;
-        writer.write(&chunk).map_err(invalid)?;
-        writer.finish().map_err(invalid)?;
-        self.chunks.push(path);
-        Ok(())
-    }
-}
-
-/// Pass each spilled chunk to `on_batch` in the plan's read types, keeping only rows inside the cursor window; returns the rows passed.
-pub(crate) async fn replay_batches(
-    spilled: &SpilledBatches,
+/// One yielded batch as the plan reads it: in the schema merged so far (`merged`, all-NULL columns as text), each read column converted to its planned type (excluded columns dropped), and only the rows inside `window` when it is given; returns the batch and the rows left outside.
+pub(crate) fn typed_batch(
+    batch: &RecordBatch,
     table: &TablePlan,
-    mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), String>,
-) -> Result<u64, LoaderError> {
-    let target = read_schema(table);
-    let cursor_type = table.window.as_ref().and_then(|window| {
+    merged: &SchemaRef,
+    window: Option<&ReadWindow>,
+) -> Result<(RecordBatch, usize), LoaderError> {
+    let conformed = conform_batch(batch, merged).map_err(LoaderError::Invalid)?;
+    let typed = read_types(&conformed, &read_schema(table))?;
+    let cursor_type = window.and_then(|window| {
         table
             .read_columns
             .iter()
             .find(|column| column.name.eq_ignore_ascii_case(&window.column))
             .map(|column| column.output.clone())
     });
-    let mut rows: u64 = 0;
-    let mut outside: u64 = 0;
-    for path in &spilled.chunks {
-        let file = File::open(path).map_err(|error| {
-            LoaderError::Invalid(format!("cannot read {}: {error}", path.display()))
-        })?;
-        let reader = FileReader::try_new(file, None).map_err(invalid)?;
-        for batch in reader {
-            let batch = conform_batch(&batch.map_err(invalid)?, &spilled.schema)
-                .map_err(LoaderError::Invalid)?;
-            let typed = read_types(&batch, &target)?;
-            let kept = match (&table.window, &cursor_type) {
-                (Some(window), Some(cursor_type)) => in_window(&typed, window, cursor_type)?,
-                _ => typed,
-            };
-            outside += (batch.num_rows() - kept.num_rows()) as u64;
-            rows += kept.num_rows() as u64;
-            on_batch(kept).await.map_err(LoaderError::Invalid)?;
-        }
-    }
-    if outside > 0 {
-        tracing::warn!(
-            table = %table.spec.destination.table,
-            rows = outside,
-            "skipped rows outside the cursor window; use ctx.cursor_value to read only new data"
-        );
-    }
-    Ok(rows)
+    let kept = match (window, &cursor_type) {
+        (Some(window), Some(cursor_type)) => in_window(&typed, window, cursor_type)?,
+        _ => typed,
+    };
+    let outside = batch.num_rows() - kept.num_rows();
+    Ok((kept, outside))
 }
 
 /// The batches' target schema: each read column in its planned type.
@@ -631,4 +554,359 @@ pub(crate) fn bound_array(
 
 fn invalid(error: impl std::fmt::Display) -> LoaderError {
     LoaderError::Invalid(error.to_string())
+}
+
+impl PythonFeed {
+    /// Call the function for each window (or once), committing each window, then commit the rest.
+    pub(crate) async fn load(&mut self, load: &PythonLoad<'_>) -> Result<TableLoaded, LoaderError> {
+        let windows = match &load.table.commits {
+            CommitRule::Windows(windows) => Some(windows),
+            _ => None,
+        };
+        let calls = windows.map_or(1, |windows| windows.count);
+        let table = load.table.spec.source_table.name.clone();
+        for index in 0..calls {
+            let window: Option<CursorWindow> = windows
+                .map(|windows| window_at(windows, index))
+                .transpose()
+                .map_err(LoaderError::Invalid)?;
+            let stream =
+                start_read(load.host.clone(), table_read(load, window.as_ref(), self)).await?;
+            self.read(load, stream, window.as_ref()).await?;
+            if load.table.logged.is_some()
+                && let Some(state) = final_state(load.host.clone(), table.clone()).await?
+            {
+                self.state = Some(state);
+            }
+            let state = self.state.clone();
+            if let Some(window) = window
+                && (self.publisher.is_some() || load.table.exists)
+            {
+                let publisher = self.publisher(load).await?;
+                publisher.state = state;
+                publisher
+                    .cut(CommitRange::Window {
+                        from: window.from.clone(),
+                        to: window.to.clone(),
+                    })
+                    .await?;
+            }
+        }
+        if self.outside > 0 {
+            tracing::warn!(
+                table = %load.table.spec.destination.table,
+                rows = self.outside,
+                "skipped rows outside the cursor window; use ctx.cursor_value to read only new data"
+            );
+        }
+        let declared = load
+            .table
+            .spec
+            .python
+            .as_ref()
+            .map_or(0, |python| python.declared.len());
+        if self.rows == 0 {
+            refuse_emptying(load.table, load.destination).await?;
+        }
+        if self.publisher.is_none() && self.rows == 0 && !load.table.exists && declared == 0 {
+            let run = run_entry(
+                load,
+                load.table,
+                (self.state.clone(), self.reconciled.clone()),
+            );
+            log_empty_run(run.as_ref(), load.table, load.destination).await?;
+            return Ok(TableLoaded {
+                rows: 0,
+                changes: Vec::new(),
+                note: Some(NO_DATA_NOTE.to_owned()),
+            });
+        }
+        let unsettled = self.publisher.is_none()
+            || self
+                .merged
+                .fields()
+                .iter()
+                .any(|field| *field.data_type() == arrow_schema::DataType::Null);
+        if unsettled {
+            self.plan_data(load, true).await?;
+        }
+        let state = self.state.clone();
+        let rows = self.publisher(load).await?.finish(state).await?;
+        Ok(TableLoaded {
+            rows,
+            changes: std::mem::take(&mut self.changes),
+            note: None,
+        })
+    }
+
+    /// Read one call of the table function to its end: each batch is typed and staged as it arrives (the plan and the table grow with new columns first), and a table without a cursor commits about every 1 GB; a logged table's `ctx.state` follows the rows that crossed with it, so its commits fall only there, recording that state.
+    pub(crate) async fn read(
+        &mut self,
+        load: &PythonLoad<'_>,
+        mut stream: Box<dyn BatchStream>,
+        window: Option<&CursorWindow>,
+    ) -> Result<(), LoaderError> {
+        loop {
+            let (returned, next) = tokio::task::spawn_blocking(move || {
+                let next = stream.next_batch();
+                (stream, next)
+            })
+            .await
+            .map_err(|error| {
+                LoaderError::Invalid(format!("the table function's thread failed: {error}"))
+            })?;
+            stream = returned;
+            match next {
+                None => return Ok(()),
+                Some(Err(reason)) => return Err(LoaderError::Invalid(reason)),
+                Some(Ok(Streamed::State(state))) => {
+                    let state = (state != NO_STATE).then_some(state);
+                    let sized = self.table.commits == CommitRule::Size;
+                    self.state = state.clone();
+                    if let Some(publisher) = &mut self.publisher {
+                        publisher.state = state;
+                        if sized && publisher.full() {
+                            publisher.cut(CommitRange::Planned).await?;
+                        }
+                    }
+                }
+                Some(Ok(Streamed::Batch(batch))) => self.batch(load, batch, window).await?,
+            }
+        }
+    }
+
+    /// Stage one batch: when it changes the merged schema, plan the table for the data so far first (one read of the live columns, the schema changes applied once).
+    async fn batch(
+        &mut self,
+        load: &PythonLoad<'_>,
+        batch: RecordBatch,
+        window: Option<&CursorWindow>,
+    ) -> Result<(), LoaderError> {
+        let merged = merge_schema(&self.merged, &batch.schema());
+        self.rows += batch.num_rows() as u64;
+        if merged != self.merged || self.publisher.is_none() {
+            self.merged = merged;
+            self.plan_data(load, false).await?;
+        }
+        let schema: SchemaRef = Arc::new(settled_schema(&self.merged));
+        let read = match window {
+            Some(window) => Some(self.read_window(window)),
+            None => self.table.window.clone(),
+        };
+        let (typed, outside) = typed_batch(&batch, &self.table, &schema, read.as_ref())?;
+        self.outside += outside as u64;
+        let sized = self.table.commits == CommitRule::Size && self.table.logged.is_none();
+        let publisher = self.publisher(load).await?;
+        publisher.stage(typed, None).await?;
+        match (sized, publisher.full()) {
+            (true, true) => publisher.cut(CommitRange::Planned).await,
+            _ => Ok(()),
+        }
+    }
+
+    /// Plan the table for the data seen so far and bring the table (and the staging table) in line: created on the first batch, altered as later batches add or widen columns; columns that only held NULL wait for a typed value, or become text at the end (`settle`).
+    pub(crate) async fn plan_data(
+        &mut self,
+        load: &PythonLoad<'_>,
+        settle: bool,
+    ) -> Result<(), LoaderError> {
+        let nulls: BTreeSet<String> = self
+            .merged
+            .fields()
+            .iter()
+            .filter(|field| *field.data_type() == DataType::Null)
+            .map(|field| field.name().clone())
+            .collect();
+        let live = self.table.live.as_deref();
+        let typed_elsewhere = |name: &str| {
+            live.is_some_and(|live| {
+                live.iter()
+                    .any(|column| column.name.eq_ignore_ascii_case(name))
+            }) || load.table.spec.pinned.keys().any(|pinned| pinned == name)
+        };
+        let fields: Vec<_> = self
+            .merged
+            .fields()
+            .iter()
+            .filter(|field| {
+                settle || !nulls.contains(field.name()) || typed_elsewhere(field.name())
+            })
+            .cloned()
+            .collect();
+        let schema = settled_schema(&Schema::new(fields));
+        let data = YieldedData {
+            schema: &schema,
+            null_columns: &nulls,
+            rows: self.rows,
+        };
+        let destination = match &self.publisher {
+            Some(publisher) => &publisher.destination,
+            None => load.destination,
+        };
+        let known = self
+            .publisher
+            .is_none()
+            .then_some(self.table.live.as_deref());
+        let replanned = replan(load, &self.table, (&data, known), destination).await?;
+        let old = staged_columns(&self.table);
+        let statements = schema_statements(&replanned);
+        if let Some(statements) = statements {
+            execute_ddl(destination, statements).await?;
+            self.changes.extend(change_lines(&replanned));
+        }
+        if let Some(publisher) = &mut self.publisher {
+            if let Some(staging) = &publisher.staging {
+                let changes = staging_changes(
+                    staging,
+                    (&old, &staged_columns(&replanned)),
+                    replanned.spec.warehouse,
+                );
+                execute_ddl(&publisher.destination, changes).await?;
+            }
+            publisher.table = replanned.clone();
+            publisher.widen_files().await?;
+        }
+        self.table = TablePlan {
+            live: replanned.live.clone().or(self.table.live.clone()),
+            ..replanned
+        };
+        Ok(())
+    }
+
+    /// The publisher, opened on first use with the table as planned for the data.
+    pub(crate) async fn publisher(
+        &mut self,
+        load: &PythonLoad<'_>,
+    ) -> Result<&mut Publisher, LoaderError> {
+        if self.publisher.is_none() {
+            let run = run_entry(
+                load,
+                &self.table,
+                (self.state.clone(), self.reconciled.clone()),
+            );
+            let mut publisher =
+                Publisher::open(self.table.clone(), (load.destination, load.options), run).await?;
+            publisher.state = self.state.clone();
+            self.publisher = Some(publisher);
+        }
+        self.publisher
+            .as_mut()
+            .ok_or_else(|| LoaderError::Invalid("the table's load could not start".to_owned()))
+    }
+
+    fn read_window(&self, window: &CursorWindow) -> ReadWindow {
+        ReadWindow {
+            column: self
+                .table
+                .spec
+                .cursor
+                .as_ref()
+                .map(|cursor| cursor.column.clone())
+                .unwrap_or_default(),
+            from: window.from.clone(),
+            to: window.to.clone(),
+            inclusive: window.inclusive,
+            maximum: None,
+        }
+    }
+}
+
+/// `planned` with its columns planned again for those `data` has (`known` being the live columns when they need no read); everything else stays as planned before the read, so it matches what the function was asked for.
+async fn replan(
+    load: &PythonLoad<'_>,
+    planned: &TablePlan,
+    (data, known): (&YieldedData<'_>, Option<Option<&[LiveColumn]>>),
+    destination: &Destination,
+) -> Result<TablePlan, LoaderError> {
+    let spec = &planned.spec;
+    let problems = declared_problems(spec, data);
+    if !problems.is_empty() {
+        return Err(LoaderError::Invalid(problems.join("; ")));
+    }
+    let declared = spec
+        .python
+        .as_ref()
+        .map(|python| python.declared.clone())
+        .unwrap_or_default();
+    let table = inferred_table(
+        &load.table.spec.source_table,
+        &declared,
+        data,
+        planned.live.as_deref(),
+    );
+    let mut project = load.project.clone();
+    if let Some(source) = project.sources.get_mut(&spec.source_name) {
+        source.tables.retain(|name, _| *name == table.name);
+    }
+    let resolved = resolve_tables(&project, &spec.source_name, &[table]);
+    let problems: Vec<String> = resolved
+        .problems
+        .into_iter()
+        .chain(resolved.skipped.into_iter().map(|skipped| skipped.reason))
+        .collect();
+    let mut inferred = match (problems.is_empty(), resolved.specs.into_iter().next()) {
+        (true, Some(inferred)) => inferred,
+        _ => return Err(LoaderError::Invalid(problems.join("; "))),
+    };
+    inferred.python = spec.python.clone();
+    inferred.listed = true;
+    let columns = replan_columns(
+        &inferred,
+        (destination, planned.live.as_deref()),
+        known,
+        load.options,
+    )
+    .await?;
+    Ok(TablePlan {
+        spec: columns.spec,
+        read_columns: columns.read_columns,
+        live: columns.live,
+        schema: columns.schema,
+        ..planned.clone()
+    })
+}
+
+/// What the table function is called with: the window to read (`ctx.cursor_value` / `ctx.cursor_end`) and the latest `ctx.state`; connections that targets write to are withheld, except the source's own s3 or filesystem connection.
+fn table_read(
+    load: &PythonLoad<'_>,
+    window: Option<&CursorWindow>,
+    feed: &PythonFeed,
+) -> TableRead {
+    let table = load.table;
+    let spec = &table.spec;
+    let connection = load
+        .project
+        .sources
+        .get(&spec.source_name)
+        .map(|source| source.connection.clone())
+        .filter(|name| !name.is_empty());
+    let withheld: Vec<String> = load
+        .project
+        .targets
+        .values()
+        .map(|target| target.connection.clone())
+        .filter(|name| {
+            Some(name) != connection.as_ref() || !shareable_connection(load.project, name)
+        })
+        .collect();
+    let mut connections = load.project.connection_settings.clone();
+    connections.retain(|name, _| !withheld.contains(name));
+    let cursor = table.window.as_ref().map(|planned| CursorRead {
+        column: planned.column.clone(),
+        column_type: cursor_type_name(&feed.table, &planned.column),
+        start: window.map_or(planned.from.clone(), |window| window.from.clone()),
+        end: window.map_or(planned.to.clone(), |window| window.to.clone()),
+        inclusive: window.map_or(planned.inclusive, |window| window.inclusive),
+    });
+    TableRead {
+        source: spec.source_name.clone(),
+        table: spec.source_table.name.clone(),
+        connection,
+        connections,
+        withheld,
+        cursor,
+        logged: table.logged.is_some(),
+        state: feed.state.clone(),
+        is_reload: load.options.reload,
+    }
 }

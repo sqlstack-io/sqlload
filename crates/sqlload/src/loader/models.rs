@@ -1,18 +1,22 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::models::DuckDbDestination;
 use crate::file_store::models::OpenFolder;
 use crate::files_destination::models::{
-    FilesDestination, PartitionFolder, PendingLoad, TableFiles, TablePath, TableState,
+    FilesDestination, FilesWriter, PartitionFolder, PendingLoad, ReplacedFiles, TableFiles,
+    TablePath, TableState,
 };
 use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, Footer, TextChecks};
 use crate::masking::models::MaskRules;
+use crate::parquet_parts::models::PartWriter;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    Contract, FilesFormat, NewTables, OnSchemaChange, Policy, ProjectConfig, WriteStrategy,
+    BatchStep, Contract, FilesFormat, NewTables, OnSchemaChange, Policy, ProjectConfig,
+    WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::Route;
@@ -22,6 +26,7 @@ use crate::run_log::main::next_stamp::next_stamp;
 use crate::run_log::models::{RunOutcome, RunRecord, UnreadableRecord};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
 use crate::snowflake_destination::models::SnowflakeDestination;
+use crate::stage_api::models::StageInfo;
 use crate::store_paths::models::Location;
 use crate::write_sql::models::{TableName, WriteMode};
 
@@ -66,6 +71,10 @@ pub struct TableSpec {
     pub strategy_origin: SettingOrigin,
     pub unique_key: Vec<String>,
     pub cursor: Option<CursorSpec>,
+    /// Read and commit the cursor range one window of this size at a time.
+    pub batch: Option<BatchStep>,
+    /// Where an integer `batch`'s windows end without `--end-cursor-int`: the Postgres source's cursor maximum, read at plan.
+    pub source_end: Option<SourceEnd>,
     pub pinned: BTreeMap<String, ColumnType>,
     /// Source columns not loaded, with the rule that dropped each.
     pub excluded_columns: Vec<(String, String)>,
@@ -164,6 +173,8 @@ pub struct TablePlan {
     pub exists: bool,
     /// The run log of a `state = "logged"` table, read at plan.
     pub logged: Option<LoggedPlan>,
+    /// How the rows are cut into commits.
+    pub commits: CommitRule,
 }
 
 /// A logged table's run log and what it means for this run.
@@ -238,6 +249,8 @@ pub struct ProjectPlan {
     pub skipped: Vec<SkippedTable>,
     /// Problems with the project's settings for particular tables.
     pub problems: Vec<String>,
+    /// Things to know that block nothing, such as a selector matching no table.
+    pub warnings: Vec<String>,
 }
 
 /// Choices for one `plan`, `apply` or `load`.
@@ -253,6 +266,10 @@ pub struct PlanOptions {
     pub start_cursor: Option<String>,
     /// `--end-cursor-*`: read only cursor values below this one.
     pub end_cursor: Option<String>,
+    /// `--threads`: the most tables loading at once, overriding the project's `threads`.
+    pub threads: Option<usize>,
+    /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
+    pub batch_bytes: Option<usize>,
 }
 
 /// What one Python table's load needs.
@@ -275,6 +292,15 @@ pub struct LoadRun<'a> {
     pub options: &'a PlanOptions,
 }
 
+/// What every table of a load shares, owned so each table can run on a thread of its own.
+#[derive(Debug)]
+pub struct SharedRun {
+    pub project: ProjectConfig,
+    pub destinations: BTreeMap<String, Destination>,
+    pub host: Option<std::sync::Arc<dyn PythonHost>>,
+    pub options: PlanOptions,
+}
+
 /// One table's load: its rows, or why it failed (other tables still load).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableOutcome {
@@ -291,28 +317,33 @@ pub struct TableLoaded {
     pub note: Option<String>,
 }
 
-/// A Python table read for its load: its data (`None` when there is nothing to write), its plan for that data, the schema changes made, and a remark.
+/// A table's columns planned once more during its load, for rows showing new columns.
 #[derive(Debug)]
-pub struct PythonRead {
-    pub reader: Option<SourceReader>,
-    pub table: TablePlan,
-    pub changes: Vec<String>,
-    pub note: Option<String>,
-    /// The run record a logged table writes with its data.
-    pub run: Option<RunEntry>,
+pub struct ReplannedColumns {
+    /// The table's spec, with a Python table's live columns among its source's.
+    pub spec: TableSpec,
+    pub read_columns: Vec<ReadColumn>,
+    pub live: Option<Vec<LiveColumn>>,
+    pub schema: SchemaPlan,
 }
 
-/// A Python table's yielded data, held in temporary Arrow IPC files until its schema is known.
+/// A Python table's load as its function's batches arrive: the plan for the columns seen so far, and where the batches go.
 #[derive(Debug)]
-pub struct SpilledBatches {
-    /// Removed when dropped.
-    pub directory: tempfile::TempDir,
-    pub chunks: Vec<std::path::PathBuf>,
-    /// The schema merged from every batch, with all-NULL columns as text.
-    pub schema: arrow_schema::SchemaRef,
-    /// The columns that only ever held NULL, which take the live or declared type.
-    pub null_columns: std::collections::BTreeSet<String>,
+pub struct PythonFeed {
+    pub table: TablePlan,
+    /// The schema merged from every batch so far, all-NULL columns as `Null`.
+    pub merged: arrow_schema::Schema,
     pub rows: u64,
+    /// Rows the function yielded outside the cursor window, which were skipped.
+    pub outside: u64,
+    /// Opened once the table exists for the data.
+    pub publisher: Option<Publisher>,
+    /// `created ...` and `altered ...` lines.
+    pub changes: Vec<String>,
+    /// `ctx.state` as the run started, or as the function left it at the end of the latest window.
+    pub state: Option<String>,
+    /// The time of the reconciliation this load appended, which its records follow.
+    pub reconciled: Option<String>,
 }
 
 /// An open destination.
@@ -325,14 +356,116 @@ pub enum Destination {
     Files(Box<FilesDestination>),
 }
 
-/// One load's staging table and the files written for it so far.
+/// A Postgres table's integer cursor as plan found it, ending its `batch` windows.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StagingSession {
-    pub staging: TableName,
+pub enum SourceEnd {
+    /// The table has no cursor value, so there is nothing to read.
+    Empty,
+    /// The largest value: windows end one past it.
+    Maximum { maximum: String, end: String },
+}
+
+/// How a table's rows are cut into commits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitRule {
+    /// Each window of the table's `batch`, read and committed by itself.
+    Windows(WindowPlan),
+    /// Read in cursor order (an index leads with the cursor, NULLs first), committing about every 1 GB, only between distinct cursor values; `delete_insert` replaces `[previous cut, next cut)` each time.
+    Ordered {
+        column: String,
+        cursor_type: ColumnType,
+    },
+    /// About every 1 GB (no cursor, so no position to keep in order).
+    Size,
+    /// A files source's batches of whole partitions.
+    FileGroups(Vec<FileGroup>),
+    /// The whole read is one commit.
+    Whole(WholeReason),
+}
+
+/// Why a table's read commits once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WholeReason {
+    /// An unordered cursor read: committing part of it could skip rows.
+    Unordered,
+    /// A text cursor, whose order the source and the destination may collate differently.
+    TextCursor,
+    /// `append` without a cursor: a rerun after a partial commit would duplicate what committed.
+    AppendWithoutCursor,
+    /// `batch = "whole"`.
+    Chosen,
+    /// The table cannot load, so it has no commits.
+    Blocked,
+}
+
+/// What the rows of one commit replace under `delete_insert`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitRange {
+    /// The planned write: the whole read's range.
+    Planned,
+    /// A cursor window, `from <= cursor < to`.
+    Window {
+        from: Option<String>,
+        to: Option<String>,
+    },
+    /// A files source's partitions, by the cursor's value.
+    Values(Vec<String>),
+}
+
+/// One table's load as it commits batch by batch: where the batches go, and what is staged but not yet committed.
+#[derive(Debug)]
+pub struct Publisher {
+    pub table: TablePlan,
+    /// The table's own connection to the destination.
+    pub destination: Destination,
+    /// A logged table's record, updated at every commit.
+    pub run: Option<RunEntry>,
     pub load_id: String,
     /// The load time as an ISO 8601 UTC timestamp, written to every row.
     pub loaded_at: String,
-    pub parts: usize,
+    /// Batches go straight into the table, each committing with its `COPY` (`append`); otherwise into `staging`.
+    pub direct: bool,
+    /// Only the end of the run commits (`replace` and `--reload`, which swap or rebuild the whole table).
+    pub at_end: bool,
+    pub staging: Option<TableName>,
+    /// The batch being filled, from 1.
+    pub batch: u64,
+    /// Snowflake: the upload credentials this batch fetched, for all its files.
+    pub stage: Option<StageInfo>,
+    /// Snowflake: the batch's Parquet being written, and the names of its files staged so far.
+    pub parts: PartWriter,
+    pub staged: Vec<String>,
+    /// Arrow bytes of the batch so far (DuckDB, which stages no files).
+    pub arrow_bytes: usize,
+    pub batch_rows: u64,
+    /// Rows in `staging` not committed yet, and what they replace.
+    pub waiting_rows: u64,
+    pub waiting_range: Option<CommitRange>,
+    pub committed_rows: u64,
+    /// Commits made, from 0.
+    pub commits: u64,
+    /// The largest cursor written so far (logged tables).
+    pub maximum: Option<String>,
+    /// `ctx.state` when the newest staged batch crossed, and when the last commit was made.
+    pub state: Option<String>,
+    pub committed_state: Option<String>,
+    /// DuckDB: a transaction is open on the table's connection.
+    pub open_transaction: bool,
+    /// The bytes a batch holds before it may commit.
+    pub batch_bytes: usize,
+    /// A files target's folder and the commit being written.
+    pub files: Option<FilesSink>,
+}
+
+/// A files target table's load: its folder, what the load replaces, and the files of the commit being written.
+#[derive(Debug)]
+pub struct FilesSink {
+    pub output: FilesOutput,
+    pub folder: OpenFolder,
+    pub replaced: ReplacedFiles,
+    pub writer: Option<FilesWriter>,
+    /// Replaced files already deleted by earlier commits.
+    pub deleted: std::collections::BTreeSet<String>,
 }
 
 /// A connected source, ready to read.
@@ -340,8 +473,6 @@ pub struct StagingSession {
 pub enum SourceReader {
     Postgres(tokio_postgres::Client),
     Files(OpenFolder),
-    /// A Python table's data, already read and spilled.
-    Batches(SpilledBatches),
 }
 
 /// What decides one files table's cursor window.

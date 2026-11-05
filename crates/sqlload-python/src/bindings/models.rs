@@ -133,7 +133,7 @@ impl BatchStream {
                 Polled::Failed(CrossError::Data(reason)) => {
                     return Err(PyValueError::new_err(reason));
                 }
-                Polled::Pending => py.check_signals()?,
+                Polled::Pending | Polled::State(_) => py.check_signals()?,
                 Polled::Finished => return Ok(None),
             }
         }

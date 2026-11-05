@@ -20,16 +20,22 @@ pub(crate) fn table_matcher(patterns: &[String]) -> Result<GlobSet, String> {
 /// Group catalog column rows into tables, keeping those `include` matches and `exclude` does not.
 pub(crate) fn tables_from_rows(
     column_rows: &[Row],
-    key_rows: &[Row],
+    (key_rows, index_rows): (&[Row], &[Row]),
     include: &GlobSet,
     exclude: &GlobSet,
 ) -> Vec<SourceTable> {
-    let mut keys: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    for row in key_rows {
-        keys.entry((row.get(0), row.get(1)))
-            .or_default()
-            .push(row.get(2));
-    }
+    let by_table = |rows: &[Row]| {
+        let mut grouped: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+        for row in rows {
+            grouped
+                .entry((row.get(0), row.get(1)))
+                .or_default()
+                .push(row.get(2));
+        }
+        grouped
+    };
+    let keys = by_table(key_rows);
+    let indexes = by_table(index_rows);
     let mut tables: BTreeMap<(String, String), SourceTable> = BTreeMap::new();
     for row in column_rows {
         let schema: String = row.get(0);
@@ -42,6 +48,10 @@ pub(crate) fn tables_from_rows(
             .entry((schema.clone(), name.clone()))
             .or_insert_with(|| SourceTable {
                 primary_key: keys
+                    .get(&(schema.clone(), name.clone()))
+                    .cloned()
+                    .unwrap_or_default(),
+                indexed_columns: indexes
                     .get(&(schema.clone(), name.clone()))
                     .cloned()
                     .unwrap_or_default(),

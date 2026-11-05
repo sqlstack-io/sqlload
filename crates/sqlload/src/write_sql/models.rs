@@ -19,11 +19,12 @@ pub enum WriteMode {
     Merge {
         unique_key: Vec<String>,
     },
-    /// Rows with `from <= cursor_column < to` (open-ended when `None`) are replaced by the staged rows.
+    /// Rows with `from <= cursor_column < to` (open-ended when `None`) are replaced by the staged rows; with `values`, the rows whose cursor is one of them (a files source's partitions) instead.
     DeleteInsert {
         cursor_column: String,
         from: Option<String>,
         to: Option<String>,
+        values: Vec<String>,
     },
     /// The staged rows become the whole table, atomically.
     Replace,
@@ -39,9 +40,6 @@ pub struct WriteStatementsRequest<'a> {
     /// The columns each row carries, `_sqlload_*` metadata included.
     pub columns: &'a [DesiredColumn],
     pub mode: &'a WriteMode,
-    pub load_id: &'a str,
-    /// The load time as an ISO 8601 UTC timestamp.
-    pub loaded_at: &'a str,
 }
 
 /// A cursor position to read from the destination.

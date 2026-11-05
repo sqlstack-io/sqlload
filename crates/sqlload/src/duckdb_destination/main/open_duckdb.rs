@@ -13,5 +13,6 @@ pub fn open_duckdb(path: &str) -> Result<DuckDbDestination, DuckDbError> {
     };
     Ok(DuckDbDestination {
         connection: Arc::new(Mutex::new(connection)),
+        ddl: Arc::default(),
     })
 }

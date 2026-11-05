@@ -1,3 +1,5 @@
+#[path = "tests/test_blocking_threads.rs"]
+mod blocking_threads;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_loader_commands.rs"]

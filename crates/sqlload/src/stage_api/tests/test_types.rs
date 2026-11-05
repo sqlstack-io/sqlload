@@ -38,3 +38,10 @@ pub(crate) struct LoadReportTestCase {
     pub(crate) expected_begin_mark: Option<&'static str>,
     pub(crate) expected_complete: bool,
 }
+
+pub(crate) struct SequenceIdsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) threads: usize,
+    pub(crate) each: usize,
+    pub(crate) expected_unique: usize,
+}

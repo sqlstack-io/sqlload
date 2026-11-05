@@ -4,10 +4,18 @@ use arrow_array::RecordBatch;
 
 use crate::python_sources::models::{PythonSource, TableRead};
 
+/// What a table function's read gives next.
+#[derive(Debug)]
+pub enum Streamed {
+    Batch(RecordBatch),
+    /// A logged table's `ctx.state` (as JSON) when the rows of the batches before it crossed.
+    State(String),
+}
+
 /// A table function's data, one Arrow batch at a time; `next_batch` blocks.
 pub trait BatchStream: Send {
-    /// The next batch, an error, or `None` at the end.
-    fn next_batch(&mut self) -> Option<Result<RecordBatch, String>>;
+    /// The next batch or state, an error, or `None` at the end.
+    fn next_batch(&mut self) -> Option<Result<Streamed, String>>;
 }
 
 /// Runs Python sources: the `sqlload` Python package provides it; the standalone executable has none.

@@ -26,7 +26,6 @@ pub(in crate::loader) async fn check_source(
             let answer: String = row.get(0);
             Ok(answer.split(" on ").next().unwrap_or_default().to_owned())
         }
-        SourceReader::Batches(_) => Ok("read".to_owned()),
         SourceReader::Files(folder) => {
             let entries = probe_folder(&folder).await?;
             Ok(format!(

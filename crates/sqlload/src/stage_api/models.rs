@@ -9,6 +9,7 @@ use crate::time_text::main::now_ms::now_ms;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -141,6 +142,18 @@ pub struct DriverSession {
     auth: Arc<Authenticator>,
     destination: DestinationConfig,
     tokens: Mutex<Option<Tokens>>,
+    /// Numbers the session's requests: Snowflake expects each to have its own.
+    sequence: SequenceIds,
+}
+
+/// Request numbers unique within a session, from 1, however many tasks share it.
+#[derive(Debug, Default)]
+pub struct SequenceIds(AtomicU64);
+
+impl SequenceIds {
+    pub fn next(&self) -> u64 {
+        self.0.fetch_add(1, Ordering::Relaxed) + 1
+    }
 }
 
 impl DriverSession {
@@ -155,6 +168,7 @@ impl DriverSession {
             auth,
             destination: destination.clone(),
             tokens: Mutex::new(None),
+            sequence: SequenceIds::default(),
         }
     }
 
@@ -174,7 +188,7 @@ impl DriverSession {
             let body = json!({
                 "sqlText": statement,
                 "asyncExec": false,
-                "sequenceId": 1,
+                "sequenceId": self.sequence.next(),
                 "querySubmissionTime": now_ms(),
             });
             let mut response = self

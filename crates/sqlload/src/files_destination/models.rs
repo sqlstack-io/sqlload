@@ -157,6 +157,8 @@ pub struct WriterRequest<'a> {
     pub cursor_column: Option<&'a str>,
     pub columns: &'a [DesiredColumn],
     pub load_id: &'a str,
+    /// Names the files and the pending marker (see [`FilesWriter::file_id`]).
+    pub file_id: &'a str,
     /// The load time as an ISO 8601 UTC timestamp, written to every row.
     pub loaded_at: &'a str,
 }
@@ -175,7 +177,10 @@ pub struct FilesWriter {
     pub partition: Option<PartitionFolder>,
     pub cursor_column: Option<String>,
     pub schema: SchemaRef,
+    /// The load id the rows carry in `_sqlload_load_id`.
     pub load_id: String,
+    /// Names this writer's files and its pending marker: one per commit of a load, so repairing an unfinished commit never touches an earlier one's files.
+    pub file_id: String,
     pub loaded_at_micros: i64,
     /// Open files by partition value (empty for a table without partitions).
     pub open: BTreeMap<String, OpenFile>,

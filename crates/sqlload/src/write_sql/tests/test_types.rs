@@ -32,3 +32,34 @@ pub(crate) struct CursorTextTestCase {
     pub(crate) column_type: ColumnType,
     pub(crate) expected_text: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct CommitStatementsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) mode: WriteMode,
+    pub(crate) run_insert: Option<&'static str>,
+    /// The staging table is swapped in or rebuilt from at the end, so it is not emptied.
+    pub(crate) keep_staging: bool,
+    pub(crate) expected_statements: &'static [&'static str],
+}
+
+pub(crate) struct StagingChangesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    /// The new columns' types: `id`, then `score`, then (when given) `note`.
+    pub(crate) new_types: &'static [ColumnType],
+    pub(crate) expected_statements: &'static [&'static str],
+}
+
+pub(crate) struct StaleStagingTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) found: &'static [&'static str],
+    pub(crate) expected_statements: &'static [&'static str],
+}
+
+pub(crate) struct StagingIdTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) load_id: &'static str,
+    pub(crate) expected_name: &'static str,
+}
