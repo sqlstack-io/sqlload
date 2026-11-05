@@ -6,7 +6,9 @@ use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::types::TableWriter;
 use crate::adapters::snowflake::_helpers::write::row_stream::settle_stream;
-use crate::adapters::snowflake::constants::{EXTERNAL_STAGE_FOLDER, STAGE_FOLDER};
+use crate::adapters::snowflake::constants::{
+    CONCURRENT_UPLOADS, EXTERNAL_STAGE_FOLDER, STAGE_FOLDER,
+};
 use crate::adapters::snowflake::main::copy::_copy_staged::copy_staged;
 use crate::adapters::snowflake::main::session::_run_statements::run_statements;
 use crate::adapters::snowflake::main::stage::_remove_staged::remove_staged;
@@ -61,6 +63,7 @@ impl TableWriter for SnowflakeWriter {
     }
 
     async fn load_batch(&mut self, target: &WriteTarget<'_>) -> Result<(), LoaderError> {
+        self.settle_uploads().await?;
         if !sends_rows(self.route.as_ref()) {
             self.copy_batch_files(target).await?;
         }
@@ -87,6 +90,8 @@ impl TableWriter for SnowflakeWriter {
     async fn rollback_batch(&mut self) {}
 
     async fn remove_batch_files(&mut self, target: &WriteTarget<'_>) {
+        self.uploads.abort_all();
+        while self.uploads.join_next().await.is_some() {}
         if !self.staged.is_empty() {
             self.remove_files(target).await;
         }
@@ -128,7 +133,7 @@ fn batch_folder(writer: &SnowflakeWriter, target: &WriteTarget<'_>) -> String {
 }
 
 impl SnowflakeWriter {
-    /// Stage one Parquet file of the batch: on the external stage's folder with SQLLoad's own client, or uploaded to the internal stage.
+    /// Stage one Parquet file of the batch in the background, at most a few at once: on the external stage's folder with SQLLoad's own client, or uploaded to the internal stage (its first file inline, fetching the credentials the rest share).
     async fn put_file(
         &mut self,
         target: &WriteTarget<'_>,
@@ -136,20 +141,56 @@ impl SnowflakeWriter {
     ) -> Result<(), LoaderError> {
         let name = format!("part-{:05}.parquet", self.staged.len() + 1);
         let key = format!("{}{name}", batch_folder(self, target));
-        match &self.external_folder {
-            Some(folder) => write_file(folder, &key, bytes::Bytes::from(body)).await?,
-            None => {
-                let reference = stage_reference(self, target)?;
-                let file = StagedFile {
-                    stage: reference.trim_start_matches('@'),
-                    key: &key,
-                    body: &body,
-                };
-                let known = self.stage.take();
-                self.stage = Some(stage_parquet(&self.destination, known, file).await?);
-            }
-        }
         self.staged.push(name);
+        while self.uploads.len() >= CONCURRENT_UPLOADS {
+            self.join_upload().await?;
+        }
+        if let Some(folder) = &self.external_folder {
+            let folder = folder.clone();
+            self.uploads.spawn(async move {
+                write_file(&folder, &key, bytes::Bytes::from(body)).await?;
+                Ok(())
+            });
+            return Ok(());
+        }
+        let reference = stage_reference(self, target)?;
+        let Some(known) = self.stage.clone() else {
+            let file = StagedFile {
+                stage: reference.trim_start_matches('@'),
+                key: &key,
+                body: &body,
+            };
+            self.stage = Some(stage_parquet(&self.destination, None, file).await?);
+            return Ok(());
+        };
+        let destination = self.destination.clone();
+        self.uploads.spawn(async move {
+            let file = StagedFile {
+                stage: reference.trim_start_matches('@'),
+                key: &key,
+                body: &body,
+            };
+            stage_parquet(&destination, Some(known), file).await?;
+            Ok(())
+        });
+        Ok(())
+    }
+
+    /// Wait for one upload; its failure fails the batch.
+    async fn join_upload(&mut self) -> Result<(), LoaderError> {
+        match self.uploads.join_next().await {
+            Some(joined) => joined.map_err(|error| {
+                LoaderError::Invalid(format!("a staged file's upload failed: {error}"))
+            })?,
+            None => Ok(()),
+        }
+    }
+
+    /// Wait for every upload of the batch.
+    async fn settle_uploads(&mut self) -> Result<(), LoaderError> {
+        while !self.uploads.is_empty() {
+            self.join_upload().await?;
+        }
         Ok(())
     }
 

@@ -33,6 +33,7 @@ pub fn open_table_writer(
                 parts: PartWriter::default(),
                 staged: Vec::new(),
                 stage: None,
+                uploads: tokio::task::JoinSet::new(),
             })))
         }
         Destination::Files(_) => Ok(Writer::Files(ParquetFiles)),
