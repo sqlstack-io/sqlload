@@ -1362,7 +1362,7 @@ pub(crate) async fn run_metadata_round_trip(
     Ok((plan, checked))
 }
 
-/// The plan for `selectors` with `--start-cursor start` over four NDJSON sources whose partition cursors are two dates, an integer and text, loading into DuckDB.
+/// The plan for `selectors` with `--start-cursor start` over NDJSON sources whose partition cursors are two dates, an integer and text, plus one whose cursor_column does not exist and one whose integer cursor is excluded, loading into DuckDB.
 pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result<String, String> {
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let root = directory.path().display().to_string();
@@ -1371,21 +1371,37 @@ pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result
             source: "days",
             partition: ("day", "date"),
             value: "2026-11-01",
+            settings: "cursor_column = \"day\"",
         },
         CursorSource {
             source: "nums",
             partition: ("n", "int"),
             value: "5",
+            settings: "cursor_column = \"n\"",
         },
         CursorSource {
             source: "later",
             partition: ("day", "date"),
             value: "2026-11-03",
+            settings: "cursor_column = \"day\"",
         },
         CursorSource {
             source: "texts",
             partition: ("k", "text"),
             value: "a",
+            settings: "cursor_column = \"k\"",
+        },
+        CursorSource {
+            source: "missing",
+            partition: ("day", "date"),
+            value: "2026-11-01",
+            settings: "cursor_column = \"nope\"",
+        },
+        CursorSource {
+            source: "hidden",
+            partition: ("n", "int"),
+            value: "5",
+            settings: "cursor_column = \"n\"\nexclude_columns = [\"n\"]",
         },
     ];
     let mut text = format!(
@@ -1395,6 +1411,7 @@ pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result
         source,
         partition: (column, column_type),
         value,
+        settings,
     } in partitions
     {
         let folder = directory
@@ -1405,7 +1422,7 @@ pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result
         std::fs::write(folder.join("a.ndjson"), "{\"id\":1}\n")
             .map_err(|error| error.to_string())?;
         text.push_str(&format!(
-            "\n[sources.{source}]\nkind = \"files\"\nconnection = \"files\"\npath = \"{source}/\"\nformat = \"ndjson\"\npartition_columns = {{ {column} = \"{column_type}\" }}\nwrite_strategy = \"append\"\ncursor_column = \"{column}\"\n"
+            "\n[sources.{source}]\nkind = \"files\"\nconnection = \"files\"\npath = \"{source}/\"\nformat = \"ndjson\"\npartition_columns = {{ {column} = \"{column_type}\" }}\nwrite_strategy = \"append\"\n{settings}\n"
         ));
     }
     let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
