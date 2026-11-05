@@ -6,7 +6,11 @@ mod direct_problem;
 mod hash_parity;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_pick_route.rs"]
+mod pick_route;
 #[path = "tests/test_stage_problem.rs"]
 mod stage_problem;
+#[path = "tests/test_stage_statements.rs"]
+mod stage_statements;
 #[path = "tests/test_types.rs"]
 mod test_types;

@@ -41,8 +41,55 @@ fn column_rows(table: &str, found: &FakeTable) -> Vec<Vec<Value>> {
         .collect()
 }
 
-/// Answer the statements sqlload sends; anything else succeeds with no rows.
+/// `CREATE STAGE IF NOT EXISTS DB.SCHEMA.NAME URL = 'url' STORAGE_INTEGRATION = NAME` → name, URL and integration.
+fn parse_create_stage(statement: &str) -> Option<(String, String, String)> {
+    let rest = statement.strip_prefix("CREATE STAGE IF NOT EXISTS ")?;
+    let (name, rest) = rest.split_once(" URL = '")?;
+    let (url, rest) = rest.split_once('\'')?;
+    let integration = rest.split_once("STORAGE_INTEGRATION = ")?.1;
+    let stage = name.rsplit('.').next()?.trim_matches('"').to_owned();
+    Some((
+        stage,
+        url.to_owned(),
+        integration.trim().trim_matches('"').to_owned(),
+    ))
+}
+
+/// What one statement of an earlier multi-statement request returned.
+pub(crate) fn script_result(state: &SharedState, path: &str) -> Outcome {
+    let handle = path.rsplit('/').next().unwrap_or_default();
+    match state.lock().script_results.get(handle) {
+        Some(result) => Ok(result.clone()),
+        None => Err((StatusCode::NOT_FOUND, json!({ "message": handle }))),
+    }
+}
+
+/// Answer one request: a multi-statement request runs its statements in order and keeps what each returned; anything else is one statement.
 pub(crate) fn run_statement(state: &SharedState, body: &[u8]) -> Outcome {
+    let request: Value = serde_json::from_slice(body).unwrap_or_default();
+    if request["parameters"]["MULTI_STATEMENT_COUNT"].is_null() {
+        return run_one(state, body);
+    }
+    let statement = request["statement"].as_str().unwrap_or_default();
+    let mut handles: Vec<Value> = Vec::new();
+    for part in statement.split(";\n") {
+        let one = serde_json::to_vec(&json!({ "statement": part })).unwrap_or_default();
+        let result = run_one(state, &one)?;
+        let mut guard = state.lock();
+        let handle = format!("fake-{}", guard.script_results.len());
+        guard.script_results.insert(handle.clone(), result);
+        handles.push(json!(handle));
+    }
+    Ok(json!({
+        "statementHandle": "fake-script",
+        "statementHandles": handles,
+        "resultSetMetaData": { "rowType": [{ "name": "status" }] },
+        "data": [["Multiple statements executed successfully."]],
+    }))
+}
+
+/// Answer the statements sqlload sends; anything else succeeds with no rows.
+fn run_one(state: &SharedState, body: &[u8]) -> Outcome {
     let request: Value = match serde_json::from_slice(body) {
         Ok(value) => value,
         Err(error) => {
@@ -64,10 +111,42 @@ pub(crate) fn run_statement(state: &SharedState, body: &[u8]) -> Outcome {
         return Ok(result(&["status"], vec![vec![json!("created")]]));
     }
     if let Some((table, keys)) = copy_files(&statement) {
+        let mut loaded: Vec<Vec<Value>> = Vec::new();
         for key in keys {
+            if statement.contains("FORCE = TRUE") {
+                guard.loaded.remove(&key);
+            }
+            let before = guard.tables.get(&table).map_or(0, |found| found.rows.len());
             guard.load_object(&table, &key);
+            let after = guard.tables.get(&table).map_or(0, |found| found.rows.len());
+            loaded.push(vec![
+                json!(key),
+                json!("LOADED"),
+                json!((after - before).to_string()),
+            ]);
         }
-        return Ok(result(&["status"], vec![vec![json!("LOADED")]]));
+        return Ok(result(&["file", "status", "rows_loaded"], loaded));
+    }
+    if let Some((name, url, integration)) = parse_create_stage(&statement) {
+        guard.stages.entry(name).or_insert((url, integration));
+        return Ok(result(&["status"], vec![vec![json!("created")]]));
+    }
+    if statement.starts_with("SHOW STAGES") {
+        let rows: Vec<Vec<Value>> = guard
+            .stages
+            .iter()
+            .map(|(name, (url, integration))| vec![json!(name), json!(url), json!(integration)])
+            .collect();
+        return Ok(result(&["name", "url", "storage_integration"], rows));
+    }
+    if statement.starts_with("SHOW INTEGRATIONS") {
+        let rows: Vec<Vec<Value>> = guard
+            .integrations
+            .iter()
+            .filter(|name| statement.contains(name.as_str()))
+            .map(|name| vec![json!(name)])
+            .collect();
+        return Ok(result(&["name"], rows));
     }
     if statement.starts_with("SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE") {
         let rows: Vec<Vec<Value>> = guard

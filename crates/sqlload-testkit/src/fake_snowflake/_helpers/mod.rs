@@ -1,3 +1,4 @@
+pub(crate) mod driver;
 pub(crate) mod loading;
 pub(crate) mod objects;
 pub(crate) mod routing;

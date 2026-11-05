@@ -1,6 +1,8 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
+use crate::fake_snowflake::constants::FAKE_BUCKET;
 use crate::fake_snowflake::models::{FakePipe, LoadOutcome, SharedState, StalledFile};
 
 type Outcome = Result<Value, (StatusCode, Value)>;
@@ -23,6 +25,111 @@ pub(crate) fn put_object(state: &SharedState, path: &str, body: &[u8]) -> Outcom
     }
     guard.objects.insert(key, body.to_vec());
     Ok(Value::String(String::new()))
+}
+
+/// Delete one path-style object, `/bucket/key`; a missing one is no error, as in S3.
+pub(crate) fn delete_object(state: &SharedState, path: &str) -> Outcome {
+    let key = percent_decode(path.trim_start_matches('/'));
+    state.lock().objects.remove(&key);
+    Ok(Value::String(String::new()))
+}
+
+/// `POST /bucket?delete`: delete the keys listed in the XML body.
+pub(crate) fn delete_objects(state: &SharedState, body: &[u8]) -> Outcome {
+    let text = String::from_utf8_lossy(body);
+    let mut guard = state.lock();
+    let mut deleted = String::new();
+    for part in text.split("<Key>").skip(1) {
+        let key = part.split("</Key>").next().unwrap_or_default();
+        guard.objects.remove(&format!("{FAKE_BUCKET}/{key}"));
+        deleted.push_str(&format!("<Deleted><Key>{key}</Key></Deleted>"));
+    }
+    Ok(Value::String(format!(
+        "<DeleteResult>{deleted}</DeleteResult>"
+    )))
+}
+
+/// `GET /bucket?list-type=2`: the objects under `prefix`, and with a `delimiter` the folders below it.
+pub(crate) fn list_objects(state: &SharedState, query: &str) -> Outcome {
+    let value = |name: &str| {
+        query
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| percent_decode(value))
+            .unwrap_or_default()
+    };
+    let (prefix, delimiter) = (value("prefix"), value("delimiter"));
+    let guard = state.lock();
+    let modified = guard
+        .objects_modified
+        .clone()
+        .unwrap_or_else(|| "2026-11-05T00:00:00.000Z".to_owned());
+    let mut contents = String::new();
+    let mut folders: Vec<String> = Vec::new();
+    let bucket = format!("{FAKE_BUCKET}/");
+    for (key, body) in &guard.objects {
+        let Some(name) = key
+            .strip_prefix(&bucket)
+            .filter(|name| name.starts_with(&prefix))
+        else {
+            continue;
+        };
+        let below = &name[prefix.len()..];
+        match below.split_once('/').filter(|_| !delimiter.is_empty()) {
+            Some((folder, _)) => {
+                let folder = format!("{prefix}{folder}/");
+                if !folders.contains(&folder) {
+                    folders.push(folder);
+                }
+            }
+            None => contents.push_str(&format!(
+                "<Contents><Key>{name}</Key><LastModified>{modified}</LastModified><ETag>&quot;fake-etag&quot;</ETag><Size>{}</Size></Contents>",
+                body.len()
+            )),
+        }
+    }
+    let folders: String = folders
+        .iter()
+        .map(|folder| format!("<CommonPrefixes><Prefix>{folder}</Prefix></CommonPrefixes>"))
+        .collect();
+    Ok(Value::String(format!(
+        "<ListBucketResult><IsTruncated>false</IsTruncated>{contents}{folders}</ListBucketResult>"
+    )))
+}
+
+/// `GET /bucket/key`, whole or by its `Range` header.
+pub(crate) fn get_object(state: &SharedState, path: &str, headers: &HeaderMap) -> Response {
+    let key = percent_decode(path.trim_start_matches('/'));
+    let Some(body) = state.lock().objects.get(&key).cloned() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let range = headers
+        .get("range")
+        .and_then(|value| value.to_str().map_or(None, Some))
+        .and_then(|value| value.strip_prefix("bytes="))
+        .and_then(|value| value.split_once('-'));
+    let meta = [
+        ("ETag", "\"fake-etag\"".to_owned()),
+        ("Last-Modified", "Thu, 05 Nov 2026 00:00:00 GMT".to_owned()),
+    ];
+    let total = body.len();
+    match range {
+        Some((from, to)) => {
+            let from = from.parse::<usize>().unwrap_or_default();
+            let to = to
+                .parse::<usize>()
+                .map_or(total - 1, |to| to.min(total - 1));
+            (
+                StatusCode::PARTIAL_CONTENT,
+                meta,
+                [("Content-Range", format!("bytes {from}-{to}/{total}"))],
+                body[from..=to].to_vec(),
+            )
+                .into_response()
+        }
+        None => (StatusCode::OK, meta, body).into_response(),
+    }
 }
 
 /// `HEAD /bucket/key`: whether the object exists.

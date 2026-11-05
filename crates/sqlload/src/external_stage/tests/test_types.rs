@@ -28,6 +28,8 @@ pub(crate) struct DirectProblemTestCase {
     pub(crate) keys: &'static [&'static str],
     pub(crate) columns: Vec<CopyColumn>,
     pub(crate) masks: Vec<(String, MaskMethod)>,
+    pub(crate) whole_table: bool,
+    pub(crate) shaped_by_loader: bool,
     pub(crate) expected_problem: Option<&'static str>,
 }
 
@@ -43,4 +45,13 @@ pub(crate) struct HashParityTestCase {
     pub(crate) value: &'static str,
     /// The lowercase hex SHA-256 of the value's UTF-8 bytes, as Snowflake's `SHA2(value, 256)` returns it.
     pub(crate) expected_digest: &'static str,
+}
+
+pub(crate) struct PickRouteTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) forced: bool,
+    /// Each step and why it cannot be used, `None` when it can.
+    pub(crate) outcomes: &'static [(&'static str, Option<&'static str>)],
+    /// How many steps were passed over, or the failure.
+    pub(crate) expected_choice: Result<usize, &'static str>,
 }

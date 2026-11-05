@@ -23,8 +23,9 @@ use tokio_postgres::Client;
 
 use crate::test_types::{
     BatchedScenarioTestCase, FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase,
-    LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile, ScenarioTestCase,
-    TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
+    LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
+    RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
+    WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -559,6 +560,134 @@ include = ["*.orders"]
 {settings}
 "#
     )
+}
+
+/// `count` small Parquet files of `day` in hive form, ids from 1, with `extra` when given; `padding` lengthens their names.
+pub(crate) fn day_files(
+    day: &str,
+    (count, padding): (usize, usize),
+    extra: Option<&'static str>,
+) -> Result<Vec<(String, bytes::Bytes)>, String> {
+    (0..count)
+        .map(|index| {
+            let file = ParquetFile {
+                key: "",
+                ids: &[1, 2],
+                score: 1.0,
+                extra,
+            };
+            Ok((
+                format!("day={day}/part-{index:05}{}.parquet", "x".repeat(padding)),
+                parquet_bytes(&file)?,
+            ))
+        })
+        .collect()
+}
+
+/// One Parquet file with a binary column, which the direct `COPY` does not load exactly.
+pub(crate) fn binary_file(key: &str) -> Result<(String, bytes::Bytes), String> {
+    let ids: arrow_array::ArrayRef = std::sync::Arc::new(arrow_array::Int64Array::from(vec![1]));
+    let blobs: arrow_array::ArrayRef =
+        std::sync::Arc::new(arrow_array::BinaryArray::from_vec(vec![b"x".as_slice()]));
+    let batch = RecordBatch::try_from_iter([("id", ids), ("blob", blobs)])
+        .map_err(|error| error.to_string())?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    Ok((key.to_owned(), bytes::Bytes::from(buffer)))
+}
+
+/// Load the case's files into a fresh fake Snowflake; what was planned and sent, and what stayed staged.
+pub(crate) async fn run_route(
+    directory: &std::path::Path,
+    test_case: &RouteTestCase,
+) -> Result<RouteOutcome, String> {
+    let fake =
+        sqlload_testkit::fake_snowflake::main::start_fake_snowflake::start_fake_snowflake().await?;
+    (test_case.prepare)(&fake);
+    let (root, base) = (directory.display().to_string(), fake.base_url.clone());
+    for (key, body) in (test_case.file_set)()? {
+        match test_case.files {
+            RouteFiles::Bucket => {
+                fake.state
+                    .lock()
+                    .objects
+                    .insert(format!("fake-bucket/src/{key}"), body.to_vec());
+            }
+            RouteFiles::Directory => {
+                let folder = open_folder(&Location {
+                    store: StoreKind::Filesystem { root: root.clone() },
+                    prefix: "src/".to_owned(),
+                })
+                .map_err(|error| error.to_string())?;
+                write_file(&folder, &key, body)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+    }
+    let lake = match test_case.files {
+        RouteFiles::Bucket => format!(
+            "kind = \"s3\"\nbucket = \"fake-bucket\"\nregion = \"us-east-1\"\nendpoint = \"{base}\""
+        ),
+        RouteFiles::Directory => format!("kind = \"filesystem\"\nroot = \"{root}\""),
+    };
+    let stage = match test_case.stage.is_empty() {
+        true => String::new(),
+        false => format!("stage = {}\n", test_case.stage.replace("FAKE", &base)),
+    };
+    let text = format!(
+        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\n{stage}\n[connections.lake]\n{lake}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
+        test_case.settings
+    );
+    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (plan, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let state = fake.state.lock();
+    let ids: Vec<u64> = state.driver_queries.iter().map(|(id, _)| *id).collect();
+    Ok(RouteOutcome {
+        error: outcome.err().unwrap_or_default(),
+        plan,
+        sent: state
+            .statements
+            .iter()
+            .chain(state.driver_queries.iter().map(|(_, statement)| statement))
+            .cloned()
+            .collect(),
+        fetches: state
+            .driver_queries
+            .iter()
+            .filter(|(_, statement)| statement.starts_with("PUT "))
+            .count(),
+        staged_left: state
+            .objects
+            .keys()
+            .filter(|key| key.starts_with("fake-bucket/_sqlload/"))
+            .count(),
+        sequence_ids_rise: ids.windows(2).all(|pair| pair[0] < pair[1]),
+    })
+}
+
+/// Which of `wanted` no text of `texts` contains.
+pub(crate) fn not_found<'a>(texts: &[String], wanted: &[&'a str]) -> Vec<&'a str> {
+    wanted
+        .iter()
+        .copied()
+        .filter(|text| !texts.iter().any(|sent| sent.contains(text)))
+        .collect()
+}
+
+/// Which of `unwanted` some text of `texts` contains.
+pub(crate) fn found<'a>(texts: &[String], unwanted: &[&'a str]) -> Vec<&'a str> {
+    unwanted
+        .iter()
+        .copied()
+        .filter(|text| texts.iter().any(|sent| sent.contains(text)))
+        .collect()
 }
 
 /// Plan, apply and load once: the rendered plan, and what apply printed or the error text.

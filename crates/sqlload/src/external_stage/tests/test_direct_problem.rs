@@ -10,12 +10,70 @@ use crate::project::models::MaskMethod;
 fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct() {
     let test_cases = [
         DirectProblemTestCase {
+            description: "shaping = loader forces SQLLoad's route, whatever else fits",
+            source: "raw/shop/orders/",
+            format: SourceFormat::Parquet,
+            keys: &["day=2026-11-04/part-0.parquet"],
+            columns: order_columns(),
+            masks: Vec::new(),
+            whole_table: false,
+            shaped_by_loader: true,
+            expected_problem: Some("the table sets shaping = \"loader\""),
+        },
+        DirectProblemTestCase {
+            description: "a hashed column cannot wait across commits in one session's temporary table",
+            source: "raw/shop/orders/",
+            format: SourceFormat::Parquet,
+            keys: &["day=2026-11-04/part-0.parquet"],
+            columns: order_columns(),
+            masks: vec![("name".to_owned(), MaskMethod::Hash)],
+            whole_table: true,
+            shaped_by_loader: false,
+            expected_problem: Some(
+                "name is hashed and the table is rewritten as a whole, so its plain values could not stay in one session's temporary table",
+            ),
+        },
+        DirectProblemTestCase {
+            description: "JSON pinned over a text column loads directly, parsed",
+            source: "raw/shop/orders/",
+            format: SourceFormat::Parquet,
+            keys: &["day=2026-11-04/part-0.parquet"],
+            columns: vec![column(
+                "profile",
+                ColumnType::Json,
+                CopyValue::File {
+                    file_type: Some(ColumnType::Text),
+                },
+            )],
+            masks: Vec::new(),
+            whole_table: false,
+            shaped_by_loader: false,
+            expected_problem: None,
+        },
+        DirectProblemTestCase {
+            description: "the row number needs no check",
+            source: "raw/shop/orders/",
+            format: SourceFormat::Parquet,
+            keys: &["day=2026-11-04/part-0.parquet"],
+            columns: vec![column(
+                "_sqlload_source_row",
+                ColumnType::Int,
+                CopyValue::SourceRow,
+            )],
+            masks: Vec::new(),
+            whole_table: false,
+            shaped_by_loader: false,
+            expected_problem: None,
+        },
+        DirectProblemTestCase {
             description: "Parquet under the stage url with plain columns loads directly",
             source: "raw/shop/orders/",
             format: SourceFormat::Parquet,
             keys: &["day=2026-11-04/part-0.parquet"],
             columns: order_columns(),
             masks: vec![("name".to_owned(), MaskMethod::Hash)],
+            whole_table: false,
+            shaped_by_loader: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -25,6 +83,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             keys: &["part-0.ndjson"],
             columns: order_columns(),
             masks: Vec::new(),
+            whole_table: false,
+            shaped_by_loader: false,
             expected_problem: Some(
                 "ndjson files are parsed by SQLLoad, whose type inference and checks differ from Snowflake's",
             ),
@@ -36,6 +96,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             keys: &["part-0.parquet"],
             columns: order_columns(),
             masks: Vec::new(),
+            whole_table: false,
+            shaped_by_loader: false,
             expected_problem: Some("the files are outside the stage url s3://lake/raw/"),
         },
         DirectProblemTestCase {
@@ -45,6 +107,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             keys: &["batch=10%3A00/part-0.parquet"],
             columns: order_columns(),
             masks: Vec::new(),
+            whole_table: false,
+            shaped_by_loader: false,
             expected_problem: Some(
                 "batch=10%3A00/part-0.parquet has characters a stage path cannot name exactly",
             ),
@@ -56,6 +120,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             keys: &["part-0.parquet"],
             columns: order_columns(),
             masks: vec![("name".to_owned(), MaskMethod::Hmac)],
+            whole_table: false,
+            shaped_by_loader: false,
             expected_problem: Some(
                 "name is masked with hmac, which Snowflake cannot compute without its key in SQL",
             ),
@@ -73,6 +139,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
                 },
             )],
             masks: vec![("id".to_owned(), MaskMethod::Hash)],
+            whole_table: false,
+            shaped_by_loader: false,
             expected_problem: Some(
                 "id is hashed but is not text in the files; SQLLoad hashes its text",
             ),
@@ -90,22 +158,26 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
                 },
             )],
             masks: Vec::new(),
+            whole_table: false,
+            shaped_by_loader: false,
             expected_problem: Some("id is int in the files but loads as text; SQLLoad converts it"),
         },
         DirectProblemTestCase {
-            description: "JSON columns are not loaded directly",
+            description: "UUID columns are not loaded directly",
             source: "raw/shop/orders/",
             format: SourceFormat::Parquet,
             keys: &["part-0.parquet"],
             columns: vec![column(
                 "meta",
-                ColumnType::Json,
+                ColumnType::Uuid,
                 CopyValue::File {
                     file_type: Some(ColumnType::Json),
                 },
             )],
             masks: Vec::new(),
-            expected_problem: Some("meta is json, which the direct COPY does not load exactly"),
+            whole_table: false,
+            shaped_by_loader: false,
+            expected_problem: Some("meta is uuid, which the direct COPY does not load exactly"),
         },
         DirectProblemTestCase {
             description: "a varchar partition column would be length-checked only by Snowflake",
@@ -114,6 +186,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             keys: &["part-0.parquet"],
             columns: vec![column("code", ColumnType::Varchar(4), CopyValue::Partition)],
             masks: Vec::new(),
+            whole_table: false,
+            shaped_by_loader: false,
             expected_problem: Some(
                 "code is varchar(4), which the direct COPY does not load exactly",
             ),
@@ -133,6 +207,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             files: &files,
             columns: &test_case.columns,
             masks: &test_case.masks,
+            whole_table: test_case.whole_table,
+            shaped_by_loader: test_case.shaped_by_loader,
         });
         assert_eq!(
             problem.as_deref(),

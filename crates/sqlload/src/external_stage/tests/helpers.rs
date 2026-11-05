@@ -2,11 +2,10 @@ use crate::column_types::models::ColumnType;
 use crate::external_stage::main::create_stage::create_stage;
 use crate::external_stage::main::stage_lookup::stage_lookup;
 use crate::external_stage::main::stage_reference::stage_reference;
-use crate::external_stage::main::staged_copies::staged_copies;
 use crate::external_stage::models::{CopyColumn, CopyValue};
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
-use crate::snowflake_destination::models::{ExternalStage, StageObject};
+use crate::snowflake_destination::models::{ExternalStage, StageObject, StageRoute};
 use crate::store_paths::models::{Location, StoreKind};
 use crate::write_sql::models::TableName;
 
@@ -29,6 +28,7 @@ pub(crate) fn stage() -> ExternalStage {
         object: StageObject::Managed {
             integration: "lake_int".to_owned(),
         },
+        keep_staged_files: false,
     }
 }
 
@@ -39,6 +39,7 @@ pub(crate) fn existing_stage() -> ExternalStage {
         object: StageObject::Existing {
             name: "ops.loading.lake_stage".to_owned(),
         },
+        keep_staged_files: false,
     }
 }
 
@@ -125,24 +126,6 @@ pub(crate) fn managed_reference() -> String {
     stage_reference(&stage(), &orders())
 }
 
-/// Staged copies of 1,001 parts: two statements; the first's start and the second whole.
-pub(crate) fn staged_copy_batches() -> String {
-    let staging = TableName {
-        table: "shop__orders__sqlload_staging_load1".to_owned(),
-        ..orders()
-    };
-    let copies = staged_copies(&staging, "@STAGE", "load-1", 1001);
-    let first: String = copies
-        .first()
-        .map(|sql| sql.chars().take(120).collect())
-        .unwrap_or_default();
-    format!(
-        "{};\n{first};\n{}",
-        copies.len(),
-        copies.get(1).cloned().unwrap_or_default()
-    )
-}
-
 /// The direct copies of the case's files from `s3://lake/raw/shop/orders/` (or `source`) into `shop__orders`: how many statements, and the first.
 pub(crate) fn direct_sql(
     files: &[(String, &str)],
@@ -205,7 +188,7 @@ pub(crate) fn rust_hash(value: &str) -> Result<String, String> {
 pub(crate) fn snowflake_hash_sql() -> String {
     use crate::column_types::models::Warehouse;
     use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
-    use crate::write_sql::main::write_statements::write_statements;
+    use crate::write_sql::main::commit_statements::commit_statements;
     use crate::write_sql::models::{WriteMode, WriteStatementsRequest};
     let columns = vec![DesiredColumn {
         name: "name".to_owned(),
@@ -216,17 +199,32 @@ pub(crate) fn snowflake_hash_sql() -> String {
         table: "staging".to_owned(),
         ..orders()
     };
-    let statements = write_statements(
+    let statements = commit_statements(
         &WriteStatementsRequest {
             warehouse: Warehouse::Snowflake,
             table: &orders(),
             columns: &columns,
             mode: &WriteMode::Append,
-            load_id: "l",
-            loaded_at: "t",
             hashed: &["name".to_owned()],
         },
         &staging,
+        (None, true),
     );
-    statements.get(1).cloned().unwrap_or_default()
+    statements.join(";")
+}
+
+/// What `pick_route` says for steps that found `outcomes` (`None` a usable route): the route and those passed over, or the failure.
+pub(crate) fn picked(
+    forced: bool,
+    outcomes: &[(&str, Option<&str>)],
+) -> Result<(String, Vec<String>), String> {
+    let steps: Vec<(String, crate::external_stage::models::StepOutcome)> = outcomes
+        .iter()
+        .map(|(step, problem)| {
+            let outcome = problem.map_or(Ok(StageRoute::User), |reason| Err(reason.to_owned()));
+            ((*step).to_owned(), outcome)
+        })
+        .collect();
+    let choice = crate::external_stage::main::pick_route::pick_route(forced, steps)?;
+    Ok((format!("{:?}", choice.route), choice.passed_over))
 }

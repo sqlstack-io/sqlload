@@ -1,5 +1,6 @@
-use crate::snowflake_destination::tests::helpers::copies;
-use crate::snowflake_destination::tests::test_types::CopyStagedTestCase;
+use crate::column_types::models::ColumnType;
+use crate::snowflake_destination::tests::helpers::{copies, selecting_copy};
+use crate::snowflake_destination::tests::test_types::{CopyStagedTestCase, SelectingCopyTestCase};
 
 const ONE_FILE: &str = "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" FROM @~/sqlload/load-1/00001/ FILES = ('part-00001.parquet') FILE_FORMAT = (TYPE = PARQUET USE_LOGICAL_TYPE = TRUE BINARY_AS_TEXT = FALSE) MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE ON_ERROR = ABORT_STATEMENT FORCE = TRUE";
 
@@ -35,6 +36,23 @@ fn given_a_batchs_staged_files_when_copying_them_then_one_copy_names_up_to_1000_
         assert!(
             first.starts_with(test_case.expected_copies.1),
             "{}: {first}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_table_holding_json_when_copying_staged_files_then_the_copy_parses_it() {
+    let test_cases = [SelectingCopyTestCase {
+        description: "JSON the files hold as text is parsed; other columns are cast; every option stays",
+        columns: vec![("id", ColumnType::Int), ("profile", ColumnType::Json)],
+        expected_copy: "COPY INTO \"RAW\".\"ORDERS\" (\"ID\", \"PROFILE\") FROM (SELECT CAST(GET($1, 'id') AS NUMBER(38,0)), PARSE_JSON(CAST(GET($1, 'profile') AS VARCHAR)) FROM @\"RAW\".%\"ORDERS\"/sqlload/l/00001/) FILES = ('part-00001.parquet') FILE_FORMAT = (TYPE = PARQUET USE_LOGICAL_TYPE = TRUE BINARY_AS_TEXT = FALSE) ON_ERROR = ABORT_STATEMENT FORCE = TRUE",
+    }];
+    for test_case in test_cases {
+        assert_eq!(
+            selecting_copy(&test_case.columns),
+            test_case.expected_copy,
+            "{}",
             test_case.description
         );
     }

@@ -2,6 +2,7 @@
 
 use std::future::Future;
 
+use crate::column_types::models::Warehouse;
 use crate::external_stage::main::create_stage::create_stage;
 use crate::external_stage::main::pick_route::pick_route;
 use crate::external_stage::main::route_reference::table_stage;
@@ -89,10 +90,7 @@ fn planned_stage(stage: &ExternalStage, target: &TableName) -> Option<PlannedSta
     Some(PlannedStage {
         name: stage_reference(stage, target),
         url: stage.location.to_string(),
-        statements: vec![
-            create_schema(target, crate::column_types::models::Warehouse::Snowflake),
-            create,
-        ],
+        statements: vec![create_schema(target, Warehouse::Snowflake), create],
     })
 }
 
@@ -130,14 +128,14 @@ async fn forced_step(
     }
 }
 
-/// `@%table`: the target's for an owned direct append (a table this load creates will be owned), otherwise the staging table's, which the load always owns. Staging tables do not exist yet, so a temporary table stands in for them.
+/// `@%table`: the target's for an owned direct append (a table this load creates will be owned), otherwise the staging table's, which the load always owns. Neither of those two exists yet, so a temporary table stands in for them.
 async fn table_step(request: &RouteRequest<'_>) -> StepOutcome {
     let snowflake = request.snowflake;
     let target = &request.spec.destination;
-    if request.direct_append && !request.table_exists {
-        return Ok(StageRoute::TargetTable);
-    }
-    if request.direct_append && probe_put(snowflake, &table_stage(target)).await.is_ok() {
+    if request.direct_append
+        && request.table_exists
+        && probe_put(snowflake, &table_stage(target)).await.is_ok()
+    {
         return Ok(StageRoute::TargetTable);
     }
     let probe = TableName {
@@ -146,7 +144,7 @@ async fn table_step(request: &RouteRequest<'_>) -> StepOutcome {
     };
     let key = format!("@%{}.{}", target.schema, STAGE_PROBE_TABLE);
     checked(snowflake, key, async {
-        let name = qualified_name(&probe, crate::column_types::models::Warehouse::Snowflake);
+        let name = qualified_name(&probe, Warehouse::Snowflake);
         snowflake
             .driver
             .run(&format!(
@@ -156,8 +154,11 @@ async fn table_step(request: &RouteRequest<'_>) -> StepOutcome {
             .map_err(|error| error.to_string())?;
         probe_put(snowflake, &table_stage(&probe)).await
     })
-    .await
-    .map(|_| StageRoute::StagingTable)
+    .await?;
+    Ok(match request.direct_append && !request.table_exists {
+        true => StageRoute::TargetTable,
+        false => StageRoute::StagingTable,
+    })
 }
 
 /// The no-bytes `PUT` that fetches a stage's upload credentials.
@@ -175,12 +176,8 @@ pub(crate) fn streaming_client(
     snowflake: &SnowflakeDestination,
     table: &TableName,
 ) -> StreamingClient {
-    let stored = |name: &str| {
-        crate::write_sql::main::stored_name::stored_name(
-            name,
-            crate::column_types::models::Warehouse::Snowflake,
-        )
-    };
+    let stored =
+        |name: &str| crate::write_sql::main::stored_name::stored_name(name, Warehouse::Snowflake);
     let mut config = snowflake.config.clone();
     config.database = stored(table.database.as_deref().unwrap_or(&snowflake.database));
     config.schema = stored(&table.schema);

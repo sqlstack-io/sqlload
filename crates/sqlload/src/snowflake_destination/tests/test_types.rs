@@ -11,3 +11,9 @@ pub(crate) struct StaleFoldersTestCase {
     pub(crate) listed: &'static [(&'static str, &'static str)],
     pub(crate) expected_folders: &'static [&'static str],
 }
+
+pub(crate) struct SelectingCopyTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) columns: Vec<(&'static str, crate::column_types::models::ColumnType)>,
+    pub(crate) expected_copy: &'static str,
+}
