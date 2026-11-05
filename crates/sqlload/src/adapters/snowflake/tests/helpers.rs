@@ -3,7 +3,7 @@ use crate::adapters::snowflake::_helpers::create_stage::create_stage;
 use crate::adapters::snowflake::_helpers::pick_route::pick_route;
 use crate::adapters::snowflake::_helpers::stale_folders::stale_folders;
 use crate::adapters::snowflake::main::copy::copy_staged::copy_staged;
-use crate::adapters::snowflake::main::stage::stage_lookup::stage_lookup;
+use crate::adapters::snowflake::main::stage::_stage_lookup::stage_lookup;
 use crate::adapters::snowflake::main::stage::stage_reference::stage_reference;
 use crate::adapters::snowflake::models::CopyStaged;
 use crate::adapters::snowflake::models::{CopyColumn, CopyValue, StepFailure};

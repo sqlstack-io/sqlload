@@ -1,10 +1,13 @@
+pub(in crate::adapters) mod _check_stage;
+pub(in crate::adapters) mod _forced_stage;
 pub(in crate::adapters) mod _remove_stale;
 pub(in crate::adapters) mod _remove_stale_external;
+pub(in crate::adapters) mod _show_stages;
+pub(in crate::adapters) mod _stage_lookup;
 pub(in crate::adapters) mod _stage_parquet;
+pub(in crate::adapters) mod _stage_problem;
+pub(in crate::adapters) mod _stage_route;
+pub(in crate::adapters) mod _writer_accepts;
 pub mod remove_staged;
 pub mod route_reference;
-pub mod show_stages;
-pub mod stage_lookup;
-pub mod stage_problem;
 pub mod stage_reference;
-pub mod stage_route;

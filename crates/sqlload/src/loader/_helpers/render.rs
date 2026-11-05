@@ -4,7 +4,7 @@ use crate::adapters::files::models::{PendingLoad, PendingPhase};
 use crate::adapters::snowflake::models::PlannedStage;
 use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
-use crate::column_types::models::{ColumnType, Warehouse};
+use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::table_plan::is_direct;
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
@@ -374,7 +374,7 @@ fn reload_moves_columns(table: &TablePlan) -> bool {
     let Some(live) = &table.live else {
         return false;
     };
-    if table.mode != WriteMode::Recreate || warehouse != Warehouse::Snowflake {
+    if table.mode != WriteMode::Recreate || !sql_adapter(warehouse).builds_like_target() {
         return false;
     }
     let sql = |column_type: &ColumnType| {

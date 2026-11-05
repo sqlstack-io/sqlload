@@ -30,6 +30,10 @@ impl SqlAdapter for SnowflakeSql {
         Warehouse::Snowflake
     }
 
+    fn builds_like_target(&self) -> bool {
+        true
+    }
+
     fn render_loader_logical_type(&self, column_type: &ColumnType) -> WarehouseType {
         logical_type(column_type)
     }

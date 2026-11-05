@@ -1,6 +1,4 @@
 pub(in crate::loader) mod _check_source;
-pub(in crate::loader) mod _check_target;
-pub(in crate::loader) mod _connect_target;
 pub(in crate::loader) mod _files_context;
 pub(in crate::loader) mod _files_repair;
 pub(in crate::loader) mod _files_schema;

@@ -13,7 +13,9 @@ use crate::sql_api::models::SqlClient;
 use crate::stage_api::models::DriverSession;
 
 /// Clients for `account`; nothing is sent until the first statement.
-pub fn connect_snowflake(account: SnowflakeAccount) -> Result<SnowflakeDestination, ApiError> {
+pub(in crate::adapters) fn connect_snowflake(
+    account: SnowflakeAccount,
+) -> Result<SnowflakeDestination, ApiError> {
     let destination = DestinationConfig {
         kind: DestinationKind::Snowflake,
         account: account.account,

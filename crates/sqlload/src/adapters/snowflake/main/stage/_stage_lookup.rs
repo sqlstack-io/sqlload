@@ -7,7 +7,7 @@ use crate::adapters::snowflake::models::{ExternalStage, StageObject};
 use crate::column_types::models::Warehouse;
 
 /// `SHOW STAGES LIKE ... IN SCHEMA ...` for the stage loads use, and its name as reported.
-pub fn stage_lookup(stage: &ExternalStage) -> StageLookup {
+pub(in crate::adapters) fn stage_lookup(stage: &ExternalStage) -> StageLookup {
     let home = &stage.home;
     let snowflake = Warehouse::Snowflake;
     let (schema, name) = match &stage.object {
