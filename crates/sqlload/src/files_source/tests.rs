@@ -4,6 +4,8 @@ mod discover_text_files;
 mod file_selection;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_loader_columns.rs"]
+mod loader_columns;
 #[path = "tests/test_merge_columns.rs"]
 mod merge_columns;
 #[path = "tests/test_read_text_files.rs"]

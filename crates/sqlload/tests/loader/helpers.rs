@@ -22,8 +22,9 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, ParquetFile,
-    ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
+    FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, MetadataRoundTripTestCase,
+    ParquetFile, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
+    WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -642,4 +643,58 @@ pub(crate) async fn partition_values(
         .collect();
     values.sort();
     Ok(values)
+}
+
+/// Load `public.orders` from Postgres into a files target on SeaweedFS, then read those files with a files source into DuckDB, twice (running `change` in between); the files source's second plan and the check of the DuckDB table, with `{stamp}` in `check` the time between the second files load and the second DuckDB load.
+pub(crate) async fn run_metadata_round_trip(
+    client: &Client,
+    port: u16,
+    endpoint: &str,
+    test_case: &MetadataRoundTripTestCase,
+    check: &str,
+) -> Result<(String, Option<String>), String> {
+    client
+        .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
+        .await
+        .map_err(|error| error.to_string())?;
+    client
+        .batch_execute(test_case.setup)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (_, connection) = seaweedfs_store(endpoint, std::path::Path::new(""));
+    let prefix = format!("lake-{}", uuid::Uuid::new_v4());
+    let target_text = files_target_project(port, &connection, "", "write_strategy = \"replace\"")
+        .replace("PREFIX", &prefix);
+    let source_text = format!(
+        "[connections.lake]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"{prefix}/app/orders/\"\nwrite_strategy = \"replace\"\n"
+    );
+    let target_project =
+        parse_project(&target_text, &|_| None).map_err(|error| error.to_string())?;
+    let source_project =
+        parse_project(&source_text, &|_| None).map_err(|error| error.to_string())?;
+    let targets = connect_targets(&target_project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let duckdb_targets = connect_targets(&source_project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(Destination::DuckDb(duckdb)) = duckdb_targets.get("dev") else {
+        return Err("no DuckDB destination".to_owned());
+    };
+    let mut plan = String::new();
+    let mut stamp = String::new();
+    for change in ["", test_case.change] {
+        client
+            .batch_execute(change)
+            .await
+            .map_err(|error| error.to_string())?;
+        run_once(&target_text, &targets, &PlanOptions::default()).await?;
+        stamp = sqlload::time_text::main::now_utc_text::now_utc_text();
+        plan = plan_text(&source_text, &duckdb_targets).await?;
+        run_once(&source_text, &duckdb_targets, &PlanOptions::default()).await?;
+    }
+    let checked = query_text(duckdb, check.replace("{stamp}", &stamp))
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok((plan, checked))
 }

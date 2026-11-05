@@ -89,3 +89,11 @@ pub(crate) struct SkippedFilesTestCase {
     /// Files read and files skipped.
     pub(crate) expected_counts: (usize, usize),
 }
+
+pub(crate) struct LoaderColumnsTestCase {
+    pub(crate) description: &'static str,
+    /// The columns a file has.
+    pub(crate) found: &'static [&'static str],
+    /// The columns kept, then those dropped as the file spells them.
+    pub(crate) expected_columns: (&'static [&'static str], &'static [&'static str]),
+}

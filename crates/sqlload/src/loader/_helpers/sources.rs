@@ -167,11 +167,17 @@ pub(crate) async fn discover_files_table(
         .collect();
     let overrides = source.tables.get(source_name);
     let pinned_only = pinned_unsampled(overrides, &table, &added, encoding.format)?;
-    let notes: Vec<String> = pinned_only
-        .iter()
-        .map(|name| {
+    let dropped = (!table.dropped.is_empty()).then(|| {
+        format!(
+            "dropped {} from the files (replaced by this load's)",
+            table.dropped.join(", ")
+        )
+    });
+    let notes: Vec<String> = dropped
+        .into_iter()
+        .chain(pinned_only.iter().map(|name| {
             format!("pinned column {name} was not seen in the sampled files (check the name)")
-        })
+        }))
         .collect();
     let typed = table
         .columns

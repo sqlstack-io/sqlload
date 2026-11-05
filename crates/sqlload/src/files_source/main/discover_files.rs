@@ -4,7 +4,8 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::models::OpenFolder;
 use crate::files_source::_helpers::parquet::footers::footer_schema;
 use crate::files_source::_helpers::plan::columns::{
-    ColumnMerge, SampledColumn, case_problems, file_columns, merge_columns, schema_columns,
+    ColumnMerge, SampledColumn, case_problems, drop_loader_columns, file_columns, merge_columns,
+    schema_columns,
 };
 use crate::files_source::_helpers::plan::encoding::{file_codec, file_names};
 use crate::files_source::_helpers::plan::partitions::data_file;
@@ -15,7 +16,7 @@ use crate::files_source::constants::{
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::{Codec, DataFile, FilesEncoding, FilesTable, SourceFormat};
 
-/// The `encoding` files under `folder` with their `partition_columns` values, and the schema of the newest ones.
+/// The `encoding` files under `folder` with their `partition_columns` values, and the schema of the newest ones without the loader's own columns, which this load fills.
 pub async fn discover_files(
     folder: &OpenFolder,
     partition_columns: &[String],
@@ -29,8 +30,15 @@ pub async fn discover_files(
         .collect();
     let text_format = encoding.format != SourceFormat::Parquet;
     let mut columns: Vec<SampledColumn> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
     for (data, codec) in files.iter().rev().take(SCHEMA_SAMPLE_FILES) {
-        let found = file_columns_of(folder, data, *codec, encoding).await?;
+        let (found, loader) =
+            drop_loader_columns(file_columns_of(folder, data, *codec, encoding).await?);
+        for name in loader {
+            if !dropped.contains(&name) {
+                dropped.push(name);
+            }
+        }
         let merge = ColumnMerge {
             key: &data.file.relative_key,
             replaced: &replaced,
@@ -48,6 +56,7 @@ pub async fn discover_files(
         columns: file_columns(columns),
         problems,
         skipped,
+        dropped,
     })
 }
 
