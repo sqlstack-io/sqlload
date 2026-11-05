@@ -3,9 +3,7 @@
 use crate::parity::constants::TEXT_COMPARED_TYPES;
 use crate::parity::models::{ComparedColumn, ComparisonSql};
 
-/// Typed `MINUS` both ways on `columns` of two tables (qualified and quoted), so values compare at their full precision; only VARIANT-like columns, which `MINUS` cannot compare, go through `TO_VARCHAR`. `MINUS` keeps distinct rows, so the row counts are compared too.
-///
-/// Known blind spots: `-0.0 = 0.0` in FLOAT, and TIMESTAMP_TZ compares by instant (both sides are written in a UTC session), so neither a zero's sign nor a stored offset can show as a difference.
+/// Typed `MINUS` both ways on `columns` of two tables (qualified and quoted), so values compare at their full precision; only VARIANT-like columns, which `MINUS` cannot compare, go through `TO_VARCHAR`. `MINUS` keeps distinct rows, so the row counts are compared too. Known blind spots: `-0.0 = 0.0` in FLOAT, and TIMESTAMP_TZ compares by instant (both sides are written in a UTC session), so neither a zero's sign nor a stored offset can show as a difference.
 pub fn comparison_sql(
     (left, right): (&str, &str),
     columns: &[ComparedColumn<'_>],
