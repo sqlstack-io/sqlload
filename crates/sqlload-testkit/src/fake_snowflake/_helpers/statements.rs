@@ -2,6 +2,7 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use crate::fake_snowflake::_helpers::objects::{copy_files, parse_stage_pipe};
+use crate::fake_snowflake::constants::NUMBER_TYPE;
 use crate::fake_snowflake::models::{FakeTable, SharedState};
 
 type Outcome = Result<Value, (StatusCode, Value)>;
@@ -158,7 +159,7 @@ fn run_one(state: &SharedState, body: &[u8]) -> Outcome {
             .filter(|(table, _)| statement.contains(&format!("TABLE_NAME = '{table}'")))
             .flat_map(|(_, found)| found.columns.iter())
             .map(|(column, data_type)| {
-                let numeric = data_type == "NUMBER";
+                let numeric = data_type == NUMBER_TYPE;
                 vec![
                     json!(column),
                     json!(data_type),

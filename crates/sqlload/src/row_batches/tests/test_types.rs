@@ -25,3 +25,9 @@ pub(crate) struct NormaliseBatchTestCase {
     pub(crate) batch: fn() -> RecordBatch,
     pub(crate) expected_batch: &'static str,
 }
+
+pub(crate) struct TextRowsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) column: arrow_array::ArrayRef,
+    pub(crate) expected_values: &'static [Option<&'static str>],
+}

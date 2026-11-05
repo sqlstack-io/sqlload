@@ -756,6 +756,12 @@ pub(crate) async fn run_route(
             .iter()
             .chain(state.driver_queries.iter().map(|(_, statement)| statement))
             .cloned()
+            .chain(
+                state
+                    .tables
+                    .values()
+                    .flat_map(|table| table.rows.iter().map(ToString::to_string)),
+            )
             .collect(),
         fetches: state
             .driver_queries

@@ -101,10 +101,14 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
-            description: "an append streaming goes through staging too",
+            description: "an append streaming goes through staging too, with rows keyed by stored names and values as text",
             prepare: no_internal_stage,
             expected_plan: &["Snowpipe Streaming into a transient staging table"],
-            expected_sent: &["INSERT INTO \"DB\".\"RAW\".\"ORDERS\""],
+            expected_sent: &[
+                "INSERT INTO \"DB\".\"RAW\".\"ORDERS\"",
+                "\"ID\":\"1\"",
+                "\"_SQLLOAD_SOURCE_ROW\":\"1\"",
+            ],
             expected_unsent: &["COPY INTO"],
             ..BASE
         },

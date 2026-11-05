@@ -8,3 +8,5 @@ mod merge_schema;
 mod normalise_batch;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_text_rows.rs"]
+mod text_rows;
