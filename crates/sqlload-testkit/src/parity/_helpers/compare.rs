@@ -289,7 +289,7 @@ async fn compare(
             );
         }
     }
-    let direct = left_plan.contains("destination loads parquet files from");
+    let direct = left_plan.contains("destination loads ");
     if test_case.left_is_direct && left.is_none() && !direct {
         return Ok(format!("the left side did not load directly:\n{left_plan}"));
     }

@@ -3,7 +3,9 @@ use crate::auth::models::Authenticator;
 use crate::column_types::models::ColumnType;
 use crate::config::models::{AuthConfig, DestinationConfig};
 use crate::file_store::models::OpenFolder;
-use crate::files_source::models::{BatchFooters, DataFile, FilesRead, SourceFormat, StoredRead};
+use crate::files_source::models::{
+    BatchFooters, DataFile, FilesEncoding, FilesRead, SourceFormat, StoredRead,
+};
 use crate::loader::models::TableSpec;
 use crate::parquet_parts::models::PartWriter;
 use crate::project::models::MaskMethod;
@@ -167,6 +169,9 @@ pub struct DirectCopy<'a> {
     pub source: &'a Location,
     pub files: &'a [DataFile],
     pub columns: &'a [CopyColumn],
+    pub encoding: &'a FilesEncoding,
+    /// Columns whose types were inferred from sampled values, whose every value must fit the inferred type (JSON and NDJSON).
+    pub inferred: &'a [String],
 }
 
 /// One `COPY` statement and the files it loads.

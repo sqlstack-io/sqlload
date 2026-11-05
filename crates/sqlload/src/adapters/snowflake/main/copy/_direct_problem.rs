@@ -11,7 +11,7 @@ pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<Str
     if check.shaped_by_loader {
         return Some("the table sets shaping = \"loader\"".to_owned());
     }
-    if check.format != SourceFormat::Parquet {
+    if check.format == SourceFormat::Csv {
         return Some(format!(
             "{} files are parsed by SQLLoad, whose type inference and checks differ from Snowflake's",
             check.format

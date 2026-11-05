@@ -14,6 +14,13 @@ const JSON: &str =
     "write_strategy = \"append\"\n[sources.SOURCE.tables.SOURCE]\ncolumns = { note = \"json\" }";
 const JSON_LOADER: &str = "write_strategy = \"append\"\nshaping = \"loader\"\n[sources.SOURCE.tables.SOURCE]\ncolumns = { note = \"json\" }";
 const JSON_STAGING: &str = "write_strategy = \"replace\"\nshaping = \"loader\"\n[sources.SOURCE.tables.SOURCE]\ncolumns = { note = \"json\" }";
+const NDJSON: &str = "write_strategy = \"append\"\nformat = \"ndjson\"";
+const NDJSON_LOADER: &str =
+    "write_strategy = \"append\"\nformat = \"ndjson\"\nshaping = \"loader\"";
+const JSON_FILES: &str = "write_strategy = \"append\"\nformat = \"json\"";
+const JSON_FILES_LOADER: &str =
+    "write_strategy = \"append\"\nformat = \"json\"\nshaping = \"loader\"";
+const NDJSON_PINNED_LOADER: &str = "write_strategy = \"append\"\nformat = \"ndjson\"\nshaping = \"loader\"\n[sources.SOURCE.tables.SOURCE]\ncolumns = { coupon = \"text\" }";
 const BY_DAY: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"day\"";
 const BY_DAY_LOADER: &str =
     "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\nshaping = \"loader\"";
@@ -147,6 +154,75 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
                 ..BASE
             },
             expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "NDJSON of every inferred type, loaded by the direct COPY with the inferred types checked in SQL",
+            case: ParityCase {
+                name: "ndjson",
+                files: ParityFiles::NdjsonValues,
+                left: Side {
+                    settings: NDJSON,
+                    ..DIRECT
+                },
+                right: Side {
+                    settings: NDJSON_LOADER,
+                    ..DIRECT
+                },
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "json files as a top-level array and as objects over several lines, with row numbers",
+            case: ParityCase {
+                name: "json_layouts",
+                files: ParityFiles::JsonLayouts,
+                left: Side {
+                    settings: JSON_FILES,
+                    ..DIRECT
+                },
+                right: Side {
+                    settings: JSON_FILES_LOADER,
+                    ..DIRECT
+                },
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "decision 125: a key past the sample is found by the batch's key query, added and loaded, as if pinned",
+            case: ParityCase {
+                name: "late_key",
+                files: ParityFiles::LateKey,
+                left: Side {
+                    settings: NDJSON,
+                    ..DIRECT
+                },
+                right: Side {
+                    settings: NDJSON_PINNED_LOADER,
+                    ..DIRECT
+                },
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "a value past the sample that does not fit its inferred type fails both ways",
+            case: ParityCase {
+                name: "late_misfit",
+                files: ParityFiles::LateMisfit,
+                left: Side {
+                    settings: NDJSON,
+                    ..DIRECT
+                },
+                right: Side {
+                    settings: NDJSON_LOADER,
+                    ..DIRECT
+                },
+                left_is_direct: false,
+                ..BASE
+            },
+            expected_outcome: BOTH_FAIL,
         },
         ParityTestCase {
             description: "every candidate type, with NULLs and edge values, and the source columns",
