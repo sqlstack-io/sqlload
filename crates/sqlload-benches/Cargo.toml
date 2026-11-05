@@ -1,0 +1,32 @@
+[package]
+name = "sqlload-benches"
+version.workspace = true
+description = "Instruction-count benchmarks of sqlload's hot paths, run under Callgrind by the CI performance gate."
+edition.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+
+# Empty: the benchmarks are the bench target below.
+[lib]
+test = false
+doctest = false
+bench = false
+
+[dev-dependencies]
+arrow-array.workspace = true
+arrow-schema.workspace = true
+gungraun.workspace = true
+object_store.workspace = true
+# The workspace entry has no default features: no DuckDB or command line, which the benchmarks do not touch.
+sqlload.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[[bench]]
+name = "hot_paths"
+path = "benches/hot_paths/main.rs"
+harness = false
+
+[lints]
+workspace = true
