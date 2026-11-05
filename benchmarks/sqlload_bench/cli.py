@@ -213,9 +213,15 @@ def main(argv: list[str] | None = None) -> int:
 					if not record["valid"]:
 						result.status, result.note = "invalid", record["error"][:300]
 			shutil.rmtree(work / scenario.name, ignore_errors=True)
+			write_results(args, sizes, started, results)
 	finally:
 		if pg is not None:
 			pg.stop()
+	return finish(args, sizes, started, results)
+
+
+def write_results(args: argparse.Namespace, sizes: datagen.Sizes, started: datetime, results: list[Result]) -> tuple[dict[str, Any], str]:
+	"""Write results.json and results.md as they stand, so a run cut short keeps what it measured."""
 	summaries = [result.summary() for result in results]
 	header = (
 		f"## SQLLoad benchmarks ({args.size}, seed {args.seed}, median of {args.runs} after {args.warmup} warm-up)\n\n"
@@ -224,13 +230,19 @@ def main(argv: list[str] | None = None) -> int:
 	document = {"started": started.isoformat(), "finished": datetime.now(UTC).isoformat(), "size": args.size, "sizes": sizes.__dict__,
 		"seed": args.seed, "runs": args.runs, "warmup": args.warmup, "versions": versions(), "machine": machine(), "results": summaries}
 	(args.out / "results.json").write_text(json.dumps(document, indent=1, default=str))
+	table = markdown(summaries, header)
+	(args.out / "results.md").write_text(table)
+	return document, table
+
+
+def finish(args: argparse.Namespace, sizes: datagen.Sizes, started: datetime, results: list[Result]) -> int:
+	document, table = write_results(args, sizes, started, results)
+	summaries = document["results"]
 	with (args.out / "history.jsonl").open("a") as history:
 		# One line per suite run, so improvement over time stays visible after results.json is replaced.
 		kept = ("scenario", "competitor", "rows", "status", "wall_s", "cpu_s", "peak_rss_mb", "rows_per_s")
 		line = {key: document[key] for key in ("started", "size", "seed", "versions")}
 		history.write(json.dumps({**line, "results": [{key: s[key] for key in kept} for s in summaries]}, default=str) + "\n")
-	table = markdown(summaries, header)
-	(args.out / "results.md").write_text(table)
 	print(table)
 	return 0 if all(s["status"] in {"ok", "n/a", "skipped"} for s in summaries) else 1
 
