@@ -56,7 +56,7 @@ bench-compare: bench-wheel
 	cd benchmarks/envs/ingestr && uv sync --quiet --locked
 	cd benchmarks && .venv/bin/python -m sqlload_bench --out $(abspath $(BENCH_OUT)) $(BENCH_ARGS)
 
-# The Snowflake scenarios, on your dev schema; every variable they need is in benchmarks/README.md.
+# The Snowflake scenarios, on a schema of your own; every variable they need is in benchmarks/README.md.
 bench-snowflake:
 	$(MAKE) bench-compare BENCH_GROUPS='--group snowflake' BENCH_ARGS='--scenarios snowflake $(BENCH_ARGS)'
 

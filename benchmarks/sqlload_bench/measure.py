@@ -71,6 +71,11 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s
 		try:
 			returncode = child.wait(timeout=timeout_s)
 		except subprocess.TimeoutExpired:
+			try:
+				for grandchild in psutil.Process(child.pid).children(recursive=True):
+					grandchild.kill()
+			except psutil.Error:
+				pass
 			child.kill()
 			returncode = child.wait()
 		wall = time.perf_counter() - start
