@@ -187,6 +187,7 @@ pub(crate) fn staging_changes<A: SqlAdapter + ?Sized>(
                 .map(|column| LiveColumn {
                     name: adapter.stored_name(&column.name),
                     column_type: column.column_type.clone(),
+                    fraction_digits: None,
                 })
                 .collect();
             for column in started {

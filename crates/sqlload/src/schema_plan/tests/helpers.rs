@@ -22,6 +22,7 @@ pub(crate) fn live(name: &str, column_type: ColumnType) -> LiveColumn {
     LiveColumn {
         name: name.to_owned(),
         column_type,
+        fraction_digits: None,
     }
 }
 

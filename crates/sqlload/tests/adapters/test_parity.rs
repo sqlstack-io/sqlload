@@ -65,7 +65,7 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
             expected_outcome: SAME,
         },
         ParityTestCase {
-            description: "milliseconds and microseconds with sub-millisecond digits, before and after 1970; seconds stay on SQLLoad, so they prove nothing here",
+            description: "milliseconds and microseconds with sub-millisecond digits, before and after 1970",
             case: ParityCase {
                 name: "timestamps",
                 files: ParityFiles::TimestampEdges,
@@ -106,6 +106,44 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
             case: ParityCase {
                 name: "integers",
                 files: ParityFiles::IntegerEdges,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "nanosecond timestamps and times, kept whole at TIMESTAMP(9) and TIME(9), wall-clock, UTC and another zone, before and after 1970",
+            case: ParityCase {
+                name: "nanos",
+                files: ParityFiles::NanoTimestamps,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "INT96 timestamps, decoded by the stage itself at full precision",
+            case: ParityCase {
+                name: "int96",
+                files: ParityFiles::Int96Timestamps,
+                embedded_schema: false,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "seconds, Date64, UInt64, dictionaries, binary, times and a 256-bit decimal, through an embedded schema",
+            case: ParityCase {
+                name: "stored_embedded",
+                files: ParityFiles::StoredTypes,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "the same types with no embedded schema, as a file from another writer",
+            case: ParityCase {
+                name: "stored_inferred",
+                files: ParityFiles::StoredTypes,
+                embedded_schema: false,
                 ..BASE
             },
             expected_outcome: SAME,

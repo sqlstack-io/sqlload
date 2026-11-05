@@ -27,6 +27,7 @@ pub(in crate::adapters) async fn describe_table(
                     scale: row.get(3)?,
                     char_length: row.get(4)?,
                 }),
+                fraction_digits: None,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)

@@ -41,6 +41,12 @@ pub enum ParityFiles {
     DecimalEdges,
     /// The minimum and maximum of each integer width.
     IntegerEdges,
+    /// Nanosecond timestamps and times, wall-clock, UTC and in another zone, with digits below the microsecond before and after 1970.
+    NanoTimestamps,
+    /// INT96 timestamps, as older writers store them, with nanosecond digits before and after 1970 (no embedded schema: this writer has no Arrow type for INT96).
+    Int96Timestamps,
+    /// Types whose files need more than a plain cast or were refused before: seconds stored as bare integers, Date64, UInt64, dictionaries, binary, times and a 256-bit decimal.
+    StoredTypes,
     /// No files: the comparison itself, on tables that differ only at microseconds, and that do not differ.
     ComparisonSelfTest,
 }

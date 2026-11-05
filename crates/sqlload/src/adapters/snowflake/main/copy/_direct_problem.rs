@@ -55,7 +55,7 @@ pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<Str
     for (name, method) in check.masks {
         let column = check.columns.iter().find(|column| column.name == *name);
         let text_file = column.is_some_and(|column| match &column.value {
-            CopyValue::File { file_type } => file_type.as_ref().is_none_or(|file_type| {
+            CopyValue::File { file_type, .. } => file_type.as_ref().is_none_or(|file_type| {
                 *file_type == crate::column_types::models::ColumnType::Text
             }),
             _ => true,
@@ -108,6 +108,7 @@ pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<Str
         }
         if let CopyValue::File {
             file_type: Some(file_type),
+            ..
         } = &column.value
             && *file_type != column.column_type
             && !(*file_type == crate::column_types::models::ColumnType::Text

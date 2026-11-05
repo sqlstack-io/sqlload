@@ -483,6 +483,7 @@ impl Publisher {
             files,
             footers,
             mode: &mode,
+            live: self.table.live.as_deref(),
         };
         load_files(&mut self.writer, &batch).await
     }

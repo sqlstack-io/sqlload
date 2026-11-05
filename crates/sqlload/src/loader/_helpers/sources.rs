@@ -15,7 +15,7 @@ use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
 use crate::files_source::models::{
     BatchFooters, DataFile, FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat,
-    TextChecks,
+    StoredRead, TextChecks,
 };
 use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::source_target;
@@ -480,11 +480,24 @@ pub(crate) async fn plan_files(
             .collect(),
         ..request.files.checks.clone()
     };
+    let nanos: Vec<String> = match spec.warehouse {
+        Warehouse::DuckDb => Vec::new(),
+        Warehouse::Snowflake | Warehouse::Parquet => request
+            .files
+            .table
+            .columns
+            .iter()
+            .filter(|column| column.stored_read == StoredRead::Nanos)
+            .filter(|column| !spec.pinned.contains_key(&column.name))
+            .map(|column| column.name.clone())
+            .collect(),
+    };
     Ok(select_files(&selection).map(|files| FilesRead {
         files,
         encoding: request.files.encoding.clone(),
         checks,
         columns,
+        nanos,
         batch_rows: SOURCE_BATCH_ROWS,
     }))
 }

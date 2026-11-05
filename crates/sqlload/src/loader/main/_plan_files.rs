@@ -149,6 +149,7 @@ async fn live_schema(
             .map(|column| LiveColumn {
                 name: column.name,
                 column_type: column.column_type.unwrap_or_else(ColumnType::Native),
+                fraction_digits: None,
             })
             .collect()
     });

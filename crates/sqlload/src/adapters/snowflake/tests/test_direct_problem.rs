@@ -3,6 +3,7 @@ use crate::adapters::snowflake::models::{CopyValue, DirectCheck};
 use crate::adapters::snowflake::tests::helpers::{column, data_file, lake, order_columns, stage};
 use crate::adapters::snowflake::tests::test_types::DirectProblemTestCase;
 use crate::column_types::models::ColumnType;
+use crate::files_source::models::StoredRead;
 use crate::files_source::models::{DataFile, SourceFormat};
 use crate::project::models::MaskMethod;
 
@@ -54,6 +55,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
                 ColumnType::Json,
                 CopyValue::File {
                     file_type: Some(ColumnType::Text),
+                    stored: StoredRead::Plain,
+                    short: false,
                 },
             )],
             masks: Vec::new(),
@@ -147,6 +150,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
                 ColumnType::Text,
                 CopyValue::File {
                     file_type: Some(ColumnType::Int),
+                    stored: StoredRead::Plain,
+                    short: false,
                 },
             )],
             masks: vec![("id".to_owned(), MaskMethod::Hash)],
@@ -166,6 +171,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
                 ColumnType::Text,
                 CopyValue::File {
                     file_type: Some(ColumnType::Int),
+                    stored: StoredRead::Plain,
+                    short: false,
                 },
             )],
             masks: Vec::new(),
@@ -183,6 +190,8 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
                 ColumnType::Uuid,
                 CopyValue::File {
                     file_type: Some(ColumnType::Json),
+                    stored: StoredRead::Plain,
+                    short: false,
                 },
             )],
             masks: Vec::new(),

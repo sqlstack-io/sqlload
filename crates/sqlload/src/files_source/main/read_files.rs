@@ -19,10 +19,11 @@ pub async fn read_files(
     footers: &BatchFooters,
     mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), String>,
 ) -> Result<u64, FilesError> {
-    let schema = output_schema(&request.columns).map_err(|reason| FilesError::File {
-        key: folder.location.to_string(),
-        reason,
-    })?;
+    let schema =
+        output_schema(&request.columns, &request.nanos).map_err(|reason| FilesError::File {
+            key: folder.location.to_string(),
+            reason,
+        })?;
     let mut rows: u64 = 0;
     for data in &request.files {
         let failed = |reason: String| FilesError::File {

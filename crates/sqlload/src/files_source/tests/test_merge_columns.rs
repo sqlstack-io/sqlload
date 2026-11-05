@@ -47,6 +47,7 @@ fn given_int_and_float_in_different_files_when_merging_then_text_formats_widen_a
                 name: "v".to_owned(),
                 column_type: Some(Ok(column_type)),
                 direct_refusal: None,
+                stored_read: crate::files_source::models::StoredRead::Plain,
             }]
         };
         let merge = ColumnMerge {

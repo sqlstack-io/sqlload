@@ -47,6 +47,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
         .map(|(name, column_type)| LiveColumn {
             name: (*name).to_owned(),
             column_type: column_type.clone(),
+            fraction_digits: None,
         })
         .collect();
     let live = Some(live.as_slice()).filter(|live| !live.is_empty());

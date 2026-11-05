@@ -1,18 +1,33 @@
 use std::sync::Arc;
 
-use arrow_array::types::{Date32Type, Decimal128Type};
+use arrow_array::types::{Date32Type, Decimal128Type, Decimal256Type, Int16Type, Int32Type};
 use arrow_array::{
-    ArrayRef, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-    Int64Array, PrimitiveArray, RecordBatch, StringArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, UInt8Array, UInt16Array, UInt32Array,
+    ArrayRef, BinaryArray, BooleanArray, Date64Array, DictionaryArray, FixedSizeBinaryArray,
+    Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, PrimitiveArray,
+    RecordBatch, StringArray, Time32MillisecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
 };
 use bytes::Bytes;
 
+/// A 256-bit decimal's integer.
+type Wide = <Decimal256Type as arrow_array::ArrowPrimitiveType>::Native;
+
 use crate::parity::models::ParityFiles;
 
-/// The case's files: each key and its rows.
-pub(crate) fn case_files(files: ParityFiles) -> Result<Vec<(&'static str, RecordBatch)>, String> {
-    match files {
+/// The case's files: each key and its Parquet bytes, with or without the embedded Arrow schema.
+pub(crate) fn case_files(
+    files: ParityFiles,
+    embedded_schema: bool,
+) -> Result<Vec<(&'static str, Bytes)>, String> {
+    if files == ParityFiles::Int96Timestamps {
+        return Ok(vec![("part-0.parquet", int96_file()?)]);
+    }
+    let batches = match files {
+        ParityFiles::NanoTimestamps => nano_timestamps(),
+        ParityFiles::StoredTypes => stored_types(),
+        ParityFiles::Int96Timestamps => Ok(Vec::new()),
         ParityFiles::EveryType => every_type(),
         ParityFiles::Hashed => hashed_values(),
         ParityFiles::Json => json_values(),
@@ -25,8 +40,211 @@ pub(crate) fn case_files(files: ParityFiles) -> Result<Vec<(&'static str, Record
         ParityFiles::DecimalEdges => decimal_edges(),
         ParityFiles::IntegerEdges => integer_edges(),
         ParityFiles::ComparisonSelfTest => Ok(Vec::new()),
-    }
+    }?;
+    batches
+        .into_iter()
+        .map(|(key, batch)| Ok((key, parquet_file(&batch, embedded_schema)?)))
+        .collect()
 }
+
+/// Nanoseconds since the epoch: below the microsecond before and after 1970, one nanosecond either side of it, and a NULL.
+const NANO_INSTANTS: [Option<i64>; 6] = [
+    Some(-1_500_000_000_123_456_789),
+    Some(-1),
+    Some(0),
+    Some(1),
+    Some(1_700_000_000_987_654_321),
+    None,
+];
+
+/// Nanosecond timestamps and times.
+fn nano_timestamps() -> Result<Vec<(&'static str, RecordBatch)>, String> {
+    let instants = || TimestampNanosecondArray::from(NANO_INSTANTS.to_vec());
+    let batch = RecordBatch::try_from_iter([
+        ("id", array(Int64Array::from(vec![1, 2, 3, 4, 5, 6]))),
+        ("at_wall", array(instants())),
+        ("at_utc", array(instants().with_timezone("UTC"))),
+        ("at_zoned", array(instants().with_timezone("+01:00"))),
+        (
+            "time_of_day",
+            array(Time64NanosecondArray::from(vec![
+                Some(1),
+                Some(999),
+                Some(1_000),
+                Some(43_200_123_456_789),
+                Some(86_399_999_999_999),
+                None,
+            ])),
+        ),
+    ])
+    .map_err(|error| error.to_string())?;
+    Ok(vec![("part-0.parquet", batch)])
+}
+
+/// Types whose files need more than a plain cast, or were refused before.
+fn stored_types() -> Result<Vec<(&'static str, RecordBatch)>, String> {
+    let names = DictionaryArray::<Int32Type>::from_iter([Some("a"), Some("b"), Some("a"), None]);
+    let codes: DictionaryArray<Int16Type> = vec![Some("x"), None, Some("x"), Some("y")]
+        .into_iter()
+        .collect();
+    let wide = PrimitiveArray::<Decimal256Type>::from(vec![
+        Some(Wide::from_i128(1_500)),
+        Some(Wide::from_i128(
+            -99_999_999_999_999_999_999_999_999_999_999_999_999,
+        )),
+        Some(Wide::from_i128(0)),
+        None,
+    ])
+    .with_precision_and_scale(38, 3)
+    .map_err(|error| error.to_string())?;
+    let batch = RecordBatch::try_from_iter([
+        ("id", array(Int64Array::from(vec![1, 2, 3, 4]))),
+        (
+            "at_seconds",
+            array(
+                TimestampSecondArray::from(vec![
+                    Some(-1_500_000_000),
+                    Some(0),
+                    Some(1_700_000_000),
+                    None,
+                ])
+                .with_timezone("UTC"),
+            ),
+        ),
+        (
+            "wall_seconds",
+            array(TimestampSecondArray::from(vec![
+                Some(-1),
+                Some(0),
+                Some(253_402_300_799),
+                None,
+            ])),
+        ),
+        (
+            "day64",
+            array(Date64Array::from(vec![
+                Some(-86_400_000 * 400),
+                Some(0),
+                Some(86_400_000 * 20_000),
+                None,
+            ])),
+        ),
+        (
+            "unsigned",
+            array(UInt64Array::from(vec![
+                Some(0),
+                Some(u64::MAX),
+                Some(1),
+                None,
+            ])),
+        ),
+        ("names", array(names)),
+        ("codes", array(codes)),
+        (
+            "bytes",
+            array(BinaryArray::from(vec![
+                Some(&b"\x00\xffab"[..]),
+                Some(&b""[..]),
+                Some(&b"plain"[..]),
+                None,
+            ])),
+        ),
+        (
+            "fixed",
+            array(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                    vec![
+                        Some(b"0123456789abcdef".to_vec()),
+                        Some(vec![0; 16]),
+                        None,
+                        Some(vec![255; 16]),
+                    ]
+                    .into_iter(),
+                    16,
+                )
+                .map_err(|error| error.to_string())?,
+            ),
+        ),
+        (
+            "millis_of_day",
+            array(Time32MillisecondArray::from(vec![
+                Some(0),
+                Some(86_399_999),
+                Some(1),
+                None,
+            ])),
+        ),
+        (
+            "micros_of_day",
+            array(Time64MicrosecondArray::from(vec![
+                Some(1),
+                Some(86_399_999_999),
+                Some(0),
+                None,
+            ])),
+        ),
+        ("wide", array(wide)),
+    ])
+    .map_err(|error| error.to_string())?;
+    Ok(vec![("part-0.parquet", batch)])
+}
+
+/// An `id` and an INT96 timestamp column, written with the low-level writer since the Arrow writer has no INT96.
+fn int96_file() -> Result<Bytes, String> {
+    use parquet::data_type::{Int64Type as ParquetInt64, Int96, Int96Type};
+    use parquet::file::properties::WriterProperties;
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+    let failed = |error: parquet::errors::ParquetError| error.to_string();
+    let schema = Arc::new(
+        parse_message_type("message m { required int64 id; optional int96 at; }")
+            .map_err(failed)?,
+    );
+    let present: Vec<Int96> = NANO_INSTANTS
+        .iter()
+        .flatten()
+        .map(|nanos| {
+            let day = nanos.div_euclid(NANOS_PER_DAY);
+            let within = nanos.rem_euclid(NANOS_PER_DAY);
+            let mut value = Int96::new();
+            value.set_data(
+                (within & 0xFFFF_FFFF) as u32,
+                (within >> 32) as u32,
+                (day + JULIAN_DAY_OF_EPOCH) as u32,
+            );
+            value
+        })
+        .collect();
+    let levels: Vec<i16> = NANO_INSTANTS
+        .iter()
+        .map(|nanos| i16::from(nanos.is_some()))
+        .collect();
+    let ids: Vec<i64> = (1..=NANO_INSTANTS.len() as i64).collect();
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer =
+        SerializedFileWriter::new(&mut buffer, schema, Arc::new(WriterProperties::default()))
+            .map_err(failed)?;
+    let mut group = writer.next_row_group().map_err(failed)?;
+    let mut column = group.next_column().map_err(failed)?.ok_or("no id column")?;
+    column
+        .typed::<ParquetInt64>()
+        .write_batch(&ids, None, None)
+        .map_err(failed)?;
+    column.close().map_err(failed)?;
+    let mut column = group.next_column().map_err(failed)?.ok_or("no at column")?;
+    column
+        .typed::<Int96Type>()
+        .write_batch(&present, Some(&levels), None)
+        .map_err(failed)?;
+    column.close().map_err(failed)?;
+    group.close().map_err(failed)?;
+    writer.close().map_err(failed)?;
+    Ok(Bytes::from(buffer))
+}
+
+const NANOS_PER_DAY: i64 = 86_400_000_000_000;
+/// The Julian day number of 1970-01-01, which INT96 counts days from.
+const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
 
 fn array<T: arrow_array::Array + 'static>(array: T) -> ArrayRef {
     Arc::new(array)

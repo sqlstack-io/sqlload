@@ -262,6 +262,7 @@ fn infer_and_read((runtime, folder, encoding): TextInput) -> u64 {
             .collect();
         let names: Vec<String> = columns.iter().map(|column| column.name.clone()).collect();
         let request = FilesRead {
+            nanos: Vec::new(),
             files: table.files,
             encoding,
             checks: TextChecks {
