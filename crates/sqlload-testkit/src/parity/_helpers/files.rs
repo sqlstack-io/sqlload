@@ -11,10 +11,61 @@ use arrow_array::{
 };
 use bytes::Bytes;
 
+use crate::parity::models::ParityFiles;
+
 /// A 256-bit decimal's integer.
 type Wide = <Decimal256Type as arrow_array::ArrowPrimitiveType>::Native;
 
-use crate::parity::models::ParityFiles;
+/// Nanoseconds since the epoch: below the microsecond before and after 1970, one nanosecond either side of it, and a NULL.
+const NANO_INSTANTS: [Option<i64>; 6] = [
+    Some(-1_500_000_000_123_456_789),
+    Some(-1),
+    Some(0),
+    Some(1),
+    Some(1_700_000_000_987_654_321),
+    None,
+];
+
+const NANOS_PER_DAY: i64 = 86_400_000_000_000;
+
+/// The Julian day number of 1970-01-01, which INT96 counts days from.
+const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
+
+/// NDJSON of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans, text from strings, numbers and booleans, RFC 3339 timestamps with offsets before and after 1970 and digits below the microsecond, a key given twice (only its last value counts), objects and arrays, NULLs and missing keys.
+const NDJSON_VALUES: &str = concat!(
+    r#"{"id":1,"n":1,"f":1.5,"b":true,"s":"plain","ts":"2026-11-05T12:00:00.123456Z","o":{"x":1,"y":[1,2]},"mixed":"007","u":"Ünïcødé \"q\" \\ x"}"#,
+    "\n",
+    r#"{"id":2,"n":-9223372036854775808,"f":3,"b":false,"s":"","ts":"1969-12-31T23:59:59.999999-02:00","o":[1,{"a":null}],"mixed":7,"u":null}"#,
+    "\n",
+    r#"{"id":3,"n":null,"f":-0.25,"b":null,"ts":null,"o":null,"mixed":true}"#,
+    "\n",
+    r#"{"id":4,"n":9223372036854775807,"f":2e10,"s":"x","ts":"2000-01-01T00:00:00+05:30","o":{},"mixed":"text"}"#,
+    "\n",
+    r#"{"id":5,"s":"first","ts":"2026-01-01T00:00:00.1234567Z","s":"last"}"#,
+    "\n",
+    r#"{"id":6,"ts":"1969-12-31T23:59:59.9999999Z","n":"x","n":6}"#,
+    "\n",
+);
+
+/// A `json` file holding one top-level array of objects.
+const JSON_ARRAY: &str = r#"[{"id":1,"v":"a"},{"id":2,"v":"b"}]"#;
+
+/// A `json` file holding objects one after another, one over two lines.
+const JSON_OBJECTS: &str = "{\"id\":3,\"v\":\"c\"}\n{\"id\":4,\n\"v\":\"d\"}\n";
+
+/// CSV of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans in any case, RFC 3339 timestamps with offsets and digits below the microsecond, text that looks like numbers, quoted delimiters, quotes, backslashes, line breaks and spaces, and empty fields, quoted or not, as NULL.
+const CSV_VALUES: &str = concat!(
+    "id,n,f,b,s,ts,mixed,u\n",
+    "1,1,1.5,true,plain,2026-11-05T12:00:00.123456Z,007,\"Ünïcødé \"\"q\"\" \\ x\"\n",
+    "2,-9223372036854775808,3,FALSE,,1969-12-31T23:59:59.999999-02:00,7,\n",
+    "3,,-0.25,,\"with, comma\",,True,\"line\nbreak\"\n",
+    "4,9223372036854775807,2e10,false,x,2000-01-01T00:00:00+05:30,text,\"   spaced  \"\n",
+    "5,\"\",\"\",\"\",\"\",2026-01-01T00:00:00.1234567Z,\"\",\"\"\n",
+    "6,,,,,1969-12-31T23:59:59.9999999Z,,\n",
+);
+
+/// A CSV file whose header puts the columns in another order and lacks some.
+const CSV_REORDERED: &str = "u,id,s\nz,5,y\n";
 
 /// The case's files: each key and its Parquet bytes, with or without the embedded Arrow schema.
 pub(crate) fn case_files(
@@ -85,16 +136,6 @@ pub(crate) fn case_files(
         .map(|(key, batch)| Ok((key, parquet_file(&batch, embedded_schema)?)))
         .collect()
 }
-
-/// Nanoseconds since the epoch: below the microsecond before and after 1970, one nanosecond either side of it, and a NULL.
-const NANO_INSTANTS: [Option<i64>; 6] = [
-    Some(-1_500_000_000_123_456_789),
-    Some(-1),
-    Some(0),
-    Some(1),
-    Some(1_700_000_000_987_654_321),
-    None,
-];
 
 /// Nanosecond timestamps and times.
 fn nano_timestamps() -> Result<Vec<(&'static str, RecordBatch)>, String> {
@@ -280,10 +321,6 @@ fn int96_file() -> Result<Bytes, String> {
     writer.close().map_err(failed)?;
     Ok(Bytes::from(buffer))
 }
-
-const NANOS_PER_DAY: i64 = 86_400_000_000_000;
-/// The Julian day number of 1970-01-01, which INT96 counts days from.
-const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
 
 fn array<T: arrow_array::Array + 'static>(array: T) -> ArrayRef {
     Arc::new(array)
@@ -642,28 +679,6 @@ pub(crate) fn parquet_file(batch: &RecordBatch, embedded_schema: bool) -> Result
     Ok(Bytes::from(buffer))
 }
 
-/// NDJSON of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans, text from strings, numbers and booleans, RFC 3339 timestamps with offsets before and after 1970 and digits below the microsecond, a key given twice, objects and arrays, NULLs and missing keys.
-const NDJSON_VALUES: &str = concat!(
-    r#"{"id":1,"n":1,"f":1.5,"b":true,"s":"plain","ts":"2026-11-05T12:00:00.123456Z","o":{"x":1,"y":[1,2]},"mixed":"007","u":"Ünïcødé \"q\" \\ x"}"#,
-    "\n",
-    r#"{"id":2,"n":-9223372036854775808,"f":3,"b":false,"s":"","ts":"1969-12-31T23:59:59.999999-02:00","o":[1,{"a":null}],"mixed":7,"u":null}"#,
-    "\n",
-    r#"{"id":3,"n":null,"f":-0.25,"b":null,"ts":null,"o":null,"mixed":true}"#,
-    "\n",
-    r#"{"id":4,"n":9223372036854775807,"f":2e10,"s":"x","ts":"2000-01-01T00:00:00+05:30","o":{},"mixed":"text"}"#,
-    "\n",
-    r#"{"id":5,"s":"first","ts":"2026-01-01T00:00:00.1234567Z","s":"last"}"#,
-    "\n",
-    r#"{"id":6,"ts":"1969-12-31T23:59:59.9999999Z"}"#,
-    "\n",
-);
-
-/// A `json` file holding one top-level array of objects.
-const JSON_ARRAY: &str = r#"[{"id":1,"v":"a"},{"id":2,"v":"b"}]"#;
-
-/// A `json` file holding objects one after another, one over two lines.
-const JSON_OBJECTS: &str = "{\"id\":3,\"v\":\"c\"}\n{\"id\":4,\n\"v\":\"d\"}\n";
-
 /// NDJSON with more records than sampling reads, `id` and `qty` ints, the last record's keys after `id` being `last`.
 fn past_sample(last: &str) -> Bytes {
     let mut text = String::new();
@@ -673,17 +688,3 @@ fn past_sample(last: &str) -> Bytes {
     text.push_str(&format!("{{\"id\":10001,{last}}}\n"));
     Bytes::from(text)
 }
-
-/// CSV of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans in any case, RFC 3339 timestamps with offsets and digits below the microsecond, text that looks like numbers, quoted delimiters, quotes, backslashes, line breaks and spaces, and empty fields, quoted or not, as NULL.
-const CSV_VALUES: &str = concat!(
-    "id,n,f,b,s,ts,mixed,u\n",
-    "1,1,1.5,true,plain,2026-11-05T12:00:00.123456Z,007,\"Ünïcødé \"\"q\"\" \\ x\"\n",
-    "2,-9223372036854775808,3,FALSE,,1969-12-31T23:59:59.999999-02:00,7,\n",
-    "3,,-0.25,,\"with, comma\",,True,\"line\nbreak\"\n",
-    "4,9223372036854775807,2e10,false,x,2000-01-01T00:00:00+05:30,text,\"   spaced  \"\n",
-    "5,\"\",\"\",\"\",\"\",2026-01-01T00:00:00.1234567Z,\"\",\"\"\n",
-    "6,,,,,1969-12-31T23:59:59.9999999Z,,\n",
-);
-
-/// A CSV file whose header puts the columns in another order and lacks some.
-const CSV_REORDERED: &str = "u,id,s\nz,5,y\n";

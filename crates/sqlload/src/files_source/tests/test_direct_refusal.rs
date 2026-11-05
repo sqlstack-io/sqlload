@@ -390,37 +390,37 @@ fn given_a_files_own_column_when_checking_it_then_each_type_needs_its_logical_ty
             description: "Date32 over a bare INT32",
             data_type: DataType::Date32,
             message: Some("message m { optional int32 at; }"),
-            expected: Err("Date32 stored as INT32"),
+            expected_read: Err("Date32 stored as INT32"),
         },
         StoredRefusalTestCase {
             description: "Date32 over its logical type",
             data_type: DataType::Date32,
             message: Some("message m { optional int32 at (DATE); }"),
-            expected: Ok(StoredRead::Plain),
+            expected_read: Ok(StoredRead::Plain),
         },
         StoredRefusalTestCase {
             description: "Decimal128 over a bare INT64",
             data_type: DataType::Decimal128(10, 2),
             message: Some("message m { optional int64 at; }"),
-            expected: Err("Decimal128(10, 2) stored as INT64"),
+            expected_read: Err("Decimal128(10, 2) stored as INT64"),
         },
         StoredRefusalTestCase {
             description: "Decimal128 over its logical type",
             data_type: DataType::Decimal128(10, 2),
             message: Some("message m { optional int64 at (DECIMAL(10,2)); }"),
-            expected: Ok(StoredRead::Plain),
+            expected_read: Ok(StoredRead::Plain),
         },
         StoredRefusalTestCase {
             description: "a timestamp the file does not hold",
             data_type: timestamp(TimeUnit::Microsecond, None),
             message: None,
-            expected: Err("Timestamp(µs) stored as nothing"),
+            expected_read: Err("Timestamp(µs) stored as nothing"),
         },
         StoredRefusalTestCase {
             description: "other types need nothing more",
             data_type: DataType::Float64,
             message: Some("message m { optional double at; }"),
-            expected: Ok(StoredRead::Plain),
+            expected_read: Ok(StoredRead::Plain),
         },
     ];
     for test_case in test_cases {
@@ -430,7 +430,7 @@ fn given_a_files_own_column_when_checking_it_then_each_type_needs_its_logical_ty
                 .as_ref()
                 .copied()
                 .map_err(String::as_str),
-            test_case.expected,
+            test_case.expected_read,
             "{}",
             test_case.description
         );

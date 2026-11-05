@@ -15,8 +15,8 @@ use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
 use crate::files_source::models::{
-    BatchFooters, DataFile, FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat,
-    StoredRead, TextChecks,
+    BatchFooters, DataFile, FileColumn, FileSelection, FilesRead, FilesTable, LoadedFile,
+    SourceFormat, StoredRead, TextChecks,
 };
 use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::source_target;
@@ -382,6 +382,39 @@ fn live_has(live: Option<&[LiveColumn]>, column: &str) -> bool {
     }
 }
 
+/// The columns of `columns` SQLLoad's reader keeps at nanoseconds for `spec`'s warehouse: those the files store at nanoseconds, unless pinned or `live` holds fewer digits.
+pub(crate) fn nanosecond_columns(
+    spec: &TableSpec,
+    columns: &[FileColumn],
+    live: Option<&[LiveColumn]>,
+) -> Vec<String> {
+    match sql_adapter(spec.warehouse).keeps_nanoseconds() {
+        true => columns
+            .iter()
+            .filter(|column| {
+                matches!(
+                    column.stored_read,
+                    StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
+                )
+            })
+            .filter(|column| !spec.pinned.contains_key(&column.name))
+            .filter(|column| !holds_fewer_digits(live, &column.name))
+            .map(|column| column.name.clone())
+            .collect(),
+        false => Vec::new(),
+    }
+}
+
+/// Whether the live column `name` holds fewer than nanosecond digits, so SQLLoad's reader cuts its values to microseconds.
+fn holds_fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> bool {
+    live.into_iter().flatten().any(|existing| {
+        existing.name.eq_ignore_ascii_case(name)
+            && existing
+                .fraction_digits
+                .is_some_and(|digits| digits < i64::from(NANOSECOND_SCALE))
+    })
+}
+
 /// The files to read, or why the table cannot be loaded.
 pub(crate) async fn plan_files(
     request: &FilesPlanRequest<'_>,
@@ -481,31 +514,7 @@ pub(crate) async fn plan_files(
             .collect(),
         ..request.files.checks.clone()
     };
-    let nanos: Vec<String> = match spec.warehouse {
-        Warehouse::DuckDb => Vec::new(),
-        Warehouse::Snowflake | Warehouse::Parquet => request
-            .files
-            .table
-            .columns
-            .iter()
-            .filter(|column| {
-                matches!(
-                    column.stored_read,
-                    StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
-                )
-            })
-            .filter(|column| !spec.pinned.contains_key(&column.name))
-            .filter(|column| {
-                !request.live.into_iter().flatten().any(|live| {
-                    live.name.eq_ignore_ascii_case(&column.name)
-                        && live
-                            .fraction_digits
-                            .is_some_and(|digits| digits < NANOSECOND_SCALE)
-                })
-            })
-            .map(|column| column.name.clone())
-            .collect(),
-    };
+    let nanos = nanosecond_columns(spec, &request.files.table.columns, request.live);
     Ok(select_files(&selection).map(|files| FilesRead {
         files,
         encoding: request.files.encoding.clone(),

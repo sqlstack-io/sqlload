@@ -89,8 +89,8 @@ impl TableWriter for SnowflakeWriter {
 
     async fn rollback_batch(&mut self) {}
 
+    /// Waits for the batch's uploads rather than aborting them: an aborted PUT whose body S3 already received can still land after the files are removed.
     async fn remove_batch_files(&mut self, target: &WriteTarget<'_>) {
-        // Wait for uploads rather than abort them: an aborted PUT S3 has already received can land after the files are removed.
         while self.uploads.join_next().await.is_some() {}
         if !self.staged.is_empty() {
             self.remove_files(target).await;

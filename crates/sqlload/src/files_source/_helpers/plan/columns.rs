@@ -52,6 +52,17 @@ pub(crate) fn schema_columns(schema: &SchemaRef) -> Vec<SampledColumn> {
         .collect()
 }
 
+/// The top-level field `name` of a Parquet schema.
+fn stored_field<'a>(
+    fields: &'a [std::sync::Arc<ParquetType>],
+    name: &str,
+) -> Option<&'a ParquetType> {
+    fields
+        .iter()
+        .find(|field| field.name() == name)
+        .map(AsRef::as_ref)
+}
+
 /// The columns of a Parquet footer, each checked for the direct route against what the file itself stores as well as its Arrow type: plan samples these, and each batch's check reads the same.
 pub(crate) fn parquet_columns(footer: &ArrowReaderMetadata) -> Vec<SampledColumn> {
     let stored = footer
@@ -65,9 +76,8 @@ pub(crate) fn parquet_columns(footer: &ArrowReaderMetadata) -> Vec<SampledColumn
         .fields()
         .iter()
         .map(|field| {
-            let column = stored.iter().find(|column| column.name() == field.name());
             let (direct_refusal, stored_read) =
-                match stored_read(field.data_type(), column.map(AsRef::as_ref)) {
+                match stored_read(field.data_type(), stored_field(stored, field.name())) {
                     Ok(read) => (direct_refusal(field.data_type()), read),
                     Err(refusal) => (Some(refusal), StoredRead::Plain),
                 };

@@ -38,10 +38,7 @@ pub(in crate::adapters) async fn describe_table(
                 scale: row.get(3).and_then(number),
                 char_length: row.get(4).and_then(number),
             }),
-            fraction_digits: row
-                .get(5)
-                .and_then(number)
-                .and_then(|digits| u8::try_from(digits).ok()),
+            fraction_digits: row.get(5).and_then(number),
         })
         .collect();
     Ok((!columns.is_empty()).then_some(columns))

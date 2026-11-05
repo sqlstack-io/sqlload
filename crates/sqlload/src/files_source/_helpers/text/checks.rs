@@ -35,14 +35,19 @@ impl ColumnChecks {
 
     /// An error for a key (`what` is `key` or `header`) the source has no column for and neither `exclude_columns` nor the loader-column rule drops.
     pub(crate) fn check_name(&self, what: &str, name: &str, line: u64) -> Result<(), String> {
-        let dropped =
-            (self.exclude.is_match(name) && !self.allow.is_match(name)) || loader_column(name);
-        match self.known.contains(name) || dropped {
+        match self.is_known(name) {
             true => Ok(()),
             false => Err(format!(
                 "line {line}: {what} {name} is not in the sampled schema; pin it in columns or add it to exclude_columns"
             )),
         }
+    }
+
+    /// Whether `name` is a column of the source or one its patterns or SQLLoad's own columns drop.
+    pub(crate) fn is_known(&self, name: &str) -> bool {
+        self.known.contains(name)
+            || (self.exclude.is_match(name) && !self.allow.is_match(name))
+            || loader_column(name)
     }
 
     /// The inferred type of column `name`, when its type was inferred rather than pinned.

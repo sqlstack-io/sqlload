@@ -60,6 +60,7 @@ use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
+use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::table_plan::source_filter;
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
@@ -579,15 +580,15 @@ impl Publisher {
         let Some(source_files) = spec.files.as_ref() else {
             return Ok(BatchFooters::default());
         };
+        let replaced: Vec<&str> = source_files
+            .partition_types
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
+            .collect();
         let (columns, footers) = match source_files.encoding.format {
             SourceFormat::Parquet => {
                 let footers = batch_footers(folder, files).await?;
-                let replaced: Vec<&str> = source_files
-                    .partition_types
-                    .iter()
-                    .map(|(name, _)| name.as_str())
-                    .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
-                    .collect();
                 let (columns, problems) =
                     batch_columns(&footers, files, &source_files.table.columns, &replaced);
                 if !problems.is_empty() {
@@ -680,16 +681,11 @@ impl Publisher {
         let inferred: Vec<String> = read_columns
             .iter()
             .map(|column| column.name.clone())
-            .filter(|name| {
-                !widened.pinned.contains_key(name)
-                    && !source_files
-                        .partition_types
-                        .iter()
-                        .any(|(partition, _)| partition == name)
-                    && ![SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN]
-                        .contains(&name.as_str())
-            })
+            .filter(|name| !widened.pinned.contains_key(name) && !replaced.contains(&name.as_str()))
             .collect();
+        let nanos = widened.files.as_ref().map_or_else(Vec::new, |files| {
+            nanosecond_columns(&widened, &files.table.columns, live.as_deref())
+        });
         let replanned = TablePlan {
             files: self.table.files.clone().map(|read| FilesRead {
                 columns: read_as,
@@ -697,6 +693,7 @@ impl Publisher {
                     inferred,
                     ..read.checks
                 },
+                nanos,
                 ..read
             }),
             spec: widened,

@@ -14,7 +14,7 @@ pub fn key_columns(
     let mut columns = known.to_vec();
     for (name, column_type) in found {
         let seen = columns.iter().any(|column| column.name == name);
-        if seen || checks.check_name("key", &name, 0).is_ok() {
+        if seen || checks.is_known(&name) {
             continue;
         }
         columns.push(FileColumn {

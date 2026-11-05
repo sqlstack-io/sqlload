@@ -51,8 +51,27 @@ impl<'de> Visitor<'de> for ObjectVisitor {
             };
             fields.push(field);
         }
-        Ok(OrderedObject(fields))
+        Ok(OrderedObject(last_values(fields)))
     }
+}
+
+/// `fields` with only the last value of a key given more than once, as Snowflake's JSON reader keeps it, so both routes read and check the same value.
+fn last_values(
+    fields: Vec<(String, Value, Option<String>)>,
+) -> Vec<(String, Value, Option<String>)> {
+    let mut keys: Vec<&str> = fields.iter().map(|(key, _, _)| key.as_str()).collect();
+    keys.sort_unstable();
+    if !keys.windows(2).any(|pair| pair[0] == pair[1]) {
+        return fields;
+    }
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut kept: Vec<(String, Value, Option<String>)> = fields
+        .into_iter()
+        .rev()
+        .filter(|(key, _, _)| seen.insert(key.clone()))
+        .collect();
+    kept.reverse();
+    kept
 }
 
 /// Where a `json` file is between records.
