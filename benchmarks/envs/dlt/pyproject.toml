@@ -1,0 +1,16 @@
+[project]
+name = "sqlload-benchmarks-dlt"
+version = "0"
+description = "dlt and its DuckDB destination, as the benchmark runs it."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "connectorx==0.4.6",
+  "dlt[duckdb,filesystem,parquet,snowflake,sql-database]==1.32.0",
+  "orjson==3.13.0",
+  "pandas==3.1.1",
+  "psycopg[binary]==3.3.8",
+  "pyarrow==26.0.1",
+]
+
+[tool.uv]
+package = false
