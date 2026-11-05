@@ -922,6 +922,43 @@ pub(crate) fn half_float_file(key: &str) -> Result<(String, bytes::Bytes), Strin
     Ok((key.to_owned(), bytes::Bytes::from(buffer)))
 }
 
+/// The parity fixture `files` in one `day` folder.
+fn fixture_in_a_day(
+    files: sqlload_testkit::parity::models::ParityFiles,
+) -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(
+        sqlload_testkit::parity::main::fixture_files::fixture_files(files)?
+            .into_iter()
+            .map(|(key, body)| (format!("day=2026-11-01/{key}"), body))
+            .collect(),
+    )
+}
+
+/// Parquet of every type the direct `COPY` loads.
+pub(crate) fn every_parquet_type() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::EveryType)
+}
+
+/// Parquet of every physical storage of those types.
+pub(crate) fn every_parquet_storage() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::StoredTypes)
+}
+
+/// NDJSON of every inferred type.
+pub(crate) fn every_ndjson_type() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::NdjsonValues)
+}
+
+/// `json` files in both layouts.
+pub(crate) fn json_layouts() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::JsonLayouts)
+}
+
+/// CSV of every inferred type.
+pub(crate) fn every_csv_type() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::CsvValues)
+}
+
 /// Load the case's files into a fresh fake Snowflake; what was planned and sent, and what stayed staged.
 pub(crate) async fn run_route(
     directory: &std::path::Path,

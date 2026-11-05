@@ -1,16 +1,33 @@
 use crate::helpers::{
-    flaky_probes, found, half_float_later, int96_in_a_later_batch, int96_newest, integration,
+    every_csv_type, every_ndjson_type, every_parquet_storage, every_parquet_type, flaky_probes,
+    found, half_float_later, int96_in_a_later_batch, int96_newest, integration, json_layouts,
     long_names, long_names_with_text, nanos_in_a_later_batch, nanos_newest, no_stage_or_channel,
     no_stage_or_host, no_user_stage, not_found, not_owned, nothing, old_leftovers, run_async,
     run_debug, run_route, similar_integration, stage_exists, two_batches, two_days, with_text,
 };
-use crate::test_types::{DebugStageTestCase, RouteFiles, RouteTestCase};
+use crate::test_types::{
+    DebugStageTestCase, MaskMatrixTestCase, RouteFileSet, RouteFiles, RouteTestCase,
+};
 
 const MANAGED: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\" }";
 const KEEPS: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\", keep_staged_files = true }";
 const OWN_STAGE: &str = "COPY INTO \"DB\".\"RAW\".\"ORDERS\"";
 const MANAGED_REF: &str = "FROM @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\"";
 const WRITES_PARQUET: &str = "write Parquet to";
+const FILES_STRATEGIES: [&str; 3] = [
+    "write_strategy = \"append\"\n",
+    "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\n",
+    "write_strategy = \"replace\"\n",
+];
+const FORMATS: [(&str, &str, RouteFileSet, &str); 5] = [
+    ("parquet, every type", "", every_parquet_type, "note"),
+    ("parquet, every storage", "", every_parquet_storage, "names"),
+    ("ndjson", "format = \"ndjson\"\n", every_ndjson_type, "s"),
+    ("json", "format = \"json\"\n", json_layouts, "v"),
+    ("csv", "format = \"csv\"\n", every_csv_type, "s"),
+];
+const PULLS_ANY: &str = " files from s3://fake-bucket/src/";
+const READS: &str = " into Arrow";
 const PULLS: &str = "destination loads parquet files from s3://fake-bucket/src/";
 
 const USER: &str = "{ type = \"internal_user_stage\" }";
@@ -489,6 +506,79 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
                 test_case.description
             );
             assert!(outcome.sequence_ids_rise, "{}", test_case.description);
+        }
+        Ok(())
+    })
+}
+
+/// Every format and type the fixtures hold, under every strategy a files source takes (merge is refused for files sources), each `FORMATS` entry naming a text column to mask, unmasked, hashed and hmac-masked: only hmac reaches SQLLoad's reader.
+#[test]
+fn given_files_a_warehouse_reads_itself_when_planning_every_format_type_and_strategy_then_only_hmac_reaches_sqlloads_reader()
+-> Result<(), String> {
+    let test_cases = [
+        MaskMatrixTestCase {
+            description: "unmasked",
+            mask: "",
+            expected_plan: &[PULLS_ANY],
+            expected_unplanned: &[READS],
+        },
+        MaskMatrixTestCase {
+            description: "hash",
+            mask: "[sources.orders.tables.orders]\nmask = { COLUMN = \"hash\" }",
+            expected_plan: &[PULLS_ANY],
+            expected_unplanned: &[READS],
+        },
+        MaskMatrixTestCase {
+            description: "hmac",
+            mask: "mask_key = \"k\"\n[sources.orders.tables.orders]\nmask = { COLUMN = \"hmac\" }",
+            expected_plan: &[READS],
+            expected_unplanned: &[PULLS_ANY],
+        },
+    ];
+    run_async(async {
+        for test_case in &test_cases {
+            for ((format_name, format, file_set, column), strategy) in
+                FORMATS.iter().flat_map(|format| {
+                    FILES_STRATEGIES
+                        .iter()
+                        .map(move |strategy| (format, strategy))
+                })
+            {
+                let mask = test_case.mask.replace("COLUMN", column);
+                let route_case = RouteTestCase {
+                    description: format!(
+                        "{}, {format_name}: {strategy}{mask}",
+                        test_case.description
+                    )
+                    .leak(),
+                    stage: MANAGED,
+                    settings: format!("{format}{strategy}{mask}").leak(),
+                    files: RouteFiles::Bucket,
+                    file_set: *file_set,
+                    prepare: integration,
+                    ..BASE
+                };
+                let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+                let outcome = run_route(directory.path(), &route_case).await?;
+                assert_eq!(
+                    not_found(std::slice::from_ref(&outcome.plan), test_case.expected_plan),
+                    Vec::<&str>::new(),
+                    "{}: {} {}",
+                    route_case.description,
+                    outcome.plan,
+                    outcome.error
+                );
+                assert_eq!(
+                    found(
+                        std::slice::from_ref(&outcome.plan),
+                        test_case.expected_unplanned
+                    ),
+                    Vec::<&str>::new(),
+                    "{}: {}",
+                    route_case.description,
+                    outcome.plan
+                );
+            }
         }
         Ok(())
     })

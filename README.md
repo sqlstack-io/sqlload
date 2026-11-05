@@ -25,6 +25,8 @@ make test-containers  # needs Docker (Redpanda, Postgres, SeaweedFS)
 make test-python      # builds the sqlload extension into .venv and runs its tests
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the rules the checks enforce.
+
 ## License
 
 Apache-2.0

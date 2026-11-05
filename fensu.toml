@@ -4,7 +4,7 @@ roots = ["crates"]
 tests = []
 tooling = ["crates/sqlload-testkit"]
 rule_packs = ["rust"]
-rule_paths = ["fensu_rules/adapter_ownership.py"]
+rule_paths = ["fensu_rules/adapter_ownership.py", "fensu_rules/loader_reads.py"]
 select = ["FPRS", "XSL"]
 
 [[targets.rust.rule_exceptions]]
@@ -17,6 +17,11 @@ reason = "Secret wraps credentials and implements Debug by hand so tokens, keys 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/parity/main/comparison_sql.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/parity/main/fixture_files.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
 
 [[targets.rust.rule_exceptions]]
