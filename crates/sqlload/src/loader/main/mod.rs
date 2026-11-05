@@ -5,7 +5,6 @@ pub(in crate::loader) mod _files_context;
 pub(in crate::loader) mod _files_repair;
 pub(in crate::loader) mod _files_schema;
 pub(in crate::loader) mod _files_window;
-pub(in crate::loader) mod _load_direct;
 pub(in crate::loader) mod _load_files;
 pub(in crate::loader) mod _load_python;
 pub(in crate::loader) mod _load_table;

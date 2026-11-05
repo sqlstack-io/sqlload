@@ -7,8 +7,8 @@ pub const STAGED_FOLDER: &str = "_sqlload/";
 /// The most files one `COPY` names, Snowflake's limit for a `FILES` list.
 pub const MAX_FILES_PER_COPY: usize = 1000;
 
-/// The longest `COPY` statement built; a batch of files whose statement would be longer is split.
-pub const MAX_COPY_SQL_BYTES: usize = 512 * 1024;
+/// The longest `COPY` statement built, below Snowflake's 1 MB limit on statement text; a batch of files whose statement would be longer is split.
+pub const MAX_COPY_SQL_BYTES: usize = 900 * 1024;
 
 /// How Snowflake reads the Parquet files.
 pub const PARQUET_COPY_FORMAT: &str =

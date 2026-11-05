@@ -1,4 +1,6 @@
-use crate::project::constants::{FILES_CONNECTION_KINDS, WAREHOUSE_CONNECTION_KINDS};
+use crate::project::constants::{
+    FILES_CONNECTION_KINDS, STAGE_NAME_PARTS, WAREHOUSE_CONNECTION_KINDS,
+};
 use crate::project::models::{
     ConnectionConfig, ProjectConfig, SourceConfig, StageConfig, TargetConfig,
 };
@@ -120,7 +122,7 @@ pub(crate) fn stage_problems(name: &str, connection: &ConnectionConfig) -> Vec<S
             "{place} needs exactly one of storage_integration (SQLLoad creates _SQLLOAD_STAGE in each loader schema) or name (an existing stage)"
         )),
         (None, Some(stage_name))
-            if stage_name.split('.').filter(|part| !part.is_empty()).count() != 3 =>
+            if stage_name.split('.').filter(|part| !part.is_empty()).count() != STAGE_NAME_PARTS =>
         {
             problems.push(format!(
                 "{place} name {stage_name:?} must be DATABASE.SCHEMA.STAGE"

@@ -91,3 +91,6 @@ pub const DEFAULT_TABLE_NAME: &str = "{source}__{table}";
 
 /// The destination table name template for a files source, which has one table.
 pub const DEFAULT_FILES_TABLE_NAME: &str = "{source}";
+
+/// The parts of an existing stage's name in a Snowflake connection's `stage`: `DATABASE.SCHEMA.STAGE`.
+pub const STAGE_NAME_PARTS: usize = 3;

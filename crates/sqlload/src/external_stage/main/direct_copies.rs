@@ -13,7 +13,7 @@ use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::quoted_identifier::quoted_identifier;
 use crate::write_sql::main::sql_literal::sql_literal;
 
-/// `COPY` statements loading `request.files` into `request.target`, at most 1,000 files and about 512 KiB of SQL each: data columns read by name and cast, partition values, source file and version per file (matched on `METADATA$FILENAME`, failing on any other file), and literals; always `FORCE = TRUE` and `ON_ERROR = ABORT_STATEMENT`.
+/// `COPY` statements loading `request.files` into `request.target`, at most 1,000 files and about 900 KiB of SQL each: data columns read by name and cast, partition values, source file and version per file (matched on `METADATA$FILENAME`, failing on any other file), and literals; always `FORCE = TRUE` and `ON_ERROR = ABORT_STATEMENT`.
 pub fn direct_copies(request: &DirectCopy<'_>) -> Result<Vec<CopyBatch>, String> {
     let folder = request
         .source

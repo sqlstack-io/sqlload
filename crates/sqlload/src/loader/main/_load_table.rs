@@ -1,12 +1,12 @@
 //! Load one table: read its source (a Python table through the host), stage the rows and apply the write strategy.
 
 use crate::loader::_helpers::destination::{cleanup_staging, execute, finish_staging, stage_batch};
+use crate::loader::_helpers::direct::load_direct;
 use crate::loader::_helpers::route::is_direct;
 use crate::loader::_helpers::run_log::{ensure_runs_table, fold_maximum, log_empty_run};
 use crate::loader::_helpers::sources::{open_source, read_source};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
-use crate::loader::main::_load_direct::load_direct;
 use crate::loader::main::_load_files::load_files_table;
 use crate::loader::main::_load_python::read_python_table;
 use crate::loader::models::{

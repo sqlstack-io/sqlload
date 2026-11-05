@@ -1,7 +1,7 @@
 use crate::external_stage::main::direct_problem::direct_problem;
-use crate::external_stage::models::{CopyColumn, CopyValue, DirectCheck};
-use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
+use crate::external_stage::models::DirectCheck;
 use crate::files_source::models::{FilesRead, SourceFormat};
+use crate::loader::_helpers::direct::copy_columns;
 use crate::loader::models::{Destination, TableSpec};
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::{
@@ -96,42 +96,6 @@ fn direct_check(spec: &TableSpec, read: &FilesRead, stage: &ExternalStage) -> Op
         columns: &copy_columns(spec, read),
         masks: &masks,
     })
-}
-
-/// The columns a direct `COPY` of a files table fills, in the order the files source reads them, each from the files, its path, or the file's name and version.
-pub(crate) fn copy_columns(spec: &TableSpec, read: &FilesRead) -> Vec<CopyColumn> {
-    let files = spec.files.as_ref();
-    read.columns
-        .iter()
-        .map(|column| {
-            let partition = files.is_some_and(|files| {
-                files
-                    .partition_types
-                    .iter()
-                    .any(|(name, _)| *name == column.name)
-            });
-            let value = match column.name.as_str() {
-                SOURCE_FILE_COLUMN => CopyValue::SourceFile,
-                SOURCE_VERSION_COLUMN => CopyValue::SourceVersion,
-                _ if partition => CopyValue::Partition,
-                name => CopyValue::File {
-                    file_type: files.and_then(|files| {
-                        files
-                            .table
-                            .columns
-                            .iter()
-                            .find(|found| found.name == name)
-                            .and_then(|found| found.column_type.clone().ok())
-                    }),
-                },
-            };
-            CopyColumn {
-                name: column.name.clone(),
-                column_type: column.column_type.clone(),
-                value,
-            }
-        })
-        .collect()
 }
 
 /// Whether `route` has the destination load a files source's own files.
