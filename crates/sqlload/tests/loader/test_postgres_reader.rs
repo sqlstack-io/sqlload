@@ -9,7 +9,17 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
 use crate::helpers::{column_values, run_async};
-use crate::test_types::PostgresColumnTestCase;
+use crate::test_types::{PostgresColumnTestCase, SplitReadTestCase};
+
+const SPLIT_ROWS: i64 = 70_000;
+
+const SPLIT_SETUP: &str = "
+CREATE TABLE public.padded (id int8 NOT NULL, pad text NOT NULL);
+ALTER TABLE public.padded ALTER COLUMN pad SET STORAGE PLAIN;
+INSERT INTO public.padded SELECT i, repeat(md5(i::text), 59) FROM generate_series(1, 70000) AS s(i);
+";
+
+const ACTIVE_COPIES: &str = "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE 'COPY (SELECT%padded%'";
 
 const SETUP: &str = "
 CREATE TYPE mood AS ENUM ('calm', 'busy');
@@ -66,6 +76,7 @@ fn given_a_postgres_table_of_every_type_when_copied_then_each_value_arrives_exac
             order_by: None,
             batch_rows: 2,
             batch_bytes: usize::MAX,
+            helpers: &[],
         };
         let rows = copy_table(&client, request, async |batch| {
             batches.push(batch);
@@ -217,6 +228,91 @@ fn given_a_postgres_table_of_every_type_when_copied_then_each_value_arrives_exac
             assert_eq!(
                 column_values(&batches, test_case.column)?,
                 test_case.expected_values,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_table_over_the_split_size_when_copied_then_each_reader_takes_a_range_and_every_row_arrives_once()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        let watcher = connect(&postgres).await?;
+        client
+            .batch_execute(SPLIT_SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let tables = read_catalog(&client, &["public.padded".to_owned()], &[])
+            .await
+            .map_err(|error| error.to_string())?;
+        let table = tables.first().ok_or("no table found")?;
+        let test_cases = [
+            SplitReadTestCase {
+                description: "a helper splits the read in two ranges",
+                helpers: 1,
+                expected_copies: 2,
+            },
+            SplitReadTestCase {
+                description: "no helper reads in one pass",
+                helpers: 0,
+                expected_copies: 1,
+            },
+        ];
+        for test_case in test_cases {
+            let mut helpers = Vec::new();
+            for _ in 0..test_case.helpers {
+                helpers.push(connect(&postgres).await?);
+            }
+            let request = CopyRequest {
+                table,
+                columns: plan_read(table, &BTreeMap::new())
+                    .map_err(|problems| problems.join("; "))?,
+                filter: None,
+                order_by: None,
+                batch_rows: 1_000,
+                batch_bytes: usize::MAX,
+                helpers: &helpers,
+            };
+            let mut ids: Vec<String> = Vec::new();
+            let mut copies: Vec<i64> = Vec::new();
+            let rows = copy_table(&client, request, async |batch| {
+                let row = watcher
+                    .query_one(ACTIVE_COPIES, &[])
+                    .await
+                    .map_err(|error| error.to_string())?;
+                copies.push(row.get(0));
+                ids.extend(column_values(std::slice::from_ref(&batch), "id")?);
+                Ok(())
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+            let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
+            let sum: i64 = ids
+                .iter()
+                .map(|id| id.parse::<i64>().map_err(|error| error.to_string()))
+                .sum::<Result<i64, String>>()?;
+            assert_eq!(rows, SPLIT_ROWS as u64, "{}", test_case.description);
+            assert_eq!(ids.len(), SPLIT_ROWS as usize, "{}", test_case.description);
+            assert_eq!(
+                distinct.len(),
+                SPLIT_ROWS as usize,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(
+                sum,
+                SPLIT_ROWS * (SPLIT_ROWS + 1) / 2,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(
+                copies.first(),
+                Some(&test_case.expected_copies),
                 "{}",
                 test_case.description
             );
