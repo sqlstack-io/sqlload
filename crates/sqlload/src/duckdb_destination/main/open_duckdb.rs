@@ -11,6 +11,7 @@ pub fn open_duckdb(path: &str) -> Result<DuckDbDestination, DuckDbError> {
         ":memory:" => duckdb::Connection::open_in_memory()?,
         path => duckdb::Connection::open(path)?,
     };
+    connection.register_table_function::<duckdb::vtab::arrow::ArrowVTab>("arrow")?;
     Ok(DuckDbDestination {
         connection: Arc::new(Mutex::new(connection)),
         ddl: Arc::default(),

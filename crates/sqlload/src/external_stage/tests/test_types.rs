@@ -29,7 +29,6 @@ pub(crate) struct DirectProblemTestCase {
     pub(crate) columns: Vec<CopyColumn>,
     pub(crate) masks: Vec<(String, MaskMethod)>,
     pub(crate) refused: Vec<(String, String)>,
-    pub(crate) whole_table: bool,
     pub(crate) shaped_by_loader: bool,
     pub(crate) expected_problem: Option<&'static str>,
 }

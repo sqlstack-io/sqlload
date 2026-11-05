@@ -1,7 +1,7 @@
 use crate::column_types::main::warehouse_type::warehouse_type;
-use crate::column_types::models::{ColumnType, Warehouse};
+use crate::column_types::models::ColumnType;
 use crate::write_sql::_helpers::identifiers::{from_staging, literal, qualified, quote};
-use crate::write_sql::_helpers::promote::{merge_statement, swap_statements};
+use crate::write_sql::_helpers::promote::{merge_statement, promote_statements, swap_statements};
 use crate::write_sql::_helpers::recreate::recreate_statements;
 use crate::write_sql::models::{TableName, WriteMode, WriteStatementsRequest};
 
@@ -11,6 +11,9 @@ pub(crate) fn write_statements(
     staging: &TableName,
 ) -> Vec<String> {
     let warehouse = request.warehouse;
+    if let Some(indexes) = request.built {
+        return promote_statements(request.table, staging, indexes, warehouse);
+    }
     let target = qualified(request.table, warehouse);
     let source = qualified(staging, warehouse);
     let names: Vec<String> = request
@@ -47,10 +50,7 @@ pub(crate) fn write_statements(
         WriteMode::Merge { unique_key } => {
             return vec![merge_statement(request, unique_key, &source, &values)];
         }
-        WriteMode::Replace if warehouse == Warehouse::Snowflake => {
-            return swap_statements(request, staging, &insert_from);
-        }
-        WriteMode::Replace => Some(format!("DELETE FROM {target}")),
+        WriteMode::Replace => return swap_statements(request, staging, &insert_from),
         WriteMode::Append => None,
         WriteMode::DeleteInsert {
             cursor_column,

@@ -72,3 +72,23 @@ pub(crate) struct InsertRowsTestCase {
     /// The start of the first statement.
     pub(crate) expected_start: &'static str,
 }
+
+pub(crate) struct BuildTableTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) live: Option<Vec<crate::schema_plan::models::LiveColumn>>,
+    pub(crate) definition: Option<&'static str>,
+    pub(crate) expected_statements: Vec<String>,
+}
+
+pub(crate) struct PromoteTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) expected_statements: Vec<String>,
+}
+
+pub(crate) struct KeptColumnsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) new: Vec<crate::schema_plan::models::DesiredColumn>,
+    pub(crate) expected_statements: Vec<String>,
+}

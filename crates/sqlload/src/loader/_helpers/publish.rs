@@ -34,6 +34,7 @@ use crate::loader::_helpers::destination::append_rows;
 use crate::loader::_helpers::destination::execute;
 use crate::loader::_helpers::destination::stage_file;
 use crate::loader::_helpers::destination::table_destination;
+use crate::loader::_helpers::destination::table_shape;
 use crate::loader::_helpers::destination::{ddl_guard, execute_ddl};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
@@ -75,19 +76,22 @@ use crate::schema_plan::constants::LOAD_ID_COLUMN;
 use crate::schema_plan::constants::LOADED_AT_COLUMN;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
+use crate::schema_plan::models::LiveColumn;
 use crate::snowflake_destination::constants::STAGE_FOLDER;
 use crate::snowflake_destination::main::copy_staged::copy_staged;
 use crate::snowflake_destination::main::remove_staged::remove_staged;
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
+use crate::write_sql::constants::SWAP_SUFFIX;
+use crate::write_sql::main::build_table::build_table;
 use crate::write_sql::main::commit_statements::commit_statements;
 use crate::write_sql::main::cursor_text::cursor_text;
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::staging_changes::staging_changes;
 use crate::write_sql::main::staging_id::staging_id;
 use crate::write_sql::main::staging_table::staging_table;
-use crate::write_sql::main::swap_table::swap_table;
 use crate::write_sql::models::TableName;
+use crate::write_sql::models::TableShape;
 use crate::write_sql::models::WriteMode;
 use crate::write_sql::models::WriteStatementsRequest;
 use arrow_array::Array;
@@ -134,18 +138,14 @@ use crate::write_sql::main::insert_rows::insert_rows;
 use crate::write_sql::main::sql_literal::sql_literal;
 use crate::write_sql::main::stored_name::stored_name;
 
-/// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`); on Snowflake, a route loading files into the table itself (streaming, `INSERT` and a staging table's stage all go through staging); elsewhere no column arriving as text the write must convert (JSON and UUIDs on DuckDB).
+/// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`); on Snowflake, a route loading files into the table itself (streaming, `INSERT` and a staging table's stage all go through staging); elsewhere always, as the batch's JSON is checked and its UUIDs converted as it is appended.
 fn writes_directly(table: &TablePlan, destination: &Destination) -> bool {
     let fits = match destination {
         Destination::Snowflake(_) => !matches!(
             table.stage,
             Some(StageRoute::Streaming { .. } | StageRoute::Insert | StageRoute::StagingTable)
         ),
-        _ => !table
-            .schema
-            .write_columns
-            .iter()
-            .any(|column| matches!(column.column_type, ColumnType::Json | ColumnType::Uuid)),
+        _ => true,
     };
     table.mode == WriteMode::Append && table.logged.is_none() && fits
 }
@@ -239,8 +239,41 @@ impl Publisher {
             _ => None,
         };
         let direct = files.is_none() && writes_directly(&table, &destination);
+        let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+        let builds = at_end
+            && files.is_none()
+            && !matches!(
+                table.stage,
+                Some(StageRoute::Streaming { .. } | StageRoute::Insert)
+            );
+        let mut shape: Option<TableShape> = None;
         let staging = match direct || files.is_some() {
             true => None,
+            false if builds => {
+                let id = staging_id(&load_id, chrono::Utc::now().naive_utc());
+                shape = match table.mode {
+                    WriteMode::Replace => {
+                        table_shape(&destination, &table.spec.destination).await?
+                    }
+                    _ => None,
+                };
+                let differing = table
+                    .live
+                    .as_deref()
+                    .filter(|_| table.mode == WriteMode::Recreate);
+                let (build, create) = build_table(
+                    &table.spec.destination,
+                    (
+                        &table.schema.write_columns,
+                        differing,
+                        shape.as_ref().map(|shape| shape.definition.as_str()),
+                    ),
+                    &id,
+                    table.spec.warehouse,
+                );
+                execute_ddl(&destination, create).await?;
+                Some(build)
+            }
             false => {
                 let (staging, create) = staging_table(
                     &table.spec.destination,
@@ -261,7 +294,9 @@ impl Publisher {
             route: table.stage.clone(),
             external_folder,
             stream: None,
-            at_end: matches!(table.mode, WriteMode::Replace | WriteMode::Recreate),
+            at_end,
+            builds,
+            indexes: shape.map(|shape| shape.indexes).unwrap_or_default(),
             table,
             destination,
             run,
@@ -327,11 +362,19 @@ impl Publisher {
             }
             _ => {
                 let into = self.batch_table();
-                if self.direct && !self.open_transaction {
+                if (self.direct || self.builds) && !self.open_transaction {
                     execute(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
                     self.open_transaction = true;
                 }
-                append_rows(&self.destination, &into, batch).await
+                let json: Vec<String> = self
+                    .table
+                    .schema
+                    .write_columns
+                    .iter()
+                    .filter(|column| column.column_type == ColumnType::Json)
+                    .map(|column| column.name.clone())
+                    .collect();
+                append_rows(&self.destination, &into, batch, json).await
             }
         }
     }
@@ -401,7 +444,11 @@ impl Publisher {
         }
         let warehouse = self.table.spec.warehouse;
         if let Some(staging) = &self.staging {
-            let drops: Vec<String> = [staging.clone(), swap_table(staging)]
+            let aside = TableName {
+                table: format!("{}{SWAP_SUFFIX}", staging.table),
+                ..staging.clone()
+            };
+            let drops: Vec<String> = [staging.clone(), aside]
                 .iter()
                 .map(|table| format!("DROP TABLE IF EXISTS {}", qualified_name(table, warehouse)))
                 .collect();
@@ -412,6 +459,14 @@ impl Publisher {
         if !self.staged.is_empty() {
             self.remove_batch_files().await;
         }
+    }
+
+    /// The live columns a build table started with, which stay; `None` when the table holds staged rows. A `--reload` rebuilds with the current columns only.
+    pub(crate) fn started_with(&self) -> Option<&[LiveColumn]> {
+        self.builds.then(|| match self.table.mode {
+            WriteMode::Replace => self.table.live.as_deref().unwrap_or_default(),
+            _ => &[],
+        })
     }
 
     /// Whether rows go in without files.
@@ -621,7 +676,7 @@ impl Publisher {
         let stage = self.stage_reference()?;
         let folder = self.batch_folder();
         let staged = staged_columns(&self.table);
-        let holds_json = self.direct
+        let holds_json = (self.direct || self.builds)
             && staged
                 .iter()
                 .any(|column| column.column_type == ColumnType::Json);
@@ -645,7 +700,7 @@ impl Publisher {
         Ok(())
     }
 
-    /// Load a files batch by having Snowflake `COPY` the files itself, where the plan chose that and the batch's own footers still allow it. `None` when SQLLoad must read this batch itself.
+    /// Load a files batch by having Snowflake `COPY` the files itself, where the plan chose that and the batch's own footers still allow it. `None` when SQLLoad must read this batch itself. A hashed batch's temporary table has its own name, since in the session it would shadow a build table made in the same second.
     pub(crate) async fn load_direct(
         &mut self,
         (files, footers): (&[DataFile], &BatchFooters),
@@ -661,7 +716,7 @@ impl Publisher {
         }
         let spec = &self.table.spec;
         let refused = batch_refusals(footers, files);
-        if let Some(reason) = direct_check(spec, (read, files, &refused), &self.table.mode, stage) {
+        if let Some(reason) = direct_check(spec, (read, files, &refused), stage) {
             tracing::warn!(table = %spec.destination.table, %reason, "SQLLoad reads this batch itself");
             return Ok(None);
         }
@@ -692,7 +747,10 @@ impl Publisher {
             let (staging, create) = staging_table(
                 &spec.destination,
                 &staged_columns(&self.table),
-                &staging_id(&self.load_id, chrono::Utc::now().naive_utc()),
+                &format!(
+                    "{}_hashed",
+                    staging_id(&self.load_id, chrono::Utc::now().naive_utc())
+                ),
                 Warehouse::Snowflake,
             );
             let create = create.replacen("TRANSIENT TABLE", "TEMPORARY TABLE", 1);
@@ -704,14 +762,19 @@ impl Publisher {
                 .filter(|(_, method)| **method == MaskMethod::Hash)
                 .map(|(name, _)| name.clone())
                 .collect();
-            let mode = commit_mode(&self.table.mode, Some(range.clone()));
+            let build = self.staging.clone().filter(|_| self.builds);
+            let mode = match build {
+                Some(_) => WriteMode::Append,
+                None => commit_mode(&self.table.mode, Some(range.clone())),
+            };
             let write = commit_statements(
                 &WriteStatementsRequest {
                     warehouse: Warehouse::Snowflake,
-                    table: &spec.destination,
+                    table: build.as_ref().unwrap_or(&spec.destination),
                     columns: &self.table.schema.write_columns,
                     mode: &mode,
                     hashed: &hashed,
+                    built: None,
                 },
                 &staging,
                 (None, true),
@@ -731,7 +794,10 @@ impl Publisher {
                 return Ok(None);
             }
             let rows = script_copy_rows(snowflake, &script).await?;
-            return Ok(Some(DirectLoaded::Committed(rows)));
+            return Ok(Some(match build {
+                Some(_) => DirectLoaded::Staged(rows),
+                None => DirectLoaded::Committed(rows),
+            }));
         }
         if self.direct {
             let columns = filled_columns(spec, read, &self.table.schema.write_columns, literals);
@@ -750,7 +816,12 @@ impl Publisher {
         let Some(staging) = self.staging.clone() else {
             return Ok(None);
         };
-        let columns = filled_columns(spec, read, &staged_as_text(&self.table), literals);
+        let staged = staged_as_text(&self.table);
+        let carried = match self.builds {
+            true => &self.table.schema.write_columns,
+            false => &staged,
+        };
+        let columns = filled_columns(spec, read, carried, literals);
         let mut rows: u64 = 0;
         for statement in copy(&staging, &columns)? {
             rows += copy_rows(snowflake, &statement).await?;
@@ -797,6 +868,7 @@ impl Publisher {
                 columns: &self.table.schema.write_columns,
                 mode: &mode,
                 hashed: &[],
+                built: self.builds.then_some(self.indexes.as_slice()),
             },
             &staging,
             (run_insert, self.at_end),
@@ -931,6 +1003,7 @@ impl Publisher {
                 staging,
                 (&old, &staged_columns(&replanned)),
                 replanned.spec.warehouse,
+                self.started_with(),
             );
             execute_ddl(&self.destination, changes).await?;
         }

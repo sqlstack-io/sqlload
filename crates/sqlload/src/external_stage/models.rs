@@ -64,8 +64,6 @@ pub struct DirectCheck<'a> {
     pub refused: &'a [(String, String)],
     /// Masked columns and how.
     pub masks: &'a [(String, MaskMethod)],
-    /// The table is rewritten as a whole across several commits (`replace`, `--reload`), so a hashed column's staging table could not last one session.
-    pub whole_table: bool,
     /// `shaping = "loader"`.
     pub shaped_by_loader: bool,
 }

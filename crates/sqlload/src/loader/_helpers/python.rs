@@ -762,6 +762,7 @@ impl PythonFeed {
                     staging,
                     (&old, &staged_columns(&replanned)),
                     replanned.spec.warehouse,
+                    publisher.started_with(),
                 );
                 execute_ddl(&publisher.destination, changes).await?;
             }

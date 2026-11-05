@@ -1,3 +1,5 @@
+#[path = "tests/test_build_table.rs"]
+mod build_table;
 #[path = "tests/test_commit_statements.rs"]
 mod commit_statements;
 #[path = "tests/test_cursor_bound.rs"]

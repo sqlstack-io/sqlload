@@ -51,7 +51,12 @@ pub(crate) fn changed_staging(
         .zip(new_types)
         .map(|(name, column_type)| column(name, column_type.clone()))
         .collect();
-    crate::write_sql::main::staging_changes::staging_changes(&staging, (&old, &new), warehouse)
+    crate::write_sql::main::staging_changes::staging_changes(
+        &staging,
+        (&old, &new),
+        warehouse,
+        None,
+    )
 }
 
 /// 2026-11-05 10:00 UTC.

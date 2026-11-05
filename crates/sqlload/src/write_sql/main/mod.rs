@@ -1,4 +1,5 @@
 pub mod alter_statements;
+pub mod build_table;
 pub mod commit_statements;
 pub mod create_schema;
 pub mod create_table;
@@ -17,4 +18,3 @@ pub mod staging_table;
 pub mod staging_tables_query;
 pub mod stale_staging;
 pub mod stored_name;
-pub mod swap_table;
