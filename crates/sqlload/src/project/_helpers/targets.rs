@@ -2,29 +2,31 @@ use crate::project::constants::{
     FILES_CONNECTION_KINDS, STAGE_NAME_PARTS, WAREHOUSE_CONNECTION_KINDS,
 };
 use crate::project::models::{
-    ConnectionConfig, ProjectConfig, SourceConfig, StageConfig, TargetConfig,
+    ConnectionConfig, LoadMethod, ProjectConfig, SourceConfig, TargetConfig,
 };
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// Problems with a Snowflake connection's `stage`: an `s3` stage needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing one).
+/// Problems with a Snowflake connection's `load_method`: it is required; an `external_stage` needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing one).
 pub(crate) fn stage_problems(name: &str, connection: &ConnectionConfig) -> Vec<String> {
-    let ConnectionConfig::Snowflake {
-        stage: Some(stage), ..
-    } = connection
-    else {
+    let ConnectionConfig::Snowflake { load_method, .. } = connection else {
         return Vec::new();
     };
-    let StageConfig::S3 {
+    let Some(load_method) = load_method else {
+        return vec![format!(
+            "connection {name}: load_method is required: how should data get into Snowflake? Add one of these to [connections.{name}]: load_method = {{ type = \"external_stage\", url = \"s3://...\", storage_integration = \"...\" }} (fastest), or load_method = {{ type = \"internal_user_stage\" }} (no setup)"
+        )];
+    };
+    let LoadMethod::ExternalStage {
         url,
         storage_integration,
         name: stage_name,
         ..
-    } = stage.as_ref()
+    } = load_method.as_ref()
     else {
         return Vec::new();
     };
-    let place = format!("[connections.{name}] stage");
+    let place = format!("[connections.{name}] load_method");
     let mut problems: Vec<String> = Vec::new();
     match resolve_location(None, url) {
         Ok(Location {

@@ -91,22 +91,21 @@ thread-safe; set `parallel_tables=True` on the source when its client is.
 
 ### How rows reach Snowflake
 
-With no `stage` on the Snowflake connection, each table takes the first route the role can use, and
-`plan` shows which and why: the user stage `@~`, then `@%table`, then Snowpipe Streaming into a
-transient staging table, then batched `INSERT` (warned in `plan`). `stage = ...` forces a choice; a
-forced route the role cannot use fails at `plan`, and never falls back:
+A Snowflake connection needs `load_method`, with no default: it is how data gets into Snowflake.
+A method the role cannot use fails at `plan`, and never falls back to another:
 
 ```toml
 [connections.wh]
 kind = "snowflake"
 # ...
-stage = { kind = "s3", url = "s3://lake/sqlload/", storage_integration = "LAKE_INT" }
-# or an existing stage: name = "DB.SCHEMA.STAGE"
-# or { kind = "user" }, { kind = "table" }, { kind = "streaming" }, { kind = "insert" },
-#    { kind = "internal", name = "DB.SCHEMA.STAGE" }
+load_method = { type = "external_stage", url = "s3://lake/sqlload/", storage_integration = "LAKE_INT" }
+# or an existing stage: name = "DB.SCHEMA.STAGE" instead of storage_integration
+# or { type = "internal_user_stage" }, { type = "internal_table_stage" },
+#    { type = "internal_named_stage", name = "DB.SCHEMA.STAGE" }, { type = "streaming" },
+#    { type = "insert" } (very slow, warned in plan)
 ```
 
-An `s3` stage needs SQLLoad's own write access to the bucket. `apply` creates `_SQLLOAD_STAGE` in the
+An `external_stage` needs SQLLoad's own write access to the bucket. `apply` creates `_SQLLOAD_STAGE` in the
 loader schema when given a `storage_integration`. Staged files are deleted once their batch commits,
 and the next load removes what failed runs left after a day; `keep_staged_files = true` on the
 stage keeps them and leaves that stage out of the cleanup.

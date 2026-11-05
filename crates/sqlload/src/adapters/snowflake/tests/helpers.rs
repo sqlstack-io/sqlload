@@ -1,13 +1,12 @@
 use crate::adapters::contract::models::TableName;
 use crate::adapters::snowflake::_helpers::stage::create_stage::create_stage;
-use crate::adapters::snowflake::_helpers::stage::pick_route::pick_route;
 use crate::adapters::snowflake::_helpers::stage::stale_folders::stale_folders;
 use crate::adapters::snowflake::main::copy::_copy_staged::copy_staged;
 use crate::adapters::snowflake::main::stage::_stage_lookup::stage_lookup;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::CopyStaged;
-use crate::adapters::snowflake::models::{CopyColumn, CopyValue, StepFailure};
-use crate::adapters::snowflake::models::{ExternalStage, StageObject, StageRoute};
+use crate::adapters::snowflake::models::{CopyColumn, CopyValue};
+use crate::adapters::snowflake::models::{ExternalStage, StageObject};
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
@@ -294,28 +293,6 @@ pub(crate) fn snowflake_hash_sql() -> String {
         (None, true),
     );
     statements.join(";")
-}
-
-/// What `pick_route` says for steps that found `outcomes` (`None` a usable route, `Some((true, reason))` an unusable step, `Some((false, reason))` a failed check): the route and those passed over, or the failure.
-pub(crate) fn picked(
-    forced: bool,
-    outcomes: &[(&str, Option<(bool, &str)>)],
-) -> Result<(String, Vec<String>), String> {
-    let steps: Vec<(String, Result<StageRoute, StepFailure>)> = outcomes
-        .iter()
-        .map(|(step, problem)| {
-            let outcome = problem.map_or(Ok(StageRoute::User), |(unusable, reason)| {
-                Err([
-                    StepFailure::Failed(reason.to_owned()),
-                    StepFailure::Unusable(reason.to_owned()),
-                ][usize::from(unusable)]
-                .clone())
-            });
-            ((*step).to_owned(), outcome)
-        })
-        .collect();
-    let choice = pick_route(forced, steps)?;
-    Ok((format!("{:?}", choice.route), choice.passed_over))
 }
 
 /// A status error with this HTTP status and service code.

@@ -787,7 +787,7 @@ pub(crate) async fn run_debug(
     (test_case.prepare)(&fake);
     let base = fake.base_url.clone();
     let text = format!(
-        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\nstage = {}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
+        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\nload_method = {}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
         stage.replace("FAKE", &base)
     );
     let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
@@ -958,7 +958,7 @@ pub(crate) async fn run_route(
     ][usize::from(test_case.files == RouteFiles::Bucket)]
     .clone();
     let stage = [
-        format!("stage = {}\n", test_case.stage.replace("FAKE", &base)),
+        format!("load_method = {}\n", test_case.stage.replace("FAKE", &base)),
         String::new(),
     ][usize::from(test_case.stage.is_empty())]
     .clone();

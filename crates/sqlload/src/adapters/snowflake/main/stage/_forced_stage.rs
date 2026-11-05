@@ -1,25 +1,25 @@
-//! The route a Snowflake connection's `stage` setting forces.
+//! The route a Snowflake connection's `load_method` sets.
 
 use crate::adapters::contract::models::TableName;
 use crate::adapters::snowflake::models::{ExternalStage, ForcedStage, StageObject};
-use crate::project::models::StageConfig;
+use crate::project::models::LoadMethod;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// The route a Snowflake connection's `stage` setting forces.
+/// The route a Snowflake connection's `load_method` sets.
 pub(in crate::adapters) fn forced_stage(
-    stage: &StageConfig,
+    stage: &LoadMethod,
     home: TableName,
 ) -> Result<ForcedStage, String> {
     let (url, integration, name, store) = match stage {
-        StageConfig::User {} => return Ok(ForcedStage::User),
-        StageConfig::Table {} => return Ok(ForcedStage::Table),
-        StageConfig::Streaming {} => return Ok(ForcedStage::Streaming),
-        StageConfig::Insert {} => return Ok(ForcedStage::Insert),
-        StageConfig::Internal { name } => {
+        LoadMethod::InternalUserStage {} => return Ok(ForcedStage::User),
+        LoadMethod::InternalTableStage {} => return Ok(ForcedStage::Table),
+        LoadMethod::Streaming {} => return Ok(ForcedStage::Streaming),
+        LoadMethod::Insert {} => return Ok(ForcedStage::Insert),
+        LoadMethod::InternalNamedStage { name } => {
             return Ok(ForcedStage::Internal { name: name.clone() });
         }
-        StageConfig::S3 {
+        LoadMethod::ExternalStage {
             url,
             storage_integration,
             name,
@@ -30,18 +30,18 @@ pub(in crate::adapters) fn forced_stage(
     };
     let location = resolve_location(None, url).map_err(|error| error.to_string())?;
     let StoreKind::S3 { bucket, .. } = location.store else {
-        return Err(format!("stage url {url:?} must be an s3:// URL"));
+        return Err(format!("load_method url {url:?} must be an s3:// URL"));
     };
     let object = match (integration, name) {
         (Some(integration), None) => StageObject::Managed {
             integration: integration.clone(),
         },
         (None, Some(name)) => StageObject::Existing { name: name.clone() },
-        _ => return Err("stage needs exactly one of storage_integration or name".to_owned()),
+        _ => return Err("load_method needs exactly one of storage_integration or name".to_owned()),
     };
     let keep_staged_files = matches!(
         stage,
-        StageConfig::S3 {
+        LoadMethod::ExternalStage {
             keep_staged_files: true,
             ..
         }

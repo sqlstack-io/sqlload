@@ -29,7 +29,7 @@ pub async fn check_destination(destination: Destination) -> Result<String, Loade
             let answer = single_text(&destination, query.to_owned())
                 .await?
                 .unwrap_or_default();
-            let Some(ForcedStage::External(stage)) = &snowflake.stage else {
+            let ForcedStage::External(stage) = &snowflake.stage else {
                 return Ok(answer);
             };
             let checked = check_stage(&snowflake, stage).await?;

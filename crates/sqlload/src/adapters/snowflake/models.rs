@@ -28,8 +28,8 @@ pub struct SnowflakeDestination {
     pub database: String,
     /// Held while a load's tables change the schema, one at a time.
     pub ddl: Arc<tokio::sync::Mutex<()>>,
-    /// The route the connection's `stage` forces, if any.
-    pub stage: Option<ForcedStage>,
+    /// The route the connection's `load_method` sets.
+    pub stage: ForcedStage,
     /// What this run's plan already found out about stages, by what was probed: usable (and whether `apply` must create it), or why not.
     pub stage_checks: Arc<Mutex<BTreeMap<String, Result<bool, StepFailure>>>>,
     /// What a streaming client for this account needs.
@@ -37,7 +37,7 @@ pub struct SnowflakeDestination {
     pub config: DestinationConfig,
 }
 
-/// The route a connection's `stage` forces.
+/// The route a connection's `load_method` sets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForcedStage {
     User,
@@ -82,10 +82,8 @@ pub enum StageRoute {
     TargetTable,
     /// The staging table's `@%table`, which the load always owns.
     StagingTable,
-    /// Snowpipe Streaming into the staging table; `may_fall_back` (the chain chose it, nothing forced it) lets a channel that will not open drop to `INSERT`.
-    Streaming {
-        may_fall_back: bool,
-    },
+    /// Snowpipe Streaming into the staging table.
+    Streaming,
     /// Batched multi-row `INSERT` into the staging table.
     Insert,
 }
@@ -100,7 +98,7 @@ pub struct SnowflakeAccount {
     pub warehouse: Option<String>,
     pub database: String,
     pub base_url: Option<String>,
-    pub stage: Option<ForcedStage>,
+    pub stage: ForcedStage,
 }
 
 /// One batch's staged files and where they load.
@@ -216,13 +214,6 @@ pub struct ShownStage {
     pub name: String,
     pub url: String,
     pub storage_integration: String,
-}
-
-/// The route plan chose for a table's rows, and why earlier steps of the chain were passed over.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteChoice {
-    pub route: StageRoute,
-    pub passed_over: Vec<String>,
 }
 
 /// A stage `apply` creates.

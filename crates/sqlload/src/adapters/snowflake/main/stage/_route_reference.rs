@@ -18,6 +18,6 @@ pub(in crate::adapters) fn route_reference(
         StageRoute::User => Some(format!("@{USER_STAGE}")),
         StageRoute::TargetTable => Some(format!("@{}", table_stage(target))),
         StageRoute::StagingTable => staging.map(|staging| format!("@{}", table_stage(staging))),
-        StageRoute::Streaming { .. } | StageRoute::Insert => None,
+        StageRoute::Streaming | StageRoute::Insert => None,
     }
 }

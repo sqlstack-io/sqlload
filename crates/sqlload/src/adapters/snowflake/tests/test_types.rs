@@ -67,15 +67,6 @@ pub(crate) struct HashParityTestCase {
     pub(crate) expected_digest: &'static str,
 }
 
-pub(crate) struct PickRouteTestCase {
-    pub(crate) description: &'static str,
-    pub(crate) forced: bool,
-    /// Each step and why it cannot be used (`true` unusable, `false` a failed check), `None` when it can.
-    pub(crate) outcomes: &'static [(&'static str, Option<(bool, &'static str)>)],
-    /// How many steps were passed over, or the failure.
-    pub(crate) expected_choice: Result<usize, &'static str>,
-}
-
 pub(crate) struct StepFailureTestCase {
     pub(crate) description: &'static str,
     pub(crate) error: crate::http::errors::ApiError,

@@ -23,7 +23,7 @@ pub(in crate::adapters) fn writer_accepts(stage: Option<&StageRoute>) -> WriterA
         Some(StageRoute::StagingTable) => stored(Store::InternalStage(
             "the staging table's @%table".to_owned(),
         )),
-        Some(StageRoute::Streaming { .. }) => WriterAccepts {
+        Some(StageRoute::Streaming) => WriterAccepts {
             rows_into: Some("Snowpipe Streaming into a transient staging table".to_owned()),
             ..WriterAccepts::default()
         },
