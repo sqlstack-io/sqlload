@@ -102,7 +102,7 @@ def _copy(connection: psycopg.Connection, table: str, path: Path) -> None:
 
 
 def load(postgres: Postgres, dataset: Dataset) -> None:
-	"""Create and fill `narrow` and `wide`, then VACUUM ANALYZE so every reader sees settled pages."""
+	"""Create and fill `narrow`, `wide` and `wide_nokey` (no primary key), then VACUUM ANALYZE so every reader sees settled pages."""
 	with postgres.connect() as connection:
 		connection.execute(NARROW_DDL.format(name="narrow"))
 		connection.execute(_wide_ddl())
@@ -110,6 +110,8 @@ def load(postgres: Postgres, dataset: Dataset) -> None:
 		_copy(connection, "wide", dataset.path("pg", "wide.csv"))
 		connection.execute("VACUUM (FREEZE, ANALYZE) public.narrow")
 		connection.execute("VACUUM (FREEZE, ANALYZE) public.wide")
+		connection.execute("CREATE TABLE public.wide_nokey AS SELECT * FROM public.wide")
+		connection.execute("VACUUM (FREEZE, ANALYZE) public.wide_nokey")
 		share = -(-dataset.sizes.narrow // MULTI_TABLES)
 		for index in range(MULTI_TABLES):
 			table = multi_table(index)

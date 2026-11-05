@@ -112,6 +112,8 @@ SIZES = {
 	"reduced": Sizes(narrow=1_000_000, wide=100_000, flat=200_000, nested=50_000, files=1_000_000),
 	# Only the narrow table to speak of: the timing CI reports.
 	"e2e": Sizes(narrow=1_000_000, wide=1, flat=1, nested=1, files=1),
+	# The wide tables at 1M rows, the reference size for them, with little else.
+	"wide": Sizes(narrow=1_000, wide=1_000_000, flat=1_000, nested=1_000, files=1_000),
 	"tiny": Sizes(narrow=20_000, wide=5_000, flat=5_000, nested=2_000, files=20_000),
 }
 

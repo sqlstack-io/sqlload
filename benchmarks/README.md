@@ -9,6 +9,7 @@ script of the CI performance gate (`perf/compare.py`). The gate's benchmarks are
 ```sh
 make bench-compare BENCH_OUT=/some/folder              # full size: takes hours
 make bench-compare BENCH_ARGS='--size reduced'         # 1M narrow rows
+make bench-compare BENCH_ARGS='--size wide --scenarios pg_wide,pg_wide_nokey'   # 1M wide rows
 make bench-compare BENCH_ARGS='--scenarios pg_narrow,files --competitors sqlload,ingestr'
 ```
 
@@ -35,6 +36,7 @@ uses DuckDB 2.0.0 and reads every loader's output. Each loader therefore writes 
 |---|---|---|
 | `pg_narrow` | Postgres, 10M rows, 6 columns | sqlload, dlt (2 backends), ingestr |
 | `pg_wide` | Postgres, 1M rows, 40 columns including jsonb | same |
+| `pg_wide_nokey` | the wide rows in a table with no primary key (ingestr loads such tables differently) | same |
 | `pg_incremental` | load, append 1% new rows, load again; the second load is timed | same |
 | `pg_multi` | the 10M narrow rows split over 8 tables | sqlload, default threads and `--threads 1` |
 | `files_parquet`, `files_csv`, `files_ndjson` | the same rows in 10 local part files | sqlload, dlt, ingestr |

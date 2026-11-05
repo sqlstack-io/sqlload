@@ -28,6 +28,7 @@ class Scenario:
 		return {
 			"pg_narrow": sizes.narrow,
 			"pg_wide": sizes.wide,
+			"pg_wide_nokey": sizes.wide,
 			"pg_incremental": sizes.append,
 			"pg_multi": sizes.narrow,
 			"pg_snowflake": sizes.narrow,
@@ -42,6 +43,7 @@ class Scenario:
 SCENARIOS: list[Scenario] = [
 	Scenario("pg_narrow", "postgres", "narrow", "narrow", "Postgres narrow table (6 columns), full load", "narrow"),
 	Scenario("pg_wide", "postgres", "wide", "wide", "Postgres wide table (40 columns, 2 jsonb), full load", "wide"),
+	Scenario("pg_wide_nokey", "postgres", "wide", "wide", "The wide table without a primary key, full load", "wide_nokey"),
 	Scenario(
 		"pg_incremental",
 		"postgres",
