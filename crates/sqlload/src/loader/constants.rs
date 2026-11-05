@@ -10,9 +10,6 @@ pub const INCLUSIVE_BOUND: &str = ">=";
 /// The comparison reading only values after a cursor's lower bound.
 pub const EXCLUSIVE_BOUND: &str = ">";
 
-/// Arrow bytes of yielded Python data held in memory before they are written to a temporary file as one chunk; replayed chunks become the staged batches.
-pub const SPILL_CHUNK_BYTES: usize = 128 * 1024 * 1024;
-
 /// The source type label Python columns carry.
 pub const PYTHON_COLUMN_TYPE: &str = "python";
 

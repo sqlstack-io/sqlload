@@ -301,28 +301,23 @@ pub struct TableLoaded {
     pub note: Option<String>,
 }
 
-/// A Python table read for its load: its data (`None` when there is nothing to write), its plan for that data, the schema changes made, and a remark.
+/// A Python table's load as its function's batches arrive: the plan for the columns seen so far, and where the batches go.
 #[derive(Debug)]
-pub struct PythonRead {
-    pub reader: Option<SourceReader>,
+pub struct PythonFeed {
     pub table: TablePlan,
-    pub changes: Vec<String>,
-    pub note: Option<String>,
-    /// The run record a logged table writes with its data.
-    pub run: Option<RunEntry>,
-}
-
-/// A Python table's yielded data, held in temporary Arrow IPC files until its schema is known.
-#[derive(Debug)]
-pub struct SpilledBatches {
-    /// Removed when dropped.
-    pub directory: tempfile::TempDir,
-    pub chunks: Vec<std::path::PathBuf>,
-    /// The schema merged from every batch, with all-NULL columns as text.
-    pub schema: arrow_schema::SchemaRef,
-    /// The columns that only ever held NULL, which take the live or declared type.
-    pub null_columns: std::collections::BTreeSet<String>,
+    /// The schema merged from every batch so far, all-NULL columns as `Null`.
+    pub merged: arrow_schema::Schema,
     pub rows: u64,
+    /// Rows the function yielded outside the cursor window, which were skipped.
+    pub outside: u64,
+    /// Opened once the table exists for the data.
+    pub publisher: Option<Publisher>,
+    /// `created ...` and `altered ...` lines.
+    pub changes: Vec<String>,
+    /// `ctx.state` as the run started, or as the function left it at the end of the latest window.
+    pub state: Option<String>,
+    /// The time of the reconciliation this load appended, which its records follow.
+    pub reconciled: Option<String>,
 }
 
 /// An open destination.
@@ -421,8 +416,6 @@ pub struct FilesSink {
 pub enum SourceReader {
     Postgres(tokio_postgres::Client),
     Files(OpenFolder),
-    /// A Python table's data, already read and spilled.
-    Batches(SpilledBatches),
 }
 
 /// What decides one files table's cursor window.

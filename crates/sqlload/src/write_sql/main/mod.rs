@@ -8,6 +8,7 @@ pub mod display_name;
 pub mod loaded_files_query;
 pub mod qualified_name;
 pub mod sql_literal;
+pub mod staging_changes;
 pub mod staging_table;
 pub mod stored_name;
 pub mod swap_table;

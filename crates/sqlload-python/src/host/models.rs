@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use arrow_array::RecordBatch;
 use pyo3::types::PyAnyMethods;
 use pyo3::{PyResult, Python};
 use sqlload::python_sources::models::{PythonSource, TableRead};
-use sqlload::python_sources::types::{BatchStream, PythonHost};
+use sqlload::python_sources::types::{BatchStream, PythonHost, Streamed};
 
 use crate::bindings::constants::{
     DEFAULT_BATCH_ROWS, DEFAULT_DICT_CROSSING, DEFAULT_MAX_QUEUED, DEFAULT_MAX_QUEUED_BYTES,
@@ -12,7 +12,7 @@ use crate::bindings::constants::{
 use crate::crossing::errors::CrossError;
 use crate::crossing::main::default_parse_threads::default_parse_threads;
 use crate::crossing::main::table_batches::table_batches;
-use crate::crossing::models::{CrossingOptions, TableBatches};
+use crate::crossing::models::{CrossingOptions, Polled, TableBatches};
 use crate::host::_helpers::python_errors::error_text;
 use crate::host::constants::RUNTIME_MODULE;
 
@@ -47,10 +47,17 @@ impl PythonHost for ExtensionHost {
             max_queued_bytes: DEFAULT_MAX_QUEUED_BYTES,
         };
         Python::attach(|py| -> PyResult<TableBatches> {
-            let iterator = py
-                .import(RUNTIME_MODULE)?
-                .call_method1("start_table", (text,))?;
-            Ok(table_batches(&iterator, options))
+            let runtime = py.import(RUNTIME_MODULE)?;
+            let iterator = runtime.call_method1("start_table", (text,))?;
+            let snapshot = match request.logged {
+                true => Some(
+                    py.import("functools")?
+                        .getattr("partial")?
+                        .call1((runtime.getattr("current_state")?, request.table.as_str()))?,
+                ),
+                false => None,
+            };
+            Ok(table_batches(&iterator, snapshot.as_ref(), options))
         })
         .map(|batches| Box::new(PythonBatches(batches)) as Box<dyn BatchStream>)
         .map_err(|error| error_text(&error))
@@ -81,12 +88,16 @@ impl PythonHost for ExtensionHost {
 pub struct PythonBatches(TableBatches);
 
 impl BatchStream for PythonBatches {
-    fn next_batch(&mut self) -> Option<Result<RecordBatch, String>> {
-        self.0.next().map(|batch| {
-            batch.map_err(|error| match error {
-                CrossError::Python(error) => error_text(&error),
-                CrossError::Data(reason) => reason,
-            })
-        })
+    fn next_batch(&mut self) -> Option<Result<Streamed, String>> {
+        loop {
+            match self.0.poll(Duration::from_secs(3600)) {
+                Polled::Batch(batch) => return Some(Ok(Streamed::Batch(batch))),
+                Polled::State(state) => return Some(Ok(Streamed::State(state))),
+                Polled::Failed(CrossError::Python(error)) => return Some(Err(error_text(&error))),
+                Polled::Failed(CrossError::Data(reason)) => return Some(Err(reason)),
+                Polled::Pending => {}
+                Polled::Finished => return None,
+            }
+        }
     }
 }

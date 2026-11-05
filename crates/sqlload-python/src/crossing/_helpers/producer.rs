@@ -30,11 +30,13 @@ struct Producer<'py> {
     pending: Bound<'py, PyList>,
     /// orjson's `dumps` and its keyword arguments, when dicts cross serialised.
     dumps: Option<(Bound<'py, PyAny>, Bound<'py, PyDict>)>,
+    /// Returns `ctx.state` as JSON, for a logged table; called as each piece crosses.
+    snapshot: Option<Bound<'py, PyAny>>,
 }
 
 /// Iterate `source` with the GIL held, dispatching each crossed batch with the GIL released, then close it; an error or a panic ends the read.
 pub(crate) fn produce(
-    source: Py<PyAny>,
+    (source, snapshot): (Py<PyAny>, Option<Py<PyAny>>),
     options: CrossingOptions,
     dispatch: Dispatch,
     stats: Arc<CrossingStats>,
@@ -48,6 +50,7 @@ pub(crate) fn produce(
             stats,
             pending: PyList::empty(py),
             dumps: None,
+            snapshot: snapshot.map(|snapshot| snapshot.into_bound(py)),
         };
         let mut iterator = None;
         let read = catch_unwind(AssertUnwindSafe(|| {
@@ -65,7 +68,7 @@ pub(crate) fn produce(
             close(&iterator);
         }
         if let Some(error) = failed {
-            py.detach(|| fallback.send(Crossed::Failed(error)));
+            py.detach(|| fallback.send(Crossed::Failed(error), None));
         }
     });
 }
@@ -120,15 +123,15 @@ impl<'py> Producer<'py> {
                 batch_rows: self.options.batch_rows,
             };
             let bytes = json.bytes.clone_ref(self.py);
-            return Ok(self.flush()? && self.send(Crossed::Json { bytes, read }));
+            return Ok(self.flush()? && self.send(Crossed::Json { bytes, read })?);
         }
         if item.hasattr("__arrow_c_stream__")? {
             let reader = RecordBatchStreamReader::from_pyarrow_bound(item)?;
-            return Ok(self.flush()? && self.send(Crossed::ArrowStream(reader)));
+            return Ok(self.flush()? && self.send(Crossed::ArrowStream(reader))?);
         }
         if item.hasattr("__arrow_c_array__")? {
             let batch = RecordBatch::from_pyarrow_bound(item)?;
-            return Ok(self.flush()? && self.send(Crossed::ArrowBatch(batch)));
+            return Ok(self.flush()? && self.send(Crossed::ArrowBatch(batch))?);
         }
         Err(PyTypeError::new_err(unsupported(item)))
     }
@@ -181,13 +184,17 @@ impl<'py> Producer<'py> {
             None => Crossed::Columns(walk_rows(rows)?),
         };
         CrossingStats::add(&self.stats.gil_nanos, started.elapsed());
-        Ok(self.send(crossed))
+        self.send(crossed)
     }
 
-    /// Dispatch `crossed` with the GIL released, waiting while the queue is full; `false` once the consumer has gone.
-    fn send(&self, crossed: Crossed) -> bool {
+    /// Dispatch `crossed` with `ctx.state` as it is now (logged tables), with the GIL released, waiting while the queue is full; `false` once the consumer has gone.
+    fn send(&self, crossed: Crossed) -> PyResult<bool> {
+        let state: Option<String> = match &self.snapshot {
+            Some(snapshot) => snapshot.call0()?.extract()?,
+            None => None,
+        };
         let dispatch = &self.dispatch;
-        self.py.detach(|| dispatch.send(crossed))
+        Ok(self.py.detach(|| dispatch.send(crossed, state)))
     }
 }
 

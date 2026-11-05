@@ -20,6 +20,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"allow_empty",
 		"append_cursor_inclusive",
 		"auto_widen",
+		"batch",
 		"contract",
 		"cursor_column",
 		"cursor_start",

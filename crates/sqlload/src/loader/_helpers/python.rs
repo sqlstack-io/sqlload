@@ -4,21 +4,16 @@ use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
 use crate::loader::_helpers::destination::single_text;
 use crate::loader::constants::{
-    EMPTY_REPLACE_PROBLEM, PYTHON_COLUMN_TYPE, SPILL_CHUNK_BYTES, UNKNOWN_CURSOR_TYPE,
-    UTC_OFFSET_SUFFIX,
+    EMPTY_REPLACE_PROBLEM, PYTHON_COLUMN_TYPE, UNKNOWN_CURSOR_TYPE, UTC_OFFSET_SUFFIX,
 };
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{
-    Destination, PythonTable, ReadWindow, SpilledBatches, TablePlan, TableSpec,
-};
+use crate::loader::models::{Destination, PythonTable, ReadWindow, TablePlan, TableSpec};
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::constants::FILES_CONNECTION_KINDS;
 use crate::project::models::{ProjectConfig, SourceConfig};
 use crate::python_sources::models::TableRead;
 use crate::python_sources::types::{BatchStream, PythonHost};
 use crate::row_batches::main::conform_batch::conform_batch;
-use crate::row_batches::main::merge_schema::merge_schema;
-use crate::row_batches::main::settled_schema::settled_schema;
 use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
 use crate::schema_plan::models::{LiveColumn, TableAction};
 use crate::similar_names::main::close_name::close_name;
@@ -34,16 +29,12 @@ use arrow_array::{
 };
 use arrow_cast::cast::{CastOptions, cast_with_options};
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
-use arrow_ipc::reader::FileReader;
-use arrow_ipc::writer::FileWriter;
 use arrow_ord::cmp::{gt, gt_eq, lt};
 use arrow_ord::sort::{SortOptions, sort_to_indices};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
-use arrow_select::concat::concat_batches;
 use arrow_select::filter::filter_record_batch;
 use chrono::{NaiveDate, NaiveDateTime};
 use std::collections::BTreeSet;
-use std::fs::File;
 use std::sync::Arc;
 
 /// A Python source's tables as planning sees them before any data: the declared (`columns`) and masked columns only.
@@ -371,143 +362,28 @@ pub(crate) async fn final_state(
         .map_err(LoaderError::Invalid)
 }
 
-/// Read every batch the table function yields into temporary Arrow IPC files of about [`SPILL_CHUNK_BYTES`] each, merging their schemas; the first error stops the read.
-pub(crate) async fn spill_batches(
-    mut stream: Box<dyn BatchStream>,
-) -> Result<SpilledBatches, LoaderError> {
-    let directory = tempfile::Builder::new()
-        .prefix("sqlload-python-")
-        .tempdir()
-        .map_err(|error| LoaderError::Invalid(format!("cannot create a spill folder: {error}")))?;
-    let mut spill = Spill {
-        merged: Schema::empty(),
-        pending: Vec::new(),
-        pending_bytes: 0,
-        chunks: Vec::new(),
-        rows: 0,
-    };
-    loop {
-        let (returned, next) = tokio::task::spawn_blocking(move || {
-            let next = stream.next_batch();
-            (stream, next)
-        })
-        .await
-        .map_err(|error| {
-            LoaderError::Invalid(format!("the table function's thread failed: {error}"))
-        })?;
-        stream = returned;
-        match next {
-            None => break,
-            Some(Err(reason)) => return Err(LoaderError::Invalid(reason)),
-            Some(Ok(batch)) => spill.add(batch, directory.path())?,
-        }
-    }
-    spill.write_chunk(directory.path())?;
-    let null_columns: BTreeSet<String> = spill
-        .merged
-        .fields()
-        .iter()
-        .filter(|field| *field.data_type() == DataType::Null)
-        .map(|field| field.name().clone())
-        .collect();
-    Ok(SpilledBatches {
-        directory,
-        chunks: spill.chunks,
-        schema: Arc::new(settled_schema(&spill.merged)),
-        null_columns,
-        rows: spill.rows,
-    })
-}
-
-/// Batches waiting to be written as one chunk, and the chunks written.
-struct Spill {
-    merged: Schema,
-    pending: Vec<RecordBatch>,
-    pending_bytes: usize,
-    chunks: Vec<std::path::PathBuf>,
-    rows: u64,
-}
-
-impl Spill {
-    fn add(&mut self, batch: RecordBatch, directory: &std::path::Path) -> Result<(), LoaderError> {
-        self.merged = merge_schema(&self.merged, &batch.schema());
-        self.rows += batch.num_rows() as u64;
-        self.pending_bytes += batch.get_array_memory_size();
-        self.pending.push(batch);
-        match self.pending_bytes >= SPILL_CHUNK_BYTES {
-            true => self.write_chunk(directory),
-            false => Ok(()),
-        }
-    }
-
-    /// Write the pending batches as one batch in one IPC file, in the schema merged so far.
-    fn write_chunk(&mut self, directory: &std::path::Path) -> Result<(), LoaderError> {
-        if self.pending.is_empty() {
-            return Ok(());
-        }
-        let schema: SchemaRef = Arc::new(self.merged.clone());
-        let conformed: Vec<RecordBatch> = self
-            .pending
-            .drain(..)
-            .map(|batch| conform_batch(&batch, &schema))
-            .collect::<Result<_, String>>()
-            .map_err(LoaderError::Invalid)?;
-        self.pending_bytes = 0;
-        let chunk = concat_batches(&schema, &conformed).map_err(invalid)?;
-        let path = directory.join(format!("{:06}.arrow", self.chunks.len()));
-        let file = File::create(&path).map_err(|error| {
-            LoaderError::Invalid(format!("cannot write {}: {error}", path.display()))
-        })?;
-        let mut writer = FileWriter::try_new(file, &schema).map_err(invalid)?;
-        writer.write(&chunk).map_err(invalid)?;
-        writer.finish().map_err(invalid)?;
-        self.chunks.push(path);
-        Ok(())
-    }
-}
-
-/// Pass each spilled chunk to `on_batch` in the plan's read types, keeping only rows inside the cursor window; returns the rows passed.
-pub(crate) async fn replay_batches(
-    spilled: &SpilledBatches,
+/// One yielded batch as the plan reads it: in the schema merged so far (`merged`, all-NULL columns as text), each read column converted to its planned type (excluded columns dropped), and only the rows inside `window` when it is given; returns the batch and the rows left outside.
+pub(crate) fn typed_batch(
+    batch: &RecordBatch,
     table: &TablePlan,
-    mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), String>,
-) -> Result<u64, LoaderError> {
-    let target = read_schema(table);
-    let cursor_type = table.window.as_ref().and_then(|window| {
+    merged: &SchemaRef,
+    window: Option<&ReadWindow>,
+) -> Result<(RecordBatch, usize), LoaderError> {
+    let conformed = conform_batch(batch, merged).map_err(LoaderError::Invalid)?;
+    let typed = read_types(&conformed, &read_schema(table))?;
+    let cursor_type = window.and_then(|window| {
         table
             .read_columns
             .iter()
             .find(|column| column.name.eq_ignore_ascii_case(&window.column))
             .map(|column| column.output.clone())
     });
-    let mut rows: u64 = 0;
-    let mut outside: u64 = 0;
-    for path in &spilled.chunks {
-        let file = File::open(path).map_err(|error| {
-            LoaderError::Invalid(format!("cannot read {}: {error}", path.display()))
-        })?;
-        let reader = FileReader::try_new(file, None).map_err(invalid)?;
-        for batch in reader {
-            let batch = conform_batch(&batch.map_err(invalid)?, &spilled.schema)
-                .map_err(LoaderError::Invalid)?;
-            let typed = read_types(&batch, &target)?;
-            let kept = match (&table.window, &cursor_type) {
-                (Some(window), Some(cursor_type)) => in_window(&typed, window, cursor_type)?,
-                _ => typed,
-            };
-            outside += (batch.num_rows() - kept.num_rows()) as u64;
-            rows += kept.num_rows() as u64;
-            on_batch(kept).await.map_err(LoaderError::Invalid)?;
-        }
-    }
-    if outside > 0 {
-        tracing::warn!(
-            table = %table.spec.destination.table,
-            rows = outside,
-            "skipped rows outside the cursor window; use ctx.cursor_value to read only new data"
-        );
-    }
-    Ok(rows)
+    let kept = match (window, &cursor_type) {
+        (Some(window), Some(cursor_type)) => in_window(&typed, window, cursor_type)?,
+        _ => typed,
+    };
+    let outside = batch.num_rows() - kept.num_rows();
+    Ok((kept, outside))
 }
 
 /// The batches' target schema: each read column in its planned type.

@@ -15,7 +15,6 @@ use crate::files_source::models::{
 };
 use crate::loader::_helpers::destination::text_values;
 use crate::loader::_helpers::python::python_tables;
-use crate::loader::_helpers::python::replay_batches;
 use crate::loader::_helpers::resolve::source_target;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
@@ -495,7 +494,6 @@ pub(crate) async fn read_source(
             };
             Ok(read_files(folder, &read, on_batch).await?)
         }
-        (SourceReader::Batches(spilled), _) => replay_batches(spilled, table, on_batch).await,
         (SourceReader::Files(_), None) => Err(LoaderError::Invalid(format!(
             "{}: a files source has no files planned",
             table.spec.source_table.qualified_name()

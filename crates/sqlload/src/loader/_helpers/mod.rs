@@ -4,6 +4,7 @@ pub(crate) mod feed;
 pub(crate) mod publish;
 pub(crate) mod publish_files;
 pub(crate) mod python;
+pub(crate) mod python_feed;
 pub(crate) mod render;
 pub(crate) mod resolve;
 pub(crate) mod route;

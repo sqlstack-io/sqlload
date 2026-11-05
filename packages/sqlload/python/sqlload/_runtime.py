@@ -98,6 +98,17 @@ def start_table(request: str) -> Iterator[Any]:
 	return iter(()) if yielded is None else iter(yielded)
 
 
+def current_state(table: str) -> str | None:
+	"""`ctx.state` as JSON now, while the table function runs (a logged table's batches commit with it)."""
+	ctx = _contexts.get(table)
+	if ctx is None or not ctx._logged:
+		return None
+	try:
+		return json.dumps(ctx.state)
+	except (TypeError, ValueError) as error:
+		raise TypeError(f"ctx.state of table {table} is not JSON: {error}") from error
+
+
 def table_state(table: str) -> str | None:
 	"""The position the table function left in `ctx.state`, as JSON, when it differs from the one it started with.
 
