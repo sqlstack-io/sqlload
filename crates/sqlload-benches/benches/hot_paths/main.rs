@@ -1,5 +1,9 @@
 //! Instruction counts of sqlload's hot paths under Callgrind (gungraun); inputs are built in setup functions, which are not measured.
 //!
+//! Each benchmark only calls a function with another name: Callgrind toggles collection on the
+//! benchmark's symbol, and closures or async blocks inside it share that symbol's prefix, which
+//! turns collection off part-way.
+//!
 //! Run with `make bench-perf`; CI compares a pull request with its merge base and fails on a
 //! regression above 5% in any benchmark's instruction count.
 
@@ -38,6 +42,25 @@ const CROSSING_ROWS: usize = 10_000;
 const TEXT_FILES: u64 = 4;
 const ROWS_PER_TEXT_FILE: u64 = 2_500;
 
+// Teardowns (not measured) check each benchmark did all its work.
+fn expect_rows<const ROWS: usize>(batches: Vec<RecordBatch>) {
+    let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(rows, ROWS, "rows produced");
+}
+
+fn expect_batch<const ROWS: usize>(batch: RecordBatch) {
+    assert_eq!(batch.num_rows(), ROWS, "rows produced");
+}
+
+fn expect_count<const ROWS: u64>(rows: u64) {
+    assert_eq!(rows, ROWS, "rows read");
+}
+
+fn expect_files((rows, written): (u64, Vec<String>)) {
+    assert_eq!(rows, 50_000, "rows written");
+    assert!(!written.is_empty(), "no Parquet file was written");
+}
+
 fn narrow_copy() -> CopyStream {
     fixtures::narrow_stream(20_000)
 }
@@ -47,14 +70,16 @@ fn wide_copy() -> CopyStream {
 }
 
 #[library_benchmark]
-#[bench::narrow_20k_rows(setup = narrow_copy)]
-#[bench::wide_2k_rows(setup = wide_copy)]
+#[bench::narrow_20k_rows(setup = narrow_copy, teardown = expect_rows::<20_000>)]
+#[bench::wide_2k_rows(setup = wide_copy, teardown = expect_rows::<2_000>)]
 fn postgres_copy_to_arrow(stream: CopyStream) -> Vec<RecordBatch> {
+    black_box(decode(black_box(stream)))
+}
+
+fn decode(stream: CopyStream) -> Vec<RecordBatch> {
     let chunks = stream.chunks.iter().map(Vec::as_slice);
-    black_box(
-        decode_copy("public.bench", stream.columns, chunks, BATCH_ROWS)
-            .unwrap_or_else(|error| panic!("{error}")),
-    )
+    decode_copy("public.bench", stream.columns, chunks, BATCH_ROWS)
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// A runtime, an in-memory folder, the table's columns and its rows.
@@ -92,8 +117,12 @@ fn desired_columns(schema: &SchemaRef, origin: ColumnOrigin) -> Vec<DesiredColum
 }
 
 #[library_benchmark]
-#[bench::narrow_50k_rows(setup = narrow_parquet_input)]
-fn arrow_to_parquet((runtime, folder, columns, batch): ParquetInput) -> Vec<String> {
+#[bench::narrow_50k_rows(setup = narrow_parquet_input, teardown = expect_files)]
+fn arrow_to_parquet(input: ParquetInput) -> (u64, Vec<String>) {
+    black_box(write_parquet(black_box(input)))
+}
+
+fn write_parquet((runtime, folder, columns, batch): ParquetInput) -> (u64, Vec<String>) {
     let path = TablePath {
         folder: folder.location.clone(),
         partition: None,
@@ -118,7 +147,7 @@ fn arrow_to_parquet((runtime, folder, columns, batch): ParquetInput) -> Vec<Stri
             .await
             .unwrap_or_else(|error| panic!("{error}"));
     });
-    black_box(writer.written)
+    (writer.rows, writer.written)
 }
 
 /// A runtime, an in-memory folder of text files, and how they are encoded.
@@ -159,12 +188,16 @@ fn csv_files() -> TextInput {
     text_input(SourceFormat::Csv)
 }
 
-/// Sample the files and infer their columns (as `plan` does), then read every file into typed batches (as `load` does).
+// Sample the files and infer their columns (as `plan` does), then read every file into typed batches (as `load` does).
 #[library_benchmark]
-#[bench::ndjson_4x2500_rows(setup = ndjson_files)]
-#[bench::json_4x2500_rows(setup = json_files)]
-#[bench::csv_4x2500_rows(setup = csv_files)]
-fn text_files_infer_and_read((runtime, folder, encoding): TextInput) -> u64 {
+#[bench::ndjson_4x2500_rows(setup = ndjson_files, teardown = expect_count::<10_000>)]
+#[bench::json_4x2500_rows(setup = json_files, teardown = expect_count::<10_000>)]
+#[bench::csv_4x2500_rows(setup = csv_files, teardown = expect_count::<10_000>)]
+fn text_files_infer_and_read(input: TextInput) -> u64 {
+    black_box(infer_and_read(black_box(input)))
+}
+
+fn infer_and_read((runtime, folder, encoding): TextInput) -> u64 {
     runtime.block_on(async {
         let table = discover_files(&folder, &[], &encoding)
             .await
@@ -198,7 +231,7 @@ fn text_files_infer_and_read((runtime, folder, encoding): TextInput) -> u64 {
         })
         .await
         .unwrap_or_else(|error| panic!("{error}"));
-        black_box(rows)
+        rows
     })
 }
 
@@ -206,33 +239,39 @@ fn flat_rows() -> Rows {
     fixtures::flat_rows(CROSSING_ROWS as u64)
 }
 
-/// Yielded dicts gathered column by column, then typed into one batch by inference.
+// Yielded dicts gathered column by column, then typed into one batch by inference.
 #[library_benchmark]
-#[bench::flat_10k_rows(setup = flat_rows)]
+#[bench::flat_10k_rows(setup = flat_rows, teardown = expect_batch::<10_000>)]
 fn rows_to_batch(rows: Rows) -> RecordBatch {
-    black_box(columns_batch(fixtures::gather(&rows)).unwrap_or_else(|error| panic!("{error}")))
+    black_box(gather_and_type(black_box(rows)))
+}
+
+fn gather_and_type(rows: Rows) -> RecordBatch {
+    columns_batch(fixtures::gather(&rows)).unwrap_or_else(|error| panic!("{error}"))
 }
 
 fn drifting() -> Vec<RecordBatch> {
     fixtures::drifting_batches(12, 2_000)
 }
 
-/// What the loader does with a Python table's batches: merge their schemas, settle it, and conform every batch to it.
+// What the loader does with a Python table's batches: merge their schemas, settle it, and conform every batch to it.
 #[library_benchmark]
-#[bench::drifting_12x2k_rows(setup = drifting)]
+#[bench::drifting_12x2k_rows(setup = drifting, teardown = expect_rows::<24_000>)]
 fn merge_and_conform(batches: Vec<RecordBatch>) -> Vec<RecordBatch> {
+    black_box(merge_then_conform(black_box(batches)))
+}
+
+fn merge_then_conform(batches: Vec<RecordBatch>) -> Vec<RecordBatch> {
     let merged = batches
         .iter()
         .fold(arrow_schema::Schema::empty(), |seen, batch| {
             merge_schema(&seen, &batch.schema())
         });
     let schema = std::sync::Arc::new(settled_schema(&merged));
-    black_box(
-        batches
-            .iter()
-            .map(|batch| conform_batch(batch, &schema).unwrap_or_else(|error| panic!("{error}")))
-            .collect(),
-    )
+    batches
+        .iter()
+        .map(|batch| conform_batch(batch, &schema).unwrap_or_else(|error| panic!("{error}")))
+        .collect()
 }
 
 /// JSON bytes and how to read them.
@@ -264,19 +303,23 @@ fn flat_document() -> JsonInput {
     (fixtures::flat_document(20_000), read)
 }
 
-/// The Rust side of `sl.json(...)` / `sl.ndjson(...)`: parse the bytes into rows and type each batch, as the crossing's parser threads do.
+// The Rust side of `sl.json(...)` / `sl.ndjson(...)`: parse the bytes into rows and type each batch, as the crossing's parser threads do.
 #[library_benchmark]
-#[bench::ndjson_flat_20k_rows(setup = flat_ndjson)]
-#[bench::ndjson_nested_5k_rows(setup = nested_ndjson)]
-#[bench::document_path_flat_20k_rows(setup = flat_document)]
-fn json_bytes_to_batches((bytes, read): JsonInput) -> Vec<RecordBatch> {
+#[bench::ndjson_flat_20k_rows(setup = flat_ndjson, teardown = expect_rows::<20_000>)]
+#[bench::ndjson_nested_5k_rows(setup = nested_ndjson, teardown = expect_rows::<5_000>)]
+#[bench::document_path_flat_20k_rows(setup = flat_document, teardown = expect_rows::<20_000>)]
+fn json_bytes_to_batches(input: JsonInput) -> Vec<RecordBatch> {
+    black_box(parse_json_bytes(black_box(input)))
+}
+
+fn parse_json_bytes((bytes, read): JsonInput) -> Vec<RecordBatch> {
     let mut batches = Vec::new();
     json_rows(&bytes, &read, |columns| {
         batches.push(columns_batch(columns)?);
         Ok(())
     })
     .unwrap_or_else(|error| panic!("{error}"));
-    black_box(batches)
+    batches
 }
 
 library_benchmark_group!(name = postgres_source, benchmarks = postgres_copy_to_arrow);

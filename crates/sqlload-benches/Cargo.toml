@@ -8,6 +8,12 @@ publish = false
 repository.workspace = true
 rust-version.workspace = true
 
+# Empty: the benchmarks are the bench target below.
+[lib]
+test = false
+doctest = false
+bench = false
+
 [dev-dependencies]
 arrow-array.workspace = true
 arrow-schema.workspace = true

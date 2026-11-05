@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use object_store::ObjectStore;
+use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use sqlload::column_types::models::ColumnType;
@@ -24,16 +24,16 @@ const STATUSES: [&str; 6] = ["new", "paid", "packed", "shipped", "delivered", "r
 const PG_2026_MICROS: i64 = 820_540_800_000_000;
 
 /// A binary `COPY` stream as Postgres sends it: one chunk per `CopyData` message (header, rows, trailer).
-pub struct CopyStream {
-    pub columns: Vec<ReadColumn>,
-    pub chunks: Vec<Vec<u8>>,
+pub(crate) struct CopyStream {
+    pub(crate) columns: Vec<ReadColumn>,
+    pub(crate) chunks: Vec<Vec<u8>>,
 }
 
 /// Yielded rows as the crossing gathers them: field names and cells in each row's key order.
-pub type Rows = Vec<Vec<(&'static str, Cell)>>;
+pub(crate) type Rows = Vec<Vec<(&'static str, Cell)>>;
 
 /// A stable 31-bit hash of `(value, salt)`.
-pub fn mix(value: u64, salt: u64) -> u64 {
+pub(crate) fn mix(value: u64, salt: u64) -> u64 {
     let mut x = value
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         .wrapping_add(salt.wrapping_mul(0xC2B2_AE3D_27D4_EB4F));
@@ -105,7 +105,7 @@ fn copy_stream(columns: Vec<ReadColumn>, rows: impl Iterator<Item = Vec<u8>>) ->
 }
 
 /// The narrow table: `id int8, customer_name text, created_at timestamptz, amount numeric(12,2), is_active bool, quantity int4`.
-pub fn narrow_stream(rows: u64) -> CopyStream {
+pub(crate) fn narrow_stream(rows: u64) -> CopyStream {
     let columns = vec![
         read_column("id", WireType::Int8, ColumnType::Int),
         read_column("customer_name", WireType::Text, ColumnType::Text),
@@ -137,7 +137,7 @@ pub fn narrow_stream(rows: u64) -> CopyStream {
 }
 
 /// The wide table: 40 columns of integers, text, numeric(18,4), timestamps, dates, booleans, floats and two jsonb (read as text).
-pub fn wide_stream(rows: u64) -> CopyStream {
+pub(crate) fn wide_stream(rows: u64) -> CopyStream {
     let mut columns = vec![read_column("id", WireType::Int8, ColumnType::Int)];
     for n in 1..=8 {
         let wire = if n % 2 == 1 { WireType::Int4 } else { WireType::Int8 };
@@ -215,7 +215,7 @@ pub fn wide_stream(rows: u64) -> CopyStream {
 }
 
 /// The narrow table's rows as one Arrow batch, decoded from its `COPY` stream.
-pub fn narrow_batch(rows: u64) -> RecordBatch {
+pub(crate) fn narrow_batch(rows: u64) -> RecordBatch {
     let stream = narrow_stream(rows);
     let chunks = stream.chunks.iter().map(Vec::as_slice);
     let mut batches = decode_copy("public.narrow", stream.columns, chunks, usize::MAX)
@@ -231,7 +231,7 @@ fn timestamp_text(seconds: u64) -> String {
 }
 
 /// The narrow rows as JSON objects with a nested `meta` object, one per line.
-pub fn narrow_ndjson(first: u64, rows: u64) -> String {
+pub(crate) fn narrow_ndjson(first: u64, rows: u64) -> String {
     (first..first + rows)
         .map(|id| {
             let h: Vec<u64> = (0..6).map(|salt| mix(id, salt)).collect();
@@ -254,7 +254,7 @@ pub fn narrow_ndjson(first: u64, rows: u64) -> String {
 }
 
 /// The narrow rows as CSV with a header line.
-pub fn narrow_csv(first: u64, rows: u64) -> String {
+pub(crate) fn narrow_csv(first: u64, rows: u64) -> String {
     let mut text = "id,customer_name,created_at,amount,is_active,quantity\n".to_owned();
     for id in first..first + rows {
         let h: Vec<u64> = (0..6).map(|salt| mix(id, salt)).collect();
@@ -275,7 +275,7 @@ pub fn narrow_csv(first: u64, rows: u64) -> String {
 }
 
 /// The narrow rows as one JSON array of objects.
-pub fn narrow_json(first: u64, rows: u64) -> String {
+pub(crate) fn narrow_json(first: u64, rows: u64) -> String {
     let lines: Vec<String> = narrow_ndjson(first, rows)
         .lines()
         .map(str::to_owned)
@@ -284,7 +284,7 @@ pub fn narrow_json(first: u64, rows: u64) -> String {
 }
 
 /// A runtime and an in-memory folder holding `files`, keyed by name.
-pub fn memory_folder(files: Vec<(String, String)>) -> (Runtime, OpenFolder) {
+pub(crate) fn memory_folder(files: Vec<(String, String)>) -> (Runtime, OpenFolder) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap_or_else(|error| panic!("a runtime starts: {error}"));
@@ -307,7 +307,7 @@ pub fn memory_folder(files: Vec<(String, String)>) -> (Runtime, OpenFolder) {
 }
 
 /// `rows` flat 20-field order rows as Python dicts cross: ints, floats, booleans, text and ISO timestamps.
-pub fn flat_rows(rows: u64) -> Rows {
+pub(crate) fn flat_rows(rows: u64) -> Rows {
     (1..=rows)
         .map(|id| {
             let h: Vec<u64> = (0..8).map(|salt| mix(id, salt)).collect();
@@ -344,7 +344,7 @@ pub fn flat_rows(rows: u64) -> Rows {
 }
 
 /// Gather `rows` column by column, as the crossing does for yielded dicts.
-pub fn gather(rows: &Rows) -> RowColumns {
+pub(crate) fn gather(rows: &Rows) -> RowColumns {
     let mut columns = RowColumns::new();
     for row in rows {
         for (name, cell) in row {
@@ -356,7 +356,7 @@ pub fn gather(rows: &Rows) -> RowColumns {
 }
 
 /// Pages of flat rows whose columns drift: a field missing from some pages, integers turning into floats, and a column NULL in the first page only.
-pub fn drifting_batches(pages: u64, rows: u64) -> Vec<RecordBatch> {
+pub(crate) fn drifting_batches(pages: u64, rows: u64) -> Vec<RecordBatch> {
     (0..pages)
         .map(|page| {
             let mut rows = flat_rows(rows);
@@ -387,7 +387,7 @@ pub fn drifting_batches(pages: u64, rows: u64) -> Vec<RecordBatch> {
 }
 
 /// The flat rows as NDJSON bytes, as `sl.ndjson(...)` hands them over.
-pub fn flat_ndjson(rows: u64) -> Vec<u8> {
+pub(crate) fn flat_ndjson(rows: u64) -> Vec<u8> {
     let mut text = String::new();
     for row in flat_rows(rows) {
         let fields: Vec<String> = row
@@ -412,7 +412,7 @@ pub fn flat_ndjson(rows: u64) -> Vec<u8> {
 }
 
 /// API-shaped nested orders as NDJSON: a customer object, a list of line objects, a map and a list of tags.
-pub fn nested_ndjson(rows: u64) -> Vec<u8> {
+pub(crate) fn nested_ndjson(rows: u64) -> Vec<u8> {
     let mut text = String::new();
     for id in 1..=rows {
         let h: Vec<u64> = (0..8).map(|salt| mix(id, salt)).collect();
@@ -453,7 +453,7 @@ pub fn nested_ndjson(rows: u64) -> Vec<u8> {
 }
 
 /// The flat rows inside an API response document, at `data.items`.
-pub fn flat_document(rows: u64) -> Vec<u8> {
+pub(crate) fn flat_document(rows: u64) -> Vec<u8> {
     let rows = String::from_utf8(flat_ndjson(rows)).unwrap_or_default();
     let items: Vec<&str> = rows.lines().collect();
     format!(
