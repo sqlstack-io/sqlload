@@ -6,7 +6,9 @@ use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbDestination;
 
 /// A new connection to the same database, so one table's transaction never mixes with another table's loading at the same time.
-pub fn own_connection(destination: &DuckDbDestination) -> Result<DuckDbDestination, DuckDbError> {
+pub(in crate::adapters) fn own_connection(
+    destination: &DuckDbDestination,
+) -> Result<DuckDbDestination, DuckDbError> {
     let connection = destination
         .connection
         .lock()

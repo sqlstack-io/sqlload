@@ -5,7 +5,7 @@ use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbDestination;
 
 /// The first column of the first row of `query`, as text; `None` for SQL `NULL`.
-pub async fn query_text(
+pub(in crate::adapters) async fn query_text(
     destination: &DuckDbDestination,
     query: String,
 ) -> Result<Option<String>, DuckDbError> {

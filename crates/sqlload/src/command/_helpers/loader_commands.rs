@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use std::collections::BTreeMap;
 
+use crate::adapters::dispatch::models::Destination;
 use crate::command::models::{Command, LoaderArgs, LoaderRequest, StateAction};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
@@ -12,7 +13,7 @@ use crate::loader::main::load_tables::load_tables;
 use crate::loader::main::plan_project::plan_project;
 use crate::loader::main::render_plan::render_plan;
 use crate::loader::main::state_command::state_command;
-use crate::loader::models::{Destination, LoadRun, PlanOptions, StateKind, StateRequest};
+use crate::loader::models::{LoadRun, PlanOptions, StateKind, StateRequest};
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::project::models::ProjectConfig;

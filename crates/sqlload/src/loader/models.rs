@@ -2,14 +2,12 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::adapters::contract::models::{TableName, WriteMode};
-#[cfg(feature = "duckdb")]
-use crate::adapters::duckdb::models::DuckDbDestination;
+use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::models::{
-    FilesDestination, FilesWriter, PartitionFolder, PendingLoad, ReplacedFiles, TableFiles,
-    TablePath, TableState,
+    FilesWriter, PartitionFolder, PendingLoad, ReplacedFiles, TableFiles, TablePath, TableState,
 };
 use crate::adapters::snowflake::models::PlannedStage;
-use crate::adapters::snowflake::models::{SnowflakeDestination, StageRoute};
+use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::models::OpenFolder;
@@ -354,16 +352,6 @@ pub struct PythonFeed {
     pub state: Option<String>,
     /// The time of the reconciliation this load appended, which its records follow.
     pub reconciled: Option<String>,
-}
-
-/// An open destination.
-#[derive(Debug, Clone)]
-pub enum Destination {
-    #[cfg(feature = "duckdb")]
-    DuckDb(DuckDbDestination),
-    Snowflake(Box<SnowflakeDestination>),
-    /// Parquet files in an s3 or filesystem connection.
-    Files(Box<FilesDestination>),
 }
 
 /// A Postgres table's integer cursor as plan found it, ending its `batch` windows.

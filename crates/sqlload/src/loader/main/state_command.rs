@@ -3,9 +3,10 @@
 use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use std::collections::BTreeMap;
 
+use crate::adapters::dispatch::models::Destination;
 use crate::loader::_helpers::run_log::{append_run, reconcile_record, reset_record};
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, ProjectPlan, StateKind, StateRequest};
+use crate::loader::models::{ProjectPlan, StateKind, StateRequest};
 use crate::run_log::main::describe_state::describe_state;
 use crate::run_log::main::unreadable_line::unreadable_line;
 use crate::run_log::models::RunRecord;

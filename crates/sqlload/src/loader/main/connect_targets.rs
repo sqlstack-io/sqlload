@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::adapters::dispatch::models::Destination;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_connect_target::connect_target;
-use crate::loader::models::Destination;
 use crate::project::models::ProjectConfig;
 
 /// One open destination per target, keyed by target name.

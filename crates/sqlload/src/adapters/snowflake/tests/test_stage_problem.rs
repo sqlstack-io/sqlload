@@ -1,5 +1,5 @@
-use crate::adapters::snowflake::main::stage_lookup::stage_lookup;
-use crate::adapters::snowflake::main::stage_problem::stage_problem;
+use crate::adapters::snowflake::main::stage::stage_lookup::stage_lookup;
+use crate::adapters::snowflake::main::stage::stage_problem::stage_problem;
 use crate::adapters::snowflake::models::ShownStage;
 use crate::adapters::snowflake::tests::helpers::stage;
 use crate::adapters::snowflake::tests::test_types::StageProblemTestCase;

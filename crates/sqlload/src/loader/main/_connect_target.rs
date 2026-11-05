@@ -1,15 +1,15 @@
 //! Open the destination one target uses.
 
 use crate::adapters::contract::models::TableName;
+use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::open_duckdb::open_duckdb;
 use crate::adapters::files::models::FilesDestination;
-use crate::adapters::snowflake::main::connect_snowflake::connect_snowflake;
+use crate::adapters::snowflake::main::session::connect_snowflake::connect_snowflake;
 use crate::adapters::snowflake::models::{
     ExternalStage, ForcedStage, SnowflakeAccount, StageObject,
 };
 use crate::loader::errors::LoaderError;
-use crate::loader::models::Destination;
 use crate::project::models::{ConnectionConfig, ProjectConfig, StageConfig};
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};

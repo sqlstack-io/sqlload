@@ -1,12 +1,13 @@
 //! Add a logged table's run log to its plan: its current state, a reset to read from, or a disagreement with the data to reconcile.
 
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::models::Destination;
 use crate::loader::_helpers::run_log::{
     committed_runs, data_disagreement, read_run_log, unreadable_problems,
 };
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, LoggedPlan, PlanOptions, TablePlan};
+use crate::loader::models::{LoggedPlan, PlanOptions, TablePlan};
 use crate::run_log::main::current_run::current_run;
 use crate::run_log::models::RunEvent;
 

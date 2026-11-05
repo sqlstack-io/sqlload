@@ -10,7 +10,7 @@ use crate::schema_plan::models::LiveColumn;
 use crate::sql_api::main::execute_sql::execute_sql;
 
 /// The table's columns in order, or `None` if it does not exist.
-pub async fn describe_table(
+pub(in crate::adapters) async fn describe_table(
     destination: &SnowflakeDestination,
     table: &TableName,
 ) -> Result<Option<Vec<LiveColumn>>, ApiError> {

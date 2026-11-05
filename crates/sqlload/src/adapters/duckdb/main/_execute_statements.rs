@@ -5,7 +5,7 @@ use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbDestination;
 
 /// Run each statement in order, stopping at the first failure (an open transaction is rolled back).
-pub async fn execute_statements(
+pub(in crate::adapters) async fn execute_statements(
     destination: &DuckDbDestination,
     statements: Vec<String>,
 ) -> Result<(), DuckDbError> {

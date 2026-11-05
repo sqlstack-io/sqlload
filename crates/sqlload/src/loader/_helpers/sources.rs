@@ -2,6 +2,8 @@ use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use arrow_array::RecordBatch;
 use tokio_postgres::Client;
 
+use crate::adapters::dispatch::main::text_values::text_values;
+use crate::adapters::dispatch::models::Destination;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::main::open_folder::open_folder;
@@ -15,13 +17,12 @@ use crate::files_source::models::{
     BatchFooters, DataFile, FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat,
     TextChecks,
 };
-use crate::loader::_helpers::destination::text_values;
 use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::source_target;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    Destination, FilesSource, PlanOptions, SourceEnd, SourceReader, TablePlan, TableSpec,
+    FilesSource, PlanOptions, SourceEnd, SourceReader, TablePlan, TableSpec,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;

@@ -3,10 +3,12 @@
 use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::loader::_helpers::destination::{execute, execute_ddl};
+use crate::adapters::dispatch::main::execute::execute;
+use crate::adapters::dispatch::main::execute_ddl::execute_ddl;
+use crate::adapters::dispatch::models::Destination;
 use crate::loader::_helpers::table_plan::schema_statements;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, ProjectPlan};
+use crate::loader::models::ProjectPlan;
 use crate::schema_plan::models::TableAction;
 
 /// Create the stages SQLLoad maintains, then apply every unblocked table's schema changes; one line per stage or table changed (files targets need none: folders appear with their files; Python tables are created and changed by their loads, once their data shows the columns).

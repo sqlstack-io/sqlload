@@ -3,7 +3,8 @@ use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use sqlload::adapters::dispatch::main::sql_adapter::sql_adapter;
-use sqlload::adapters::snowflake::main::query_texts::query_texts;
+use sqlload::adapters::dispatch::models::Destination;
+use sqlload::adapters::snowflake::main::session::query_texts::query_texts;
 use sqlload::column_types::models::Warehouse;
 use sqlload::file_store::main::delete_files::delete_files;
 use sqlload::file_store::main::list_files::list_files;
@@ -15,7 +16,7 @@ use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::main::load_tables::load_tables;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
-use sqlload::loader::models::{Destination, LoadRun, PlanOptions};
+use sqlload::loader::models::{LoadRun, PlanOptions};
 use sqlload::project::main::parse_project::parse_project;
 use sqlload::store_paths::models::{Location, StoreKind};
 use tokio::runtime::Runtime;

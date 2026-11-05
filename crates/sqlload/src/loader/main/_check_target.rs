@@ -1,20 +1,20 @@
 //! The target check behind `debug`.
 
+use crate::adapters::dispatch::main::single_text::single_text;
+use crate::adapters::dispatch::models::Destination;
 use crate::adapters::snowflake::constants::EXTERNAL_STAGE_FOLDER;
-use crate::adapters::snowflake::main::is_not_found::is_not_found;
-use crate::adapters::snowflake::main::show_stages::show_stages;
-use crate::adapters::snowflake::main::stage_lookup::stage_lookup;
-use crate::adapters::snowflake::main::stage_problem::stage_problem;
-use crate::adapters::snowflake::main::stage_reference::stage_reference;
+use crate::adapters::snowflake::main::session::is_not_found::is_not_found;
+use crate::adapters::snowflake::main::stage::show_stages::show_stages;
+use crate::adapters::snowflake::main::stage::stage_lookup::stage_lookup;
+use crate::adapters::snowflake::main::stage::stage_problem::stage_problem;
+use crate::adapters::snowflake::main::stage::stage_reference::stage_reference;
 use crate::adapters::snowflake::models::{
     ExternalStage, ForcedStage, SnowflakeDestination, StageObject,
 };
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::probe_folder::probe_folder;
-use crate::loader::_helpers::destination::single_text;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_connect_target::connect_target;
-use crate::loader::models::Destination;
 use crate::project::models::ProjectConfig;
 use crate::sql_api::main::execute_sql::execute_sql;
 use crate::store_paths::models::Location;
