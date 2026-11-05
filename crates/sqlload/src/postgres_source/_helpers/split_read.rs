@@ -93,7 +93,10 @@ pub(crate) async fn split_readers<'a>(
         .collect();
     let readers: Vec<&Client> = std::iter::once(client).chain(helpers).collect();
     if ranges.is_some() && share_snapshot(&readers).await.is_err() {
-        end_all(&readers, "ROLLBACK").await?;
+        for helper in readers.iter().skip(1) {
+            let _ = helper.batch_execute("ROLLBACK").await;
+        }
+        client.batch_execute("ROLLBACK").await?;
         ranges = None;
     }
     let readers: Vec<&Client> = readers
