@@ -2,7 +2,7 @@ use crate::adapters::contract::tests::helpers::{accounts, columns};
 use crate::adapters::contract::tests::test_types::{
     BuildTableTestCase, KeptColumnsTestCase, PromoteTestCase,
 };
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 

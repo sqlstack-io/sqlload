@@ -8,12 +8,14 @@ check:
 	cargo fmt --all
 	cargo clippy --workspace --all-targets --features sqlload/container-tests --quiet -- -D warnings
 	cargo clippy -p sqlload --all-targets --no-default-features --features cli,container-tests --quiet -- -D warnings
+	cargo clippy -p sqlload --lib --no-default-features --features cli --quiet -- -D warnings
 	$(FENSU) check
 
 check-ci:
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --features sqlload/container-tests --quiet -- -D warnings
 	cargo clippy -p sqlload --all-targets --no-default-features --features cli,container-tests --quiet -- -D warnings
+	cargo clippy -p sqlload --lib --no-default-features --features cli --quiet -- -D warnings
 	$(FENSU) check
 
 test-unit:

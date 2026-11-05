@@ -51,11 +51,8 @@ pub(crate) fn changed_staging(
         .zip(new_types)
         .map(|(name, column_type)| column(name, column_type.clone()))
         .collect();
-    crate::adapters::dispatch::main::sql_adapter::sql_adapter(warehouse).render_staging_changes(
-        &staging,
-        (&old, &new),
-        None,
-    )
+    crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter(warehouse)
+        .render_staging_changes(&staging, (&old, &new), None)
 }
 
 /// 2026-11-05 10:00 UTC.
@@ -77,7 +74,7 @@ pub(crate) fn inserted(rows: usize, value_bytes: usize) -> Vec<String> {
         column("gone", ColumnType::Text),
     ];
     let row = vec![Some("1".to_owned()), Some("x".repeat(value_bytes)), None];
-    crate::adapters::dispatch::main::sql_adapter::sql_adapter(
+    crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter(
         crate::column_types::models::Warehouse::Snowflake,
     )
     .render_insert_rows(&accounts(), &columns, &vec![row; rows])
@@ -112,10 +109,11 @@ const WRITE_VERBS: [&str; 6] = [
     "CREATE OR REPLACE TABLE",
 ];
 
-/// Whether `statement` writes `target` itself.
-pub(crate) fn writes(statement: &str, target: &str) -> bool {
-    WRITE_VERBS.iter().any(|verb| {
-        statement.starts_with(&format!("{verb} {target}"))
-            || statement.starts_with(&format!("{verb} IF EXISTS {target}"))
-    })
+/// Whether `statement` writes `target` (its qualified name, and its bare `name` as a rename takes it).
+pub(crate) fn writes(statement: &str, (target, name): (&str, &str)) -> bool {
+    statement.ends_with(&format!("RENAME TO {name}"))
+        || WRITE_VERBS.iter().any(|verb| {
+            statement.starts_with(&format!("{verb} {target}"))
+                || statement.starts_with(&format!("{verb} IF EXISTS {target}"))
+        })
 }

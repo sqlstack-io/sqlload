@@ -5,11 +5,11 @@ use bytes::Bytes;
 
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::dispatch::main::ddl_guard::ddl_guard;
-use crate::adapters::dispatch::main::execute::execute;
-use crate::adapters::dispatch::main::live_columns::live_columns;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
-use crate::adapters::dispatch::main::text_values::text_values;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::session::ddl_guard::ddl_guard;
+use crate::adapters::dispatch::main::session::execute::execute;
+use crate::adapters::dispatch::main::session::live_columns::live_columns;
+use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::models::PendingPhase;
 use crate::column_types::models::ColumnType;

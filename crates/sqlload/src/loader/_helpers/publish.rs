@@ -8,14 +8,15 @@ use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::types::TableWriter;
-use crate::adapters::dispatch::main::ddl_guard::ddl_guard;
-use crate::adapters::dispatch::main::execute::execute;
-use crate::adapters::dispatch::main::execute_ddl::execute_ddl;
-use crate::adapters::dispatch::main::load_files::load_files;
-use crate::adapters::dispatch::main::open_table_writer::open_table_writer;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
-use crate::adapters::dispatch::main::table_destination::table_destination;
-use crate::adapters::dispatch::main::table_shape::table_shape;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
+use crate::adapters::dispatch::main::session::ddl_guard::ddl_guard;
+use crate::adapters::dispatch::main::session::execute::execute;
+use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
+use crate::adapters::dispatch::main::session::table_destination::table_destination;
+use crate::adapters::dispatch::main::session::table_shape::table_shape;
+use crate::adapters::dispatch::main::write::load_files::load_files;
+use crate::adapters::dispatch::main::write::open_table_writer::open_table_writer;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::dispatch::models::Writer;
 use crate::adapters::files::main::clear_pending::clear_pending;
@@ -100,7 +101,6 @@ use chrono::DateTime;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::adapters::snowflake::models::StageRoute;
 use crate::loader::_helpers::table_plan::is_direct;
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself).
@@ -218,12 +218,7 @@ impl Publisher {
         };
         let direct = files.is_none() && writes_directly(&table, &writer);
         let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
-        let builds = at_end
-            && files.is_none()
-            && !matches!(
-                table.stage,
-                Some(StageRoute::Streaming { .. } | StageRoute::Insert)
-            );
+        let builds = at_end && files.is_none() && !sends_rows(table.stage.as_ref());
         let mut shape: Option<TableShape> = None;
         let staging = match direct || files.is_some() {
             true => None,

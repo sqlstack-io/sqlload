@@ -1,6 +1,6 @@
 //! `sqlload state`: show, verify, reconcile or reset the run log of the selected logged tables.
 
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use std::collections::BTreeMap;
 
 use crate::adapters::dispatch::models::Destination;

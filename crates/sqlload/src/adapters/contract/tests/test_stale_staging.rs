@@ -1,7 +1,7 @@
 use crate::adapters::contract::main::staging_id::staging_id;
 use crate::adapters::contract::tests::helpers::{accounts, columns, ten_oclock};
 use crate::adapters::contract::tests::test_types::{StagingIdTestCase, StaleStagingTestCase};
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 
 #[test]

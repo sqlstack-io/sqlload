@@ -1,8 +1,8 @@
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
 use crate::adapters::files::models::{PendingLoad, PendingPhase};
 use crate::adapters::snowflake::models::PlannedStage;
-use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
@@ -296,12 +296,7 @@ fn batch_line(table: &TablePlan) -> String {
                 groups.len()
             )
         }
-        (_, true)
-            if matches!(
-                table.stage,
-                Some(StageRoute::Streaming { .. } | StageRoute::Insert)
-            ) =>
-        {
+        (_, true) if sends_rows(table.stage.as_ref()) => {
             "about 1 GB at a time into a staging table, copied and swapped in once at the end"
                 .to_owned()
         }

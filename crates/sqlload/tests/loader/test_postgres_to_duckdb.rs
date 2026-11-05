@@ -1,4 +1,4 @@
-use sqlload::adapters::dispatch::main::single_text::single_text;
+use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::adapters::dispatch::models::Destination;
 use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;

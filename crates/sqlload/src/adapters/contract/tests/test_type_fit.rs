@@ -1,6 +1,6 @@
 use crate::adapters::contract::tests::helpers::decimal;
 use crate::adapters::contract::tests::test_types::TypeFitTestCase;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, TypeFit, Warehouse};
 
 #[test]

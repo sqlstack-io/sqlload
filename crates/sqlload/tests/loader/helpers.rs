@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use arrow_array::RecordBatch;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
-use sqlload::adapters::dispatch::main::execute::execute;
-use sqlload::adapters::dispatch::main::single_text::single_text;
+use sqlload::adapters::dispatch::main::session::execute::execute;
+use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::adapters::dispatch::models::Destination;
 use sqlload::file_store::main::list_files::list_files;
 use sqlload::file_store::main::open_folder::open_folder;

@@ -8,7 +8,7 @@ use crate::loader::models::TableSpec;
 use crate::project::models::MaskMethod;
 
 /// Why Snowflake must not `COPY` these of a files table's files straight from `stage`; `refused` is what a batch's own footers refuse, beyond what plan sampled.
-pub fn direct_check(
+pub(in crate::adapters) fn direct_check(
     spec: &TableSpec,
     (read, files, refused): (&FilesRead, &[DataFile], &[(String, String)]),
     stage: &ExternalStage,

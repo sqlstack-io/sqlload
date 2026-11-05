@@ -7,9 +7,9 @@ use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::snowflake::_helpers::write::copy_columns::copy_columns;
 use crate::adapters::snowflake::constants::MAX_COPY_SQL_BYTES;
 use crate::adapters::snowflake::main::copy::_copy_rows::copy_rows;
+use crate::adapters::snowflake::main::copy::_direct_check::direct_check;
 use crate::adapters::snowflake::main::copy::_direct_copies::direct_copies;
 use crate::adapters::snowflake::main::copy::_script_copy_rows::script_copy_rows;
-use crate::adapters::snowflake::main::copy::direct_check::direct_check;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::{
     CopyColumn, CopyValue, DirectBatch, DirectCopy, DirectLoaded, SnowflakeSql, SnowflakeWriter,

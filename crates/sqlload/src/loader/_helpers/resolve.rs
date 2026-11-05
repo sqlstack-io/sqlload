@@ -1,5 +1,5 @@
-use crate::adapters::dispatch::main::connection_warehouse::connection_warehouse;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::connection_warehouse::connection_warehouse;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 use crate::loader::_helpers::specs::ColumnSelection;
 use crate::loader::_helpers::specs::{

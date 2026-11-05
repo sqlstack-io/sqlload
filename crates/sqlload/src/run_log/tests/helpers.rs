@@ -1,5 +1,5 @@
 use crate::adapters::contract::models::TableName;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::current_run::current_run;

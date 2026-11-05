@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::adapters::dispatch::main::connect_destination::connect_destination;
+use crate::adapters::dispatch::main::session::connect_destination::connect_destination;
 use crate::adapters::dispatch::models::Destination;
 use crate::loader::errors::LoaderError;
 use crate::project::models::ProjectConfig;

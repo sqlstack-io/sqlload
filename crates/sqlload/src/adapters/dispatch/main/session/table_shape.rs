@@ -11,6 +11,8 @@ pub async fn table_shape(
     destination: &Destination,
     table: &TableName,
 ) -> Result<Option<TableShape>, LoaderError> {
+    #[cfg(not(feature = "duckdb"))]
+    let _ = table;
     match destination {
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(duckdb_table_shape(duckdb, table).await?),

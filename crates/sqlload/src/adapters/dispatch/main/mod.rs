@@ -1,21 +1,4 @@
-#[cfg(test)]
-pub(in crate::adapters) mod _every_warehouse;
-pub mod check_destination;
-pub mod choose_stage;
-pub mod clean_stage;
-pub mod connect_destination;
-pub mod connection_warehouse;
-pub mod ddl_guard;
-pub mod drop_stale_staging;
-pub mod execute;
-pub mod execute_ddl;
-pub mod files_destination;
-pub mod live_columns;
-pub mod load_files;
-pub mod open_table_writer;
-pub mod single_text;
-pub mod sql_adapter;
-pub mod table_destination;
-pub mod table_shape;
-pub mod text_values;
-pub mod writer_accepts;
+pub mod dialect;
+pub mod route;
+pub mod session;
+pub mod write;

@@ -2,7 +2,7 @@ use std::any::Any;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use sqlload::adapters::dispatch::main::sql_adapter::sql_adapter;
+use sqlload::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use sqlload::adapters::dispatch::models::Destination;
 use sqlload::adapters::snowflake::main::session::query_texts::query_texts;
 use sqlload::column_types::models::Warehouse;

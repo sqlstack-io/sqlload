@@ -1,6 +1,6 @@
 //! The destination check behind `debug`.
 
-use crate::adapters::dispatch::main::single_text::single_text;
+use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::snowflake::main::stage::_check_stage::check_stage;
 use crate::adapters::snowflake::models::ForcedStage;
@@ -35,7 +35,8 @@ pub async fn check_destination(destination: Destination) -> Result<String, Loade
             let checked = check_stage(&snowflake, stage).await?;
             Ok(format!("{answer}; {checked}"))
         }
-        destination => {
+        #[cfg(feature = "duckdb")]
+        destination @ Destination::DuckDb(_) => {
             let answer =
                 single_text(&destination, "SELECT 'DuckDB ' || version()".to_owned()).await?;
             Ok(answer.unwrap_or_default())

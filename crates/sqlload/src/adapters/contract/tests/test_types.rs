@@ -121,6 +121,6 @@ pub(crate) struct ContractTestCase {
     pub(crate) mode: WriteMode,
     /// The staging table is a build table, swapped in at the end.
     pub(crate) built: bool,
-    /// Whether rows are copied from the staging table into the table.
-    pub(crate) expected_copy: bool,
+    /// How many statements copy rows out of the staging table.
+    pub(crate) expected_copies: usize,
 }

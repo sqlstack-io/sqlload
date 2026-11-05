@@ -2,14 +2,15 @@ use crate::adapters::contract::main::cursor_bound::cursor_bound;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::CursorQuery;
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::dispatch::main::choose_stage::choose_stage;
-use crate::adapters::dispatch::main::files_destination::files_destination;
-use crate::adapters::dispatch::main::live_columns::live_columns;
-use crate::adapters::dispatch::main::single_text::single_text;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
-use crate::adapters::dispatch::main::writer_accepts::writer_accepts;
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
+use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
+use crate::adapters::dispatch::main::route::route_warning::route_warning;
+use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
+use crate::adapters::dispatch::main::session::live_columns::live_columns;
+use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::models::Destination;
-use crate::adapters::snowflake::main::copy::direct_check::direct_check;
 use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
@@ -409,12 +410,9 @@ async fn plan_table_once(
         Some(choice) => (Some(choice.route), choice.passed_over),
         None => (None, Vec::new()),
     };
-    if stage == Some(StageRoute::Insert) {
-        schema.warnings.push(
-            "rows load by batched INSERT, the slowest route; no stage or streaming was usable"
-                .to_owned(),
-        );
-    }
+    schema
+        .warnings
+        .extend(route_warning(stage.as_ref()).map(str::to_owned));
     let route = match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
         Ok(route) => Some(route),
         Err(problem) => {
@@ -498,12 +496,7 @@ fn reader_offer(
             SourceFormat::Csv => FileFormat::Csv,
         },
     });
-    let direct_blocked = match (read, stage) {
-        (Some(read), Some(StageRoute::External(stage))) => {
-            direct_check(spec, (read, read.files.as_slice(), &[]), stage)
-        }
-        _ => None,
-    };
+    let direct_blocked = read.and_then(|read| direct_blocked(spec, read, stage));
     ReaderOffer {
         arrow: true,
         existing_files,

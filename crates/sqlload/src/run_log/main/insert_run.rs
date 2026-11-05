@@ -1,7 +1,7 @@
 //! Append one record to the run log table.
 
 use crate::adapters::contract::models::TableName;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 use crate::run_log::constants::RUNS_COLUMNS;
 use crate::run_log::models::RunRecord;

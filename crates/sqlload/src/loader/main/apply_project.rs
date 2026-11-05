@@ -1,10 +1,10 @@
 //! Create and change destination tables; never loads data.
 
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::adapters::dispatch::main::execute::execute;
-use crate::adapters::dispatch::main::execute_ddl::execute_ddl;
+use crate::adapters::dispatch::main::session::execute::execute;
+use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
 use crate::adapters::dispatch::models::Destination;
 use crate::loader::_helpers::table_plan::schema_statements;
 use crate::loader::errors::LoaderError;
