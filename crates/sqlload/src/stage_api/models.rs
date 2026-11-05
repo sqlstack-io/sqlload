@@ -181,6 +181,11 @@ impl DriverSession {
         parse_stage_info(&data).map_err(ApiError::Protocol)
     }
 
+    /// Run `statement` in this session, whose temporary tables later statements see.
+    pub async fn run(&self, statement: &str) -> Result<(), ApiError> {
+        self.query(statement).await.map(|_| ())
+    }
+
     async fn query(&self, statement: &str) -> Result<Value, ApiError> {
         let mut renewed = false;
         loop {

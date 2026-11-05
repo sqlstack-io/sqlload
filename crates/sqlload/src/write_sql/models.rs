@@ -40,6 +40,8 @@ pub struct WriteStatementsRequest<'a> {
     /// The columns each row carries, `_sqlload_*` metadata included.
     pub columns: &'a [DesiredColumn],
     pub mode: &'a WriteMode,
+    /// Columns staged in plain text that the write hashes in SQL (`hash` masking on the direct route): the lowercase hex SHA-256 of their text.
+    pub hashed: &'a [String],
 }
 
 /// A cursor position to read from the destination.

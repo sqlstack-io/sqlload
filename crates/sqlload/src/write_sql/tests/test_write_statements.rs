@@ -117,6 +117,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             table: &table,
             columns: &columns,
             mode: &test_case.mode,
+            hashed: &[],
         };
         assert_eq!(
             write_statements(&request, &staging),

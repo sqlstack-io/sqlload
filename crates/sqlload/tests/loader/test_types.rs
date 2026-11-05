@@ -248,3 +248,73 @@ pub(crate) struct LargePartitionTestCase {
     /// Rows, rows with `extra`, distinct source files and the distinct ids, after both runs.
     pub(crate) expected_result: &'static str,
 }
+
+/// Where a routes scenario's source files are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RouteFiles {
+    /// In a directory, so Snowflake cannot read them.
+    Directory,
+    /// In the fake's bucket, under the stage URL.
+    Bucket,
+}
+
+/// Makes a routes scenario's source files: each key and its bytes.
+pub(crate) type RouteFileSet = fn() -> Result<Vec<(String, bytes::Bytes)>, String>;
+
+/// One load of a files source into the fake Snowflake.
+pub(crate) struct RouteTestCase {
+    pub(crate) description: &'static str,
+    /// The connection's `stage`, with `FAKE` for the fake's URL; empty leaves it unset.
+    pub(crate) stage: &'static str,
+    /// TOML added to `[sources.orders]`.
+    pub(crate) settings: &'static str,
+    pub(crate) files: RouteFiles,
+    pub(crate) file_set: RouteFileSet,
+    /// What the fake refuses or holds first.
+    pub(crate) prepare: fn(&sqlload_testkit::fake_snowflake::models::FakeSnowflake),
+    /// Text the plan or load error must contain; empty when the run must succeed.
+    pub(crate) expected_error: &'static str,
+    /// Text the rendered plan must contain.
+    pub(crate) expected_plan: &'static [&'static str],
+    /// Text the rendered plan must not contain.
+    pub(crate) expected_unplanned: &'static [&'static str],
+    /// Text some statement sent must contain.
+    pub(crate) expected_sent: &'static [&'static str],
+    /// Text no statement sent may contain.
+    pub(crate) expected_unsent: &'static [&'static str],
+    /// How many `PUT`s fetched upload credentials, probes included; `None` skips the check.
+    pub(crate) expected_fetches: Option<usize>,
+    /// How many objects stay under `_sqlload/` in the bucket.
+    pub(crate) expected_staged_left: usize,
+}
+
+/// What a routes scenario left behind.
+#[derive(Debug, Default)]
+pub(crate) struct RouteOutcome {
+    pub(crate) error: String,
+    pub(crate) plan: String,
+    pub(crate) sent: Vec<String>,
+    pub(crate) fetches: usize,
+    pub(crate) staged_left: usize,
+    /// Whether the driver's sequence ids only went up.
+    pub(crate) sequence_ids_rise: bool,
+}
+
+/// `debug` on a project with a managed external stage on the fake.
+pub(crate) struct DebugStageTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) prepare: fn(&sqlload_testkit::fake_snowflake::models::FakeSnowflake),
+    /// Text one of the lines must contain.
+    pub(crate) expected_line: &'static str,
+    /// Text one of the statements must contain.
+    pub(crate) expected_sent: &'static str,
+}
+
+/// A files table loaded once, its `_sqlload_source_row` then gone as in a table from before it, then loaded again.
+pub(crate) struct SourceRowUpgradeTestCase {
+    pub(crate) description: &'static str,
+    /// TOML added to the source.
+    pub(crate) settings: &'static str,
+    /// Each row's id and row number, `-` for NULL.
+    pub(crate) expected_rows: &'static str,
+}

@@ -13,7 +13,8 @@ pub fn plan_route(
     overrides: RouteOverrides,
 ) -> Result<Route, RouteError> {
     if let Some(files) = &reader.existing_files {
-        if destination_pulls(writer, &files.store, files.format) {
+        let pulls = destination_pulls(writer, &files.store, files.format);
+        if pulls && reader.direct_blocked.is_none() {
             return Ok(Route {
                 steps: vec![
                     Step::UseFiles(files.clone()),
@@ -29,7 +30,11 @@ pub fn plan_route(
             ],
             writer,
             overrides.stage,
-            "the destination cannot read the files where they are, so SQLLoad reads them",
+            &match (&reader.direct_blocked, pulls) {
+                (Some(reason), true) => format!("SQLLoad reads the files because {reason}"),
+                _ => "the destination cannot read the files where they are, so SQLLoad reads them"
+                    .to_owned(),
+            },
         );
     }
     if should_unload(reader, overrides.read_via)? {

@@ -5,7 +5,7 @@ use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::main::open_folder::open_folder;
 use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
 };
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
@@ -178,7 +178,7 @@ pub(crate) fn files_source_parts(
     let added: Vec<&str> = partition_types
         .iter()
         .map(|(name, _)| name.as_str())
-        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
         .collect();
     let overrides = source.tables.get(source_name);
     let pinned_only = pinned_unsampled(overrides, &table, &added, encoding.format)?;
@@ -212,6 +212,7 @@ pub(crate) fn files_source_parts(
         .chain([
             (SOURCE_FILE_COLUMN.to_owned(), Ok(ColumnType::Text)),
             (SOURCE_VERSION_COLUMN.to_owned(), Ok(ColumnType::Text)),
+            (SOURCE_ROW_COLUMN.to_owned(), Ok(ColumnType::Int)),
         ]);
     let columns: Vec<SourceColumn> = typed
         .map(|(name, column_type)| SourceColumn {
@@ -449,7 +450,7 @@ pub(crate) async fn plan_files(
         .partition_types
         .iter()
         .map(|(name, _)| name.as_str())
-        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
         .collect();
     let checks = TextChecks {
         inferred: request

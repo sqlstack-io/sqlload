@@ -20,6 +20,8 @@ mod test_postgres_reader;
 mod test_postgres_to_duckdb;
 #[path = "loader/test_postgres_to_files.rs"]
 mod test_postgres_to_files;
+#[path = "loader/test_snowflake_routes.rs"]
+mod test_snowflake_routes;
 #[path = "loader/test_text_files_to_duckdb.rs"]
 mod test_text_files_to_duckdb;
 #[path = "loader/test_types.rs"]

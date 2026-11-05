@@ -1,5 +1,6 @@
 pub mod batch_columns;
 pub mod batch_footers;
+pub mod batch_refusals;
 pub mod discover_files;
 pub mod footer_columns;
 pub mod read_files;

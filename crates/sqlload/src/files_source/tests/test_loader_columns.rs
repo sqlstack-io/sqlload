@@ -35,6 +35,7 @@ fn given_files_with_the_loaders_own_columns_when_sampling_then_they_are_dropped_
             .map(|name| SampledColumn {
                 name: (*name).to_owned(),
                 column_type: None,
+                direct_refusal: None,
             })
             .collect();
         let (kept, dropped) = drop_loader_columns(found);

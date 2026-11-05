@@ -59,3 +59,24 @@ pub(crate) fn ten_oclock() -> Result<chrono::NaiveDateTime, String> {
     chrono::NaiveDateTime::parse_from_str("2026-11-05 10:00:00", "%Y-%m-%d %H:%M:%S")
         .map_err(|error| error.to_string())
 }
+
+/// The statements inserting `rows` rows of `id` and a text of `value_bytes` bytes (and a NULL).
+pub(crate) fn inserted(rows: usize, value_bytes: usize) -> Vec<String> {
+    let column = |name: &str, column_type: ColumnType| DesiredColumn {
+        name: name.to_owned(),
+        column_type,
+        origin: ColumnOrigin::Source,
+    };
+    let columns = vec![
+        column("id", ColumnType::Int),
+        column("note", ColumnType::Json),
+        column("gone", ColumnType::Text),
+    ];
+    let row = vec![Some("1".to_owned()), Some("x".repeat(value_bytes)), None];
+    crate::write_sql::main::insert_rows::insert_rows(
+        &accounts(),
+        &columns,
+        &vec![row; rows],
+        crate::column_types::models::Warehouse::Snowflake,
+    )
+}

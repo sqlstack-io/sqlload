@@ -5,6 +5,7 @@
 pub mod configs;
 pub mod fake_snowflake;
 pub mod harness;
+pub mod parity;
 pub mod postgres;
 pub mod records;
 pub mod redpanda;

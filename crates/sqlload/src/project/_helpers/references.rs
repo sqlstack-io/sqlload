@@ -1,6 +1,6 @@
 use crate::files_source::models::SourceFormat;
 use crate::project::_helpers::targets::{
-    destination_kind_problems, is_files_target, target_problems,
+    destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
 use crate::project::constants::{FILES_CONNECTION_KINDS, TABLE_PLACEHOLDER};
 use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig, SourceKind};
@@ -17,6 +17,9 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
     }
     for (name, target) in &project.targets {
         problems.extend(target_problems(project, name, target));
+    }
+    for (name, connection) in &project.connections {
+        problems.extend(stage_problems(name, connection));
     }
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));

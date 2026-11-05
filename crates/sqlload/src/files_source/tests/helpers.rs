@@ -1,10 +1,20 @@
 use std::io::Write;
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
+use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use flate2::Compression as GzipLevel;
 use flate2::write::GzEncoder;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::arrow_writer::ArrowWriterOptions;
+use parquet::arrow::{ARROW_SCHEMA_META_KEY, ArrowWriter, encode_arrow_schema};
+use parquet::file::metadata::KeyValue;
+use parquet::file::properties::WriterProperties;
+use parquet::file::writer::SerializedFileWriter;
+use parquet::schema::parser::parse_message_type;
+use parquet::schema::types::TypePtr;
 
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::open_folder::open_folder;
@@ -290,4 +300,58 @@ async fn break_footer_and_read(folder: &OpenFolder, reuse: bool) -> Result<Strin
     Ok(read_files(folder, &request, &kept, async |_| Ok(()))
         .await
         .map_or_else(|_| "failed".to_owned(), |rows| rows.to_string()))
+}
+
+/// The type the reader finds in the footer of a file written with a column of `written`, with or without the embedded Arrow schema; other writers' files often have none.
+pub(crate) fn footer_type(written: &DataType, embedded_schema: bool) -> Result<DataType, String> {
+    let column = arrow_array::new_null_array(written, 1);
+    let batch = RecordBatch::try_from_iter([("at", column)]).map_err(|error| error.to_string())?;
+    let options = ArrowWriterOptions::new().with_skip_arrow_metadata(!embedded_schema);
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = ArrowWriter::try_new_with_options(&mut buffer, batch.schema(), options)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    let footer = ArrowReaderMetadata::load(&Bytes::from(buffer), ArrowReaderOptions::new())
+        .map_err(|error| error.to_string())?;
+    Ok(footer.schema().field(0).data_type().clone())
+}
+
+/// The footer of a file with this Parquet schema and, over it, an embedded Arrow schema giving column `at` this type: what another writer can produce, and `ArrowWriter` cannot.
+pub(crate) fn overridden_footer(
+    message: &str,
+    embedded: Option<&DataType>,
+) -> Result<ArrowReaderMetadata, String> {
+    let schema = parse_message_type(message).map_err(|error| error.to_string())?;
+    let metadata = embedded.map(|data_type| {
+        let arrow = Schema::new(vec![Field::new("at", data_type.clone(), true)]);
+        vec![KeyValue::new(
+            ARROW_SCHEMA_META_KEY.to_owned(),
+            encode_arrow_schema(&arrow),
+        )]
+    });
+    let properties = WriterProperties::builder()
+        .set_key_value_metadata(metadata)
+        .build();
+    let mut buffer: Vec<u8> = Vec::new();
+    SerializedFileWriter::new(&mut buffer, Arc::new(schema), Arc::new(properties))
+        .and_then(|writer| writer.close())
+        .map_err(|error| error.to_string())?;
+    ArrowReaderMetadata::load(&Bytes::from(buffer), ArrowReaderOptions::new())
+        .map_err(|error| error.to_string())
+}
+
+/// The only column of `message`, or `None` with no `message`.
+pub(crate) fn only_column(message: Option<&str>) -> Result<Option<TypePtr>, String> {
+    let parsed = message.map(parse_message_type).transpose();
+    let schema = parsed.map_err(|error| error.to_string())?;
+    Ok(schema.and_then(|schema| schema.get_fields().first().cloned()))
+}
+
+/// A timestamp type of `unit` in `zone`.
+pub(crate) fn timestamp(
+    unit: arrow_schema::TimeUnit,
+    zone: Option<&str>,
+) -> arrow_schema::DataType {
+    arrow_schema::DataType::Timestamp(unit, zone.map(std::sync::Arc::from))
 }

@@ -99,6 +99,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             table: &table,
             columns: &columns,
             mode: &test_case.mode,
+            hashed: &[],
         };
         let run_insert = test_case.run_insert.map(str::to_owned);
         assert_eq!(

@@ -6,6 +6,8 @@ mod cursor_bound;
 mod cursor_text;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_insert_rows.rs"]
+mod insert_rows;
 #[path = "tests/test_sql_literal.rs"]
 mod sql_literal;
 #[path = "tests/test_staging_changes.rs"]

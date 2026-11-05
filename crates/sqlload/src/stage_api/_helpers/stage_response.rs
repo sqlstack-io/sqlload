@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::auth::models::Secret;
-use crate::stage_api::constants::{S3_LOCATION, SUPPORTED_CIPHER};
+use crate::stage_api::constants::{NON_S3_STAGE, S3_LOCATION, SUPPORTED_CIPHER};
 use crate::stage_api::models::{AwsCredentials, EncryptionMaterial, ObjectTarget, StageInfo};
 
 fn text(value: &Value, name: &str) -> Result<String, String> {
@@ -16,9 +16,7 @@ pub(crate) fn parse_stage_info(data: &Value) -> Result<StageInfo, String> {
     let stage = &data["stageInfo"];
     let location_type = stage["locationType"].as_str().unwrap_or_default();
     if location_type != S3_LOCATION {
-        return Err(format!(
-            "only S3-backed internal stages are supported, got {location_type:?}"
-        ));
+        return Err(format!("{NON_S3_STAGE}, got {location_type:?}"));
     }
     let location = text(stage, "location")?;
     let (bucket, path) = location.split_once('/').unwrap_or((location.as_str(), ""));
@@ -27,7 +25,9 @@ pub(crate) fn parse_stage_info(data: &Value) -> Result<StageInfo, String> {
         prefix.push('/');
     }
     let region = text(stage, "region")?;
-    let endpoint = match stage["endPoint"].as_str().filter(|value| !value.is_empty()) {
+    let named = stage["endPoint"].as_str().filter(|value| !value.is_empty());
+    let endpoint = match named {
+        Some(endpoint) if endpoint.contains("://") => endpoint.to_owned(),
         Some(endpoint) => format!("https://{endpoint}"),
         None => format!("https://s3.{region}.amazonaws.com"),
     };
@@ -52,7 +52,7 @@ pub(crate) fn parse_stage_info(data: &Value) -> Result<StageInfo, String> {
         target: ObjectTarget {
             endpoint,
             bucket: bucket.to_owned(),
-            path_style: false,
+            path_style: named.is_some_and(|endpoint| endpoint.contains("://")),
             prefix,
             region,
             credentials: AwsCredentials {

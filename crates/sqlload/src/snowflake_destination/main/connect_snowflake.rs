@@ -31,9 +31,13 @@ pub fn connect_snowflake(account: SnowflakeAccount) -> Result<SnowflakeDestinati
         sql: SqlClient::new(http.clone(), auth.clone(), &destination)
             .in_utc()
             .with_timeout(LOADER_STATEMENT_TIMEOUT_SECS),
-        driver: Arc::new(DriverSession::new(http.clone(), auth, &destination)),
+        driver: Arc::new(DriverSession::new(http.clone(), auth.clone(), &destination)),
         http,
         database: account.database,
         ddl: Arc::default(),
+        stage: account.stage,
+        stage_checks: Arc::default(),
+        auth,
+        config: destination,
     })
 }

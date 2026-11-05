@@ -18,7 +18,7 @@ fn given_files_a_files_target_wrote_when_a_files_source_loads_them_twice_then_th
                 INSERT INTO public.orders VALUES (1, 'a'), (2, 'b');",
         change: "INSERT INTO public.orders VALUES (3, 'c');",
         expected_plan: "note    dropped _sqlload_load_id, _sqlload_loaded_at from the files (replaced by this load's)",
-        expected_check: "id,name,_sqlload_source_file,_sqlload_source_version,_sqlload_load_id,_sqlload_loaded_at|3|1|0",
+        expected_check: "id,name,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at|3|1|0",
     }];
     run_async(async {
         let postgres = start_postgres().await?;

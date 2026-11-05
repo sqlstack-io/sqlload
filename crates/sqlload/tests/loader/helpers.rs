@@ -22,8 +22,9 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    BatchedScenarioTestCase, FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase,
-    LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile, ScenarioTestCase,
+    BatchedScenarioTestCase, DebugStageTestCase, FilesScenario, FilesScenarioTestCase,
+    FilesTargetScenarioTestCase, LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile,
+    RouteFiles, RouteOutcome, RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase,
     TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
@@ -559,6 +560,460 @@ include = ["*.orders"]
 {settings}
 "#
     )
+}
+
+pub(crate) fn two_days() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files = day_files("2026-11-01", (2, 0), None)?;
+    files.extend(day_files("2026-11-02", (1, 0), None)?);
+    Ok(files)
+}
+
+/// Enough files for two batches.
+pub(crate) fn two_batches() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files = day_files("2026-11-01", (1000, 0), None)?;
+    files.extend(day_files("2026-11-02", (1, 0), None)?);
+    Ok(files)
+}
+
+pub(crate) fn with_text() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    day_files("2026-11-01", (1, 0), Some("{\"a\": 1}"))
+}
+
+pub(crate) fn long_names() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    day_files("2026-11-01", (300, 1500), None)
+}
+
+/// A full first batch of plain files, then a batch holding one the direct `COPY` must not load; the newest files, which planning samples, are plain.
+pub(crate) fn binary_later() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files = day_files("2026-11-01", (1000, 0), None)?;
+    files.push(binary_file("day=2026-11-02/part-0.parquet")?);
+    files.extend(day_files("2026-11-03", (25, 0), None)?);
+    Ok(files)
+}
+
+pub(crate) fn nothing(_: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {}
+
+pub(crate) fn no_user_stage(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().denied_stages.push("@~".to_owned());
+}
+
+pub(crate) fn no_internal_stage(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state
+        .lock()
+        .denied_stages
+        .extend(["@~".to_owned(), "%".to_owned()]);
+}
+
+pub(crate) fn no_stage_or_host(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    no_internal_stage(fake);
+    fake.state.lock().streaming_unreachable = true;
+}
+
+pub(crate) fn no_stage_or_channel(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    no_internal_stage(fake);
+    fake.state.lock().channels_refused = true;
+}
+
+pub(crate) fn integration(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().integrations.insert("LAKE_INT".to_owned());
+}
+
+/// The integration, and a load folder a failed run left long ago.
+pub(crate) fn old_leftovers(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    integration(fake);
+    let mut state = fake.state.lock();
+    state.objects_modified = Some("2020-01-01T00:00:00.000Z".to_owned());
+    state.objects.insert(
+        "fake-bucket/_sqlload/old-load/00001/part-00001.parquet".to_owned(),
+        b"PAR1".to_vec(),
+    );
+}
+
+/// The managed stage already exists, reading the bucket.
+pub(crate) fn stage_exists(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().stages.insert(
+        "_SQLLOAD_STAGE".to_owned(),
+        ("s3://fake-bucket/".to_owned(), "LAKE_INT".to_owned()),
+    );
+}
+
+/// Only an integration `LAKE_INT` matches through `SHOW`'s wildcard exists.
+pub(crate) fn similar_integration(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().integrations.insert("LAKEXINT".to_owned());
+    fake.state
+        .lock()
+        .integrations
+        .insert("LAKE_INT_OLD".to_owned());
+}
+
+/// The driver answers every `PUT` with a server problem.
+pub(crate) fn flaky_probes(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().driver_failure = Some(("000603".to_owned(), "internal error".to_owned()));
+}
+
+/// Files whose names pass the statement limit in total, with a text column to hash.
+pub(crate) fn long_names_with_text() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    day_files("2026-11-01", (300, 1500), Some("x"))
+}
+
+/// One Parquet file with a timestamp column of `nanos` nanoseconds or microseconds.
+fn timestamp_file(key: String, nanos: bool) -> Result<(String, bytes::Bytes), String> {
+    let units: [arrow_array::ArrayRef; 2] = [
+        std::sync::Arc::new(arrow_array::TimestampMicrosecondArray::from(vec![1])),
+        std::sync::Arc::new(arrow_array::TimestampNanosecondArray::from(vec![1_000])),
+    ];
+    let at = units[usize::from(nanos)].clone();
+    let ids: arrow_array::ArrayRef = std::sync::Arc::new(arrow_array::Int64Array::from(vec![1]));
+    let batch =
+        RecordBatch::try_from_iter([("id", ids), ("at", at)]).map_err(|error| error.to_string())?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    Ok((key, bytes::Bytes::from(buffer)))
+}
+
+/// The newest files, which planning samples, hold nanoseconds.
+pub(crate) fn nanos_newest() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(vec![timestamp_file(
+        "day=2026-11-01/part-0.parquet".to_owned(),
+        true,
+    )?])
+}
+
+/// A full batch of microseconds, a batch of nanoseconds, then a batch of microseconds, the newest files planning samples.
+pub(crate) fn nanos_in_a_later_batch() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files: Vec<(String, bytes::Bytes)> = Vec::new();
+    for (day, count, nanos) in [
+        ("2026-11-01", 1000, false),
+        ("2026-11-02", 1000, true),
+        ("2026-11-03", 25, false),
+    ] {
+        for index in 0..count {
+            files.push(timestamp_file(
+                format!("day={day}/part-{index:05}.parquet"),
+                nanos,
+            )?);
+        }
+    }
+    Ok(files)
+}
+
+/// One Parquet file whose timestamp is an INT96 under an embedded Arrow type of microseconds, which `ArrowWriter` cannot produce.
+fn int96_file(key: String) -> Result<(String, bytes::Bytes), String> {
+    let text = |error: parquet::errors::ParquetError| error.to_string();
+    let schema = parquet::schema::parser::parse_message_type(
+        "message m { required int64 id; required int96 at; }",
+    )
+    .map_err(text)?;
+    let arrow = arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("id", arrow_schema::DataType::Int64, false),
+        arrow_schema::Field::new(
+            "at",
+            arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+            false,
+        ),
+    ]);
+    let properties = parquet::file::properties::WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue::new(
+            parquet::arrow::ARROW_SCHEMA_META_KEY.to_owned(),
+            parquet::arrow::encode_arrow_schema(&arrow),
+        )]))
+        .build();
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = parquet::file::writer::SerializedFileWriter::new(
+        &mut buffer,
+        std::sync::Arc::new(schema),
+        std::sync::Arc::new(properties),
+    )
+    .map_err(text)?;
+    let mut group = writer.next_row_group().map_err(text)?;
+    let mut ids = group.next_column().map_err(text)?.ok_or("no id column")?;
+    ids.typed::<parquet::data_type::Int64Type>()
+        .write_batch(&[1], None, None)
+        .map_err(text)?;
+    ids.close().map_err(text)?;
+    let mut ats = group.next_column().map_err(text)?.ok_or("no at column")?;
+    ats.typed::<parquet::data_type::Int96Type>()
+        .write_batch(
+            &[parquet::data_type::Int96::from(vec![0, 0, 2_440_588])],
+            None,
+            None,
+        )
+        .map_err(text)?;
+    ats.close().map_err(text)?;
+    group.close().map_err(text)?;
+    writer.close().map_err(text)?;
+    Ok((key, bytes::Bytes::from(buffer)))
+}
+
+/// The newest files, which planning samples, hold an INT96 under an embedded type the direct route allows.
+pub(crate) fn int96_newest() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(vec![int96_file(
+        "day=2026-11-01/part-0.parquet".to_owned(),
+    )?])
+}
+
+/// A full batch of microseconds, a batch of INT96 under embedded microseconds, then a batch of microseconds, the newest files planning samples.
+pub(crate) fn int96_in_a_later_batch() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files: Vec<(String, bytes::Bytes)> = Vec::new();
+    for index in 0..1000 {
+        files.push(timestamp_file(
+            format!("day=2026-11-01/part-{index:05}.parquet"),
+            false,
+        )?);
+        files.push(int96_file(format!(
+            "day=2026-11-02/part-{index:05}.parquet"
+        ))?);
+    }
+    for index in 0..25 {
+        files.push(timestamp_file(
+            format!("day=2026-11-03/part-{index:05}.parquet"),
+            false,
+        )?);
+    }
+    Ok(files)
+}
+
+/// `debug` on a project whose connection has `stage`, against a fake prepared as the case says: its lines, and the statements sent.
+pub(crate) async fn run_debug(
+    stage: &str,
+    test_case: &DebugStageTestCase,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let fake =
+        sqlload_testkit::fake_snowflake::main::start_fake_snowflake::start_fake_snowflake().await?;
+    (test_case.prepare)(&fake);
+    let base = fake.base_url.clone();
+    let text = format!(
+        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\nstage = {}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
+        stage.replace("FAKE", &base)
+    );
+    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let (lines, _) = sqlload::loader::main::debug_project::debug_project(&project, true).await;
+    let sent = fake.state.lock().statements.clone();
+    Ok((lines, sent))
+}
+
+/// Load a files table into DuckDB; take `_sqlload_source_row` away, as in a table from before it; add a file and load again. Each row's id and row number.
+pub(crate) async fn run_source_row_upgrade(
+    directory: &std::path::Path,
+    test_case: &SourceRowUpgradeTestCase,
+) -> Result<Option<String>, String> {
+    let (store, connection) = local_store("", directory);
+    let folder = open_folder(&Location {
+        store,
+        prefix: "scores/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    let text = format!(
+        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
+        test_case.settings
+    );
+    let project_destinations =
+        connect_targets(&parse_project(&text, &|_| None).map_err(|error| error.to_string())?)
+            .await
+            .map_err(|error| error.to_string())?;
+    let Some(Destination::DuckDb(duckdb)) = project_destinations.get("dev") else {
+        return Err("no DuckDB destination".to_owned());
+    };
+    for (key, ids) in [("a.parquet", &[1_i64, 2][..]), ("b.parquet", &[3][..])] {
+        let file = ParquetFile {
+            key,
+            ids,
+            score: 1.0,
+            extra: None,
+        };
+        write_file(&folder, key, parquet_bytes(&file)?)
+            .await
+            .map_err(|error| error.to_string())?;
+        run_once(&text, &project_destinations, &PlanOptions::default()).await?;
+        execute_statements(
+            duckdb,
+            [(
+                "a.parquet",
+                "ALTER TABLE raw.scores DROP COLUMN _sqlload_source_row",
+            )]
+            .iter()
+            .filter(|(when, _)| *when == key)
+            .map(|(_, statement)| (*statement).to_owned())
+            .collect(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    query_text(
+        duckdb,
+        "SELECT string_agg(id || ':' || coalesce(CAST(_sqlload_source_row AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.scores".to_owned(),
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// `ORDERS` already exists, its stage refused to this role (it does not own it), and so is `@~`.
+pub(crate) fn not_owned(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    let mut state = fake.state.lock();
+    state
+        .denied_stages
+        .extend(["@~".to_owned(), "%\"ORDERS\"".to_owned()]);
+    state.tables.entry("ORDERS".to_owned()).or_default().columns = [
+        "ID",
+        "SCORE",
+        "DAY",
+        "_SQLLOAD_SOURCE_FILE",
+        "_SQLLOAD_SOURCE_VERSION",
+        "_SQLLOAD_SOURCE_ROW",
+        "_SQLLOAD_LOAD_ID",
+        "_SQLLOAD_LOADED_AT",
+    ]
+    .iter()
+    .zip([
+        "NUMBER",
+        "FLOAT",
+        "DATE",
+        "TEXT",
+        "TEXT",
+        "NUMBER",
+        "TEXT",
+        "TIMESTAMP_TZ",
+    ])
+    .map(|(column, data_type)| ((*column).to_owned(), data_type.to_owned()))
+    .collect();
+}
+
+/// `count` small Parquet files of `day` in hive form, ids from 1, with `extra` when given; `padding` lengthens their names.
+pub(crate) fn day_files(
+    day: &str,
+    (count, padding): (usize, usize),
+    extra: Option<&'static str>,
+) -> Result<Vec<(String, bytes::Bytes)>, String> {
+    (0..count)
+        .map(|index| {
+            let file = ParquetFile {
+                key: "",
+                ids: &[1, 2],
+                score: 1.0,
+                extra,
+            };
+            Ok((
+                format!("day={day}/part-{index:05}{}.parquet", "x".repeat(padding)),
+                parquet_bytes(&file)?,
+            ))
+        })
+        .collect()
+}
+
+/// One Parquet file with a binary column, which the direct `COPY` does not load exactly.
+pub(crate) fn binary_file(key: &str) -> Result<(String, bytes::Bytes), String> {
+    let ids: arrow_array::ArrayRef = std::sync::Arc::new(arrow_array::Int64Array::from(vec![1]));
+    let blobs: arrow_array::ArrayRef =
+        std::sync::Arc::new(arrow_array::BinaryArray::from_vec(vec![b"x".as_slice()]));
+    let batch = RecordBatch::try_from_iter([("id", ids), ("blob", blobs)])
+        .map_err(|error| error.to_string())?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    Ok((key.to_owned(), bytes::Bytes::from(buffer)))
+}
+
+/// Load the case's files into a fresh fake Snowflake; what was planned and sent, and what stayed staged.
+pub(crate) async fn run_route(
+    directory: &std::path::Path,
+    test_case: &RouteTestCase,
+) -> Result<RouteOutcome, String> {
+    let fake =
+        sqlload_testkit::fake_snowflake::main::start_fake_snowflake::start_fake_snowflake().await?;
+    (test_case.prepare)(&fake);
+    let (root, base) = (directory.display().to_string(), fake.base_url.clone());
+    let store = [
+        StoreKind::Filesystem { root: root.clone() },
+        StoreKind::S3 {
+            bucket: "fake-bucket".to_owned(),
+            region: Some("us-east-1".to_owned()),
+            endpoint: Some(base.clone()),
+        },
+    ][usize::from(test_case.files == RouteFiles::Bucket)]
+    .clone();
+    let source = open_folder(&Location {
+        store,
+        prefix: "src/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    for (key, body) in (test_case.file_set)()? {
+        write_file(&source, &key, body)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let lake = [
+        format!("kind = \"filesystem\"\nroot = \"{root}\""),
+        format!(
+            "kind = \"s3\"\nbucket = \"fake-bucket\"\nregion = \"us-east-1\"\nendpoint = \"{base}\""
+        ),
+    ][usize::from(test_case.files == RouteFiles::Bucket)]
+    .clone();
+    let stage = [
+        format!("stage = {}\n", test_case.stage.replace("FAKE", &base)),
+        String::new(),
+    ][usize::from(test_case.stage.is_empty())]
+    .clone();
+    let text = format!(
+        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\n{stage}\n[connections.lake]\n{lake}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
+        test_case.settings
+    );
+    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (plan, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let state = fake.state.lock();
+    let ids: Vec<u64> = state.driver_queries.iter().map(|(id, _)| *id).collect();
+    Ok(RouteOutcome {
+        error: outcome.err().unwrap_or_default(),
+        plan,
+        sent: state
+            .statements
+            .iter()
+            .chain(state.driver_queries.iter().map(|(_, statement)| statement))
+            .cloned()
+            .chain(
+                state
+                    .tables
+                    .values()
+                    .flat_map(|table| table.rows.iter().map(ToString::to_string)),
+            )
+            .collect(),
+        fetches: state
+            .driver_queries
+            .iter()
+            .filter(|(_, statement)| statement.starts_with("PUT "))
+            .count(),
+        staged_left: state
+            .objects
+            .keys()
+            .filter(|key| key.starts_with("fake-bucket/_sqlload/"))
+            .count(),
+        sequence_ids_rise: ids.windows(2).all(|pair| pair[0] < pair[1]),
+    })
+}
+
+/// Which of `wanted` no text of `texts` contains.
+pub(crate) fn not_found<'a>(texts: &[String], wanted: &[&'a str]) -> Vec<&'a str> {
+    wanted
+        .iter()
+        .copied()
+        .filter(|text| !texts.iter().any(|sent| sent.contains(text)))
+        .collect()
+}
+
+/// Which of `unwanted` some text of `texts` contains.
+pub(crate) fn found<'a>(texts: &[String], unwanted: &[&'a str]) -> Vec<&'a str> {
+    unwanted
+        .iter()
+        .copied()
+        .filter(|text| texts.iter().any(|sent| sent.contains(text)))
+        .collect()
 }
 
 /// Plan, apply and load once: the rendered plan, and what apply printed or the error text.

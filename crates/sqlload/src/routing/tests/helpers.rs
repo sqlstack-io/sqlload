@@ -57,6 +57,7 @@ pub(crate) fn warehouse_destination(staging: Vec<Store>) -> WriterAccepts {
         pulls_from: staging.clone(),
         pull_formats: vec![FileFormat::Parquet, FileFormat::Json, FileFormat::Csv],
         staging,
+        rows_into: None,
     }
 }
 
@@ -67,6 +68,7 @@ pub(crate) fn clickhouse_destination() -> WriterAccepts {
         pulls_from: vec![object_store(LAKE)],
         pull_formats: vec![FileFormat::Parquet],
         staging: Vec::new(),
+        rows_into: None,
     }
 }
 
@@ -77,6 +79,7 @@ pub(crate) fn local_destination() -> WriterAccepts {
         pulls_from: vec![object_store(LAKE), user_stage()],
         pull_formats: vec![FileFormat::Parquet],
         staging: Vec::new(),
+        rows_into: None,
     }
 }
 

@@ -755,6 +755,8 @@ impl PythonFeed {
             self.changes.extend(change_lines(&replanned));
         }
         if let Some(publisher) = &mut self.publisher {
+            publisher.settle_rows().await?;
+            publisher.reopen_rows();
             if let Some(staging) = &publisher.staging {
                 let changes = staging_changes(
                     staging,

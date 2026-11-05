@@ -21,3 +21,9 @@ pub const STAGING_TIME_FORMAT: &str = "%Y%m%d%H%M%S";
 
 /// The length of that time.
 pub const STAGING_TIME_DIGITS: usize = 14;
+
+/// The most rows Snowflake takes in one `VALUES`.
+pub const MAX_INSERT_ROWS: usize = 16_384;
+
+/// The longest `INSERT` built, below Snowflake's 1 MB limit on statement text.
+pub const MAX_INSERT_SQL_BYTES: usize = 900 * 1024;

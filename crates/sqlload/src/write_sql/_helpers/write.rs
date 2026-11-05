@@ -21,7 +21,13 @@ pub(crate) fn write_statements(
     let values: Vec<String> = request
         .columns
         .iter()
-        .map(|column| from_staging(&column.name, &column.column_type, warehouse))
+        .map(|column| {
+            let value = from_staging(&column.name, &column.column_type, warehouse);
+            match request.hashed.contains(&column.name) {
+                true => format!("SHA2({value}, 256)"),
+                false => value,
+            }
+        })
         .collect();
     let insert_from = format!(
         "({}) SELECT {} FROM {source}",

@@ -1,12 +1,15 @@
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
+use crate::external_stage::models::PlannedStage;
 use crate::files_destination::models::{PendingLoad, PendingPhase};
 use crate::files_source::models::SourceFormat;
+use crate::loader::_helpers::table_plan::is_direct;
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
 use crate::loader::models::{
     CommitRule, FilesOutput, PythonTable, SourceEnd, TablePlan, WholeReason,
 };
 use crate::project::models::BatchStep;
 use crate::project::models::FilesFormat;
+use crate::project::models::MaskMethod;
 use crate::routing::models::Route;
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnOrigin, TableAction};
@@ -100,6 +103,10 @@ pub(crate) fn object_lines(table: &TablePlan) -> Vec<String> {
     lines
 }
 
+pub(crate) fn stage_object_lines(stage: &PlannedStage) -> Vec<String> {
+    vec![row(&stage.name, &format!("create stage on {}", stage.url))]
+}
+
 pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
     let spec = &table.spec;
     let strategy = match &table.mode {
@@ -181,6 +188,33 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
         ));
     }
     lines.extend(table.route.as_ref().map(route_line));
+    if let Some(reason) = table
+        .route
+        .as_ref()
+        .filter(|_| table.stage.is_some() && spec.files.is_some())
+        .map(|route| route.reason.clone())
+    {
+        lines.push(format!("why     {reason}"));
+    }
+    lines.extend(
+        table
+            .passed_over
+            .iter()
+            .map(|reason| format!("note    {reason}")),
+    );
+    if table.route.as_ref().is_some_and(|route| {
+        is_direct(Some(route))
+            && spec
+                .masked
+                .columns
+                .values()
+                .any(|method| *method == MaskMethod::Hash)
+    }) {
+        lines.push(
+            "note    hashed columns reach Snowflake in plain text in a temporary table, gone with its session; shaping = \"loader\" keeps them out"
+                .to_owned(),
+        );
+    }
     lines.push(batch_line(table));
     if matches!(table.commits, CommitRule::Windows(_))
         && spec.python.is_none()

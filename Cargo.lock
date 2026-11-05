@@ -3854,6 +3854,7 @@ dependencies = [
 name = "sqlload-testkit"
 version = "0.4.0"
 dependencies = [
+ "arrow-array",
  "axum",
  "bytes",
  "flate2",
@@ -3866,6 +3867,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]

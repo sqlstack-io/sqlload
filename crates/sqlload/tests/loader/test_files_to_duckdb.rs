@@ -2,8 +2,10 @@ use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
 use crate::helpers::{
-    local_store, run_async, run_files_scenario, run_large_partition, seaweedfs_store,
+    local_store, run_async, run_files_scenario, run_large_partition, run_source_row_upgrade,
+    seaweedfs_store,
 };
+use crate::test_types::SourceRowUpgradeTestCase;
 use crate::test_types::{FilesRun, FilesScenarioTestCase, LargePartitionTestCase, ParquetFile};
 
 const NOV_3: ParquetFile = ParquetFile {
@@ -192,6 +194,66 @@ fn given_a_partition_of_more_than_1000_files_when_delete_insert_loads_it_then_it
                     .await?
                     .as_deref(),
                 Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_files_when_loading_them_then_each_row_carries_its_number_in_its_file() -> Result<(), String>
+{
+    let test_cases = [FilesScenarioTestCase {
+        description: "row numbers start at 1 in each file",
+        store: local_store,
+        settings: "write_strategy = \"append\"\npartition_columns = { day = \"date\" }\n",
+        runs: &[FilesRun {
+            files: &[NOV_3, NOV_5],
+            expected_error: "",
+        }],
+        check_query: "SELECT string_agg(id || ':' || _sqlload_source_row, ',' ORDER BY id) FROM raw.scores",
+        expected_result: "1:1,2:2,5:1",
+    }];
+    run_async(async {
+        for test_case in &test_cases {
+            let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let result = run_files_scenario("", directory.path(), test_case).await?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_table_from_before_source_rows_when_loading_again_then_the_column_is_added_whatever_on_schema_change_says()
+-> Result<(), String> {
+    let test_cases = [
+        SourceRowUpgradeTestCase {
+            description: "by default",
+            settings: "",
+            expected_rows: "1:-,2:-,3:1",
+        },
+        SourceRowUpgradeTestCase {
+            description: "on_schema_change = fail is not blocked: it is the loader's own column",
+            settings: "on_schema_change = \"fail\"",
+            expected_rows: "1:-,2:-,3:1",
+        },
+    ];
+    run_async(async {
+        for test_case in &test_cases {
+            let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+            assert_eq!(
+                run_source_row_upgrade(directory.path(), test_case)
+                    .await?
+                    .as_deref(),
+                Some(test_case.expected_rows),
                 "{}",
                 test_case.description
             );

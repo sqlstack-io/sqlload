@@ -1,7 +1,8 @@
 //! Print a plan in the `sqb plan` style.
 
+use crate::external_stage::models::PlannedStage;
 use crate::loader::_helpers::render::{
-    blocked_lines, load_lines, object_lines, tree, warning_lines,
+    blocked_lines, load_lines, object_lines, stage_object_lines, tree, warning_lines,
 };
 use crate::loader::models::ProjectPlan;
 use crate::schema_plan::models::TableAction;
@@ -23,11 +24,19 @@ pub fn render_plan(plan: &ProjectPlan) -> (Vec<String>, bool) {
         .filter(|table| table.schema.action != TableAction::Unchanged && table.output.is_none())
         .copied()
         .collect();
+    let mut stages: Vec<&PlannedStage> = Vec::new();
+    for table in &ready {
+        if let Some(stage) = &table.planned_stage
+            && !stages.iter().any(|seen| seen.name == stage.name)
+        {
+            stages.push(stage);
+        }
+    }
     let ok = blocked.is_empty() && plan.problems.is_empty();
     let summary = format!(
         "{} selected, {} objects to create or change, {} tables to load{}",
         plan.tables.len(),
-        objects.len(),
+        objects.len() + stages.len(),
         ready.len(),
         match blocked.len() {
             0 => String::new(),
@@ -36,9 +45,13 @@ pub fn render_plan(plan: &ProjectPlan) -> (Vec<String>, bool) {
     );
     let mut lines = vec![format!("Plan ready  {summary}"), String::new()];
     lines.extend(tree(
-        &format!("Objects ({})", objects.len()),
+        &format!("Objects ({})", objects.len() + stages.len()),
         "sqlload apply",
-        objects.iter().map(|table| object_lines(table)).collect(),
+        stages
+            .iter()
+            .map(|stage| stage_object_lines(stage))
+            .chain(objects.iter().map(|table| object_lines(table)))
+            .collect(),
     ));
     lines.extend(tree(
         &format!("Loads ({})", ready.len()),

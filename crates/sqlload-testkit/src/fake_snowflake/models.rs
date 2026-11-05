@@ -64,6 +64,26 @@ pub struct FakeState {
     /// HTTP statuses for the next `loadHistoryScan` calls.
     pub history_failures: VecDeque<u16>,
     pub history_scans: u64,
+    /// Stages made with `CREATE STAGE`, by name: their URL and storage integration.
+    pub stages: BTreeMap<String, (String, String)>,
+    /// Every statement the driver session ran, with its sequence id.
+    pub driver_queries: Vec<(u64, String)>,
+    /// Driver `PUT`s to a stage holding one of these texts are refused.
+    pub denied_stages: Vec<String>,
+    /// While set, Snowpipe Streaming's host cannot be reached.
+    pub streaming_unreachable: bool,
+    /// While set, Snowpipe Streaming channels will not open.
+    pub channels_refused: bool,
+    /// Storage integrations that exist.
+    pub integrations: BTreeSet<String>,
+    /// While set, driver `PUT`s fail with this code and message, as a server problem would.
+    pub driver_failure: Option<(String, String)>,
+    /// While set, `SHOW STAGES` says the schema does not exist.
+    pub schema_missing: bool,
+    /// The `LastModified` of every object listed; now when unset.
+    pub objects_modified: Option<String>,
+    /// What each statement of a multi-statement request returned, by handle.
+    pub script_results: BTreeMap<String, Value>,
 }
 
 impl FakeState {

@@ -63,3 +63,12 @@ pub(crate) struct StagingIdTestCase {
     pub(crate) load_id: &'static str,
     pub(crate) expected_name: &'static str,
 }
+
+pub(crate) struct InsertRowsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) rows: usize,
+    pub(crate) value_bytes: usize,
+    pub(crate) expected_statements: usize,
+    /// The start of the first statement.
+    pub(crate) expected_start: &'static str,
+}

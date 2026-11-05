@@ -105,3 +105,35 @@ pub(crate) struct BatchFootersTestCase {
     /// The rows read, or `failed`.
     pub(crate) expected_outcome: &'static str,
 }
+
+pub(crate) struct DirectRefusalTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) data_type: arrow_schema::DataType,
+    pub(crate) expected_exact: bool,
+}
+
+pub(crate) struct FooterZoneTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) written: arrow_schema::DataType,
+    pub(crate) embedded_schema: bool,
+    pub(crate) expected_read: arrow_schema::DataType,
+    pub(crate) expected_exact: bool,
+}
+
+pub(crate) struct StoredColumnTestCase {
+    pub(crate) description: &'static str,
+    /// The Parquet schema, its column named `at`.
+    pub(crate) message: &'static str,
+    /// The embedded Arrow schema's type for `at`.
+    pub(crate) embedded: Option<arrow_schema::DataType>,
+    pub(crate) expected_read: arrow_schema::DataType,
+    pub(crate) expected_refusal: Option<&'static str>,
+}
+
+pub(crate) struct StoredRefusalTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) data_type: arrow_schema::DataType,
+    /// The Parquet schema of a column the file holds, or `None` for no such column.
+    pub(crate) message: Option<&'static str>,
+    pub(crate) expected_refusal: Option<&'static str>,
+}

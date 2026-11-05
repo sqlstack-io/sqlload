@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, RecordBatch, StringArray, new_null_array};
+use arrow_array::{Array, ArrayRef, Int64Array, RecordBatch, StringArray, new_null_array};
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 
 use crate::column_types::main::arrow_field::arrow_field;
-use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
+use crate::files_source::constants::{
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+};
 use crate::files_source::errors::ShapeError;
 use crate::files_source::models::DataFile;
 use crate::schema_plan::models::DesiredColumn;
@@ -22,11 +24,11 @@ pub(crate) fn output_schema(columns: &[DesiredColumn]) -> Result<SchemaRef, Stri
     Ok(Arc::new(Schema::new(fields)))
 }
 
-/// `batch` from `file` reshaped to `schema`: data columns cast, missing ones NULL, partition and file columns filled in.
+/// `batch` from `file` reshaped to `schema`: data columns cast, missing ones NULL, partition and file columns filled in, and rows numbered after the file's `rows_before`.
 pub(crate) fn shape_batch(
     batch: &RecordBatch,
     file: &DataFile,
-    file_name: &str,
+    (file_name, rows_before): (&str, u64),
     schema: &SchemaRef,
 ) -> Result<RecordBatch, ShapeError> {
     let mut constants: Vec<(&str, &str)> = file
@@ -40,12 +42,23 @@ pub(crate) fn shape_batch(
     let columns: Vec<ArrayRef> = schema
         .fields()
         .iter()
-        .map(|field| shape_column(batch, &constants, field))
+        .map(|field| match field.name().as_str() {
+            SOURCE_ROW_COLUMN => Ok(row_numbers(rows_before, batch.num_rows())),
+            _ => shape_column(batch, &constants, field),
+        })
         .collect::<Result<_, ShapeError>>()?;
     RecordBatch::try_new(schema.clone(), columns).map_err(|error| ShapeError {
         row: None,
         reason: error.to_string(),
     })
+}
+
+/// `rows` row numbers after `rows_before`.
+fn row_numbers(rows_before: u64, rows: usize) -> ArrayRef {
+    let first = i64::try_from(rows_before).unwrap_or(i64::MAX);
+    Arc::new(Int64Array::from_iter_values(
+        (0..rows).map(|row| first + row as i64 + 1),
+    ))
 }
 
 /// One output column: a constant (partition value or file name), the file's column cast, or NULLs; a value that does not convert is an error, never NULL.

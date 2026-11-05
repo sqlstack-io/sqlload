@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arrow_array::RecordBatch;
 use tokio::sync::OwnedMutexGuard;
@@ -20,6 +20,7 @@ use crate::duckdb_destination::main::own_connection::own_connection;
 use crate::duckdb_destination::main::query_text::query_text as query_duckdb;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::query_texts::query_texts as query_duckdb_texts;
+use crate::external_stage::main::route_reference::route_reference;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, LoadRun, ProjectPlan, TablePlan};
 use crate::schema_plan::models::LiveColumn;
@@ -27,8 +28,10 @@ use crate::snowflake_destination::main::describe_table::describe_table as descri
 use crate::snowflake_destination::main::query_text::query_text as query_snowflake;
 use crate::snowflake_destination::main::query_texts::query_texts as query_snowflake_texts;
 use crate::snowflake_destination::main::remove_stale::remove_stale;
+use crate::snowflake_destination::main::remove_stale_external::remove_stale_external;
 use crate::snowflake_destination::main::run_statements::run_statements;
 use crate::snowflake_destination::main::stage_parquet::stage_parquet;
+use crate::snowflake_destination::models::{StageRoute, StagedFile};
 use crate::stage_api::models::StageInfo;
 use crate::write_sql::models::TableName;
 
@@ -187,30 +190,51 @@ pub(crate) async fn append_rows(
     }
 }
 
-/// Upload one staged Parquet file to `key` on the user stage (Snowflake), with the batch's `known` credentials; returns them for its next file.
+/// Upload one staged Parquet file to an internal stage (Snowflake), with the batch's `known` credentials; returns them for its next file.
 pub(crate) async fn stage_file(
     destination: &Destination,
     known: Option<StageInfo>,
-    key: &str,
-    body: &[u8],
+    file: StagedFile<'_>,
 ) -> Result<StageInfo, LoaderError> {
     match destination {
-        Destination::Snowflake(snowflake) => Ok(stage_parquet(snowflake, known, key, body).await?),
+        Destination::Snowflake(snowflake) => Ok(stage_parquet(snowflake, known, file).await?),
         _ => Err(no_sql()),
     }
 }
 
-/// Remove the load folders failed runs left on the user stage over a day ago; a failure only warns.
-pub(crate) async fn clean_stage(destination: &Destination) {
-    let Destination::Snowflake(snowflake) = destination else {
-        return;
-    };
-    match remove_stale(snowflake).await {
-        Ok(0) => {}
-        Ok(removed) => tracing::info!(
-            removed,
-            "removed load folders failed runs left on the user stage"
-        ),
-        Err(error) => tracing::warn!(%error, "cannot clean up the user stage"),
+/// Remove the load folders failed runs left, over a day ago, on the stages this plan's tables use (an external stage keeping its files stays as it is; a staging table's stage goes with its table). A failure only warns.
+pub(crate) async fn clean_stages(run: &LoadRun<'_>, plan: &ProjectPlan) {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for table in plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_none())
+    {
+        let (Some(route), Some(Destination::Snowflake(snowflake))) =
+            (&table.stage, run.destinations.get(&table.spec.target))
+        else {
+            continue;
+        };
+        let target = &table.spec.destination;
+        let Some(reference) = route_reference(route, target, None) else {
+            continue;
+        };
+        if !seen.insert(format!("{}{reference}", table.spec.target)) {
+            continue;
+        }
+        let removed = match route {
+            StageRoute::External(stage) if stage.keep_staged_files => Ok(0),
+            StageRoute::External(stage) => remove_stale_external(stage).await,
+            _ => remove_stale(snowflake, &reference)
+                .await
+                .map_err(|error| error.to_string()),
+        };
+        match removed {
+            Ok(0) => {}
+            Ok(removed) => {
+                tracing::info!(removed, stage = %reference, "removed load folders failed runs left on the stage")
+            }
+            Err(error) => tracing::warn!(%error, stage = %reference, "cannot clean up the stage"),
+        }
     }
 }

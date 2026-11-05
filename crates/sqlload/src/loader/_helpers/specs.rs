@@ -172,6 +172,7 @@ pub(crate) fn build_spec(
         unique_key,
         cursor,
         batch,
+        shaped_by_loader: layered(&settings.shaping, &defaults.shaping).is_some(),
         source_end: None,
         pinned: columns.pinned,
         excluded_columns: columns.excluded,

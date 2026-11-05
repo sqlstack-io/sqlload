@@ -50,12 +50,24 @@ fn parse_line(line: &str) -> Option<Value> {
 
 /// The ingest host, which is the fake itself.
 pub(crate) fn host(state: &SharedState) -> Outcome {
+    if state.lock().streaming_unreachable {
+        return Err((
+            StatusCode::FORBIDDEN,
+            json!({ "code": "DENIED", "message": "streaming is not allowed here" }),
+        ));
+    }
     Ok(Value::String(state.lock().host.clone()))
 }
 
 /// Open or reopen a channel, discarding uncommitted rows like the real service.
 pub(crate) fn open(state: &SharedState, path: &str) -> Outcome {
     let mut guard = state.lock();
+    if guard.channels_refused {
+        return Err((
+            StatusCode::FORBIDDEN,
+            json!({ "code": "DENIED", "message": "no such pipe" }),
+        ));
+    }
     let channel = guard.channels.entry(channel_key(path)).or_default();
     channel.uncommitted.clear();
     channel.continuation += 1;

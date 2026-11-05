@@ -1,8 +1,11 @@
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
+use parquet::arrow::arrow_reader::ArrowReaderMetadata;
+use parquet::basic::{LogicalType, TimeUnit as ParquetTimeUnit};
+use parquet::schema::types::{Type as ParquetType, TypePtr};
 
 use crate::column_types::main::portable_type::portable_type;
 use crate::column_types::models::ColumnType;
-use crate::files_source::constants::LOADER_COLUMNS;
+use crate::files_source::constants::{LOADER_COLUMNS, MAX_DIRECT_DECIMAL_PRECISION, UTC_ZONES};
 use crate::files_source::models::FileColumn;
 
 /// A column seen in sampled files: its type, or `None` while every sampled value was NULL.
@@ -10,6 +13,8 @@ use crate::files_source::models::FileColumn;
 pub(crate) struct SampledColumn {
     pub(crate) name: String,
     pub(crate) column_type: Option<Result<ColumnType, String>>,
+    /// How the column is held when a direct `COPY` does not load it exactly.
+    pub(crate) direct_refusal: Option<String>,
 }
 
 /// Whether `name` is one of the loader's own columns, ignoring case.
@@ -38,8 +43,83 @@ pub(crate) fn schema_columns(schema: &SchemaRef) -> Vec<SampledColumn> {
         .map(|field| SampledColumn {
             name: field.name().clone(),
             column_type: Some(portable_type(field)),
+            direct_refusal: direct_refusal(field.data_type()),
         })
         .collect()
+}
+
+/// The columns of a Parquet footer, each checked for the direct route against what the file itself stores as well as its Arrow type: plan samples these, and each batch's check reads the same.
+pub(crate) fn parquet_columns(footer: &ArrowReaderMetadata) -> Vec<SampledColumn> {
+    let stored = footer
+        .metadata()
+        .file_metadata()
+        .schema_descr()
+        .root_schema()
+        .get_fields();
+    footer
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| SampledColumn {
+            name: field.name().clone(),
+            column_type: Some(portable_type(field)),
+            direct_refusal: stored_or_arrow_refusal(field, stored),
+        })
+        .collect()
+}
+
+fn stored_or_arrow_refusal(field: &Field, stored: &[TypePtr]) -> Option<String> {
+    let column = stored.iter().find(|column| column.name() == field.name());
+    direct_refusal(field.data_type())
+        .or_else(|| stored_refusal(field.data_type(), column.map(AsRef::as_ref)))
+}
+
+/// `data_type` and the logical type missing when the file's own column does not carry the one Snowflake needs to read it as `data_type`: an embedded Arrow schema can name a timestamp over a bare INT64 or an INT96 (decision 96), where Snowflake sees something else.
+pub(crate) fn stored_refusal(data_type: &DataType, stored: Option<&ParquetType>) -> Option<String> {
+    let logical = stored.and_then(|column| column.get_basic_info().logical_type_ref());
+    let missing = match (data_type, logical) {
+        (DataType::Timestamp(..), Some(LogicalType::Timestamp(timestamp)))
+            if matches!(
+                timestamp.unit,
+                ParquetTimeUnit::MILLIS | ParquetTimeUnit::MICROS
+            ) =>
+        {
+            None
+        }
+        (DataType::Timestamp(..), _) => Some("millisecond or microsecond timestamp"),
+        (DataType::Date32, Some(LogicalType::Date)) => None,
+        (DataType::Date32, _) => Some("date"),
+        (DataType::Decimal128(..), Some(LogicalType::Decimal { .. })) => None,
+        (DataType::Decimal128(..), _) => Some("decimal"),
+        _ => None,
+    };
+    missing.map(|missing| format!("{data_type} with no {missing} logical type"))
+}
+
+/// `data_type` as text unless a direct `COPY` is known to load it exactly (decision 96): nanosecond and INT96 timestamps, seconds and `Date64` (bare integers in the file, whose unit Snowflake guesses from their size), `UInt64`, `Float16`, `Decimal256`, timestamps in a zone other than UTC and anything else not listed stay with SQLLoad until parity proves them.
+pub(crate) fn direct_refusal(data_type: &DataType) -> Option<String> {
+    let exact = match data_type {
+        DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Date32 => true,
+        DataType::Decimal128(precision, _) => *precision <= MAX_DIRECT_DECIMAL_PRECISION,
+        DataType::Timestamp(TimeUnit::Millisecond | TimeUnit::Microsecond, zone) => {
+            zone.as_deref().is_none_or(|zone| UTC_ZONES.contains(&zone))
+        }
+        _ => false,
+    };
+    (!exact).then(|| data_type.to_string())
 }
 
 /// How one file's columns join those of newer files.
@@ -68,6 +148,9 @@ pub(crate) fn merge_columns(
             columns.push(column);
             continue;
         };
+        if existing.direct_refusal.is_none() {
+            existing.direct_refusal = column.direct_refusal;
+        }
         match (&existing.column_type, column.column_type) {
             (_, None) => {}
             (None, found_type) => existing.column_type = found_type,
@@ -122,6 +205,7 @@ pub(crate) fn merge_schema(
         .map(|column| SampledColumn {
             name: column.name,
             column_type: Some(column.column_type),
+            direct_refusal: column.direct_refusal,
         })
         .collect();
     let merge = ColumnMerge {
@@ -140,6 +224,7 @@ pub(crate) fn file_columns(columns: Vec<SampledColumn>) -> Vec<FileColumn> {
         .map(|column| FileColumn {
             name: column.name,
             column_type: column.column_type.unwrap_or(Ok(ColumnType::Text)),
+            direct_refusal: column.direct_refusal,
         })
         .collect()
 }

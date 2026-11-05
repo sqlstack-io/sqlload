@@ -2,16 +2,16 @@
 
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::models::OpenFolder;
-use crate::files_source::_helpers::parquet::footers::footer_schema;
+use crate::files_source::_helpers::parquet::footers::parquet_footer;
 use crate::files_source::_helpers::plan::columns::{
     ColumnMerge, SampledColumn, case_problems, drop_loader_columns, file_columns, merge_columns,
-    schema_columns,
+    parquet_columns,
 };
 use crate::files_source::_helpers::plan::encoding::{file_codec, file_names};
 use crate::files_source::_helpers::plan::partitions::data_file;
 use crate::files_source::_helpers::text::sample::sample_file;
 use crate::files_source::constants::{
-    SCHEMA_SAMPLE_FILES, SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN,
+    SCHEMA_SAMPLE_FILES, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::{Codec, DataFile, FilesEncoding, FilesTable, SourceFormat};
@@ -26,7 +26,7 @@ pub async fn discover_files(
     let replaced: Vec<&str> = partition_columns
         .iter()
         .map(String::as_str)
-        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
         .collect();
     let text_format = encoding.format != SourceFormat::Parquet;
     let mut columns: Vec<SampledColumn> = Vec::new();
@@ -98,7 +98,7 @@ async fn file_columns_of(
     encoding: &FilesEncoding,
 ) -> Result<Vec<SampledColumn>, FilesError> {
     match encoding.format {
-        SourceFormat::Parquet => Ok(schema_columns(&footer_schema(folder, &data.file).await?)),
+        SourceFormat::Parquet => Ok(parquet_columns(&parquet_footer(folder, &data.file).await?)),
         _ => sample_file(folder, &data.file, codec, encoding)
             .await
             .map_err(|reason| FilesError::File {

@@ -21,9 +21,12 @@ use crate::files_destination::models::PendingPhase;
 use crate::files_destination::models::PendingRun;
 use crate::files_destination::models::ReplacedFiles;
 use crate::files_destination::models::WriterRequest;
-use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
+use crate::files_source::constants::{
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+};
 use crate::files_source::main::batch_columns::batch_columns;
 use crate::files_source::main::batch_footers::batch_footers;
+use crate::files_source::main::batch_refusals::batch_refusals;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, SourceFormat};
@@ -98,17 +101,53 @@ use arrow_schema::Schema;
 use bytes::Bytes;
 use chrono::DateTime;
 use std::collections::BTreeSet;
+use std::io::Write;
 use std::sync::Arc;
 
-/// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and no column the write must convert in SQL (JSON on Snowflake, which `PARSE_JSON` turns into a `VARIANT`; JSON and UUIDs on DuckDB, which arrive as text).
+use flate2::Compression as GzipLevel;
+use flate2::write::GzEncoder;
+
+use crate::column_types::models::Warehouse;
+use crate::external_stage::constants::MAX_COPY_SQL_BYTES;
+use crate::external_stage::main::direct_copies::direct_copies;
+use crate::external_stage::main::route_reference::route_reference;
+use crate::external_stage::main::stage_reference::stage_reference;
+use crate::external_stage::models::{CopyColumn, CopyValue, DirectCopy};
+use crate::file_store::main::write_file::write_file as write_stage_file;
+use crate::loader::_helpers::table_plan::{copy_columns, direct_check, is_direct};
+use crate::loader::models::{DirectLoaded, RowStream, TableSpec};
+use crate::project::models::MaskMethod;
+use crate::row_batches::main::text_rows::text_rows;
+use crate::snowflake_destination::constants::{
+    EXTERNAL_STAGE_FOLDER, STREAM_COMMIT_WAIT_SECS, STREAM_PIPE_SUFFIX, STREAM_POLL_MILLIS,
+    STREAM_REQUEST_BYTES,
+};
+use crate::snowflake_destination::main::copy_rows::copy_rows;
+use crate::snowflake_destination::main::script_copy_rows::script_copy_rows;
+use crate::snowflake_destination::main::streaming_client::streaming_client;
+use crate::snowflake_destination::models::{CopyStaged, StageRoute, StagedFile};
+use crate::streaming_api::main::append_rows::append_rows as append_stream_rows;
+use crate::streaming_api::main::channel_statuses::channel_statuses;
+use crate::streaming_api::main::open_channel::open_channel;
+use crate::streaming_api::models::AppendRequest;
+use crate::write_sql::main::insert_rows::insert_rows;
+use crate::write_sql::main::sql_literal::sql_literal;
+use crate::write_sql::main::stored_name::stored_name;
+
+/// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`); on Snowflake, a route loading files into the table itself (streaming, `INSERT` and a staging table's stage all go through staging); elsewhere no column arriving as text the write must convert (JSON and UUIDs on DuckDB).
 fn writes_directly(table: &TablePlan, destination: &Destination) -> bool {
-    let converted = |column: &DesiredColumn| match destination {
-        Destination::Snowflake(_) => column.column_type == ColumnType::Json,
-        _ => matches!(column.column_type, ColumnType::Json | ColumnType::Uuid),
+    let fits = match destination {
+        Destination::Snowflake(_) => !matches!(
+            table.stage,
+            Some(StageRoute::Streaming { .. } | StageRoute::Insert | StageRoute::StagingTable)
+        ),
+        _ => !table
+            .schema
+            .write_columns
+            .iter()
+            .any(|column| matches!(column.column_type, ColumnType::Json | ColumnType::Uuid)),
     };
-    table.mode == WriteMode::Append
-        && table.logged.is_none()
-        && !table.schema.write_columns.iter().any(converted)
+    table.mode == WriteMode::Append && table.logged.is_none() && fits
 }
 
 /// The columns the staged batches carry: the read columns as the source gives them, then the `_sqlload_*` metadata.
@@ -122,12 +161,19 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
             origin: ColumnOrigin::Source,
         })
         .collect();
+    let read: Vec<&str> = table
+        .read_columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
     columns.extend(
         table
             .schema
             .write_columns
             .iter()
-            .filter(|column| column.origin == ColumnOrigin::Metadata)
+            .filter(|column| {
+                column.origin == ColumnOrigin::Metadata && !read.contains(&column.name.as_str())
+            })
             .cloned(),
     );
     columns
@@ -207,7 +253,14 @@ impl Publisher {
             }
         };
         let committed_state = run.as_ref().and_then(|run| run.record.state.clone());
+        let external_folder = match &table.stage {
+            Some(StageRoute::External(stage)) => Some(open_folder(&stage.location)?),
+            _ => None,
+        };
         Ok(Self {
+            route: table.stage.clone(),
+            external_folder,
+            stream: None,
             at_end: matches!(table.mode, WriteMode::Replace | WriteMode::Recreate),
             table,
             destination,
@@ -262,6 +315,7 @@ impl Publisher {
         self.batch_rows += batch.num_rows() as u64;
         self.arrow_bytes += batch.get_array_memory_size();
         match &self.destination {
+            Destination::Snowflake(_) if self.sends_rows() => self.send_rows(&batch).await,
             Destination::Snowflake(_) => {
                 let parts = std::mem::take(&mut self.parts);
                 let (parts, files) = encode(move || write_part(parts, &batch)).await?;
@@ -285,7 +339,7 @@ impl Publisher {
     /// Whether the batch holds about 1 GB (Parquet staged on Snowflake, Arrow elsewhere), where a size-cut table may end it.
     pub(crate) fn full(&self) -> bool {
         let bytes = match &self.destination {
-            Destination::Snowflake(_) => self.parts.bytes(),
+            Destination::Snowflake(_) if !self.sends_rows() => self.parts.bytes(),
             _ => self.arrow_bytes,
         };
         bytes >= self.batch_bytes
@@ -355,12 +409,138 @@ impl Publisher {
                 tracing::warn!(%error, table = %staging.table, "cannot drop the staging table");
             }
         }
-        if let Destination::Snowflake(snowflake) = &self.destination
-            && !self.staged.is_empty()
-            && let Err(error) = remove_staged(snowflake, &self.batch_folder()).await
-        {
-            tracing::warn!(%error, load_id = %self.load_id, "cannot remove the staged files; the next load removes them after a day");
+        if !self.staged.is_empty() {
+            self.remove_batch_files().await;
         }
+    }
+
+    /// Whether rows go in without files.
+    fn sends_rows(&self) -> bool {
+        matches!(
+            self.route,
+            Some(StageRoute::Streaming { .. } | StageRoute::Insert)
+        )
+    }
+
+    /// The stage this load's files go through, as SQL.
+    fn stage_reference(&self) -> Result<String, LoaderError> {
+        let route = self
+            .route
+            .as_ref()
+            .ok_or_else(|| LoaderError::Invalid("no stage was planned".to_owned()))?;
+        route_reference(route, &self.table.spec.destination, self.staging.as_ref())
+            .ok_or_else(|| LoaderError::Invalid("this route has no stage".to_owned()))
+    }
+
+    /// Delete the batch's staged files, unless the stage keeps them; a failure only warns, and the next load removes them after a day.
+    async fn remove_batch_files(&self) {
+        let removed = match (&self.route, &self.external_folder, &self.destination) {
+            (Some(StageRoute::External(stage)), _, _) if stage.keep_staged_files => Ok(()),
+            (_, Some(folder), _) => {
+                let keys: Vec<String> = self
+                    .staged
+                    .iter()
+                    .map(|name| format!("{}{name}", self.batch_folder()))
+                    .collect();
+                delete_files(folder, &keys)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+            (_, None, Destination::Snowflake(snowflake)) => match self.stage_reference() {
+                Ok(stage) => remove_staged(snowflake, &stage, &self.batch_folder())
+                    .await
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            },
+            _ => Ok(()),
+        };
+        if let Err(error) = removed {
+            tracing::warn!(%error, load_id = %self.load_id, "cannot remove a batch's staged files; the next load removes them after a day");
+        }
+    }
+
+    /// Add `batch` to the staging table without files: a request to the channel, or `INSERT`s.
+    async fn send_rows(&mut self, batch: &RecordBatch) -> Result<(), LoaderError> {
+        let Some(staging) = self.staging.clone() else {
+            return Err(LoaderError::Invalid(
+                "rows go in through a staging table, and this load has none".to_owned(),
+            ));
+        };
+        let columns: Vec<DesiredColumn> = staged_columns(&self.table);
+        let schema = batch.schema();
+        let mut in_batch: Vec<DesiredColumn> = Vec::with_capacity(schema.fields().len());
+        for field in schema.fields() {
+            let column = columns.iter().find(|column| column.name == *field.name());
+            in_batch.extend(column.cloned());
+        }
+        let rows = text_rows(batch).map_err(LoaderError::Invalid)?;
+        if matches!(self.route, Some(StageRoute::Streaming { .. })) {
+            self.open_stream(&staging).await?;
+        }
+        match self.stream.as_mut() {
+            Some(stream) => stream.send(&in_batch, &rows).await,
+            None => {
+                for statement in insert_rows(&staging, &in_batch, &rows, Warehouse::Snowflake) {
+                    execute(&self.destination, vec![statement]).await?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Open the channel on first use. A chain-chosen stream that will not open drops to `INSERT`, as no rows have been sent; a forced one fails.
+    async fn open_stream(&mut self, staging: &TableName) -> Result<(), LoaderError> {
+        let Destination::Snowflake(snowflake) = &self.destination else {
+            return Ok(());
+        };
+        if self.stream.is_some() {
+            return Ok(());
+        }
+        let client = streaming_client(snowflake, staging);
+        let pipe = format!(
+            "{}{STREAM_PIPE_SUFFIX}",
+            stored_name(&staging.table, Warehouse::Snowflake)
+        );
+        let channel = format!("sqlload_{}", self.load_id.replace('-', "_"));
+        match (open_channel(&client, &pipe, &channel).await, &self.route) {
+            (Ok(opened), _) => {
+                self.stream = Some(RowStream {
+                    client,
+                    pipe,
+                    channel,
+                    continuation: opened.continuation_token,
+                    offset: 0,
+                });
+                Ok(())
+            }
+            (
+                Err(error),
+                Some(StageRoute::Streaming {
+                    may_fall_back: true,
+                }),
+            ) => {
+                tracing::warn!(%error, table = %self.table.spec.destination.table, "Snowpipe Streaming will not open; this table loads by batched INSERT");
+                self.route = Some(StageRoute::Insert);
+                Ok(())
+            }
+            (Err(error), _) => Err(LoaderError::Invalid(format!(
+                "Snowpipe Streaming will not open for {}: {error}",
+                staging.table
+            ))),
+        }
+    }
+
+    /// Wait until Snowflake has committed every row sent to the channel, so the staging table holds them.
+    pub(crate) async fn settle_rows(&mut self) -> Result<(), LoaderError> {
+        if let Some(stream) = &self.stream {
+            settle_stream(stream).await?;
+        }
+        Ok(())
+    }
+
+    /// The channel again after a schema change, which may have replaced the staging table and its pipe.
+    pub(crate) fn reopen_rows(&mut self) {
+        self.stream = None;
     }
 
     /// Where the batch's rows go: the table itself, or the staging table.
@@ -371,16 +551,31 @@ impl Publisher {
         }
     }
 
-    /// `sqlload/<load id>/<batch>/` on the user stage.
+    /// `sqlload/<load id>/<batch>/` on an internal stage, `_sqlload/<load id>/<batch>/` under an external stage's URL.
     fn batch_folder(&self) -> String {
-        format!("{STAGE_FOLDER}/{}/{:05}/", self.load_id, self.batch)
+        let root = match self.external_folder {
+            Some(_) => EXTERNAL_STAGE_FOLDER,
+            None => STAGE_FOLDER,
+        };
+        format!("{root}/{}/{:05}/", self.load_id, self.batch)
     }
 
     async fn put_file(&mut self, body: Vec<u8>) -> Result<(), LoaderError> {
         let name = format!("part-{:05}.parquet", self.staged.len() + 1);
         let key = format!("{}{name}", self.batch_folder());
-        let known = self.stage.take();
-        self.stage = Some(stage_file(&self.destination, known, &key, &body).await?);
+        match &self.external_folder {
+            Some(folder) => write_stage_file(folder, &key, bytes::Bytes::from(body)).await?,
+            None => {
+                let reference = self.stage_reference()?;
+                let file = StagedFile {
+                    stage: reference.trim_start_matches('@'),
+                    key: &key,
+                    body: &body,
+                };
+                let known = self.stage.take();
+                self.stage = Some(stage_file(&self.destination, known, file).await?);
+            }
+        }
         self.staged.push(name);
         Ok(())
     }
@@ -397,20 +592,9 @@ impl Publisher {
         if self.batch_rows == 0 {
             return Ok(());
         }
-        if let Destination::Snowflake(snowflake) = &self.destination {
-            let copies = copy_staged(&self.batch_table(), &self.batch_folder(), &self.staged);
-            let statements = match self.direct {
-                true => [BEGIN_STATEMENT.to_owned()]
-                    .into_iter()
-                    .chain(copies)
-                    .chain([COMMIT_STATEMENT.to_owned()])
-                    .collect(),
-                false => copies,
-            };
-            execute(&self.destination, statements).await?;
-            if let Err(error) = remove_staged(snowflake, &self.batch_folder()).await {
-                tracing::warn!(%error, load_id = %self.load_id, "cannot remove a loaded batch's staged files; the next load removes them after a day");
-            }
+        self.settle_rows().await?;
+        if matches!(self.destination, Destination::Snowflake(_)) && !self.sends_rows() {
+            self.copy_batch_files().await?;
         }
         if self.open_transaction {
             execute(&self.destination, vec![COMMIT_STATEMENT.to_owned()]).await?;
@@ -430,6 +614,159 @@ impl Publisher {
         self.stage = None;
         self.parts = PartWriter::default();
         Ok(())
+    }
+
+    /// `COPY` the batch's staged files (straight into the table, committing, or into the staging table), then remove them.
+    async fn copy_batch_files(&self) -> Result<(), LoaderError> {
+        let stage = self.stage_reference()?;
+        let folder = self.batch_folder();
+        let staged = staged_columns(&self.table);
+        let holds_json = self.direct
+            && staged
+                .iter()
+                .any(|column| column.column_type == ColumnType::Json);
+        let copies = copy_staged(&CopyStaged {
+            table: &self.batch_table(),
+            stage: &stage,
+            folder: &folder,
+            names: &self.staged,
+            selected: holds_json.then_some(staged.as_slice()),
+        });
+        let statements = match self.direct {
+            true => [BEGIN_STATEMENT.to_owned()]
+                .into_iter()
+                .chain(copies)
+                .chain([COMMIT_STATEMENT.to_owned()])
+                .collect(),
+            false => copies,
+        };
+        execute(&self.destination, statements).await?;
+        self.remove_batch_files().await;
+        Ok(())
+    }
+
+    /// Load a files batch by having Snowflake `COPY` the files itself, where the plan chose that and the batch's own footers still allow it. `None` when SQLLoad must read this batch itself.
+    pub(crate) async fn load_direct(
+        &mut self,
+        (files, footers): (&[DataFile], &BatchFooters),
+        range: &CommitRange,
+    ) -> Result<Option<DirectLoaded>, LoaderError> {
+        let (Destination::Snowflake(snowflake), Some(StageRoute::External(stage)), Some(read)) =
+            (&self.destination, &self.route, &self.table.files)
+        else {
+            return Ok(None);
+        };
+        if !is_direct(self.table.route.as_ref()) {
+            return Ok(None);
+        }
+        let spec = &self.table.spec;
+        let refused = batch_refusals(footers, files);
+        if let Some(reason) = direct_check(spec, (read, files, &refused), &self.table.mode, stage) {
+            tracing::warn!(table = %spec.destination.table, %reason, "SQLLoad reads this batch itself");
+            return Ok(None);
+        }
+        let Some(source) = spec.files.as_ref().map(|files| &files.location) else {
+            return Ok(None);
+        };
+        let reference = stage_reference(stage);
+        let hashes = spec
+            .masked
+            .columns
+            .values()
+            .any(|method| *method == MaskMethod::Hash);
+        let copy =
+            |target: &'_ TableName, columns: &[CopyColumn]| -> Result<Vec<String>, LoaderError> {
+                let request = DirectCopy {
+                    target,
+                    stage: &reference,
+                    stage_url: &stage.location,
+                    source,
+                    files,
+                    columns,
+                };
+                let batches = direct_copies(&request).map_err(LoaderError::Invalid)?;
+                Ok(batches.into_iter().map(|batch| batch.sql).collect())
+            };
+        let literals = (self.load_id.as_str(), self.loaded_at.as_str());
+        if hashes {
+            let (staging, create) = staging_table(
+                &spec.destination,
+                &staged_columns(&self.table),
+                &staging_id(&self.load_id, chrono::Utc::now().naive_utc()),
+                Warehouse::Snowflake,
+            );
+            let create = create.replacen("TRANSIENT TABLE", "TEMPORARY TABLE", 1);
+            let columns = filled_columns(spec, read, &staged_as_text(&self.table), literals);
+            let hashed: Vec<String> = spec
+                .masked
+                .columns
+                .iter()
+                .filter(|(_, method)| **method == MaskMethod::Hash)
+                .map(|(name, _)| name.clone())
+                .collect();
+            let mode = commit_mode(&self.table.mode, Some(range.clone()));
+            let write = commit_statements(
+                &WriteStatementsRequest {
+                    warehouse: Warehouse::Snowflake,
+                    table: &spec.destination,
+                    columns: &self.table.schema.write_columns,
+                    mode: &mode,
+                    hashed: &hashed,
+                },
+                &staging,
+                (None, true),
+            );
+            let mut script = vec![create];
+            script.extend(copy(&staging, &columns)?);
+            script.extend(write);
+            script.push(format!(
+                "DROP TABLE IF EXISTS {}",
+                qualified_name(&staging, Warehouse::Snowflake)
+            ));
+            if script
+                .iter()
+                .any(|statement| statement.len() > MAX_COPY_SQL_BYTES)
+            {
+                tracing::warn!(table = %spec.destination.table, "a hashed batch's statement is too long; SQLLoad reads this batch itself");
+                return Ok(None);
+            }
+            let rows = script_copy_rows(snowflake, &script).await?;
+            return Ok(Some(DirectLoaded::Committed(rows)));
+        }
+        if self.direct {
+            let columns = filled_columns(spec, read, &self.table.schema.write_columns, literals);
+            let mut copies = copy(&spec.destination, &columns)?;
+            let rows = match copies.len() {
+                1 => copy_rows(snowflake, &copies.remove(0)).await?,
+                _ => {
+                    let mut script = vec![BEGIN_STATEMENT.to_owned()];
+                    script.append(&mut copies);
+                    script.push(COMMIT_STATEMENT.to_owned());
+                    script_copy_rows(snowflake, &script).await?
+                }
+            };
+            return Ok(Some(DirectLoaded::Committed(rows)));
+        }
+        let Some(staging) = self.staging.clone() else {
+            return Ok(None);
+        };
+        let columns = filled_columns(spec, read, &staged_as_text(&self.table), literals);
+        let mut rows: u64 = 0;
+        for statement in copy(&staging, &columns)? {
+            rows += copy_rows(snowflake, &statement).await?;
+        }
+        Ok(Some(DirectLoaded::Staged(rows)))
+    }
+
+    /// Note what a direct batch did; a batch that is not yet committed waits for `cut`.
+    pub(crate) fn note_direct(&mut self, loaded: &DirectLoaded) {
+        match loaded {
+            DirectLoaded::Committed(rows) => {
+                self.committed_rows += rows;
+                self.commits += 1;
+            }
+            DirectLoaded::Staged(rows) => self.waiting_rows += rows,
+        }
     }
 
     /// Apply the write strategy to the waiting rows in one transaction, with a logged table's record and the emptying of the staging table for the next batches.
@@ -459,6 +796,7 @@ impl Publisher {
                 table: &spec.destination,
                 columns: &self.table.schema.write_columns,
                 mode: &mode,
+                hashed: &[],
             },
             &staging,
             (run_insert, self.at_end),
@@ -517,7 +855,7 @@ impl Publisher {
             .partition_types
             .iter()
             .map(|(name, _)| name.as_str())
-            .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
+            .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
             .collect();
         let (columns, problems) =
             batch_columns(&footers, files, &source_files.table.columns, &replaced);
@@ -582,6 +920,8 @@ impl Publisher {
             schema,
             ..self.table.clone()
         };
+        self.settle_rows().await?;
+        self.reopen_rows();
         let old = staged_columns(&self.table);
         if let Some(statements) = schema_statements(&replanned) {
             execute_ddl(&self.destination, statements).await?;
@@ -719,6 +1059,22 @@ async fn feed(
                         }
                         _ => BatchFooters::default(),
                     };
+                    let range = match group.values.is_empty() {
+                        true => CommitRange::Planned,
+                        false => CommitRange::Values(group.values.clone()),
+                    };
+                    match publisher.load_direct((&files, &footers), &range).await? {
+                        Some(DirectLoaded::Committed(rows)) => {
+                            publisher.note_direct(&DirectLoaded::Committed(rows));
+                            continue;
+                        }
+                        Some(staged) => {
+                            publisher.note_direct(&staged);
+                            publisher.cut(range).await?;
+                            continue;
+                        }
+                        None => {}
+                    }
                     let part = ReadPart {
                         files: Some(files),
                         footers,
@@ -729,10 +1085,6 @@ async fn feed(
                         stage(&mut publisher, batch).await
                     })
                     .await?;
-                    let range = match group.values.is_empty() {
-                        true => CommitRange::Planned,
-                        false => CommitRange::Values(group.values.clone()),
-                    };
                     publisher.cut(range).await?;
                 }
             }
@@ -822,6 +1174,138 @@ async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), Stri
         .stage(batch, None)
         .await
         .map_err(|error| error.to_string())
+}
+
+/// The columns a staging table holds, as the staged rows carry them: JSON and UUIDs as text.
+fn staged_as_text(table: &TablePlan) -> Vec<DesiredColumn> {
+    staged_columns(table)
+        .into_iter()
+        .map(|column| match column.column_type {
+            ColumnType::Json | ColumnType::Uuid => DesiredColumn {
+                column_type: ColumnType::Text,
+                ..column
+            },
+            _ => column,
+        })
+        .collect()
+}
+
+/// What each of `columns` is filled with by a direct `COPY`: the files' columns, then this load's metadata as literals, and NULL for a live column the files lack.
+fn filled_columns(
+    spec: &TableSpec,
+    read: &FilesRead,
+    columns: &[DesiredColumn],
+    (load_id, loaded_at): (&str, &str),
+) -> Vec<CopyColumn> {
+    let from_files = copy_columns(spec, read);
+    let snowflake = Warehouse::Snowflake;
+    let mut filled: Vec<CopyColumn> = Vec::with_capacity(columns.len());
+    for column in columns {
+        let found = from_files.iter().find(|found| found.name == column.name);
+        let value = match (found, column.name.as_str()) {
+            (Some(found), _) => found.value.clone(),
+            (None, LOAD_ID_COLUMN) => CopyValue::Literal(sql_literal(load_id, snowflake)),
+            (None, LOADED_AT_COLUMN) => CopyValue::Literal(format!(
+                "CAST({} AS TIMESTAMP_TZ(6))",
+                sql_literal(loaded_at, snowflake)
+            )),
+            (None, _) => CopyValue::Literal("NULL".to_owned()),
+        };
+        filled.push(CopyColumn {
+            name: column.name.clone(),
+            column_type: column.column_type.clone(),
+            value,
+        });
+    }
+    filled
+}
+
+impl RowStream {
+    /// Send `rows` to the channel in requests of at most about 4 MiB of gzip NDJSON, keyed by the columns' stored names.
+    pub(crate) async fn send(
+        &mut self,
+        columns: &[DesiredColumn],
+        rows: &[Vec<Option<String>>],
+    ) -> Result<(), LoaderError> {
+        let keys: Vec<String> = columns
+            .iter()
+            .map(|column| stored_name(&column.name, Warehouse::Snowflake))
+            .collect();
+        let mut body: Vec<u8> = Vec::new();
+        for row in rows {
+            let line: serde_json::Map<String, serde_json::Value> = keys
+                .iter()
+                .cloned()
+                .zip(row.iter().map(|value| serde_json::json!(value)))
+                .collect();
+            serde_json::to_writer(&mut body, &line)
+                .map_err(|error| LoaderError::Invalid(error.to_string()))?;
+            body.push(b'\n');
+            if body.len() >= STREAM_REQUEST_BYTES {
+                self.send_body(std::mem::take(&mut body)).await?;
+            }
+        }
+        if !body.is_empty() {
+            self.send_body(body).await?;
+        }
+        Ok(())
+    }
+
+    async fn send_body(&mut self, body: Vec<u8>) -> Result<(), LoaderError> {
+        let mut gzip = GzEncoder::new(Vec::new(), GzipLevel::default());
+        gzip.write_all(&body)
+            .map_err(|error| LoaderError::Invalid(error.to_string()))?;
+        let compressed = gzip
+            .finish()
+            .map_err(|error| LoaderError::Invalid(error.to_string()))?;
+        self.offset += 1;
+        self.continuation = append_stream_rows(
+            &self.client,
+            AppendRequest {
+                pipe: &self.pipe,
+                channel: &self.channel,
+                continuation: &self.continuation,
+                offset: self.offset,
+                body: compressed,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+/// Wait until Snowflake has committed the channel's last request; a row it refused fails the load.
+async fn settle_stream(stream: &RowStream) -> Result<(), LoaderError> {
+    if stream.offset == 0 {
+        return Ok(());
+    }
+    let waited = std::time::Instant::now();
+    let channels = [stream.channel.clone()];
+    loop {
+        let statuses = channel_statuses(&stream.client, &stream.pipe, &channels).await?;
+        let status = statuses.get(&stream.channel.to_ascii_uppercase());
+        if let Some(status) = status {
+            if status.rows_error_count.unwrap_or_default() > 0 {
+                return Err(LoaderError::Invalid(format!(
+                    "Snowpipe Streaming refused {} rows: {}",
+                    status.rows_error_count.unwrap_or_default(),
+                    status.last_error_message.as_deref().unwrap_or("no message")
+                )));
+            }
+            if status
+                .committed_offset()
+                .is_some_and(|offset| offset >= stream.offset)
+            {
+                return Ok(());
+            }
+        }
+        if waited.elapsed().as_secs() > STREAM_COMMIT_WAIT_SECS {
+            return Err(LoaderError::Invalid(format!(
+                "Snowpipe Streaming did not commit within {STREAM_COMMIT_WAIT_SECS} seconds"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(STREAM_POLL_MILLIS)).await;
+    }
 }
 
 /// The Postgres filter reading one cursor window.

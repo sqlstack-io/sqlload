@@ -11,6 +11,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "auto_widen",
     "type_change_rebuild",
     "batch",
+    "shaping",
 ];
 
 /// Keys only a source may use.
@@ -97,3 +98,6 @@ pub const DEFAULT_FILES_TABLE_NAME: &str = "{source}";
 
 /// The `batch` value that opts a table out of windows and ordered reads.
 pub const WHOLE_BATCH: &str = "whole";
+
+/// The parts of an existing stage's name in a Snowflake connection's `stage`: `DATABASE.SCHEMA.STAGE`.
+pub const STAGE_NAME_PARTS: usize = 3;

@@ -5,7 +5,7 @@ use crate::files_source::_helpers::plan::columns::{
 };
 use crate::files_source::models::{BatchFooters, DataFile, FileColumn};
 
-/// `known` plus the columns `files`' `footers` add (the loader's own and the `replaced` ones, whose values come from the path or the load, left out), and a problem for each column a file holds as another type, naming the file.
+/// `known` plus the columns `files`' `footers` add (the loader's own and the `replaced` ones, whose values come from the path or the load, left out), and a problem for each column a file holds as another type, naming the file; a batch's refusals of the direct route are its own, from [`batch_refusals`](crate::files_source::main::batch_refusals::batch_refusals), so one batch never keeps later ones from it.
 pub fn batch_columns(
     footers: &BatchFooters,
     files: &[DataFile],
@@ -17,6 +17,7 @@ pub fn batch_columns(
         .map(|column| SampledColumn {
             name: column.name.clone(),
             column_type: Some(column.column_type.clone()),
+            direct_refusal: column.direct_refusal.clone(),
         })
         .collect();
     let mut problems: Vec<String> = Vec::new();
@@ -24,7 +25,10 @@ pub fn batch_columns(
         let Some(footer) = footers.0.get(&data.file.relative_key) else {
             continue;
         };
-        let (found, _) = drop_loader_columns(schema_columns(footer.schema()));
+        let (mut found, _) = drop_loader_columns(schema_columns(footer.schema()));
+        for column in &mut found {
+            column.direct_refusal = None;
+        }
         let merge = ColumnMerge {
             key: &data.file.relative_key,
             replaced,

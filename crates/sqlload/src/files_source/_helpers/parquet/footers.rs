@@ -1,5 +1,4 @@
-use arrow_schema::SchemaRef;
-use parquet::arrow::ParquetRecordBatchStreamBuilder;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::_helpers::parquet::object_reader::ObjectFileReader;
@@ -14,14 +13,14 @@ pub(crate) fn object_reader(folder: &OpenFolder, file: &StoredFile) -> ObjectFil
     }
 }
 
-/// The Arrow schema in `file`'s footer (a range read, not the whole file).
-pub(crate) async fn footer_schema(
+/// `file`'s footer, with its Arrow and Parquet schemas (a range read, not the whole file).
+pub(crate) async fn parquet_footer(
     folder: &OpenFolder,
     file: &StoredFile,
-) -> Result<SchemaRef, FilesError> {
-    ParquetRecordBatchStreamBuilder::new(object_reader(folder, file))
+) -> Result<ArrowReaderMetadata, FilesError> {
+    let mut reader = object_reader(folder, file);
+    ArrowReaderMetadata::load_async(&mut reader, ArrowReaderOptions::new())
         .await
-        .map(|builder| builder.schema().clone())
         .map_err(|error| FilesError::File {
             key: file.relative_key.clone(),
             reason: format!("cannot read the Parquet footer: {error}"),

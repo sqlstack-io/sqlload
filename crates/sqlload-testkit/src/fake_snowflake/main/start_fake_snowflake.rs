@@ -13,7 +13,10 @@ pub async fn start_fake_snowflake() -> Result<FakeSnowflake, String> {
     let address = listener.local_addr().map_err(|error| error.to_string())?;
     let state = SharedState::default();
     state.lock().host = address.to_string();
-    let router = Router::new().fallback(handle).with_state(state.clone());
+    let router = Router::new()
+        .fallback(handle)
+        .layer(axum::extract::DefaultBodyLimit::disable())
+        .with_state(state.clone());
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
