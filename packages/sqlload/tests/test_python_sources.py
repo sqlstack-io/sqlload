@@ -190,7 +190,7 @@ def test_given_an_incremental_table_when_loading_then_ctx_carries_the_cursor_win
 	load(project)
 	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2026, 1, 2, 9, 0, tzinfo=datetime.timezone.utc)"
 	assert seen(project, "rows")["cursor_column"] == "at"
-	load(project, "--start-cursor-ts", "2025-12-01T00:00:00Z", "--end-cursor-ts", "2026-02-01T00:00:00Z")
+	load(project, "--start-cursor", "2025-12-01T00:00:00Z", "--end-cursor", "2026-02-01T00:00:00Z")
 	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2025, 12, 1, 0, 0, tzinfo=datetime.timezone.utc)"
 	assert seen(project, "rows")["cursor_end"] == "datetime.datetime(2026, 2, 1, 0, 0, tzinfo=datetime.timezone.utc)"
 	assert query(project, 'SELECT id FROM "RAW"."shop__rows" ORDER BY id') == [(1,), (2,), (3,)]

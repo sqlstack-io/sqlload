@@ -72,7 +72,7 @@ pub struct TableSpec {
     pub batch: Option<BatchStep>,
     /// Tests only (`test_loader_route`, absent from released builds): SQLLoad reads a files source's files itself, the reference side of the live parity test.
     pub test_loader_route: bool,
-    /// Where an integer `batch_size`'s windows end without `--end-cursor-int`: the Postgres source's cursor maximum, read at plan.
+    /// Where an integer `batch_size`'s windows end without `--end-cursor`: the Postgres source's cursor maximum, read at plan.
     pub source_end: Option<SourceEnd>,
     pub pinned: BTreeMap<String, ColumnType>,
     /// Source columns not loaded, with the rule that dropped each.

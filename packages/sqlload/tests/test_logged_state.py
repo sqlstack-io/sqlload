@@ -323,7 +323,7 @@ def test_given_a_backfill_when_loading_a_logged_table_then_it_is_logged_without_
 	give(project, "events", [{"id": 1, "at": "2026-01-03T00:00:00Z"}])
 	ok(project, "load", "api__events")
 	give(project, "events", [{"id": 0, "at": "2026-01-01T00:00:00Z"}])
-	ok(project, "load", "--start-cursor-ts", "2025-12-01T00:00:00Z", "--end-cursor-ts", "2026-01-02T00:00:00Z", "api__events")
+	ok(project, "load", "--start-cursor", "2025-12-01T00:00:00Z", "--end-cursor", "2026-01-02T00:00:00Z", "api__events")
 	assert [event for event, *_ in runs(project, "api__events")] == ["run", "backfill"]
 	assert "state   logged: at 2026-01-03 00:00:00.000000+00" in ok(project, "plan", "api__events")
 
@@ -467,7 +467,7 @@ def test_given_a_pending_reset_when_an_end_cursor_backfill_runs_then_the_reset_i
 	ok(project, "load", "api__events")
 	ok(project, "state", "reset", "--to", "2026-01-02T00:00:00Z", "--yes", "api__events")
 	give(project, "events", [])
-	ok(project, "load", "--end-cursor-ts", "2026-01-06T00:00:00Z", "api__events")
+	ok(project, "load", "--end-cursor", "2026-01-06T00:00:00Z", "api__events")
 	assert [event for event, *_ in runs(project, "api__events")] == ["run", "reset", "backfill"]
 	assert "(state reset at" in ok(project, "plan", "api__events")
 
