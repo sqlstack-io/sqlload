@@ -29,6 +29,20 @@ fn given_a_cursor_range_when_selected_tables_have_cursors_of_different_types_the
             expected_absent: MIXED,
         },
         MixedCursorTestCase {
+            description: "a table already blocked with no known cursor type is left out, so a date cursor beside it still reads the range",
+            selectors: &["days", "missing"],
+            start: "2026-11-02",
+            expected_plan: "day from 2026-11-02 (--start-cursor)",
+            expected_absent: MIXED,
+        },
+        MixedCursorTestCase {
+            description: "a table already blocked with a known integer cursor still counts, and keeps its own reason beside the mixed one",
+            selectors: &["days", "hidden"],
+            start: "2026-11-02",
+            expected_plan: "cursor_column n is not written to the table",
+            expected_absent: "day from",
+        },
+        MixedCursorTestCase {
             description: "one integer cursor takes an integer",
             selectors: &["nums"],
             start: "50",

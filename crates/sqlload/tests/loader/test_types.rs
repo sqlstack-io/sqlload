@@ -345,12 +345,14 @@ pub(crate) struct SourceRowUpgradeTestCase {
     pub(crate) expected_rows: &'static str,
 }
 
-/// A files source of one partition, whose partition column is its cursor.
+/// A files source of one partition, with its cursor settings.
 pub(crate) struct CursorSource {
     pub(crate) source: &'static str,
     /// The partition column and its type.
     pub(crate) partition: (&'static str, &'static str),
     pub(crate) value: &'static str,
+    /// TOML naming its cursor_column, and any other settings.
+    pub(crate) settings: &'static str,
 }
 
 /// One `--start-cursor` over a selection of `CursorSource`s, and what the plan says.
