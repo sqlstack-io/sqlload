@@ -411,12 +411,15 @@ async fn plan_table_once(
     schema
         .warnings
         .extend(hmac_warnings(spec, stage.as_ref(), destination));
-    let route = match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
-        Ok(route) => Some(route),
-        Err(problem) => {
-            schema = blocked_plan(vec![problem]);
-            None
-        }
+    let route = match schema.blocked {
+        Some(_) => None,
+        None => match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
+            Ok(route) => Some(route),
+            Err(problem) => {
+                schema = blocked_plan(vec![problem]);
+                None
+            }
+        },
     };
     let commits = commit_rule(&CommitRequest {
         spec,
