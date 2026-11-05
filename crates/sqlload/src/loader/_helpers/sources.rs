@@ -108,7 +108,7 @@ pub(crate) fn source_readers(table: &TablePlan) -> usize {
     }
 }
 
-/// A connected reader for `source`, with `readers` connections in all for a Postgres table read in parallel.
+/// A connected reader for `source`, with up to `readers` connections in all for a Postgres table read in parallel (a helper that cannot connect is left out).
 pub(crate) async fn open_source(
     project: &ProjectConfig,
     source: &SourceConfig,
@@ -119,7 +119,10 @@ pub(crate) async fn open_source(
             let client = connect_source(project, source).await?;
             let mut helpers = Vec::with_capacity(readers.saturating_sub(1));
             for _ in 1..readers {
-                helpers.push(connect_source(project, source).await?);
+                match connect_source(project, source).await {
+                    Ok(helper) => helpers.push(helper),
+                    Err(_) => break,
+                }
             }
             Ok(SourceReader::Postgres(client, helpers))
         }
