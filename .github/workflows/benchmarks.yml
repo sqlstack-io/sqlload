@@ -38,6 +38,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.9"
+      # A restored cache can hold a partly unpacked copy, which the DuckDB build refuses to unpack over.
+      - run: rm -rf target/duckdb-source*
       - run: docker pull postgres:17
       - name: Run the suite
         env:
