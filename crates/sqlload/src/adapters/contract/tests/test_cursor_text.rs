@@ -53,6 +53,42 @@ fn given_a_cursor_flag_when_normalising_then_every_system_reads_the_same_bound()
             column_type: ColumnType::SmallInt,
             expected_text: Err("is not an integer"),
         },
+        CursorTextTestCase {
+            description: "an integer given to a timestamp cursor fails",
+            text: "50",
+            column_type: ColumnType::TimestampTz,
+            expected_text: Err("is not an RFC 3339 timestamp or a date"),
+        },
+        CursorTextTestCase {
+            description: "a decimal cursor takes a number as written",
+            text: "2.50",
+            column_type: ColumnType::Decimal {
+                precision: 4,
+                scale: 2,
+            },
+            expected_text: Ok("2.50"),
+        },
+        CursorTextTestCase {
+            description: "a date given to a decimal cursor fails at plan, not at read",
+            text: "2026-11-04",
+            column_type: ColumnType::Decimal {
+                precision: 4,
+                scale: 2,
+            },
+            expected_text: Err("is not a number, which a decimal(4,2) cursor needs"),
+        },
+        CursorTextTestCase {
+            description: "a date given to a float cursor fails",
+            text: "2026-11-04",
+            column_type: ColumnType::Float,
+            expected_text: Err("is not a number"),
+        },
+        CursorTextTestCase {
+            description: "a time cursor needs a time",
+            text: "2026-11-04",
+            column_type: ColumnType::Time,
+            expected_text: Err("is not a time"),
+        },
     ];
     for test_case in test_cases {
         let text = cursor_text(test_case.text, &test_case.column_type);

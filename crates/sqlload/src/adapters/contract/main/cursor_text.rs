@@ -1,6 +1,6 @@
 //! Check and normalise a cursor value given on the command line.
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 
 use crate::adapters::contract::constants::{CURSOR_TIMESTAMP_FORMAT, NAIVE_TIMESTAMP_FORMATS};
 use crate::column_types::models::ColumnType;
@@ -50,6 +50,18 @@ pub fn cursor_text(text: &str, column_type: &ColumnType) -> Result<String, Strin
             Ok(value) => Ok(value.to_string()),
             Err(_) => Err(format!(
                 "{text:?} is not an integer, which an integer cursor needs"
+            )),
+        },
+        (ColumnType::Decimal { .. } | ColumnType::Float, _, _) => match text.parse::<f64>() {
+            Ok(value) if value.is_finite() => Ok(text.to_owned()),
+            _ => Err(format!(
+                "{text:?} is not a number, which a {column_type} cursor needs"
+            )),
+        },
+        (ColumnType::Time, _, _) => match NaiveTime::parse_from_str(text, "%H:%M:%S%.f") {
+            Ok(_) => Ok(text.to_owned()),
+            Err(_) => Err(format!(
+                "{text:?} is not a time (HH:MM:SS), which a time cursor needs"
             )),
         },
         _ => Ok(text.to_owned()),
