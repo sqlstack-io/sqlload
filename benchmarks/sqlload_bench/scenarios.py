@@ -23,6 +23,8 @@ class Scenario:
 	table: str
 	#: Skipped until the feature exists in sqlload; the reason is reported.
 	pending: str = ""
+	#: The Postgres table a Snowflake scenario reads.
+	source: str = ""
 
 	def rows(self, sizes: Sizes) -> int:
 		return {
@@ -32,6 +34,8 @@ class Scenario:
 			"pg_incremental": sizes.append,
 			"pg_multi": sizes.narrow,
 			"pg_snowflake": sizes.narrow,
+			"pg_wide_snowflake": sizes.wide,
+			"pg_wide_nokey_snowflake": sizes.wide,
 			"py_flat": sizes.flat,
 			"py_nested": sizes.nested,
 			"py_bytes": sizes.flat,
@@ -78,7 +82,17 @@ SCENARIOS: list[Scenario] = [
 		"flat",
 		pending="sqlload's HTTP helpers are not on main yet",
 	),
-	Scenario("pg_snowflake", "snowflake", "narrow", "narrow", "Postgres narrow table into Snowflake, full load", "BENCH_NARROW"),
+	Scenario("pg_snowflake", "snowflake", "narrow", "narrow", "Postgres narrow table into Snowflake, full load", "BENCH_NARROW", source="narrow"),
+	Scenario("pg_wide_snowflake", "snowflake", "wide", "wide", "Postgres wide table into Snowflake, full load", "BENCH_WIDE", source="wide"),
+	Scenario(
+		"pg_wide_nokey_snowflake",
+		"snowflake",
+		"wide",
+		"wide",
+		"Postgres wide table without a primary key into Snowflake, full load",
+		"BENCH_WIDE_NOKEY",
+		source="wide_nokey",
+	),
 	Scenario("files_snowflake", "snowflake", "narrow", "files", "Parquet files in S3 into Snowflake: the direct route and shaping = \"loader\"", "BENCH_PARQUET"),
 ]
 

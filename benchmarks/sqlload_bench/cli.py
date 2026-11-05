@@ -26,7 +26,7 @@ def check(competitor: Competitor, scenario: Scenario, context: Context, run_dir:
 	expected = context.dataset.expected(scenario.expected)
 	if scenario.group == "snowflake":
 		assert context.warehouse is not None
-		return snowflake.check(context.warehouse, scenario.table, expected)
+		return snowflake.check(context.warehouse, scenario.table, scenario.kind, expected)
 	try:
 		with duckdb.connect(str(competitor.destination(run_dir)), read_only=True) as connection:
 			connection.execute("SET TimeZone = 'UTC'")
@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
 			if scenario.name == "files_snowflake":
 				print(f"test data: s3://{snowflake_settings.bucket}/{snowflake.upload_parquet(snowflake_settings, dataset)}", flush=True)
 	active_names = {s.name for s in scenarios} - blocked.keys()
-	needs_postgres = any(s.group == "postgres" or s.name == "pg_snowflake" for s in scenarios if s.name in active_names)
+	needs_postgres = any(s.group == "postgres" or s.source for s in scenarios if s.name in active_names)
 	pg = postgres.start() if needs_postgres else None
 	started = datetime.now(UTC)
 	results: list[Result] = []

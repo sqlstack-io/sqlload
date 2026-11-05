@@ -75,12 +75,12 @@ Differences a reader should know:
 
 ## Snowflake
 
-Two scenarios run only when selected, with these variables set. Neither runs in CI.
+These scenarios run only when selected, with these variables set. None runs in CI.
 
 | Variable | For |
 |---|---|
-| `SQLLOAD_BENCH_SF_ACCOUNT`, `_USER`, `_WAREHOUSE`, `_DATABASE`, `_SCHEMA` | both; `_SCHEMA` is where tables load |
-| `SQLLOAD_BENCH_SF_TOKEN` or `SQLLOAD_BENCH_SF_PRIVATE_KEY_FILE` | both; a PAT, or a key-pair file |
+| `SQLLOAD_BENCH_SF_ACCOUNT`, `_USER`, `_WAREHOUSE`, `_DATABASE`, `_SCHEMA` | all; `_SCHEMA` is where tables load |
+| `SQLLOAD_BENCH_SF_TOKEN` or `SQLLOAD_BENCH_SF_PRIVATE_KEY_FILE` | all; a PAT, or a key-pair file |
 | `SQLLOAD_BENCH_SF_ROLE` | optional |
 | `SQLLOAD_BENCH_S3_BUCKET`, `SQLLOAD_BENCH_S3_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `files_snowflake` |
 | `SQLLOAD_BENCH_SF_STORAGE_INTEGRATION` or `SQLLOAD_BENCH_SF_STAGE_NAME` | `files_snowflake`; an integration SQLLoad creates its stage with, or an existing stage on `s3://<bucket>/sqlload/` |
@@ -91,13 +91,14 @@ make bench-snowflake BENCH_OUT=/some/folder BENCH_ARGS='--size reduced'
 
 BENCH_ARGS can add `--scenarios` to narrow it to one scenario, as the last `--scenarios` wins.
 
-- `pg_snowflake` loads the Postgres narrow table with sqlload, both dlt backends and ingestr.
+- `pg_snowflake` loads the Postgres narrow table with sqlload, both dlt backends and ingestr;
+  `pg_wide_snowflake` and `pg_wide_nokey_snowflake` load the wide table, with and without its primary key.
 - `files_snowflake` loads 10 Parquet parts with sqlload's direct route (Snowflake reads the files
   itself) and with `shaping = "loader"`. Each run first checks `sqlload plan` names the expected
   route, and is invalid if not.
 
 What it touches: test data goes only under `s3://<bucket>/sqlload/bench/`, and the stage's URL is
-`s3://<bucket>/sqlload/`. In Snowflake it drops only `BENCH_NARROW` and `BENCH_PARQUET` before each
+`s3://<bucket>/sqlload/`. In Snowflake it drops only its `BENCH_` tables before each
 run, and leaves them after the last. Objects the loaders make themselves stay (`_SQLLOAD_*`; dlt's
 `_DLT_*` tables and its staging schema). Remove those by hand if the schema is shared.
 
