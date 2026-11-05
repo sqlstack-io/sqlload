@@ -10,6 +10,7 @@ pub mod execute;
 pub mod execute_ddl;
 pub mod files_destination;
 pub mod live_columns;
+pub mod open_table_writer;
 pub mod single_text;
 pub mod sql_adapter;
 pub mod stage_file;

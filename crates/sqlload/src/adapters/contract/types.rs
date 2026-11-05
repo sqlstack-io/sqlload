@@ -1,5 +1,6 @@
 //! The warehouse adapter contract, after sqlbuild's `StrictAdapter` and `BaseAdapter`: the shared rendering is the default, and each warehouse overrides what its SQL does differently.
 
+use arrow_array::RecordBatch;
 use chrono::NaiveDateTime;
 
 use crate::adapters::contract::_helpers::identifiers::{
@@ -21,9 +22,10 @@ use crate::adapters::contract::_helpers::schema::{
 use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::_helpers::write::write_statements;
 use crate::adapters::contract::models::{
-    CursorQuery, CursorRead, CursorValue, TableName, WriteStatementsRequest,
+    CursorQuery, CursorRead, CursorValue, TableName, WriteStatementsRequest, WriteTarget,
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
+use crate::loader::errors::LoaderError;
 use crate::schema_plan::models::{ColumnChange, DesiredColumn, LiveColumn};
 
 /// What a warehouse's SQL looks like. Pure rendering, with no I/O; names follow sqlbuild's adapter contract.
@@ -322,4 +324,47 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     ) -> (String, Option<String>) {
         (self.render_create_table(runs, columns), None)
     }
+}
+
+/// One table's write session on its destination: how its batches get in. The loader keeps the commit cycle (staging and build tables, commit points, run records); the writer owns the transport.
+pub trait TableWriter {
+    /// Whether an unlogged `append` may write batches straight into the table rather than through a staging table.
+    fn writes_directly(&self) -> bool;
+
+    /// Add one batch, the load's metadata included, where `target`'s batches go.
+    fn write_batch(
+        &mut self,
+        target: &WriteTarget<'_>,
+        batch: RecordBatch,
+    ) -> impl Future<Output = Result<(), LoaderError>> + Send;
+
+    /// The bytes of files the batch has staged so far, where it goes through files; `None` when its Arrow bytes measure it.
+    fn staged_bytes(&self) -> Option<usize>;
+
+    /// Stage what the batch still holds in memory, so every row it was given is in a file or sent.
+    fn finish_files(
+        &mut self,
+        target: &WriteTarget<'_>,
+    ) -> impl Future<Output = Result<(), LoaderError>> + Send;
+
+    /// Load a batch that has rows where it goes: `COPY` its staged files, or commit its open transaction.
+    fn load_batch(
+        &mut self,
+        target: &WriteTarget<'_>,
+    ) -> impl Future<Output = Result<(), LoaderError>> + Send;
+
+    /// Start the next batch, with nothing staged.
+    fn next_batch(&mut self);
+
+    /// Wait until every row sent without files is in the staging table.
+    fn settle_rows(&mut self) -> impl Future<Output = Result<(), LoaderError>> + Send;
+
+    /// Open the row channel again on its next use, after a schema change replaced the staging table.
+    fn reopen_rows(&mut self);
+
+    /// Roll back a batch's open transaction, before its staging table is dropped; best effort.
+    fn rollback_batch(&mut self) -> impl Future<Output = ()> + Send;
+
+    /// Remove the staged files of a batch that did not load, unless the stage keeps them; best effort.
+    fn remove_batch_files(&mut self, target: &WriteTarget<'_>) -> impl Future<Output = ()> + Send;
 }

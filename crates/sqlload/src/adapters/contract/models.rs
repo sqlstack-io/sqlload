@@ -80,3 +80,21 @@ pub struct CursorRead {
     pub sql: String,
     pub value: CursorValue,
 }
+
+/// Where one table's batches go, as the load planned them.
+#[derive(Debug, Clone, Copy)]
+pub struct WriteTarget<'a> {
+    /// The table itself.
+    pub table: &'a TableName,
+    /// The staging or build table the batches land in, when they do not go straight into the table.
+    pub staging: Option<&'a TableName>,
+    /// The columns staged batches carry, the `_sqlload_*` metadata included.
+    pub columns: &'a [DesiredColumn],
+    pub load_id: &'a str,
+    /// The batch being filled, from 1.
+    pub batch: u64,
+    /// Batches go straight into the table, each committing.
+    pub direct: bool,
+    /// The batches land in a build table in their final types.
+    pub builds: bool,
+}

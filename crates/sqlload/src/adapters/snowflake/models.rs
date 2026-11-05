@@ -2,12 +2,16 @@ use crate::adapters::contract::models::TableName;
 use crate::auth::models::Authenticator;
 use crate::column_types::models::ColumnType;
 use crate::config::models::{AuthConfig, DestinationConfig};
+use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{DataFile, SourceFormat};
+use crate::parquet_parts::models::PartWriter;
 use crate::project::models::MaskMethod;
 use crate::schema_plan::models::DesiredColumn;
 use crate::sql_api::models::SqlClient;
 use crate::stage_api::models::DriverSession;
+use crate::stage_api::models::StageInfo;
 use crate::store_paths::models::Location;
+use crate::streaming_api::models::StreamingClient;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -234,4 +238,32 @@ pub enum StepFailure {
     Unusable(String),
     /// Anything else, such as a network failure, which says nothing about the step: the plan fails, so a blip cannot change a table's route.
     Failed(String),
+}
+
+/// A channel a load's rows stream through.
+#[derive(Debug)]
+pub struct RowStream {
+    pub client: StreamingClient,
+    pub pipe: String,
+    pub channel: String,
+    pub continuation: String,
+    /// The offset of the last request sent, 0 before any.
+    pub offset: i64,
+}
+
+/// One table's write session on Snowflake: Parquet files staged and loaded by `COPY`, or rows sent without files.
+#[derive(Debug)]
+pub struct SnowflakeWriter {
+    pub destination: SnowflakeDestination,
+    /// How this load's rows go in.
+    pub route: Option<StageRoute>,
+    /// The folder of an external stage, written with SQLLoad's own client.
+    pub external_folder: Option<OpenFolder>,
+    /// The channel rows are streaming through.
+    pub stream: Option<RowStream>,
+    /// The batch's Parquet being written, and the names of its files staged so far.
+    pub parts: PartWriter,
+    pub staged: Vec<String>,
+    /// The upload credentials this batch fetched, for all its files.
+    pub stage: Option<StageInfo>,
 }
