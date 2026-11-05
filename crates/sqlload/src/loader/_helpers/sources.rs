@@ -406,6 +406,30 @@ pub(crate) fn nanosecond_columns(
     }
 }
 
+/// A warning for each column the files store at nanoseconds but the live table holds at fewer digits, so the load cuts them.
+pub(crate) fn truncated_nanoseconds(spec: &TableSpec, live: Option<&[LiveColumn]>) -> Vec<String> {
+    let Some(files) = &spec.files else {
+        return Vec::new();
+    };
+    files
+        .table
+        .columns
+        .iter()
+        .filter(|column| {
+            matches!(
+                column.stored_read,
+                StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
+            ) && holds_fewer_digits(live, &column.name)
+        })
+        .map(|column| {
+            format!(
+                "{}: nanoseconds in the files, but the column holds fewer digits, so they are truncated.\nRebuild the column at (9) (--reload) to keep them.",
+                column.name
+            )
+        })
+        .collect()
+}
+
 /// Whether the live column `name` holds fewer than nanosecond digits, so SQLLoad's reader cuts its values to microseconds.
 fn holds_fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> bool {
     live.into_iter().flatten().any(|existing| {

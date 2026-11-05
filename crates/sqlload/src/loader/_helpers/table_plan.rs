@@ -24,6 +24,7 @@ use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::FilesPlanRequest;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
+use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
@@ -412,6 +413,9 @@ async fn plan_table_once(
     schema
         .warnings
         .extend(hmac_warnings(spec, stage.as_ref(), destination));
+    schema
+        .warnings
+        .extend(truncated_nanoseconds(spec, live.as_deref()));
     let route = match schema.blocked {
         Some(_) => None,
         None => match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
