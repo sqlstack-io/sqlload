@@ -36,3 +36,6 @@ pub const DEFAULT_THREADS: usize = 4;
 
 /// The JSON a table function's `ctx.state` holds when it holds nothing.
 pub const NO_STATE: &str = "null";
+
+/// Starts the one snapshot a Postgres table's cursor windows are all read in.
+pub const SNAPSHOT_BEGIN: &str = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";

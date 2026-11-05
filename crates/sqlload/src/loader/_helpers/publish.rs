@@ -38,6 +38,7 @@ use crate::loader::_helpers::table_plan::source_filter;
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
+use crate::loader::constants::SNAPSHOT_BEGIN;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_repair::files_to_replace;
 use crate::loader::models::CommitRange;
@@ -53,6 +54,7 @@ use crate::masking::main::mask_batch::mask_batch;
 use crate::parquet_parts::main::finish_part::finish_part;
 use crate::parquet_parts::main::write_part::write_part;
 use crate::parquet_parts::models::PartWriter;
+use crate::postgres_source::errors::PostgresError;
 use crate::run_log::constants::BEGIN_STATEMENT;
 use crate::run_log::constants::COMMIT_STATEMENT;
 use crate::run_log::main::insert_run::insert_run;
@@ -566,6 +568,17 @@ impl Publisher {
     }
 }
 
+/// Run `statement` on a Postgres source: its windows' reads share one snapshot, so a row moving between windows mid-load is read once.
+async fn snapshot(reader: &SourceReader, statement: &str) -> Result<(), LoaderError> {
+    match reader {
+        SourceReader::Postgres(client) => Ok(client
+            .batch_execute(statement)
+            .await
+            .map_err(PostgresError::from)?),
+        _ => Ok(()),
+    }
+}
+
 /// Run Parquet encoding on a blocking thread, so tables loading at once encode in parallel.
 async fn encode<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
@@ -627,6 +640,7 @@ async fn feed(
     let fed = async {
         match &table.commits {
             CommitRule::Windows(windows) => {
+                snapshot(reader, SNAPSHOT_BEGIN).await?;
                 for window in windows {
                     let part = ReadPart {
                         filter: window_filter(table, window),
@@ -644,6 +658,7 @@ async fn feed(
                         })
                         .await?;
                 }
+                snapshot(reader, COMMIT_STATEMENT).await?;
             }
             CommitRule::FileGroups(groups) => {
                 let planned = table.files.as_ref().map(|files| files.files.as_slice());
