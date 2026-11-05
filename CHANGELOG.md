@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/sqlstack-io/sqlload/compare/v0.5.0...v0.5.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **cli:** refuse one cursor range for selected tables with cursors of different types ([#35](https://github.com/sqlstack-io/sqlload/issues/35)) ([da83cb2](https://github.com/sqlstack-io/sqlload/commit/da83cb211afbd2b7350579b7d0a8240a34f09bb3))
+
 ## [0.5.0](https://github.com/sqlstack-io/sqlload/compare/v0.4.0...v0.5.0) (2026-11-05)
 
 
