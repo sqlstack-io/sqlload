@@ -99,3 +99,6 @@ pub const MISFIT_MARKER: &str = "sqlload: ";
 
 /// The temporary file format a JSON batch's key query reads the stage with, in the loader schema; it goes with the session.
 pub const KEYS_FILE_FORMAT: &str = "_SQLLOAD_KEYS";
+
+/// The most staged files of one table uploading at once.
+pub const CONCURRENT_UPLOADS: usize = 4;

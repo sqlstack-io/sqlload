@@ -6,6 +6,7 @@ use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{
     BatchFooters, DataFile, FilesEncoding, FilesRead, SourceFormat, StoredRead,
 };
+use crate::loader::errors::LoaderError;
 use crate::loader::models::TableSpec;
 use crate::parquet_parts::models::PartWriter;
 use crate::project::models::MaskMethod;
@@ -278,6 +279,8 @@ pub struct SnowflakeWriter {
     pub staged: Vec<String>,
     /// The upload credentials this batch fetched, for all its files.
     pub stage: Option<StageInfo>,
+    /// The batch's files still uploading, a few at a time, while the next ones are read and encoded.
+    pub uploads: tokio::task::JoinSet<Result<(), LoaderError>>,
 }
 
 /// What a direct batch's `COPY` did, with the rows it loaded.
