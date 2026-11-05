@@ -28,14 +28,14 @@ fn given_a_listed_stage_when_checking_it_then_only_one_on_the_url_with_the_integ
             description: "a stage on another url",
             shown: &[("_SQLLOAD_STAGE", "s3://lake/other/", "LAKE_INT")],
             expected_problem: Some(
-                "stage _SQLLOAD_STAGE reads s3://lake/other/, but the connection's stage url is s3://lake/raw/; point the stage at it or change the url",
+                "stage _SQLLOAD_STAGE reads s3://lake/other/, but the connection's stage url is s3://lake/raw/. Fix: point the stage at it, or correct the url",
             ),
         },
         StageProblemTestCase {
             description: "a stage with another integration",
             shown: &[("_SQLLOAD_STAGE", "s3://lake/raw/", "OLD_INT")],
             expected_problem: Some(
-                "stage _SQLLOAD_STAGE uses storage integration OLD_INT, but the connection names lake_int; drop the stage so SQLLoad recreates it, or change storage_integration",
+                "stage _SQLLOAD_STAGE uses storage integration OLD_INT, but the connection names lake_int. Fix: drop the stage so SQLLoad recreates it, or correct storage_integration",
             ),
         },
     ];
