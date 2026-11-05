@@ -361,7 +361,7 @@ impl Publisher {
             }
             _ => {
                 let into = self.batch_table();
-                if self.direct && !self.open_transaction {
+                if (self.direct || self.builds) && !self.open_transaction {
                     execute(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
                     self.open_transaction = true;
                 }
@@ -691,7 +691,7 @@ impl Publisher {
         Ok(())
     }
 
-    /// Load a files batch by having Snowflake `COPY` the files itself, where the plan chose that and the batch's own footers still allow it. `None` when SQLLoad must read this batch itself.
+    /// Load a files batch by having Snowflake `COPY` the files itself, where the plan chose that and the batch's own footers still allow it. `None` when SQLLoad must read this batch itself. A hashed batch's temporary table has its own name, since in the session it would shadow a build table made in the same second.
     pub(crate) async fn load_direct(
         &mut self,
         (files, footers): (&[DataFile], &BatchFooters),
@@ -738,7 +738,10 @@ impl Publisher {
             let (staging, create) = staging_table(
                 &spec.destination,
                 &staged_columns(&self.table),
-                &staging_id(&self.load_id, chrono::Utc::now().naive_utc()),
+                &format!(
+                    "{}_hashed",
+                    staging_id(&self.load_id, chrono::Utc::now().naive_utc())
+                ),
                 Warehouse::Snowflake,
             );
             let create = create.replacen("TRANSIENT TABLE", "TEMPORARY TABLE", 1);

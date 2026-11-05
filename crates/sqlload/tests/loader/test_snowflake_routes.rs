@@ -380,6 +380,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             expected_plan: &[PULLS, "in a temporary table, gone with its session"],
             expected_sent: &[
                 "CREATE OR REPLACE TEMPORARY TABLE",
+                "_HASHED\" (",
                 "SHA2(\"EXTRA\", 256)",
                 "SWAP WITH",
             ],

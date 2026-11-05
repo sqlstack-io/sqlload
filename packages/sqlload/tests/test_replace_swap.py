@@ -117,10 +117,13 @@ def things(ctx):
 """
 
 
-def test_given_a_column_appearing_mid_load_when_replacing_then_the_build_table_takes_it(tmp_path: Path) -> None:
+@pytest.mark.parametrize("batching", [("--batch-bytes", "1"), ()])
+def test_given_a_column_appearing_mid_load_when_replacing_then_the_build_table_takes_it(
+    tmp_path: Path, batching: tuple[str, ...]
+) -> None:
     root = project(tmp_path, GROWING)
     assert sqlload(root, "load").returncode == 0
-    second = sqlload(root, "load", "--batch-bytes", "1", run=2)
+    second = sqlload(root, "load", *batching, run=2)
     assert second.returncode == 0, second.stderr
     assert query(root, "SELECT id, added FROM raw.api__things ORDER BY id") == [(1, None), (2, "x")]
     assert tables(root) == ["api__things"]
