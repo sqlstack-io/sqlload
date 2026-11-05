@@ -42,3 +42,9 @@ pub const SNAPSHOT_BEGIN: &str = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONL
 
 /// Blocking threads beyond one per table loading at once, for the reads and encoding those tables wait on.
 pub const SPARE_BLOCKING_THREADS: usize = 64;
+
+/// Postgres connections reading one large table at once, when its read is whole and unordered.
+pub const PARALLEL_READERS: usize = 2;
+
+/// Tables Postgres estimates below this size (128 MiB) are read over one connection.
+pub const PARALLEL_READ_MIN_BYTES: i64 = 128 * 1024 * 1024;

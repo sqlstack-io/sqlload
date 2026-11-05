@@ -7,6 +7,14 @@ pub(crate) struct PostgresColumnTestCase {
     pub(crate) expected_values: &'static [&'static str],
 }
 
+pub(crate) struct SplitReadTestCase {
+    pub(crate) description: &'static str,
+    /// Extra connections offered to the read.
+    pub(crate) helpers: usize,
+    /// `COPY` statements running when the first batch arrives.
+    pub(crate) expected_copies: i64,
+}
+
 pub(crate) struct LoadRunTestCase {
     pub(crate) description: &'static str,
     /// SQL run in Postgres before this load.
