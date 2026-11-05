@@ -64,6 +64,8 @@ pub struct FakeState {
     /// HTTP statuses for the next `loadHistoryScan` calls.
     pub history_failures: VecDeque<u16>,
     pub history_scans: u64,
+    /// Stages made with `CREATE STAGE`, by name: their URL and storage integration.
+    pub stages: BTreeMap<String, (String, String)>,
 }
 
 impl FakeState {

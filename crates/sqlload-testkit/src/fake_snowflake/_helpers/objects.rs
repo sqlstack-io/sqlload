@@ -8,6 +8,13 @@ type Outcome = Result<Value, (StatusCode, Value)>;
 const EXPIRED: &str =
     "<Error><Code>ExpiredToken</Code><Message>The provided token has expired.</Message></Error>";
 
+/// Delete one path-style object, `/bucket/key`; a missing one is no error, as in S3.
+pub(crate) fn delete_object(state: &SharedState, path: &str) -> Outcome {
+    let key = percent_decode(path.trim_start_matches('/'));
+    state.lock().objects.remove(&key);
+    Ok(Value::String(String::new()))
+}
+
 /// Store one path-style upload, `/bucket/key`, unless a failure is queued.
 pub(crate) fn put_object(state: &SharedState, path: &str, body: &[u8]) -> Outcome {
     let key = percent_decode(path.trim_start_matches('/'));

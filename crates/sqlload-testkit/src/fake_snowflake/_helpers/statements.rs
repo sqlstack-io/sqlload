@@ -33,6 +33,20 @@ fn parse_create_table(statement: &str) -> Option<(String, Vec<(String, String)>)
     Some((table, parsed))
 }
 
+/// `CREATE STAGE IF NOT EXISTS DB.SCHEMA.NAME URL = 'url' STORAGE_INTEGRATION = NAME` → name, URL and integration.
+fn parse_create_stage(statement: &str) -> Option<(String, String, String)> {
+    let rest = statement.strip_prefix("CREATE STAGE IF NOT EXISTS ")?;
+    let (name, rest) = rest.split_once(" URL = '")?;
+    let (url, rest) = rest.split_once('\'')?;
+    let integration = rest.split_once("STORAGE_INTEGRATION = ")?.1;
+    let stage = name.rsplit('.').next()?.trim_matches('"').to_owned();
+    Some((
+        stage,
+        url.to_owned(),
+        integration.trim().trim_matches('"').to_owned(),
+    ))
+}
+
 fn column_rows(table: &str, found: &FakeTable) -> Vec<Vec<Value>> {
     found
         .columns
@@ -64,10 +78,33 @@ pub(crate) fn run_statement(state: &SharedState, body: &[u8]) -> Outcome {
         return Ok(result(&["status"], vec![vec![json!("created")]]));
     }
     if let Some((table, keys)) = copy_files(&statement) {
+        let mut loaded: Vec<Vec<Value>> = Vec::new();
         for key in keys {
+            if statement.contains("FORCE = TRUE") {
+                guard.loaded.remove(&key);
+            }
+            let before = guard.tables.get(&table).map_or(0, |found| found.rows.len());
             guard.load_object(&table, &key);
+            let after = guard.tables.get(&table).map_or(0, |found| found.rows.len());
+            loaded.push(vec![
+                json!(key),
+                json!("LOADED"),
+                json!((after - before).to_string()),
+            ]);
         }
-        return Ok(result(&["status"], vec![vec![json!("LOADED")]]));
+        return Ok(result(&["file", "status", "rows_loaded"], loaded));
+    }
+    if let Some((name, url, integration)) = parse_create_stage(&statement) {
+        guard.stages.entry(name).or_insert((url, integration));
+        return Ok(result(&["status"], vec![vec![json!("created")]]));
+    }
+    if statement.starts_with("SHOW STAGES") {
+        let rows: Vec<Vec<Value>> = guard
+            .stages
+            .iter()
+            .map(|(name, (url, integration))| vec![json!(name), json!(url), json!(integration)])
+            .collect();
+        return Ok(result(&["name", "url", "storage_integration"], rows));
     }
     if statement.starts_with("SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE") {
         let rows: Vec<Vec<Value>> = guard

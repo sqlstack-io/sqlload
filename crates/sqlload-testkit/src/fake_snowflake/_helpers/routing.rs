@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::fake_snowflake::_helpers::objects::{
-    head_object, insert_files, insert_report, load_history_scan, put_object,
+    delete_object, head_object, insert_files, insert_report, load_history_scan, put_object,
 };
 use crate::fake_snowflake::_helpers::statements::run_statement;
 use crate::fake_snowflake::_helpers::streaming::{append, bulk_status, host, open};
@@ -27,6 +27,9 @@ pub(crate) async fn handle(
         ("PUT", path) if path.starts_with(&format!("/{FAKE_BUCKET}/")) => {
             put_object(&state, path, &body)
         }
+        ("DELETE", path) if path.starts_with(&format!("/{FAKE_BUCKET}/")) => {
+            delete_object(&state, path)
+        }
         ("HEAD", path) if path.starts_with(&format!("/{FAKE_BUCKET}/")) => {
             head_object(&state, path)
         }
@@ -45,7 +48,11 @@ pub(crate) async fn handle(
             json!({ "code": "NOT_FOUND", "message": path }),
         )),
     };
+    let uploaded = method == Method::PUT && path.starts_with(&format!("/{FAKE_BUCKET}/"));
     match outcome {
+        Ok(Value::String(text)) if uploaded => {
+            (StatusCode::OK, [("ETag", "\"fake-etag\"")], text).into_response()
+        }
         Ok(Value::String(text)) => (StatusCode::OK, text).into_response(),
         Ok(value) => (StatusCode::OK, value.to_string()).into_response(),
         Err((status, Value::String(text))) => (status, text).into_response(),
