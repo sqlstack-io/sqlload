@@ -280,6 +280,7 @@ pub(crate) fn files_source_parts(
             encoding,
             checks,
             notes,
+            copy_to_internal_stage: source.copy_to_internal_stage,
         },
     ))
 }

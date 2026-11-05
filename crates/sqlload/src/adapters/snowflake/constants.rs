@@ -102,3 +102,6 @@ pub const KEYS_FILE_FORMAT: &str = "_SQLLOAD_KEYS";
 
 /// The most staged files of one table uploading at once.
 pub const CONCURRENT_UPLOADS: usize = 4;
+
+/// The warehouse's name in messages.
+pub const SNOWFLAKE: &str = "Snowflake";

@@ -1,18 +1,26 @@
-//! Why the destination must not read a files table's files itself.
+//! Why the destination cannot load a files table's files exactly by reading them itself.
 
 use crate::adapters::snowflake::main::copy::_direct_check::direct_check;
+use crate::adapters::snowflake::main::copy::_stage_covers::stage_covers;
 use crate::adapters::snowflake::models::StageRoute;
 use crate::files_source::models::FilesRead;
 use crate::loader::models::TableSpec;
 
-/// Why the destination must not load the planned `read` of a files table straight from its files over `stage`; `None` when it may, or when the route reads no files itself.
+/// Why the destination cannot load the planned `read` of a files table exactly from its files: under the external `stage` that covers them, or copied unchanged to an internal stage (`copy_to_internal_stage`); `None` when it can, or when neither applies.
 pub fn direct_blocked(
     spec: &TableSpec,
     read: &FilesRead,
     stage: Option<&StageRoute>,
 ) -> Option<String> {
-    let Some(StageRoute::External(stage)) = stage else {
-        return None;
+    let files = spec.files.as_ref()?;
+    let covering = match stage {
+        Some(StageRoute::External(stage)) if stage_covers(&stage.location, &files.location) => {
+            Some(stage)
+        }
+        _ => None,
     };
-    direct_check(spec, (read, read.files.as_slice(), &[]), stage)
+    if covering.is_none() && !files.copy_to_internal_stage {
+        return None;
+    }
+    direct_check(spec, (read, read.files.as_slice(), &[]), covering)
 }

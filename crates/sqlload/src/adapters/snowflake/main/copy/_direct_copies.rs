@@ -9,16 +9,6 @@ use crate::files_source::models::DataFile;
 pub(in crate::adapters) fn direct_copies(
     request: &DirectCopy<'_>,
 ) -> Result<Vec<CopyBatch>, String> {
-    let folder = request
-        .source
-        .prefix
-        .strip_prefix(&request.stage_url.prefix)
-        .ok_or_else(|| {
-            format!(
-                "{} is not under the stage url {}",
-                request.source, request.stage_url
-            )
-        })?;
     let mut groups: Vec<(Option<&[String]>, Vec<DataFile>)> = Vec::new();
     for data in request.files {
         let header = request
@@ -40,7 +30,7 @@ pub(in crate::adapters) fn direct_copies(
     for (header, chunk) in chunks {
         let mut pending: Vec<&[DataFile]> = vec![chunk];
         while let Some(files) = pending.pop() {
-            let sql = copy_sql(request, (folder, header), files)?;
+            let sql = copy_sql(request, header, files)?;
             match (sql.len() > MAX_COPY_SQL_BYTES, files.len()) {
                 (true, count) if count > 1 => {
                     let (first, second) = files.split_at(count / 2);

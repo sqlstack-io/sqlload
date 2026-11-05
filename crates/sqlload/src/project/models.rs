@@ -230,6 +230,9 @@ pub struct SourceConfig {
     /// Hive `key=value` folders loaded as typed columns (files sources).
     #[serde(default)]
     pub partition_columns: BTreeMap<String, String>,
+    /// For files no external stage of the warehouse can read: download them and upload them unchanged to the user stage `@~`, where the warehouse loads them itself (much slower than an external stage; files sources).
+    #[serde(default)]
+    pub copy_to_internal_stage: bool,
     #[serde(default)]
     pub exclude_columns: Vec<String>,
     #[serde(default)]
@@ -325,9 +328,10 @@ pub struct TableSettings {
     /// Where a Python table's position is kept: derived from the data (default) or in the run log.
     #[serde(default)]
     pub state: Option<StateMode>,
-    /// `"loader"`: SQLLoad shapes the rows itself, so plain values of masked columns never reach Snowflake.
+    /// Tests only, and absent from released builds: SQLLoad reads a files source's files itself, the reference side of the live parity test.
+    #[cfg(feature = "container-tests")]
     #[serde(default)]
-    pub shaping: Option<Shaping>,
+    pub test_loader_route: Option<bool>,
     /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones.
     #[serde(default, deserialize_with = "deserialize_optional_batch")]
     pub batch: Option<BatchStep>,
@@ -396,13 +400,6 @@ impl std::fmt::Display for WriteStrategy {
             Self::Replace => "replace",
         })
     }
-}
-
-/// Who shapes a files source's rows, when it is forced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Shaping {
-    Loader,
 }
 
 /// A cursor table's `batch`: each run reads and commits one cursor window of this size at a time.

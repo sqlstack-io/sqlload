@@ -6,28 +6,28 @@ use crate::helpers::all_outcomes;
 use crate::test_types::{ComparisonTestCase, ParityTestCase};
 
 const APPEND: &str = "write_strategy = \"append\"";
-const LOADER: &str = "write_strategy = \"append\"\nshaping = \"loader\"";
+const LOADER: &str = "write_strategy = \"append\"\ntest_loader_route = true";
 const HASHED: &str =
     "write_strategy = \"append\"\n[sources.SOURCE.tables.SOURCE]\nmask = { note = \"hash\" }";
-const HASHED_LOADER: &str = "write_strategy = \"append\"\nshaping = \"loader\"\n[sources.SOURCE.tables.SOURCE]\nmask = { note = \"hash\" }";
+const HASHED_LOADER: &str = "write_strategy = \"append\"\ntest_loader_route = true\n[sources.SOURCE.tables.SOURCE]\nmask = { note = \"hash\" }";
 const JSON: &str =
     "write_strategy = \"append\"\n[sources.SOURCE.tables.SOURCE]\ncolumns = { note = \"json\" }";
-const JSON_LOADER: &str = "write_strategy = \"append\"\nshaping = \"loader\"\n[sources.SOURCE.tables.SOURCE]\ncolumns = { note = \"json\" }";
-const JSON_STAGING: &str = "write_strategy = \"replace\"\nshaping = \"loader\"\n[sources.SOURCE.tables.SOURCE]\ncolumns = { note = \"json\" }";
+const JSON_LOADER: &str = "write_strategy = \"append\"\ntest_loader_route = true\n[sources.SOURCE.tables.SOURCE]\ncolumns = { note = \"json\" }";
+const JSON_STAGING: &str = "write_strategy = \"replace\"\ntest_loader_route = true\n[sources.SOURCE.tables.SOURCE]\ncolumns = { note = \"json\" }";
 const NDJSON: &str = "write_strategy = \"append\"\nformat = \"ndjson\"";
 const NDJSON_LOADER: &str =
-    "write_strategy = \"append\"\nformat = \"ndjson\"\nshaping = \"loader\"";
+    "write_strategy = \"append\"\nformat = \"ndjson\"\ntest_loader_route = true";
 const JSON_FILES: &str = "write_strategy = \"append\"\nformat = \"json\"";
 const JSON_FILES_LOADER: &str =
-    "write_strategy = \"append\"\nformat = \"json\"\nshaping = \"loader\"";
+    "write_strategy = \"append\"\nformat = \"json\"\ntest_loader_route = true";
 const CSV: &str = "write_strategy = \"append\"\nformat = \"csv\"";
-const CSV_LOADER: &str = "write_strategy = \"append\"\nformat = \"csv\"\nshaping = \"loader\"";
-const NDJSON_PINNED_LOADER: &str = "write_strategy = \"append\"\nformat = \"ndjson\"\nshaping = \"loader\"\n[sources.SOURCE.tables.SOURCE]\ncolumns = { coupon = \"text\" }";
+const CSV_LOADER: &str = "write_strategy = \"append\"\nformat = \"csv\"\ntest_loader_route = true";
+const NDJSON_PINNED_LOADER: &str = "write_strategy = \"append\"\nformat = \"ndjson\"\ntest_loader_route = true\n[sources.SOURCE.tables.SOURCE]\ncolumns = { coupon = \"text\" }";
 const BY_DAY: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"day\"";
 const BY_DAY_LOADER: &str =
-    "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\nshaping = \"loader\"";
+    "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\ntest_loader_route = true";
 const REPLACE: &str = "write_strategy = \"replace\"";
-const REPLACE_LOADER: &str = "write_strategy = \"replace\"\nshaping = \"loader\"";
+const REPLACE_LOADER: &str = "write_strategy = \"replace\"\ntest_loader_route = true";
 const PARTITIONS: &str = "day = \"date\", n = \"int\", label = \"text\"";
 
 const SAME: &str = "same rows";

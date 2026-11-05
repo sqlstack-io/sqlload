@@ -1,36 +1,16 @@
 //! Decide whether Snowflake can load a files source's files itself.
 
 use crate::adapters::snowflake::_helpers::dialect::values::{copyable_type, plain_key};
+use crate::adapters::snowflake::main::copy::_stage_covers::stage_covers;
 use crate::adapters::snowflake::models::{CopyValue, DirectCheck};
 use crate::project::models::MaskMethod;
-use crate::store_paths::models::StoreKind;
 
-/// Why the files must go through SQLLoad instead of a direct `COPY` from the stage, or `None` when Snowflake can load them exactly as SQLLoad would.
+/// Why Snowflake cannot load the files exactly as SQLLoad would with a direct `COPY` from the stage (`stage_url`, or files copied to an internal stage when `None`), or `None` when it can.
 pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<String> {
-    if check.shaped_by_loader {
-        return Some("the table sets shaping = \"loader\"".to_owned());
-    }
-    let (
-        StoreKind::S3 {
-            bucket, endpoint, ..
-        },
-        StoreKind::S3 {
-            bucket: stage_bucket,
-            endpoint: stage_endpoint,
-            ..
-        },
-    ) = (&check.source.store, &check.stage_url.store)
-    else {
-        return Some("the files are not in S3".to_owned());
-    };
-    if bucket != stage_bucket
-        || endpoint != stage_endpoint
-        || !check.source.prefix.starts_with(&check.stage_url.prefix)
+    if let Some(stage_url) = check.stage_url
+        && !stage_covers(stage_url, check.source)
     {
-        return Some(format!(
-            "the files are outside the stage url {}",
-            check.stage_url
-        ));
+        return Some(format!("the files are outside the stage url {stage_url}"));
     }
     let odd_key = std::iter::once(check.source.prefix.as_str())
         .chain(

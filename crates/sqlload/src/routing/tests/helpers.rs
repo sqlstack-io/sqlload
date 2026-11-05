@@ -58,6 +58,8 @@ pub(crate) fn warehouse_destination(staging: Vec<Store>) -> WriterAccepts {
         pull_formats: vec![FileFormat::Parquet, FileFormat::Json, FileFormat::Csv],
         staging,
         rows_into: None,
+        reads_files_itself: Some("Snowflake"),
+        copies_files_to: Some(user_stage()),
     }
 }
 
@@ -69,6 +71,8 @@ pub(crate) fn clickhouse_destination() -> WriterAccepts {
         pull_formats: vec![FileFormat::Parquet],
         staging: Vec::new(),
         rows_into: None,
+        reads_files_itself: None,
+        copies_files_to: None,
     }
 }
 
@@ -80,6 +84,8 @@ pub(crate) fn local_destination() -> WriterAccepts {
         pull_formats: vec![FileFormat::Parquet],
         staging: Vec::new(),
         rows_into: None,
+        reads_files_itself: None,
+        copies_files_to: None,
     }
 }
 

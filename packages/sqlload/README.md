@@ -110,12 +110,16 @@ loader schema when given a `storage_integration`. Staged files are deleted once 
 and the next load removes what failed runs left after a day; `keep_staged_files = true` on the
 stage keeps them and leaves that stage out of the cleanup.
 
-Parquet files of a files source under that URL load directly: Snowflake reads them itself and
-nothing passes through SQLLoad, where tests prove the result is the same as SQLLoad's own; `plan`
-says why a table stays on SQLLoad otherwise. A `hash`-masked column on this route reaches Snowflake
-in plain text, in a temporary table gone with its session, and is hashed there; `hmac` always stays
-on SQLLoad. `shaping = "loader"` on a table or source keeps its rows on SQLLoad, so plain values
-never reach Snowflake.
+Files of a files source (Parquet, JSON, NDJSON or CSV) under that URL load directly: Snowflake
+reads them itself and nothing passes through SQLLoad, with the same values SQLLoad's own reader
+gives, which live tests check. A column the direct `COPY` cannot load exactly (`Float16`, a decimal
+over 38 digits, a nested type) fails `plan`, or the load for a later batch, naming the column: files
+never fall back to SQLLoad. Files no external stage covers fail `plan` too, unless the source sets
+`copy_to_internal_stage = true`.
+
+A `hash`-masked column on this route reaches Snowflake in plain text, in a temporary table gone with
+its session, and is hashed there. `hmac` is the one exception: its key must never appear in SQL, so
+those files go through SQLLoad, which `plan` warns is much slower.
 
 Files sources add `_sqlload_source_row`, a row's number in its file from 1.
 

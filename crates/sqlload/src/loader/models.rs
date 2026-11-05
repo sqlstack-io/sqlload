@@ -70,8 +70,8 @@ pub struct TableSpec {
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
-    /// `shaping = "loader"`: Snowflake never reads the files itself.
-    pub shaped_by_loader: bool,
+    /// Tests only (`test_loader_route`, absent from released builds): SQLLoad reads a files source's files itself, the reference side of the live parity test.
+    pub test_loader_route: bool,
     /// Where an integer `batch`'s windows end without `--end-cursor-int`: the Postgres source's cursor maximum, read at plan.
     pub source_end: Option<SourceEnd>,
     pub pinned: BTreeMap<String, ColumnType>,
@@ -129,6 +129,8 @@ pub struct FilesSource {
     pub checks: TextChecks,
     /// Notes `plan` shows on the table, such as pinned columns no sampled file has.
     pub notes: Vec<String>,
+    /// `copy_to_internal_stage`: files no external stage reads are uploaded unchanged to an internal stage, and loaded from there by the warehouse.
+    pub copy_to_internal_stage: bool,
 }
 
 /// A table that matched a source's selection but is not loaded.

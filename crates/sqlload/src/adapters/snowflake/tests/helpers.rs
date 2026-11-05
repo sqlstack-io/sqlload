@@ -7,6 +7,7 @@ use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::CopyStaged;
 use crate::adapters::snowflake::models::{CopyColumn, CopyValue};
 use crate::adapters::snowflake::models::{ExternalStage, StageObject};
+use crate::adapters::snowflake::tests::test_types::CopyFrom;
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
@@ -15,6 +16,22 @@ use crate::http::errors::ApiError;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
 use chrono::{DateTime, Utc};
+
+/// Files under the managed stage on `s3://lake/raw/`, read where they are.
+pub(crate) const EXTERNAL: CopyFrom = CopyFrom {
+    source: "raw/shop/orders/",
+    stage: "@\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"",
+    folder: "shop/orders/",
+    filename_prefix: "raw/shop/orders/",
+};
+
+/// Files of `s3://lake/other/` no stage covers, copied unchanged to `@~` for batch 1 of load `L`.
+pub(crate) const INTERNAL: CopyFrom = CopyFrom {
+    source: "other/",
+    stage: "@~",
+    folder: "sqlload/L/00001/",
+    filename_prefix: "sqlload/L/00001/",
+};
 
 /// The `COPY` statements for `files` staged parts of batch 1 of load `load-1`: how many, and the first.
 pub(crate) fn copies(files: usize) -> (usize, String) {
@@ -205,20 +222,21 @@ pub(crate) fn managed_reference() -> String {
     stage_reference(&stage())
 }
 
-/// The direct copies of the case's files from `s3://lake/raw/shop/orders/` (or `source`) into `shop__orders`: how many statements, and the first.
+/// The direct copies of the case's files from `from` into `shop__orders`: how many statements, and the first.
 pub(crate) fn direct_sql(
     files: &[(String, &str)],
     columns: &[crate::adapters::snowflake::models::CopyColumn],
-    source: &Location,
+    from: &CopyFrom,
 ) -> Result<(usize, String), String> {
     let files: Vec<DataFile> = files.iter().map(|(key, day)| data_file(key, day)).collect();
-    let stage = stage();
+    let source = lake(from.source);
     let batches = crate::adapters::snowflake::main::copy::_direct_copies::direct_copies(
         &crate::adapters::snowflake::models::DirectCopy {
             target: &orders(),
-            stage: "@\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"",
-            stage_url: &stage.location,
-            source,
+            stage: from.stage,
+            folder: from.folder,
+            filename_prefix: from.filename_prefix,
+            source: &source,
             files: &files,
             columns,
             encoding: &crate::files_source::models::FilesEncoding::default(),

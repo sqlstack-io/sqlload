@@ -16,13 +16,15 @@ const PULLS: &str = "destination loads parquet files from s3://fake-bucket/src/"
 const USER: &str = "{ type = \"internal_user_stage\" }";
 const TABLE: &str = "{ type = \"internal_table_stage\" }";
 const STREAMING: &str = "{ type = \"streaming\" }";
-const APPEND: &str = "write_strategy = \"append\"";
-const REPLACING: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"day\"";
+const VIA_LOADER: &str = "write_strategy = \"append\"\ntest_loader_route = true";
+const DIRECT: &str = "write_strategy = \"append\"";
+const REPLACING: &str =
+    "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\ntest_loader_route = true";
 
 const BASE: RouteTestCase = RouteTestCase {
     description: "",
     stage: USER,
-    settings: APPEND,
+    settings: VIA_LOADER,
     files: RouteFiles::Directory,
     file_set: two_days,
     prepare: nothing,
@@ -50,6 +52,26 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
                 "LIST @~/sqlload/",
             ],
             expected_fetches: Some(3),
+            ..BASE
+        },
+        RouteTestCase {
+            description: "files no external stage covers fail the plan with the fix, never going through SQLLoad",
+            settings: DIRECT,
+            expected_error: "cannot be read by Snowflake: no external stage covers it. Fix: add a storage integration",
+            expected_unsent: &["COPY INTO"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "copy_to_internal_stage: the files are uploaded unchanged to @~ and Snowflake loads them there, then they are removed",
+            settings: "write_strategy = \"append\"\ncopy_to_internal_stage = true",
+            expected_plan: &["copy_to_internal_stage"],
+            expected_sent: &[
+                OWN_STAGE,
+                "FROM @~/sqlload/",
+                "METADATA$FILENAME",
+                "REMOVE @~/sqlload/",
+            ],
+            expected_unplanned: &[WRITES_PARQUET],
             ..BASE
         },
         RouteTestCase {
@@ -206,6 +228,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "files under the stage url load directly: nothing passes through SQLLoad",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             prepare: integration,
             expected_plan: &[PULLS],
@@ -220,6 +243,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "a column the newest files hold as nanoseconds loads directly, kept whole",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: nanos_newest,
             prepare: integration,
@@ -231,6 +255,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "a later batch of nanoseconds loads directly like the microsecond batches around it",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: nanos_in_a_later_batch,
             prepare: integration,
@@ -244,33 +269,34 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
         RouteTestCase {
-            description: "an INT96 under an embedded microsecond type stays on SQLLoad, and plan names the column and reason",
+            description: "an INT96 under an embedded microsecond type fails the plan, naming the column and reason, and nothing loads",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: int96_newest,
             prepare: integration,
-            expected_plan: &[WRITES_PARQUET, "at is Timestamp(", "stored as INT96"],
-            expected_unsent: &["METADATA$FILENAME"],
+            expected_error: "cannot load these files exactly by reading them itself",
+            expected_plan: &["at is Timestamp(", "stored as INT96"],
+            expected_unsent: &["COPY INTO", "/_sqlload/"],
             ..BASE
         },
         RouteTestCase {
-            description: "a later batch of INT96 under embedded microseconds goes via SQLLoad, and the clean batches around it stay direct",
+            description: "a later batch of INT96 under embedded microseconds fails the load after the clean batch before it, never going through SQLLoad",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: int96_in_a_later_batch,
             prepare: integration,
+            expected_error: "never go through SQLLoad instead",
             expected_plan: &[PULLS],
-            expected_sent: &[
-                "METADATA$FILENAME = 'src/day=2026-11-01/",
-                "METADATA$FILENAME = 'src/day=2026-11-03/",
-                "/_sqlload/",
-            ],
+            expected_sent: &["METADATA$FILENAME = 'src/day=2026-11-01/"],
+            expected_unsent: &["/_sqlload/", "METADATA$FILENAME = 'src/day=2026-11-03/"],
             ..BASE
         },
         RouteTestCase {
             description: "a stage goes in the target's loader schema, whatever schema the table loads into, and apply creates only that one for it",
             stage: MANAGED,
-            settings: "schema = \"OTHER\"\nwrite_strategy = \"append\"",
+            settings: "schema = \"OTHER\"\nwrite_strategy = \"append\"\ntest_loader_route = true",
             prepare: integration,
             expected_plan: &["\"DB\".\"RAW\".\"_SQLLOAD_STAGE\""],
             expected_sent: &[
@@ -314,14 +340,16 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
         RouteTestCase {
-            description: "shaping = loader keeps them on SQLLoad, and plan says why",
+            description: "hmac masking is the one case files Snowflake reads itself go through SQLLoad, warned in plan",
             stage: MANAGED,
-            settings: "write_strategy = \"append\"\nshaping = \"loader\"",
+            settings: "write_strategy = \"append\"\nmask_key = \"k\"\n[sources.orders.tables.orders]\nmask = { extra = \"hmac\" }",
             files: RouteFiles::Bucket,
+            file_set: with_text,
             prepare: integration,
             expected_plan: &[
                 WRITES_PARQUET,
-                "SQLLoad reads the files because the table sets shaping = \"loader\"",
+                "SQLLoad reads the files because extra masked with hmac, whose key must never appear in SQL",
+                "extra: hmac masking pulls every file through the loader",
             ],
             expected_unsent: &["METADATA$FILENAME"],
             ..BASE
@@ -367,7 +395,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         },
         RouteTestCase {
             description: "and so does the staged route's COPY, with no staging table",
-            settings: "write_strategy = \"append\"\n[sources.orders.tables.orders]\ncolumns = { extra = \"json\" }",
+            settings: "write_strategy = \"append\"\ntest_loader_route = true\n[sources.orders.tables.orders]\ncolumns = { extra = \"json\" }",
             file_set: with_text,
             expected_sent: &[
                 "PARSE_JSON(CAST(GET($1, 'extra') AS VARCHAR))",
@@ -379,6 +407,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "per-file names passing the statement limit: several COPYs in one transaction",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: long_names,
             prepare: integration,
@@ -387,13 +416,16 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
         RouteTestCase {
-            description: "a later batch the direct checks refuse goes via SQLLoad; the batch before stays direct",
+            description: "a later batch the direct checks refuse fails the load; the batch before loaded directly and nothing goes through SQLLoad",
             stage: MANAGED,
+            settings: DIRECT,
             files: RouteFiles::Bucket,
             file_set: half_float_later,
             prepare: integration,
+            expected_error: "never go through SQLLoad instead: ",
             expected_plan: &[PULLS],
-            expected_sent: &["METADATA$FILENAME", "/_sqlload/"],
+            expected_sent: &["METADATA$FILENAME"],
+            expected_unsent: &["/_sqlload/"],
             ..BASE
         },
     ];

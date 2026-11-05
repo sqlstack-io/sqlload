@@ -13,10 +13,10 @@ use crate::adapters::snowflake::models::{CopyColumn, CopyValue, DirectCopy};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::{DataFile, SourceFormat, StoredRead};
 
-/// One `COPY` of `files`, which lie in `folder` below the stage URL; CSV files share one `header`, which places their columns.
+/// One `COPY` of `files`, which lie in `request.folder` below the stage; CSV files share one `header`, which places their columns.
 pub(crate) fn copy_sql(
     request: &DirectCopy<'_>,
-    (folder, header): (&str, Option<&[String]>),
+    header: Option<&[String]>,
     files: &[DataFile],
 ) -> Result<String, String> {
     let literal = |text: &str| SnowflakeSql.render_loader_value_literal(text);
@@ -27,7 +27,7 @@ pub(crate) fn copy_sql(
                 "METADATA$FILENAME = {}",
                 literal(&format!(
                     "{}{}",
-                    request.source.prefix, data.file.relative_key
+                    request.filename_prefix, data.file.relative_key
                 ))
             )
         })
@@ -63,11 +63,12 @@ pub(crate) fn copy_sql(
         ),
     };
     Ok(format!(
-        "COPY INTO {} ({}) FROM (SELECT {} FROM {}/{folder}) FILES = ({}) {file_format} {COPY_OPTIONS}",
+        "COPY INTO {} ({}) FROM (SELECT {} FROM {}/{}) FILES = ({}) {file_format} {COPY_OPTIONS}",
         SnowflakeSql.render_qualified_name(request.target),
         names.join(", "),
         values.join(", "),
         request.stage,
+        request.folder,
         keys.join(", ")
     ))
 }
