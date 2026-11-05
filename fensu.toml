@@ -110,6 +110,11 @@ path = "crates/sqlload-testkit/src/seaweedfs/main/start_seaweedfs.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
 
 [[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload/src/postgres_source/main/decode_copy.rs"
+reason = "Entry used by the hot-path benchmarks (crates/sqlload-benches/benches), which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
 rule = "FPRSN003"
 path = "crates/sqlload/src/files_source/_helpers/parquet/object_reader.rs"
 reason = "get_bytes, get_byte_ranges and get_metadata are parquet's AsyncFileReader trait methods."

@@ -17,7 +17,7 @@ parquet = { workspace = true, features = ["json"] }
 rdkafka.workspace = true
 rsa = { workspace = true, features = ["getrandom"] }
 serde_json.workspace = true
-sqlload.workspace = true
+sqlload = { workspace = true, default-features = true }
 testcontainers.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true

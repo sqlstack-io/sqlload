@@ -1,0 +1,23 @@
+[project]
+name = "sqlload-benchmarks"
+version = "0"
+description = "The benchmark harness: generates data, runs each loader in its own environment, checks and reports."
+requires-python = ">=3.12,<3.13"
+# The sqlload wheel is built from this repository and installed by `make bench-compare`, so it is
+# not listed here.
+dependencies = [
+  "duckdb==2.0.0",
+  "maturin==1.16.0",
+  "orjson==3.13.0",
+  "psutil==7.2.2",
+  "psycopg[binary]==3.3.8",
+  "pyarrow==26.0.1",
+]
+
+[dependency-groups]
+dev = ["pytest==9.2.0"]
+# Only the Snowflake scenarios use it: `make bench-snowflake`.
+snowflake = ["snowflake-connector-python==5.2.0"]
+
+[tool.uv]
+package = false

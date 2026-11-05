@@ -14,8 +14,8 @@ pub(in crate::loader) async fn check_source(
     if source.kind == SourceKind::Python {
         return Ok(format!("{} Python tables", source.tables.len()));
     }
-    match open_source(project, source).await? {
-        SourceReader::Postgres(client) => {
+    match open_source(project, source, 1).await? {
+        SourceReader::Postgres(client, _) => {
             let row = client
                 .query_one(
                     "SELECT current_user || '@' || current_database() || ', ' || version()",

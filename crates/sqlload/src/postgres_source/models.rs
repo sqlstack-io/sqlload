@@ -114,4 +114,6 @@ pub struct CopyRequest<'a> {
     pub batch_rows: usize,
     /// A batch ends once its rows hold about this many bytes, even with fewer than `batch_rows` rows.
     pub batch_bytes: usize,
+    /// More connections to the same database, idle and outside any transaction, to read a large table in parallel; empty reads in one pass.
+    pub helpers: &'a [tokio_postgres::Client],
 }
