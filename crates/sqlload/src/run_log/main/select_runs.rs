@@ -1,7 +1,7 @@
 //! Read a table's run log records.
 
 use crate::adapters::contract::models::TableName;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 
 /// The JSON of every record for destination table `table_name`, oldest first (ties by run id).

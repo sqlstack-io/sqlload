@@ -1,6 +1,6 @@
 //! Find a stage object.
 
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::snowflake::constants::MANAGED_STAGE_NAME;
 use crate::adapters::snowflake::models::StageLookup;
 use crate::adapters::snowflake::models::{ExternalStage, StageObject};

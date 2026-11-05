@@ -4,6 +4,8 @@ pub(in crate::adapters) mod _remove_staged;
 pub(in crate::adapters) mod _remove_stale;
 pub(in crate::adapters) mod _remove_stale_external;
 pub(in crate::adapters) mod _route_reference;
+pub(in crate::adapters) mod _route_warning;
+pub(in crate::adapters) mod _sends_rows;
 pub(in crate::adapters) mod _show_stages;
 pub(in crate::adapters) mod _stage_lookup;
 pub(in crate::adapters) mod _stage_parquet;

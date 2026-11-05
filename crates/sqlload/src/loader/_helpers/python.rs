@@ -1,9 +1,9 @@
 use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::dispatch::main::execute_ddl::execute_ddl;
-use crate::adapters::dispatch::main::single_text::single_text;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
+use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::models::Destination;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;

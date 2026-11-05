@@ -1,4 +1,4 @@
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

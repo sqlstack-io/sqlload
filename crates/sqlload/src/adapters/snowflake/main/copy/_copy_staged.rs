@@ -1,7 +1,7 @@
 //! Load a batch's staged files into a table.
 
 use crate::adapters::contract::types::SqlAdapter;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::snowflake::constants::{COPY_FILE_FORMAT, MAX_COPY_FILES};
 use crate::adapters::snowflake::models::CopyStaged;
 use crate::adapters::snowflake::models::SnowflakeSql;

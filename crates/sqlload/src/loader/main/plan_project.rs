@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::adapters::dispatch::main::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::folder_conflict::folder_conflict;
 use crate::adapters::files::models::FolderClaim;

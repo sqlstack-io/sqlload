@@ -2,9 +2,9 @@
 
 use crate::adapters::contract::constants::STALE_STAGING_HOURS;
 use crate::adapters::contract::models::TableName;
-use crate::adapters::dispatch::main::execute::execute;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
-use crate::adapters::dispatch::main::text_values::text_values;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::session::execute::execute;
+use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::models::Warehouse;
 use crate::loader::errors::LoaderError;

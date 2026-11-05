@@ -11,6 +11,7 @@ use crate::adapters::snowflake::main::copy::_copy_staged::copy_staged;
 use crate::adapters::snowflake::main::session::_run_statements::run_statements;
 use crate::adapters::snowflake::main::stage::_remove_staged::remove_staged;
 use crate::adapters::snowflake::main::stage::_route_reference::route_reference;
+use crate::adapters::snowflake::main::stage::_sends_rows::sends_rows;
 use crate::adapters::snowflake::main::stage::_stage_parquet::stage_parquet;
 use crate::adapters::snowflake::models::{CopyStaged, SnowflakeWriter, StageRoute, StagedFile};
 use crate::column_types::models::ColumnType;
@@ -90,14 +91,6 @@ impl TableWriter for SnowflakeWriter {
             self.remove_files(target).await;
         }
     }
-}
-
-/// Whether rows go in without files.
-fn sends_rows(route: Option<&StageRoute>) -> bool {
-    matches!(
-        route,
-        Some(StageRoute::Streaming { .. } | StageRoute::Insert)
-    )
 }
 
 /// Run Parquet encoding on a blocking thread, so tables loading at once encode in parallel.

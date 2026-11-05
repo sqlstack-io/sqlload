@@ -1,7 +1,7 @@
 //! `sqlload debug`: check a loader project's configuration and connections.
 
-use crate::adapters::dispatch::main::check_destination::check_destination;
-use crate::adapters::dispatch::main::connect_destination::connect_destination;
+use crate::adapters::dispatch::main::session::check_destination::check_destination;
+use crate::adapters::dispatch::main::session::connect_destination::connect_destination;
 use crate::loader::main::_check_source::check_source;
 use crate::project::models::ProjectConfig;
 

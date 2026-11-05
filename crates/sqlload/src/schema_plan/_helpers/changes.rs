@@ -1,4 +1,4 @@
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::TypeFit;
 use crate::project::models::{OnSchemaChange, Policy};
 use crate::schema_plan::constants::ALLOW_REBUILD_FLAG;

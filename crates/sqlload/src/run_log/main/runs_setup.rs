@@ -1,7 +1,7 @@
 //! Decide what creating a table's run log takes.
 
 use crate::adapters::contract::models::TableName;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::run_log::constants::RUNS_COLUMNS;
 use crate::run_log::main::runs_table::runs_table;

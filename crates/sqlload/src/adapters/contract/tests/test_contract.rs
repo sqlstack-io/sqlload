@@ -1,8 +1,8 @@
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::tests::helpers::{accounts, columns, writes};
 use crate::adapters::contract::tests::test_types::ContractTestCase;
-use crate::adapters::dispatch::main::_every_warehouse::every_warehouse;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::_every_warehouse::every_warehouse;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 
 #[test]
 fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_table_changes_atomically()
@@ -12,7 +12,7 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
             description: "append copies the staged rows in",
             mode: WriteMode::Append,
             built: false,
-            expected_copy: true,
+            expected_copies: 1,
         },
         ContractTestCase {
             description: "merge copies the staged rows in",
@@ -20,7 +20,7 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
                 unique_key: vec!["id".to_owned()],
             },
             built: false,
-            expected_copy: true,
+            expected_copies: 1,
         },
         ContractTestCase {
             description: "delete_insert replaces its window from the staged rows",
@@ -31,25 +31,25 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
                 values: Vec::new(),
             },
             built: false,
-            expected_copy: true,
+            expected_copies: 1,
         },
         ContractTestCase {
             description: "replace from rows staged as text converts them once into a copy it swaps in",
             mode: WriteMode::Replace,
             built: false,
-            expected_copy: true,
+            expected_copies: 1,
         },
         ContractTestCase {
             description: "replace from a build table swaps it in without copying a row",
             mode: WriteMode::Replace,
             built: true,
-            expected_copy: false,
+            expected_copies: 0,
         },
         ContractTestCase {
             description: "--reload from a build table swaps it in without copying a row",
             mode: WriteMode::Recreate,
             built: true,
-            expected_copy: false,
+            expected_copies: 0,
         },
     ];
     let staging = TableName {
@@ -62,6 +62,7 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
     {
         let adapter = sql_adapter(warehouse);
         let target = adapter.render_qualified_name(&accounts());
+        let name = adapter.render_identifier(&accounts().table);
         let from_staging = format!("FROM {}", adapter.render_qualified_name(&staging));
         for test_case in &test_cases {
             let statements = adapter.render_commit(
@@ -77,16 +78,17 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
             );
             let copies = statements
                 .iter()
-                .any(|statement| statement.contains(&from_staging));
+                .filter(|statement| statement.contains(&from_staging))
+                .count();
             assert_eq!(
-                copies, test_case.expected_copy,
+                copies, test_case.expected_copies,
                 "{warehouse:?}: {}: {statements:#?}",
                 test_case.description
             );
             let written: Vec<usize> = statements
                 .iter()
                 .enumerate()
-                .filter(|(_, statement)| writes(statement, &target))
+                .filter(|(_, statement)| writes(statement, (&target, &name)))
                 .map(|(index, _)| index)
                 .collect();
             let (Some(first), Some(last)) = (written.first(), written.last()) else {

@@ -1,6 +1,6 @@
 use crate::adapters::contract::tests::helpers::live;
 use crate::adapters::contract::tests::test_types::LiveTypeTestCase;
-use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, Warehouse};
 
 #[test]

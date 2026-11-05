@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::adapters::dispatch::main::clean_stage::clean_stage;
-use crate::adapters::dispatch::main::drop_stale_staging::drop_stale_staging;
+use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
+use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
 use crate::loader::models::{LoadRun, ProjectPlan, TablePlan};
 
 /// Before a load: drop the staging tables crashed loads left in the schemas it writes to. A failure only warns.
