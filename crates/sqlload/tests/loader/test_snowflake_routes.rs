@@ -1,7 +1,7 @@
 use crate::helpers::{
     binary_later, found, integration, long_names, no_internal_stage, no_stage_or_channel,
-    no_stage_or_host, no_user_stage, not_found, nothing, old_leftovers, run_async, run_route,
-    two_batches, two_days, with_text,
+    no_stage_or_host, no_user_stage, not_found, not_owned, nothing, old_leftovers, run_async,
+    run_route, two_batches, two_days, with_text,
 };
 use crate::test_types::{RouteFiles, RouteTestCase};
 
@@ -24,6 +24,7 @@ const BASE: RouteTestCase = RouteTestCase {
     prepare: nothing,
     expected_error: "",
     expected_plan: &[],
+    expected_unplanned: &[],
     expected_sent: &[],
     expected_unsent: &[],
     expected_fetches: None,
@@ -70,6 +71,16 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
                 "CREATE TEMPORARY TABLE IF NOT EXISTS",
                 ".%\"ORDERS__SQLLOAD_STAGING_",
                 "DELETE FROM \"DB\".\"RAW\".\"ORDERS\"",
+            ],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "an append into a table this role does not own goes through the staging table's stage",
+            prepare: not_owned,
+            expected_plan: &["the staging table's @%table"],
+            expected_sent: &[
+                ".%\"ORDERS__SQLLOAD_STAGING_",
+                "INSERT INTO \"DB\".\"RAW\".\"ORDERS\"",
             ],
             ..BASE
         },
@@ -262,6 +273,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
                 WRITES_PARQUET,
                 "extra is hashed and the table is rewritten as a whole",
             ],
+            expected_unplanned: &["in a temporary table"],
             expected_unsent: &["SHA2("],
             ..BASE
         },
@@ -327,6 +339,16 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             );
             assert_eq!(
                 not_found(std::slice::from_ref(&outcome.plan), test_case.expected_plan),
+                Vec::<&str>::new(),
+                "{}: {}",
+                test_case.description,
+                outcome.plan
+            );
+            assert_eq!(
+                found(
+                    std::slice::from_ref(&outcome.plan),
+                    test_case.expected_unplanned
+                ),
                 Vec::<&str>::new(),
                 "{}: {}",
                 test_case.description,

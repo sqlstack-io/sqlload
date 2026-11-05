@@ -640,8 +640,10 @@ fn file_type(spec: &TableSpec, name: &str) -> Option<ColumnType> {
 /// Whether `route` has the destination load a files source's own files.
 pub(crate) fn is_direct(route: Option<&Route>) -> bool {
     route.is_some_and(|route| {
-        matches!(route.steps.first(), Some(Step::UseFiles(_)))
-            && matches!(route.steps.last(), Some(Step::DestinationPulls(_)))
+        matches!(
+            route.steps.as_slice(),
+            [Step::UseFiles(_), Step::DestinationPulls(_)]
+        )
     })
 }
 

@@ -629,6 +629,37 @@ pub(crate) fn old_leftovers(fake: &sqlload_testkit::fake_snowflake::models::Fake
     );
 }
 
+/// `ORDERS` already exists, its stage refused to this role (it does not own it), and so is `@~`.
+pub(crate) fn not_owned(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    let mut state = fake.state.lock();
+    state
+        .denied_stages
+        .extend(["@~".to_owned(), "%\"ORDERS\"".to_owned()]);
+    state.tables.entry("ORDERS".to_owned()).or_default().columns = [
+        "ID",
+        "SCORE",
+        "DAY",
+        "_SQLLOAD_SOURCE_FILE",
+        "_SQLLOAD_SOURCE_VERSION",
+        "_SQLLOAD_SOURCE_ROW",
+        "_SQLLOAD_LOAD_ID",
+        "_SQLLOAD_LOADED_AT",
+    ]
+    .iter()
+    .zip([
+        "NUMBER",
+        "FLOAT",
+        "DATE",
+        "TEXT",
+        "TEXT",
+        "NUMBER",
+        "TEXT",
+        "TIMESTAMP_TZ",
+    ])
+    .map(|(column, data_type)| ((*column).to_owned(), data_type.to_owned()))
+    .collect();
+}
+
 /// `count` small Parquet files of `day` in hive form, ids from 1, with `extra` when given; `padding` lengthens their names.
 pub(crate) fn day_files(
     day: &str,

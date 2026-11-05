@@ -151,6 +151,33 @@ fn run_one(state: &SharedState, body: &[u8]) -> Outcome {
             .collect();
         return Ok(result(&["name"], rows));
     }
+    if statement.starts_with("SELECT COLUMN_NAME, DATA_TYPE, NUMERIC_PRECISION") {
+        let rows: Vec<Vec<Value>> = guard
+            .tables
+            .iter()
+            .filter(|(table, _)| statement.contains(&format!("TABLE_NAME = '{table}'")))
+            .flat_map(|(_, found)| found.columns.iter())
+            .map(|(column, data_type)| {
+                vec![
+                    json!(column),
+                    json!(data_type),
+                    json!(null),
+                    json!(null),
+                    json!(null),
+                ]
+            })
+            .collect();
+        return Ok(result(
+            &[
+                "COLUMN_NAME",
+                "DATA_TYPE",
+                "NUMERIC_PRECISION",
+                "NUMERIC_SCALE",
+                "CHARACTER_MAXIMUM_LENGTH",
+            ],
+            rows,
+        ));
+    }
     if statement.starts_with("SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE") {
         let rows: Vec<Vec<Value>> = guard
             .tables

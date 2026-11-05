@@ -276,6 +276,8 @@ pub(crate) struct RouteTestCase {
     pub(crate) expected_error: &'static str,
     /// Text the rendered plan must contain.
     pub(crate) expected_plan: &'static [&'static str],
+    /// Text the rendered plan must not contain.
+    pub(crate) expected_unplanned: &'static [&'static str],
     /// Text some statement sent must contain.
     pub(crate) expected_sent: &'static [&'static str],
     /// Text no statement sent may contain.
