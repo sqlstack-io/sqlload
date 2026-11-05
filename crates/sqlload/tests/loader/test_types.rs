@@ -217,13 +217,10 @@ pub(crate) struct BatchedRun {
     pub(crate) source_change: &'static str,
     /// SQL run in the DuckDB destination first (a hand edit, such as a unique index that makes a later batch fail).
     pub(crate) destination_change: &'static str,
-    /// Text the load error must contain; empty when every table must load.
-    pub(crate) expected_error: &'static str,
     /// `--end-cursor-*`.
     pub(crate) end_cursor: Option<&'static str>,
-    /// A query on DuckDB after the run and its single text result.
+    /// A query on DuckDB after the run, giving one text result.
     pub(crate) check_query: &'static str,
-    pub(crate) expected_result: &'static str,
 }
 
 /// Loads that commit in batches, run in order on fresh source tables and a fresh DuckDB.
@@ -236,4 +233,14 @@ pub(crate) struct BatchedScenarioTestCase {
     pub(crate) batch_bytes: Option<usize>,
     pub(crate) threads: Option<usize>,
     pub(crate) runs: &'static [BatchedRun],
+    /// Each run's `<load error, or ok> => <check query result>`.
+    pub(crate) expected_outcomes: &'static [&'static str],
+}
+
+/// A `delete_insert` files source with one partition of many files, which alone have an `extra` column.
+pub(crate) struct LargePartitionTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) files: usize,
+    /// Rows, rows with `extra`, distinct source files and the distinct ids, after both runs.
+    pub(crate) expected_result: &'static str,
 }

@@ -1,5 +1,3 @@
-//! The statements that move staged rows into the table.
-
 use crate::column_types::main::warehouse_type::warehouse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::write_sql::_helpers::identifiers::{from_staging, literal, qualified, quote};
@@ -8,7 +6,10 @@ use crate::write_sql::_helpers::recreate::recreate_statements;
 use crate::write_sql::models::{TableName, WriteMode, WriteStatementsRequest};
 
 /// Atomic statements applying `request.mode` from `staging`, which holds every column, the `_sqlload_*` metadata included; the caller drops `staging` and its swap table.
-pub fn write_statements(request: &WriteStatementsRequest<'_>, staging: &TableName) -> Vec<String> {
+pub(crate) fn write_statements(
+    request: &WriteStatementsRequest<'_>,
+    staging: &TableName,
+) -> Vec<String> {
     let warehouse = request.warehouse;
     let target = qualified(request.table, warehouse);
     let source = qualified(staging, warehouse);

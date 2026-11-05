@@ -1,4 +1,4 @@
-use crate::batch_plan::tests::helpers::groups;
+use crate::batch_plan::tests::helpers::{groups, owned_groups};
 use crate::batch_plan::tests::test_types::FileGroupsTestCase;
 
 #[test]
@@ -45,16 +45,11 @@ fn given_partitioned_files_when_grouping_them_then_batches_hold_whole_partitions
         },
     ];
     for test_case in test_cases {
-        let expected: Vec<(usize, Vec<String>)> = test_case
-            .expected_groups
-            .iter()
-            .map(|(count, values)| {
-                (
-                    *count,
-                    values.iter().map(|value| (*value).to_owned()).collect(),
-                )
-            })
-            .collect();
-        assert_eq!(groups(&test_case), expected, "{}", test_case.description);
+        assert_eq!(
+            groups(&test_case),
+            owned_groups(test_case.expected_groups),
+            "{}",
+            test_case.description
+        );
     }
 }

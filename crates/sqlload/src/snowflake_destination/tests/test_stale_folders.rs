@@ -42,14 +42,9 @@ fn given_staged_files_when_cleaning_the_user_stage_then_only_folders_older_than_
         },
     ];
     for test_case in test_cases {
-        let expected: Vec<String> = test_case
-            .expected_folders
-            .iter()
-            .map(|folder| (*folder).to_owned())
-            .collect();
         assert_eq!(
             stale(test_case.listed),
-            expected,
+            test_case.expected_folders,
             "{}",
             test_case.description
         );

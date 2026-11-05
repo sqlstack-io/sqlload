@@ -26,8 +26,9 @@ pub(in crate::loader) async fn with_run_log(
     log.records.sort_by(|left, right| {
         (&left.recorded_at, &left.run_id).cmp(&(&right.recorded_at, &right.run_id))
     });
-    log.records
-        .dedup_by(|later, earlier| later.run_id == earlier.run_id);
+    log.records.dedup_by(|later, earlier| {
+        (&later.run_id, later.batch) == (&earlier.run_id, earlier.batch)
+    });
     let records = log.records;
     let current = current_run(&records).cloned();
     let flags = options.reload || options.start_cursor.is_some() || options.end_cursor.is_some();

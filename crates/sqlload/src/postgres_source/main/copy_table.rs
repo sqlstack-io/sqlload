@@ -41,15 +41,13 @@ pub async fn copy_table(
     let stream = client.copy_out(&sql).await?;
     pin_mut!(stream);
     let mut total: u64 = 0;
-    let sink_error = |reason: String| PostgresError::Batch {
-        table: table.clone(),
-        reason,
-    };
     while let Some(chunk) = stream.next().await {
         decoder.push(&chunk?)?;
         if decoder.rows() >= request.batch_rows || decoder.bytes() >= request.batch_bytes {
             total += decoder.rows() as u64;
-            on_batch(decoder.take_batch()?).await.map_err(sink_error)?;
+            on_batch(decoder.take_batch()?)
+                .await
+                .map_err(PostgresError::Consumer)?;
         }
     }
     if !decoder.finished() {
@@ -60,7 +58,9 @@ pub async fn copy_table(
     }
     if decoder.rows() > 0 {
         total += decoder.rows() as u64;
-        on_batch(decoder.take_batch()?).await.map_err(sink_error)?;
+        on_batch(decoder.take_batch()?)
+            .await
+            .map_err(PostgresError::Consumer)?;
     }
     Ok(total)
 }

@@ -633,7 +633,7 @@ impl PythonFeed {
         })
     }
 
-    /// Read one call of the table function to its end: each batch is typed and staged as it arrives (the plan and the table grow with new columns first), a logged table's `ctx.state` follows the rows, and a table without a cursor commits about every 1 GB.
+    /// Read one call of the table function to its end: each batch is typed and staged as it arrives (the plan and the table grow with new columns first), and a table without a cursor commits about every 1 GB; a logged table's `ctx.state` follows the rows that crossed with it, so its commits fall only there, recording that state.
     pub(crate) async fn read(
         &mut self,
         load: &PythonLoad<'_>,
@@ -655,10 +655,14 @@ impl PythonFeed {
                 Some(Err(reason)) => return Err(LoaderError::Invalid(reason)),
                 Some(Ok(Streamed::State(state))) => {
                     let state = (state != NO_STATE).then_some(state);
+                    let sized = self.table.commits == CommitRule::Size;
+                    self.state = state.clone();
                     if let Some(publisher) = &mut self.publisher {
-                        publisher.state = state.clone();
+                        publisher.state = state;
+                        if sized && publisher.full() {
+                            publisher.cut(CommitRange::Planned).await?;
+                        }
                     }
-                    self.state = state;
                 }
                 Some(Ok(Streamed::Batch(batch))) => self.batch(load, batch, window).await?,
             }
@@ -685,7 +689,7 @@ impl PythonFeed {
         };
         let (typed, outside) = typed_batch(&batch, &self.table, &schema, read.as_ref())?;
         self.outside += outside as u64;
-        let sized = self.table.commits == CommitRule::Size;
+        let sized = self.table.commits == CommitRule::Size && self.table.logged.is_none();
         let publisher = self.publisher(load).await?;
         publisher.stage(typed, None).await?;
         match (sized, publisher.full()) {

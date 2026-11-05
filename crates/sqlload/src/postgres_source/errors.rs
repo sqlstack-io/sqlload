@@ -18,6 +18,9 @@ pub enum PostgresError {
     Stream { table: String, reason: String },
     #[error("cannot build an Arrow batch for {table}: {reason}")]
     Batch { table: String, reason: String },
+    /// What the caller's batch consumer failed with, as it said it.
+    #[error("{0}")]
+    Consumer(String),
     #[error("{table}.{column} has type {postgres_type}, which cannot be read as {wanted}")]
     Unreadable {
         table: String,

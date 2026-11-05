@@ -73,27 +73,26 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
-                        expected_error: "Postgres query failed",
                         end_cursor: Some("2026-11-06"),
                         check_query: IDS,
-                        expected_result: "1,2",
                     },
                     BatchedRun {
                         source_change: "UPDATE public.events_raw SET d = 1 WHERE id = 3;",
                         destination_change: "",
-                        expected_error: "",
                         end_cursor: Some("2026-11-06"),
                         check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) || ' ' || CAST(count(DISTINCT _sqlload_load_id) AS VARCHAR) FROM raw.app__events",
-                        expected_result: "1,2,3,4 2",
                     },
                     BatchedRun {
                         source_change: "DELETE FROM public.events_raw WHERE id = 4; INSERT INTO public.events_raw VALUES (5, '2026-11-04', 1);",
                         destination_change: "",
-                        expected_error: "",
                         end_cursor: Some("2026-11-06"),
                         check_query: IDS,
-                        expected_result: "1,2,3,5",
                     },
+                ],
+                expected_outcomes: &[
+                    "raw.app__events: Postgres query failed => 1,2",
+                    "ok => 1,2,3,4 2",
+                    "ok => 1,2,3,5",
                 ],
             },
             BatchedScenarioTestCase {
@@ -106,27 +105,26 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
-                        expected_error: "",
                         end_cursor: Some("3"),
                         check_query: IDS,
-                        expected_result: "1,2,3",
                     },
                     BatchedRun {
                         source_change: "",
                         destination_change: "CREATE UNIQUE INDEX events_v ON raw.app__events (v)",
-                        expected_error: "app__events",
                         end_cursor: None,
                         check_query: IDS,
-                        expected_result: "1,2,3,4",
                     },
                     BatchedRun {
                         source_change: "UPDATE public.events SET v = 'e' WHERE id = 5;",
                         destination_change: "",
-                        expected_error: "",
                         end_cursor: None,
                         check_query: IDS,
-                        expected_result: "1,2,3,4,5,6",
                     },
+                ],
+                expected_outcomes: &[
+                    "ok => 1,2,3",
+                    "raw.app__events: DuckDB => 1,2,3,4",
+                    "ok => 1,2,3,4,5,6",
                 ],
             },
             BatchedScenarioTestCase {
@@ -139,19 +137,19 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
-                        expected_error: "Postgres query failed",
                         end_cursor: None,
                         check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__events",
-                        expected_result: "0",
                     },
                     BatchedRun {
                         source_change: "UPDATE public.events_raw SET d = 1 WHERE id = 3;",
                         destination_change: "",
-                        expected_error: "",
                         end_cursor: None,
                         check_query: IDS,
-                        expected_result: "1,2,3,4",
                     },
+                ],
+                expected_outcomes: &[
+                    "raw.app__events: Postgres query failed => 0",
+                    "ok => 1,2,3,4",
                 ],
             },
             BatchedScenarioTestCase {
@@ -163,15 +161,19 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
-                    expected_error: "Postgres query failed",
                     end_cursor: None,
                     check_query: "SELECT (SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM raw.app__a) || ' ' || (SELECT string_agg(CAST(id AS VARCHAR), ',') FROM raw.app__b)",
-                    expected_result: "1,2 3",
                 }],
+                expected_outcomes: &["raw.app__c: Postgres query failed => 1,2 3"],
             },
         ];
         for test_case in test_cases {
-            run_batched(&client, postgres.port, &test_case).await?;
+            assert_eq!(
+                run_batched(&client, postgres.port, &test_case).await?,
+                test_case.expected_outcomes,
+                "{}",
+                test_case.description
+            );
         }
         Ok(())
     })

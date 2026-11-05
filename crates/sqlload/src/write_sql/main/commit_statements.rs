@@ -2,8 +2,8 @@
 
 use crate::column_types::models::Warehouse;
 use crate::run_log::main::logged_statements::logged_statements;
+use crate::write_sql::_helpers::write::write_statements;
 use crate::write_sql::main::qualified_name::qualified_name;
-use crate::write_sql::main::write_statements::write_statements;
 use crate::write_sql::models::{TableName, WriteStatementsRequest};
 
 /// The write of `request` from `staging`, with a logged table's run record insert and (unless the staging table is swapped in or rebuilt from at the end) the emptying of the staging table for the next batches, in the write's transaction where the warehouse allows it.

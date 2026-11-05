@@ -33,10 +33,7 @@ pub(crate) fn windows(test_case: &SplitWindowsTestCase) -> Result<Vec<String>, S
 }
 
 fn window_text(window: &CursorWindow) -> String {
-    let open = match window.inclusive {
-        true => "",
-        false => "(",
-    };
+    let open = ["(", ""][usize::from(window.inclusive)];
     format!(
         "{open}{}..{}",
         window.from.as_deref().unwrap_or("-"),
@@ -78,4 +75,23 @@ pub(crate) fn cut(values: &[i64], last: Option<&str>) -> Result<(usize, Option<S
         cut_index(array.as_ref(), last)?,
         last_value(array.as_ref())?,
     ))
+}
+
+/// `expected` as the owned values [`windows`] returns.
+pub(crate) fn owned_windows(expected: Result<&[&str], &str>) -> Result<Vec<String>, String> {
+    expected
+        .map(|windows| windows.iter().map(|window| (*window).to_owned()).collect())
+        .map_err(str::to_owned)
+}
+
+/// `expected` as the owned values [`groups`] returns.
+pub(crate) fn owned_groups(expected: &[(usize, &[&str])]) -> Vec<(usize, Vec<String>)> {
+    expected
+        .iter()
+        .map(|(count, values)| (*count, owned(values)))
+        .collect()
+}
+
+fn owned(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
 }

@@ -1,6 +1,6 @@
 use crate::column_types::models::Warehouse;
+use crate::write_sql::_helpers::write::write_statements;
 use crate::write_sql::main::staging_table::staging_table;
-use crate::write_sql::main::write_statements::write_statements;
 use crate::write_sql::models::{WriteMode, WriteStatementsRequest};
 use crate::write_sql::tests::helpers::{accounts, columns};
 use crate::write_sql::tests::test_types::WriteStatementsTestCase;

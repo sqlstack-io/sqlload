@@ -23,8 +23,8 @@ use tokio_postgres::Client;
 
 use crate::test_types::{
     BatchedScenarioTestCase, FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase,
-    MetadataRoundTripTestCase, ParquetFile, ScenarioTestCase, TextFilesScenarioTestCase,
-    WrittenPartition, WrittenRow, WrittenRun,
+    LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile, ScenarioTestCase,
+    TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -133,18 +133,18 @@ async fn load_with(
                 .map(|reason| format!("{}: {reason}", outcome.table))
         })
         .collect();
-    match failures.is_empty() {
-        true => Ok(()),
-        false => Err(failures.join("\n")),
-    }
+    failures
+        .is_empty()
+        .then_some(())
+        .ok_or_else(|| failures.join("\n"))
 }
 
-/// Run a batched scenario on fresh source tables and a fresh DuckDB, checking the destination after each run.
+/// Run a batched scenario on fresh source tables and a fresh DuckDB; returns each run's outcome as `<load error, or ok> => <check query result>`, the error cut to its first two parts (`table: what failed`), which stay the same from run to run.
 pub(crate) async fn run_batched(
     client: &Client,
     port: u16,
     test_case: &BatchedScenarioTestCase,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     client
         .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
         .await
@@ -161,7 +161,8 @@ pub(crate) async fn run_batched(
     let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
         return Err("no DuckDB destination".to_owned());
     };
-    for (index, run) in test_case.runs.iter().enumerate() {
+    let mut outcomes: Vec<String> = Vec::new();
+    for run in test_case.runs {
         client
             .batch_execute(run.source_change)
             .await
@@ -191,18 +192,17 @@ pub(crate) async fn run_batched(
         let error = load_with(&project, &plan, &destinations, &options)
             .await
             .err()
-            .unwrap_or_default();
-        let place = format!("{} run {}", test_case.description, index + 1);
-        assert!(
-            error.contains(run.expected_error) && error.is_empty() == run.expected_error.is_empty(),
-            "{place}: {error}"
-        );
+            .map_or_else(
+                || "ok".to_owned(),
+                |error| error.splitn(3, ": ").take(2).collect::<Vec<_>>().join(": "),
+            );
         let result = query_text(duckdb, run.check_query.to_owned())
             .await
-            .map_err(|error| error.to_string())?;
-        assert_eq!(result.as_deref(), Some(run.expected_result), "{place}");
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        outcomes.push(format!("{error} => {result}"));
     }
-    Ok(())
+    Ok(outcomes)
 }
 
 /// The rendered plan, or the error that stopped it.
@@ -323,11 +323,12 @@ fn parquet_bytes(file: &ParquetFile) -> Result<bytes::Bytes, String> {
     Ok(bytes::Bytes::from(buffer))
 }
 
-/// A `delete_insert` files source into DuckDB with one partition of 1,001 files that alone have an `extra` column (outside the newest files the plan samples), then that partition's neighbour rewritten; the check query's result.
+/// A `delete_insert` files source into DuckDB with one partition of `test_case.files` files that alone have an `extra` column (outside the newest files the plan samples), then that partition's neighbour rewritten; the check query's result.
 pub(crate) async fn run_large_partition(
     directory: &std::path::Path,
+    test_case: &LargePartitionTestCase,
 ) -> Result<Option<String>, String> {
-    let wide: Vec<(String, ParquetFile)> = (1..=1001)
+    let wide: Vec<(String, ParquetFile)> = (1..=test_case.files)
         .map(|id| {
             (
                 format!("day=2026-11-01/part-{id:05}.parquet"),
@@ -359,7 +360,7 @@ pub(crate) async fn run_large_partition(
         ..late
     };
     let scenario = FilesScenario {
-        description: "a partition of more than 1,000 files",
+        description: test_case.description,
         store: local_store,
         settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\n",
         runs: vec![

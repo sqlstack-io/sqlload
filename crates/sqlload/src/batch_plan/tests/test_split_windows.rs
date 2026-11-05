@@ -1,4 +1,4 @@
-use crate::batch_plan::tests::helpers::windows;
+use crate::batch_plan::tests::helpers::{owned_windows, windows};
 use crate::batch_plan::tests::test_types::SplitWindowsTestCase;
 use crate::column_types::models::ColumnType;
 use crate::project::models::BatchStep;
@@ -104,10 +104,11 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
         },
     ];
     for test_case in test_cases {
-        let expected = test_case
-            .expected_windows
-            .map(|windows| windows.iter().map(|window| (*window).to_owned()).collect())
-            .map_err(str::to_owned);
-        assert_eq!(windows(&test_case), expected, "{}", test_case.description);
+        assert_eq!(
+            windows(&test_case),
+            owned_windows(test_case.expected_windows),
+            "{}",
+            test_case.description
+        );
     }
 }
