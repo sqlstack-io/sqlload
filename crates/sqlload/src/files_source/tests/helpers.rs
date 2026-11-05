@@ -2,9 +2,13 @@ use std::io::Write;
 
 use arrow_array::RecordBatch;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
+use arrow_schema::DataType;
 use bytes::Bytes;
 use flate2::Compression as GzipLevel;
 use flate2::write::GzEncoder;
+use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::arrow_writer::ArrowWriterOptions;
 
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::open_folder::open_folder;
@@ -290,6 +294,21 @@ async fn break_footer_and_read(folder: &OpenFolder, reuse: bool) -> Result<Strin
     Ok(read_files(folder, &request, &kept, async |_| Ok(()))
         .await
         .map_or_else(|_| "failed".to_owned(), |rows| rows.to_string()))
+}
+
+/// The type the reader finds in the footer of a file written with a column of `written`, with or without the embedded Arrow schema; other writers' files often have none.
+pub(crate) fn footer_type(written: &DataType, embedded_schema: bool) -> Result<DataType, String> {
+    let column = arrow_array::new_null_array(written, 1);
+    let batch = RecordBatch::try_from_iter([("at", column)]).map_err(|error| error.to_string())?;
+    let options = ArrowWriterOptions::new().with_skip_arrow_metadata(!embedded_schema);
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = ArrowWriter::try_new_with_options(&mut buffer, batch.schema(), options)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    let footer = ArrowReaderMetadata::load(&Bytes::from(buffer), ArrowReaderOptions::new())
+        .map_err(|error| error.to_string())?;
+    Ok(footer.schema().field(0).data_type().clone())
 }
 
 /// A timestamp type of `unit` in `zone`.

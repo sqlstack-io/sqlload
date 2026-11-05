@@ -116,7 +116,7 @@ pub struct RouteRequest<'a> {
 /// Why a step of the chain cannot be used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepFailure {
-    /// The role may not use it, or it does not exist: the chain moves on.
+    /// The role may not use it, it does not exist, or the account's stages are not on S3: the chain moves on.
     Unusable(String),
     /// Anything else, such as a network failure, which says nothing about the step: the plan fails, so a blip cannot change a table's route.
     Failed(String),

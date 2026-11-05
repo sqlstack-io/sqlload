@@ -21,6 +21,7 @@ pub(crate) fn case_files(files: ParityFiles) -> Result<Vec<(&'static str, Record
         ParityFiles::BadPartition => bad_partition(),
         ParityFiles::FloatEdges => float_edges(),
         ParityFiles::TimestampEdges => timestamp_edges(),
+        ParityFiles::OffsetTimestamps => offset_timestamps(),
         ParityFiles::DecimalEdges => decimal_edges(),
         ParityFiles::IntegerEdges => integer_edges(),
         ParityFiles::ComparisonSelfTest => Ok(Vec::new()),
@@ -228,8 +229,8 @@ fn float_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
     Ok(vec![("part-0.parquet", batch)])
 }
 
-/// Each timestamp unit, with sub-millisecond digits before and after 1970, with and without UTC.
-fn timestamp_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
+/// Instants in microseconds, milliseconds and seconds: sub-millisecond digits, before and after 1970, and a NULL.
+fn edge_instants() -> [Vec<Option<i64>>; 3] {
     let micros = vec![
         Some(1_700_000_000_123_456),
         Some(1_700_000_000_123_457),
@@ -254,6 +255,34 @@ fn timestamp_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
         Some(0),
         None,
     ];
+    [micros, millis, seconds]
+}
+
+/// Each timestamp unit in the Arrow zone `+00:00`. Without the embedded schema the seconds read as plain integers, as this Parquet writer stores them with no logical type; other writers store milliseconds.
+fn offset_timestamps() -> Result<Vec<(&'static str, RecordBatch)>, String> {
+    let [micros, millis, seconds] = edge_instants();
+    let batch = RecordBatch::try_from_iter([
+        ("id", array(Int64Array::from(vec![1, 2, 3, 4, 5, 6]))),
+        (
+            "micros",
+            array(TimestampMicrosecondArray::from(micros).with_timezone("+00:00")),
+        ),
+        (
+            "millis",
+            array(TimestampMillisecondArray::from(millis).with_timezone("+00:00")),
+        ),
+        (
+            "seconds",
+            array(TimestampSecondArray::from(seconds).with_timezone("+00:00")),
+        ),
+    ])
+    .map_err(|error| error.to_string())?;
+    Ok(vec![("part-0.parquet", batch)])
+}
+
+/// Each timestamp unit, with sub-millisecond digits before and after 1970, with and without UTC.
+fn timestamp_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
+    let [micros, millis, seconds] = edge_instants();
     let batch = RecordBatch::try_from_iter([
         ("id", array(Int64Array::from(vec![1, 2, 3, 4, 5, 6]))),
         (
@@ -360,11 +389,14 @@ fn integer_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
     Ok(vec![("part-0.parquet", batch)])
 }
 
-/// `batch` as a Parquet file.
-pub(crate) fn parquet_file(batch: &RecordBatch) -> Result<Bytes, String> {
+/// `batch` as a Parquet file, with or without the embedded Arrow schema.
+pub(crate) fn parquet_file(batch: &RecordBatch, embedded_schema: bool) -> Result<Bytes, String> {
+    let options = parquet::arrow::arrow_writer::ArrowWriterOptions::new()
+        .with_skip_arrow_metadata(!embedded_schema);
     let mut buffer: Vec<u8> = Vec::new();
-    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, batch.schema(), None)
-        .map_err(|error| error.to_string())?;
+    let mut writer =
+        parquet::arrow::ArrowWriter::try_new_with_options(&mut buffer, batch.schema(), options)
+            .map_err(|error| error.to_string())?;
     writer.write(batch).map_err(|error| error.to_string())?;
     writer.close().map_err(|error| error.to_string())?;
     Ok(Bytes::from(buffer))

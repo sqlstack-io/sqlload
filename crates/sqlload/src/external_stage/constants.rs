@@ -28,3 +28,6 @@ pub const NOT_FOUND_CODES: &[&str] = &["002003", "002043"];
 
 /// HTTP statuses saying a service refuses this role, or has no such object.
 pub const REFUSING_HTTP_STATUSES: &[u16] = &[403, 404];
+
+/// What a refusal says in lower case, whatever its code.
+pub const REFUSAL_PHRASES: &[&str] = &["insufficient privileges", "not authorized"];

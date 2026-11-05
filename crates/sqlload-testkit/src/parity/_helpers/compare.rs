@@ -264,9 +264,13 @@ fn panic_text(panic: &(dyn Any + Send)) -> String {
 async fn write_files(live: &Live, folder_key: &str, test_case: &ParityCase) -> Result<(), String> {
     let folder = lake_folder(live, folder_key).await?;
     for (key, batch) in case_files(test_case.files)? {
-        write_file(&folder, key, parquet_file(&batch)?)
-            .await
-            .map_err(|error| error.to_string())?;
+        write_file(
+            &folder,
+            key,
+            parquet_file(&batch, test_case.embedded_schema)?,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }

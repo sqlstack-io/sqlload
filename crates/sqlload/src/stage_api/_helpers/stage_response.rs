@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::auth::models::Secret;
-use crate::stage_api::constants::{S3_LOCATION, SUPPORTED_CIPHER};
+use crate::stage_api::constants::{NON_S3_STAGE, S3_LOCATION, SUPPORTED_CIPHER};
 use crate::stage_api::models::{AwsCredentials, EncryptionMaterial, ObjectTarget, StageInfo};
 
 fn text(value: &Value, name: &str) -> Result<String, String> {
@@ -16,9 +16,7 @@ pub(crate) fn parse_stage_info(data: &Value) -> Result<StageInfo, String> {
     let stage = &data["stageInfo"];
     let location_type = stage["locationType"].as_str().unwrap_or_default();
     if location_type != S3_LOCATION {
-        return Err(format!(
-            "only S3-backed internal stages are supported, got {location_type:?}"
-        ));
+        return Err(format!("{NON_S3_STAGE}, got {location_type:?}"));
     }
     let location = text(stage, "location")?;
     let (bucket, path) = location.split_once('/').unwrap_or((location.as_str(), ""));

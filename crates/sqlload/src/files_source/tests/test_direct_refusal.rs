@@ -1,8 +1,8 @@
 use arrow_schema::{DataType, Field, TimeUnit};
 
 use crate::files_source::_helpers::plan::columns::direct_refusal;
-use crate::files_source::tests::helpers::timestamp;
-use crate::files_source::tests::test_types::DirectRefusalTestCase;
+use crate::files_source::tests::helpers::{footer_type, timestamp};
+use crate::files_source::tests::test_types::{DirectRefusalTestCase, FooterZoneTestCase};
 
 #[test]
 fn given_a_files_arrow_type_when_choosing_the_route_then_only_exact_ones_go_direct() {
@@ -181,4 +181,78 @@ fn given_a_files_arrow_type_when_choosing_the_route_then_only_exact_ones_go_dire
             test_case.description
         );
     }
+}
+
+#[test]
+fn given_a_files_footer_when_reading_its_zone_then_the_direct_filter_sees_what_the_reader_infers()
+-> Result<(), String> {
+    let test_cases = [
+        FooterZoneTestCase {
+            description: "+00:00 microseconds with no embedded schema read as UTC",
+            written: timestamp(TimeUnit::Microsecond, Some("+00:00")),
+            embedded_schema: false,
+            expected_read: timestamp(TimeUnit::Microsecond, Some("UTC")),
+            expected_exact: true,
+        },
+        FooterZoneTestCase {
+            description: "+00:00 milliseconds with no embedded schema read as UTC",
+            written: timestamp(TimeUnit::Millisecond, Some("+00:00")),
+            embedded_schema: false,
+            expected_read: timestamp(TimeUnit::Millisecond, Some("UTC")),
+            expected_exact: true,
+        },
+        FooterZoneTestCase {
+            description: "seconds with no embedded schema read as plain integers: this Parquet writer stores them with no logical type",
+            written: timestamp(TimeUnit::Second, Some("+00:00")),
+            embedded_schema: false,
+            expected_read: DataType::Int64,
+            expected_exact: true,
+        },
+        FooterZoneTestCase {
+            description: "+00:00 nanoseconds with no embedded schema stay refused",
+            written: timestamp(TimeUnit::Nanosecond, Some("+00:00")),
+            embedded_schema: false,
+            expected_read: timestamp(TimeUnit::Nanosecond, Some("UTC")),
+            expected_exact: false,
+        },
+        FooterZoneTestCase {
+            description: "+01:00 with no embedded schema reads as UTC: Parquet stores only instants",
+            written: timestamp(TimeUnit::Microsecond, Some("+01:00")),
+            embedded_schema: false,
+            expected_read: timestamp(TimeUnit::Microsecond, Some("UTC")),
+            expected_exact: true,
+        },
+        FooterZoneTestCase {
+            description: "no zone with no embedded schema reads as wall-clock",
+            written: timestamp(TimeUnit::Microsecond, None),
+            embedded_schema: false,
+            expected_read: timestamp(TimeUnit::Microsecond, None),
+            expected_exact: true,
+        },
+        FooterZoneTestCase {
+            description: "+00:00 only reaches the filter as written through an embedded schema",
+            written: timestamp(TimeUnit::Microsecond, Some("+00:00")),
+            embedded_schema: true,
+            expected_read: timestamp(TimeUnit::Microsecond, Some("+00:00")),
+            expected_exact: true,
+        },
+        FooterZoneTestCase {
+            description: "+01:00 through an embedded schema stays refused",
+            written: timestamp(TimeUnit::Microsecond, Some("+01:00")),
+            embedded_schema: true,
+            expected_read: timestamp(TimeUnit::Microsecond, Some("+01:00")),
+            expected_exact: false,
+        },
+    ];
+    for test_case in test_cases {
+        let read = footer_type(&test_case.written, test_case.embedded_schema)?;
+        assert_eq!(read, test_case.expected_read, "{}", test_case.description);
+        assert_eq!(
+            direct_refusal(&read).is_none(),
+            test_case.expected_exact,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

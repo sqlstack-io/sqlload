@@ -35,6 +35,8 @@ pub enum ParityFiles {
     FloatEdges,
     /// Timestamps of each unit with sub-millisecond digits, before and after 1970.
     TimestampEdges,
+    /// Timestamps of each unit in the Arrow zone `+00:00`, with sub-millisecond digits, before and after 1970.
+    OffsetTimestamps,
     /// Decimals at the edges of precision and scale.
     DecimalEdges,
     /// The minimum and maximum of each integer width.
@@ -63,6 +65,8 @@ pub struct ParityCase {
     pub right: Side,
     /// Whether the left side must be Snowflake reading the files itself.
     pub left_is_direct: bool,
+    /// Whether the files embed the Arrow schema; without it the reader infers each type from Parquet alone.
+    pub embedded_schema: bool,
 }
 
 /// The statements comparing two tables, typed.

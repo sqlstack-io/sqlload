@@ -111,3 +111,11 @@ pub(crate) struct DirectRefusalTestCase {
     pub(crate) data_type: arrow_schema::DataType,
     pub(crate) expected_exact: bool,
 }
+
+pub(crate) struct FooterZoneTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) written: arrow_schema::DataType,
+    pub(crate) embedded_schema: bool,
+    pub(crate) expected_read: arrow_schema::DataType,
+    pub(crate) expected_exact: bool,
+}

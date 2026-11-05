@@ -71,8 +71,43 @@ fn given_a_probe_error_when_classifying_it_then_only_privileges_and_missing_obje
         },
         StepFailureTestCase {
             description: "a response that makes no sense",
-            error: ApiError::Protocol("only S3-backed internal stages".to_owned()),
+            error: ApiError::Protocol("PUT response has no location".to_owned()),
             expected_unusable: false,
+        },
+        StepFailureTestCase {
+            description: "an unlisted code saying insufficient privileges, in any case",
+            error: ApiError::Status {
+                status: 200,
+                code: "999999".to_owned(),
+                message: "SQL access control error: INSUFFICIENT PRIVILEGES to operate on stage"
+                    .to_owned(),
+            },
+            expected_unusable: true,
+        },
+        StepFailureTestCase {
+            description: "an unlisted code saying not authorized, in any case",
+            error: ApiError::Status {
+                status: 200,
+                code: "999999".to_owned(),
+                message: "Stage '~' Not Authorized.".to_owned(),
+            },
+            expected_unusable: true,
+        },
+        StepFailureTestCase {
+            description: "an unlisted code saying anything else",
+            error: ApiError::Status {
+                status: 200,
+                code: "999999".to_owned(),
+                message: "internal error".to_owned(),
+            },
+            expected_unusable: false,
+        },
+        StepFailureTestCase {
+            description: "a stage on another cloud, which no retry changes",
+            error: ApiError::Protocol(
+                "only S3-backed internal stages are supported, got \"AZURE\"".to_owned(),
+            ),
+            expected_unusable: true,
         },
     ];
     for test_case in test_cases {

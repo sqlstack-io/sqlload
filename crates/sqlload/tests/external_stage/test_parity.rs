@@ -38,6 +38,7 @@ const BASE: ParityCase = ParityCase {
         ..DIRECT
     },
     left_is_direct: true,
+    embedded_schema: true,
 };
 
 #[test]
@@ -68,6 +69,25 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
             case: ParityCase {
                 name: "timestamps",
                 files: ParityFiles::TimestampEdges,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "the Arrow zone +00:00 with no embedded schema, the type inferred from Parquet alone as for a file from another writer",
+            case: ParityCase {
+                name: "offset_inferred",
+                files: ParityFiles::OffsetTimestamps,
+                embedded_schema: false,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "the Arrow zone +00:00 through an embedded schema, the only way the filter sees it as +00:00",
+            case: ParityCase {
+                name: "offset_embedded",
+                files: ParityFiles::OffsetTimestamps,
                 ..BASE
             },
             expected_outcome: SAME,
