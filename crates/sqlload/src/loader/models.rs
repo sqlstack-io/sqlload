@@ -263,6 +263,8 @@ pub struct PlanOptions {
     pub end_cursor: Option<String>,
     /// `--threads`: the most tables loading at once, overriding the project's `threads`.
     pub threads: Option<usize>,
+    /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
+    pub batch_bytes: Option<usize>,
 }
 
 /// What one Python table's load needs.
@@ -396,6 +398,8 @@ pub struct Publisher {
     pub committed_state: Option<String>,
     /// DuckDB: a transaction is open on the table's connection.
     pub open_transaction: bool,
+    /// The bytes a batch holds before it may commit.
+    pub batch_bytes: usize,
     /// A files target's folder and the commit being written.
     pub files: Option<FilesSink>,
 }

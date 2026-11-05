@@ -125,6 +125,9 @@ pub struct LoaderArgs {
     /// The most tables loading at once (default: the project's `threads`, else 4); one table's batches always commit one at a time.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     pub threads: Option<u16>,
+    /// The bytes a batch holds before it may commit, instead of about 1 GB (for tests).
+    #[arg(long, hide = true, value_parser = clap::value_parser!(u64).range(1..))]
+    pub batch_bytes: Option<u64>,
 }
 
 /// How logs are written.

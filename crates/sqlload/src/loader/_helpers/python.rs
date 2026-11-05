@@ -769,7 +769,8 @@ impl PythonFeed {
                 &self.table,
                 (self.state.clone(), self.reconciled.clone()),
             );
-            let mut publisher = Publisher::open(self.table.clone(), load.destination, run).await?;
+            let mut publisher =
+                Publisher::open(self.table.clone(), (load.destination, load.options), run).await?;
             publisher.state = self.state.clone();
             self.publisher = Some(publisher);
         }

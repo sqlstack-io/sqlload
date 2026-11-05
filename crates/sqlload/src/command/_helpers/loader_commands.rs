@@ -39,6 +39,9 @@ fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         start_cursor: start,
         end_cursor: end,
         threads: args.threads.map(usize::from),
+        batch_bytes: args
+            .batch_bytes
+            .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),
     })
 }
 

@@ -44,11 +44,11 @@ use crate::loader::models::CommitRange;
 use crate::loader::models::CommitRule;
 use crate::loader::models::Destination;
 use crate::loader::models::FilesSink;
-use crate::loader::models::LoadRun;
 use crate::loader::models::Publisher;
 use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
 use crate::loader::models::TablePlan;
+use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::parquet_parts::main::finish_part::finish_part;
 use crate::parquet_parts::main::write_part::write_part;
@@ -155,7 +155,7 @@ impl Publisher {
     /// A table's load ready for its first batch: its own connection, and (unless the batches go straight into the table) a fresh staging table.
     pub(crate) async fn open(
         table: TablePlan,
-        destination: &Destination,
+        (destination, options): (&Destination, &PlanOptions),
         run: Option<RunEntry>,
     ) -> Result<Self, LoaderError> {
         let destination = table_destination(destination)?;
@@ -220,6 +220,7 @@ impl Publisher {
             state: committed_state.clone(),
             committed_state,
             open_transaction: false,
+            batch_bytes: options.batch_bytes.unwrap_or(BATCH_BYTES),
             files,
         })
     }
@@ -277,7 +278,7 @@ impl Publisher {
             Destination::Snowflake(_) => self.parts.bytes(),
             _ => self.arrow_bytes,
         };
-        bytes >= BATCH_BYTES
+        bytes >= self.batch_bytes
     }
 
     /// A point where the rows so far may commit, replacing `range` under `delete_insert`: the batch is loaded (one `COPY` for all its files), then committed unless the table commits only at the end, or is logged and its `ctx.state` has not changed since the last commit (its rows then wait in the staging table).
@@ -612,7 +613,7 @@ pub(crate) async fn publish_table(
     table: &TablePlan,
     (destination, run): (&Destination, &LoadRun<'_>),
 ) -> Result<u64, LoaderError> {
-    let publisher = Publisher::open(table.clone(), destination, None).await?;
+    let publisher = Publisher::open(table.clone(), (destination, run.options), None).await?;
     let published = feed(reader, table, publisher, run).await;
     let (mut publisher, result) = published;
     publisher.close().await;
