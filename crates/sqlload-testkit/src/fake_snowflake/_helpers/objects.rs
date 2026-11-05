@@ -118,7 +118,7 @@ pub(crate) fn object_response(state: &SharedState, path: &str, headers: &HeaderM
     let total = body.len();
     match range {
         Some((from, to)) => {
-            let from = from.parse::<usize>().unwrap_or_default();
+            let from = from.parse::<usize>().unwrap_or(0);
             let to = to.parse::<usize>().unwrap_or(total - 1).min(total - 1);
             (
                 StatusCode::PARTIAL_CONTENT,

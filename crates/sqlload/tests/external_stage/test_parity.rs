@@ -1,6 +1,6 @@
-use sqlload_testkit::parity::main::run_cases::run_cases;
 use sqlload_testkit::parity::models::{ParityCase, ParityFiles, Side};
 
+use crate::helpers::all_outcomes;
 use crate::test_types::ParityTestCase;
 
 const APPEND: &str = "write_strategy = \"append\"";
@@ -212,8 +212,7 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
             expected_outcome: SAME,
         },
     ];
-    let cases: Vec<ParityCase> = test_cases.iter().map(|test_case| test_case.case).collect();
-    let outcomes = run_cases(&cases)?;
+    let outcomes = all_outcomes(&test_cases)?;
     for test_case in &test_cases {
         let outcome = outcomes
             .get(test_case.case.name)

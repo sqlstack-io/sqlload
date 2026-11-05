@@ -16,10 +16,10 @@ use crate::store_paths::models::{Location, StoreKind};
 /// The route a Snowflake connection's `stage` setting forces.
 fn forced_stage(stage: &StageConfig) -> Result<ForcedStage, String> {
     let (url, integration, name, store) = match stage {
-        StageConfig::User => return Ok(ForcedStage::User),
-        StageConfig::Table => return Ok(ForcedStage::Table),
-        StageConfig::Streaming => return Ok(ForcedStage::Streaming),
-        StageConfig::Insert => return Ok(ForcedStage::Insert),
+        StageConfig::User {} => return Ok(ForcedStage::User),
+        StageConfig::Table {} => return Ok(ForcedStage::Table),
+        StageConfig::Streaming {} => return Ok(ForcedStage::Streaming),
+        StageConfig::Insert {} => return Ok(ForcedStage::Insert),
         StageConfig::Internal { name } => {
             return Ok(ForcedStage::Internal { name: name.clone() });
         }

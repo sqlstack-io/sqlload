@@ -47,13 +47,13 @@ pub struct ProjectConfig {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StageConfig {
     /// The user stage `@~`.
-    User,
+    User {},
     /// The table stage `@%table`: the target's for an owned direct append, otherwise the staging table's.
-    Table,
+    Table {},
     /// Snowpipe Streaming into a transient staging table.
-    Streaming,
+    Streaming {},
     /// Batched multi-row `INSERT` into a transient staging table.
-    Insert,
+    Insert {},
     /// A named internal stage.
     Internal { name: String },
     /// An external stage on an S3 prefix: SQLLoad writes there itself, and Snowflake loads files of a files source under it directly.
