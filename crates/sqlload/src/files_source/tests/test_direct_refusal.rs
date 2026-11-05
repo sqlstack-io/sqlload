@@ -275,18 +275,18 @@ fn given_an_embedded_schema_over_another_parquet_type_when_reading_the_footer_th
     let millis = || timestamp(TimeUnit::Millisecond, None);
     let test_cases = [
         StoredColumnTestCase {
-            description: "INT96 under embedded microseconds",
+            description: "INT96 under embedded microseconds, which SQLLoad reads cut to that unit, is refused",
             message: "message m { optional int96 at; }",
             embedded: Some(micros()),
             expected_read: micros(),
-            expected: Ok(StoredRead::Nanos),
+            expected: Err("stored as INT96"),
         },
         StoredColumnTestCase {
-            description: "INT96 under embedded milliseconds",
+            description: "INT96 under embedded milliseconds, which SQLLoad reads cut to that unit, is refused",
             message: "message m { optional int96 at; }",
             embedded: Some(millis()),
             expected_read: millis(),
-            expected: Ok(StoredRead::Nanos),
+            expected: Err("stored as INT96"),
         },
         StoredColumnTestCase {
             description: "a bare INT64 under embedded milliseconds",
