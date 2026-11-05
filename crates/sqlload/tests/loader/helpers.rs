@@ -700,6 +700,82 @@ pub(crate) fn nanos_in_a_later_batch() -> Result<Vec<(String, bytes::Bytes)>, St
     Ok(files)
 }
 
+/// One Parquet file whose timestamp is an INT96 under an embedded Arrow type of microseconds, which `ArrowWriter` cannot produce.
+fn int96_file(key: String) -> Result<(String, bytes::Bytes), String> {
+    let text = |error: parquet::errors::ParquetError| error.to_string();
+    let schema = parquet::schema::parser::parse_message_type(
+        "message m { required int64 id; required int96 at; }",
+    )
+    .map_err(text)?;
+    let arrow = arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("id", arrow_schema::DataType::Int64, false),
+        arrow_schema::Field::new(
+            "at",
+            arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+            false,
+        ),
+    ]);
+    let properties = parquet::file::properties::WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue::new(
+            parquet::arrow::ARROW_SCHEMA_META_KEY.to_owned(),
+            parquet::arrow::encode_arrow_schema(&arrow),
+        )]))
+        .build();
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = parquet::file::writer::SerializedFileWriter::new(
+        &mut buffer,
+        std::sync::Arc::new(schema),
+        std::sync::Arc::new(properties),
+    )
+    .map_err(text)?;
+    let mut group = writer.next_row_group().map_err(text)?;
+    let mut ids = group.next_column().map_err(text)?.ok_or("no id column")?;
+    ids.typed::<parquet::data_type::Int64Type>()
+        .write_batch(&[1], None, None)
+        .map_err(text)?;
+    ids.close().map_err(text)?;
+    let mut ats = group.next_column().map_err(text)?.ok_or("no at column")?;
+    ats.typed::<parquet::data_type::Int96Type>()
+        .write_batch(
+            &[parquet::data_type::Int96::from(vec![0, 0, 2_440_588])],
+            None,
+            None,
+        )
+        .map_err(text)?;
+    ats.close().map_err(text)?;
+    group.close().map_err(text)?;
+    writer.close().map_err(text)?;
+    Ok((key, bytes::Bytes::from(buffer)))
+}
+
+/// The newest files, which planning samples, hold an INT96 under an embedded type the direct route allows.
+pub(crate) fn int96_newest() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(vec![int96_file(
+        "day=2026-11-01/part-0.parquet".to_owned(),
+    )?])
+}
+
+/// A full batch of microseconds, a batch of INT96 under embedded microseconds, then a batch of microseconds, the newest files planning samples.
+pub(crate) fn int96_in_a_later_batch() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files: Vec<(String, bytes::Bytes)> = Vec::new();
+    for index in 0..1000 {
+        files.push(timestamp_file(
+            format!("day=2026-11-01/part-{index:05}.parquet"),
+            false,
+        )?);
+        files.push(int96_file(format!(
+            "day=2026-11-02/part-{index:05}.parquet"
+        ))?);
+    }
+    for index in 0..25 {
+        files.push(timestamp_file(
+            format!("day=2026-11-03/part-{index:05}.parquet"),
+            false,
+        )?);
+    }
+    Ok(files)
+}
+
 /// `debug` on a project whose connection has `stage`, against a fake prepared as the case says: its lines, and the statements sent.
 pub(crate) async fn run_debug(
     stage: &str,

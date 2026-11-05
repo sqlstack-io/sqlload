@@ -1,8 +1,9 @@
 use crate::helpers::{
-    binary_later, flaky_probes, found, integration, long_names, long_names_with_text,
-    nanos_in_a_later_batch, nanos_newest, no_internal_stage, no_stage_or_channel, no_stage_or_host,
-    no_user_stage, not_found, not_owned, nothing, old_leftovers, run_async, run_debug, run_route,
-    similar_integration, stage_exists, two_batches, two_days, with_text,
+    binary_later, flaky_probes, found, int96_in_a_later_batch, int96_newest, integration,
+    long_names, long_names_with_text, nanos_in_a_later_batch, nanos_newest, no_internal_stage,
+    no_stage_or_channel, no_stage_or_host, no_user_stage, not_found, not_owned, nothing,
+    old_leftovers, run_async, run_debug, run_route, similar_integration, stage_exists, two_batches,
+    two_days, with_text,
 };
 use crate::test_types::{DebugStageTestCase, RouteFiles, RouteTestCase};
 
@@ -261,6 +262,34 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             stage: MANAGED,
             files: RouteFiles::Bucket,
             file_set: nanos_in_a_later_batch,
+            prepare: integration,
+            expected_plan: &[PULLS],
+            expected_sent: &[
+                "METADATA$FILENAME = 'src/day=2026-11-01/",
+                "METADATA$FILENAME = 'src/day=2026-11-03/",
+                "/_sqlload/",
+            ],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "an INT96 under an embedded microsecond type stays on SQLLoad, and plan names the column and reason",
+            stage: MANAGED,
+            files: RouteFiles::Bucket,
+            file_set: int96_newest,
+            prepare: integration,
+            expected_plan: &[
+                WRITES_PARQUET,
+                "at is Timestamp(",
+                "with no millisecond or microsecond timestamp logical type",
+            ],
+            expected_unsent: &["METADATA$FILENAME"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "a later batch of INT96 under embedded microseconds goes via SQLLoad, and the clean batches around it stay direct",
+            stage: MANAGED,
+            files: RouteFiles::Bucket,
+            file_set: int96_in_a_later_batch,
             prepare: integration,
             expected_plan: &[PULLS],
             expected_sent: &[

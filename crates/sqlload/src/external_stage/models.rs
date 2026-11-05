@@ -60,7 +60,7 @@ pub struct DirectCheck<'a> {
     pub format: SourceFormat,
     pub files: &'a [DataFile],
     pub columns: &'a [CopyColumn],
-    /// Columns the files hold as an Arrow type a direct `COPY` does not load exactly, and that type.
+    /// Columns the files hold in a way a direct `COPY` does not load exactly, and how.
     pub refused: &'a [(String, String)],
     /// Masked columns and how.
     pub masks: &'a [(String, MaskMethod)],

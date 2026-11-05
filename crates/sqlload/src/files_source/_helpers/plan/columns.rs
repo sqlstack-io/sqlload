@@ -1,4 +1,7 @@
-use arrow_schema::{DataType, SchemaRef, TimeUnit};
+use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
+use parquet::arrow::arrow_reader::ArrowReaderMetadata;
+use parquet::basic::{LogicalType, TimeUnit as ParquetTimeUnit};
+use parquet::schema::types::{Type as ParquetType, TypePtr};
 
 use crate::column_types::main::portable_type::portable_type;
 use crate::column_types::models::ColumnType;
@@ -10,7 +13,7 @@ use crate::files_source::models::FileColumn;
 pub(crate) struct SampledColumn {
     pub(crate) name: String,
     pub(crate) column_type: Option<Result<ColumnType, String>>,
-    /// The file's Arrow type when a direct `COPY` does not load it exactly.
+    /// How the column is held when a direct `COPY` does not load it exactly.
     pub(crate) direct_refusal: Option<String>,
 }
 
@@ -43,6 +46,54 @@ pub(crate) fn schema_columns(schema: &SchemaRef) -> Vec<SampledColumn> {
             direct_refusal: direct_refusal(field.data_type()),
         })
         .collect()
+}
+
+/// The columns of a Parquet footer, each checked for the direct route against what the file itself stores as well as its Arrow type: plan samples these, and each batch's check reads the same.
+pub(crate) fn parquet_columns(footer: &ArrowReaderMetadata) -> Vec<SampledColumn> {
+    let stored = footer
+        .metadata()
+        .file_metadata()
+        .schema_descr()
+        .root_schema()
+        .get_fields();
+    footer
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| SampledColumn {
+            name: field.name().clone(),
+            column_type: Some(portable_type(field)),
+            direct_refusal: stored_or_arrow_refusal(field, stored),
+        })
+        .collect()
+}
+
+fn stored_or_arrow_refusal(field: &Field, stored: &[TypePtr]) -> Option<String> {
+    let column = stored.iter().find(|column| column.name() == field.name());
+    direct_refusal(field.data_type())
+        .or_else(|| stored_refusal(field.data_type(), column.map(AsRef::as_ref)))
+}
+
+/// `data_type` and the logical type missing when the file's own column does not carry the one Snowflake needs to read it as `data_type`: an embedded Arrow schema can name a timestamp over a bare INT64 or an INT96 (decision 96), where Snowflake sees something else.
+pub(crate) fn stored_refusal(data_type: &DataType, stored: Option<&ParquetType>) -> Option<String> {
+    let logical = stored.and_then(|column| column.get_basic_info().logical_type_ref());
+    let missing = match (data_type, logical) {
+        (DataType::Timestamp(..), Some(LogicalType::Timestamp(timestamp)))
+            if matches!(
+                timestamp.unit,
+                ParquetTimeUnit::MILLIS | ParquetTimeUnit::MICROS
+            ) =>
+        {
+            None
+        }
+        (DataType::Timestamp(..), _) => Some("millisecond or microsecond timestamp"),
+        (DataType::Date32, Some(LogicalType::Date)) => None,
+        (DataType::Date32, _) => Some("date"),
+        (DataType::Decimal128(..), Some(LogicalType::Decimal { .. })) => None,
+        (DataType::Decimal128(..), _) => Some("decimal"),
+        _ => None,
+    };
+    missing.map(|missing| format!("{data_type} with no {missing} logical type"))
 }
 
 /// `data_type` as text unless a direct `COPY` is known to load it exactly (decision 96): nanosecond and INT96 timestamps, seconds and `Date64` (bare integers in the file, whose unit Snowflake guesses from their size), `UInt64`, `Float16`, `Decimal256`, timestamps in a zone other than UTC and anything else not listed stay with SQLLoad until parity proves them.

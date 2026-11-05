@@ -2,10 +2,10 @@
 
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::models::OpenFolder;
-use crate::files_source::_helpers::parquet::footers::footer_schema;
+use crate::files_source::_helpers::parquet::footers::parquet_footer;
 use crate::files_source::_helpers::plan::columns::{
     ColumnMerge, SampledColumn, case_problems, drop_loader_columns, file_columns, merge_columns,
-    schema_columns,
+    parquet_columns,
 };
 use crate::files_source::_helpers::plan::encoding::{file_codec, file_names};
 use crate::files_source::_helpers::plan::partitions::data_file;
@@ -98,7 +98,7 @@ async fn file_columns_of(
     encoding: &FilesEncoding,
 ) -> Result<Vec<SampledColumn>, FilesError> {
     match encoding.format {
-        SourceFormat::Parquet => Ok(schema_columns(&footer_schema(folder, &data.file).await?)),
+        SourceFormat::Parquet => Ok(parquet_columns(&parquet_footer(folder, &data.file).await?)),
         _ => sample_file(folder, &data.file, codec, encoding)
             .await
             .map_err(|reason| FilesError::File {

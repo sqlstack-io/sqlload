@@ -1,8 +1,12 @@
 use arrow_schema::{DataType, Field, TimeUnit};
 
-use crate::files_source::_helpers::plan::columns::direct_refusal;
-use crate::files_source::tests::helpers::{footer_type, timestamp};
-use crate::files_source::tests::test_types::{DirectRefusalTestCase, FooterZoneTestCase};
+use crate::files_source::_helpers::plan::columns::{
+    direct_refusal, parquet_columns, stored_refusal,
+};
+use crate::files_source::tests::helpers::{footer_type, only_column, overridden_footer, timestamp};
+use crate::files_source::tests::test_types::{
+    DirectRefusalTestCase, FooterZoneTestCase, StoredColumnTestCase, StoredRefusalTestCase,
+};
 
 #[test]
 fn given_a_files_arrow_type_when_choosing_the_route_then_only_exact_ones_go_direct() {
@@ -257,6 +261,179 @@ fn given_a_files_footer_when_reading_its_zone_then_the_direct_filter_sees_what_t
         assert_eq!(
             direct_refusal(&read).is_none(),
             test_case.expected_exact,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_an_embedded_schema_over_another_parquet_type_when_reading_the_footer_then_only_what_the_file_stores_goes_direct()
+-> Result<(), String> {
+    let micros = || timestamp(TimeUnit::Microsecond, None);
+    let millis = || timestamp(TimeUnit::Millisecond, None);
+    let test_cases = [
+        StoredColumnTestCase {
+            description: "INT96 under embedded microseconds",
+            message: "message m { optional int96 at; }",
+            embedded: Some(micros()),
+            expected_read: micros(),
+            expected_refusal: Some("no millisecond or microsecond timestamp logical type"),
+        },
+        StoredColumnTestCase {
+            description: "INT96 under embedded milliseconds",
+            message: "message m { optional int96 at; }",
+            embedded: Some(millis()),
+            expected_read: millis(),
+            expected_refusal: Some("no millisecond or microsecond timestamp logical type"),
+        },
+        StoredColumnTestCase {
+            description: "a bare INT64 under embedded milliseconds",
+            message: "message m { optional int64 at; }",
+            embedded: Some(millis()),
+            expected_read: millis(),
+            expected_refusal: Some("no millisecond or microsecond timestamp logical type"),
+        },
+        StoredColumnTestCase {
+            description: "a bare INT64 under embedded microseconds",
+            message: "message m { optional int64 at; }",
+            embedded: Some(micros()),
+            expected_read: micros(),
+            expected_refusal: Some("no millisecond or microsecond timestamp logical type"),
+        },
+        StoredColumnTestCase {
+            description: "a nanosecond column under embedded microseconds",
+            message: "message m { optional int64 at (TIMESTAMP(NANOS,false)); }",
+            embedded: Some(micros()),
+            expected_read: micros(),
+            expected_refusal: Some("no millisecond or microsecond timestamp logical type"),
+        },
+        StoredColumnTestCase {
+            description: "a timestamp with only the older converted type",
+            message: "message m { optional int64 at (TIMESTAMP_MICROS); }",
+            embedded: None,
+            expected_read: timestamp(TimeUnit::Microsecond, Some("UTC")),
+            expected_refusal: Some("no millisecond or microsecond timestamp logical type"),
+        },
+        StoredColumnTestCase {
+            description: "a normal microsecond column goes direct",
+            message: "message m { optional int64 at (TIMESTAMP(MICROS,false)); }",
+            embedded: None,
+            expected_read: micros(),
+            expected_refusal: None,
+        },
+        StoredColumnTestCase {
+            description: "a normal millisecond column goes direct",
+            message: "message m { optional int64 at (TIMESTAMP(MILLIS,false)); }",
+            embedded: None,
+            expected_read: millis(),
+            expected_refusal: None,
+        },
+        StoredColumnTestCase {
+            description: "a normal microsecond column under its own embedded type goes direct",
+            message: "message m { optional int64 at (TIMESTAMP(MICROS,true)); }",
+            embedded: Some(timestamp(TimeUnit::Microsecond, Some("UTC"))),
+            expected_read: timestamp(TimeUnit::Microsecond, Some("UTC")),
+            expected_refusal: None,
+        },
+        StoredColumnTestCase {
+            description: "a normal date goes direct",
+            message: "message m { optional int32 at (DATE); }",
+            embedded: None,
+            expected_read: DataType::Date32,
+            expected_refusal: None,
+        },
+        StoredColumnTestCase {
+            description: "a normal decimal goes direct",
+            message: "message m { optional int64 at (DECIMAL(10,2)); }",
+            embedded: None,
+            expected_read: DataType::Decimal128(10, 2),
+            expected_refusal: None,
+        },
+        StoredColumnTestCase {
+            description: "a bare integer is just an integer",
+            message: "message m { optional int64 at; }",
+            embedded: None,
+            expected_read: DataType::Int64,
+            expected_refusal: None,
+        },
+    ];
+    for test_case in test_cases {
+        let footer = overridden_footer(test_case.message, test_case.embedded.as_ref())?;
+        assert_eq!(
+            footer.schema().field(0).data_type(),
+            &test_case.expected_read,
+            "{}",
+            test_case.description
+        );
+        let columns = parquet_columns(&footer);
+        let reason = columns[0].direct_refusal.as_deref();
+        assert_eq!(
+            test_case.expected_refusal.is_some(),
+            reason.is_some(),
+            "{}: {reason:?}",
+            test_case.description
+        );
+        assert!(
+            reason
+                .unwrap_or_default()
+                .contains(test_case.expected_refusal.unwrap_or_default()),
+            "{}: {reason:?}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_files_own_column_when_checking_it_then_each_type_needs_its_logical_type()
+-> Result<(), String> {
+    let test_cases = [
+        StoredRefusalTestCase {
+            description: "Date32 over a bare INT32",
+            data_type: DataType::Date32,
+            message: Some("message m { optional int32 at; }"),
+            expected_refusal: Some("Date32 with no date logical type"),
+        },
+        StoredRefusalTestCase {
+            description: "Date32 over its logical type",
+            data_type: DataType::Date32,
+            message: Some("message m { optional int32 at (DATE); }"),
+            expected_refusal: None,
+        },
+        StoredRefusalTestCase {
+            description: "Decimal128 over a bare INT64",
+            data_type: DataType::Decimal128(10, 2),
+            message: Some("message m { optional int64 at; }"),
+            expected_refusal: Some("Decimal128(10, 2) with no decimal logical type"),
+        },
+        StoredRefusalTestCase {
+            description: "Decimal128 over its logical type",
+            data_type: DataType::Decimal128(10, 2),
+            message: Some("message m { optional int64 at (DECIMAL(10,2)); }"),
+            expected_refusal: None,
+        },
+        StoredRefusalTestCase {
+            description: "a timestamp the file does not hold",
+            data_type: timestamp(TimeUnit::Microsecond, None),
+            message: None,
+            expected_refusal: Some(
+                "Timestamp(µs) with no millisecond or microsecond timestamp logical type",
+            ),
+        },
+        StoredRefusalTestCase {
+            description: "other types need nothing more",
+            data_type: DataType::Float64,
+            message: Some("message m { optional double at; }"),
+            expected_refusal: None,
+        },
+    ];
+    for test_case in test_cases {
+        let column = only_column(test_case.message)?;
+        assert_eq!(
+            stored_refusal(&test_case.data_type, column.as_deref()).as_deref(),
+            test_case.expected_refusal,
             "{}",
             test_case.description
         );

@@ -22,7 +22,7 @@ pub struct DataFile {
 pub struct FileColumn {
     pub name: String,
     pub column_type: Result<ColumnType, String>,
-    /// The file's Arrow type when a direct `COPY` does not load it exactly, among the files this was read from.
+    /// How the column is held when a direct `COPY` does not load it exactly, among the files this was read from.
     pub direct_refusal: Option<String>,
 }
 
