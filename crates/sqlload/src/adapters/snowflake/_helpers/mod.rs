@@ -1,10 +1,12 @@
 pub(crate) mod create_stage;
 pub(crate) mod pick_route;
 pub(crate) mod probes;
+pub(crate) mod row_stream;
 pub(crate) mod rows_loaded;
 pub(crate) mod sql_adapter;
 pub(crate) mod stale_folders;
 pub(crate) mod step_failure;
 pub(crate) mod table_stage;
+pub(crate) mod table_writer;
 pub(crate) mod type_names;
 pub(crate) mod values;

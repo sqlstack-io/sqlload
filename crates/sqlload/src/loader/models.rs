@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::adapters::contract::models::{TableName, WriteMode};
-use crate::adapters::dispatch::models::Destination;
+use crate::adapters::dispatch::models::{Destination, Writer};
 use crate::adapters::files::models::{
     FilesWriter, PartitionFolder, PendingLoad, ReplacedFiles, TableFiles, TablePath, TableState,
 };
@@ -13,7 +13,6 @@ use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, Footer, TextChecks};
 use crate::masking::models::MaskRules;
-use crate::parquet_parts::models::PartWriter;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
     BatchStep, Contract, FilesFormat, NewTables, OnSchemaChange, Policy, ProjectConfig,
@@ -26,9 +25,7 @@ use crate::run_log::main::later_cursor::later_cursor;
 use crate::run_log::main::next_stamp::next_stamp;
 use crate::run_log::models::{RunOutcome, RunRecord, UnreadableRecord};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
-use crate::stage_api::models::StageInfo;
 use crate::store_paths::models::Location;
-use crate::streaming_api::models::StreamingClient;
 
 /// Where a setting's value came from, for `plan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -432,18 +429,9 @@ pub struct Publisher {
     pub staging: Option<TableName>,
     /// The batch being filled, from 1.
     pub batch: u64,
-    /// Snowflake: the upload credentials this batch fetched, for all its files.
-    pub stage: Option<StageInfo>,
-    /// Snowflake: how this load's rows go in.
-    pub route: Option<StageRoute>,
-    /// Snowflake: the folder of an external stage, written with SQLLoad's own client.
-    pub external_folder: Option<OpenFolder>,
-    /// Snowflake: the channel rows are streaming through.
-    pub stream: Option<RowStream>,
-    /// Snowflake: the batch's Parquet being written, and the names of its files staged so far.
-    pub parts: PartWriter,
-    pub staged: Vec<String>,
-    /// Arrow bytes of the batch so far (DuckDB, which stages no files).
+    /// How the batches get into the destination.
+    pub writer: Writer,
+    /// Arrow bytes of the batch so far, which measure it when the writer stages no files.
     pub arrow_bytes: usize,
     pub batch_rows: u64,
     /// Rows in `staging` not committed yet, and what they replace.
@@ -457,8 +445,6 @@ pub struct Publisher {
     /// `ctx.state` when the newest staged batch crossed, and when the last commit was made.
     pub state: Option<String>,
     pub committed_state: Option<String>,
-    /// DuckDB: a transaction is open on the table's connection.
-    pub open_transaction: bool,
     /// The bytes a batch holds before it may commit.
     pub batch_bytes: usize,
     /// A files target's folder and the commit being written.
@@ -472,17 +458,6 @@ pub enum DirectLoaded {
     Committed(u64),
     /// In the staging table, waiting for the commit.
     Staged(u64),
-}
-
-/// A channel a load's rows stream through.
-#[derive(Debug)]
-pub struct RowStream {
-    pub client: StreamingClient,
-    pub pipe: String,
-    pub channel: String,
-    pub continuation: String,
-    /// The offset of the last request sent, 0 before any.
-    pub offset: i64,
 }
 
 /// A files target table's load: its folder, what the load replaces, and the files of the commit being written.

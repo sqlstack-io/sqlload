@@ -13,3 +13,12 @@ pub struct DuckDbDestination {
 /// DuckDB's SQL dialect.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DuckDbSql;
+
+/// One table's write session on DuckDB: Arrow batches appended inside a transaction on the table's own connection.
+#[cfg(feature = "duckdb")]
+#[derive(Debug)]
+pub struct DuckDbWriter {
+    pub destination: DuckDbDestination,
+    /// A transaction is open on the table's connection.
+    pub open_transaction: bool,
+}
