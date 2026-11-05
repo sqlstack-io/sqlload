@@ -130,11 +130,6 @@ pub(crate) fn build_spec(
     let mut problems = strategy_problems(strategy, &unique_key, cursor.as_ref());
     problems.extend(column_reference_problems(table, overrides));
     let batch = layered(&settings.batch, &defaults.batch).map(|(value, _)| value);
-    if batch.is_some() && cursor.is_none() {
-        problems.push(
-            "batch splits the cursor range into windows, so it needs a cursor_column".to_owned(),
-        );
-    }
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
         let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.column == *masked);

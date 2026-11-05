@@ -92,6 +92,26 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             expected_windows: Err("a date cursor's batch must be whole days, not 1h"),
         },
         SplitWindowsTestCase {
+            description: "a step giving more than 100,000 windows is refused",
+            from: Some("2000-01-01 00:00:00.000000+00"),
+            to: Some("2026-01-01 00:00:00.000000+00"),
+            inclusive: true,
+            step: BatchStep::Duration(std::time::Duration::from_secs(60)),
+            cursor_type: Some(ColumnType::TimestampTz),
+            expected_windows: Err(
+                "batch splits the read into 13675680 windows, more than 100000; use a larger batch, or narrow the read with --start-cursor/--end-cursor",
+            ),
+        },
+        SplitWindowsTestCase {
+            description: "the range already read gives no windows",
+            from: Some("10"),
+            to: Some("10"),
+            inclusive: true,
+            step: BatchStep::Integer(5),
+            cursor_type: Some(ColumnType::Int),
+            expected_windows: Ok(&[]),
+        },
+        SplitWindowsTestCase {
             description: "a duration batch on an integer cursor is refused",
             from: Some("1"),
             to: None,

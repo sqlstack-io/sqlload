@@ -1,3 +1,4 @@
+use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
@@ -558,12 +559,17 @@ fn invalid(error: impl std::fmt::Display) -> LoaderError {
 impl PythonFeed {
     /// Call the function for each window (or once), committing each window, then commit the rest.
     pub(crate) async fn load(&mut self, load: &PythonLoad<'_>) -> Result<TableLoaded, LoaderError> {
-        let windows: Vec<Option<CursorWindow>> = match &load.table.commits {
-            CommitRule::Windows(windows) => windows.iter().cloned().map(Some).collect(),
-            _ => vec![None],
+        let windows = match &load.table.commits {
+            CommitRule::Windows(windows) => Some(windows),
+            _ => None,
         };
+        let calls = windows.map_or(1, |windows| windows.count);
         let table = load.table.spec.source_table.name.clone();
-        for window in &windows {
+        for index in 0..calls {
+            let window: Option<CursorWindow> = windows
+                .map(|windows| window_at(windows, index))
+                .transpose()
+                .map_err(LoaderError::Invalid)?;
             let stream =
                 start_read(load.host.clone(), table_read(load, window.as_ref(), self)).await?;
             self.read(load, stream, window.as_ref()).await?;

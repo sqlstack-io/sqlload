@@ -2,70 +2,80 @@
 
 use chrono::{Duration as TimeDelta, NaiveDate, NaiveDateTime};
 
-use crate::batch_plan::constants::SECONDS_PER_DAY;
-use crate::batch_plan::models::{CursorWindow, WindowSplit};
+use crate::batch_plan::constants::{MAX_WINDOWS, SECONDS_PER_DAY};
+use crate::batch_plan::models::{WindowPlan, WindowSplit, WindowStep};
 use crate::column_types::models::ColumnType;
 use crate::project::models::BatchStep;
 use crate::write_sql::constants::CURSOR_TIMESTAMP_FORMAT;
 
-/// The windows `[from, from + step)`, ... up to the end (`--end-cursor-*`, else now; for a date cursor the end of today), as cursor text; the first keeps the read's inclusiveness. A range without a start cannot be split, so `cursor_start` must give the first load one.
-pub fn split_windows(split: &WindowSplit<'_>) -> Result<Vec<CursorWindow>, String> {
+/// The windows `[from, from + step)`, ... up to the end (`--end-cursor-*`, else now; for a date cursor the end of today), counted but not listed; the first keeps the read's inclusiveness. A range without a start cannot be split, so `cursor_start` must give the first load one; a step giving more than 100,000 windows is refused.
+pub fn split_windows(split: &WindowSplit<'_>) -> Result<WindowPlan, String> {
     let Some(from) = split.from else {
         return Err(
             "batch needs a start to split the cursor range: set cursor_start for the first load"
                 .to_owned(),
         );
     };
-    let bounds = match (split.step, split.cursor_type) {
+    let plan = match (split.step, split.cursor_type) {
         (BatchStep::Integer(step), Some(ColumnType::Int | ColumnType::SmallInt) | None) => {
-            integer_bounds(from, split.to, step)?
+            integer_plan(split, from, step)?
         }
         (BatchStep::Integer(_), Some(other)) => {
             return Err(format!(
                 "an integer batch needs an integer cursor, but the cursor is {other}; give a duration such as \"1d\""
             ));
         }
-        (BatchStep::Duration(step), cursor_type) => time_bounds(split, from, step, cursor_type)?,
+        (BatchStep::Duration(step), cursor_type) => time_plan(split, from, step, cursor_type)?,
+        (BatchStep::Whole, _) => {
+            return Err("batch = \"whole\" reads in one piece; it has no windows".to_owned());
+        }
     };
-    Ok(bounds
-        .windows(2)
-        .enumerate()
-        .map(|(index, pair)| CursorWindow {
-            from: Some(pair[0].clone()),
-            to: Some(pair[1].clone()),
-            inclusive: index > 0 || split.inclusive,
-        })
-        .collect())
+    if plan.count > MAX_WINDOWS {
+        return Err(format!(
+            "batch splits the read into {} windows, more than {MAX_WINDOWS}; use a larger batch, or narrow the read with --start-cursor/--end-cursor",
+            plan.count
+        ));
+    }
+    Ok(plan)
 }
 
-/// `from`, `from + step`, ... and the end: an integer range needs `--end-cursor-*`, since only time has a natural end.
-fn integer_bounds(from: &str, to: Option<&str>, step: u64) -> Result<Vec<String>, String> {
+/// How many steps of `step` cover `span` (none when it is not positive).
+fn steps(span: i128, step: i128) -> u64 {
+    match span > 0 {
+        true => u64::try_from((span + step - 1) / step).unwrap_or(u64::MAX),
+        false => 0,
+    }
+}
+
+/// An integer range, which needs an end: only time has a natural one.
+fn integer_plan(split: &WindowSplit<'_>, from: &str, step: u64) -> Result<WindowPlan, String> {
     let parse = |text: &str| {
         text.trim()
             .parse::<i128>()
             .map_err(|_| format!("{text:?} is not an integer, which an integer batch needs"))
     };
-    let Some(to) = to else {
+    let Some(to) = split.to else {
         return Err(
             "an integer batch needs --end-cursor-int to know where the last window ends (a Postgres source ends at its current maximum)".to_owned(),
         );
     };
-    let (mut at, end) = (parse(from)?, parse(to)?);
-    let mut bounds = vec![at.to_string()];
-    while at < end {
-        at = (at + i128::from(step)).min(end);
-        bounds.push(at.to_string());
-    }
-    Ok(bounds)
+    let (start, end, step) = (parse(from)?, parse(to)?, i128::from(step));
+    Ok(WindowPlan {
+        start: start.to_string(),
+        end: end.to_string(),
+        step: WindowStep::Integer(step),
+        inclusive: split.inclusive,
+        count: steps(end - start, step),
+    })
 }
 
-/// Date or timestamp bounds; the start's text decides the kind before the cursor's type is known.
-fn time_bounds(
+/// A date or timestamp range; the start's text decides the kind before the cursor's type is known.
+fn time_plan(
     split: &WindowSplit<'_>,
     from: &str,
     step: std::time::Duration,
     cursor_type: Option<&ColumnType>,
-) -> Result<Vec<String>, String> {
+) -> Result<WindowPlan, String> {
     let is_date = match cursor_type {
         Some(ColumnType::Date) => true,
         Some(ColumnType::TimestampTz | ColumnType::TimestampNtz) => false,
@@ -92,32 +102,39 @@ fn time_bounds(
             Some(to) => parse(to)?,
             None => split.now.date_naive() + TimeDelta::days(1),
         };
-        let mut at = parse(from)?;
-        let mut bounds = vec![at.format("%Y-%m-%d").to_string()];
-        while at < end {
-            at = (at + delta).min(end);
-            bounds.push(at.format("%Y-%m-%d").to_string());
-        }
-        return Ok(bounds);
+        let start = parse(from)?;
+        let days = delta.num_days();
+        return Ok(WindowPlan {
+            start: start.format("%Y-%m-%d").to_string(),
+            end: end.format("%Y-%m-%d").to_string(),
+            step: WindowStep::Days(days),
+            inclusive: split.inclusive,
+            count: steps(i128::from((end - start).num_days()), i128::from(days)),
+        });
     }
     let zoned = !matches!(cursor_type, Some(ColumnType::TimestampNtz));
     let parse = |text: &str| {
         NaiveDateTime::parse_from_str(text.trim_end_matches("+00"), CURSOR_TIMESTAMP_FORMAT)
             .map_err(|_| format!("{text:?} is not a cursor timestamp"))
     };
-    let print = |time: NaiveDateTime| match zoned {
-        true => format!("{}+00", time.format(CURSOR_TIMESTAMP_FORMAT)),
-        false => time.format(CURSOR_TIMESTAMP_FORMAT).to_string(),
-    };
     let end = match split.to {
         Some(to) => parse(to)?,
         None => split.now.naive_utc(),
     };
-    let mut at = parse(from)?;
-    let mut bounds = vec![print(at)];
-    while at < end {
-        at = (at + delta).min(end);
-        bounds.push(print(at));
-    }
-    Ok(bounds)
+    let start = parse(from)?;
+    let micros = delta
+        .num_microseconds()
+        .ok_or_else(|| "the batch step is too long".to_owned())?;
+    let span = (end - start).num_microseconds().unwrap_or(i64::MAX);
+    let print = |time: NaiveDateTime| match zoned {
+        true => format!("{}+00", time.format(CURSOR_TIMESTAMP_FORMAT)),
+        false => time.format(CURSOR_TIMESTAMP_FORMAT).to_string(),
+    };
+    Ok(WindowPlan {
+        start: print(start),
+        end: print(end),
+        step: WindowStep::Micros { micros, zoned },
+        inclusive: split.inclusive,
+        count: steps(i128::from(span), i128::from(micros)),
+    })
 }

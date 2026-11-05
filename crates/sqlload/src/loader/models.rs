@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::batch_plan::models::{CursorWindow, FileGroup};
+use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::models::DuckDbDestination;
@@ -347,15 +347,33 @@ pub enum SourceEnd {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitRule {
     /// Each window of the table's `batch`, read and committed by itself.
-    Windows(Vec<CursorWindow>),
-    /// Read in cursor order (an index leads with the cursor), committing about every 1 GB, only between distinct cursor values.
-    Ordered { column: String },
+    Windows(WindowPlan),
+    /// Read in cursor order (an index leads with the cursor, NULLs first), committing about every 1 GB, only between distinct cursor values; `delete_insert` replaces `[previous cut, next cut)` each time.
+    Ordered {
+        column: String,
+        cursor_type: ColumnType,
+    },
     /// About every 1 GB (no cursor, so no position to keep in order).
     Size,
     /// A files source's batches of whole partitions.
     FileGroups(Vec<FileGroup>),
-    /// The whole read is one commit (an unordered cursor read: committing part of it could skip rows).
-    Whole,
+    /// The whole read is one commit.
+    Whole(WholeReason),
+}
+
+/// Why a table's read commits once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WholeReason {
+    /// An unordered cursor read: committing part of it could skip rows.
+    Unordered,
+    /// A text cursor, whose order the source and the destination may collate differently.
+    TextCursor,
+    /// `append` without a cursor: a rerun after a partial commit would duplicate what committed.
+    AppendWithoutCursor,
+    /// `batch = "whole"`.
+    Chosen,
+    /// The table cannot load, so it has no commits.
+    Blocked,
 }
 
 /// What the rows of one commit replace under `delete_insert`.

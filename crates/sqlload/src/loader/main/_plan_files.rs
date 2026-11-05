@@ -15,7 +15,7 @@ use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_files_window::files_window;
 use crate::loader::models::{
     CommitRule, FilesContext, FilesOutput, FilesWindowRequest, LiveFiles, PlanOptions, TablePlan,
-    TableSpec,
+    TableSpec, WholeReason,
 };
 use crate::project::models::FilesFormat;
 use crate::schema_plan::models::LiveColumn;
@@ -88,7 +88,7 @@ pub(in crate::loader) async fn plan_files_table(
             if schema.blocked.is_none() {
                 schema = blocked_plan(vec![problem]);
             }
-            CommitRule::Whole
+            CommitRule::Whole(WholeReason::Blocked)
         }
     };
     Ok(TablePlan {

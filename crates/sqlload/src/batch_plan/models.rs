@@ -33,3 +33,29 @@ pub struct FileGroup {
     /// The partition values of the cursor column the group replaces (`delete_insert`); empty otherwise.
     pub values: Vec<String>,
 }
+
+/// How a [`WindowPlan`] steps from one bound to the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowStep {
+    /// Whole days of a date cursor.
+    Days(i64),
+    /// A timestamp cursor's step in microseconds; `zoned` bounds end in `+00`.
+    Micros {
+        micros: i64,
+        zoned: bool,
+    },
+    Integer(i128),
+}
+
+/// A read range split into `count` windows of `step`, each worked out when it is read, so a long range never holds its windows in memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowPlan {
+    /// The first window's start, as cursor text.
+    pub start: String,
+    /// Where the last window ends, as cursor text.
+    pub end: String,
+    pub step: WindowStep,
+    /// Whether the first window reads its start; later windows always read theirs.
+    pub inclusive: bool,
+    pub count: u64,
+}

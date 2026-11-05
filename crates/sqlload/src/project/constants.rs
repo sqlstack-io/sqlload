@@ -92,3 +92,6 @@ pub const DEFAULT_TABLE_NAME: &str = "{source}__{table}";
 
 /// The destination table name template for a files source, which has one table.
 pub const DEFAULT_FILES_TABLE_NAME: &str = "{source}";
+
+/// The `batch` value that opts a table out of windows and ordered reads.
+pub const WHOLE_BATCH: &str = "whole";

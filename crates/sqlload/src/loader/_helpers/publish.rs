@@ -1,6 +1,7 @@
 use crate::batch_plan::constants::BATCH_BYTES;
 use crate::batch_plan::main::cut_index::cut_index;
 use crate::batch_plan::main::last_value::last_value;
+use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::delete_files::delete_files;
@@ -73,6 +74,7 @@ use crate::snowflake_destination::main::remove_staged::remove_staged;
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
 use crate::write_sql::main::commit_statements::commit_statements;
+use crate::write_sql::main::cursor_text::cursor_text;
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::staging_changes::staging_changes;
 use crate::write_sql::main::staging_table::staging_table;
@@ -85,6 +87,7 @@ use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
 use arrow_array::StringArray;
 use arrow_array::TimestampMicrosecondArray;
+use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::Field;
 use arrow_schema::Schema;
 use bytes::Bytes;
@@ -579,6 +582,18 @@ async fn snapshot(reader: &SourceReader, statement: &str) -> Result<(), LoaderEr
     }
 }
 
+/// Whether the table's commits delete a cursor range (`delete_insert`), so its last range commits even without rows: rows deleted upstream go too.
+fn deletes_range(table: &TablePlan) -> bool {
+    matches!(table.mode, WriteMode::DeleteInsert { .. })
+}
+
+/// The cursor value at row `index` of `values` as cursor text, where an ordered read's commit ends.
+fn cut_value(values: &dyn Array, index: usize, cursor_type: &ColumnType) -> Result<String, String> {
+    let formatter = ArrayFormatter::try_new(values, &FormatOptions::default())
+        .map_err(|error| error.to_string())?;
+    cursor_text(&formatter.value(index).to_string(), cursor_type)
+}
+
 /// Run Parquet encoding on a blocking thread, so tables loading at once encode in parallel.
 async fn encode<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
@@ -641,7 +656,8 @@ async fn feed(
         match &table.commits {
             CommitRule::Windows(windows) => {
                 snapshot(reader, SNAPSHOT_BEGIN).await?;
-                for window in windows {
+                for index in 0..windows.count {
+                    let window = &window_at(windows, index).map_err(LoaderError::Invalid)?;
                     let part = ReadPart {
                         filter: window_filter(table, window),
                         batch_bytes,
@@ -687,13 +703,17 @@ async fn feed(
                     publisher.cut(range).await?;
                 }
             }
-            CommitRule::Ordered { column } => {
+            CommitRule::Ordered {
+                column,
+                cursor_type,
+            } => {
                 let part = ReadPart {
-                    order_by: Some(format!("\"{}\"", column.replace('"', "\"\""))),
+                    order_by: Some(format!("\"{}\" NULLS FIRST", column.replace('"', "\"\""))),
                     batch_bytes,
                     ..ReadPart::default()
                 };
                 let mut last: Option<String> = None;
+                let mut cut_from = table.window.as_ref().and_then(|window| window.from.clone());
                 read_source(reader, table, part, async |batch| {
                     let values = batch
                         .column_by_name(column)
@@ -706,8 +726,13 @@ async fn feed(
                     last = last_value(values.as_ref())?.or(last.take());
                     stage(&mut publisher, batch.slice(0, at)).await?;
                     if at < batch.num_rows() {
+                        let cut_at = cut_value(values.as_ref(), at, cursor_type)?;
+                        let range = CommitRange::Window {
+                            from: cut_from.replace(cut_at.clone()),
+                            to: Some(cut_at),
+                        };
                         publisher
-                            .cut(CommitRange::Planned)
+                            .cut(range)
                             .await
                             .map_err(|error| error.to_string())?;
                         stage(&mut publisher, batch.slice(at, batch.num_rows() - at)).await?;
@@ -715,6 +740,12 @@ async fn feed(
                     Ok(())
                 })
                 .await?;
+                if deletes_range(table) {
+                    let to = table.window.as_ref().and_then(|window| window.to.clone());
+                    publisher
+                        .cut(CommitRange::Window { from: cut_from, to })
+                        .await?;
+                }
             }
             CommitRule::Size => {
                 let part = ReadPart {
@@ -733,7 +764,7 @@ async fn feed(
                 })
                 .await?;
             }
-            CommitRule::Whole => {
+            CommitRule::Whole(_) => {
                 let part = ReadPart {
                     batch_bytes,
                     ..ReadPart::default()
@@ -742,6 +773,9 @@ async fn feed(
                     stage(&mut publisher, batch).await
                 })
                 .await?;
+                if deletes_range(table) {
+                    publisher.cut(CommitRange::Planned).await?;
+                }
             }
         }
         publisher.finish(None).await

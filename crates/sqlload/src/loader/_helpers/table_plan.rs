@@ -21,9 +21,11 @@ use crate::loader::models::ReadWindow;
 use crate::loader::models::SourceEnd;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
+use crate::loader::models::WholeReason;
 use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::ReadColumn;
 use crate::postgres_source::models::SourceTable;
+use crate::project::models::BatchStep;
 use crate::project::models::Contract;
 use crate::project::models::WriteStrategy;
 use crate::routing::main::plan_route::plan_route;
@@ -112,7 +114,7 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         output: None,
         exists: false,
         logged: None,
-        commits: CommitRule::Whole,
+        commits: CommitRule::Whole(WholeReason::Blocked),
     }
 }
 
@@ -133,11 +135,28 @@ pub(crate) async fn plan_table(
         ));
     }
     let plan = plan_table_once(spec, destination, options).await?;
-    let plan = match with_live_columns(spec, plan.live.as_deref()) {
+    let mut plan = match with_live_columns(spec, plan.live.as_deref()) {
         Some(augmented) => plan_table_once(&augmented, destination, options).await?,
         None => plan,
     };
+    plan.schema.warnings.extend(ignored_batch(&plan));
     with_run_log(plan, destination, options).await
+}
+
+/// Why the table's `batch` setting has no effect, if it has none: a files source commits by whole partitions, `replace` and `--reload` swap the whole table in once, and windows need a cursor.
+fn ignored_batch(plan: &TablePlan) -> Option<String> {
+    let spec = &plan.spec;
+    let step = spec.batch?;
+    let reason = match (&spec.files, &plan.mode, &spec.cursor, step) {
+        (Some(_), _, _, _) => "a files source commits in batches of whole partitions",
+        (None, WriteMode::Replace, _, _) => "replace swaps the whole table in once",
+        (None, WriteMode::Recreate, _, _) => "--reload rebuilds the whole table once",
+        (None, _, None, BatchStep::Duration(_) | BatchStep::Integer(_)) => {
+            "windows need a cursor_column"
+        }
+        _ => return None,
+    };
+    Some(format!("batch is ignored: {reason}"))
 }
 
 /// A table's read columns, live columns and schema plan once more (one read of the live columns), for a load whose source shows new columns; the rest of its plan stays.
@@ -210,7 +229,7 @@ async fn plan_table_once(
                 files: None,
                 output: None,
                 logged: None,
-                commits: CommitRule::Whole,
+                commits: CommitRule::Whole(WholeReason::Blocked),
             });
         }
     };
@@ -348,7 +367,7 @@ async fn plan_table_once(
             if schema.blocked.is_none() {
                 schema = blocked_plan(vec![problem]);
             }
-            CommitRule::Whole
+            CommitRule::Whole(WholeReason::Blocked)
         }
     };
     Ok(TablePlan {
@@ -529,13 +548,22 @@ async fn lower_bound(
             None,
         )));
     }
+    let cursor_start = match cursor
+        .start
+        .as_deref()
+        .map(|start| cursor_text(start, cursor_type))
+    {
+        Some(Ok(start)) => Some(start),
+        Some(Err(problem)) => return Ok(Err(format!("cursor_start: {problem}"))),
+        None => None,
+    };
     if options.reload || !request.table_exists {
         let label = if options.reload {
             "reload"
         } else {
             "first run"
         };
-        return Ok(Ok(match &cursor.start {
+        return Ok(Ok(match &cursor_start {
             Some(start) => (
                 Some(start.clone()),
                 format!("{} {label}, from cursor_start {start}", cursor.column),
@@ -574,7 +602,7 @@ async fn lower_bound(
         Some(Err(problem)) => return Ok(Err(problem)),
         None => (None, None),
     };
-    Ok(Ok(match (maximum, &cursor.start) {
+    Ok(Ok(match (maximum, &cursor_start) {
         (Some(maximum), _) => {
             let note = format!(
                 "{} from {maximum} (destination maximum{lookback})",
@@ -674,7 +702,7 @@ pub(crate) struct CommitRequest<'a> {
     pub(crate) mode: &'a WriteMode,
 }
 
-/// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch` windows; an ordered Postgres read (an index leads with the cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads; about every 1 GB without a cursor.
+/// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch` windows; an ordered Postgres read (an index leads with a non-text cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads, for `batch = "whole"`, and for `append` without a cursor; about every 1 GB for other tables without a cursor.
 pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, String> {
     let spec = request.spec;
     if let Some(files) = request.files {
@@ -684,8 +712,14 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
         };
         return Ok(CommitRule::FileGroups(file_groups(&files.files, by_value)));
     }
+    if spec.batch == Some(BatchStep::Whole) {
+        return Ok(CommitRule::Whole(WholeReason::Chosen));
+    }
     let Some(cursor) = &spec.cursor else {
-        return Ok(CommitRule::Size);
+        return Ok(match request.mode {
+            WriteMode::Append => CommitRule::Whole(WholeReason::AppendWithoutCursor),
+            _ => CommitRule::Size,
+        });
     };
     if let (Some(step), Some(window)) = (spec.batch, request.window) {
         let to = match (&window.to, &spec.source_end) {
@@ -714,11 +748,19 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
     let indexed = spec.python.is_none()
         && plain_column
         && spec.source_table.indexed_columns.contains(&cursor.column);
-    match (indexed, request.mode) {
-        (true, WriteMode::Append | WriteMode::Merge { .. }) => Ok(CommitRule::Ordered {
+    let ordered_mode = matches!(
+        request.mode,
+        WriteMode::Append | WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. }
+    );
+    match (indexed && ordered_mode, request.cursor_type) {
+        (true, Some(ColumnType::Text | ColumnType::Varchar(_))) => {
+            Ok(CommitRule::Whole(WholeReason::TextCursor))
+        }
+        (true, Some(cursor_type)) => Ok(CommitRule::Ordered {
             column: cursor.column.clone(),
+            cursor_type: cursor_type.clone(),
         }),
-        _ => Ok(CommitRule::Whole),
+        _ => Ok(CommitRule::Whole(WholeReason::Unordered)),
     }
 }
 

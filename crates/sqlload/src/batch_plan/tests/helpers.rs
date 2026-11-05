@@ -7,6 +7,7 @@ use crate::batch_plan::main::cut_index::cut_index;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::last_value::last_value;
 use crate::batch_plan::main::split_windows::split_windows;
+use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::{CursorWindow, WindowSplit};
 use crate::batch_plan::tests::test_types::{FileGroupsTestCase, SplitWindowsTestCase};
 use crate::file_store::models::StoredFile;
@@ -29,7 +30,10 @@ pub(crate) fn windows(test_case: &SplitWindowsTestCase) -> Result<Vec<String>, S
         cursor_type: test_case.cursor_type.as_ref(),
         now: now(),
     };
-    Ok(split_windows(&split)?.iter().map(window_text).collect())
+    let plan = split_windows(&split)?;
+    (0..plan.count)
+        .map(|index| window_at(&plan, index).map(|window| window_text(&window)))
+        .collect()
 }
 
 fn window_text(window: &CursorWindow) -> String {
