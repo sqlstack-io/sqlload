@@ -1,9 +1,10 @@
-use crate::adapters::contract::models::TableName;
+use crate::adapters::contract::models::{TableName, WriteMode, WriteTarget};
 use crate::auth::models::Authenticator;
 use crate::column_types::models::ColumnType;
 use crate::config::models::{AuthConfig, DestinationConfig};
 use crate::file_store::models::OpenFolder;
-use crate::files_source::models::{DataFile, SourceFormat};
+use crate::files_source::models::{BatchFooters, DataFile, FilesRead, SourceFormat};
+use crate::loader::models::TableSpec;
 use crate::parquet_parts::models::PartWriter;
 use crate::project::models::MaskMethod;
 use crate::schema_plan::models::DesiredColumn;
@@ -266,4 +267,30 @@ pub struct SnowflakeWriter {
     pub staged: Vec<String>,
     /// The upload credentials this batch fetched, for all its files.
     pub stage: Option<StageInfo>,
+}
+
+/// What a direct batch's `COPY` did, with the rows it loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectLoaded {
+    /// Committed with the `COPY`.
+    Committed(u64),
+    /// In the staging table, waiting for the commit.
+    Staged(u64),
+}
+
+/// One files batch Snowflake may `COPY` straight from the source's own files.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectBatch<'a> {
+    pub spec: &'a TableSpec,
+    /// The files table's planned read.
+    pub read: &'a FilesRead,
+    /// The table's columns as the load writes them.
+    pub write_columns: &'a [DesiredColumn],
+    pub target: WriteTarget<'a>,
+    /// The load time as an ISO 8601 UTC timestamp, written to every row.
+    pub loaded_at: &'a str,
+    pub files: &'a [DataFile],
+    pub footers: &'a BatchFooters,
+    /// The write mode of the batch's commit.
+    pub mode: &'a WriteMode,
 }

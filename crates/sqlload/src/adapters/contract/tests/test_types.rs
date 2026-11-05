@@ -115,3 +115,12 @@ pub(crate) struct TypeFitTestCase {
     pub(crate) warehouse: Warehouse,
     pub(crate) expected_fit: TypeFit,
 }
+
+pub(crate) struct ContractTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) mode: WriteMode,
+    /// The staging table is a build table, swapped in at the end.
+    pub(crate) built: bool,
+    /// Whether rows are copied from the staging table into the table.
+    pub(crate) expected_copy: bool,
+}

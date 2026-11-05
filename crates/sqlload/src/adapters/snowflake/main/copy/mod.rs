@@ -1,5 +1,6 @@
-pub mod copy_rows;
-pub mod copy_staged;
-pub mod direct_copies;
-pub mod direct_problem;
-pub mod script_copy_rows;
+pub(in crate::adapters) mod _copy_rows;
+pub(in crate::adapters) mod _copy_staged;
+pub(in crate::adapters) mod _direct_copies;
+pub(in crate::adapters) mod _direct_problem;
+pub(in crate::adapters) mod _script_copy_rows;
+pub mod direct_check;

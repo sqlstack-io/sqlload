@@ -7,7 +7,7 @@ use crate::adapters::snowflake::models::SnowflakeSql;
 use crate::adapters::snowflake::models::{ExternalStage, StageObject};
 
 /// The stage loads use, as SQL: `@"DB"."SCHEMA"."_SQLLOAD_STAGE"` in the target's loader schema, or `@` and the existing stage's name.
-pub fn stage_reference(stage: &ExternalStage) -> String {
+pub(in crate::adapters) fn stage_reference(stage: &ExternalStage) -> String {
     match &stage.object {
         StageObject::Managed { .. } => {
             let managed = TableName {

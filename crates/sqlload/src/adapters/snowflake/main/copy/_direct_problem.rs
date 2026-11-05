@@ -1,13 +1,13 @@
 //! Decide whether Snowflake can load a files source's files itself.
 
-use crate::adapters::snowflake::_helpers::values::{copyable_type, plain_key};
+use crate::adapters::snowflake::_helpers::dialect::values::{copyable_type, plain_key};
 use crate::adapters::snowflake::models::{CopyValue, DirectCheck};
 use crate::files_source::models::SourceFormat;
 use crate::project::models::MaskMethod;
 use crate::store_paths::models::StoreKind;
 
 /// Why the files must go through SQLLoad instead of a direct `COPY` from the stage, or `None` when Snowflake can load them exactly as SQLLoad would.
-pub fn direct_problem(check: &DirectCheck<'_>) -> Option<String> {
+pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<String> {
     if check.shaped_by_loader {
         return Some("the table sets shaping = \"loader\"".to_owned());
     }

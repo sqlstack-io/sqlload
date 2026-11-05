@@ -2,7 +2,7 @@
 
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
-use crate::adapters::snowflake::_helpers::values::partition_text;
+use crate::adapters::snowflake::_helpers::dialect::values::partition_text;
 use crate::adapters::snowflake::constants::{
     COPY_OPTIONS, MAX_COPY_SQL_BYTES, MAX_FILES_PER_COPY, PARQUET_COPY_FORMAT,
     UNEXPECTED_FILE_MARKER,
@@ -13,7 +13,9 @@ use crate::column_types::models::{ColumnType, Warehouse};
 use crate::files_source::models::DataFile;
 
 /// `COPY` statements loading `request.files` into `request.target`, at most 1,000 files and about 900 KiB of SQL each: data columns read by name and cast (JSON parsed), partition values, source file, version per file (matched on `METADATA$FILENAME`, which on an external stage is the bucket-relative key, failing on any other file) and row number, and literals; always `FORCE = TRUE` and `ON_ERROR = ABORT_STATEMENT`.
-pub fn direct_copies(request: &DirectCopy<'_>) -> Result<Vec<CopyBatch>, String> {
+pub(in crate::adapters) fn direct_copies(
+    request: &DirectCopy<'_>,
+) -> Result<Vec<CopyBatch>, String> {
     let folder = request
         .source
         .prefix

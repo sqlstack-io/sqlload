@@ -5,7 +5,7 @@ use chrono::NaiveDateTime;
 use crate::adapters::contract::constants::{STAGING_SUFFIX, STALE_STAGING_HOURS};
 use crate::adapters::contract::models::{CursorValue, TableName, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
-use crate::adapters::snowflake::_helpers::type_names::{
+use crate::adapters::snowflake::_helpers::dialect::type_names::{
     logical_type, portable_type, widens_in_place,
 };
 use crate::adapters::snowflake::constants::{

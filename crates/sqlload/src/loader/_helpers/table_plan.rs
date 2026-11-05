@@ -9,18 +9,15 @@ use crate::adapters::dispatch::main::single_text::single_text;
 use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::models::Destination;
-use crate::adapters::snowflake::main::copy::direct_problem::direct_problem;
-use crate::adapters::snowflake::models::{CopyColumn, CopyValue, DirectCheck};
-use crate::adapters::snowflake::models::{ExternalStage, StageRoute};
+use crate::adapters::snowflake::main::copy::direct_check::direct_check;
+use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
 use crate::column_types::models::ColumnType;
-use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
-};
+use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
-use crate::files_source::models::{DataFile, SourceFormat};
+use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::FilesPlanRequest;
 use crate::loader::_helpers::sources::files_read_columns;
@@ -44,7 +41,6 @@ use crate::postgres_source::models::ReadColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::BatchStep;
 use crate::project::models::Contract;
-use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -518,79 +514,6 @@ fn reader_offer(
         },
         direct_blocked,
     }
-}
-
-/// Why Snowflake must not `COPY` these of a files table's files straight from `stage`; `refused` is what a batch's own footers refuse, beyond what plan sampled.
-pub(crate) fn direct_check(
-    spec: &TableSpec,
-    (read, files, refused): (&FilesRead, &[DataFile], &[(String, String)]),
-    stage: &ExternalStage,
-) -> Option<String> {
-    let source = spec.files.as_ref()?;
-    let mut all_refused: Vec<(String, String)> = refused.to_vec();
-    for column in &source.table.columns {
-        if let Some(arrow_type) = &column.direct_refusal {
-            all_refused.push((column.name.clone(), arrow_type.clone()));
-        }
-    }
-    let masks: Vec<(String, MaskMethod)> = spec
-        .masked
-        .columns
-        .iter()
-        .map(|(name, method)| (name.clone(), *method))
-        .collect();
-    direct_problem(&DirectCheck {
-        stage_url: &stage.location,
-        source: &source.location,
-        format: source.encoding.format,
-        files,
-        columns: &copy_columns(spec, read),
-        refused: &all_refused,
-        masks: &masks,
-        shaped_by_loader: spec.shaped_by_loader,
-    })
-}
-
-/// The columns a direct `COPY` of a files table fills, in the order the files source reads them, each from the files, its path, or the file's name, version and row number.
-pub(crate) fn copy_columns(spec: &TableSpec, read: &FilesRead) -> Vec<CopyColumn> {
-    read.columns
-        .iter()
-        .map(|column| CopyColumn {
-            name: column.name.clone(),
-            column_type: column.column_type.clone(),
-            value: match column.name.as_str() {
-                SOURCE_FILE_COLUMN => CopyValue::SourceFile,
-                SOURCE_VERSION_COLUMN => CopyValue::SourceVersion,
-                SOURCE_ROW_COLUMN => CopyValue::SourceRow,
-                name if partition_column(spec, name) => CopyValue::Partition,
-                name => CopyValue::File {
-                    file_type: file_type(spec, name),
-                },
-            },
-        })
-        .collect()
-}
-
-/// Whether `name` is one of the files source's partition columns.
-fn partition_column(spec: &TableSpec, name: &str) -> bool {
-    spec.files
-        .iter()
-        .flat_map(|files| files.partition_types.iter())
-        .any(|(partition, _)| partition == name)
-}
-
-/// The type the known files hold column `name` as; a type with no portable equivalent is named as one the direct `COPY` never loads.
-fn file_type(spec: &TableSpec, name: &str) -> Option<ColumnType> {
-    let files = spec.files.as_ref()?;
-    let found = files
-        .table
-        .columns
-        .iter()
-        .find(|found| found.name == name)?;
-    Some(match &found.column_type {
-        Ok(column_type) => column_type.clone(),
-        Err(reason) => ColumnType::Native(format!("unsupported ({reason})")),
-    })
 }
 
 /// Whether `route` has the destination load a files source's own files.

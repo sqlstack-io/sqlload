@@ -451,15 +451,6 @@ pub struct Publisher {
     pub files: Option<FilesSink>,
 }
 
-/// What a direct batch's `COPY` did, with the rows it loaded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DirectLoaded {
-    /// Committed with the `COPY`.
-    Committed(u64),
-    /// In the staging table, waiting for the commit.
-    Staged(u64),
-}
-
 /// A files target table's load: its folder, what the load replaces, and the files of the commit being written.
 #[derive(Debug)]
 pub struct FilesSink {

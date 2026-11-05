@@ -1,7 +1,7 @@
 //! Choose how one table's rows reach Snowflake, trying what the role can use without changing anything.
 
-use crate::adapters::snowflake::_helpers::pick_route::pick_route;
-use crate::adapters::snowflake::_helpers::probes::{
+use crate::adapters::snowflake::_helpers::stage::pick_route::pick_route;
+use crate::adapters::snowflake::_helpers::stage::probes::{
     checked_external, planned_stage, probed_step, step_name,
 };
 use crate::adapters::snowflake::models::{ForcedStage, StageRoute};

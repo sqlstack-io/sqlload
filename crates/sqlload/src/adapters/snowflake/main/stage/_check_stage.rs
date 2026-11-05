@@ -5,7 +5,7 @@ use crate::adapters::snowflake::main::session::_is_not_found::is_not_found;
 use crate::adapters::snowflake::main::stage::_show_stages::show_stages;
 use crate::adapters::snowflake::main::stage::_stage_lookup::stage_lookup;
 use crate::adapters::snowflake::main::stage::_stage_problem::stage_problem;
-use crate::adapters::snowflake::main::stage::stage_reference::stage_reference;
+use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::{ExternalStage, SnowflakeDestination, StageObject};
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::probe_folder::probe_folder;
