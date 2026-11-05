@@ -13,7 +13,7 @@ pub fn route_reference(
     staging: Option<&TableName>,
 ) -> Option<String> {
     match route {
-        StageRoute::External(stage) => Some(stage_reference(stage, target)),
+        StageRoute::External(stage) => Some(stage_reference(stage)),
         StageRoute::Internal { name } => Some(format!("@{name}")),
         StageRoute::User => Some(format!("@{USER_STAGE}")),
         StageRoute::TargetTable => Some(format!("@{}", table_stage(target))),

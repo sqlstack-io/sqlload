@@ -4,16 +4,16 @@ use crate::external_stage::_helpers::pick_route::pick_route;
 use crate::external_stage::_helpers::probes::{
     checked_external, planned_stage, probed_step, step_name,
 };
-use crate::external_stage::models::{PlannedStage, RouteChoice, RouteRequest};
+use crate::external_stage::models::{PlannedStage, RouteChoice, RouteRequest, StepFailure};
 use crate::snowflake_destination::models::{ForcedStage, StageRoute};
 
-/// The table's route: what the connection's `stage` forces (failing with the reason if it cannot be used), else the first of `@~`, `@%table`, Snowpipe Streaming and `INSERT` the role can use; each probe changes nothing and is asked once per run. Also the stage `apply` must create, if any.
+/// The table's route: what the connection's `stage` forces (failing with the reason if it cannot be used), else the first of `@~`, `@%table`, Snowpipe Streaming and `INSERT` the role can use; a probe failing for any other reason than privileges or a missing object fails the plan. Each probe changes nothing and is asked once per run. Also the stage `apply` must create, if any.
 pub async fn stage_route(
     request: &RouteRequest<'_>,
 ) -> Result<(RouteChoice, Option<PlannedStage>), String> {
     match &request.snowflake.stage {
         None => {
-            let mut outcomes: Vec<(String, Result<StageRoute, String>)> = Vec::new();
+            let mut outcomes: Vec<(String, Result<StageRoute, StepFailure>)> = Vec::new();
             for step in [
                 ForcedStage::User,
                 ForcedStage::Table,
@@ -31,12 +31,11 @@ pub async fn stage_route(
             Ok((pick_route(false, outcomes)?, None))
         }
         Some(ForcedStage::External(stage)) => {
-            let target = request.destination;
-            let outcome = checked_external(request.snowflake, stage, target).await;
+            let outcome = checked_external(request.snowflake, stage).await;
             let creates = matches!(outcome, Ok(true));
             let route = outcome.map(|_| StageRoute::External(stage.clone()));
             let choice = pick_route(true, vec![(stage.location.to_string(), route)])?;
-            let planned = creates.then(|| planned_stage(stage, target)).flatten();
+            let planned = creates.then(|| planned_stage(stage)).flatten();
             Ok((choice, planned))
         }
         Some(step) => {

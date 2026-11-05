@@ -1,10 +1,12 @@
 use crate::column_types::models::ColumnType;
 use crate::external_stage::_helpers::create_stage::create_stage;
+use crate::external_stage::_helpers::pick_route::pick_route;
 use crate::external_stage::main::stage_lookup::stage_lookup;
 use crate::external_stage::main::stage_reference::stage_reference;
-use crate::external_stage::models::{CopyColumn, CopyValue};
+use crate::external_stage::models::{CopyColumn, CopyValue, StepFailure};
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
+use crate::http::errors::ApiError;
 use crate::snowflake_destination::models::{ExternalStage, StageObject, StageRoute};
 use crate::store_paths::models::{Location, StoreKind};
 use crate::write_sql::models::TableName;
@@ -28,6 +30,10 @@ pub(crate) fn stage() -> ExternalStage {
         object: StageObject::Managed {
             integration: "lake_int".to_owned(),
         },
+        home: TableName {
+            table: String::new(),
+            ..orders()
+        },
         keep_staged_files: false,
     }
 }
@@ -38,6 +44,10 @@ pub(crate) fn existing_stage() -> ExternalStage {
         location: lake("raw/"),
         object: StageObject::Existing {
             name: "ops.loading.lake_stage".to_owned(),
+        },
+        home: TableName {
+            table: String::new(),
+            ..orders()
         },
         keep_staged_files: false,
     }
@@ -105,25 +115,25 @@ pub(crate) fn order_columns() -> Vec<CopyColumn> {
 }
 
 pub(crate) fn managed_create() -> String {
-    create_stage(&stage(), &orders()).unwrap_or_default()
+    create_stage(&stage()).unwrap_or_default()
 }
 
 pub(crate) fn existing_create() -> String {
-    create_stage(&existing_stage(), &orders()).unwrap_or_default()
+    create_stage(&existing_stage()).unwrap_or_default()
 }
 
 pub(crate) fn managed_lookup() -> String {
-    let lookup = stage_lookup(&stage(), &orders());
+    let lookup = stage_lookup(&stage());
     format!("{};\n{}", lookup.query, lookup.name)
 }
 
 pub(crate) fn existing_lookup() -> String {
-    let lookup = stage_lookup(&existing_stage(), &orders());
+    let lookup = stage_lookup(&existing_stage());
     format!("{};\n{}", lookup.query, lookup.name)
 }
 
 pub(crate) fn managed_reference() -> String {
-    stage_reference(&stage(), &orders())
+    stage_reference(&stage())
 }
 
 /// The direct copies of the case's files from `s3://lake/raw/shop/orders/` (or `source`) into `shop__orders`: how many statements, and the first.
@@ -213,18 +223,33 @@ pub(crate) fn snowflake_hash_sql() -> String {
     statements.join(";")
 }
 
-/// What `pick_route` says for steps that found `outcomes` (`None` a usable route): the route and those passed over, or the failure.
+/// What `pick_route` says for steps that found `outcomes` (`None` a usable route, `Some((true, reason))` an unusable step, `Some((false, reason))` a failed check): the route and those passed over, or the failure.
 pub(crate) fn picked(
     forced: bool,
-    outcomes: &[(&str, Option<&str>)],
+    outcomes: &[(&str, Option<(bool, &str)>)],
 ) -> Result<(String, Vec<String>), String> {
-    let steps: Vec<(String, Result<StageRoute, String>)> = outcomes
+    let steps: Vec<(String, Result<StageRoute, StepFailure>)> = outcomes
         .iter()
         .map(|(step, problem)| {
-            let outcome = problem.map_or(Ok(StageRoute::User), |reason| Err(reason.to_owned()));
+            let outcome = problem.map_or(Ok(StageRoute::User), |(unusable, reason)| {
+                Err([
+                    StepFailure::Failed(reason.to_owned()),
+                    StepFailure::Unusable(reason.to_owned()),
+                ][usize::from(unusable)]
+                .clone())
+            });
             ((*step).to_owned(), outcome)
         })
         .collect();
-    let choice = crate::external_stage::_helpers::pick_route::pick_route(forced, steps)?;
+    let choice = pick_route(forced, steps)?;
     Ok((format!("{:?}", choice.route), choice.passed_over))
+}
+
+/// A status error with this HTTP status and service code.
+pub(crate) fn api_status(status: u16, code: &str) -> ApiError {
+    ApiError::Status {
+        status,
+        code: code.to_owned(),
+        message: "m".to_owned(),
+    }
 }

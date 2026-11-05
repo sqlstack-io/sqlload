@@ -6,14 +6,14 @@ use crate::write_sql::main::quoted_identifier::quoted_identifier;
 use crate::write_sql::main::sql_literal::sql_literal;
 use crate::write_sql::models::TableName;
 
-/// `CREATE STAGE IF NOT EXISTS` for `_SQLLOAD_STAGE` in `table`'s schema on the stage URL; `None` for an existing stage, which SQLLoad never creates.
-pub(crate) fn create_stage(stage: &ExternalStage, table: &TableName) -> Option<String> {
+/// `CREATE STAGE IF NOT EXISTS` for `_SQLLOAD_STAGE` in the target's loader schema on the stage URL; `None` for an existing stage, which SQLLoad never creates.
+pub(crate) fn create_stage(stage: &ExternalStage) -> Option<String> {
     let StageObject::Managed { integration } = &stage.object else {
         return None;
     };
     let managed = TableName {
         table: MANAGED_STAGE_NAME.to_owned(),
-        ..table.clone()
+        ..stage.home.clone()
     };
     Some(format!(
         "CREATE STAGE IF NOT EXISTS {} URL = {} STORAGE_INTEGRATION = {}",

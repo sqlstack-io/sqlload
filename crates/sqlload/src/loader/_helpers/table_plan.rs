@@ -88,9 +88,13 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
         .map(|column| DesiredColumn {
             name: column.name.clone(),
             column_type: column.output.clone(),
-            origin: match spec.pinned.contains_key(&column.name) {
-                true => ColumnOrigin::Pinned,
-                false => ColumnOrigin::Source,
+            origin: match (
+                column.name == SOURCE_ROW_COLUMN,
+                spec.pinned.contains_key(&column.name),
+            ) {
+                (true, _) => ColumnOrigin::Metadata,
+                (false, true) => ColumnOrigin::Pinned,
+                (false, false) => ColumnOrigin::Source,
             },
         })
         .collect();
@@ -553,7 +557,7 @@ fn reader_offer(
     });
     let direct_blocked = match (read, stage) {
         (Some(read), Some(StageRoute::External(stage))) => {
-            direct_check(spec, (read, read.files.as_slice()), mode, stage)
+            direct_check(spec, (read, read.files.as_slice(), &[]), mode, stage)
         }
         _ => None,
     };
@@ -569,14 +573,20 @@ fn reader_offer(
     }
 }
 
-/// Why Snowflake must not `COPY` these of a files table's files straight from `stage`.
+/// Why Snowflake must not `COPY` these of a files table's files straight from `stage`; `refused` is what a batch's own footers refuse, beyond what plan sampled.
 pub(crate) fn direct_check(
     spec: &TableSpec,
-    (read, files): (&FilesRead, &[DataFile]),
+    (read, files, refused): (&FilesRead, &[DataFile], &[(String, String)]),
     mode: &WriteMode,
     stage: &ExternalStage,
 ) -> Option<String> {
     let source = spec.files.as_ref()?;
+    let mut all_refused: Vec<(String, String)> = refused.to_vec();
+    for column in &source.table.columns {
+        if let Some(arrow_type) = &column.direct_refusal {
+            all_refused.push((column.name.clone(), arrow_type.clone()));
+        }
+    }
     let masks: Vec<(String, MaskMethod)> = spec
         .masked
         .columns
@@ -589,6 +599,7 @@ pub(crate) fn direct_check(
         format: source.encoding.format,
         files,
         columns: &copy_columns(spec, read),
+        refused: &all_refused,
         masks: &masks,
         whole_table: matches!(mode, WriteMode::Replace | WriteMode::Recreate),
         shaped_by_loader: spec.shaped_by_loader,

@@ -1,5 +1,6 @@
 //! The target check behind `debug`.
 
+use crate::external_stage::main::is_not_found::is_not_found;
 use crate::external_stage::main::stage_lookup::stage_lookup;
 use crate::external_stage::main::stage_problem::stage_problem;
 use crate::external_stage::main::stage_reference::stage_reference;
@@ -10,13 +11,13 @@ use crate::loader::errors::LoaderError;
 use crate::loader::main::_connect_target::connect_target;
 use crate::loader::models::Destination;
 use crate::project::models::ProjectConfig;
+use crate::snowflake_destination::constants::EXTERNAL_STAGE_FOLDER;
 use crate::snowflake_destination::main::show_stages::show_stages;
 use crate::snowflake_destination::models::{
     ExternalStage, ForcedStage, SnowflakeDestination, StageObject,
 };
 use crate::sql_api::main::execute_sql::execute_sql;
 use crate::store_paths::models::Location;
-use crate::write_sql::models::TableName;
 
 /// What target `name` connects as, or why it cannot connect.
 pub(in crate::loader) async fn check_target(
@@ -44,17 +45,7 @@ pub(in crate::loader) async fn check_target(
             let Some(ForcedStage::External(stage)) = &snowflake.stage else {
                 return Ok(answer);
             };
-            let schema = project
-                .targets
-                .get(name)
-                .and_then(|target| target.loader_schema.clone())
-                .unwrap_or_default();
-            let table = TableName {
-                database: Some(snowflake.database.clone()),
-                schema,
-                table: String::new(),
-            };
-            let checked = check_stage(&snowflake, stage, &table).await?;
+            let checked = check_stage(&snowflake, stage).await?;
             Ok(format!("{answer}; {checked}"))
         }
         destination => {
@@ -65,17 +56,20 @@ pub(in crate::loader) async fn check_target(
     }
 }
 
-/// Whether the external stage works for tables in `schema`'s schema: SQLLoad can list the stage URL; the stage exists, reads that URL and lists (or SQLLoad creates it at `apply`).
+/// Whether the external stage works: SQLLoad can list the stage URL; the stage exists, reads that URL and lists its own folder (or SQLLoad creates it at `apply`, as it does a missing schema).
 async fn check_stage(
     snowflake: &SnowflakeDestination,
     stage: &ExternalStage,
-    schema: &TableName,
 ) -> Result<String, LoaderError> {
     let folder = open_folder(&stage.location)?;
     probe_folder(&folder).await?;
-    let lookup = stage_lookup(stage, schema);
-    let shown = show_stages(snowflake, &lookup.query).await?;
-    let reference = stage_reference(stage, schema);
+    let lookup = stage_lookup(stage);
+    let shown = match show_stages(snowflake, &lookup.query).await {
+        Ok(shown) => shown,
+        Err(error) if is_not_found(&error) => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let reference = stage_reference(stage);
     let exists = shown
         .iter()
         .any(|found| found.name.eq_ignore_ascii_case(&lookup.name));
@@ -88,7 +82,11 @@ async fn check_stage(
     if let Some(problem) = stage_problem(stage, &lookup, &shown) {
         return Err(LoaderError::Invalid(problem));
     }
-    execute_sql(&snowflake.sql, &format!("LIST {reference}/")).await?;
+    execute_sql(
+        &snowflake.sql,
+        &format!("LIST {reference}/{EXTERNAL_STAGE_FOLDER}/"),
+    )
+    .await?;
     Ok(format!(
         "stage {reference} reads {} and lists",
         stage.location

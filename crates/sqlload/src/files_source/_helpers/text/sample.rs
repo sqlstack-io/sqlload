@@ -45,6 +45,7 @@ pub(crate) fn json_columns(records: &[JsonRecord]) -> Vec<SampledColumn> {
                 columns.push(SampledColumn {
                     name: key.clone(),
                     column_type: None,
+                    direct_refusal: None,
                 });
                 columns.len() - 1
             });
@@ -72,6 +73,7 @@ pub(crate) fn csv_columns(names: &[String], batch: Option<&RecordBatch>) -> Vec<
         columns.push(SampledColumn {
             name: name.clone(),
             column_type,
+            direct_refusal: None,
         });
     }
     columns

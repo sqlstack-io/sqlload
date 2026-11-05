@@ -60,6 +60,8 @@ pub struct DirectCheck<'a> {
     pub format: SourceFormat,
     pub files: &'a [DataFile],
     pub columns: &'a [CopyColumn],
+    /// Columns the files hold as an Arrow type a direct `COPY` does not load exactly, and that type.
+    pub refused: &'a [(String, String)],
     /// Masked columns and how.
     pub masks: &'a [(String, MaskMethod)],
     /// The table is rewritten as a whole across several commits (`replace`, `--reload`), so a hashed column's staging table could not last one session.
@@ -109,4 +111,13 @@ pub struct RouteRequest<'a> {
     /// The load would `COPY` straight into the target (`append`, not logged).
     pub direct_append: bool,
     pub snowflake: &'a SnowflakeDestination,
+}
+
+/// Why a step of the chain cannot be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepFailure {
+    /// The role may not use it, or it does not exist: the chain moves on.
+    Unusable(String),
+    /// Anything else, such as a network failure, which says nothing about the step: the plan fails, so a blip cannot change a table's route.
+    Failed(String),
 }

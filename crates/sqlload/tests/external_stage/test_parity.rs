@@ -1,7 +1,9 @@
-use sqlload_testkit::parity::models::{ParityCase, ParityFiles, Side};
+use sqlload_testkit::parity::constants::SELF_TEST_PASSED;
+use sqlload_testkit::parity::main::comparison_sql::comparison_sql;
+use sqlload_testkit::parity::models::{ComparedColumn, ParityCase, ParityFiles, Side};
 
 use crate::helpers::all_outcomes;
-use crate::test_types::ParityTestCase;
+use crate::test_types::{ComparisonTestCase, ParityTestCase};
 
 const APPEND: &str = "write_strategy = \"append\"";
 const LOADER: &str = "write_strategy = \"append\"\nshaping = \"loader\"";
@@ -42,6 +44,52 @@ const BASE: ParityCase = ParityCase {
 fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_failures_match()
 -> Result<(), String> {
     let test_cases = [
+        ParityTestCase {
+            description: "the comparison itself: rows differing only at microseconds are reported, identical ones are not",
+            case: ParityCase {
+                name: "self_test",
+                files: ParityFiles::ComparisonSelfTest,
+                left_is_direct: false,
+                ..BASE
+            },
+            expected_outcome: SELF_TEST_PASSED,
+        },
+        ParityTestCase {
+            description: "NaN and both infinities, in both float widths",
+            case: ParityCase {
+                name: "floats",
+                files: ParityFiles::FloatEdges,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "each timestamp unit with sub-millisecond digits, before and after 1970",
+            case: ParityCase {
+                name: "timestamps",
+                files: ParityFiles::TimestampEdges,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "decimals at the edges of precision and scale",
+            case: ParityCase {
+                name: "decimals",
+                files: ParityFiles::DecimalEdges,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
+        ParityTestCase {
+            description: "the minimum and maximum of each integer width",
+            case: ParityCase {
+                name: "integers",
+                files: ParityFiles::IntegerEdges,
+                ..BASE
+            },
+            expected_outcome: SAME,
+        },
         ParityTestCase {
             description: "every candidate type, with NULLs and edge values, and the source columns",
             case: ParityCase {
@@ -224,4 +272,31 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
         );
     }
     Ok(())
+}
+
+#[test]
+fn given_two_tables_when_comparing_them_then_values_compare_typed_and_only_variants_as_text() {
+    let columns = [
+        ComparedColumn {
+            name: "AT",
+            data_type: "TIMESTAMP_NTZ",
+        },
+        ComparedColumn {
+            name: "V",
+            data_type: "VARIANT",
+        },
+    ];
+    let test_cases = [ComparisonTestCase {
+        description: "a timestamp goes as itself, a VARIANT as text, and row counts count",
+        tables: ("L", "R"),
+        expected_counts: "SELECT (SELECT COUNT(*) FROM (SELECT \"AT\", TO_VARCHAR(\"V\") AS \"V\" FROM L MINUS SELECT \"AT\", TO_VARCHAR(\"V\") AS \"V\" FROM R)) || ' ' || (SELECT COUNT(*) FROM (SELECT \"AT\", TO_VARCHAR(\"V\") AS \"V\" FROM R MINUS SELECT \"AT\", TO_VARCHAR(\"V\") AS \"V\" FROM L)) || ' ' || (SELECT COUNT(*) FROM L) || ' ' || (SELECT COUNT(*) FROM R)",
+    }];
+    for test_case in test_cases {
+        assert_eq!(
+            comparison_sql(test_case.tables, &columns).counts,
+            test_case.expected_counts,
+            "{}",
+            test_case.description
+        );
+    }
 }

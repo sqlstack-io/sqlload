@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use arrow_array::types::{Date32Type, Decimal128Type};
 use arrow_array::{
-    ArrayRef, BooleanArray, Float64Array, Int16Array, Int64Array, PrimitiveArray, RecordBatch,
-    StringArray, TimestampMicrosecondArray,
+    ArrayRef, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array, PrimitiveArray, RecordBatch, StringArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
 };
 use bytes::Bytes;
 
@@ -18,6 +19,11 @@ pub(crate) fn case_files(files: ParityFiles) -> Result<Vec<(&'static str, Record
         ParityFiles::BadJson => bad_json(),
         ParityFiles::Partitioned => partitioned(),
         ParityFiles::BadPartition => bad_partition(),
+        ParityFiles::FloatEdges => float_edges(),
+        ParityFiles::TimestampEdges => timestamp_edges(),
+        ParityFiles::DecimalEdges => decimal_edges(),
+        ParityFiles::IntegerEdges => integer_edges(),
+        ParityFiles::ComparisonSelfTest => Ok(Vec::new()),
     }
 }
 
@@ -189,6 +195,169 @@ fn bad_partition() -> Result<Vec<(&'static str, RecordBatch)>, String> {
         "day=not-a-date/part-0.parquet",
         ids_and_text(vec![Some("x")])?,
     )])
+}
+
+/// NaN and both infinities, in both float widths, beside ordinary values.
+fn float_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
+    let batch = RecordBatch::try_from_iter([
+        ("id", array(Int64Array::from(vec![1, 2, 3, 4, 5, 6]))),
+        (
+            "wide",
+            array(Float64Array::from(vec![
+                Some(f64::NAN),
+                Some(f64::INFINITY),
+                Some(f64::NEG_INFINITY),
+                Some(-0.0),
+                Some(f64::MIN_POSITIVE),
+                None,
+            ])),
+        ),
+        (
+            "narrow",
+            array(Float32Array::from(vec![
+                Some(f32::NAN),
+                Some(f32::INFINITY),
+                Some(f32::NEG_INFINITY),
+                Some(1.1),
+                Some(f32::MAX),
+                None,
+            ])),
+        ),
+    ])
+    .map_err(|error| error.to_string())?;
+    Ok(vec![("part-0.parquet", batch)])
+}
+
+/// Each timestamp unit, with sub-millisecond digits before and after 1970, with and without UTC.
+fn timestamp_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
+    let micros = vec![
+        Some(1_700_000_000_123_456),
+        Some(1_700_000_000_123_457),
+        Some(-1),
+        Some(-1_500_001),
+        Some(-62_135_596_800_000_000),
+        None,
+    ];
+    let millis = vec![
+        Some(1_700_000_000_123),
+        Some(1_700_000_000_124),
+        Some(-1),
+        Some(-1_501),
+        Some(0),
+        None,
+    ];
+    let seconds = vec![
+        Some(1_700_000_000),
+        Some(1_700_000_001),
+        Some(-1),
+        Some(-1_501),
+        Some(0),
+        None,
+    ];
+    let batch = RecordBatch::try_from_iter([
+        ("id", array(Int64Array::from(vec![1, 2, 3, 4, 5, 6]))),
+        (
+            "micros_zoned",
+            array(TimestampMicrosecondArray::from(micros.clone()).with_timezone("UTC")),
+        ),
+        (
+            "micros_wall",
+            array(TimestampMicrosecondArray::from(micros)),
+        ),
+        (
+            "millis_zoned",
+            array(TimestampMillisecondArray::from(millis.clone()).with_timezone("UTC")),
+        ),
+        (
+            "millis_wall",
+            array(TimestampMillisecondArray::from(millis)),
+        ),
+        (
+            "seconds_zoned",
+            array(TimestampSecondArray::from(seconds.clone()).with_timezone("UTC")),
+        ),
+        ("seconds_wall", array(TimestampSecondArray::from(seconds))),
+    ])
+    .map_err(|error| error.to_string())?;
+    Ok(vec![("part-0.parquet", batch)])
+}
+
+fn decimals(values: Vec<Option<i128>>, scale: i8) -> Result<ArrayRef, String> {
+    let decimals = PrimitiveArray::<Decimal128Type>::from(values)
+        .with_precision_and_scale(38, scale)
+        .map_err(|error| error.to_string())?;
+    Ok(array(decimals))
+}
+
+/// The largest and smallest values at precision 38, at scales 0, 10 and 37, and a precision 1 column.
+fn decimal_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
+    const MAX: i128 = 99_999_999_999_999_999_999_999_999_999_999_999_999;
+    let small = PrimitiveArray::<Decimal128Type>::from(vec![Some(9), Some(-9), Some(0), None])
+        .with_precision_and_scale(1, 0)
+        .map_err(|error| error.to_string())?;
+    let batch = RecordBatch::try_from_iter([
+        ("id", array(Int64Array::from(vec![1, 2, 3, 4]))),
+        (
+            "whole",
+            decimals(vec![Some(MAX), Some(-MAX), Some(0), None], 0)?,
+        ),
+        (
+            "mixed",
+            decimals(vec![Some(MAX), Some(-MAX), Some(1), None], 10)?,
+        ),
+        (
+            "fraction",
+            decimals(vec![Some(MAX), Some(-MAX), Some(1), None], 37)?,
+        ),
+        ("tiny", array(small)),
+    ])
+    .map_err(|error| error.to_string())?;
+    Ok(vec![("part-0.parquet", batch)])
+}
+
+/// The minimum and maximum of each integer width the direct route allows.
+fn integer_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
+    let batch = RecordBatch::try_from_iter([
+        ("id", array(Int64Array::from(vec![1, 2, 3]))),
+        (
+            "i8",
+            array(Int8Array::from(vec![Some(i8::MIN), Some(i8::MAX), None])),
+        ),
+        (
+            "i16",
+            array(Int16Array::from(vec![Some(i16::MIN), Some(i16::MAX), None])),
+        ),
+        (
+            "i32",
+            array(Int32Array::from(vec![Some(i32::MIN), Some(i32::MAX), None])),
+        ),
+        (
+            "i64",
+            array(Int64Array::from(vec![Some(i64::MIN), Some(i64::MAX), None])),
+        ),
+        (
+            "u8",
+            array(UInt8Array::from(vec![Some(u8::MIN), Some(u8::MAX), None])),
+        ),
+        (
+            "u16",
+            array(UInt16Array::from(vec![
+                Some(u16::MIN),
+                Some(u16::MAX),
+                None,
+            ])),
+        ),
+        (
+            "u32",
+            array(UInt32Array::from(vec![
+                Some(u32::MIN),
+                Some(u32::MAX),
+                None,
+            ])),
+        ),
+    ])
+    .map_err(|error| error.to_string())?;
+    Ok(vec![("part-0.parquet", batch)])
 }
 
 /// `batch` as a Parquet file.

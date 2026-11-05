@@ -56,6 +56,15 @@ fn parse_create_stage(statement: &str) -> Option<(String, String, String)> {
     ))
 }
 
+/// Whether `name` matches a `LIKE` pattern, as `SHOW` does: `_` stands for any one character.
+fn like_matches(pattern: &str, name: &str) -> bool {
+    pattern.len() == name.len()
+        && pattern
+            .chars()
+            .zip(name.chars())
+            .all(|(wanted, found)| wanted == '_' || wanted == found)
+}
+
 /// What one statement of an earlier multi-statement request returned.
 pub(crate) fn script_result(state: &SharedState, path: &str) -> Outcome {
     let handle = path.rsplit('/').next().unwrap_or_default();
@@ -135,6 +144,12 @@ fn run_one(state: &SharedState, body: &[u8]) -> Outcome {
         guard.stages.entry(name).or_insert((url, integration));
         return Ok(result(&["status"], vec![vec![json!("created")]]));
     }
+    if statement.starts_with("SHOW STAGES") && guard.schema_missing {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "code": "002003", "message": "Schema 'RAW' does not exist or not authorized." }),
+        ));
+    }
     if statement.starts_with("SHOW STAGES") {
         let rows: Vec<Vec<Value>> = guard
             .stages
@@ -144,10 +159,15 @@ fn run_one(state: &SharedState, body: &[u8]) -> Outcome {
         return Ok(result(&["name", "url", "storage_integration"], rows));
     }
     if statement.starts_with("SHOW INTEGRATIONS") {
+        let pattern = statement
+            .split('\'')
+            .nth(1)
+            .unwrap_or_default()
+            .to_ascii_uppercase();
         let rows: Vec<Vec<Value>> = guard
             .integrations
             .iter()
-            .filter(|name| statement.contains(name.as_str()))
+            .filter(|name| like_matches(&pattern, name))
             .map(|name| vec![json!(name)])
             .collect();
         return Ok(result(&["name"], rows));

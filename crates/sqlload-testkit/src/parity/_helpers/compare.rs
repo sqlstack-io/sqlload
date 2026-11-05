@@ -21,7 +21,9 @@ use sqlload::write_sql::main::stored_name::stored_name;
 use tokio::runtime::Runtime;
 
 use crate::parity::_helpers::files::{case_files, parquet_file};
-use crate::parity::models::{Live, ParityCase, Side};
+use crate::parity::constants::{NO_ROWS, SELF_TEST_PASSED};
+use crate::parity::main::comparison_sql::comparison_sql;
+use crate::parity::models::{ComparedColumn, Live, ParityCase, ParityFiles, Side};
 
 /// The project text holds every value itself, so nothing is read from the environment.
 fn no_variables(_: &str) -> Option<String> {
@@ -114,7 +116,7 @@ async fn lake_folder(live: &Live, prefix: &str) -> Result<OpenFolder, String> {
     .map_err(|error| error.to_string())
 }
 
-/// The rows of one table but not the other, as text, for `SELECT` columns but this load's id and time.
+/// What differs between two tables, typed: nothing when they hold the same rows.
 async fn differences(text: &str, live: &Live, tables: (&str, &str)) -> Result<Vec<String>, String> {
     let project = parse_project(text, &no_variables).map_err(|error| error.to_string())?;
     let destinations = connect_targets(&project)
@@ -124,35 +126,86 @@ async fn differences(text: &str, live: &Live, tables: (&str, &str)) -> Result<Ve
         return Err("no Snowflake connection".to_owned());
     };
     let schema = stored_name(&live.schema, Warehouse::Snowflake);
-    let columns = query_texts(
+    let listed = query_texts(
         snowflake,
         &format!(
-            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{}' AND TABLE_NAME = '{}' AND COLUMN_NAME NOT IN ('_SQLLOAD_LOAD_ID', '_SQLLOAD_LOADED_AT') ORDER BY COLUMN_NAME",
-            schema, tables.0
+            "SELECT COLUMN_NAME || ' ' || DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{}' AND COLUMN_NAME NOT IN ('_SQLLOAD_LOAD_ID', '_SQLLOAD_LOADED_AT') ORDER BY COLUMN_NAME",
+            tables.0
         ),
     )
     .await
     .map_err(|error| error.to_string())?;
-    if columns.is_empty() {
+    if listed.is_empty() {
         return Err(format!(
             "no columns found for {schema}.{} in the information schema",
             tables.0
         ));
     }
-    let select: Vec<String> = columns
+    let columns: Vec<ComparedColumn<'_>> = listed
         .iter()
-        .map(|column| format!("COALESCE(TO_VARCHAR(\"{column}\"), '<NULL>')"))
+        .filter_map(|line| line.split_once(' '))
+        .map(|(name, data_type)| ComparedColumn { name, data_type })
         .collect();
-    let row = select.join(" || '|' || ");
     let table = |name: &str| format!("\"{schema}\".\"{name}\"");
-    let query = format!(
-        "SELECT 'left only: ' || r FROM (SELECT {row} AS r FROM {0} MINUS SELECT {row} FROM {1}) UNION ALL SELECT 'right only: ' || r FROM (SELECT {row} AS r FROM {1} MINUS SELECT {row} FROM {0}) UNION ALL SELECT 'left has ' || (SELECT COUNT(*) FROM {0}) || ' rows, right has ' || (SELECT COUNT(*) FROM {1}) WHERE (SELECT COUNT(*) FROM {0}) <> (SELECT COUNT(*) FROM {1})",
-        table(tables.0),
-        table(tables.1)
-    );
-    query_texts(snowflake, &query)
+    let sql = comparison_sql((&table(tables.0), &table(tables.1)), &columns);
+    let counted = query_texts(snowflake, &sql.counts)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let counts: Vec<&str> = counted
+        .first()
+        .map(|line| line.split(' ').collect())
+        .unwrap_or_default();
+    let [left_only, right_only, left_rows, right_rows] = counts.as_slice() else {
+        return Err(format!("the comparison returned {counted:?}"));
+    };
+    if *left_only == NO_ROWS && *right_only == NO_ROWS && left_rows == right_rows {
+        return Ok(Vec::new());
+    }
+    let mut found = vec![format!(
+        "{left_only} rows only on the left, {right_only} only on the right; {left_rows} rows on the left, {right_rows} on the right"
+    )];
+    for (side, statement) in [("left", &sql.left_only), ("right", &sql.right_only)] {
+        match query_texts(snowflake, statement).await {
+            Ok(rows) => found.extend(rows.iter().map(|row| format!("{side} only: {row}"))),
+            Err(error) => found.push(format!("{side} only: rows cannot be shown: {error}")),
+        }
+    }
+    Ok(found)
+}
+
+/// The comparison itself, live: two tables differing only at microseconds must differ, and identical ones (with NaN and a VARIANT) must not.
+async fn self_test(text: &str, live: &Live, tables: (&str, &str)) -> Result<String, String> {
+    let project = parse_project(text, &no_variables).map_err(|error| error.to_string())?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(Destination::Snowflake(snowflake)) = destinations.get("direct") else {
+        return Err("no Snowflake connection".to_owned());
+    };
+    let schema = stored_name(&live.schema, Warehouse::Snowflake);
+    let create = |table: &str, micros: &str| {
+        format!(
+            "CREATE OR REPLACE TABLE \"{schema}\".\"{table}\" AS SELECT 1 AS \"ID\", 'NaN'::FLOAT AS \"F\", PARSE_JSON('{{\"a\": 1}}') AS \"V\", '2026-11-05 10:00:00.{micros}'::TIMESTAMP_NTZ(6) AS \"AT\""
+        )
+    };
+    for statement in [create(tables.0, "123456"), create(tables.1, "123457")] {
+        query_texts(snowflake, &statement)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let differing = differences(text, live, tables).await?;
+    query_texts(snowflake, &create(tables.1, "123456"))
+        .await
+        .map_err(|error| error.to_string())?;
+    let identical = differences(text, live, tables).await?;
+    Ok(match (differing.is_empty(), identical.is_empty()) {
+        (false, true) => SELF_TEST_PASSED.to_owned(),
+        (true, _) => "tables differing only at microseconds were reported the same".to_owned(),
+        (false, false) => format!(
+            "identical tables were reported different: {}",
+            identical.join("\n")
+        ),
+    })
 }
 
 /// Load the case both ways and compare: `same rows`, `both fail`, or what differed. Its tables and files go whatever happened, a panic included, after its error is printed.
@@ -178,6 +231,9 @@ pub(crate) fn run_case(
     let names = (tables.0.as_str(), tables.1.as_str());
     let ran = catch_unwind(AssertUnwindSafe(|| {
         runtime.block_on(async {
+            if test_case.files == ParityFiles::ComparisonSelfTest {
+                return self_test(&text, live, names).await;
+            }
             write_files(live, &folder_key, test_case).await?;
             compare(&text, live, test_case, names).await
         })

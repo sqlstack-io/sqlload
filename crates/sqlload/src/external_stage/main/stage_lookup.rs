@@ -7,20 +7,20 @@ use crate::snowflake_destination::models::{ExternalStage, StageObject};
 use crate::write_sql::main::quoted_identifier::quoted_identifier;
 use crate::write_sql::main::sql_literal::sql_literal;
 use crate::write_sql::main::stored_name::stored_name;
-use crate::write_sql::models::TableName;
 
-/// `SHOW STAGES LIKE ... IN SCHEMA ...` for the stage loads into `table` use, and its name as reported.
-pub fn stage_lookup(stage: &ExternalStage, table: &TableName) -> StageLookup {
+/// `SHOW STAGES LIKE ... IN SCHEMA ...` for the stage loads use, and its name as reported.
+pub fn stage_lookup(stage: &ExternalStage) -> StageLookup {
+    let home = &stage.home;
     let snowflake = Warehouse::Snowflake;
     let (schema, name) = match &stage.object {
         StageObject::Managed { .. } => {
-            let schema = match &table.database {
+            let schema = match &home.database {
                 Some(database) => format!(
                     "{}.{}",
                     quoted_identifier(database, snowflake),
-                    quoted_identifier(&table.schema, snowflake)
+                    quoted_identifier(&home.schema, snowflake)
                 ),
-                None => quoted_identifier(&table.schema, snowflake),
+                None => quoted_identifier(&home.schema, snowflake),
             };
             (schema, stored_name(MANAGED_STAGE_NAME, snowflake))
         }

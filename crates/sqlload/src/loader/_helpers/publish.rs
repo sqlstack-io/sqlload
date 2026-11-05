@@ -26,6 +26,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::main::batch_columns::batch_columns;
 use crate::files_source::main::batch_footers::batch_footers;
+use crate::files_source::main::batch_refusals::batch_refusals;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, SourceFormat};
@@ -165,7 +166,13 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
             .schema
             .write_columns
             .iter()
-            .filter(|column| column.origin == ColumnOrigin::Metadata)
+            .filter(|column| {
+                column.origin == ColumnOrigin::Metadata
+                    && !table
+                        .read_columns
+                        .iter()
+                        .any(|read| read.name == column.name)
+            })
             .cloned(),
     );
     columns
@@ -640,7 +647,7 @@ impl Publisher {
     /// Load a files batch by having Snowflake `COPY` the files itself, where the plan chose that and the batch's own footers still allow it. `None` when SQLLoad must read this batch itself.
     pub(crate) async fn load_direct(
         &mut self,
-        files: &[DataFile],
+        (files, footers): (&[DataFile], &BatchFooters),
         range: &CommitRange,
     ) -> Result<Option<DirectLoaded>, LoaderError> {
         let (Destination::Snowflake(snowflake), Some(StageRoute::External(stage)), Some(read)) =
@@ -652,14 +659,15 @@ impl Publisher {
             return Ok(None);
         }
         let spec = &self.table.spec;
-        if let Some(reason) = direct_check(spec, (read, files), &self.table.mode, stage) {
+        let refused = batch_refusals(footers, files);
+        if let Some(reason) = direct_check(spec, (read, files, &refused), &self.table.mode, stage) {
             tracing::warn!(table = %spec.destination.table, %reason, "SQLLoad reads this batch itself");
             return Ok(None);
         }
         let Some(source) = spec.files.as_ref().map(|files| &files.location) else {
             return Ok(None);
         };
-        let reference = stage_reference(stage, &spec.destination);
+        let reference = stage_reference(stage);
         let hashes = spec
             .masked
             .columns
@@ -714,8 +722,11 @@ impl Publisher {
                 "DROP TABLE IF EXISTS {}",
                 qualified_name(&staging, Warehouse::Snowflake)
             ));
-            if script.iter().map(String::len).sum::<usize>() > MAX_COPY_SQL_BYTES {
-                tracing::warn!(table = %spec.destination.table, "a hashed batch is too large for one session's statements; SQLLoad reads this batch itself");
+            if script
+                .iter()
+                .any(|statement| statement.len() > MAX_COPY_SQL_BYTES)
+            {
+                tracing::warn!(table = %spec.destination.table, "a hashed batch's statement is too long; SQLLoad reads this batch itself");
                 return Ok(None);
             }
             let rows = script_copy_rows(snowflake, &script).await?;
@@ -1051,7 +1062,7 @@ async fn feed(
                         true => CommitRange::Planned,
                         false => CommitRange::Values(group.values.clone()),
                     };
-                    match publisher.load_direct(&files, &range).await? {
+                    match publisher.load_direct((&files, &footers), &range).await? {
                         Some(DirectLoaded::Committed(rows)) => {
                             publisher.note_direct(&DirectLoaded::Committed(rows));
                             continue;

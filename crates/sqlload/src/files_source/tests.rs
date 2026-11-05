@@ -1,5 +1,7 @@
 #[path = "tests/test_batch_footers.rs"]
 mod batch_footers;
+#[path = "tests/test_direct_refusal.rs"]
+mod direct_refusal;
 #[path = "tests/test_discover_text_files.rs"]
 mod discover_text_files;
 #[path = "tests/test_file_selection.rs"]

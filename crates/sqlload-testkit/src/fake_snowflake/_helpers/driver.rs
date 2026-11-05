@@ -29,6 +29,9 @@ pub(crate) fn query_request(state: &SharedState, body: &[u8]) -> Outcome {
     if !statement.starts_with("PUT ") {
         return Ok(json!({ "success": true, "data": {} }));
     }
+    if let Some((code, message)) = guard.driver_failure.clone() {
+        return Ok(json!({ "success": false, "code": code, "message": message }));
+    }
     let denied = guard
         .denied_stages
         .iter()

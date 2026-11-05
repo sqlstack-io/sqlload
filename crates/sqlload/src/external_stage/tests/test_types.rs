@@ -28,6 +28,7 @@ pub(crate) struct DirectProblemTestCase {
     pub(crate) keys: &'static [&'static str],
     pub(crate) columns: Vec<CopyColumn>,
     pub(crate) masks: Vec<(String, MaskMethod)>,
+    pub(crate) refused: Vec<(String, String)>,
     pub(crate) whole_table: bool,
     pub(crate) shaped_by_loader: bool,
     pub(crate) expected_problem: Option<&'static str>,
@@ -50,8 +51,15 @@ pub(crate) struct HashParityTestCase {
 pub(crate) struct PickRouteTestCase {
     pub(crate) description: &'static str,
     pub(crate) forced: bool,
-    /// Each step and why it cannot be used, `None` when it can.
-    pub(crate) outcomes: &'static [(&'static str, Option<&'static str>)],
+    /// Each step and why it cannot be used (`true` unusable, `false` a failed check), `None` when it can.
+    pub(crate) outcomes: &'static [(&'static str, Option<(bool, &'static str)>)],
     /// How many steps were passed over, or the failure.
     pub(crate) expected_choice: Result<usize, &'static str>,
+}
+
+pub(crate) struct StepFailureTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) error: crate::http::errors::ApiError,
+    /// Whether the chain moves on past the step.
+    pub(crate) expected_unusable: bool,
 }

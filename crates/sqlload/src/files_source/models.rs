@@ -22,6 +22,8 @@ pub struct DataFile {
 pub struct FileColumn {
     pub name: String,
     pub column_type: Result<ColumnType, String>,
+    /// The file's Arrow type when a direct `COPY` does not load it exactly, among the files this was read from.
+    pub direct_refusal: Option<String>,
 }
 
 /// What a files source holds: its data files and their combined schema.

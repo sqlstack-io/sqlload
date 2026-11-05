@@ -291,3 +291,11 @@ async fn break_footer_and_read(folder: &OpenFolder, reuse: bool) -> Result<Strin
         .await
         .map_or_else(|_| "failed".to_owned(), |rows| rows.to_string()))
 }
+
+/// A timestamp type of `unit` in `zone`.
+pub(crate) fn timestamp(
+    unit: arrow_schema::TimeUnit,
+    zone: Option<&str>,
+) -> arrow_schema::DataType {
+    arrow_schema::DataType::Timestamp(unit, zone.map(std::sync::Arc::from))
+}

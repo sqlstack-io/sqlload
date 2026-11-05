@@ -299,3 +299,22 @@ pub(crate) struct RouteOutcome {
     /// Whether the driver's sequence ids only went up.
     pub(crate) sequence_ids_rise: bool,
 }
+
+/// `debug` on a project with a managed external stage on the fake.
+pub(crate) struct DebugStageTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) prepare: fn(&sqlload_testkit::fake_snowflake::models::FakeSnowflake),
+    /// Text one of the lines must contain.
+    pub(crate) expected_line: &'static str,
+    /// Text one of the statements must contain.
+    pub(crate) expected_sent: &'static str,
+}
+
+/// A files table loaded once, its `_sqlload_source_row` then gone as in a table from before it, then loaded again.
+pub(crate) struct SourceRowUpgradeTestCase {
+    pub(crate) description: &'static str,
+    /// TOML added to the source.
+    pub(crate) settings: &'static str,
+    /// Each row's id and row number, `-` for NULL.
+    pub(crate) expected_rows: &'static str,
+}

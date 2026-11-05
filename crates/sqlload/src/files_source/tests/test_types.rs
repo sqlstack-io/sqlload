@@ -105,3 +105,9 @@ pub(crate) struct BatchFootersTestCase {
     /// The rows read, or `failed`.
     pub(crate) expected_outcome: &'static str,
 }
+
+pub(crate) struct DirectRefusalTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) data_type: arrow_schema::DataType,
+    pub(crate) expected_exact: bool,
+}

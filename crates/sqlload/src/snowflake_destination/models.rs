@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::auth::models::Authenticator;
 use crate::config::models::{AuthConfig, DestinationConfig};
+use crate::external_stage::models::StepFailure;
 use crate::schema_plan::models::DesiredColumn;
 use crate::store_paths::models::Location;
 use crate::write_sql::models::TableName;
@@ -22,7 +23,7 @@ pub struct SnowflakeDestination {
     /// The route the connection's `stage` forces, if any.
     pub stage: Option<ForcedStage>,
     /// What this run's plan already found out about stages, by what was probed: usable (and whether `apply` must create it), or why not.
-    pub stage_checks: Arc<Mutex<BTreeMap<String, Result<bool, String>>>>,
+    pub stage_checks: Arc<Mutex<BTreeMap<String, Result<bool, StepFailure>>>>,
     /// What a streaming client for this account needs.
     pub auth: Arc<Authenticator>,
     pub config: DestinationConfig,
@@ -45,6 +46,8 @@ pub struct ExternalStage {
     /// The stage URL as a folder, with the region and endpoint SQLLoad writes through.
     pub location: Location,
     pub object: StageObject,
+    /// The target's loader schema (`table` empty), where SQLLoad maintains its stage whatever schema a table loads into.
+    pub home: TableName,
     /// Keep staged files after their batch commits, and leave the stage out of the cleanup of old ones.
     pub keep_staged_files: bool,
 }

@@ -2,14 +2,18 @@ use std::future::Future;
 
 use crate::column_types::models::Warehouse;
 use crate::external_stage::_helpers::create_stage::create_stage;
+use crate::external_stage::_helpers::step_failure::step_failure;
 use crate::external_stage::_helpers::table_stage::table_stage;
+use crate::external_stage::main::is_not_found::is_not_found;
 use crate::external_stage::main::stage_lookup::stage_lookup;
 use crate::external_stage::main::stage_problem::stage_problem;
 use crate::external_stage::main::stage_reference::stage_reference;
-use crate::external_stage::models::{PlannedStage, RouteRequest};
+use crate::external_stage::models::{PlannedStage, RouteRequest, StepFailure};
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::probe_folder::probe_folder;
-use crate::snowflake_destination::constants::{STAGE_PROBE_TABLE, USER_STAGE};
+use crate::snowflake_destination::constants::{
+    EXTERNAL_STAGE_FOLDER, STAGE_PROBE_TABLE, USER_STAGE,
+};
 use crate::snowflake_destination::main::show_stages::show_stages;
 use crate::snowflake_destination::main::streaming_client::streaming_client;
 use crate::snowflake_destination::models::{
@@ -32,13 +36,13 @@ pub(crate) fn step_name(step: &ForcedStage) -> String {
     }
 }
 
-/// What `apply` runs to create the stage SQLLoad maintains in `target`'s schema.
-pub(crate) fn planned_stage(stage: &ExternalStage, target: &TableName) -> Option<PlannedStage> {
-    let create = create_stage(stage, target)?;
+/// What `apply` runs to create the stage SQLLoad maintains, and the loader schema it needs.
+pub(crate) fn planned_stage(stage: &ExternalStage) -> Option<PlannedStage> {
+    let create = create_stage(stage)?;
     Some(PlannedStage {
-        name: stage_reference(stage, target),
+        name: stage_reference(stage),
         url: stage.location.to_string(),
-        statements: vec![create_schema(target, Warehouse::Snowflake), create],
+        statements: vec![create_schema(&stage.home, Warehouse::Snowflake), create],
     })
 }
 
@@ -46,7 +50,7 @@ pub(crate) async fn probed_step(
     request: &RouteRequest<'_>,
     step: &ForcedStage,
     in_chain: bool,
-) -> Result<StageRoute, String> {
+) -> Result<StageRoute, StepFailure> {
     let snowflake = request.snowflake;
     match step {
         ForcedStage::User => checked(snowflake, format!("@{USER_STAGE}"), async {
@@ -65,27 +69,30 @@ pub(crate) async fn probed_step(
             ingest_host(&client)
                 .await
                 .map(|_| false)
-                .map_err(|error| error.to_string())
+                .map_err(|error| step_failure(&error))
         })
         .await
         .map(|_| StageRoute::Streaming {
             may_fall_back: in_chain,
         }),
         ForcedStage::Insert => Ok(StageRoute::Insert),
-        ForcedStage::External(_) => Err("an external stage is not a step of the chain".to_owned()),
+        ForcedStage::External(_) => Err(StepFailure::Failed(
+            "an external stage is not a step of the chain".to_owned(),
+        )),
     }
 }
 
 /// `@%table`: the target's for an owned direct append (a table this load creates will be owned), otherwise the staging table's, which the load always owns. Neither of those two exists yet, so a temporary table stands in for them.
-async fn table_step(request: &RouteRequest<'_>) -> Result<StageRoute, String> {
+async fn table_step(request: &RouteRequest<'_>) -> Result<StageRoute, StepFailure> {
     let snowflake = request.snowflake;
     let target = request.destination;
     if request.direct_append && request.table_exists {
         match probe_put(snowflake, &table_stage(target)).await {
             Ok(_) => return Ok(StageRoute::TargetTable),
-            Err(reason) => {
+            Err(StepFailure::Unusable(reason)) => {
                 tracing::debug!(%reason, table = %target.table, "the table's own stage cannot be used");
             }
+            Err(failed) => return Err(failed),
         }
     }
     let probe = TableName {
@@ -101,7 +108,7 @@ async fn table_step(request: &RouteRequest<'_>) -> Result<StageRoute, String> {
                 "CREATE TEMPORARY TABLE IF NOT EXISTS {name} (ID INT)"
             ))
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| step_failure(&error))?;
         probe_put(snowflake, &table_stage(&probe)).await
     })
     .await?;
@@ -112,21 +119,21 @@ async fn table_step(request: &RouteRequest<'_>) -> Result<StageRoute, String> {
 }
 
 /// The no-bytes `PUT` that fetches a stage's upload credentials.
-async fn probe_put(snowflake: &SnowflakeDestination, stage: &str) -> Result<bool, String> {
+async fn probe_put(snowflake: &SnowflakeDestination, stage: &str) -> Result<bool, StepFailure> {
     snowflake
         .driver
         .stage_info(stage)
         .await
         .map(|_| false)
-        .map_err(|error| error.to_string())
+        .map_err(|error| step_failure(&error))
 }
 
 /// `probe`'s answer for `key`, asked once per run.
 async fn checked(
     snowflake: &SnowflakeDestination,
     key: String,
-    probe: impl Future<Output = Result<bool, String>>,
-) -> Result<bool, String> {
+    probe: impl Future<Output = Result<bool, StepFailure>>,
+) -> Result<bool, StepFailure> {
     let known = match snowflake.stage_checks.lock() {
         Ok(checks) => checks.get(&key).cloned(),
         Err(_) => None,
@@ -141,47 +148,67 @@ async fn checked(
     answer
 }
 
-/// Whether the external stage serving `target`'s schema works: SQLLoad lists its URL; the stage reads that URL and lists, or (one SQLLoad maintains) is missing, its integration visible, so `apply` creates it (`Ok(true)`).
+/// Whether the external stage works: SQLLoad lists its URL; the stage reads that URL and lists its own folder, or (one SQLLoad maintains) is missing, its integration visible, so `apply` creates it (`Ok(true)`). Everything here fails a forced route, so the reason is all that matters.
 pub(crate) async fn checked_external(
     snowflake: &SnowflakeDestination,
     stage: &ExternalStage,
-    target: &TableName,
-) -> Result<bool, String> {
-    let reference = stage_reference(stage, target);
+) -> Result<bool, StepFailure> {
+    let reference = stage_reference(stage);
     checked(snowflake, reference.clone(), async {
-        let failed = |error: &dyn std::fmt::Display| format!("{reference}: {error}");
-        let folder = open_folder(&stage.location).map_err(|error| failed(&error))?;
-        probe_folder(&folder).await.map_err(|error| {
-            format!("SQLLoad cannot list {}: {error}", stage.location)
-        })?;
-        let lookup = stage_lookup(stage, target);
-        let shown = match show_stages(snowflake, &lookup.query).await {
-            Ok(shown) => shown,
-            Err(error) if error.to_string().contains("does not exist") => Vec::new(),
-            Err(error) => return Err(failed(&error)),
-        };
-        let exists = shown
-            .iter()
-            .any(|found| found.name.eq_ignore_ascii_case(&lookup.name));
-        if let (false, StageObject::Managed { integration }) = (exists, &stage.object) {
-            let query = format!("SHOW INTEGRATIONS LIKE '{}'", integration.replace('\'', "''"));
-            let found = execute_sql(&snowflake.sql, &query)
-                .await
-                .map_err(|error| failed(&error))?;
-            return match found.rows.is_empty() {
-                true => Err(format!(
-                    "storage integration {integration} does not exist or this role has no USAGE on it"
-                )),
-                false => Ok(true),
-            };
-        }
-        if let Some(problem) = stage_problem(stage, &lookup, &shown) {
-            return Err(problem);
-        }
-        execute_sql(&snowflake.sql, &format!("LIST {reference}/"))
+        external_state(snowflake, stage, &reference)
             .await
-            .map(|_| false)
-            .map_err(|error| failed(&error))
+            .map_err(StepFailure::Failed)
     })
     .await
+}
+
+async fn external_state(
+    snowflake: &SnowflakeDestination,
+    stage: &ExternalStage,
+    reference: &str,
+) -> Result<bool, String> {
+    let failed = |error: &dyn std::fmt::Display| format!("{reference}: {error}");
+    let folder = open_folder(&stage.location).map_err(|error| failed(&error))?;
+    probe_folder(&folder)
+        .await
+        .map_err(|error| format!("SQLLoad cannot list {}: {error}", stage.location))?;
+    let lookup = stage_lookup(stage);
+    let shown = match show_stages(snowflake, &lookup.query).await {
+        Ok(shown) => shown,
+        Err(error) if is_not_found(&error) => Vec::new(),
+        Err(error) => return Err(failed(&error)),
+    };
+    let exists = shown
+        .iter()
+        .any(|found| found.name.eq_ignore_ascii_case(&lookup.name));
+    if let (false, StageObject::Managed { integration }) = (exists, &stage.object) {
+        let query = format!(
+            "SHOW INTEGRATIONS LIKE '{}'",
+            integration.replace('\'', "''")
+        );
+        let found = execute_sql(&snowflake.sql, &query)
+            .await
+            .map_err(|error| failed(&error))?;
+        let visible = found.rows.iter().any(|row| {
+            found
+                .value(row, "name")
+                .is_some_and(|name| name.eq_ignore_ascii_case(integration))
+        });
+        return match visible {
+            false => Err(format!(
+                "storage integration {integration} does not exist or this role has no USAGE on it"
+            )),
+            true => Ok(true),
+        };
+    }
+    if let Some(problem) = stage_problem(stage, &lookup, &shown) {
+        return Err(problem);
+    }
+    execute_sql(
+        &snowflake.sql,
+        &format!("LIST {reference}/{EXTERNAL_STAGE_FOLDER}/"),
+    )
+    .await
+    .map(|_| false)
+    .map_err(|error| failed(&error))
 }

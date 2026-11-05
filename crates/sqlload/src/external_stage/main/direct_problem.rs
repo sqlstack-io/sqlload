@@ -84,6 +84,17 @@ pub fn direct_problem(check: &DirectCheck<'_>) -> Option<String> {
             MaskMethod::Hash => {}
         }
     }
+    for (name, arrow_type) in check.refused {
+        let read = check
+            .columns
+            .iter()
+            .any(|column| column.name == *name && matches!(column.value, CopyValue::File { .. }));
+        if read {
+            return Some(format!(
+                "{name} is {arrow_type} in the files, which the direct COPY does not load exactly"
+            ));
+        }
+    }
     for column in check.columns {
         if matches!(
             column.value,

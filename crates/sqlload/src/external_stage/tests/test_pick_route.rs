@@ -15,8 +15,8 @@ fn given_what_each_step_found_when_choosing_then_the_first_usable_wins_and_a_for
             description: "steps that cannot be used are passed over, with their reasons",
             forced: false,
             outcomes: &[
-                ("@~", Some("denied")),
-                ("@%table", Some("denied")),
+                ("@~", Some((true, "denied"))),
+                ("@%table", Some((true, "denied"))),
                 ("Snowpipe Streaming", None),
             ],
             expected_choice: Ok(2),
@@ -24,13 +24,25 @@ fn given_what_each_step_found_when_choosing_then_the_first_usable_wins_and_a_for
         PickRouteTestCase {
             description: "a forced step fails at plan with its reason",
             forced: true,
-            outcomes: &[("@~", Some("denied"))],
+            outcomes: &[("@~", Some((true, "denied")))],
             expected_choice: Err("stage @~ cannot be used: denied"),
+        },
+        PickRouteTestCase {
+            description: "a failed check fails the plan: a blip says nothing about the step",
+            forced: false,
+            outcomes: &[("@~", Some((false, "timed out"))), ("@%table", None)],
+            expected_choice: Err("cannot check whether @~ can be used: timed out"),
+        },
+        PickRouteTestCase {
+            description: "a forced step's failed check fails the same way as an unusable one",
+            forced: true,
+            outcomes: &[("@~", Some((false, "timed out")))],
+            expected_choice: Err("stage @~ cannot be used: timed out"),
         },
         PickRouteTestCase {
             description: "nothing usable names every reason",
             forced: false,
-            outcomes: &[("@~", Some("denied"))],
+            outcomes: &[("@~", Some((true, "denied")))],
             expected_choice: Err("no route can load this table: @~ cannot be used: denied"),
         },
     ];

@@ -12,9 +12,10 @@ use crate::snowflake_destination::models::{
 };
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
+use crate::write_sql::models::TableName;
 
 /// The route a Snowflake connection's `stage` setting forces.
-fn forced_stage(stage: &StageConfig) -> Result<ForcedStage, String> {
+fn forced_stage(stage: &StageConfig, home: TableName) -> Result<ForcedStage, String> {
     let (url, integration, name, store) = match stage {
         StageConfig::User {} => return Ok(ForcedStage::User),
         StageConfig::Table {} => return Ok(ForcedStage::Table),
@@ -60,6 +61,7 @@ fn forced_stage(stage: &StageConfig) -> Result<ForcedStage, String> {
             prefix: location.prefix,
         },
         object,
+        home,
         keep_staged_files,
     }))
 }
@@ -101,7 +103,18 @@ pub(in crate::loader) async fn connect_target(
             base_url: base_url.clone(),
             stage: stage
                 .as_ref()
-                .map(|stage| forced_stage(stage))
+                .map(|stage| {
+                    forced_stage(
+                        stage,
+                        TableName {
+                            database: Some(
+                                target.database.clone().unwrap_or_else(|| database.clone()),
+                            ),
+                            schema: target.loader_schema.clone().unwrap_or_default(),
+                            table: String::new(),
+                        },
+                    )
+                })
                 .transpose()
                 .map_err(LoaderError::Invalid)?,
         })?)),

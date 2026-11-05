@@ -22,10 +22,10 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    BatchedScenarioTestCase, FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase,
-    LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
-    RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
-    WrittenRun,
+    BatchedScenarioTestCase, DebugStageTestCase, FilesScenario, FilesScenarioTestCase,
+    FilesTargetScenarioTestCase, LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile,
+    RouteFiles, RouteOutcome, RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase,
+    TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -627,6 +627,151 @@ pub(crate) fn old_leftovers(fake: &sqlload_testkit::fake_snowflake::models::Fake
         "fake-bucket/_sqlload/old-load/00001/part-00001.parquet".to_owned(),
         b"PAR1".to_vec(),
     );
+}
+
+/// The managed stage already exists, reading the bucket.
+pub(crate) fn stage_exists(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().stages.insert(
+        "_SQLLOAD_STAGE".to_owned(),
+        ("s3://fake-bucket/".to_owned(), "LAKE_INT".to_owned()),
+    );
+}
+
+/// Only an integration `LAKE_INT` matches through `SHOW`'s wildcard exists.
+pub(crate) fn similar_integration(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().integrations.insert("LAKEXINT".to_owned());
+    fake.state
+        .lock()
+        .integrations
+        .insert("LAKE_INT_OLD".to_owned());
+}
+
+/// The driver answers every `PUT` with a server problem.
+pub(crate) fn flaky_probes(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().driver_failure = Some(("000603".to_owned(), "internal error".to_owned()));
+}
+
+/// Files whose names pass the statement limit in total, with a text column to hash.
+pub(crate) fn long_names_with_text() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    day_files("2026-11-01", (300, 1500), Some("x"))
+}
+
+/// One Parquet file with a timestamp column of `nanos` nanoseconds or microseconds.
+fn timestamp_file(key: String, nanos: bool) -> Result<(String, bytes::Bytes), String> {
+    let units: [arrow_array::ArrayRef; 2] = [
+        std::sync::Arc::new(arrow_array::TimestampMicrosecondArray::from(vec![1])),
+        std::sync::Arc::new(arrow_array::TimestampNanosecondArray::from(vec![1_000])),
+    ];
+    let at = units[usize::from(nanos)].clone();
+    let ids: arrow_array::ArrayRef = std::sync::Arc::new(arrow_array::Int64Array::from(vec![1]));
+    let batch =
+        RecordBatch::try_from_iter([("id", ids), ("at", at)]).map_err(|error| error.to_string())?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    Ok((key, bytes::Bytes::from(buffer)))
+}
+
+/// The newest files, which planning samples, hold nanoseconds.
+pub(crate) fn nanos_newest() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(vec![timestamp_file(
+        "day=2026-11-01/part-0.parquet".to_owned(),
+        true,
+    )?])
+}
+
+/// A full batch of microseconds, a batch of nanoseconds, then a batch of microseconds, the newest files planning samples.
+pub(crate) fn nanos_in_a_later_batch() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files: Vec<(String, bytes::Bytes)> = Vec::new();
+    for (day, count, nanos) in [
+        ("2026-11-01", 1000, false),
+        ("2026-11-02", 1000, true),
+        ("2026-11-03", 25, false),
+    ] {
+        for index in 0..count {
+            files.push(timestamp_file(
+                format!("day={day}/part-{index:05}.parquet"),
+                nanos,
+            )?);
+        }
+    }
+    Ok(files)
+}
+
+/// `debug` on a project whose connection has `stage`, against a fake prepared as the case says: its lines, and the statements sent.
+pub(crate) async fn run_debug(
+    stage: &str,
+    test_case: &DebugStageTestCase,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let fake =
+        sqlload_testkit::fake_snowflake::main::start_fake_snowflake::start_fake_snowflake().await?;
+    (test_case.prepare)(&fake);
+    let base = fake.base_url.clone();
+    let text = format!(
+        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\nstage = {}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
+        stage.replace("FAKE", &base)
+    );
+    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let (lines, _) = sqlload::loader::main::debug_project::debug_project(&project, true).await;
+    let sent = fake.state.lock().statements.clone();
+    Ok((lines, sent))
+}
+
+/// Load a files table into DuckDB; take `_sqlload_source_row` away, as in a table from before it; add a file and load again. Each row's id and row number.
+pub(crate) async fn run_source_row_upgrade(
+    directory: &std::path::Path,
+    test_case: &SourceRowUpgradeTestCase,
+) -> Result<Option<String>, String> {
+    let (store, connection) = local_store("", directory);
+    let folder = open_folder(&Location {
+        store,
+        prefix: "scores/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    let text = format!(
+        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
+        test_case.settings
+    );
+    let project_destinations =
+        connect_targets(&parse_project(&text, &|_| None).map_err(|error| error.to_string())?)
+            .await
+            .map_err(|error| error.to_string())?;
+    let Some(Destination::DuckDb(duckdb)) = project_destinations.get("dev") else {
+        return Err("no DuckDB destination".to_owned());
+    };
+    for (key, ids) in [("a.parquet", &[1_i64, 2][..]), ("b.parquet", &[3][..])] {
+        let file = ParquetFile {
+            key,
+            ids,
+            score: 1.0,
+            extra: None,
+        };
+        write_file(&folder, key, parquet_bytes(&file)?)
+            .await
+            .map_err(|error| error.to_string())?;
+        run_once(&text, &project_destinations, &PlanOptions::default()).await?;
+        execute_statements(
+            duckdb,
+            [(
+                "a.parquet",
+                "ALTER TABLE raw.scores DROP COLUMN _sqlload_source_row",
+            )]
+            .iter()
+            .filter(|(when, _)| *when == key)
+            .map(|(_, statement)| (*statement).to_owned())
+            .collect(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    query_text(
+        duckdb,
+        "SELECT string_agg(id || ':' || coalesce(CAST(_sqlload_source_row AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.scores".to_owned(),
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 /// `ORDERS` already exists, its stage refused to this role (it does not own it), and so is `@~`.

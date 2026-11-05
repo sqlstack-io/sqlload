@@ -76,6 +76,10 @@ pub struct FakeState {
     pub channels_refused: bool,
     /// Storage integrations that exist.
     pub integrations: BTreeSet<String>,
+    /// While set, driver `PUT`s fail with this code and message, as a server problem would.
+    pub driver_failure: Option<(String, String)>,
+    /// While set, `SHOW STAGES` says the schema does not exist.
+    pub schema_missing: bool,
     /// The `LastModified` of every object listed; now when unset.
     pub objects_modified: Option<String>,
     /// What each statement of a multi-statement request returned, by handle.

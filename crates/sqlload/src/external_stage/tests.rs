@@ -12,5 +12,7 @@ mod pick_route;
 mod stage_problem;
 #[path = "tests/test_stage_statements.rs"]
 mod stage_statements;
+#[path = "tests/test_step_failure.rs"]
+mod step_failure;
 #[path = "tests/test_types.rs"]
 mod test_types;

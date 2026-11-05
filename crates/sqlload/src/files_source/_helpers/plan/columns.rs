@@ -1,8 +1,8 @@
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, SchemaRef, TimeUnit};
 
 use crate::column_types::main::portable_type::portable_type;
 use crate::column_types::models::ColumnType;
-use crate::files_source::constants::LOADER_COLUMNS;
+use crate::files_source::constants::{LOADER_COLUMNS, MAX_DIRECT_DECIMAL_PRECISION, UTC_ZONES};
 use crate::files_source::models::FileColumn;
 
 /// A column seen in sampled files: its type, or `None` while every sampled value was NULL.
@@ -10,6 +10,8 @@ use crate::files_source::models::FileColumn;
 pub(crate) struct SampledColumn {
     pub(crate) name: String,
     pub(crate) column_type: Option<Result<ColumnType, String>>,
+    /// The file's Arrow type when a direct `COPY` does not load it exactly.
+    pub(crate) direct_refusal: Option<String>,
 }
 
 /// Whether `name` is one of the loader's own columns, ignoring case.
@@ -38,8 +40,36 @@ pub(crate) fn schema_columns(schema: &SchemaRef) -> Vec<SampledColumn> {
         .map(|field| SampledColumn {
             name: field.name().clone(),
             column_type: Some(portable_type(field)),
+            direct_refusal: direct_refusal(field.data_type()),
         })
         .collect()
+}
+
+/// `data_type` as text unless a direct `COPY` is known to load it exactly (decision 96): nanosecond and INT96 timestamps, `Date64`, `UInt64`, `Float16`, `Decimal256`, timestamps in a zone other than UTC and anything else not listed stay with SQLLoad until parity proves them.
+pub(crate) fn direct_refusal(data_type: &DataType) -> Option<String> {
+    let exact = match data_type {
+        DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Date32 => true,
+        DataType::Decimal128(precision, _) => *precision <= MAX_DIRECT_DECIMAL_PRECISION,
+        DataType::Timestamp(
+            TimeUnit::Second | TimeUnit::Millisecond | TimeUnit::Microsecond,
+            zone,
+        ) => zone.as_deref().is_none_or(|zone| UTC_ZONES.contains(&zone)),
+        _ => false,
+    };
+    (!exact).then(|| data_type.to_string())
 }
 
 /// How one file's columns join those of newer files.
@@ -68,6 +98,9 @@ pub(crate) fn merge_columns(
             columns.push(column);
             continue;
         };
+        if existing.direct_refusal.is_none() {
+            existing.direct_refusal = column.direct_refusal;
+        }
         match (&existing.column_type, column.column_type) {
             (_, None) => {}
             (None, found_type) => existing.column_type = found_type,
@@ -122,6 +155,7 @@ pub(crate) fn merge_schema(
         .map(|column| SampledColumn {
             name: column.name,
             column_type: Some(column.column_type),
+            direct_refusal: column.direct_refusal,
         })
         .collect();
     let merge = ColumnMerge {
@@ -140,6 +174,7 @@ pub(crate) fn file_columns(columns: Vec<SampledColumn>) -> Vec<FileColumn> {
         .map(|column| FileColumn {
             name: column.name,
             column_type: column.column_type.unwrap_or(Ok(ColumnType::Text)),
+            direct_refusal: column.direct_refusal,
         })
         .collect()
 }

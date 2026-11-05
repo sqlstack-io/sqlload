@@ -31,6 +31,16 @@ pub enum ParityFiles {
     Partitioned,
     /// A partition value that is not a date.
     BadPartition,
+    /// NaN and both infinities, in both float widths.
+    FloatEdges,
+    /// Timestamps of each unit with sub-millisecond digits, before and after 1970.
+    TimestampEdges,
+    /// Decimals at the edges of precision and scale.
+    DecimalEdges,
+    /// The minimum and maximum of each integer width.
+    IntegerEdges,
+    /// No files: the comparison itself, on tables that differ only at microseconds, and that do not differ.
+    ComparisonSelfTest,
 }
 
 /// How one side of a parity case loads the files.
@@ -53,4 +63,22 @@ pub struct ParityCase {
     pub right: Side,
     /// Whether the left side must be Snowflake reading the files itself.
     pub left_is_direct: bool,
+}
+
+/// The statements comparing two tables, typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComparisonSql {
+    /// One text: rows only on the left, rows only on the right, rows on the left, rows on the right.
+    pub counts: String,
+    /// Some rows only on the left, as text for the report.
+    pub left_only: String,
+    pub right_only: String,
+}
+
+/// One column of a compared table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComparedColumn<'a> {
+    pub name: &'a str,
+    /// As the information schema reports it.
+    pub data_type: &'a str,
 }

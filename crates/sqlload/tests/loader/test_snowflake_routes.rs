@@ -1,9 +1,10 @@
 use crate::helpers::{
-    binary_later, found, integration, long_names, no_internal_stage, no_stage_or_channel,
-    no_stage_or_host, no_user_stage, not_found, not_owned, nothing, old_leftovers, run_async,
-    run_route, two_batches, two_days, with_text,
+    binary_later, flaky_probes, found, integration, long_names, long_names_with_text,
+    nanos_in_a_later_batch, nanos_newest, no_internal_stage, no_stage_or_channel, no_stage_or_host,
+    no_user_stage, not_found, not_owned, nothing, old_leftovers, run_async, run_debug, run_route,
+    similar_integration, stage_exists, two_batches, two_days, with_text,
 };
-use crate::test_types::{RouteFiles, RouteTestCase};
+use crate::test_types::{DebugStageTestCase, RouteFiles, RouteTestCase};
 
 const MANAGED: &str = "{ kind = \"s3\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\" }";
 const KEEPS: &str = "{ kind = \"s3\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\", keep_staged_files = true }";
@@ -242,6 +243,80 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
             ..BASE
         },
         RouteTestCase {
+            description: "a column the newest files hold as nanoseconds stays on SQLLoad, and plan names the column and type",
+            stage: MANAGED,
+            files: RouteFiles::Bucket,
+            file_set: nanos_newest,
+            prepare: integration,
+            expected_plan: &[
+                WRITES_PARQUET,
+                "at is Timestamp(ns",
+                "does not load exactly",
+            ],
+            expected_unsent: &["METADATA$FILENAME"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "a later batch of nanoseconds goes via SQLLoad, and the clean batches around it stay direct",
+            stage: MANAGED,
+            files: RouteFiles::Bucket,
+            file_set: nanos_in_a_later_batch,
+            prepare: integration,
+            expected_plan: &[PULLS],
+            expected_sent: &[
+                "METADATA$FILENAME = 'src/day=2026-11-01/",
+                "METADATA$FILENAME = 'src/day=2026-11-03/",
+                "/_sqlload/",
+            ],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "a stage goes in the target's loader schema, whatever schema the table loads into, and apply creates only that one for it",
+            stage: MANAGED,
+            settings: "schema = \"OTHER\"\nwrite_strategy = \"append\"",
+            prepare: integration,
+            expected_plan: &["\"DB\".\"RAW\".\"_SQLLOAD_STAGE\""],
+            expected_sent: &[
+                "CREATE SCHEMA IF NOT EXISTS \"DB\".\"RAW\"",
+                "CREATE STAGE IF NOT EXISTS \"DB\".\"RAW\".\"_SQLLOAD_STAGE\"",
+                "COPY INTO \"DB\".\"OTHER\".\"ORDERS\"",
+            ],
+            expected_unsent: &["\"OTHER\".\"_SQLLOAD_STAGE\""],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "plan lists the stage's own folder, never its whole URL",
+            stage: MANAGED,
+            prepare: stage_exists,
+            expected_sent: &["LIST @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\"/_sqlload/"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "an integration only matching through SHOW's wildcard does not count",
+            stage: MANAGED,
+            prepare: similar_integration,
+            expected_error: "storage integration LAKE_INT does not exist",
+            ..BASE
+        },
+        RouteTestCase {
+            description: "a probe failing for any other reason fails the plan, never changing the route",
+            prepare: flaky_probes,
+            expected_error: "cannot check whether @~ can be used",
+            expected_unsent: &["COPY INTO", "FROM VALUES"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "a hashed batch past 900 KiB in total still goes direct, each statement being within the limit",
+            stage: MANAGED,
+            settings: "write_strategy = \"append\"\n[sources.orders.tables.orders]\nmask = { extra = \"hash\" }",
+            files: RouteFiles::Bucket,
+            file_set: long_names_with_text,
+            prepare: integration,
+            expected_sent: &["CREATE OR REPLACE TEMPORARY TABLE", "SHA2(\"EXTRA\", 256)"],
+            expected_unsent: &["/_sqlload/"],
+            ..BASE
+        },
+        RouteTestCase {
             description: "shaping = loader keeps them on SQLLoad, and plan says why",
             stage: MANAGED,
             settings: "write_strategy = \"append\"\nshaping = \"loader\"",
@@ -384,6 +459,48 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
                 test_case.description
             );
             assert!(outcome.sequence_ids_rise, "{}", test_case.description);
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_an_external_stage_when_debugging_then_its_state_is_reported() -> Result<(), String> {
+    let test_cases = [
+        DebugStageTestCase {
+            description: "a stage that exists and lists",
+            prepare: stage_exists,
+            expected_line: "ok    target dev  LOADER; stage @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\" reads s3://fake-bucket/ and lists",
+            expected_sent: "LIST @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\"/_sqlload/",
+        },
+        DebugStageTestCase {
+            description: "a stage apply will create",
+            prepare: integration,
+            expected_line: "is missing; apply creates it",
+            expected_sent: "SHOW STAGES",
+        },
+        DebugStageTestCase {
+            description: "a schema that does not exist yet is tolerated, as plan does",
+            prepare: |fake| fake.state.lock().schema_missing = true,
+            expected_line: "is missing; apply creates it",
+            expected_sent: "SHOW STAGES",
+        },
+    ];
+    run_async(async {
+        for test_case in &test_cases {
+            let (lines, sent) = run_debug(MANAGED, test_case).await?;
+            assert_eq!(
+                not_found(&lines, &[test_case.expected_line]),
+                Vec::<&str>::new(),
+                "{}: {lines:#?}",
+                test_case.description
+            );
+            assert_eq!(
+                not_found(&sent, &[test_case.expected_sent]),
+                Vec::<&str>::new(),
+                "{}: {sent:#?}",
+                test_case.description
+            );
         }
         Ok(())
     })

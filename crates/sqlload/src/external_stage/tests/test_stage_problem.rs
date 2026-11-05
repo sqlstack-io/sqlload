@@ -1,7 +1,7 @@
 use crate::external_stage::main::stage_lookup::stage_lookup;
 use crate::external_stage::main::stage_problem::stage_problem;
 use crate::external_stage::models::ShownStage;
-use crate::external_stage::tests::helpers::{orders, stage};
+use crate::external_stage::tests::helpers::stage;
 use crate::external_stage::tests::test_types::StageProblemTestCase;
 
 #[test]
@@ -40,7 +40,7 @@ fn given_a_listed_stage_when_checking_it_then_only_one_on_the_url_with_the_integ
         },
     ];
     let stage = stage();
-    let lookup = stage_lookup(&stage, &orders());
+    let lookup = stage_lookup(&stage);
     for test_case in test_cases {
         let shown: Vec<ShownStage> = test_case
             .shown
