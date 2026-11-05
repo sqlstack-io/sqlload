@@ -1,4 +1,4 @@
-"""The benchmark's Postgres: a dedicated `postgres:17-alpine` container on a free port."""
+"""The benchmark's Postgres: a dedicated `postgres:17` container on a free port."""
 
 import socket
 import subprocess
@@ -12,7 +12,7 @@ import psycopg
 from sqlload_bench.datagen import Dataset
 from sqlload_bench.scenarios import MULTI_TABLES
 
-IMAGE = "postgres:17-alpine"
+IMAGE = "postgres:17"
 USER = "bench"
 PASSWORD = "bench"
 DATABASE = "shop"

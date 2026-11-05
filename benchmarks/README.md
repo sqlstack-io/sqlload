@@ -60,7 +60,7 @@ Differences a reader should know:
 
 - Data comes from a seed (`--seed`, default 42): DuckDB generates the narrow and wide rows, and
   `pydata.py`, standard library only, generates the Python rows in every environment.
-- Postgres runs in its own `postgres:17-alpine` container on a free port, started and stopped by
+- Postgres runs in its own `postgres:17` container on a free port, started and stopped by
   the harness, with durability off and tables vacuumed before any run.
 - Every run gets a new destination, `HOME` and XDG folders. A warm-up comes first, then the median of 3.
   Runs go round-robin across loaders, so drift in machine load spreads over all of them.
