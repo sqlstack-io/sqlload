@@ -203,8 +203,8 @@ def test_given_a_generator_that_raises_when_loading_then_only_its_table_fails_an
 	done = sqlload(project, "load")
 	assert done.returncode == 1
 	assert "loaded   RAW.shop__good  1 rows" in done.stdout + done.stderr
-	assert "failed  RAW.shop__bad  RuntimeError: the API returned 503" in done.stdout + done.stderr
-	assert "shop.py" in done.stderr
+	assert "failed   RAW.shop__bad   RuntimeError: the API returned 503" in done.stdout + done.stderr
+	assert "shop.py" in done.stdout + done.stderr
 	assert query(project, "SELECT table_name FROM information_schema.tables ORDER BY table_name") == [("shop__good",)]
 
 
@@ -241,14 +241,14 @@ def test_given_bad_python_sources_when_planning_then_the_project_fails_closed(tm
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
-	assert message in done.stderr, done.stderr
+	assert message in done.stdout + done.stderr, done.stderr
 
 
 def test_given_a_toml_python_source_when_parsing_then_it_is_rejected(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT + '\n[sources.shop]\nkind = "python"\n', "")
 	done = sqlload(project, "debug", "--no-connection")
 	assert done.returncode == 1
-	assert "Python sources are declared in Python with sl.source" in done.stderr
+	assert "Python sources are declared in Python with sl.source" in done.stdout + done.stderr
 
 
 def test_given_a_selector_when_loading_then_only_the_named_python_table_loads(tmp_path: Path) -> None:
@@ -311,7 +311,7 @@ def test_given_a_type_the_live_column_cannot_hold_when_loading_then_the_table_fa
 	give(project, "rows", [{"id": 2, "amount": 2.5}])
 	done = sqlload(project, "load")
 	assert done.returncode == 1
-	assert "failed  RAW.shop__rows  the yielded data does not fit the table" in done.stderr, done.stderr
+	assert "failed   RAW.shop__rows  the yielded data does not fit the table" in done.stdout + done.stderr, done.stderr
 	assert query(project, 'SELECT id, amount FROM "RAW"."shop__rows"') == [(1, 1)]
 
 
@@ -430,7 +430,7 @@ def test_given_a_declared_key_the_data_does_not_have_when_loading_then_the_table
 	give(project, "rows", rows)
 	done = sqlload(project, "load")
 	assert done.returncode == 1
-	assert message in done.stderr, done.stderr
+	assert message in done.stdout + done.stderr, done.stderr
 	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
 
 
@@ -461,7 +461,7 @@ def test_given_a_files_target_and_an_undeclared_cursor_when_planning_then_it_ask
 	project = make_project(tmp_path, toml, "shop.table(write_strategy='delete_insert', cursor_column='day')(rows)\n")
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
-	assert 'files targets need its type before the first load: declare it, for example columns={"day": "date"}' in done.stderr, done.stderr
+	assert 'files targets need its type before the first load: declare it, for example columns={"day": "date"}' in done.stdout + done.stderr, done.stderr
 
 
 @pytest.mark.parametrize(
@@ -537,8 +537,8 @@ def test_given_a_python_path_outside_the_project_folder_when_planning_then_disco
 	project = make_project(tmp_path, DUCKDB_PROJECT.replace('python_paths = ["sources"]', f"python_paths = [{entry!r}]".replace("'", '"')), "")
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
-	assert "DiscoveryError: python_paths entry" in done.stderr, done.stderr
-	assert "must be a folder inside the project folder" in done.stderr
+	assert "DiscoveryError\n    └── reason  python_paths entry" in done.stdout + done.stderr, done.stderr
+	assert "must be a folder inside the project folder" in done.stdout + done.stderr
 
 
 def test_given_environments_and_build_folders_under_python_paths_when_discovering_then_they_are_skipped(tmp_path: Path) -> None:
@@ -570,7 +570,7 @@ def test_given_no_rows_when_loading_into_a_table_with_rows_then_only_an_allowed_
 	give(project, "rows", [])
 	done = sqlload(project, "load", *args)
 	assert (done.returncode == 1) == fails, done.stdout + done.stderr
-	assert ("yielded no rows; replace would empty RAW.shop__rows; set allow_empty=True" in done.stderr) == fails, done.stderr
+	assert ("yielded no rows; replace would empty RAW.shop__rows; set allow_empty=True" in done.stdout + done.stderr) == fails, done.stderr
 	assert query(project, 'SELECT id FROM "RAW"."shop__rows"') == expected_rows
 
 
@@ -592,7 +592,7 @@ def test_given_no_rows_when_loading_into_files_with_rows_then_only_an_allowed_re
 	give(project, "rows", [])
 	done = sqlload(project, "load")
 	assert (done.returncode == 1) == fails, done.stdout + done.stderr
-	assert ("yielded no rows; replace would empty" in done.stderr) == fails, done.stderr
+	assert ("yielded no rows; replace would empty" in done.stdout + done.stderr) == fails, done.stderr
 	assert files_rows(project, "rows") == expected_rows
 
 
@@ -601,7 +601,7 @@ def test_given_allow_empty_on_a_source_with_a_bad_value_when_planning_then_the_s
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
-	assert "invalid type: string \"yes\", expected a boolean" in done.stderr, done.stderr
+	assert "invalid type: string \"yes\", expected a boolean" in done.stdout + done.stderr, done.stderr
 
 
 def test_given_allow_empty_in_sqlload_toml_when_parsing_then_it_is_an_unknown_key(tmp_path: Path) -> None:
@@ -609,7 +609,7 @@ def test_given_allow_empty_in_sqlload_toml_when_parsing_then_it_is_an_unknown_ke
 	project = make_project(tmp_path, toml, "")
 	done = sqlload(project, "debug", "--no-connection")
 	assert done.returncode == 1
-	assert 'unknown key "allow_empty" in [sources.app]' in done.stderr, done.stderr
+	assert 'unknown key "allow_empty" in [sources.app]' in done.stdout + done.stderr, done.stderr
 
 
 def test_given_a_python_source_on_a_warehouse_targets_connection_when_planning_then_the_project_is_refused(tmp_path: Path) -> None:
@@ -617,7 +617,7 @@ def test_given_a_python_source_on_a_warehouse_targets_connection_when_planning_t
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
-	assert "Python source shop uses connection wh, which target dev loads into; Python code never gets warehouse credentials" in done.stderr, done.stderr
+	assert "Python source shop uses connection wh, which target dev loads into; Python code never gets warehouse credentials" in done.stdout + done.stderr, done.stderr
 
 
 LAKE_MODULE = """
