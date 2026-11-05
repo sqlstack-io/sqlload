@@ -244,6 +244,7 @@ class Context:
 		self._client: Any = None
 		self._logged = logged
 		self._state = state
+		self._previous_state = state
 		self.started_state = json.dumps(state)
 
 	@property
@@ -255,6 +256,7 @@ class Context:
 	def state(self, value: Any) -> None:
 		if not self._logged:
 			raise AttributeError(f"ctx.state needs state='logged' on table {self.table}")
+		self._previous_state = self._state
 		self._state = value
 
 	@property

@@ -70,14 +70,14 @@ keeps it in `ctx.state`:
 @shop.table(write_strategy="append", state="logged")
 def events(ctx: sl.Context):
     page = fetch_events(since=ctx.state)
-    ctx.state = page.next_token
     yield from page.items
+    ctx.state = page.next_token
 ```
 
-Set `ctx.state` before yielding the rows it covers: rows commit with the state as it is when
-they reach SQLLoad. Written the other way round (`yield page; ctx.state = next`), a run that
-fails after committing some pages loads the last committed page again on the next run; it never
-loses data.
+A large run commits along the way, each commit with the value `ctx.state` had one assignment
+before its current one, so whether a function sets the state before or after the rows it covers,
+a run that fails part-way never loses rows; under `append`, the next run may load up to about
+two pages again.
 
 Each successful run appends a record to `_sqlload_runs` in the table's schema (or one object under
 `<table folder>/_sqlload/runs/` in a files target), in the same transaction as the data where the
