@@ -152,6 +152,35 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "2026-11-01=1,2026-11-02=20,2026-11-03=3",
         },
         ScenarioTestCase {
+            description: "one cursor range over a timestamp and an integer cursor is refused for both, naming each table's cursor type",
+            setup: "CREATE TABLE public.events (at timestamptz, n int4);
+                    CREATE TABLE public.counts (at timestamptz, n int4);
+                    INSERT INTO public.events VALUES ('2026-11-01', 1), ('2026-11-03', 3);
+                    INSERT INTO public.counts VALUES ('2026-11-01', 1), ('2026-11-03', 3);",
+            settings: "[sources.app.tables.\"public.events\"]\nwrite_strategy = \"append\"\ncursor_column = \"at\"\n[sources.app.tables.\"public.counts\"]\nwrite_strategy = \"append\"\ncursor_column = \"n\"\n",
+            runs: &[ScenarioRun {
+                window: (Some("2026-11-02"), None),
+                expected_error: "app__counts (integer), app__events (date or timestamp)",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "varchar(n) and text cursors compare alike, so one range applies to both",
+            setup: "CREATE TABLE public.codes (code varchar(8));
+                    CREATE TABLE public.names (code text);
+                    INSERT INTO public.codes VALUES ('a'), ('c');
+                    INSERT INTO public.names VALUES ('a'), ('c');",
+            settings: "[sources.app.tables.\"public.codes\"]\nwrite_strategy = \"append\"\ncursor_column = \"code\"\n[sources.app.tables.\"public.names\"]\nwrite_strategy = \"append\"\ncursor_column = \"code\"\n",
+            runs: &[ScenarioRun {
+                window: (Some("b"), None),
+                ..OK
+            }],
+            check_query: "SELECT (SELECT string_agg(code, ',') FROM raw.app__codes) || '|' || (SELECT string_agg(code, ',') FROM raw.app__names)",
+            expected_result: "c|c",
+        },
+        ScenarioTestCase {
             description: "a mask naming no column stops the plan instead of loading the column in clear",
             setup: "CREATE TABLE public.users (id int8 PRIMARY KEY, \"Email\" text);",
             settings: "[sources.app.tables.\"public.users\"]\nmask = { email = \"hash\" }\n",

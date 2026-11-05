@@ -11,6 +11,7 @@ use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::sources::{selected, source_ends, source_tables, unmatched_selectors};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
+use crate::loader::main::_mixed_cursors::block_mixed_cursors;
 use crate::loader::main::_table_folder::table_folder;
 use crate::loader::models::{PlanOptions, ProjectPlan, SkippedTable, TableSpec};
 use crate::project::models::{NewTables, ProjectConfig};
@@ -72,7 +73,7 @@ pub async fn plan_project(
     }
     plan.warnings
         .extend(unmatched_selectors(project, options, &names));
-    Ok(block_overlapping(plan, &claims))
+    Ok(block_conflicts(plan, &claims, options))
 }
 
 /// The folders files tables write to, whether or not they are selected; warehouse tables and paths that do not resolve claim none.
@@ -103,8 +104,12 @@ fn folder_claims(
     claims
 }
 
-/// The plan with every selected files table blocked whose folder clashes with any other configured table's.
-fn block_overlapping(mut plan: ProjectPlan, claims: &[FolderClaim]) -> ProjectPlan {
+/// The plan with every selected files table blocked whose folder clashes with any other configured table's, and every cursor table blocked when a cursor range meets cursors of different kinds.
+fn block_conflicts(
+    mut plan: ProjectPlan,
+    claims: &[FolderClaim],
+    options: &PlanOptions,
+) -> ProjectPlan {
     for table in plan
         .tables
         .iter_mut()
@@ -120,5 +125,5 @@ fn block_overlapping(mut plan: ProjectPlan, claims: &[FolderClaim]) -> ProjectPl
             table.schema = blocked_plan(vec![problem]);
         }
     }
-    plan
+    block_mixed_cursors(plan, options)
 }
