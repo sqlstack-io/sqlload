@@ -10,7 +10,7 @@ use crate::adapters::snowflake::constants::{
 use crate::adapters::snowflake::models::SnowflakeSql;
 use crate::adapters::snowflake::models::{CopyBatch, CopyColumn, CopyValue, DirectCopy};
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::files_source::models::DataFile;
+use crate::files_source::models::{DataFile, StoredRead};
 
 /// `COPY` statements loading `request.files` into `request.target`, at most 1,000 files and about 900 KiB of SQL each: data columns read by name and cast (JSON parsed), partition values, source file, version per file (matched on `METADATA$FILENAME`, which on an external stage is the bucket-relative key, failing on any other file) and row number, and literals; always `FORCE = TRUE` and `ON_ERROR = ABORT_STATEMENT`.
 pub(in crate::adapters) fn direct_copies(
@@ -87,9 +87,11 @@ fn copy_sql(request: &DirectCopy<'_>, folder: &str, files: &[DataFile]) -> Resul
                 "PARSE_JSON(CAST(GET($1, {}) AS VARCHAR))",
                 literal(&column.name)
             ),
-            CopyValue::File { .. } => {
-                format!("CAST(GET($1, {}) AS {sql_type})", literal(&column.name))
-            }
+            CopyValue::File { stored, short, .. } => file_value(
+                &format!("GET($1, {})", literal(&column.name)),
+                (&column.column_type, &sql_type),
+                (*stored, *short),
+            ),
             CopyValue::SourceRow => "METADATA$FILE_ROW_NUMBER".to_owned(),
             CopyValue::Literal(expression) => expression.clone(),
             CopyValue::SourceFile => per_file(
@@ -148,4 +150,35 @@ fn partition_value(data: &DataFile, column: &CopyColumn, sql_type: &str) -> Resu
         "CAST({} AS {sql_type})",
         SnowflakeSql.render_loader_value_literal(&text)
     ))
+}
+
+/// The value of file column `get`, as `column_type` (`sql_type`): a bare integer converted from its unit, and a time or timestamp cut to microseconds toward zero where the live column is `short`, as SQLLoad's own reader does (a cast to fewer digits rounds down instead, which differs before 1970).
+fn file_value(
+    get: &str,
+    (column_type, sql_type): (&ColumnType, &str),
+    (stored, short): (StoredRead, bool),
+) -> String {
+    let read = match (stored, column_type) {
+        (StoredRead::Epoch(scale), ColumnType::Date) => {
+            format!("TO_DATE(TO_TIMESTAMP_NTZ({get}::NUMBER, {scale}))")
+        }
+        (StoredRead::Epoch(scale), ColumnType::TimestampTz) => {
+            format!("TO_TIMESTAMP_TZ({get}::NUMBER, {scale})")
+        }
+        (StoredRead::Epoch(scale), _) => format!("TO_TIMESTAMP_NTZ({get}::NUMBER, {scale})"),
+        _ => get.to_owned(),
+    };
+    let value = format!("CAST({read} AS {sql_type})");
+    match (short, column_type) {
+        (true, ColumnType::TimestampTz) => {
+            format!("TO_TIMESTAMP_TZ(TRUNC(DATE_PART(EPOCH_NANOSECOND, {value}) / 1000), 6)")
+        }
+        (true, ColumnType::TimestampNtz) => {
+            format!("TO_TIMESTAMP_NTZ(TRUNC(DATE_PART(EPOCH_NANOSECOND, {value}) / 1000), 6)")
+        }
+        (true, ColumnType::Time) => {
+            format!("TIMEADD(NANOSECOND, -MOD(DATE_PART(NANOSECOND, {value}), 1000), {value})")
+        }
+        _ => value,
+    }
 }

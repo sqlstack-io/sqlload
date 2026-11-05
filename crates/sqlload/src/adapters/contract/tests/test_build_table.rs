@@ -14,6 +14,7 @@ fn given_a_replace_when_building_the_table_then_it_has_the_tables_own_types_and_
     let live = |name: &str, column_type: ColumnType| LiveColumn {
         name: name.to_owned(),
         column_type,
+        fraction_digits: None,
     };
     let same = vec![
         live("ID", ColumnType::Int),
@@ -53,7 +54,7 @@ fn given_a_replace_when_building_the_table_then_it_has_the_tables_own_types_and_
                 format!("ALTER TABLE {SF_BUILD} DROP COLUMN \"ID\""),
                 format!("ALTER TABLE {SF_BUILD} DROP COLUMN \"GONE\""),
                 format!("ALTER TABLE {SF_BUILD} ADD COLUMN \"ID\" NUMBER(38,0)"),
-                format!("ALTER TABLE {SF_BUILD} ADD COLUMN \"UPDATED_AT\" TIMESTAMP_TZ(6)"),
+                format!("ALTER TABLE {SF_BUILD} ADD COLUMN \"UPDATED_AT\" TIMESTAMP_TZ(9)"),
             ],
         },
         BuildTableTestCase {
@@ -176,6 +177,7 @@ fn given_a_build_table_holding_a_column_the_source_lacks_when_changing_it_then_t
     let note = LiveColumn {
         name: "NOTE".to_owned(),
         column_type: ColumnType::Text,
+        fraction_digits: None,
     };
     let old = vec![column("score", ColumnType::Int)];
     let test_cases = [

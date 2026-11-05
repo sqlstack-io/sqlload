@@ -67,7 +67,7 @@ fn given_a_desired_and_live_type_when_comparing_then_the_needed_change_is_named(
             desired: ColumnType::TimestampTz,
             live: ColumnType::TimestampNtz,
             warehouse: Warehouse::Snowflake,
-            expected_fit: TypeFit::NeedsRebuild("TIMESTAMP_TZ(6)".to_owned()),
+            expected_fit: TypeFit::NeedsRebuild("TIMESTAMP_TZ(9)".to_owned()),
         },
         TypeFitTestCase {
             description: "text into an int column is incompatible",

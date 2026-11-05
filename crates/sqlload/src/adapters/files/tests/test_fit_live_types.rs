@@ -55,6 +55,7 @@ fn given_a_source_type_the_files_type_holds_when_planning_then_new_files_keep_th
         let live = [LiveColumn {
             name: "QTY".to_owned(),
             column_type: test_case.live.clone(),
+            fraction_digits: None,
         }];
         let fitted = fit_live_types(desired, &live);
         assert_eq!(

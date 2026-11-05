@@ -5,7 +5,7 @@ use crate::adapters::contract::main::staging_id::staging_id;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::snowflake::_helpers::write::copy_columns::copy_columns;
-use crate::adapters::snowflake::constants::MAX_COPY_SQL_BYTES;
+use crate::adapters::snowflake::constants::{MAX_COPY_SQL_BYTES, MAX_FRACTION_DIGITS};
 use crate::adapters::snowflake::main::copy::_copy_rows::copy_rows;
 use crate::adapters::snowflake::main::copy::_direct_check::direct_check;
 use crate::adapters::snowflake::main::copy::_direct_copies::direct_copies;
@@ -22,7 +22,7 @@ use crate::loader::errors::LoaderError;
 use crate::loader::models::TableSpec;
 use crate::project::models::MaskMethod;
 use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
-use crate::schema_plan::models::DesiredColumn;
+use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 
 /// Load `batch` by having Snowflake `COPY` its files from the external stage the writer loads through, where the batch's own footers still allow it; `None` when SQLLoad must read it itself. A hashed batch's temporary table has its own name, since in the session it would shadow a build table made in the same second.
 impl SnowflakeWriter {
@@ -36,7 +36,11 @@ impl SnowflakeWriter {
         let spec = batch.spec;
         let read = batch.read;
         let files = batch.files;
-        let refused = batch_refusals(batch.footers, files);
+        let known = spec
+            .files
+            .as_ref()
+            .map_or(&[][..], |files| files.table.columns.as_slice());
+        let refused = batch_refusals(batch.footers, files, known);
         if let Some(reason) = direct_check(spec, (read, files, &refused), stage) {
             tracing::warn!(table = %spec.destination.table, %reason, "SQLLoad reads this batch itself");
             return Ok(None);
@@ -74,8 +78,12 @@ impl SnowflakeWriter {
                 ),
             );
             let create = create.replacen("TRANSIENT TABLE", "TEMPORARY TABLE", 1);
-            let columns =
-                filled_columns(spec, read, &staged_as_text(batch.target.columns), literals);
+            let columns = filled_columns(
+                spec,
+                (read, batch.live),
+                &staged_as_text(batch.target.columns),
+                literals,
+            );
             let hashed: Vec<String> = spec
                 .masked
                 .columns
@@ -124,7 +132,7 @@ impl SnowflakeWriter {
             }));
         }
         if batch.target.direct {
-            let columns = filled_columns(spec, read, batch.write_columns, literals);
+            let columns = filled_columns(spec, (read, batch.live), batch.write_columns, literals);
             let mut copies = copy(&spec.destination, &columns)?;
             let rows = match copies.len() {
                 1 => copy_rows(&self.destination, &copies.remove(0)).await?,
@@ -145,7 +153,7 @@ impl SnowflakeWriter {
             true => batch.write_columns,
             false => &staged,
         };
-        let columns = filled_columns(spec, read, carried, literals);
+        let columns = filled_columns(spec, (read, batch.live), carried, literals);
         let mut rows: u64 = 0;
         for statement in copy(&staging, &columns)? {
             rows += copy_rows(&self.destination, &statement).await?;
@@ -169,10 +177,10 @@ fn staged_as_text(columns: &[DesiredColumn]) -> Vec<DesiredColumn> {
         .collect()
 }
 
-/// What each of `columns` is filled with by a direct `COPY`: the files' columns, then this load's metadata as literals, and NULL for a live column the files lack.
+/// What each of `columns` is filled with by a direct `COPY`: the files' columns (cut to microseconds where the `live` column holds fewer digits), then this load's metadata as literals, and NULL for a live column the files lack.
 fn filled_columns(
     spec: &TableSpec,
-    read: &FilesRead,
+    (read, live): (&FilesRead, Option<&[LiveColumn]>),
     columns: &[DesiredColumn],
     (load_id, loaded_at): (&str, &str),
 ) -> Vec<CopyColumn> {
@@ -180,7 +188,27 @@ fn filled_columns(
     let mut filled: Vec<CopyColumn> = Vec::with_capacity(columns.len());
     for column in columns {
         let found = from_files.iter().find(|found| found.name == column.name);
+        let short = live.into_iter().flatten().any(|live| {
+            live.name == SnowflakeSql.stored_name(&column.name)
+                && live
+                    .fraction_digits
+                    .is_some_and(|digits| digits < MAX_FRACTION_DIGITS)
+        });
         let value = match (found, column.name.as_str()) {
+            (
+                Some(CopyColumn {
+                    value:
+                        CopyValue::File {
+                            file_type, stored, ..
+                        },
+                    ..
+                }),
+                _,
+            ) => CopyValue::File {
+                file_type: file_type.clone(),
+                stored: *stored,
+                short,
+            },
             (Some(found), _) => found.value.clone(),
             (None, LOAD_ID_COLUMN) => {
                 CopyValue::Literal(SnowflakeSql.render_loader_value_literal(load_id))

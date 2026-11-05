@@ -83,3 +83,6 @@ pub const REFUSING_HTTP_STATUSES: &[u16] = &[403, 404];
 
 /// What a refusal says in lower case, whatever its code.
 pub const REFUSAL_PHRASES: &[&str] = &["insufficient privileges", "not authorized"];
+
+/// Digits after the second Snowflake's times and timestamps hold at most, which SQLLoad's new columns use.
+pub const MAX_FRACTION_DIGITS: u8 = 9;

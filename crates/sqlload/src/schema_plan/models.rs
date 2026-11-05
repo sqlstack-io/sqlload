@@ -27,6 +27,8 @@ pub struct DesiredColumn {
 pub struct LiveColumn {
     pub name: String,
     pub column_type: ColumnType,
+    /// Digits after the second a live time or timestamp column holds, where the warehouse reports them.
+    pub fraction_digits: Option<u8>,
 }
 
 /// The rules for one table.

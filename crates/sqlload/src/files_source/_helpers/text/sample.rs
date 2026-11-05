@@ -12,7 +12,7 @@ use crate::files_source::_helpers::text::inference::{csv_value_type, json_value_
 use crate::files_source::_helpers::text::json_reader::JsonReader;
 use crate::files_source::_helpers::text::json_records::JsonRecord;
 use crate::files_source::constants::SAMPLE_ROWS;
-use crate::files_source::models::{Codec, FilesEncoding, SourceFormat};
+use crate::files_source::models::{Codec, FilesEncoding, SourceFormat, StoredRead};
 
 /// The columns in the first records of a JSON or CSV `file`, with the types their values suggest.
 pub(crate) async fn sample_file(
@@ -46,6 +46,7 @@ pub(crate) fn json_columns(records: &[JsonRecord]) -> Vec<SampledColumn> {
                     name: key.clone(),
                     column_type: None,
                     direct_refusal: None,
+                    stored_read: StoredRead::Plain,
                 });
                 columns.len() - 1
             });
@@ -74,6 +75,7 @@ pub(crate) fn csv_columns(names: &[String], batch: Option<&RecordBatch>) -> Vec<
             name: name.clone(),
             column_type,
             direct_refusal: None,
+            stored_read: StoredRead::Plain,
         });
     }
     columns

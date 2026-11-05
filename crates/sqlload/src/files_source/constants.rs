@@ -53,6 +53,3 @@ pub const LOADER_COLUMNS: &[&str] = &[
 
 /// The largest decimal precision a direct `COPY` loads exactly.
 pub const MAX_DIRECT_DECIMAL_PRECISION: u8 = 38;
-
-/// The Arrow zones a direct `COPY` reads as UTC.
-pub const UTC_ZONES: &[&str] = &["UTC", "+00:00"];

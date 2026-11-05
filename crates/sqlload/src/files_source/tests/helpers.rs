@@ -183,6 +183,7 @@ async fn discover_and_read(
             .collect(),
     };
     let request = FilesRead {
+        nanos: Vec::new(),
         files: listed.files,
         encoding: test_case.encoding.clone(),
         checks,
@@ -287,6 +288,7 @@ async fn break_footer_and_read(folder: &OpenFolder, reuse: bool) -> Result<Strin
         .await
         .map_err(|error| error.to_string())?;
     let request = FilesRead {
+        nanos: Vec::new(),
         files: listed.files,
         encoding,
         checks: TextChecks::default(),

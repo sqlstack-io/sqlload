@@ -31,10 +31,10 @@ fn given_a_portable_type_when_mapping_to_a_warehouse_then_the_sql_name_and_loss_
             expected_lossy: false,
         },
         WarehouseTypeTestCase {
-            description: "Snowflake timestamps are microsecond",
+            description: "Snowflake timestamps keep nanoseconds",
             column_type: ColumnType::TimestampTz,
             warehouse: Warehouse::Snowflake,
-            expected_sql: "TIMESTAMP_TZ(6)",
+            expected_sql: "TIMESTAMP_TZ(9)",
             expected_lossy: false,
         },
         WarehouseTypeTestCase {
