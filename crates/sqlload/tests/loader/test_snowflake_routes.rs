@@ -370,9 +370,25 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
                 "CREATE OR REPLACE TEMPORARY TABLE",
                 "SHA2(\"EXTRA\", 256)",
                 "_DELTA\"",
+                "INSERT INTO \"DB\".\"RAW\".\"ORDERS\" (",
                 "DROP TABLE IF EXISTS \"DB\".\"RAW\".\"ORDERS__SQLLOAD_STAGING_",
             ],
             expected_unsent: &["/_sqlload/"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "a direct append past one request's size is split the same way, COPYing into a delta table that one last request writes from",
+            stage: MANAGED,
+            settings: DIRECT,
+            files: RouteFiles::Bucket,
+            file_set: long_names_with_text,
+            prepare: integration,
+            expected_sent: &[
+                "CREATE OR REPLACE TEMPORARY TABLE",
+                "_DELTA\"",
+                "INSERT INTO \"DB\".\"RAW\".\"ORDERS\" (",
+            ],
+            expected_unsent: &["/_sqlload/", "SHA2("],
             ..BASE
         },
         RouteTestCase {

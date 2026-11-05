@@ -121,7 +121,7 @@ impl SnowflakeWriter {
         Ok(())
     }
 
-    /// The `COPY`s of `batch` from `place`: straight into the target, into the staging or build table, or through a temporary table that hashes.
+    /// The `COPY`s of `batch` from `place`: straight into the target, into the staging or build table, or through a temporary table that hashes (also used, hashing nothing, for a direct batch too large for one request).
     async fn copy_from(
         &mut self,
         batch: &DirectBatch<'_>,
@@ -157,7 +157,20 @@ impl SnowflakeWriter {
                 Ok(batches.into_iter().map(|batch| batch.sql).collect())
             };
         let literals = (batch.target.load_id, batch.loaded_at);
-        if hashes {
+        let direct_copies = match (hashes, batch.target.direct) {
+            (false, true) => Some(copy(
+                &spec.destination,
+                &filled_columns(spec, (read, batch.live), batch.write_columns, literals),
+            )?),
+            _ => None,
+        };
+        let oversized = direct_copies
+            .iter()
+            .flatten()
+            .map(String::len)
+            .sum::<usize>()
+            > MAX_SCRIPT_BYTES;
+        if hashes || oversized {
             let id = staging_id(batch.target.load_id, chrono::Utc::now().naive_utc());
             let (staging, create) = SnowflakeSql.render_create_staging_table(
                 &spec.destination,
@@ -188,20 +201,22 @@ impl SnowflakeWriter {
                 None => batch.mode,
             };
             let target = build.as_ref().unwrap_or(&spec.destination);
-            let write_into =
-                |table: &TableName, mode: &WriteMode, hashed: &[String], from: &TableName| {
-                    SnowflakeSql.render_commit(
-                        &WriteStatementsRequest {
-                            table,
-                            columns: batch.write_columns,
-                            mode,
-                            hashed,
-                            built: None,
-                        },
-                        from,
-                        (None, true),
-                    )
-                };
+            let write_into = |(table, columns): (&TableName, &[DesiredColumn]),
+                              mode: &WriteMode,
+                              hashed: &[String],
+                              from: &TableName| {
+                SnowflakeSql.render_commit(
+                    &WriteStatementsRequest {
+                        table,
+                        columns,
+                        mode,
+                        hashed,
+                        built: None,
+                    },
+                    from,
+                    (None, true),
+                )
+            };
             let drop = |table: &TableName| {
                 format!(
                     "DROP TABLE IF EXISTS {}",
@@ -223,17 +238,21 @@ impl SnowflakeWriter {
                 batch.write_columns,
                 &format!("{id}_delta"),
             );
-            let mut finish = write_into(target, mode, &[], &delta);
-            finish.push(drop(&delta));
+            let as_text = staged_as_text(batch.write_columns);
             let rows = self
                 .run_hashed(HashedScript {
                     create,
                     copies,
-                    write: write_into(target, mode, &hashed, &staging),
+                    write: write_into((target, batch.write_columns), mode, &hashed, &staging),
                     drop_staging: drop(&staging),
                     create_delta,
-                    hash_into_delta: write_into(&delta, &WriteMode::Append, &hashed, &staging),
-                    finish,
+                    hash_into_delta: write_into(
+                        (&delta, &as_text),
+                        &WriteMode::Append,
+                        &hashed,
+                        &staging,
+                    ),
+                    finish: write_into((target, batch.write_columns), mode, &[], &delta),
                     drop_delta: drop(&delta),
                 })
                 .await?;
@@ -242,9 +261,7 @@ impl SnowflakeWriter {
                 None => DirectLoaded::Committed(rows),
             }));
         }
-        if batch.target.direct {
-            let columns = filled_columns(spec, (read, batch.live), batch.write_columns, literals);
-            let mut copies = copy(&spec.destination, &columns)?;
+        if let Some(mut copies) = direct_copies {
             let rows = match copies.len() {
                 1 => copy_rows(&self.destination, &copies.remove(0)).await?,
                 _ => {
@@ -272,7 +289,7 @@ impl SnowflakeWriter {
         Ok(Some(DirectLoaded::Staged(rows)))
     }
 
-    /// Run a hashed batch's statements: in one request when they fit, otherwise each group of `COPY`s in a request of its own, hashed into the delta table, which one last request writes from; the delta is dropped if any request fails.
+    /// Run a hashed batch's statements: in one request when they fit, otherwise each group of `COPY`s in a request of its own, hashed into the delta table, which one last request writes from; the delta is dropped afterwards either way.
     async fn run_hashed(&self, script: HashedScript) -> Result<u64, LoaderError> {
         let whole: usize = [script.create.len(), script.drop_staging.len()]
             .into_iter()
@@ -300,9 +317,8 @@ impl SnowflakeWriter {
             Ok::<u64, LoaderError>(rows)
         }
         .await;
-        if loaded.is_err()
-            && let Err(error) =
-                script_copy_rows(&self.destination, std::slice::from_ref(&script.drop_delta)).await
+        if let Err(error) =
+            script_copy_rows(&self.destination, std::slice::from_ref(&script.drop_delta)).await
         {
             tracing::warn!(%error, "cannot drop a hashed batch's delta table; it holds only hashed values");
         }

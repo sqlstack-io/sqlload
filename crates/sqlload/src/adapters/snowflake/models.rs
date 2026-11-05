@@ -330,8 +330,10 @@ pub(in crate::adapters) struct HashedScript {
     pub(in crate::adapters) drop_staging: String,
     /// Creates the transient delta table a split batch hashes into.
     pub(in crate::adapters) create_delta: String,
+    /// Hashes the temporary table into the delta, keeping JSON and UUIDs as text so `finish` casts them once.
     pub(in crate::adapters) hash_into_delta: Vec<String>,
-    /// Writes the delta into the target, then drops it.
+    /// Writes the delta into the target.
     pub(in crate::adapters) finish: Vec<String>,
+    /// Dropped after the split batch, whether or not it loaded; a failed drop only warns.
     pub(in crate::adapters) drop_delta: String,
 }
