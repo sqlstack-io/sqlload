@@ -102,3 +102,5 @@ pub const NATIVE_TYPE_NAMES: &[(&str, PgType)] = &[
 
 /// Session settings: UTC so timestamp text and filter literals ignore the server zone; standard strings so `\\` is literal.
 pub const SESSION_OPTIONS: &str = "-c TimeZone=UTC -c standard_conforming_strings=on";
+/// Batches read ahead of the consumer, so Postgres keeps sending while one is written.
+pub const COPY_QUEUE_BATCHES: usize = 2;
