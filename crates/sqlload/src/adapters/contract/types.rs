@@ -96,6 +96,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         string_literal(text)
     }
 
+    /// How `plan` names the warehouse reading files itself: the verb for reading them in place, and the step loading them from a stage.
+    fn render_read_words(&self) -> (&'static str, &'static str) {
+        ("reads", "reads them")
+    }
+
     /// `SCHEMA.TABLE` as `plan` prints it, the way the warehouse stores the names.
     fn render_display_name(&self, table: &TableName) -> String {
         format!("{}.{}", table.schema, table.table)

@@ -52,9 +52,10 @@ pub(crate) struct BoundArrayTestCase {
 
 pub(crate) struct RenderTallyTestCase {
     pub(crate) description: &'static str,
-    /// `verb`, name and detail of each line.
-    pub(crate) lines: &'static [(&'static str, &'static str, &'static str)],
-    pub(crate) rows: u64,
+    /// The lines `apply` printed.
+    pub(crate) applied: &'static [&'static str],
+    /// Each table, its rows or failure, and its milliseconds.
+    pub(crate) outcomes: &'static [(&'static str, Result<u64, &'static str>, u64)],
     pub(crate) elapsed_ms: u64,
     pub(crate) expected_output: &'static str,
 }

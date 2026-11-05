@@ -21,6 +21,6 @@ pub(crate) struct LoadOptionsTestCase {
 
 pub(crate) struct PlanFailureTestCase {
     pub(crate) description: &'static str,
-    pub(crate) json: bool,
+    pub(crate) argv: &'static [&'static str],
     pub(crate) expected_output: &'static str,
 }

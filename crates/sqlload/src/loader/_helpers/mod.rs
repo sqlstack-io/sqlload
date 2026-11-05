@@ -1,5 +1,4 @@
 pub(crate) mod destination;
-pub(crate) mod plan_view;
 pub(crate) mod publish;
 pub(crate) mod python;
 pub(crate) mod render;

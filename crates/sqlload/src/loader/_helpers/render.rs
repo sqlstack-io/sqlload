@@ -4,13 +4,14 @@ use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
 use crate::adapters::files::models::{PendingLoad, PendingPhase};
 use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
-use crate::column_types::models::{ColumnType, Warehouse};
+use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::is_direct;
 use crate::loader::constants::{LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN};
 use crate::loader::models::{
-    CommitRule, FilesOutput, PlanDetail, PlanItem, PythonTable, SourceEnd, TablePlan, WholeReason,
+    CommitRule, FilesOutput, PlanDetail, PlanItem, PlanView, ProjectPlan, PythonTable, SourceEnd,
+    TablePlan, WholeReason,
 };
 use crate::project::models::BatchStep;
 use crate::project::models::FilesFormat;
@@ -84,7 +85,7 @@ pub(crate) fn thousands(count: u64) -> String {
     let digits = count.to_string();
     let mut grouped = String::new();
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             grouped.push(',');
         }
         grouped.push(digit);
@@ -558,34 +559,29 @@ fn reload_moves_columns(table: &TablePlan) -> bool {
     false
 }
 
-/// How a table's data moves, in short: the warehouse's own read of the files where it reads them, otherwise each step, naming files by their real format.
+/// How a table's data moves, in short: the warehouse's own read of the files where it reads them, otherwise each step.
 fn route_text(table: &TablePlan, route: &Route) -> String {
     let warehouse = table.spec.warehouse;
-    let real = table.spec.files.as_ref().map(|files| files.encoding.format);
-    let format = |given: &dyn std::fmt::Display| {
-        real.map_or_else(|| given.to_string(), |format| format.to_string())
-    };
-    let reads = match warehouse {
-        Warehouse::Snowflake => "COPY".to_owned(),
-        _ => format!("{warehouse} reads them"),
-    };
+    let (verb, load) = sql_adapter(warehouse).render_read_words();
+    let real = table
+        .spec
+        .files
+        .as_ref()
+        .map(|files| files.encoding.format.to_string());
     match route.steps.as_slice() {
-        [Step::UseFiles(files), Step::DestinationPulls(_)] => format!(
-            "{} {} directly from {} (nothing through the loader)",
-            warehouse,
-            match warehouse {
-                Warehouse::Snowflake => "COPYs",
-                _ => "reads",
-            },
-            files.store
-        ),
+        [Step::UseFiles(files), Step::DestinationPulls(_)] => {
+            format!(
+                "{warehouse} {verb} directly from {} (nothing through the loader)",
+                files.store
+            )
+        }
         [
             Step::UseFiles(files),
             Step::CopyFiles(Store::InternalStage(stage)),
             Step::DestinationPulls(_),
         ] => format!(
-            "{} files from {} uploaded unchanged to {stage} -> {reads}",
-            format(&files.format),
+            "{} files from {} uploaded unchanged to {stage} -> {load}",
+            real.unwrap_or_else(|| files.format.to_string()),
             files.store
         ),
         steps => steps
@@ -593,12 +589,11 @@ fn route_text(table: &TablePlan, route: &Route) -> String {
             .filter(|step| !matches!(step, Step::UseFiles(_)))
             .map(|step| match step {
                 Step::ReadArrow => "read as Arrow".to_owned(),
-                Step::FileReader(given) => format!("read {} as Arrow", format(given)),
                 Step::ParquetWriter(Store::InternalStage(stage)) => {
                     format!("Parquet -> PUT to {stage}")
                 }
                 Step::ParquetWriter(store) => format!("Parquet -> {store}"),
-                Step::DestinationPulls(_) => reads.clone(),
+                Step::DestinationPulls(_) => load.to_owned(),
                 Step::DestinationTakesArrow => format!("{warehouse} takes Arrow"),
                 other => other.to_string(),
             })
@@ -660,4 +655,115 @@ fn python_columns_line(table: &TablePlan, python: &PythonTable) -> String {
         true => format!("columns inferred at load and checked against the live table{declared}"),
         false => format!("columns inferred on first load{declared}"),
     }
+}
+
+/// `count` and the noun for it, as `1 object` or `2 objects`.
+fn counted(count: usize, (one, many): (&str, &str)) -> String {
+    match count {
+        1 => format!("1 {one}"),
+        _ => format!("{count} {many}"),
+    }
+}
+
+/// The plan's sections: what `apply` creates or changes, what `load` moves, and what stops or should be known.
+pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
+    let ready: Vec<_> = plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_none())
+        .collect();
+    let mut stages: Vec<&PlannedStage> = Vec::new();
+    for table in &ready {
+        if let Some(stage) = &table.planned_stage
+            && !stages.iter().any(|seen| seen.name == stage.name)
+        {
+            stages.push(stage);
+        }
+    }
+    let changed: Vec<_> = ready
+        .iter()
+        .filter(|table| table.schema.action != TableAction::Unchanged && table.output.is_none())
+        .collect();
+    let creates = stages.len()
+        + changed
+            .iter()
+            .filter(|table| {
+                matches!(
+                    table.schema.action,
+                    TableAction::Create | TableAction::Recreate
+                )
+            })
+            .count();
+    let alters = stages.len() + changed.len() - creates;
+    let errors: Vec<PlanItem> = plan
+        .tables
+        .iter()
+        .filter_map(blocked_item)
+        .chain(plan.problems.iter().map(|problem| problem_item(problem)))
+        .collect();
+    let clauses = [
+        (creates, ("object to create", "objects to create")),
+        (alters, ("to alter", "to alter")),
+        (ready.len(), ("to load", "to load")),
+        (plan.skipped.len(), ("skipped", "skipped")),
+    ];
+    let mut summary = vec![format!("{} selected", plan.tables.len())];
+    summary.extend(
+        clauses
+            .into_iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, words)| counted(count, words)),
+    );
+    PlanView {
+        ok: errors.is_empty(),
+        summary: summary.join(", "),
+        selected: plan.tables.len(),
+        objects: stages
+            .iter()
+            .map(|stage| stage_item(stage))
+            .chain(changed.iter().map(|table| object_item(table)))
+            .collect(),
+        loads: ready.iter().map(|table| load_item(table)).collect(),
+        skipped: plan
+            .skipped
+            .iter()
+            .map(|skipped| PlanItem {
+                name: skipped.source_table.clone(),
+                action: String::new(),
+                details: vec![PlanDetail {
+                    label: "reason".to_owned(),
+                    text: skipped.reason.clone(),
+                }],
+            })
+            .collect(),
+        errors,
+        warnings: plan
+            .warnings
+            .iter()
+            .map(|warning| error_item(warning, &[]))
+            .chain(ready.iter().filter_map(|table| warning_item(table)))
+            .collect(),
+    }
+}
+
+/// The lines `plan` prints for `view`: `Plan ready`, each section with items, then whether the plan is complete.
+pub(crate) fn view_lines(view: &PlanView) -> Vec<String> {
+    let mut lines = match view.selected {
+        0 if !view.errors.is_empty() => Vec::new(),
+        _ => vec![format!("Plan ready  {}", view.summary), String::new()],
+    };
+    lines.extend(tree("Objects", "sqlload apply", &view.objects));
+    lines.extend(tree("Loads", "sqlload load", &view.loads));
+    lines.extend(tree("Skipped", "", &view.skipped));
+    let summary = match lines.is_empty() {
+        true => String::new(),
+        false => format!("  {}", view.summary),
+    };
+    lines.extend(tree("Errors", "", &view.errors));
+    lines.extend(tree("Warnings", "", &view.warnings));
+    lines.push(match view.ok {
+        true => format!("✓ Plan complete{summary}"),
+        false => format!("✗ Plan failed with errors{summary}"),
+    });
+    lines
 }

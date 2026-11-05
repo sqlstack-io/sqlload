@@ -24,13 +24,9 @@ pub(crate) fn debug_without_host(project: &str) -> String {
         .unwrap_or_default()
 }
 
-/// `sqlload plan` (with `--json` when `json`) on `project` without a Python host: its output, or its error.
-pub(crate) fn plan_without_host(project: &str, json: bool) -> String {
-    let argv: &[&str] = match json {
-        true => &["sqlload", "plan", "--json"],
-        false => &["sqlload", "plan"],
-    };
-    let Ok(cli) = Cli::try_parse_from(argv) else {
+/// The command line `argv` (after `sqlload`) on `project` without a Python host: its output, or its error.
+pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
+    let Ok(cli) = Cli::try_parse_from(["sqlload"].iter().chain(argv)) else {
         return "unparsed".to_owned();
     };
     let request = LoaderRequest {
