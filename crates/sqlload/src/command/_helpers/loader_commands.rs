@@ -5,15 +5,19 @@ use std::collections::BTreeMap;
 
 use crate::adapters::dispatch::models::Destination;
 use crate::command::models::{Command, LoaderArgs, LoaderRequest, StateAction};
+use crate::loader::_helpers::plan_view::failed_lines;
+use crate::loader::_helpers::render::thousands;
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
 use crate::loader::main::debug_project::debug_project;
 use crate::loader::main::load_tables::load_tables;
+use crate::loader::main::plan_json::plan_json;
 use crate::loader::main::plan_project::plan_project;
 use crate::loader::main::render_plan::render_plan;
+use crate::loader::main::render_tally::render_tally;
 use crate::loader::main::state_command::state_command;
-use crate::loader::models::{LoadRun, PlanOptions, StateKind, StateRequest};
+use crate::loader::models::{LoadRun, PlanOptions, StateKind, StateRequest, TallyLine};
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::project::models::ProjectConfig;
@@ -99,9 +103,12 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
         .map_err(|error| error.to_string())
 }
 
-/// Run a loader command against the project in `request.text`.
-pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<Vec<String>, String> {
-    let project = load_project_config(&request).await?;
+/// Run a loader command against the project in `request.text`: the lines to print, and whether it succeeded.
+pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String>, bool), String> {
+    let project = match load_project_config(&request).await {
+        Ok(project) => project,
+        Err(error) => return config_failure(&request.command, error),
+    };
     let outcome = run_command(&project, request.command, request.host.clone()).await;
     if let Some(host) = request.host {
         let _ = tokio::task::spawn_blocking(move || host.finish()).await;
@@ -109,15 +116,51 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<Vec<String>
     outcome
 }
 
+/// A project that does not parse: a failed plan's `Errors` for `plan`, `apply` and `load` (as JSON for `plan --json`), else the error.
+fn config_failure(command: &Command, error: String) -> Result<(Vec<String>, bool), String> {
+    let (Command::Plan(args) | Command::Apply(args) | Command::Load(args)) = command else {
+        return Err(error);
+    };
+    let problems: Vec<String> = match error.strip_prefix("invalid project:\n  - ") {
+        Some(listed) => listed.split("\n  - ").map(str::to_owned).collect(),
+        None => vec![error.clone()],
+    };
+    match args.json {
+        true => Ok((
+            vec![
+                serde_json::json!({ "error": { "code": "config", "message": error, "help": null } })
+                    .to_string(),
+            ],
+            false,
+        )),
+        false => Ok((failed_lines(&problems), false)),
+    }
+}
+
+/// `created  name  detail` as a tally line; a line without a detail keeps its name whole.
+fn tally_line(line: &str) -> TallyLine {
+    let mut parts = line.splitn(3, "  ");
+    let verb = match parts.next().unwrap_or_default() {
+        "created" => "created",
+        "recreated" => "recreated",
+        _ => "altered",
+    };
+    TallyLine {
+        verb,
+        name: parts.next().unwrap_or_default().to_owned(),
+        detail: parts.next().unwrap_or_default().to_owned(),
+    }
+}
+
 async fn run_command(
     project: &ProjectConfig,
     command: Command,
     host: Option<Arc<dyn PythonHost>>,
-) -> Result<Vec<String>, String> {
+) -> Result<(Vec<String>, bool), String> {
     if let Command::Debug { no_connection } = command {
         let (lines, ok) = debug_project(project, !no_connection).await;
         return match ok {
-            true => Ok(lines),
+            true => Ok((lines, true)),
             false => Err(lines.join("\n")),
         };
     }
@@ -125,7 +168,9 @@ async fn run_command(
         .await
         .map_err(|error| error.to_string())?;
     if let Command::State { action } = command {
-        return run_state(project, &destinations, action).await;
+        return run_state(project, &destinations, action)
+            .await
+            .map(|lines| (lines, true));
     }
     let (args, applies, loads) = match command {
         Command::Plan(args) => (args, false, false),
@@ -138,22 +183,30 @@ async fn run_command(
             );
         }
     };
+    if args.json && applies {
+        return Err("--json applies to plan only".to_owned());
+    }
+    let json = args.json;
+    let started = std::time::Instant::now();
     let options = options(args)?;
     let plan = plan_project(project, &destinations, &options)
         .await
         .map_err(|error| error.to_string())?;
-    let (mut lines, mut ok) = render_plan(&plan);
-    if !applies {
-        return match ok {
-            true => Ok(lines),
-            false => Err(lines.join("\n")),
-        };
+    if json {
+        let (text, ok) = plan_json(&plan);
+        return Ok((vec![text], ok));
     }
-    lines.extend(
-        apply_project(&plan, &destinations)
-            .await
-            .map_err(|error| error.to_string())?,
-    );
+    let (mut lines, planned) = render_plan(&plan);
+    if !applies {
+        return Ok((lines, planned));
+    }
+    let mut tally: Vec<TallyLine> = apply_project(&plan, &destinations)
+        .await
+        .map_err(|error| error.to_string())?
+        .iter()
+        .map(|line| tally_line(line))
+        .collect();
+    let mut rows: u64 = 0;
     if loads {
         let run = LoadRun {
             project,
@@ -162,29 +215,32 @@ async fn run_command(
             options: &options,
         };
         for outcome in load_tables(&run, &plan).await {
+            let seconds = format!("{:.1}s", outcome.elapsed.as_secs_f64());
             match outcome.loaded {
                 Ok(loaded) => {
-                    lines.extend(loaded.changes);
+                    tally.extend(loaded.changes.iter().map(|line| tally_line(line)));
+                    rows += loaded.rows;
                     let note = loaded
                         .note
                         .map(|note| format!(" {note}"))
                         .unwrap_or_default();
-                    lines.push(format!(
-                        "loaded  {}  {} rows{note}",
-                        outcome.table, loaded.rows
-                    ));
+                    tally.push(TallyLine {
+                        verb: "loaded",
+                        name: outcome.table,
+                        detail: format!("{} rows{note}  {seconds}", thousands(loaded.rows)),
+                    });
                 }
-                Err(reason) => {
-                    ok = false;
-                    lines.push(format!("failed  {}  {reason}", outcome.table));
-                }
+                Err(reason) => tally.push(TallyLine {
+                    verb: "failed",
+                    name: outcome.table,
+                    detail: reason,
+                }),
             }
         }
     }
-    match ok {
-        true => Ok(lines),
-        false => Err(format!("{}\nsome tables were not loaded", lines.join("\n"))),
-    }
+    let (tallied, completed) = render_tally(&tally, (rows, started.elapsed()));
+    lines.extend(tallied);
+    Ok((lines, planned && completed))
 }
 
 /// `sqlload state`: plan the selected tables (which reads their run logs), then show, verify, reconcile or reset them.

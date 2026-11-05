@@ -24,6 +24,29 @@ pub(crate) fn debug_without_host(project: &str) -> String {
         .unwrap_or_default()
 }
 
+/// `sqlload plan` (with `--json` when `json`) on `project` without a Python host: its output, or its error.
+pub(crate) fn plan_without_host(project: &str, json: bool) -> String {
+    let argv: &[&str] = match json {
+        true => &["sqlload", "plan", "--json"],
+        false => &["sqlload", "plan"],
+    };
+    let Ok(cli) = Cli::try_parse_from(argv) else {
+        return "unparsed".to_owned();
+    };
+    let request = LoaderRequest {
+        text: project,
+        config: Path::new("sqlload.toml"),
+        command: cli.command,
+        host: None,
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())
+        .and_then(|runtime| runtime.block_on(run_loader(request)))
+        .map_or_else(|error| error, |(lines, _)| lines.join("\n"))
+}
+
 /// The selection and cursor options `sqlload load <argv>` plans with, as `select | exclude | start | end`, or the parse error.
 pub(crate) fn load_options(argv: &[&str]) -> Result<String, String> {
     let cli = Cli::try_parse_from(["sqlload", "load"].iter().chain(argv))

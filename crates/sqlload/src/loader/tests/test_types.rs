@@ -49,3 +49,12 @@ pub(crate) struct BoundArrayTestCase {
     /// The bound as Arrow displays it.
     pub(crate) expected_value: &'static str,
 }
+
+pub(crate) struct RenderTallyTestCase {
+    pub(crate) description: &'static str,
+    /// `verb`, name and detail of each line.
+    pub(crate) lines: &'static [(&'static str, &'static str, &'static str)],
+    pub(crate) rows: u64,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) expected_output: &'static str,
+}

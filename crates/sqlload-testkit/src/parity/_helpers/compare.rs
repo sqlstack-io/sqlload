@@ -289,7 +289,8 @@ async fn compare(
             );
         }
     }
-    let direct = left_plan.contains("destination loads ");
+    let direct =
+        left_plan.contains("COPYs directly from ") || left_plan.contains("uploaded unchanged to ");
     if test_case.left_is_direct && left.is_none() && !direct {
         return Ok(format!("the left side did not load directly:\n{left_plan}"));
     }

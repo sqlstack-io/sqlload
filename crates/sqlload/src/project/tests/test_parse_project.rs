@@ -194,7 +194,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         (
             "load_method is required, and the error names the fix",
             snowflake("{ type = \"insert\" }").replace("load_method = { type = \"insert\" }\n", ""),
-            "load_method is required: how should data get into Snowflake? Add one of these to [connections.wh]: load_method = { type = \"external_stage\"",
+            "load_method is required: how should data get into Snowflake? Fix: add one of these to [connections.wh]:\nload_method = { type = \"external_stage\"",
         ),
     ];
     for (description, text, expected_message) in stage_cases {

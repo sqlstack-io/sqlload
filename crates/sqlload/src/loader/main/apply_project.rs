@@ -33,7 +33,7 @@ pub async fn apply_project(
             LoaderError::Invalid(format!("target {:?} is not connected", table.spec.target))
         })?;
         execute_ddl(destination, stage.statements.clone()).await?;
-        lines.push(format!("created  stage {} on {}", stage.name, stage.url));
+        lines.push(format!("created  {}  stage on {}", stage.name, stage.url));
     }
     for table in plan
         .tables
@@ -48,14 +48,22 @@ pub async fn apply_project(
             LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
         })?;
         execute(destination, statements).await?;
-        let verb = match table.schema.action {
-            TableAction::Create => "created",
-            _ => "altered",
-        };
-        lines.push(format!(
-            "{verb}  {}",
-            sql_adapter(spec.warehouse).render_display_name(&spec.destination)
-        ));
+        let name = sql_adapter(spec.warehouse).render_display_name(&spec.destination);
+        match &table.schema.action {
+            TableAction::Alter(changes) => lines.extend(
+                changes
+                    .iter()
+                    .map(|change| format!("altered  {name}  {change}")),
+            ),
+            TableAction::Recreate => lines.push(format!(
+                "recreated  {name}  {} columns (--reload)",
+                table.schema.write_columns.len()
+            )),
+            _ => lines.push(format!(
+                "created  {name}  {} columns",
+                table.schema.write_columns.len()
+            )),
+        }
     }
     Ok(lines)
 }
