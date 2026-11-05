@@ -89,6 +89,37 @@ a larger `batch` or a narrower range if either matters.
 Tables of a Python source with a `@source.client` run one at a time, because clients are rarely
 thread-safe; set `parallel_tables=True` on the source when its client is.
 
+### How rows reach Snowflake
+
+With no `stage` on the Snowflake connection, each table takes the first route the role can use, and
+`plan` shows which and why: the user stage `@~`, then `@%table`, then Snowpipe Streaming into a
+transient staging table, then batched `INSERT` (warned in `plan`). `stage = ...` forces a choice; a
+forced route the role cannot use fails at `plan`, and never falls back:
+
+```toml
+[connections.wh]
+kind = "snowflake"
+# ...
+stage = { kind = "s3", url = "s3://lake/sqlload/", storage_integration = "LAKE_INT" }
+# or an existing stage: name = "DB.SCHEMA.STAGE"
+# or { kind = "user" }, { kind = "table" }, { kind = "streaming" }, { kind = "insert" },
+#    { kind = "internal", name = "DB.SCHEMA.STAGE" }
+```
+
+An `s3` stage needs SQLLoad's own write access to the bucket. `apply` creates `_SQLLOAD_STAGE` in the
+loader schema when given a `storage_integration`. Staged files are deleted once their batch commits,
+and the next load removes what failed runs left after a day; `keep_staged_files = true` on the
+stage keeps them and leaves that stage out of the cleanup.
+
+Parquet files of a files source under that URL load directly: Snowflake reads them itself and
+nothing passes through SQLLoad, where tests prove the result is the same as SQLLoad's own; `plan`
+says why a table stays on SQLLoad otherwise. A `hash`-masked column on this route reaches Snowflake
+in plain text, in a temporary table gone with its session, and is hashed there; `hmac` always stays
+on SQLLoad. `shaping = "loader"` on a table or source keeps its rows on SQLLoad, so plain values
+never reach Snowflake.
+
+Files sources add `_sqlload_source_row`, a row's number in its file from 1.
+
 ### Logged state
 
 A table whose position the data cannot carry (an API sync token, say) sets `state="logged"` and

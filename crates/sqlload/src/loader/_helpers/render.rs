@@ -1,10 +1,11 @@
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
+use crate::external_stage::models::PlannedStage;
 use crate::files_destination::models::{PendingLoad, PendingPhase};
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::table_plan::is_direct;
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
 use crate::loader::models::{
-    CommitRule, FilesOutput, PlannedStage, PythonTable, SourceEnd, TablePlan, WholeReason,
+    CommitRule, FilesOutput, PythonTable, SourceEnd, TablePlan, WholeReason,
 };
 use crate::project::models::BatchStep;
 use crate::project::models::FilesFormat;

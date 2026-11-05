@@ -1,5 +1,3 @@
-//! Create the stage SQLLoad maintains.
-
 use crate::column_types::models::Warehouse;
 use crate::external_stage::constants::MANAGED_STAGE_NAME;
 use crate::snowflake_destination::models::{ExternalStage, StageObject};
@@ -9,7 +7,7 @@ use crate::write_sql::main::sql_literal::sql_literal;
 use crate::write_sql::models::TableName;
 
 /// `CREATE STAGE IF NOT EXISTS` for `_SQLLOAD_STAGE` in `table`'s schema on the stage URL; `None` for an existing stage, which SQLLoad never creates.
-pub fn create_stage(stage: &ExternalStage, table: &TableName) -> Option<String> {
+pub(crate) fn create_stage(stage: &ExternalStage, table: &TableName) -> Option<String> {
     let StageObject::Managed { integration } = &stage.object else {
         return None;
     };

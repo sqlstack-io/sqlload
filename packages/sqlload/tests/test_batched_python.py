@@ -476,3 +476,24 @@ def test_given_a_first_load_with_no_rows_when_its_schema_is_new_then_no_schema_i
 	done = sqlload(project, "load", "empty__nothing")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'NEVER_MADE'") == []
+
+
+def test_given_shaping_loader_when_declaring_a_python_table_then_it_is_accepted_and_other_values_are_not(project: Path) -> None:
+	(project / "sources" / "shaped.py").write_text(
+		"import sqlload as sl\n"
+		"shaped = sl.source('shaped')\n"
+		"@shaped.table(write_strategy='append', shaping='loader')\n"
+		"def rows(ctx):\n"
+		"    yield {'id': 1}\n"
+	)
+	assert sqlload(project, "plan", "shaped__rows").returncode == 0
+	(project / "sources" / "shaped.py").write_text(
+		"import sqlload as sl\n"
+		"shaped = sl.source('shaped', shaping='sql')\n"
+		"@shaped.table(write_strategy='append')\n"
+		"def rows(ctx):\n"
+		"    yield {'id': 1}\n"
+	)
+	refused = sqlload(project, "plan", "shaped__rows")
+	assert refused.returncode != 0
+	assert "sql" in refused.stdout + refused.stderr

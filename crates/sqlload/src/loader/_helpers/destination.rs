@@ -30,8 +30,8 @@ use crate::snowflake_destination::main::query_texts::query_texts as query_snowfl
 use crate::snowflake_destination::main::remove_stale::remove_stale;
 use crate::snowflake_destination::main::remove_stale_external::remove_stale_external;
 use crate::snowflake_destination::main::run_statements::run_statements;
-use crate::snowflake_destination::main::stage_parquet::{StagedFile, stage_parquet};
-use crate::snowflake_destination::models::StageRoute;
+use crate::snowflake_destination::main::stage_parquet::stage_parquet;
+use crate::snowflake_destination::models::{StageRoute, StagedFile};
 use crate::stage_api::models::StageInfo;
 use crate::write_sql::models::TableName;
 

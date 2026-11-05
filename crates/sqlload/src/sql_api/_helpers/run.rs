@@ -16,15 +16,14 @@ pub(crate) async fn run_body(client: &SqlClient, body: Value) -> Result<SqlRows,
 /// Run `body` (several statements) and wait for it; each statement's rows, in order.
 pub(crate) async fn run_script(client: &SqlClient, body: Value) -> Result<Vec<SqlRows>, ApiError> {
     let value = run_to_end(client, body).await?;
-    let handles: Vec<String> = value["statementHandles"]
+    let listed = value["statementHandles"]
         .as_array()
-        .map(|handles| {
-            handles
-                .iter()
-                .filter_map(|handle| handle.as_str().map(str::to_owned))
-                .collect()
-        })
+        .cloned()
         .unwrap_or_default();
+    let handles: Vec<String> = listed
+        .iter()
+        .filter_map(|handle| handle.as_str().map(str::to_owned))
+        .collect();
     let mut results: Vec<SqlRows> = Vec::with_capacity(handles.len());
     for handle in handles {
         let path = format!("/api/v2/statements/{handle}");

@@ -16,7 +16,10 @@ pub(crate) fn login() -> Outcome {
 
 /// `/queries/v1/query-request`: record the statement; a `PUT` gets upload details back unless its stage is refused.
 pub(crate) fn query_request(state: &SharedState, body: &[u8]) -> Outcome {
-    let request: Value = serde_json::from_slice(body).unwrap_or_default();
+    let request: Value = match serde_json::from_slice(body) {
+        Ok(request) => request,
+        Err(_) => Value::Null,
+    };
     let statement = request["sqlText"].as_str().unwrap_or_default().to_owned();
     let mut guard = state.lock();
     guard.driver_queries.push((

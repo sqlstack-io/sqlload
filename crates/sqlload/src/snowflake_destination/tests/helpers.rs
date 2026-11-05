@@ -4,7 +4,8 @@ use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 
 use crate::snowflake_destination::_helpers::stale_folders::stale_folders;
-use crate::snowflake_destination::main::copy_staged::{CopyStaged, copy_staged};
+use crate::snowflake_destination::main::copy_staged::copy_staged;
+use crate::snowflake_destination::models::CopyStaged;
 use crate::write_sql::models::TableName;
 
 /// The `COPY` statements for `files` staged parts of batch 1 of load `load-1`: how many, and the first.

@@ -9,7 +9,6 @@ pub(in crate::loader) mod _load_python;
 pub(in crate::loader) mod _load_table;
 pub(in crate::loader) mod _logged_plan;
 pub(in crate::loader) mod _plan_files;
-pub(in crate::loader) mod _stage_route;
 pub(in crate::loader) mod _table_folder;
 pub mod apply_project;
 pub mod connect_targets;

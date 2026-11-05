@@ -114,7 +114,6 @@ use crate::external_stage::main::stage_reference::stage_reference;
 use crate::external_stage::models::{CopyColumn, CopyValue, DirectCopy};
 use crate::file_store::main::write_file::write_file as write_stage_file;
 use crate::loader::_helpers::table_plan::{copy_columns, direct_check, is_direct};
-use crate::loader::main::_stage_route::streaming_client;
 use crate::loader::models::{DirectLoaded, RowStream, TableSpec};
 use crate::project::models::MaskMethod;
 use crate::row_batches::main::text_rows::text_rows;
@@ -122,10 +121,10 @@ use crate::snowflake_destination::constants::{
     EXTERNAL_STAGE_FOLDER, STREAM_COMMIT_WAIT_SECS, STREAM_PIPE_SUFFIX, STREAM_POLL_MILLIS,
     STREAM_REQUEST_BYTES,
 };
-use crate::snowflake_destination::main::copy_rows::{copy_rows, script_copy_rows};
-use crate::snowflake_destination::main::copy_staged::CopyStaged;
-use crate::snowflake_destination::main::stage_parquet::StagedFile;
-use crate::snowflake_destination::models::StageRoute;
+use crate::snowflake_destination::main::copy_rows::copy_rows;
+use crate::snowflake_destination::main::script_copy_rows::script_copy_rows;
+use crate::snowflake_destination::main::streaming_client::streaming_client;
+use crate::snowflake_destination::models::{CopyStaged, StageRoute, StagedFile};
 use crate::streaming_api::main::append_rows::append_rows as append_stream_rows;
 use crate::streaming_api::main::channel_statuses::channel_statuses;
 use crate::streaming_api::main::open_channel::open_channel;
@@ -471,7 +470,7 @@ impl Publisher {
             self.open_stream(&staging).await?;
         }
         match self.stream.as_mut() {
-            Some(stream) => stream_rows(stream, &in_batch, &rows).await,
+            Some(stream) => stream.send(&in_batch, &rows).await,
             None => {
                 for statement in insert_rows(&staging, &in_batch, &rows, Warehouse::Snowflake) {
                     execute(&self.destination, vec![statement]).await?;
@@ -1209,56 +1208,58 @@ fn filled_columns(
     filled
 }
 
-/// Send `rows` to the channel in requests of at most about 4 MiB of gzip NDJSON, keyed by the columns' stored names.
-async fn stream_rows(
-    stream: &mut RowStream,
-    columns: &[DesiredColumn],
-    rows: &[Vec<Option<String>>],
-) -> Result<(), LoaderError> {
-    let keys: Vec<String> = columns
-        .iter()
-        .map(|column| stored_name(&column.name, Warehouse::Snowflake))
-        .collect();
-    let mut body: Vec<u8> = Vec::new();
-    for row in rows {
-        let line: serde_json::Map<String, serde_json::Value> = keys
+impl RowStream {
+    /// Send `rows` to the channel in requests of at most about 4 MiB of gzip NDJSON, keyed by the columns' stored names.
+    pub(crate) async fn send(
+        &mut self,
+        columns: &[DesiredColumn],
+        rows: &[Vec<Option<String>>],
+    ) -> Result<(), LoaderError> {
+        let keys: Vec<String> = columns
             .iter()
-            .cloned()
-            .zip(row.iter().map(|value| serde_json::json!(value)))
+            .map(|column| stored_name(&column.name, Warehouse::Snowflake))
             .collect();
-        serde_json::to_writer(&mut body, &line)
-            .map_err(|error| LoaderError::Invalid(error.to_string()))?;
-        body.push(b'\n');
-        if body.len() >= STREAM_REQUEST_BYTES {
-            send_stream_body(stream, std::mem::take(&mut body)).await?;
+        let mut body: Vec<u8> = Vec::new();
+        for row in rows {
+            let line: serde_json::Map<String, serde_json::Value> = keys
+                .iter()
+                .cloned()
+                .zip(row.iter().map(|value| serde_json::json!(value)))
+                .collect();
+            serde_json::to_writer(&mut body, &line)
+                .map_err(|error| LoaderError::Invalid(error.to_string()))?;
+            body.push(b'\n');
+            if body.len() >= STREAM_REQUEST_BYTES {
+                self.send_body(std::mem::take(&mut body)).await?;
+            }
         }
+        if !body.is_empty() {
+            self.send_body(body).await?;
+        }
+        Ok(())
     }
-    if !body.is_empty() {
-        send_stream_body(stream, body).await?;
-    }
-    Ok(())
-}
 
-async fn send_stream_body(stream: &mut RowStream, body: Vec<u8>) -> Result<(), LoaderError> {
-    let mut gzip = GzEncoder::new(Vec::new(), GzipLevel::default());
-    gzip.write_all(&body)
-        .map_err(|error| LoaderError::Invalid(error.to_string()))?;
-    let compressed = gzip
-        .finish()
-        .map_err(|error| LoaderError::Invalid(error.to_string()))?;
-    stream.offset += 1;
-    stream.continuation = append_stream_rows(
-        &stream.client,
-        AppendRequest {
-            pipe: &stream.pipe,
-            channel: &stream.channel,
-            continuation: &stream.continuation,
-            offset: stream.offset,
-            body: compressed,
-        },
-    )
-    .await?;
-    Ok(())
+    async fn send_body(&mut self, body: Vec<u8>) -> Result<(), LoaderError> {
+        let mut gzip = GzEncoder::new(Vec::new(), GzipLevel::default());
+        gzip.write_all(&body)
+            .map_err(|error| LoaderError::Invalid(error.to_string()))?;
+        let compressed = gzip
+            .finish()
+            .map_err(|error| LoaderError::Invalid(error.to_string()))?;
+        self.offset += 1;
+        self.continuation = append_stream_rows(
+            &self.client,
+            AppendRequest {
+                pipe: &self.pipe,
+                channel: &self.channel,
+                continuation: &self.continuation,
+                offset: self.offset,
+                body: compressed,
+            },
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 /// Wait until Snowflake has committed the channel's last request; a row it refused fails the load.

@@ -10,15 +10,17 @@ use crate::store_paths::models::{Location, StoreKind};
 /// Problems with a Snowflake connection's `stage`: an `s3` stage needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing one).
 pub(crate) fn stage_problems(name: &str, connection: &ConnectionConfig) -> Vec<String> {
     let ConnectionConfig::Snowflake {
-        stage:
-            Some(StageConfig::S3 {
-                url,
-                storage_integration,
-                name: stage_name,
-                ..
-            }),
-        ..
+        stage: Some(stage), ..
     } = connection
+    else {
+        return Vec::new();
+    };
+    let StageConfig::S3 {
+        url,
+        storage_integration,
+        name: stage_name,
+        ..
+    } = stage.as_ref()
     else {
         return Vec::new();
     };

@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::auth::models::Authenticator;
 use crate::config::models::{AuthConfig, DestinationConfig};
+use crate::schema_plan::models::DesiredColumn;
 use crate::store_paths::models::Location;
+use crate::write_sql::models::TableName;
 
 use crate::sql_api::models::SqlClient;
 use crate::stage_api::models::DriverSession;
@@ -88,4 +90,26 @@ pub struct SnowflakeAccount {
     pub database: String,
     pub base_url: Option<String>,
     pub stage: Option<ForcedStage>,
+}
+
+/// One batch's staged files and where they load.
+#[derive(Debug, Clone, Copy)]
+pub struct CopyStaged<'a> {
+    pub table: &'a TableName,
+    /// The stage as SQL, `@~` or `@"DB"."SCHEMA"."STAGE"`.
+    pub stage: &'a str,
+    /// Below the stage, ending in `/`.
+    pub folder: &'a str,
+    pub names: &'a [String],
+    /// The columns to fill by a `SELECT`, for a table holding JSON the files carry as text (`PARSE_JSON`); `None` loads by column name.
+    pub selected: Option<&'a [DesiredColumn]>,
+}
+
+/// Where one staged file goes on an internal stage.
+#[derive(Debug, Clone, Copy)]
+pub struct StagedFile<'a> {
+    /// The stage without its `@`, such as `~` or `"DB"."SCHEMA".%"TABLE"`.
+    pub stage: &'a str,
+    pub key: &'a str,
+    pub body: &'a [u8],
 }

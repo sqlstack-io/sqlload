@@ -199,3 +199,32 @@ fn given_a_partition_of_more_than_1000_files_when_delete_insert_loads_it_then_it
         Ok(())
     })
 }
+
+#[test]
+fn given_files_when_loading_them_then_each_row_carries_its_number_in_its_file() -> Result<(), String>
+{
+    let test_cases = [FilesScenarioTestCase {
+        description: "row numbers start at 1 in each file",
+        store: local_store,
+        settings: "write_strategy = \"append\"\npartition_columns = { day = \"date\" }\n",
+        runs: &[FilesRun {
+            files: &[NOV_3, NOV_5],
+            expected_error: "",
+        }],
+        check_query: "SELECT string_agg(id || ':' || _sqlload_source_row, ',' ORDER BY id) FROM raw.scores",
+        expected_result: "1:1,2:2,5:1",
+    }];
+    run_async(async {
+        for test_case in &test_cases {
+            let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let result = run_files_scenario("", directory.path(), test_case).await?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}

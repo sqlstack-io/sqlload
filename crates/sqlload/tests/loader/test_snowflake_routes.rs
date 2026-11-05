@@ -1,6 +1,8 @@
-use sqlload_testkit::fake_snowflake::models::FakeSnowflake;
-
-use crate::helpers::{binary_file, day_files, found, not_found, run_async, run_route};
+use crate::helpers::{
+    binary_later, found, integration, long_names, no_internal_stage, no_stage_or_channel,
+    no_stage_or_host, no_user_stage, not_found, nothing, old_leftovers, run_async, run_route,
+    two_batches, two_days, with_text,
+};
 use crate::test_types::{RouteFiles, RouteTestCase};
 
 const MANAGED: &str = "{ kind = \"s3\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\" }";
@@ -12,73 +14,6 @@ const PULLS: &str = "destination loads parquet files from s3://fake-bucket/src/"
 
 const APPEND: &str = "write_strategy = \"append\"";
 const REPLACING: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"day\"";
-
-fn two_days() -> Result<Vec<(String, bytes::Bytes)>, String> {
-    let mut files = day_files("2026-11-01", (2, 0), None)?;
-    files.extend(day_files("2026-11-02", (1, 0), None)?);
-    Ok(files)
-}
-
-/// Enough files for two batches.
-fn two_batches() -> Result<Vec<(String, bytes::Bytes)>, String> {
-    let mut files = day_files("2026-11-01", (1000, 0), None)?;
-    files.extend(day_files("2026-11-02", (1, 0), None)?);
-    Ok(files)
-}
-
-fn with_text() -> Result<Vec<(String, bytes::Bytes)>, String> {
-    day_files("2026-11-01", (1, 0), Some("{\"a\": 1}"))
-}
-
-fn long_names() -> Result<Vec<(String, bytes::Bytes)>, String> {
-    day_files("2026-11-01", (300, 1500), None)
-}
-
-/// A full first batch of plain files, then a batch holding one the direct `COPY` must not load; the newest files, which planning samples, are plain.
-fn binary_later() -> Result<Vec<(String, bytes::Bytes)>, String> {
-    let mut files = day_files("2026-11-01", (1000, 0), None)?;
-    files.push(binary_file("day=2026-11-02/part-0.parquet")?);
-    files.extend(day_files("2026-11-03", (25, 0), None)?);
-    Ok(files)
-}
-
-fn nothing(_: &FakeSnowflake) {}
-
-fn no_user_stage(fake: &FakeSnowflake) {
-    fake.state.lock().denied_stages.push("@~".to_owned());
-}
-
-fn no_internal_stage(fake: &FakeSnowflake) {
-    fake.state
-        .lock()
-        .denied_stages
-        .extend(["@~".to_owned(), "%".to_owned()]);
-}
-
-fn no_stage_or_host(fake: &FakeSnowflake) {
-    no_internal_stage(fake);
-    fake.state.lock().streaming_unreachable = true;
-}
-
-fn no_stage_or_channel(fake: &FakeSnowflake) {
-    no_internal_stage(fake);
-    fake.state.lock().channels_refused = true;
-}
-
-fn integration(fake: &FakeSnowflake) {
-    fake.state.lock().integrations.insert("LAKE_INT".to_owned());
-}
-
-/// The integration, and a load folder a failed run left long ago.
-fn old_leftovers(fake: &FakeSnowflake) {
-    integration(fake);
-    let mut state = fake.state.lock();
-    state.objects_modified = Some("2020-01-01T00:00:00.000Z".to_owned());
-    state.objects.insert(
-        "fake-bucket/_sqlload/old-load/00001/part-00001.parquet".to_owned(),
-        b"PAR1".to_vec(),
-    );
-}
 
 const BASE: RouteTestCase = RouteTestCase {
     description: "",
@@ -377,47 +312,52 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_first_r
         for test_case in &test_cases {
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
             let outcome = run_route(directory.path(), test_case).await?;
-            let place = test_case.description;
-            assert_eq!(
+            assert!(
                 outcome.error.contains(test_case.expected_error),
-                true,
-                "{place}: {}",
+                "{}: {}",
+                test_case.description,
                 outcome.error
             );
             assert_eq!(
                 outcome.error.is_empty(),
                 test_case.expected_error.is_empty(),
-                "{place}: {}",
+                "{}: {}",
+                test_case.description,
                 outcome.error
             );
             assert_eq!(
                 not_found(std::slice::from_ref(&outcome.plan), test_case.expected_plan),
                 Vec::<&str>::new(),
-                "{place}: {}",
+                "{}: {}",
+                test_case.description,
                 outcome.plan
             );
             assert_eq!(
                 not_found(&outcome.sent, test_case.expected_sent),
                 Vec::<&str>::new(),
-                "{place}: {:#?}",
+                "{}: {:#?}",
+                test_case.description,
                 outcome.sent
             );
             assert_eq!(
                 found(&outcome.sent, test_case.expected_unsent),
                 Vec::<&str>::new(),
-                "{place}: {:#?}",
+                "{}: {:#?}",
+                test_case.description,
                 outcome.sent
             );
             assert_eq!(
                 test_case.expected_fetches.unwrap_or(outcome.fetches),
                 outcome.fetches,
-                "{place}"
+                "{}",
+                test_case.description
             );
             assert_eq!(
                 outcome.staged_left, test_case.expected_staged_left,
-                "{place}"
+                "{}",
+                test_case.description
             );
-            assert!(outcome.sequence_ids_rise, "{place}");
+            assert!(outcome.sequence_ids_rise, "{}", test_case.description);
         }
         Ok(())
     })

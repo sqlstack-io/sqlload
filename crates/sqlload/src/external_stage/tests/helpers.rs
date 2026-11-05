@@ -1,5 +1,5 @@
 use crate::column_types::models::ColumnType;
-use crate::external_stage::main::create_stage::create_stage;
+use crate::external_stage::_helpers::create_stage::create_stage;
 use crate::external_stage::main::stage_lookup::stage_lookup;
 use crate::external_stage::main::stage_reference::stage_reference;
 use crate::external_stage::models::{CopyColumn, CopyValue};
@@ -218,13 +218,13 @@ pub(crate) fn picked(
     forced: bool,
     outcomes: &[(&str, Option<&str>)],
 ) -> Result<(String, Vec<String>), String> {
-    let steps: Vec<(String, crate::external_stage::models::StepOutcome)> = outcomes
+    let steps: Vec<(String, Result<StageRoute, String>)> = outcomes
         .iter()
         .map(|(step, problem)| {
             let outcome = problem.map_or(Ok(StageRoute::User), |reason| Err(reason.to_owned()));
             ((*step).to_owned(), outcome)
         })
         .collect();
-    let choice = crate::external_stage::main::pick_route::pick_route(forced, steps)?;
+    let choice = crate::external_stage::_helpers::pick_route::pick_route(forced, steps)?;
     Ok((format!("{:?}", choice.route), choice.passed_over))
 }

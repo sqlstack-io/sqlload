@@ -258,6 +258,9 @@ pub(crate) enum RouteFiles {
     Bucket,
 }
 
+/// Makes a routes scenario's source files: each key and its bytes.
+pub(crate) type RouteFileSet = fn() -> Result<Vec<(String, bytes::Bytes)>, String>;
+
 /// One load of a files source into the fake Snowflake.
 pub(crate) struct RouteTestCase {
     pub(crate) description: &'static str,
@@ -266,8 +269,7 @@ pub(crate) struct RouteTestCase {
     /// TOML added to `[sources.orders]`.
     pub(crate) settings: &'static str,
     pub(crate) files: RouteFiles,
-    /// `(keys, each file's ids)`: a generator of the source's files.
-    pub(crate) file_set: fn() -> Result<Vec<(String, bytes::Bytes)>, String>,
+    pub(crate) file_set: RouteFileSet,
     /// What the fake refuses or holds first.
     pub(crate) prepare: fn(&sqlload_testkit::fake_snowflake::models::FakeSnowflake),
     /// Text the plan or load error must contain; empty when the run must succeed.

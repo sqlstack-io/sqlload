@@ -66,14 +66,17 @@ pub(crate) fn script_result(state: &SharedState, path: &str) -> Outcome {
 
 /// Answer one request: a multi-statement request runs its statements in order and keeps what each returned; anything else is one statement.
 pub(crate) fn run_statement(state: &SharedState, body: &[u8]) -> Outcome {
-    let request: Value = serde_json::from_slice(body).unwrap_or_default();
+    let request: Value = match serde_json::from_slice(body) {
+        Ok(request) => request,
+        Err(_) => Value::Null,
+    };
     if request["parameters"]["MULTI_STATEMENT_COUNT"].is_null() {
         return run_one(state, body);
     }
     let statement = request["statement"].as_str().unwrap_or_default();
     let mut handles: Vec<Value> = Vec::new();
     for part in statement.split(";\n") {
-        let one = serde_json::to_vec(&json!({ "statement": part })).unwrap_or_default();
+        let one = json!({ "statement": part }).to_string().into_bytes();
         let result = run_one(state, &one)?;
         let mut guard = state.lock();
         let handle = format!("fake-{}", guard.script_results.len());

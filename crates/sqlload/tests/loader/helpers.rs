@@ -562,6 +562,73 @@ include = ["*.orders"]
     )
 }
 
+pub(crate) fn two_days() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files = day_files("2026-11-01", (2, 0), None)?;
+    files.extend(day_files("2026-11-02", (1, 0), None)?);
+    Ok(files)
+}
+
+/// Enough files for two batches.
+pub(crate) fn two_batches() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files = day_files("2026-11-01", (1000, 0), None)?;
+    files.extend(day_files("2026-11-02", (1, 0), None)?);
+    Ok(files)
+}
+
+pub(crate) fn with_text() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    day_files("2026-11-01", (1, 0), Some("{\"a\": 1}"))
+}
+
+pub(crate) fn long_names() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    day_files("2026-11-01", (300, 1500), None)
+}
+
+/// A full first batch of plain files, then a batch holding one the direct `COPY` must not load; the newest files, which planning samples, are plain.
+pub(crate) fn binary_later() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files = day_files("2026-11-01", (1000, 0), None)?;
+    files.push(binary_file("day=2026-11-02/part-0.parquet")?);
+    files.extend(day_files("2026-11-03", (25, 0), None)?);
+    Ok(files)
+}
+
+pub(crate) fn nothing(_: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {}
+
+pub(crate) fn no_user_stage(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().denied_stages.push("@~".to_owned());
+}
+
+pub(crate) fn no_internal_stage(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state
+        .lock()
+        .denied_stages
+        .extend(["@~".to_owned(), "%".to_owned()]);
+}
+
+pub(crate) fn no_stage_or_host(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    no_internal_stage(fake);
+    fake.state.lock().streaming_unreachable = true;
+}
+
+pub(crate) fn no_stage_or_channel(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    no_internal_stage(fake);
+    fake.state.lock().channels_refused = true;
+}
+
+pub(crate) fn integration(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    fake.state.lock().integrations.insert("LAKE_INT".to_owned());
+}
+
+/// The integration, and a load folder a failed run left long ago.
+pub(crate) fn old_leftovers(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    integration(fake);
+    let mut state = fake.state.lock();
+    state.objects_modified = Some("2020-01-01T00:00:00.000Z".to_owned());
+    state.objects.insert(
+        "fake-bucket/_sqlload/old-load/00001/part-00001.parquet".to_owned(),
+        b"PAR1".to_vec(),
+    );
+}
+
 /// `count` small Parquet files of `day` in hive form, ids from 1, with `extra` when given; `padding` lengthens their names.
 pub(crate) fn day_files(
     day: &str,
@@ -608,36 +675,37 @@ pub(crate) async fn run_route(
         sqlload_testkit::fake_snowflake::main::start_fake_snowflake::start_fake_snowflake().await?;
     (test_case.prepare)(&fake);
     let (root, base) = (directory.display().to_string(), fake.base_url.clone());
+    let store = [
+        StoreKind::Filesystem { root: root.clone() },
+        StoreKind::S3 {
+            bucket: "fake-bucket".to_owned(),
+            region: Some("us-east-1".to_owned()),
+            endpoint: Some(base.clone()),
+        },
+    ][usize::from(test_case.files == RouteFiles::Bucket)]
+    .clone();
+    let source = open_folder(&Location {
+        store,
+        prefix: "src/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
     for (key, body) in (test_case.file_set)()? {
-        match test_case.files {
-            RouteFiles::Bucket => {
-                fake.state
-                    .lock()
-                    .objects
-                    .insert(format!("fake-bucket/src/{key}"), body.to_vec());
-            }
-            RouteFiles::Directory => {
-                let folder = open_folder(&Location {
-                    store: StoreKind::Filesystem { root: root.clone() },
-                    prefix: "src/".to_owned(),
-                })
-                .map_err(|error| error.to_string())?;
-                write_file(&folder, &key, body)
-                    .await
-                    .map_err(|error| error.to_string())?;
-            }
-        }
+        write_file(&source, &key, body)
+            .await
+            .map_err(|error| error.to_string())?;
     }
-    let lake = match test_case.files {
-        RouteFiles::Bucket => format!(
+    let lake = [
+        format!("kind = \"filesystem\"\nroot = \"{root}\""),
+        format!(
             "kind = \"s3\"\nbucket = \"fake-bucket\"\nregion = \"us-east-1\"\nendpoint = \"{base}\""
         ),
-        RouteFiles::Directory => format!("kind = \"filesystem\"\nroot = \"{root}\""),
-    };
-    let stage = match test_case.stage.is_empty() {
-        true => String::new(),
-        false => format!("stage = {}\n", test_case.stage.replace("FAKE", &base)),
-    };
+    ][usize::from(test_case.files == RouteFiles::Bucket)]
+    .clone();
+    let stage = [
+        format!("stage = {}\n", test_case.stage.replace("FAKE", &base)),
+        String::new(),
+    ][usize::from(test_case.stage.is_empty())]
+    .clone();
     let text = format!(
         "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\n{stage}\n[connections.lake]\n{lake}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
         test_case.settings

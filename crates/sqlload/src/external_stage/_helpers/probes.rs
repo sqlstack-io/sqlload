@@ -1,79 +1,27 @@
-//! Choose how one table's rows reach Snowflake, trying what the role can use without changing anything.
-
 use std::future::Future;
 
 use crate::column_types::models::Warehouse;
-use crate::external_stage::main::create_stage::create_stage;
-use crate::external_stage::main::pick_route::pick_route;
-use crate::external_stage::main::route_reference::table_stage;
+use crate::external_stage::_helpers::create_stage::create_stage;
+use crate::external_stage::_helpers::table_stage::table_stage;
 use crate::external_stage::main::stage_lookup::stage_lookup;
 use crate::external_stage::main::stage_problem::stage_problem;
 use crate::external_stage::main::stage_reference::stage_reference;
-use crate::external_stage::models::{RouteChoice, StepOutcome};
+use crate::external_stage::models::{PlannedStage, RouteRequest};
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::probe_folder::probe_folder;
-use crate::loader::models::{PlannedStage, TableSpec};
 use crate::snowflake_destination::constants::{STAGE_PROBE_TABLE, USER_STAGE};
 use crate::snowflake_destination::main::show_stages::show_stages;
+use crate::snowflake_destination::main::streaming_client::streaming_client;
 use crate::snowflake_destination::models::{
     ExternalStage, ForcedStage, SnowflakeDestination, StageObject, StageRoute,
 };
 use crate::sql_api::main::execute_sql::execute_sql;
 use crate::streaming_api::main::ingest_host::ingest_host;
-use crate::streaming_api::models::StreamingClient;
 use crate::write_sql::main::create_schema::create_schema;
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::models::TableName;
 
-/// What decides a table's route besides its spec.
-#[derive(Debug, Clone, Copy)]
-pub(in crate::loader) struct RouteRequest<'a> {
-    pub(in crate::loader) spec: &'a TableSpec,
-    pub(in crate::loader) table_exists: bool,
-    /// The load would `COPY` straight into the target (`append`, not logged).
-    pub(in crate::loader) direct_append: bool,
-    pub(in crate::loader) snowflake: &'a SnowflakeDestination,
-}
-
-/// The table's route: what the connection's `stage` forces (failing with the reason if it cannot be used), else the first of `@~`, `@%table`, Snowpipe Streaming and `INSERT` the role can use; each probe changes nothing and is asked once per run. Also the stage `apply` must create, if any.
-pub(in crate::loader) async fn stage_route(
-    request: &RouteRequest<'_>,
-) -> Result<(RouteChoice, Option<PlannedStage>), String> {
-    match &request.snowflake.stage {
-        None => {
-            let mut outcomes: Vec<(String, StepOutcome)> = Vec::new();
-            for step in [
-                ForcedStage::User,
-                ForcedStage::Table,
-                ForcedStage::Streaming,
-            ] {
-                let outcome = forced_step(request, &step, true).await;
-                let usable = outcome.is_ok();
-                outcomes.push((step_name(&step), outcome));
-                if usable {
-                    return Ok((pick_route(false, outcomes)?, None));
-                }
-            }
-            outcomes.push((step_name(&ForcedStage::Insert), Ok(StageRoute::Insert)));
-            Ok((pick_route(false, outcomes)?, None))
-        }
-        Some(ForcedStage::External(stage)) => {
-            let target = &request.spec.destination;
-            let outcome = checked_external(request.snowflake, stage, target).await;
-            let creates = matches!(outcome, Ok(true));
-            let route = outcome.map(|_| StageRoute::External(stage.clone()));
-            let choice = pick_route(true, vec![(stage.location.to_string(), route)])?;
-            let planned = creates.then(|| planned_stage(stage, target)).flatten();
-            Ok((choice, planned))
-        }
-        Some(step) => {
-            let outcome = forced_step(request, step, false).await;
-            Ok((pick_route(true, vec![(step_name(step), outcome)])?, None))
-        }
-    }
-}
-
-fn step_name(step: &ForcedStage) -> String {
+pub(crate) fn step_name(step: &ForcedStage) -> String {
     match step {
         ForcedStage::User => format!("@{USER_STAGE}"),
         ForcedStage::Table => "@%table".to_owned(),
@@ -85,7 +33,7 @@ fn step_name(step: &ForcedStage) -> String {
 }
 
 /// What `apply` runs to create the stage SQLLoad maintains in `target`'s schema.
-fn planned_stage(stage: &ExternalStage, target: &TableName) -> Option<PlannedStage> {
+pub(crate) fn planned_stage(stage: &ExternalStage, target: &TableName) -> Option<PlannedStage> {
     let create = create_stage(stage, target)?;
     Some(PlannedStage {
         name: stage_reference(stage, target),
@@ -94,11 +42,11 @@ fn planned_stage(stage: &ExternalStage, target: &TableName) -> Option<PlannedSta
     })
 }
 
-async fn forced_step(
+pub(crate) async fn probed_step(
     request: &RouteRequest<'_>,
     step: &ForcedStage,
     in_chain: bool,
-) -> StepOutcome {
+) -> Result<StageRoute, String> {
     let snowflake = request.snowflake;
     match step {
         ForcedStage::User => checked(snowflake, format!("@{USER_STAGE}"), async {
@@ -113,7 +61,7 @@ async fn forced_step(
         .map(|_| StageRoute::Internal { name: name.clone() }),
         ForcedStage::Table => table_step(request).await,
         ForcedStage::Streaming => checked(snowflake, "streaming".to_owned(), async {
-            let client = streaming_client(snowflake, &request.spec.destination);
+            let client = streaming_client(snowflake, request.destination);
             ingest_host(&client)
                 .await
                 .map(|_| false)
@@ -129,14 +77,16 @@ async fn forced_step(
 }
 
 /// `@%table`: the target's for an owned direct append (a table this load creates will be owned), otherwise the staging table's, which the load always owns. Neither of those two exists yet, so a temporary table stands in for them.
-async fn table_step(request: &RouteRequest<'_>) -> StepOutcome {
+async fn table_step(request: &RouteRequest<'_>) -> Result<StageRoute, String> {
     let snowflake = request.snowflake;
-    let target = &request.spec.destination;
-    if request.direct_append
-        && request.table_exists
-        && probe_put(snowflake, &table_stage(target)).await.is_ok()
-    {
-        return Ok(StageRoute::TargetTable);
+    let target = request.destination;
+    if request.direct_append && request.table_exists {
+        match probe_put(snowflake, &table_stage(target)).await {
+            Ok(_) => return Ok(StageRoute::TargetTable),
+            Err(reason) => {
+                tracing::debug!(%reason, table = %target.table, "the table's own stage cannot be used");
+            }
+        }
     }
     let probe = TableName {
         table: STAGE_PROBE_TABLE.to_owned(),
@@ -171,19 +121,6 @@ async fn probe_put(snowflake: &SnowflakeDestination, stage: &str) -> Result<bool
         .map_err(|error| error.to_string())
 }
 
-/// A streaming client for the schema of `table` on this account.
-pub(crate) fn streaming_client(
-    snowflake: &SnowflakeDestination,
-    table: &TableName,
-) -> StreamingClient {
-    let stored =
-        |name: &str| crate::write_sql::main::stored_name::stored_name(name, Warehouse::Snowflake);
-    let mut config = snowflake.config.clone();
-    config.database = stored(table.database.as_deref().unwrap_or(&snowflake.database));
-    config.schema = stored(&table.schema);
-    StreamingClient::new(snowflake.http.clone(), snowflake.auth.clone(), &config)
-}
-
 /// `probe`'s answer for `key`, asked once per run.
 async fn checked(
     snowflake: &SnowflakeDestination,
@@ -205,7 +142,7 @@ async fn checked(
 }
 
 /// Whether the external stage serving `target`'s schema works: SQLLoad lists its URL; the stage reads that URL and lists, or (one SQLLoad maintains) is missing, its integration visible, so `apply` creates it (`Ok(true)`).
-async fn checked_external(
+pub(crate) async fn checked_external(
     snowflake: &SnowflakeDestination,
     stage: &ExternalStage,
     target: &TableName,

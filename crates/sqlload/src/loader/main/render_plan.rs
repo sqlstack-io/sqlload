@@ -1,9 +1,10 @@
 //! Print a plan in the `sqb plan` style.
 
+use crate::external_stage::models::PlannedStage;
 use crate::loader::_helpers::render::{
     blocked_lines, load_lines, object_lines, stage_object_lines, tree, warning_lines,
 };
-use crate::loader::models::{PlannedStage, ProjectPlan};
+use crate::loader::models::ProjectPlan;
 use crate::schema_plan::models::TableAction;
 
 /// The plan's lines, and whether every selected table can load.

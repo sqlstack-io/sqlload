@@ -1,13 +1,14 @@
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use axum::http::StatusCode;
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::fake_snowflake::_helpers::driver::{login, query_request};
 use crate::fake_snowflake::_helpers::objects::{
-    delete_object, delete_objects, get_object, head_object, insert_files, insert_report,
-    list_objects, load_history_scan, put_object,
+    delete_object, delete_objects, head_object, insert_files, insert_report, list_objects,
+    load_history_scan, object_response, put_object,
 };
 use crate::fake_snowflake::_helpers::statements::{run_statement, script_result};
 use crate::fake_snowflake::_helpers::streaming::{append, bulk_status, host, open};
@@ -17,11 +18,10 @@ use crate::fake_snowflake::models::SharedState;
 /// Route one request by method and path.
 pub(crate) async fn handle(
     State(state): State<SharedState>,
-    method: Method,
-    uri: Uri,
-    headers: HeaderMap,
+    parts: Parts,
     body: Bytes,
 ) -> Response {
+    let (method, uri) = (parts.method.clone(), parts.uri.clone());
     let path = uri.path().to_owned();
     let query = uri.query().unwrap_or_default().to_owned();
     let outcome = match (method.as_str(), path.as_str()) {
@@ -49,7 +49,7 @@ pub(crate) async fn handle(
             head_object(&state, path)
         }
         ("GET", path) if path.starts_with(&format!("/{FAKE_BUCKET}/")) => {
-            return get_object(&state, path, &headers);
+            return object_response(&state, path, &parts.headers);
         }
         ("POST", path) if path.ends_with("/insertFiles") => {
             insert_files(&state, path, &query, &body)

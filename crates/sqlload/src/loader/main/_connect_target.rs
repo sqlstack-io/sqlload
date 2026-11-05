@@ -101,7 +101,7 @@ pub(in crate::loader) async fn connect_target(
             base_url: base_url.clone(),
             stage: stage
                 .as_ref()
-                .map(forced_stage)
+                .map(|stage| forced_stage(stage))
                 .transpose()
                 .map_err(LoaderError::Invalid)?,
         })?)),

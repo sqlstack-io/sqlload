@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+arrow-array = { workspace = true, features = ["chrono-tz"] }
 axum.workspace = true
 bytes.workspace = true
 flate2.workspace = true
@@ -21,6 +22,7 @@ testcontainers.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-util.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

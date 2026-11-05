@@ -101,6 +101,11 @@ path = "tests/exporter.rs"
 required-features = ["container-tests"]
 
 [[test]]
+name = "external_stage"
+path = "tests/external_stage.rs"
+required-features = ["container-tests"]
+
+[[test]]
 name = "loader"
 path = "tests/loader.rs"
 required-features = ["container-tests", "duckdb"]

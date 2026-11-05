@@ -3,6 +3,8 @@ use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
 use crate::column_types::models::ColumnType;
 use crate::external_stage::main::direct_problem::direct_problem;
+use crate::external_stage::main::stage_route::stage_route;
+use crate::external_stage::models::RouteRequest;
 use crate::external_stage::models::{CopyColumn, CopyValue, DirectCheck};
 use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
@@ -20,7 +22,6 @@ use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
 use crate::loader::main::_plan_files::plan_files_table;
-use crate::loader::main::_stage_route::{RouteRequest, stage_route};
 use crate::loader::models::CommitRule;
 use crate::loader::models::CursorSpec;
 use crate::loader::models::Destination;
@@ -393,7 +394,7 @@ async fn plan_table_once(
     let chosen = match (destination, &schema.blocked) {
         (Destination::Snowflake(snowflake), None) => {
             let request = RouteRequest {
-                spec,
+                destination: &spec.destination,
                 table_exists: exists,
                 direct_append: mode == WriteMode::Append && !spec.logged,
                 snowflake,

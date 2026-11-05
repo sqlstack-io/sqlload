@@ -96,7 +96,7 @@ pub enum ConnectionConfig {
         base_url: Option<String>,
         /// Forces how loads reach Snowflake; without it, the first route the role can use: `@~`, `@%table`, Snowpipe Streaming, then `INSERT`.
         #[serde(default)]
-        stage: Option<StageConfig>,
+        stage: Option<Box<StageConfig>>,
     },
     Postgres {
         host: String,

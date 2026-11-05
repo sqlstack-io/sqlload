@@ -1,18 +1,9 @@
 //! Upload a Parquet file to an internal stage.
 
 use crate::http::errors::ApiError;
-use crate::snowflake_destination::models::SnowflakeDestination;
+use crate::snowflake_destination::models::{SnowflakeDestination, StagedFile};
 use crate::stage_api::main::put_stage_file::put_stage_file;
 use crate::stage_api::models::{PutOutcome, StageInfo};
-
-/// Where one staged file goes on an internal stage.
-#[derive(Debug, Clone, Copy)]
-pub struct StagedFile<'a> {
-    /// The stage without its `@`, such as `~` or `"DB"."SCHEMA".%"TABLE"`.
-    pub stage: &'a str,
-    pub key: &'a str,
-    pub body: &'a [u8],
-}
 
 /// Write the file with `known` credentials, fetching new ones when there are none or they expired; returns the credentials that worked, so a batch's files need one fetch.
 pub async fn stage_parquet(

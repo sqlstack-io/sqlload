@@ -99,15 +99,17 @@ pub(crate) fn list_objects(state: &SharedState, query: &str) -> Outcome {
 }
 
 /// `GET /bucket/key`, whole or by its `Range` header.
-pub(crate) fn get_object(state: &SharedState, path: &str, headers: &HeaderMap) -> Response {
+pub(crate) fn object_response(state: &SharedState, path: &str, headers: &HeaderMap) -> Response {
     let key = percent_decode(path.trim_start_matches('/'));
     let Some(body) = state.lock().objects.get(&key).cloned() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let range = headers
-        .get("range")
-        .and_then(|value| value.to_str().map_or(None, Some))
-        .and_then(|value| value.strip_prefix("bytes="))
+    let asked = match headers.get("range").map(|value| value.to_str()) {
+        Some(Ok(value)) => value,
+        _ => "",
+    };
+    let range = asked
+        .strip_prefix("bytes=")
         .and_then(|value| value.split_once('-'));
     let meta = [
         ("ETag", "\"fake-etag\"".to_owned()),
@@ -117,9 +119,7 @@ pub(crate) fn get_object(state: &SharedState, path: &str, headers: &HeaderMap) -
     match range {
         Some((from, to)) => {
             let from = from.parse::<usize>().unwrap_or_default();
-            let to = to
-                .parse::<usize>()
-                .map_or(total - 1, |to| to.min(total - 1));
+            let to = to.parse::<usize>().unwrap_or(total - 1).min(total - 1);
             (
                 StatusCode::PARTIAL_CONTENT,
                 meta,

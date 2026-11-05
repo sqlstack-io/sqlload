@@ -5,6 +5,7 @@ use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::models::DuckDbDestination;
+use crate::external_stage::models::PlannedStage;
 use crate::file_store::models::OpenFolder;
 use crate::files_destination::models::{
     FilesDestination, FilesWriter, PartitionFolder, PendingLoad, ReplacedFiles, TableFiles,
@@ -184,15 +185,6 @@ pub struct TablePlan {
     pub passed_over: Vec<String>,
     /// The stage `apply` must create.
     pub planned_stage: Option<PlannedStage>,
-}
-
-/// A stage `apply` creates.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlannedStage {
-    /// As SQL, which also tells stages apart.
-    pub name: String,
-    pub url: String,
-    pub statements: Vec<String>,
 }
 
 /// A logged table's run log and what it means for this run.

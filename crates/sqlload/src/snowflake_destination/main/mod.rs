@@ -8,5 +8,7 @@ pub mod remove_staged;
 pub mod remove_stale;
 pub mod remove_stale_external;
 pub mod run_statements;
+pub mod script_copy_rows;
 pub mod show_stages;
 pub mod stage_parquet;
+pub mod streaming_client;

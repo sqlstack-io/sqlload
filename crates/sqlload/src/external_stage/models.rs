@@ -1,7 +1,7 @@
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::{DataFile, SourceFormat};
 use crate::project::models::MaskMethod;
-use crate::snowflake_destination::models::StageRoute;
+use crate::snowflake_destination::models::{SnowflakeDestination, StageRoute};
 use crate::store_paths::models::Location;
 use crate::write_sql::models::TableName;
 
@@ -85,12 +85,28 @@ pub struct ShownStage {
     pub storage_integration: String,
 }
 
-/// One step of the route chain: the route it would use, or why it cannot be used.
-pub type StepOutcome = Result<StageRoute, String>;
-
 /// The route plan chose for a table's rows, and why earlier steps of the chain were passed over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteChoice {
     pub route: StageRoute,
     pub passed_over: Vec<String>,
+}
+
+/// A stage `apply` creates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedStage {
+    /// As SQL, which also tells stages apart.
+    pub name: String,
+    pub url: String,
+    pub statements: Vec<String>,
+}
+
+/// What decides a table's route.
+#[derive(Debug, Clone, Copy)]
+pub struct RouteRequest<'a> {
+    pub destination: &'a TableName,
+    pub table_exists: bool,
+    /// The load would `COPY` straight into the target (`append`, not logged).
+    pub direct_append: bool,
+    pub snowflake: &'a SnowflakeDestination,
 }

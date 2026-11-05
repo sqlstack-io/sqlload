@@ -37,9 +37,7 @@ fn given_what_each_step_found_when_choosing_then_the_first_usable_wins_and_a_for
     for test_case in test_cases {
         let choice = picked(test_case.forced, test_case.outcomes);
         assert_eq!(
-            choice
-                .map(|(_, passed)| passed.len())
-                .map_err(|error| error),
+            choice.map(|(_, passed)| passed.len()),
             test_case.expected_choice.map_err(str::to_owned),
             "{}",
             test_case.description

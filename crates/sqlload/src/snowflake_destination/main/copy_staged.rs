@@ -4,23 +4,10 @@ use crate::column_types::main::warehouse_type::warehouse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::schema_plan::models::DesiredColumn;
 use crate::snowflake_destination::constants::{COPY_FILE_FORMAT, MAX_COPY_FILES};
+use crate::snowflake_destination::models::CopyStaged;
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::quoted_identifier::quoted_identifier;
 use crate::write_sql::main::sql_literal::sql_literal;
-use crate::write_sql::models::TableName;
-
-/// One batch's staged files and where they load.
-#[derive(Debug, Clone, Copy)]
-pub struct CopyStaged<'a> {
-    pub table: &'a TableName,
-    /// The stage as SQL, `@~` or `@"DB"."SCHEMA"."STAGE"`.
-    pub stage: &'a str,
-    /// Below the stage, ending in `/`.
-    pub folder: &'a str,
-    pub names: &'a [String],
-    /// The columns to fill by a `SELECT`, for a table holding JSON the files carry as text (`PARSE_JSON`); `None` loads by column name.
-    pub selected: Option<&'a [DesiredColumn]>,
-}
 
 /// `COPY` statements loading the files, at most 1,000 each; always `FORCE = TRUE` (SQLLoad never relies on Snowflake's load history) and stopping at the first bad value.
 pub fn copy_staged(request: &CopyStaged<'_>) -> Vec<String> {
