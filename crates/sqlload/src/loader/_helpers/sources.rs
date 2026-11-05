@@ -17,10 +17,11 @@ use crate::files_source::models::{
 use crate::loader::_helpers::destination::text_values;
 use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::source_target;
-use crate::loader::constants::SOURCE_BATCH_ROWS;
+use crate::loader::constants::{PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    Destination, FilesSource, PlanOptions, SourceEnd, SourceReader, TablePlan, TableSpec,
+    CommitRule, Destination, FilesSource, PlanOptions, SourceEnd, SourceReader, TablePlan,
+    TableSpec,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
@@ -97,15 +98,31 @@ pub(crate) fn files_location(
         .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
-/// A connected reader for `source`.
+/// The Postgres connections a table's read uses: several for a large Postgres table read whole and in no order (windows and cursor-ordered reads keep one connection).
+pub(crate) fn source_readers(table: &TablePlan) -> usize {
+    let whole = matches!(table.commits, CommitRule::Size | CommitRule::Whole(_));
+    let postgres = table.spec.python.is_none() && table.spec.files.is_none();
+    match whole && postgres && table.spec.source_table.estimated_bytes >= PARALLEL_READ_MIN_BYTES {
+        true => PARALLEL_READERS,
+        false => 1,
+    }
+}
+
+/// A connected reader for `source`, with `readers` connections in all for a Postgres table read in parallel.
 pub(crate) async fn open_source(
     project: &ProjectConfig,
     source: &SourceConfig,
+    readers: usize,
 ) -> Result<SourceReader, LoaderError> {
     match source.kind {
-        SourceKind::Postgres => Ok(SourceReader::Postgres(
-            connect_source(project, source).await?,
-        )),
+        SourceKind::Postgres => {
+            let client = connect_source(project, source).await?;
+            let mut helpers = Vec::with_capacity(readers.saturating_sub(1));
+            for _ in 1..readers {
+                helpers.push(connect_source(project, source).await?);
+            }
+            Ok(SourceReader::Postgres(client, helpers))
+        }
         SourceKind::Files => Ok(SourceReader::Files(open_folder(&files_location(
             project, source,
         )?)?)),
@@ -493,7 +510,8 @@ pub(crate) async fn read_source(
     on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), String>,
 ) -> Result<u64, LoaderError> {
     match (reader, &table.files) {
-        (SourceReader::Postgres(client), _) => {
+        (SourceReader::Postgres(client, helpers), _) => {
+            let whole = part.filter.is_none() && part.order_by.is_none();
             let request = CopyRequest {
                 table: &table.spec.source_table,
                 columns: table.read_columns.clone(),
@@ -503,6 +521,10 @@ pub(crate) async fn read_source(
                 batch_bytes: part
                     .batch_bytes
                     .map_or(DEFAULT_BATCH_BYTES, |bytes| bytes.min(DEFAULT_BATCH_BYTES)),
+                helpers: match whole {
+                    true => helpers,
+                    false => &[],
+                },
             };
             Ok(copy_table(client, request, on_batch).await?)
         }

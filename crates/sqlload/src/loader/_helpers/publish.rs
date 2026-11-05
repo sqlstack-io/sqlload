@@ -1008,7 +1008,7 @@ impl Publisher {
 /// Run `statement` on a Postgres source: its windows' reads share one snapshot, so a row moving between windows mid-load is read once.
 async fn snapshot(reader: &SourceReader, statement: &str) -> Result<(), LoaderError> {
     match reader {
-        SourceReader::Postgres(client) => Ok(client
+        SourceReader::Postgres(client, _) => Ok(client
             .batch_execute(statement)
             .await
             .map_err(PostgresError::from)?),
