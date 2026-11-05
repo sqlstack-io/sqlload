@@ -26,7 +26,7 @@ pub(crate) fn integer_plan(
     };
     let Some(to) = split.to else {
         return Err(
-            "an integer batch needs --end-cursor-int to know where the last window ends (a Postgres source ends at its current maximum)".to_owned(),
+            "an integer batch needs --end-cursor to know where the last window ends (a Postgres source ends at its current maximum)".to_owned(),
         );
     };
     let (start, end, step) = (parse(from)?, parse(to)?, i128::from(step));

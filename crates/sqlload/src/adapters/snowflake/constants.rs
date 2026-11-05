@@ -59,6 +59,9 @@ pub const MAX_FILES_PER_COPY: usize = 1000;
 /// The longest `COPY` statement built, below Snowflake's 1 MB limit on statement text; a batch of files whose statement would be longer is split.
 pub const MAX_COPY_SQL_BYTES: usize = 900 * 1024;
 
+/// The longest multi-statement request a hashed batch sends at once (1.63 MB was accepted live); a longer one is split over several requests through a table of hashed values.
+pub const MAX_SCRIPT_BYTES: usize = 1536 * 1024;
+
 /// How Snowflake reads the Parquet files.
 pub const PARQUET_COPY_FORMAT: &str =
     "FILE_FORMAT = (TYPE = PARQUET USE_LOGICAL_TYPE = TRUE BINARY_AS_TEXT = FALSE)";

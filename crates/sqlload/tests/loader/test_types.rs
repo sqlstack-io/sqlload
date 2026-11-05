@@ -296,6 +296,8 @@ pub(crate) struct RouteTestCase {
     pub(crate) file_set: RouteFileSet,
     /// What the fake refuses or holds first.
     pub(crate) prepare: fn(&sqlload_testkit::fake_snowflake::models::FakeSnowflake),
+    /// Plan and load with `--reload`.
+    pub(crate) reload: bool,
     /// Text the plan or load error must contain; empty when the run must succeed.
     pub(crate) expected_error: &'static str,
     /// Text the rendered plan must contain.

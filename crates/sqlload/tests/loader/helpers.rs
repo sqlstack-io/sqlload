@@ -853,10 +853,24 @@ pub(crate) async fn run_source_row_upgrade(
 
 /// `ORDERS` already exists, its stage refused to this role (it does not own it), and so is `@~`.
 pub(crate) fn not_owned(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
-    let mut state = fake.state.lock();
-    state
+    orders_exists(fake);
+    fake.state
+        .lock()
         .denied_stages
         .extend(["@~".to_owned(), "%\"ORDERS\"".to_owned()]);
+}
+
+/// The integration, and `ORDERS` already loaded.
+pub(crate) fn integration_and_orders(
+    fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake,
+) {
+    integration(fake);
+    orders_exists(fake);
+}
+
+/// `ORDERS` already exists, with the columns a load of the route files gives it.
+fn orders_exists(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
+    let mut state = fake.state.lock();
     state.tables.entry("ORDERS".to_owned()).or_default().columns = [
         "ID",
         "SCORE",
@@ -1007,7 +1021,11 @@ pub(crate) async fn run_route(
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
-    let (plan, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let options = PlanOptions {
+        reload: test_case.reload,
+        ..PlanOptions::default()
+    };
+    let (plan, outcome) = plan_apply_load(&project, &destinations, &options).await;
     let state = fake.state.lock();
     let ids: Vec<u64> = state.driver_queries.iter().map(|(id, _)| *id).collect();
     Ok(RouteOutcome {
