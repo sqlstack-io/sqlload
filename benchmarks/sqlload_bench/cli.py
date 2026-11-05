@@ -14,8 +14,8 @@ from typing import Any
 
 import duckdb
 
-from sqlload_bench import datagen, postgres
-from sqlload_bench.competitors import BENCH_ROOT, HIDDEN, DLT_PYTHON, INGESTR, SQLLOAD, Competitor, Context, all_competitors
+from sqlload_bench import datagen, postgres, snowflake
+from sqlload_bench.competitors import BENCH_ROOT, DLT_PYTHON, HIDDEN, INGESTR, SQLLOAD, Competitor, Context, Dlt, all_competitors
 from sqlload_bench.measure import run as measure
 from sqlload_bench.report import Result, markdown
 from sqlload_bench.scenarios import SCENARIOS, Scenario
@@ -23,18 +23,19 @@ from sqlload_bench.scenarios import SCENARIOS, Scenario
 
 def check(competitor: Competitor, scenario: Scenario, context: Context, run_dir: Path) -> tuple[bool, str]:
 	"""Whether the destination holds exactly the source's rows (count and checksum over key columns)."""
-	tables = competitor.tables(scenario)
-	if not tables:
-		return True, ""
 	expected = context.dataset.expected(scenario.expected)
+	if scenario.group == "snowflake":
+		assert context.warehouse is not None
+		return snowflake.check(context.warehouse, scenario.table, expected)
 	try:
 		with duckdb.connect(str(competitor.destination(run_dir)), read_only=True) as connection:
 			connection.execute("SET TimeZone = 'UTC'")
-			got = datagen.checksum(connection, scenario.kind, tables[0])
-			if scenario.name == "py_nested" and len(tables) > 1:
-				lines = connection.execute(f"SELECT count(*) FROM {tables[1]}").fetchone()
+			got = datagen.checksum(connection, scenario.kind, competitor.relation(scenario))
+			child = competitor.child_table(scenario) if isinstance(competitor, Dlt) else None
+			if child:
+				lines = connection.execute(f"SELECT count(*) FROM {child}").fetchone()
 				if [str(lines[0] if lines else 0)] != context.dataset.expected("nested_lines"):
-					return False, f"{tables[1]} has {lines} rows, expected {context.dataset.expected('nested_lines')}"
+					return False, f"{child} has {lines} rows, expected {context.dataset.expected('nested_lines')}"
 	except duckdb.Error as error:
 		return False, f"check failed: {error}"
 	if got != expected:
@@ -47,6 +48,15 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 	shutil.rmtree(run_dir, ignore_errors=True)
 	run_dir.mkdir(parents=True)
 	record: dict[str, Any] = {"load_avg_1m": os.getloadavg()[0]}
+	if scenario.group == "snowflake":
+		assert context.warehouse is not None
+		snowflake.drop_table(context.warehouse, scenario.table)
+	planned = competitor.plan_invocation(scenario, context, run_dir)
+	if planned is not None:
+		invocation, expected_text = planned
+		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "plan.log")
+		if done.returncode != 0 or expected_text not in done.output:
+			return {**record, "valid": False, "returncode": done.returncode, "error": f"the plan does not say {expected_text!r}: {done.output[-1500:]}"}
 	incremental = scenario.name == "pg_incremental" and context.postgres is not None
 	try:
 		if incremental:
@@ -100,6 +110,11 @@ def machine() -> dict[str, Any]:
 	return {"cpu": cpu, "cores": os.cpu_count(), "platform": platform.platform(), "load_avg": os.getloadavg()}
 
 
+def load_range(results: list[Result]) -> str:
+	loads = [run["load_avg_1m"] for result in results for run in result.runs if "load_avg_1m" in run]
+	return f"{min(loads):.1f} to {max(loads):.1f}" if loads else "not measured"
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(prog="sqlload_bench", description=__doc__)
 	parser.add_argument("--out", type=Path, required=True, help="where results.json and results.md go")
@@ -112,7 +127,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 	parser.add_argument("--scenarios", default="", help="comma-separated scenario names or groups (default: all)")
 	parser.add_argument("--competitors", default="", help="comma-separated loader names (default: all)")
 	parser.add_argument("--work", type=Path, help="scratch folder for destinations (default: OUT/work)")
+	parser.add_argument("--wait-for-builds", action="store_true", help="before each run, wait until no compiler is running on this machine")
 	return parser.parse_args(argv)
+
+
+def wait_for_builds() -> None:
+	"""On a shared machine, start a run only while nothing is compiling."""
+	while subprocess.run(["pgrep", "-x", "rustc|cc1plus|cc"], capture_output=True, check=False).returncode == 0:
+		time.sleep(10)
 
 
 def selected(values: str, name: str, group: str = "") -> bool:
@@ -130,8 +152,23 @@ def main(argv: list[str] | None = None) -> int:
 	scenarios = [s for s in SCENARIOS if selected(args.scenarios, s.name, s.group)]
 	competitors = [c for c in all_competitors() if selected(args.competitors, c.name)]
 	print(f"generating data ({args.size}, seed {args.seed})", flush=True)
-	dataset = datagen.generate(args.data or args.out.parent / "data", args.seed, sizes)
-	needs_postgres = any(s.group == "postgres" for s in scenarios)
+	dataset = datagen.generate(args.data or args.out / "data", args.seed, sizes)
+	# Snowflake scenarios run only when asked for by name or group, with their variables set.
+	explicit = {value.strip() for value in args.scenarios.split(",")}
+	snowflake_settings: snowflake.Settings | None = None
+	blocked: dict[str, str] = {}
+	for scenario in [s for s in scenarios if s.group == "snowflake"]:
+		missing = snowflake.missing_settings(scenario.name)
+		if not ({scenario.name, scenario.group} & explicit):
+			blocked[scenario.name] = "only runs when selected with --scenarios"
+		elif missing:
+			blocked[scenario.name] = "set " + ", ".join(missing)
+		else:
+			snowflake_settings = snowflake.settings_from_env()
+			if scenario.name == "files_snowflake":
+				print(f"test data: s3://{snowflake_settings.bucket}/{snowflake.upload_parquet(snowflake_settings, dataset)}", flush=True)
+	active_names = {s.name for s in scenarios} - blocked.keys()
+	needs_postgres = any(s.group == "postgres" or s.name == "pg_snowflake" for s in scenarios if s.name in active_names)
 	pg = postgres.start() if needs_postgres else None
 	started = datetime.now(UTC)
 	results: list[Result] = []
@@ -139,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
 		if pg is not None:
 			print(f"loading Postgres on port {pg.port}", flush=True)
 			postgres.load(pg, dataset)
-		context = Context(dataset, pg, args.out.parent / "cache")
+		context = Context(dataset, pg, args.out / "cache", snowflake_settings)
 		for scenario in scenarios:
 			active: list[tuple[Competitor, Result]] = []
 			for competitor in competitors:
@@ -147,8 +184,9 @@ def main(argv: list[str] | None = None) -> int:
 				reason = competitor.unsupported(scenario)
 				if reason == HIDDEN:
 					continue
+				reason = reason or blocked.get(scenario.name)
 				if reason:
-					result.status, result.note = ("skipped" if scenario.pending else "n/a"), reason
+					result.status, result.note = ("skipped" if scenario.pending or scenario.name in blocked else "n/a"), reason
 					if competitor.name == "sqlload" or not scenario.pending:
 						results.append(result)
 					continue
@@ -160,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
 					if result.status == "failed":
 						continue
 					run_dir = work / scenario.name / competitor.name.replace(" ", "_").replace("(", "").replace(")", "")
+					if args.wait_for_builds:
+						wait_for_builds()
 					print(f"{scenario.name:18} {competitor.name:24} {'warm-up' if attempt < args.warmup else f'run {attempt - args.warmup + 1}'}", flush=True)
 					record = one_run(competitor, scenario, context, run_dir)
 					record["warmup"] = attempt < args.warmup
@@ -179,11 +219,16 @@ def main(argv: list[str] | None = None) -> int:
 	summaries = [result.summary() for result in results]
 	header = (
 		f"## SQLLoad benchmarks ({args.size}, seed {args.seed}, median of {args.runs} after {args.warmup} warm-up)\n\n"
-		f"Started {started:%Y-%m-%d %H:%M} UTC on {machine()['cpu']} ({os.cpu_count()} cores)."
+		f"Started {started:%Y-%m-%d %H:%M} UTC on {machine()['cpu']} ({os.cpu_count()} cores); 1-minute load before each run: {load_range(results)}."
 	)
 	document = {"started": started.isoformat(), "finished": datetime.now(UTC).isoformat(), "size": args.size, "sizes": sizes.__dict__,
 		"seed": args.seed, "runs": args.runs, "warmup": args.warmup, "versions": versions(), "machine": machine(), "results": summaries}
 	(args.out / "results.json").write_text(json.dumps(document, indent=1, default=str))
+	with (args.out / "history.jsonl").open("a") as history:
+		# One line per suite run, so improvement over time stays visible after results.json is replaced.
+		kept = ("scenario", "competitor", "rows", "status", "wall_s", "cpu_s", "peak_rss_mb", "rows_per_s")
+		line = {key: document[key] for key in ("started", "size", "seed", "versions")}
+		history.write(json.dumps({**line, "results": [{key: s[key] for key in kept} for s in summaries]}, default=str) + "\n")
 	table = markdown(summaries, header)
 	(args.out / "results.md").write_text(table)
 	print(table)

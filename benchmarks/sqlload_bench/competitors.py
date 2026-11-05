@@ -1,25 +1,26 @@
-"""The loaders compared, and how each one runs a scenario as a process into a fresh DuckDB file."""
+"""The loaders compared, and how each one runs a scenario as a process into a fresh destination."""
 
 import json
-import textwrap
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from sqlload_bench import postgres as pg
+from sqlload_bench import snowflake
 from sqlload_bench.datagen import Dataset
 from sqlload_bench.measure import clean_env
-from sqlload_bench.scenarios import Scenario
+from sqlload_bench.scenarios import MULTI_TABLES, Scenario
 
 BENCH_ROOT = Path(__file__).resolve().parent.parent
 RUNNERS = BENCH_ROOT / "runners"
 DLT_PYTHON = BENCH_ROOT / "envs/dlt/.venv/bin/python"
-INGESTR_PYTHON = BENCH_ROOT / "envs/ingestr/.venv/bin/python"
 INGESTR = BENCH_ROOT / "envs/ingestr/.venv/bin/ingestr"
-HARNESS_PYTHON = BENCH_ROOT / ".venv/bin/python"
 SQLLOAD = BENCH_ROOT / ".venv/bin/sqlload"
 SCHEMA = "raw"
 #: `unsupported` returns this for combinations not worth a table row (a dlt backend outside sql_database).
 HIDDEN = "hidden"
+#: Environment variables a Snowflake scenario's loader needs from the caller.
+SNOWFLAKE_ENV = (snowflake.TOKEN_ENV, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_DEFAULT_REGION")
 
 
 @dataclass
@@ -29,6 +30,8 @@ class Context:
 	dataset: Dataset
 	postgres: pg.Postgres | None
 	cache: Path
+	#: Set only when a Snowflake scenario was selected and its variables are present.
+	warehouse: snowflake.Settings | None = None
 
 
 @dataclass
@@ -40,23 +43,30 @@ class Invocation:
 	env: dict[str, str] = field(default_factory=dict)
 
 
+def _caller_env(names: tuple[str, ...]) -> dict[str, str]:
+	return {name: os.environ[name] for name in names if name in os.environ}
+
+
 class Competitor:
 	"""A loader; subclasses say which scenarios they run and how."""
 
 	name: str = ""
-	version: str = ""
 
 	def unsupported(self, scenario: Scenario) -> str | None:
-		"""Why this loader cannot run `scenario`, or None when it can."""
+		"""Why this loader cannot run `scenario` (`HIDDEN` for no table row), or None when it can."""
 		raise NotImplementedError
 
 	def invocation(self, scenario: Scenario, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
 		"""The load to run; `second` is the incremental scenario's load after the append."""
 		raise NotImplementedError
 
-	def tables(self, scenario: Scenario) -> list[str]:
-		"""The destination table the checksum reads, then any child tables."""
-		return [f"{SCHEMA}.{scenario.table}"]
+	def plan_invocation(self, scenario: Scenario, context: Context, run_dir: Path) -> tuple[Invocation, str] | None:
+		"""A command whose output must contain the returned text before the load counts, when a route matters."""
+		return None
+
+	def relation(self, scenario: Scenario) -> str:
+		"""What the destination's checksum reads."""
+		return f"{SCHEMA}.{scenario.table}"
 
 	@staticmethod
 	def destination(run_dir: Path) -> Path:
@@ -86,81 +96,101 @@ def _spec(run_dir: Path, scenario: Scenario, context: Context, **settings: objec
 
 
 class SqlLoad(Competitor):
-	"""The sqlload extension wheel built from this repository; `sqlload load` runs in-process."""
+	"""The sqlload extension wheel built from this repository; its `sqlload load` runs in-process."""
 
-	name = "sqlload"
+	def __init__(self, *, threads: int | None = None, shaping: str | None = None, label: str = "") -> None:
+		self.threads = threads
+		self.shaping = shaping
+		self.name = f"sqlload ({label})" if label else "sqlload"
 
 	def unsupported(self, scenario: Scenario) -> str | None:
+		if self.threads is not None:
+			return None if scenario.name == "pg_multi" else HIDDEN
+		if scenario.name == "files_snowflake":
+			return None if self.shaping else HIDDEN
+		if self.shaping:
+			return HIDDEN
 		return scenario.pending or None
 
-	def tables(self, scenario: Scenario) -> list[str]:
+	def relation(self, scenario: Scenario) -> str:
+		if scenario.name == "pg_multi":
+			tables = [f"SELECT * FROM {SCHEMA}.app__{pg.multi_table(index)}" for index in range(MULTI_TABLES)]
+			return "(" + " UNION ALL ".join(tables) + ")"
 		if scenario.group == "postgres":
-			return [f"{SCHEMA}.app__{scenario.table}"]
-		return [f"{SCHEMA}.{scenario.table}"]
+			return f"{SCHEMA}.app__{scenario.table}"
+		return f"{SCHEMA}.{scenario.table}"
 
 	def invocation(self, scenario: Scenario, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
+		argv = [str(SQLLOAD), "load", *(["--threads", str(self.threads)] if self.threads else [])]
+		return Invocation(argv, self._project_dir(scenario, context, run_dir), self._env(scenario, run_dir))
+
+	def plan_invocation(self, scenario: Scenario, context: Context, run_dir: Path) -> tuple[Invocation, str] | None:
+		if scenario.name != "files_snowflake":
+			return None
+		expected = 'shaping = "loader"' if self.shaping == "loader" else "destination loads parquet files from"
+		return Invocation([str(SQLLOAD), "plan"], self._project_dir(scenario, context, run_dir), self._env(scenario, run_dir)), expected
+
+	def _env(self, scenario: Scenario, run_dir: Path) -> dict[str, str]:
+		extra = {"PGPASSWORD": pg.PASSWORD}
+		if scenario.group == "snowflake":
+			extra.update(_caller_env(SNOWFLAKE_ENV))
+		return self.env(run_dir, extra)
+
+	def _project_dir(self, scenario: Scenario, context: Context, run_dir: Path) -> Path:
 		project = run_dir / "project"
 		if not project.exists():
 			project.mkdir(parents=True)
-			(project / "sqlload.toml").write_text(self._project(scenario, context, run_dir))
+			(project / "sqlload.toml").write_text(self.project(scenario, context, run_dir))
 			if scenario.group == "python":
 				(project / "sources").mkdir()
 				(project / "sources" / "bench.py").write_text(self._module(scenario, context))
-		return Invocation([str(SQLLOAD), "load"], project, self.env(run_dir, {"PGPASSWORD": pg.PASSWORD}))
+		return project
 
-	def _project(self, scenario: Scenario, context: Context, run_dir: Path) -> str:
-		text = textwrap.dedent(
-			f"""\
-			[connections.wh]
-			kind = "duckdb"
-			path = "{self.destination(run_dir)}"
-
-			[targets.dev]
-			connection = "wh"
-			loader_schema = "{SCHEMA}"
-			"""
+	def project(self, scenario: Scenario, context: Context, run_dir: Path) -> str:
+		"""The `sqlload.toml` of this load."""
+		if scenario.name == "files_snowflake":
+			return self._files_snowflake(scenario, context)
+		if scenario.name == "pg_snowflake":
+			assert context.warehouse is not None
+			return context.warehouse.connection_toml() + "\n" + self._postgres(scenario, context) + f'table_name = "{scenario.table}"\n'
+		text = (
+			f'[connections.wh]\nkind = "duckdb"\npath = "{self.destination(run_dir)}"\n\n'
+			f'[targets.dev]\nconnection = "wh"\nloader_schema = "{SCHEMA}"\n'
 		)
 		if scenario.group == "postgres":
-			assert context.postgres is not None
-			# `id` only grows, so the next load starts after the loaded maximum rather than at it.
-			incremental = (
-				'write_strategy = "append"\ncursor_column = "id"\nappend_cursor_inclusive = false\n' if scenario.name == "pg_incremental" else ""
-			)
-			text += textwrap.dedent(
-				f"""
-				[connections.app_pg]
-				kind = "postgres"
-				host = "127.0.0.1"
-				port = {context.postgres.port}
-				user = "{pg.USER}"
-				password = "${{PGPASSWORD}}"
-				database = "{pg.DATABASE}"
-
-				[sources.app]
-				kind = "postgres"
-				connection = "app_pg"
-				include = ["public.{scenario.table}"]
-				"""
-			)
-			text += incremental
-		elif scenario.group == "files":
+			return text + "\n" + self._postgres(scenario, context)
+		if scenario.group == "files":
 			file_format = scenario.name.removeprefix("files_")
-			text += textwrap.dedent(
-				f"""
-				[connections.files]
-				kind = "filesystem"
-				root = "{context.dataset.path("files")}"
-
-				[sources.{scenario.table}]
-				kind = "files"
-				connection = "files"
-				path = "{file_format}/"
-				format = "{file_format}"
-				"""
+			return text + (
+				f'\n[connections.files]\nkind = "filesystem"\nroot = "{context.dataset.path("files")}"\n\n'
+				f'[sources.{scenario.table}]\nkind = "files"\nconnection = "files"\npath = "{file_format}/"\nformat = "{file_format}"\n'
 			)
-		else:
-			text = 'python_paths = ["sources"]\n\n' + text
+		return 'python_paths = ["sources"]\n\n' + text
+
+	@staticmethod
+	def _postgres(scenario: Scenario, context: Context) -> str:
+		assert context.postgres is not None
+		include = "public.multi_*" if scenario.name == "pg_multi" else "public.narrow" if scenario.group == "snowflake" else f"public.{scenario.table}"
+		text = (
+			f'[connections.app_pg]\nkind = "postgres"\nhost = "127.0.0.1"\nport = {context.postgres.port}\n'
+			f'user = "{pg.USER}"\npassword = "${{PGPASSWORD}}"\ndatabase = "{pg.DATABASE}"\n\n'
+			f'[sources.app]\nkind = "postgres"\nconnection = "app_pg"\ninclude = ["{include}"]\n'
+		)
+		if scenario.name == "pg_incremental":
+			# `id` only grows, so the next load starts after the loaded maximum rather than at it.
+			text += 'write_strategy = "append"\ncursor_column = "id"\nappend_cursor_inclusive = false\n'
 		return text
+
+	def _files_snowflake(self, scenario: Scenario, context: Context) -> str:
+		settings = context.warehouse
+		assert settings is not None
+		shaping = 'shaping = "loader"\n' if self.shaping == "loader" else ""
+		key = snowflake.files_key(context.dataset)
+		return settings.connection_toml(settings.stage_toml()) + (
+			f'\n[connections.lake]\nkind = "s3"\nbucket = "{settings.bucket}"\nregion = "{settings.region}"\n\n'
+			f'[sources.files]\nkind = "files"\nconnection = "lake"\npath = "{key}"\nformat = "parquet"\n'
+			f'table_name = "{scenario.table}"\nwrite_strategy = "append"\n{shaping}'
+		)
 
 	@staticmethod
 	def _module(scenario: Scenario, context: Context) -> str:
@@ -179,62 +209,72 @@ class SqlLoad(Competitor):
 
 
 class Dlt(Competitor):
-	"""dlt with its DuckDB destination; `backend` picks the sql_database backend."""
+	"""dlt; `backend` picks the sql_database backend (pyarrow or connectorx)."""
 
 	def __init__(self, backend: str | None) -> None:
 		self.backend = backend
 		self.name = f"dlt ({backend})" if backend else "dlt"
 
 	def unsupported(self, scenario: Scenario) -> str | None:
-		if scenario.group == "postgres":
-			return None if self.backend else HIDDEN
-		if self.backend:
+		if scenario.name == "pg_multi":
 			return HIDDEN
-		if scenario.name == "py_bytes":
-			return "dlt has no NDJSON bytes input; it takes Python objects or Arrow"
+		if scenario.group == "postgres" or scenario.name == "pg_snowflake":
+			return None if self.backend else HIDDEN
+		if self.backend or scenario.name == "files_snowflake":
+			return HIDDEN
 		if scenario.name == "py_nested_flatten":
 			return "dlt flattens by default (py_nested)"
 		if scenario.group == "http":
 			return "pending with sqlload's HTTP helpers"
 		return None
 
-	def tables(self, scenario: Scenario) -> list[str]:
-		if scenario.name == "py_nested":
-			return [f"{SCHEMA}.nested", f"{SCHEMA}.nested__lines"]
-		return [f"{SCHEMA}.{scenario.table}"]
+	def relation(self, scenario: Scenario) -> str:
+		return f"{SCHEMA}.{scenario.table}"
+
+	def child_table(self, scenario: Scenario) -> str | None:
+		"""The child table dlt makes of the nested rows' `lines`."""
+		return f"{SCHEMA}.nested__lines" if scenario.name == "py_nested" else None
 
 	def invocation(self, scenario: Scenario, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
-		spec = _spec(run_dir, scenario, context, backend=self.backend or "")
-		env = self.env(run_dir, {"RUNTIME__DLTHUB_TELEMETRY": "false"})
-		return Invocation([str(DLT_PYTHON), str(RUNNERS / "dlt_run.py"), spec], run_dir, env)
+		settings: dict[str, object] = {"backend": self.backend or ""}
+		env = {"RUNTIME__DLTHUB_TELEMETRY": "false"}
+		if context.warehouse is not None and scenario.group == "snowflake":
+			sf = context.warehouse
+			settings["snowflake"] = {
+				"username": sf.user, "host": sf.account, "warehouse": sf.warehouse, "database": sf.database, "role": sf.role, "schema": sf.schema,
+				"private_key_path": sf.private_key_file,
+			}
+			env.update(_caller_env((snowflake.TOKEN_ENV,)))
+		spec = _spec(run_dir, scenario, context, **settings)
+		return Invocation([str(DLT_PYTHON), str(RUNNERS / "dlt_run.py"), spec], run_dir, self.env(run_dir, env))
 
 
 class Ingestr(Competitor):
-	"""ingestr's release binary (through its pinned PyPI wrapper); Python data via its Arrow SDK."""
+	"""ingestr's release binary, through its pinned PyPI wrapper."""
 
 	name = "ingestr"
 
 	def unsupported(self, scenario: Scenario) -> str | None:
-		if scenario.name == "py_bytes":
-			return "ingestr's Python SDK takes rows and Arrow, not NDJSON bytes"
-		if scenario.name == "py_nested_flatten":
-			return "no flattening option"
+		if scenario.name == "pg_multi" or scenario.group == "python" or scenario.name == "files_snowflake":
+			return HIDDEN
 		if scenario.group == "http":
 			return "pending with sqlload's HTTP helpers"
 		return None
 
 	def invocation(self, scenario: Scenario, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
-		env = self.env(run_dir, {"INGESTR_BINARY_CACHE_DIR": str(context.cache / "ingestr"), "INGESTR_DISABLE_TELEMETRY": "true"})
-		if scenario.group == "python":
-			spec = _spec(run_dir, scenario, context)
-			return Invocation([str(INGESTR_PYTHON), str(RUNNERS / "ingestr_python.py"), spec], run_dir, env)
-		argv = [
-			str(INGESTR), "ingest", "--yes", "--progress", "log", "--pipelines-dir", str(run_dir / "pipelines"),
-			"--dest-uri", f"duckdb:///{self.destination(run_dir)}", "--dest-table", f"{SCHEMA}.{scenario.table}",
-		]
-		if scenario.group == "postgres":
+		env = {"INGESTR_BINARY_CACHE_DIR": str(context.cache / "ingestr"), "INGESTR_DISABLE_TELEMETRY": "true"}
+		argv = [str(INGESTR), "ingest", "--yes", "--progress", "log", "--pipelines-dir", str(run_dir / "pipelines")]
+		if scenario.group == "snowflake":
+			assert context.warehouse is not None
+			# The URI holds a secret, so it goes through ingestr's environment variable.
+			env["INGESTR_DESTINATION_URI"] = context.warehouse.ingestr_uri()
+			argv += ["--dest-table", f"{context.warehouse.schema}.{scenario.table}"]
+		else:
+			argv += ["--dest-uri", f"duckdb:///{self.destination(run_dir)}", "--dest-table", f"{SCHEMA}.{scenario.table}"]
+		if scenario.group == "snowflake" or scenario.group == "postgres":
 			assert context.postgres is not None
-			argv += ["--source-uri", context.postgres.dsn, "--source-table", f"public.{scenario.table}"]
+			source = "narrow" if scenario.group == "snowflake" else scenario.table
+			argv += ["--source-uri", context.postgres.dsn, "--source-table", f"public.{source}"]
 			if scenario.name == "pg_incremental":
 				# ingestr keeps no high-water mark: the caller passes the interval. The harness gives
 				# the first appended row's created_at, which every base row is below.
@@ -249,24 +289,17 @@ class Ingestr(Competitor):
 			file_format = scenario.name.removeprefix("files_")
 			scheme = {"ndjson": "jsonl"}.get(file_format, file_format)
 			argv += ["--source-uri", f"{scheme}://{context.dataset.path('files', 'single', 'narrow.' + file_format)}", "--source-table", scenario.table]
-		return Invocation(argv, run_dir, env)
-
-
-class GenerateOnly(Competitor):
-	"""Not a loader: exhausts the same Python generator, the floor every Python scenario includes."""
-
-	name = "python (generate only)"
-
-	def unsupported(self, scenario: Scenario) -> str | None:
-		return None if scenario.name in {"py_flat", "py_nested", "py_bytes", "py_arrow"} else HIDDEN
-
-	def tables(self, scenario: Scenario) -> list[str]:
-		return []
-
-	def invocation(self, scenario: Scenario, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
-		spec = _spec(run_dir, scenario, context)
-		return Invocation([str(HARNESS_PYTHON), str(RUNNERS / "generate_only.py"), spec], run_dir, self.env(run_dir))
+		return Invocation(argv, run_dir, self.env(run_dir, env))
 
 
 def all_competitors() -> list[Competitor]:
-	return [SqlLoad(), Dlt("pyarrow"), Dlt("connectorx"), Dlt(None), Ingestr(), GenerateOnly()]
+	return [
+		SqlLoad(),
+		SqlLoad(threads=1, label="--threads 1"),
+		SqlLoad(shaping="direct", label="direct"),
+		SqlLoad(shaping="loader", label='shaping = "loader"'),
+		Dlt("pyarrow"),
+		Dlt("connectorx"),
+		Dlt(None),
+		Ingestr(),
+	]

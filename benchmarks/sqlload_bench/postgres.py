@@ -10,6 +10,7 @@ from pathlib import Path
 import psycopg
 
 from sqlload_bench.datagen import Dataset
+from sqlload_bench.scenarios import MULTI_TABLES
 
 IMAGE = "postgres:17-alpine"
 USER = "bench"
@@ -53,6 +54,11 @@ class Postgres:
 
 	def stop(self) -> None:
 		subprocess.run(["docker", "rm", "-f", "-v", self.container], capture_output=True, check=False)
+
+
+def multi_table(index: int) -> str:
+	"""The name of one of the multi-table scenario's tables."""
+	return f"multi_{index + 1:02d}"
 
 
 def free_port() -> int:
@@ -104,6 +110,11 @@ def load(postgres: Postgres, dataset: Dataset) -> None:
 		_copy(connection, "wide", dataset.path("pg", "wide.csv"))
 		connection.execute("VACUUM (FREEZE, ANALYZE) public.narrow")
 		connection.execute("VACUUM (FREEZE, ANALYZE) public.wide")
+		share = -(-dataset.sizes.narrow // MULTI_TABLES)
+		for index in range(MULTI_TABLES):
+			table = multi_table(index)
+			connection.execute(f"CREATE TABLE public.{table} AS SELECT * FROM public.narrow WHERE id > {index * share} AND id <= {(index + 1) * share}")
+			connection.execute(f"VACUUM (FREEZE, ANALYZE) public.{table}")
 
 
 def append_rows(postgres: Postgres, dataset: Dataset) -> None:

@@ -1,16 +1,20 @@
 """The harness's own logic: data generation, checksums, measurement, reporting and the perf gate."""
 
 import json
+import subprocess
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 import duckdb
 import pytest
 
 from perf import compare
-from sqlload_bench import datagen, pydata
+from sqlload_bench import datagen, pydata, snowflake
+from sqlload_bench.competitors import HIDDEN, SQLLOAD, Context, SqlLoad, all_competitors
 from sqlload_bench.measure import run
 from sqlload_bench.report import Result, markdown
+from sqlload_bench.scenarios import BY_NAME
 
 
 def test_given_the_same_seed_when_generating_python_rows_then_they_are_identical_and_ids_run_from_one() -> None:
@@ -70,6 +74,80 @@ def test_given_results_when_reporting_then_each_row_shows_its_ratio_to_sqlload()
 	assert "| pg_narrow | sqlload | 1,000 | 3.00 |" in table
 	assert "| 2.00x |" in table
 	assert "n/a: no bytes input" in table
+
+
+def _snowflake_env(**extra: str) -> dict[str, str]:
+	base = {f"{snowflake.PREFIX}{name}": name.lower() for name in snowflake.REQUIRED}
+	return {**base, snowflake.TOKEN_ENV: "secret", **extra}
+
+
+FILES_ENV = {
+	"SQLLOAD_BENCH_S3_BUCKET": "example-bucket-test",
+	"SQLLOAD_BENCH_S3_REGION": "eu-west-2",
+	"AWS_ACCESS_KEY_ID": "test",
+	"AWS_SECRET_ACCESS_KEY": "test",
+	f"{snowflake.PREFIX}STORAGE_INTEGRATION": "LAKE_INT",
+}
+
+
+def test_given_partial_settings_when_checking_a_snowflake_scenario_then_each_missing_variable_is_named() -> None:
+	assert snowflake.missing_settings("pg_snowflake", _snowflake_env()) == []
+	assert f"{snowflake.PREFIX}ACCOUNT" in snowflake.missing_settings("pg_snowflake", {})
+	assert "SQLLOAD_BENCH_S3_BUCKET" in snowflake.missing_settings("files_snowflake", _snowflake_env())
+	assert snowflake.missing_settings("files_snowflake", _snowflake_env(**FILES_ENV)) == []
+
+
+def test_given_a_dataset_when_naming_its_s3_folder_then_it_stays_under_the_sqlload_prefix(tmp_path: Path) -> None:
+	dataset = datagen.Dataset(tmp_path / "seed1", 1, datagen.SIZES["tiny"])
+	assert snowflake.files_key(dataset) == "sqlload/bench/seed1/parquet/"
+
+
+def test_given_a_table_of_someone_else_when_dropping_then_the_harness_refuses() -> None:
+	with pytest.raises(ValueError, match="BENCH_"):
+		snowflake.drop_table(snowflake.settings_from_env(_snowflake_env()), "ORDERS")
+
+
+def test_given_equal_values_in_different_text_forms_when_comparing_then_they_match() -> None:
+	assert snowflake.same_numbers([Decimal("947612460.6"), 3], ["947612460.60", "3"])
+	assert not snowflake.same_numbers([Decimal("947612460.7"), 3], ["947612460.60", "3"])
+	assert not snowflake.same_numbers([1], ["1", "2"])
+
+
+@pytest.mark.parametrize(
+	("competitor", "expected_text"),
+	[
+		(SqlLoad(shaping="direct", label="direct"), "destination loads parquet files from"),
+		(SqlLoad(shaping="loader", label="loader"), 'shaping = "loader"'),
+	],
+	ids=["direct", "loader"],
+)
+@pytest.mark.skipif(not SQLLOAD.exists(), reason="the sqlload wheel is not installed")
+def test_given_the_files_to_snowflake_project_when_validated_then_sqlload_accepts_it_and_the_route_is_checked(
+	tmp_path: Path, competitor: SqlLoad, expected_text: str
+) -> None:
+	settings = snowflake.settings_from_env(_snowflake_env(**FILES_ENV))
+	dataset = datagen.Dataset(tmp_path / "seed1", 1, datagen.SIZES["tiny"])
+	context = Context(dataset, None, tmp_path, settings)
+	plan, text = competitor.plan_invocation(BY_NAME["files_snowflake"], context, tmp_path) or (None, "")
+	assert plan is not None and text == expected_text
+	assert ("sqlload/bench/seed1/parquet/" in (plan.cwd / "sqlload.toml").read_text())
+	done = subprocess.run(
+		[str(SQLLOAD), "debug", "--no-connection"], cwd=plan.cwd, env={**plan.env, snowflake.TOKEN_ENV: "secret"}, capture_output=True, text=True, check=False
+	)
+	assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_given_the_sizes_when_reading_the_multi_table_scenario_then_it_holds_all_narrow_rows() -> None:
+	assert BY_NAME["pg_multi"].rows(datagen.SIZES["tiny"]) == datagen.SIZES["tiny"].narrow
+
+
+def test_given_each_loader_when_asked_about_scenarios_then_python_is_dlt_only_and_threads_only_multi() -> None:
+	by_name = {competitor.name: competitor for competitor in all_competitors()}
+	assert by_name["ingestr"].unsupported(BY_NAME["py_flat"]) == HIDDEN
+	assert by_name["dlt"].unsupported(BY_NAME["py_bytes"]) is None
+	assert by_name["sqlload (--threads 1)"].unsupported(BY_NAME["pg_narrow"]) == HIDDEN
+	assert by_name["sqlload (--threads 1)"].unsupported(BY_NAME["pg_multi"]) is None
+	assert by_name["sqlload"].unsupported(BY_NAME["files_snowflake"]) == HIDDEN
 
 
 def _summary_line(name: str, bench_id: str, ir: int) -> str:

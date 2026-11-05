@@ -22,7 +22,12 @@ use sqlload::files_destination::main::write_rows::write_rows;
 use sqlload::files_destination::models::{TablePath, WriterRequest};
 use sqlload::files_source::main::discover_files::discover_files;
 use sqlload::files_source::main::read_files::read_files;
-use sqlload::files_source::models::{FilesEncoding, FilesRead, SourceFormat, TextChecks};
+use sqlload::files_source::models::{
+    BatchFooters, FilesEncoding, FilesRead, SourceFormat, TextChecks,
+};
+use sqlload::parquet_parts::main::finish_part::finish_part;
+use sqlload::parquet_parts::main::write_part::write_part;
+use sqlload::parquet_parts::models::PartWriter;
 use sqlload::postgres_source::main::decode_copy::decode_copy;
 use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::conform_batch::conform_batch;
@@ -54,6 +59,10 @@ fn expect_batch<const ROWS: usize>(batch: RecordBatch) {
 
 fn expect_count<const ROWS: u64>(rows: u64) {
     assert_eq!(rows, ROWS, "rows read");
+}
+
+fn expect_part(bytes: usize) {
+    assert!(bytes > 0, "no Parquet part was written");
 }
 
 fn expect_files((rows, written): (u64, Vec<String>)) {
@@ -116,9 +125,36 @@ fn desired_columns(schema: &SchemaRef, origin: ColumnOrigin) -> Vec<DesiredColum
         .collect()
 }
 
+/// The narrow rows in batches of 10,000.
+fn narrow_batches() -> Vec<RecordBatch> {
+    let batch = fixtures::narrow_batch(50_000);
+    (0..batch.num_rows())
+        .step_by(10_000)
+        .map(|offset| batch.slice(offset, 10_000.min(batch.num_rows() - offset)))
+        .collect()
+}
+
+// The Parquet files staged for a warehouse (`parquet_parts`).
+#[library_benchmark]
+#[bench::narrow_50k_rows(setup = narrow_batches, teardown = expect_part)]
+fn arrow_to_stage_parquet(batches: Vec<RecordBatch>) -> usize {
+    black_box(write_stage_parts(black_box(batches)))
+}
+
+fn write_stage_parts(batches: Vec<RecordBatch>) -> usize {
+    let mut parts = PartWriter::default();
+    for batch in &batches {
+        let (rest, _) = write_part(parts, batch).unwrap_or_else(|error| panic!("{error}"));
+        parts = rest;
+    }
+    let (_, file) = finish_part(parts).unwrap_or_else(|error| panic!("{error}"));
+    file.map_or(0, |bytes| bytes.len())
+}
+
+// The Parquet files of a files target (`files_destination`).
 #[library_benchmark]
 #[bench::narrow_50k_rows(setup = narrow_parquet_input, teardown = expect_files)]
-fn arrow_to_parquet(input: ParquetInput) -> (u64, Vec<String>) {
+fn arrow_to_target_parquet(input: ParquetInput) -> (u64, Vec<String>) {
     black_box(write_parquet(black_box(input)))
 }
 
@@ -133,6 +169,7 @@ fn write_parquet((runtime, folder, columns, batch): ParquetInput) -> (u64, Vec<S
         cursor_column: None,
         columns: &columns,
         load_id: "20261105T000000Z",
+        file_id: "20261105T000000Z",
         loaded_at: "2026-11-05T00:00:00Z",
     };
     let mut writer = open_writer(request).unwrap_or_else(|error| panic!("{error}"));
@@ -206,11 +243,15 @@ fn infer_and_read((runtime, folder, encoding): TextInput) -> u64 {
             .columns
             .iter()
             .filter_map(|column| {
-                column.column_type.clone().ok().map(|column_type| DesiredColumn {
-                    name: column.name.clone(),
-                    column_type,
-                    origin: ColumnOrigin::Inferred,
-                })
+                column
+                    .column_type
+                    .clone()
+                    .ok()
+                    .map(|column_type| DesiredColumn {
+                        name: column.name.clone(),
+                        column_type,
+                        origin: ColumnOrigin::Inferred,
+                    })
             })
             .collect();
         let names: Vec<String> = columns.iter().map(|column| column.name.clone()).collect();
@@ -225,13 +266,12 @@ fn infer_and_read((runtime, folder, encoding): TextInput) -> u64 {
             columns,
             batch_rows: BATCH_ROWS,
         };
-        let rows = read_files(&folder, &request, async |batch| {
+        read_files(&folder, &request, &BatchFooters::default(), async |batch| {
             black_box(batch);
             Ok(())
         })
         .await
-        .unwrap_or_else(|error| panic!("{error}"));
-        rows
+        .unwrap_or_else(|error| panic!("{error}"))
     })
 }
 
@@ -323,14 +363,20 @@ fn parse_json_bytes((bytes, read): JsonInput) -> Vec<RecordBatch> {
 }
 
 library_benchmark_group!(name = postgres_source, benchmarks = postgres_copy_to_arrow);
-library_benchmark_group!(name = files_destination, benchmarks = arrow_to_parquet);
+library_benchmark_group!(
+    name = parquet_writing,
+    benchmarks = [arrow_to_stage_parquet, arrow_to_target_parquet]
+);
 library_benchmark_group!(name = files_source, benchmarks = text_files_infer_and_read);
-library_benchmark_group!(name = row_batches, benchmarks = [rows_to_batch, merge_and_conform]);
+library_benchmark_group!(
+    name = row_batches,
+    benchmarks = [rows_to_batch, merge_and_conform]
+);
 library_benchmark_group!(name = python_crossing, benchmarks = json_bytes_to_batches);
 
 main!(
     library_benchmark_groups = postgres_source,
-    files_destination,
+    parquet_writing,
     files_source,
     row_batches,
     python_crossing

@@ -4,10 +4,13 @@ from dataclasses import dataclass
 
 from sqlload_bench.datagen import Sizes
 
+#: Tables in the multi-table scenario, which splits the narrow rows evenly among them.
+MULTI_TABLES = 8
+
 
 @dataclass(frozen=True)
 class Scenario:
-	"""One source-to-DuckDB load."""
+	"""One source-to-destination load."""
 
 	name: str
 	group: str
@@ -26,10 +29,13 @@ class Scenario:
 			"pg_narrow": sizes.narrow,
 			"pg_wide": sizes.wide,
 			"pg_incremental": sizes.append,
+			"pg_multi": sizes.narrow,
+			"pg_snowflake": sizes.narrow,
 			"py_flat": sizes.flat,
 			"py_nested": sizes.nested,
 			"py_bytes": sizes.flat,
 			"py_arrow": sizes.flat,
+			"http_json": sizes.flat,
 		}.get(self.name, sizes.files)
 
 
@@ -44,6 +50,7 @@ SCENARIOS: list[Scenario] = [
 		"Postgres narrow table: load, append 1% new rows, load again (the second load is timed)",
 		"narrow",
 	),
+	Scenario("pg_multi", "postgres", "narrow", "narrow", f"The narrow rows split over {MULTI_TABLES} Postgres tables: sqlload's --threads 1 and its default", "multi"),
 	Scenario("files_parquet", "files", "narrow", "files", "Parquet files (10 parts) in a local folder", "narrow"),
 	Scenario("files_csv", "files", "narrow", "files", "CSV files (10 parts, header) in a local folder", "narrow"),
 	Scenario("files_ndjson", "files", "narrow", "files", "NDJSON files (10 parts) in a local folder", "narrow"),
@@ -65,10 +72,12 @@ SCENARIOS: list[Scenario] = [
 		"http",
 		"flat",
 		"flat",
-		"HTTP JSON API: paginated responses from a local stub server",
+		"HTTP JSON API: paginated, fanned-out responses from a local stub (rows/s, memory, requests, CPU)",
 		"flat",
 		pending="sqlload's HTTP helpers are not on main yet",
 	),
+	Scenario("pg_snowflake", "snowflake", "narrow", "narrow", "Postgres narrow table into Snowflake, full load", "BENCH_NARROW"),
+	Scenario("files_snowflake", "snowflake", "narrow", "files", "Parquet files in S3 into Snowflake: the direct route and shaping = \"loader\"", "BENCH_PARQUET"),
 ]
 
 BY_NAME = {scenario.name: scenario for scenario in SCENARIOS}

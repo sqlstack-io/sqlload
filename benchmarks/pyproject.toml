@@ -16,6 +16,8 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest==9.2.0"]
+# Only the Snowflake scenarios use it: `make bench-snowflake`.
+snowflake = ["snowflake-connector-python==5.2.0"]
 
 [tool.uv]
 package = false

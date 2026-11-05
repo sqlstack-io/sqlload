@@ -1,12 +1,10 @@
 [project]
 name = "sqlload-benchmarks-ingestr"
 version = "0"
-description = "ingestr (its wrapper downloads the pinned release binary) and pyarrow for its Python data SDK."
+description = "ingestr (its wrapper downloads the pinned release binary)."
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "ingestr[sdk]==1.1.82",
-  "orjson==3.13.0",
-  "pyarrow==26.0.1",
+  "ingestr==1.1.82",
 ]
 
 [tool.uv]

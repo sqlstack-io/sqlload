@@ -126,10 +126,17 @@ pub(crate) fn narrow_stream(rows: u64) -> CopyStream {
         let created = PG_2026_MICROS + ((id * 3 + h[5] % 3) * 1_000_000) as i64;
         copy_row(&[
             Some((id as i64).to_be_bytes().to_vec()),
-            Some(format!("customer {} {}", h[0] % 100_000, WORDS[(h[1] % 10) as usize]).into_bytes()),
+            Some(
+                format!(
+                    "customer {} {}",
+                    h[0] % 100_000,
+                    WORDS[(h[1] % 10) as usize]
+                )
+                .into_bytes(),
+            ),
             Some(created.to_be_bytes().to_vec()),
-            (h[2] % 20 != 0).then(|| numeric((h[2] % 10_000_000) as i64, 2)),
-            Some(vec![u8::from(h[3] % 3 != 0)]),
+            (!h[2].is_multiple_of(20)).then(|| numeric((h[2] % 10_000_000) as i64, 2)),
+            Some(vec![u8::from(!h[3].is_multiple_of(3))]),
             Some(((h[4] % 1000) as i32).to_be_bytes().to_vec()),
         ])
     };
@@ -139,31 +146,59 @@ pub(crate) fn narrow_stream(rows: u64) -> CopyStream {
 /// The wide table: 40 columns of integers, text, numeric(18,4), timestamps, dates, booleans, floats and two jsonb (read as text).
 pub(crate) fn wide_stream(rows: u64) -> CopyStream {
     let mut columns = vec![read_column("id", WireType::Int8, ColumnType::Int)];
-    for n in 1..=8 {
-        let wire = if n % 2 == 1 { WireType::Int4 } else { WireType::Int8 };
+    for n in 1..=8_u32 {
+        let wire = if !n.is_multiple_of(2) {
+            WireType::Int4
+        } else {
+            WireType::Int8
+        };
         columns.push(read_column(&format!("c_int_{n:02}"), wire, ColumnType::Int));
     }
     for n in 1..=9 {
-        columns.push(read_column(&format!("c_text_{n:02}"), WireType::Text, ColumnType::Text));
+        columns.push(read_column(
+            &format!("c_text_{n:02}"),
+            WireType::Text,
+            ColumnType::Text,
+        ));
     }
     for n in 1..=6 {
         let decimal = ColumnType::Decimal {
             precision: 18,
             scale: 4,
         };
-        columns.push(read_column(&format!("c_num_{n:02}"), WireType::Numeric, decimal));
+        columns.push(read_column(
+            &format!("c_num_{n:02}"),
+            WireType::Numeric,
+            decimal,
+        ));
     }
     for n in 1..=4 {
-        columns.push(read_column(&format!("c_ts_{n:02}"), WireType::Timestamp, ColumnType::TimestampTz));
+        columns.push(read_column(
+            &format!("c_ts_{n:02}"),
+            WireType::Timestamp,
+            ColumnType::TimestampTz,
+        ));
     }
     for n in 1..=2 {
-        columns.push(read_column(&format!("c_date_{n:02}"), WireType::Date, ColumnType::Date));
+        columns.push(read_column(
+            &format!("c_date_{n:02}"),
+            WireType::Date,
+            ColumnType::Date,
+        ));
     }
     for n in 1..=4 {
-        columns.push(read_column(&format!("c_bool_{n:02}"), WireType::Bool, ColumnType::Bool));
+        columns.push(read_column(
+            &format!("c_bool_{n:02}"),
+            WireType::Bool,
+            ColumnType::Bool,
+        ));
     }
     for n in 1..=4 {
-        columns.push(read_column(&format!("c_float_{n:02}"), WireType::Float8, ColumnType::Float));
+        columns.push(read_column(
+            &format!("c_float_{n:02}"),
+            WireType::Float8,
+            ColumnType::Float,
+        ));
     }
     for n in 1..=2 {
         let mut column = read_column(&format!("c_json_{n:02}"), WireType::Text, ColumnType::Json);
@@ -181,24 +216,38 @@ pub(crate) fn wide_stream(rows: u64) -> CopyStream {
             }));
         }
         for n in 1..=9_u64 {
-            let text = format!("{}-{}", WORDS[(h(90 + n) % 10) as usize], h(20 + n) % 100_000);
+            let text = format!(
+                "{}-{}",
+                WORDS[(h(90 + n) % 10) as usize],
+                h(20 + n) % 100_000
+            );
             fields.push(Some(text.into_bytes()));
         }
         for n in 1..=6_u64 {
-            fields.push((h(30 + n) % 25 != 0).then(|| numeric((h(30 + n) % 100_000_000) as i64, 4)));
+            fields.push(
+                (!h(30 + n).is_multiple_of(25))
+                    .then(|| numeric((h(30 + n) % 100_000_000) as i64, 4)),
+            );
         }
         for n in 1..=4_u64 {
-            let micros = PG_2026_MICROS - 31_536_000_000_000 + (h(40 + n) % 31_536_000) as i64 * 1_000_000;
+            let micros =
+                PG_2026_MICROS - 31_536_000_000_000 + (h(40 + n) % 31_536_000) as i64 * 1_000_000;
             fields.push(Some(micros.to_be_bytes().to_vec()));
         }
         for n in 1..=2_u64 {
-            fields.push(Some((7305 + (h(50 + n) % 3650) as i32).to_be_bytes().to_vec()));
+            fields.push(Some(
+                (7305 + (h(50 + n) % 3650) as i32).to_be_bytes().to_vec(),
+            ));
         }
         for n in 1..=4_u64 {
-            fields.push(Some(vec![u8::from(h(60 + n) % 2 == 0)]));
+            fields.push(Some(vec![u8::from(h(60 + n).is_multiple_of(2))]));
         }
         for n in 1..=4_u64 {
-            fields.push(Some(((h(70 + n) % 1_000_000) as f64 / 64.0).to_be_bytes().to_vec()));
+            fields.push(Some(
+                ((h(70 + n) % 1_000_000) as f64 / 64.0)
+                    .to_be_bytes()
+                    .to_vec(),
+            ));
         }
         let first = format!(
             r#"{{"n": {}, "meta": {{"k": "v{}"}}, "tags": [{}, {}]}}"#,
@@ -208,7 +257,14 @@ pub(crate) fn wide_stream(rows: u64) -> CopyStream {
             h(83) % 7
         );
         fields.push(Some(first.into_bytes()));
-        fields.push(Some(format!(r#"{{"n": {}, "ok": {}}}"#, h(85) % 1000, h(86) % 2 == 0).into_bytes()));
+        fields.push(Some(
+            format!(
+                r#"{{"n": {}, "ok": {}}}"#,
+                h(85) % 1000,
+                h(86).is_multiple_of(2)
+            )
+            .into_bytes(),
+        ));
         copy_row(&fields)
     };
     copy_stream(columns, (1..=rows).map(row))
@@ -220,14 +276,19 @@ pub(crate) fn narrow_batch(rows: u64) -> RecordBatch {
     let chunks = stream.chunks.iter().map(Vec::as_slice);
     let mut batches = decode_copy("public.narrow", stream.columns, chunks, usize::MAX)
         .unwrap_or_else(|error| panic!("the narrow stream decodes: {error}"));
-    batches.pop().unwrap_or_else(|| panic!("the narrow stream has rows"))
+    batches
+        .pop()
+        .unwrap_or_else(|| panic!("the narrow stream has rows"))
 }
 
 fn timestamp_text(seconds: u64) -> String {
     let (days, rest) = (seconds / 86_400, seconds % 86_400);
     let (hour, minute, second) = (rest / 3600, rest / 60 % 60, rest % 60);
     let (month, day) = (1 + days / 28 % 12, 1 + days % 28);
-    format!("{}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z", 2026 + days / 336)
+    format!(
+        "{}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z",
+        2026 + days / 336
+    )
 }
 
 /// The narrow rows as JSON objects with a nested `meta` object, one per line.
@@ -244,7 +305,7 @@ pub(crate) fn narrow_ndjson(first: u64, rows: u64) -> String {
                 h[0] % 100_000,
                 WORDS[(h[1] % 10) as usize],
                 timestamp_text(id * 3 + h[5] % 3),
-                h[3] % 3 != 0,
+                !h[3].is_multiple_of(3),
                 h[4] % 1000,
                 WORDS[(h[4] % 10) as usize],
                 h[0] % 7
@@ -267,7 +328,7 @@ pub(crate) fn narrow_csv(first: u64, rows: u64) -> String {
             h[0] % 100_000,
             WORDS[(h[1] % 10) as usize],
             timestamp_text(id * 3 + h[5] % 3),
-            h[3] % 3 != 0,
+            !h[3].is_multiple_of(3),
             h[4] % 1000
         ));
     }
@@ -319,16 +380,25 @@ pub(crate) fn flat_rows(rows: u64) -> Rows {
                 ("warehouse_id", Cell::Int((h[3] % 50) as i64)),
                 ("priority", Cell::Int((h[4] % 5) as i64)),
                 ("sku", Cell::Text(format!("SKU-{:05}", h[1] % 5_000))),
-                ("status", Cell::Text(STATUSES[(h[2] % 6) as usize].to_owned())),
-                ("customer_name", Cell::Text(format!("{} {}", WORDS[(h[0] % 10) as usize], h[0] % 997))),
+                (
+                    "status",
+                    Cell::Text(STATUSES[(h[2] % 6) as usize].to_owned()),
+                ),
+                (
+                    "customer_name",
+                    Cell::Text(format!("{} {}", WORDS[(h[0] % 10) as usize], h[0] % 997)),
+                ),
                 ("city", Cell::Text(WORDS[(h[5] % 10) as usize].to_owned())),
-                ("channel", Cell::Text(["web", "app", "partner"][(h[6] % 3) as usize].to_owned())),
+                (
+                    "channel",
+                    Cell::Text(["web", "app", "partner"][(h[6] % 3) as usize].to_owned()),
+                ),
                 ("unit_price", Cell::Float((h[5] % 100_000) as f64 / 100.0)),
                 ("discount", Cell::Float((h[6] % 5_000) as f64 / 100.0)),
                 ("tax", Cell::Float((h[7] % 2_000) as f64 / 100.0)),
                 ("weight_kg", Cell::Float((h[4] % 10_000) as f64 / 100.0)),
-                ("is_gift", Cell::Bool(h[7] % 7 == 0)),
-                ("is_priority", Cell::Bool(h[4] % 3 == 0)),
+                ("is_gift", Cell::Bool(h[7].is_multiple_of(7))),
+                ("is_priority", Cell::Bool(h[4].is_multiple_of(3))),
                 ("created_at", Cell::Text(timestamp_text(id * 7))),
                 ("updated_at", Cell::Text(timestamp_text(id * 7 + 3_600))),
                 (
