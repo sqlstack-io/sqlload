@@ -1,3 +1,7 @@
+use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
@@ -49,13 +53,6 @@ use crate::schema_plan::constants::LOADED_AT_COLUMN;
 use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::TableAction;
 use crate::similar_names::main::close_name::close_name;
-use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
-use crate::adapters::contract::main::cursor_text::cursor_text;
-use crate::adapters::contract::main::display_name::display_name;
-use crate::adapters::contract::main::qualified_name::qualified_name;
-use crate::adapters::contract::main::staging_changes::staging_changes;
-use crate::adapters::contract::main::stored_name::stored_name;
-use crate::adapters::contract::models::WriteMode;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
 use arrow_array::Date32Array;
@@ -142,7 +139,7 @@ pub(crate) fn with_live_columns(
 /// The name a table function most likely yields for live column `stored`: its lower-case form when the warehouse stores that as `stored` (upper case on Snowflake), else `stored` itself.
 pub(crate) fn source_spelling(stored: &str, spec: &TableSpec) -> String {
     let lower = stored.to_lowercase();
-    match stored_name(&lower, spec.warehouse) == stored {
+    match sql_adapter(spec.warehouse).stored_name(&lower) == stored {
         true => lower,
         false => stored.to_owned(),
     }
@@ -258,7 +255,7 @@ pub(crate) fn cursor_type_name(table: &TablePlan, column: &str) -> String {
 
 /// The schema changes the load made, one line each, as `apply` would print them.
 pub(crate) fn change_lines(table: &TablePlan) -> Vec<String> {
-    let name = display_name(&table.spec.destination, table.spec.warehouse);
+    let name = sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination);
     match &table.schema.action {
         TableAction::Create => vec![format!(
             "created  {name}  {} columns",
@@ -286,12 +283,12 @@ pub(crate) async fn refuse_emptying(
         destination => {
             let query = format!(
                 "SELECT 'x' FROM {} LIMIT 1",
-                qualified_name(&table.spec.destination, table.spec.warehouse)
+                sql_adapter(table.spec.warehouse).render_qualified_name(&table.spec.destination)
             );
             single_text(destination, query).await?.is_some()
         }
     };
-    let name = display_name(&table.spec.destination, table.spec.warehouse);
+    let name = sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination);
     match has_rows {
         true => Err(LoaderError::Invalid(
             EMPTY_REPLACE_PROBLEM.replace("{table}", &name),
@@ -758,10 +755,9 @@ impl PythonFeed {
             publisher.settle_rows().await?;
             publisher.reopen_rows();
             if let Some(staging) = &publisher.staging {
-                let changes = staging_changes(
+                let changes = sql_adapter(replanned.spec.warehouse).render_staging_changes(
                     staging,
                     (&old, &staged_columns(&replanned)),
-                    replanned.spec.warehouse,
                     publisher.started_with(),
                 );
                 execute_ddl(&publisher.destination, changes).await?;

@@ -1,9 +1,9 @@
 use chrono::{Duration as TimeDelta, NaiveDate, NaiveDateTime};
 
+use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
 use crate::batch_plan::constants::SECONDS_PER_DAY;
 use crate::batch_plan::models::{WindowPlan, WindowSplit, WindowStep};
 use crate::column_types::models::ColumnType;
-use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
 
 /// How many steps of `step` cover `span` (none when it is not positive).
 fn steps(span: i128, step: i128) -> u64 {

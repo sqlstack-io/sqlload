@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::column_types::models::{ColumnType, Warehouse};
+use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::DesiredColumn;
 
 /// A destination table.
@@ -35,7 +35,6 @@ pub enum WriteMode {
 /// Everything the statements of one write need.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteStatementsRequest<'a> {
-    pub warehouse: Warehouse,
     pub table: &'a TableName,
     /// The columns each row carries, `_sqlload_*` metadata included.
     pub columns: &'a [DesiredColumn],
@@ -62,7 +61,6 @@ pub struct CursorQuery<'a> {
     pub column: &'a str,
     pub column_type: &'a ColumnType,
     pub lookback: Option<Duration>,
-    pub warehouse: Warehouse,
 }
 
 /// How a cursor query's single value is turned into the lower bound.

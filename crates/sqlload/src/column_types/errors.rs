@@ -1,5 +1,3 @@
-use crate::column_types::models::Warehouse;
-
 /// Why a declared column type was rejected.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TypeError {
@@ -16,7 +14,7 @@ pub enum TypeError {
     )]
     WarehouseSpecific {
         written: String,
-        warehouse: Warehouse,
+        warehouse: &'static str,
         others: String,
         portable: String,
     },

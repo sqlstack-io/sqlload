@@ -1,3 +1,4 @@
+use crate::adapters::contract::models::TableName;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
@@ -8,7 +9,6 @@ use crate::project::models::{
     MaskMethod, SourceConfig, StateMode, TableOverride, TableSettings, WriteStrategy,
 };
 use crate::similar_names::main::nearest_name::nearest_name;
-use crate::adapters::contract::models::TableName;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
 use std::collections::BTreeMap;
 

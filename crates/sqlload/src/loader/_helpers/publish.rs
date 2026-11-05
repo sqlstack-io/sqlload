@@ -1,3 +1,28 @@
+use crate::adapters::contract::constants::BEGIN_STATEMENT;
+use crate::adapters::contract::constants::COMMIT_STATEMENT;
+use crate::adapters::contract::constants::SWAP_SUFFIX;
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::main::staging_id::staging_id;
+use crate::adapters::contract::models::TableName;
+use crate::adapters::contract::models::TableShape;
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::WriteStatementsRequest;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::files::main::clear_pending::clear_pending;
+use crate::adapters::files::main::close_writer::close_writer;
+use crate::adapters::files::main::mark_pending::mark_pending;
+use crate::adapters::files::main::open_writer::open_writer;
+use crate::adapters::files::main::partitions_finished::partitions_finished;
+use crate::adapters::files::main::write_rows::write_rows;
+use crate::adapters::files::models::FilesWriter;
+use crate::adapters::files::models::PartitionFolder;
+use crate::adapters::files::models::PendingPhase;
+use crate::adapters::files::models::PendingRun;
+use crate::adapters::files::models::ReplacedFiles;
+use crate::adapters::files::models::WriterRequest;
+use crate::adapters::snowflake::constants::STAGE_FOLDER;
+use crate::adapters::snowflake::main::copy_staged::copy_staged;
+use crate::adapters::snowflake::main::remove_staged::remove_staged;
 use crate::batch_plan::constants::BATCH_BYTES;
 use crate::batch_plan::main::cut_index::cut_index;
 use crate::batch_plan::main::last_value::last_value;
@@ -9,18 +34,6 @@ use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
 use crate::file_store::models::OpenFolder as StoreFolder;
-use crate::files_destination::main::clear_pending::clear_pending;
-use crate::files_destination::main::close_writer::close_writer;
-use crate::files_destination::main::mark_pending::mark_pending;
-use crate::files_destination::main::open_writer::open_writer;
-use crate::files_destination::main::partitions_finished::partitions_finished;
-use crate::files_destination::main::write_rows::write_rows;
-use crate::files_destination::models::FilesWriter;
-use crate::files_destination::models::PartitionFolder;
-use crate::files_destination::models::PendingPhase;
-use crate::files_destination::models::PendingRun;
-use crate::files_destination::models::ReplacedFiles;
-use crate::files_destination::models::WriterRequest;
 use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
@@ -64,8 +77,6 @@ use crate::parquet_parts::main::finish_part::finish_part;
 use crate::parquet_parts::main::write_part::write_part;
 use crate::parquet_parts::models::PartWriter;
 use crate::postgres_source::errors::PostgresError;
-use crate::run_log::constants::BEGIN_STATEMENT;
-use crate::run_log::constants::COMMIT_STATEMENT;
 use crate::run_log::main::insert_run::insert_run;
 use crate::run_log::main::record_object_name::record_object_name;
 use crate::run_log::main::runs_location::runs_location;
@@ -77,23 +88,8 @@ use crate::schema_plan::constants::LOADED_AT_COLUMN;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
-use crate::adapters::snowflake::constants::STAGE_FOLDER;
-use crate::adapters::snowflake::main::copy_staged::copy_staged;
-use crate::adapters::snowflake::main::remove_staged::remove_staged;
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
-use crate::adapters::contract::constants::SWAP_SUFFIX;
-use crate::adapters::contract::main::build_table::build_table;
-use crate::adapters::contract::main::commit_statements::commit_statements;
-use crate::adapters::contract::main::cursor_text::cursor_text;
-use crate::adapters::contract::main::qualified_name::qualified_name;
-use crate::adapters::contract::main::staging_changes::staging_changes;
-use crate::adapters::contract::main::staging_id::staging_id;
-use crate::adapters::contract::main::staging_table::staging_table;
-use crate::adapters::contract::models::TableName;
-use crate::adapters::contract::models::TableShape;
-use crate::adapters::contract::models::WriteMode;
-use crate::adapters::contract::models::WriteStatementsRequest;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
@@ -111,32 +107,29 @@ use std::sync::Arc;
 use flate2::Compression as GzipLevel;
 use flate2::write::GzEncoder;
 
-use crate::column_types::models::Warehouse;
-use crate::external_stage::constants::MAX_COPY_SQL_BYTES;
-use crate::external_stage::main::direct_copies::direct_copies;
-use crate::external_stage::main::route_reference::route_reference;
-use crate::external_stage::main::stage_reference::stage_reference;
-use crate::external_stage::models::{CopyColumn, CopyValue, DirectCopy};
-use crate::file_store::main::write_file::write_file as write_stage_file;
-use crate::loader::_helpers::table_plan::{copy_columns, direct_check, is_direct};
-use crate::loader::models::{DirectLoaded, RowStream, TableSpec};
-use crate::project::models::MaskMethod;
-use crate::row_batches::main::text_rows::text_rows;
+use crate::adapters::snowflake::constants::MAX_COPY_SQL_BYTES;
 use crate::adapters::snowflake::constants::{
     EXTERNAL_STAGE_FOLDER, STREAM_COMMIT_WAIT_SECS, STREAM_PIPE_SUFFIX, STREAM_POLL_MILLIS,
     STREAM_REQUEST_BYTES,
 };
 use crate::adapters::snowflake::main::copy_rows::copy_rows;
+use crate::adapters::snowflake::main::direct_copies::direct_copies;
+use crate::adapters::snowflake::main::route_reference::route_reference;
 use crate::adapters::snowflake::main::script_copy_rows::script_copy_rows;
+use crate::adapters::snowflake::main::stage_reference::stage_reference;
 use crate::adapters::snowflake::main::streaming_client::streaming_client;
+use crate::adapters::snowflake::models::{CopyColumn, CopyValue, DirectCopy};
 use crate::adapters::snowflake::models::{CopyStaged, StageRoute, StagedFile};
+use crate::column_types::models::Warehouse;
+use crate::file_store::main::write_file::write_file as write_stage_file;
+use crate::loader::_helpers::table_plan::{copy_columns, direct_check, is_direct};
+use crate::loader::models::{DirectLoaded, RowStream, TableSpec};
+use crate::project::models::MaskMethod;
+use crate::row_batches::main::text_rows::text_rows;
 use crate::streaming_api::main::append_rows::append_rows as append_stream_rows;
 use crate::streaming_api::main::channel_statuses::channel_statuses;
 use crate::streaming_api::main::open_channel::open_channel;
 use crate::streaming_api::models::AppendRequest;
-use crate::adapters::contract::main::insert_rows::insert_rows;
-use crate::adapters::contract::main::sql_literal::sql_literal;
-use crate::adapters::contract::main::stored_name::stored_name;
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`); on Snowflake, a route loading files into the table itself (streaming, `INSERT` and a staging table's stage all go through staging); elsewhere always, as appending a batch converts its JSON and UUIDs.
 fn writes_directly(table: &TablePlan, destination: &Destination) -> bool {
@@ -261,26 +254,27 @@ impl Publisher {
                     .live
                     .as_deref()
                     .filter(|_| table.mode == WriteMode::Recreate);
-                let (build, create) = build_table(
+                let adapter = sql_adapter(table.spec.warehouse);
+                let build = adapter.staging_relation_name(&table.spec.destination, &id);
+                let create = adapter.render_create_build_table(
+                    &build,
                     &table.spec.destination,
                     (
                         &table.schema.write_columns,
                         differing,
                         shape.as_ref().map(|shape| shape.definition.as_str()),
                     ),
-                    &id,
-                    table.spec.warehouse,
                 );
                 execute_ddl(&destination, create).await?;
                 Some(build)
             }
             false => {
-                let (staging, create) = staging_table(
-                    &table.spec.destination,
-                    &staged_columns(&table),
-                    &staging_id(&load_id, chrono::Utc::now().naive_utc()),
-                    table.spec.warehouse,
-                );
+                let (staging, create) = sql_adapter(table.spec.warehouse)
+                    .render_create_staging_table(
+                        &table.spec.destination,
+                        &staged_columns(&table),
+                        &staging_id(&load_id, chrono::Utc::now().naive_utc()),
+                    );
                 execute_ddl(&destination, vec![create]).await?;
                 Some(staging)
             }
@@ -442,7 +436,12 @@ impl Publisher {
             };
             let drops: Vec<String> = [staging.clone(), aside]
                 .iter()
-                .map(|table| format!("DROP TABLE IF EXISTS {}", qualified_name(table, warehouse)))
+                .map(|table| {
+                    format!(
+                        "DROP TABLE IF EXISTS {}",
+                        sql_adapter(warehouse).render_qualified_name(table)
+                    )
+                })
                 .collect();
             if let Err(error) = execute_ddl(&self.destination, drops).await {
                 tracing::warn!(%error, table = %staging.table, "cannot drop the staging table");
@@ -527,7 +526,9 @@ impl Publisher {
         match self.stream.as_mut() {
             Some(stream) => stream.send(&in_batch, &rows).await,
             None => {
-                for statement in insert_rows(&staging, &in_batch, &rows, Warehouse::Snowflake) {
+                for statement in
+                    sql_adapter(Warehouse::Snowflake).render_insert_rows(&staging, &in_batch, &rows)
+                {
                     execute(&self.destination, vec![statement]).await?;
                 }
                 Ok(())
@@ -546,7 +547,7 @@ impl Publisher {
         let client = streaming_client(snowflake, staging);
         let pipe = format!(
             "{}{STREAM_PIPE_SUFFIX}",
-            stored_name(&staging.table, Warehouse::Snowflake)
+            sql_adapter(Warehouse::Snowflake).stored_name(&staging.table)
         );
         let channel = format!("sqlload_{}", self.load_id.replace('-', "_"));
         match (open_channel(&client, &pipe, &channel).await, &self.route) {
@@ -736,14 +737,13 @@ impl Publisher {
             };
         let literals = (self.load_id.as_str(), self.loaded_at.as_str());
         if hashes {
-            let (staging, create) = staging_table(
+            let (staging, create) = sql_adapter(Warehouse::Snowflake).render_create_staging_table(
                 &spec.destination,
                 &staged_columns(&self.table),
                 &format!(
                     "{}_hashed",
                     staging_id(&self.load_id, chrono::Utc::now().naive_utc())
                 ),
-                Warehouse::Snowflake,
             );
             let create = create.replacen("TRANSIENT TABLE", "TEMPORARY TABLE", 1);
             let columns = filled_columns(spec, read, &staged_as_text(&self.table), literals);
@@ -759,9 +759,8 @@ impl Publisher {
                 Some(_) => WriteMode::Append,
                 None => commit_mode(&self.table.mode, Some(range.clone())),
             };
-            let write = commit_statements(
+            let write = sql_adapter(spec.warehouse).render_commit(
                 &WriteStatementsRequest {
-                    warehouse: Warehouse::Snowflake,
                     table: build.as_ref().unwrap_or(&spec.destination),
                     columns: &self.table.schema.write_columns,
                     mode: &mode,
@@ -776,7 +775,7 @@ impl Publisher {
             script.extend(write);
             script.push(format!(
                 "DROP TABLE IF EXISTS {}",
-                qualified_name(&staging, Warehouse::Snowflake)
+                sql_adapter(Warehouse::Snowflake).render_qualified_name(&staging)
             ));
             if script
                 .iter()
@@ -853,9 +852,8 @@ impl Publisher {
             None => None,
         };
         let spec = &self.table.spec;
-        let statements = commit_statements(
+        let statements = sql_adapter(warehouse).render_commit(
             &WriteStatementsRequest {
-                warehouse,
                 table: &spec.destination,
                 columns: &self.table.schema.write_columns,
                 mode: &mode,
@@ -991,10 +989,9 @@ impl Publisher {
             execute_ddl(&self.destination, statements).await?;
         }
         if let Some(staging) = &self.staging {
-            let changes = staging_changes(
+            let changes = sql_adapter(replanned.spec.warehouse).render_staging_changes(
                 staging,
                 (&old, &staged_columns(&replanned)),
-                replanned.spec.warehouse,
                 self.started_with(),
             );
             execute_ddl(&self.destination, changes).await?;
@@ -1269,10 +1266,12 @@ fn filled_columns(
         let found = from_files.iter().find(|found| found.name == column.name);
         let value = match (found, column.name.as_str()) {
             (Some(found), _) => found.value.clone(),
-            (None, LOAD_ID_COLUMN) => CopyValue::Literal(sql_literal(load_id, snowflake)),
+            (None, LOAD_ID_COLUMN) => {
+                CopyValue::Literal(sql_adapter(snowflake).render_loader_value_literal(load_id))
+            }
             (None, LOADED_AT_COLUMN) => CopyValue::Literal(format!(
                 "CAST({} AS TIMESTAMP_TZ(6))",
-                sql_literal(loaded_at, snowflake)
+                sql_adapter(snowflake).render_loader_value_literal(loaded_at)
             )),
             (None, _) => CopyValue::Literal("NULL".to_owned()),
         };
@@ -1294,7 +1293,7 @@ impl RowStream {
     ) -> Result<(), LoaderError> {
         let keys: Vec<String> = columns
             .iter()
-            .map(|column| stored_name(&column.name, Warehouse::Snowflake))
+            .map(|column| sql_adapter(Warehouse::Snowflake).stored_name(&column.name))
             .collect();
         let mut body: Vec<u8> = Vec::new();
         for row in rows {

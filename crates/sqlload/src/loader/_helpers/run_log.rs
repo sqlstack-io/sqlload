@@ -3,12 +3,14 @@ use std::cmp::Ordering;
 use arrow_array::RecordBatch;
 use bytes::Bytes;
 
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::files::models::PendingPhase;
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
-use crate::files_destination::models::PendingPhase;
 use crate::loader::_helpers::destination::{ddl_guard, execute, live_columns, text_values};
 use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::errors::LoaderError;
@@ -29,8 +31,6 @@ use crate::run_log::models::{
 };
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
-use crate::adapters::contract::main::cursor_text::cursor_text;
-use crate::adapters::contract::models::WriteMode;
 
 /// Every record of the table, oldest first, and those that cannot be used, none when the log does not exist (never written, or deleted); and whether a warehouse's `_sqlload_runs` exists.
 pub(crate) async fn read_run_log(

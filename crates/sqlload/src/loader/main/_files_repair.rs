@@ -1,11 +1,11 @@
 //! Repair a files table's unfinished loads and work out what the next write replaces.
 
+use crate::adapters::files::main::plan_replaced_files::plan_replaced_files;
+use crate::adapters::files::main::read_table_state::read_table_state;
+use crate::adapters::files::main::repair_table::repair_table;
+use crate::adapters::files::models::{ReplaceRequest, ReplacedFiles, TableFiles, TablePath};
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::OpenFolder;
-use crate::files_destination::main::plan_replaced_files::plan_replaced_files;
-use crate::files_destination::main::read_table_state::read_table_state;
-use crate::files_destination::main::repair_table::repair_table;
-use crate::files_destination::models::{ReplaceRequest, ReplacedFiles, TableFiles, TablePath};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{FilesOutput, TablePlan};
 

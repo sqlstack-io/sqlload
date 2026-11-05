@@ -1,12 +1,10 @@
-use crate::column_types::models::{ColumnType, Warehouse};
-use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
-use crate::adapters::contract::_helpers::promote::promote_statements;
-use crate::adapters::contract::main::build_table::build_table;
-use crate::adapters::contract::main::staging_changes::staging_changes;
 use crate::adapters::contract::tests::helpers::{accounts, columns};
 use crate::adapters::contract::tests::test_types::{
     BuildTableTestCase, KeptColumnsTestCase, PromoteTestCase,
 };
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::column_types::models::{ColumnType, Warehouse};
+use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 
 const SF_BUILD: &str = "\"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
 const DUCK_BUILD: &str = "\"raw\".\"app__accounts__sqlload_staging_load1\"";
@@ -78,11 +76,12 @@ fn given_a_replace_when_building_the_table_then_it_has_the_tables_own_types_and_
         },
     ];
     for test_case in test_cases {
-        let (_, statements) = build_table(
+        let adapter = sql_adapter(test_case.warehouse);
+        let build = adapter.staging_relation_name(&accounts(), "load-1");
+        let statements = adapter.render_create_build_table(
+            &build,
             &accounts(),
             (&columns(), test_case.live.as_deref(), test_case.definition),
-            "load-1",
-            test_case.warehouse,
         );
         assert_eq!(
             statements, test_case.expected_statements,
@@ -117,13 +116,12 @@ fn given_a_finished_build_table_when_promoting_then_no_row_is_copied() {
     ];
     for test_case in test_cases {
         let warehouse = test_case.warehouse;
-        let (build, _) = build_table(&accounts(), (&columns(), None, None), "load-1", warehouse);
+        let build = sql_adapter(warehouse).staging_relation_name(&accounts(), "load-1");
         assert_eq!(
-            promote_statements(
+            sql_adapter(warehouse).render_swap(
                 &accounts(),
                 &build,
                 &["CREATE INDEX ix ON raw.app__accounts(id)".to_owned()],
-                warehouse
             ),
             test_case.expected_statements,
             "{}",
@@ -152,7 +150,7 @@ fn given_a_build_table_when_a_column_arrives_mid_load_then_it_takes_the_final_ty
     ];
     for test_case in test_cases {
         let warehouse = test_case.warehouse;
-        let (build, _) = build_table(&accounts(), (&columns(), None, None), "load-1", warehouse);
+        let build = sql_adapter(warehouse).staging_relation_name(&accounts(), "load-1");
         let new = columns();
         let old: Vec<DesiredColumn> = new
             .iter()
@@ -160,7 +158,7 @@ fn given_a_build_table_when_a_column_arrives_mid_load_then_it_takes_the_final_ty
             .cloned()
             .collect();
         assert_eq!(
-            staging_changes(&build, (&old, &new), warehouse, Some(&[])),
+            sql_adapter(warehouse).render_staging_changes(&build, (&old, &new), Some(&[])),
             test_case.expected_statements,
             "{}",
             test_case.description
@@ -199,12 +197,11 @@ fn given_a_build_table_holding_a_column_the_source_lacks_when_changing_it_then_t
     ];
     for test_case in test_cases {
         let warehouse = Warehouse::Snowflake;
-        let (build, _) = build_table(&accounts(), (&columns(), None, None), "load-1", warehouse);
+        let build = sql_adapter(warehouse).staging_relation_name(&accounts(), "load-1");
         assert_eq!(
-            staging_changes(
+            sql_adapter(warehouse).render_staging_changes(
                 &build,
                 (&old, &test_case.new),
-                warehouse,
                 Some(std::slice::from_ref(&note))
             ),
             test_case.expected_statements,

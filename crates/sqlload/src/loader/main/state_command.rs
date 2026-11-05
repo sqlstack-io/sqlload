@@ -1,5 +1,6 @@
 //! `sqlload state`: show, verify, reconcile or reset the run log of the selected logged tables.
 
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use std::collections::BTreeMap;
 
 use crate::loader::_helpers::run_log::{append_run, reconcile_record, reset_record};
@@ -8,7 +9,6 @@ use crate::loader::models::{Destination, ProjectPlan, StateKind, StateRequest};
 use crate::run_log::main::describe_state::describe_state;
 use crate::run_log::main::unreadable_line::unreadable_line;
 use crate::run_log::models::RunRecord;
-use crate::adapters::contract::main::display_name::display_name;
 
 /// The command's lines, and whether it succeeded (`verify` fails when a log disagrees with its data); `reconcile` and `reset` append only with `request.append`.
 pub async fn state_command(
@@ -19,7 +19,7 @@ pub async fn state_command(
     let mut lines: Vec<String> = Vec::new();
     let mut ok = true;
     for table in plan.tables.iter().filter(|table| table.spec.logged) {
-        let name = display_name(&table.spec.destination, table.spec.warehouse);
+        let name = sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination);
         let Some(logged) = &table.logged else {
             ok = false;
             lines.push(format!(

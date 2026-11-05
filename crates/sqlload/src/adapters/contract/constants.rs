@@ -27,3 +27,9 @@ pub const MAX_INSERT_ROWS: usize = 16_384;
 
 /// The longest `INSERT` built, below Snowflake's 1 MB limit on statement text.
 pub const MAX_INSERT_SQL_BYTES: usize = 900 * 1024;
+
+/// The statement opening a transaction.
+pub const BEGIN_STATEMENT: &str = "BEGIN";
+
+/// The statement committing a transaction.
+pub const COMMIT_STATEMENT: &str = "COMMIT";

@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::batch_plan::models::{FileGroup, WindowPlan};
-use crate::column_types::models::{ColumnType, Warehouse};
+use crate::adapters::contract::models::{TableName, WriteMode};
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::models::DuckDbDestination;
-use crate::external_stage::models::PlannedStage;
-use crate::file_store::models::OpenFolder;
-use crate::files_destination::models::{
+use crate::adapters::files::models::{
     FilesDestination, FilesWriter, PartitionFolder, PendingLoad, ReplacedFiles, TableFiles,
     TablePath, TableState,
 };
+use crate::adapters::snowflake::models::PlannedStage;
+use crate::adapters::snowflake::models::{SnowflakeDestination, StageRoute};
+use crate::batch_plan::models::{FileGroup, WindowPlan};
+use crate::column_types::models::{ColumnType, Warehouse};
+use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, Footer, TextChecks};
 use crate::masking::models::MaskRules;
 use crate::parquet_parts::models::PartWriter;
@@ -26,11 +28,9 @@ use crate::run_log::main::later_cursor::later_cursor;
 use crate::run_log::main::next_stamp::next_stamp;
 use crate::run_log::models::{RunOutcome, RunRecord, UnreadableRecord};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
-use crate::adapters::snowflake::models::{SnowflakeDestination, StageRoute};
 use crate::stage_api::models::StageInfo;
 use crate::store_paths::models::Location;
 use crate::streaming_api::models::StreamingClient;
-use crate::adapters::contract::models::{TableName, WriteMode};
 
 /// Where a setting's value came from, for `plan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

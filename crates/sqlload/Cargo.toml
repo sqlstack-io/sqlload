@@ -101,8 +101,8 @@ path = "tests/exporter.rs"
 required-features = ["container-tests"]
 
 [[test]]
-name = "external_stage"
-path = "tests/external_stage.rs"
+name = "adapters"
+path = "tests/adapters.rs"
 required-features = ["container-tests"]
 
 [[test]]

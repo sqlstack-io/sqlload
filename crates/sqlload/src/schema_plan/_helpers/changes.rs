@@ -1,5 +1,4 @@
-use crate::column_types::main::type_fit::type_fit;
-use crate::column_types::main::warehouse_type::warehouse_type;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use crate::column_types::models::{TypeFit, Warehouse};
 use crate::project::models::{OnSchemaChange, Policy};
 use crate::schema_plan::constants::ALLOW_REBUILD_FLAG;
@@ -22,7 +21,9 @@ pub(crate) struct ColumnDecision {
 pub(crate) fn missing_column(column: &DesiredColumn, rules: SchemaRules) -> ColumnDecision {
     let add = || ColumnChange::Add {
         column: column.clone(),
-        sql_type: warehouse_type(&column.column_type, rules.warehouse).sql,
+        sql_type: sql_adapter(rules.warehouse)
+            .render_loader_logical_type(&column.column_type)
+            .sql,
     };
     let declared = matches!(column.origin, ColumnOrigin::Pinned | ColumnOrigin::Metadata);
     match rules.on_schema_change {
@@ -64,7 +65,7 @@ pub(crate) fn existing_column(
         ..ColumnDecision::default()
     };
     match (
-        type_fit(&column.column_type, &live.column_type, rules.warehouse),
+        sql_adapter(rules.warehouse).type_fit(&column.column_type, &live.column_type),
         rules.warehouse,
     ) {
         (TypeFit::Fits, _) => written,

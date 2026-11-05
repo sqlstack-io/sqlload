@@ -1,8 +1,8 @@
 use crate::column_types::models::Warehouse;
 use std::time::Duration;
 
-use crate::column_types::models::ColumnType;
 use crate::adapters::contract::models::{CursorValue, WriteMode};
+use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit};
 
 pub(crate) struct WriteStatementsTestCase {
     pub(crate) description: &'static str,
@@ -91,4 +91,27 @@ pub(crate) struct KeptColumnsTestCase {
     pub(crate) description: &'static str,
     pub(crate) new: Vec<crate::schema_plan::models::DesiredColumn>,
     pub(crate) expected_statements: Vec<String>,
+}
+
+pub(crate) struct WarehouseTypeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) column_type: ColumnType,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) expected_sql: &'static str,
+    pub(crate) expected_lossy: bool,
+}
+
+pub(crate) struct LiveTypeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) live: LiveColumnType,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) expected_type: ColumnType,
+}
+
+pub(crate) struct TypeFitTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) desired: ColumnType,
+    pub(crate) live: ColumnType,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) expected_fit: TypeFit,
 }

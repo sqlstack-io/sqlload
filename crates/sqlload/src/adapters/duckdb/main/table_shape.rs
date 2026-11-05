@@ -1,10 +1,10 @@
 //! Read what a table's rebuild must keep.
 
+use crate::adapters::contract::models::{TableName, TableShape};
 use crate::adapters::duckdb::_helpers::blocking::with_connection;
 use crate::adapters::duckdb::constants::{DEFINITION_QUERY, INDEXES_QUERY};
 use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbDestination;
-use crate::adapters::contract::models::{TableName, TableShape};
 
 /// `table`'s columns and constraints as DuckDB would create them, and its indexes' statements; `None` when there is no such table.
 pub async fn table_shape(

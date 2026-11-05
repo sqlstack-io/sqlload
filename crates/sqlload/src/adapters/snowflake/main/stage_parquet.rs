@@ -1,7 +1,7 @@
 //! Upload a Parquet file to an internal stage.
 
-use crate::http::errors::ApiError;
 use crate::adapters::snowflake::models::{SnowflakeDestination, StagedFile};
+use crate::http::errors::ApiError;
 use crate::stage_api::main::put_stage_file::put_stage_file;
 use crate::stage_api::models::{PutOutcome, StageInfo};
 

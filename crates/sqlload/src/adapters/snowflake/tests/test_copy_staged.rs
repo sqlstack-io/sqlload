@@ -1,6 +1,6 @@
-use crate::column_types::models::ColumnType;
 use crate::adapters::snowflake::tests::helpers::{copies, selecting_copy};
 use crate::adapters::snowflake::tests::test_types::{CopyStagedTestCase, SelectingCopyTestCase};
+use crate::column_types::models::ColumnType;
 
 const ONE_FILE: &str = "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" FROM @~/sqlload/load-1/00001/ FILES = ('part-00001.parquet') FILE_FORMAT = (TYPE = PARQUET USE_LOGICAL_TYPE = TRUE BINARY_AS_TEXT = FALSE) MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE ON_ERROR = ABORT_STATEMENT FORCE = TRUE";
 

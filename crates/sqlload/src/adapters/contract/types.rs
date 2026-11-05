@@ -1,0 +1,307 @@
+//! The warehouse adapter contract, after sqlbuild's `StrictAdapter` and `BaseAdapter`: the shared rendering is the default, and each warehouse overrides what its SQL does differently.
+
+use chrono::NaiveDateTime;
+
+use crate::adapters::contract::_helpers::identifiers::{
+    exact_identifier, qualified, source_expression_cast, staging_type, string_literal,
+};
+use crate::adapters::contract::_helpers::logged::{commit_statements, logged_statements};
+use crate::adapters::contract::_helpers::promote::{
+    drop_and_rename, merge_statement, swap_statements,
+};
+use crate::adapters::contract::_helpers::queries::{
+    cursor_query, insert_rows, loaded_files_query, staging_tables_query, staging_time,
+    stale_staging,
+};
+use crate::adapters::contract::_helpers::recreate::recreate_statements;
+use crate::adapters::contract::_helpers::schema::{
+    alter_statements, build_table, create_schema, create_table, staging_changes, staging_name,
+    staging_table,
+};
+use crate::adapters::contract::_helpers::type_fit::type_fit;
+use crate::adapters::contract::_helpers::write::write_statements;
+use crate::adapters::contract::models::{
+    CursorQuery, CursorRead, CursorValue, TableName, WriteStatementsRequest,
+};
+use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
+use crate::schema_plan::models::{ColumnChange, DesiredColumn, LiveColumn};
+
+/// What a warehouse's SQL looks like. Pure rendering, with no I/O; names follow sqlbuild's adapter contract.
+pub trait SqlAdapter: Sync + std::fmt::Debug {
+    /// The warehouse this adapter renders for.
+    fn warehouse(&self) -> Warehouse;
+
+    /// How the warehouse spells `column_type` in DDL, and what is lost if it cannot hold it exactly.
+    fn render_loader_logical_type(&self, column_type: &ColumnType) -> WarehouseType;
+
+    /// The portable type of a live column the information schema reports; `native(...)` when it has none.
+    fn live_type(&self, live: &LiveColumnType) -> ColumnType {
+        ColumnType::Native(live.data_type.clone())
+    }
+
+    /// Whether the warehouse changes a `live` column to `target` without rewriting the table.
+    fn widens_in_place(&self, _live: &ColumnType, _target: &ColumnType) -> bool {
+        false
+    }
+
+    /// Whether `live` holds every `desired` value, can be widened to, or cannot.
+    fn type_fit(&self, desired: &ColumnType, live: &ColumnType) -> TypeFit {
+        type_fit(self, desired, live)
+    }
+
+    /// `name` as the warehouse stores it and reports it in its information schema.
+    fn stored_name(&self, name: &str) -> String {
+        name.to_owned()
+    }
+
+    /// Whether the live column `live` is the one stored as `stored`.
+    fn is_stored_as(&self, live: &str, stored: &str) -> bool {
+        live.eq_ignore_ascii_case(stored)
+    }
+
+    /// `name` quoted, as the warehouse stores it.
+    fn render_identifier(&self, name: &str) -> String {
+        exact_identifier(&self.stored_name(name))
+    }
+
+    /// A live name, quoted exactly as the warehouse reports it.
+    fn render_exact_identifier(&self, name: &str) -> String {
+        exact_identifier(name)
+    }
+
+    /// A fully qualified table name.
+    fn render_qualified_name(&self, table: &TableName) -> String {
+        qualified(self, table)
+    }
+
+    /// `text` as a SQL string literal.
+    fn render_loader_value_literal(&self, text: &str) -> String {
+        string_literal(text)
+    }
+
+    /// `SCHEMA.TABLE` as `plan` prints it, the way the warehouse stores the names.
+    fn render_display_name(&self, table: &TableName) -> String {
+        format!("{}.{}", table.schema, table.table)
+    }
+
+    /// The type a staging column has: what the loaded files or batches carry (JSON and UUIDs as text).
+    fn render_staging_type(&self, column_type: &ColumnType) -> String {
+        staging_type(self, column_type)
+    }
+
+    /// The expression turning staging column `name` into the table's type.
+    fn render_source_expression_cast(&self, name: &str, column_type: &ColumnType) -> String {
+        source_expression_cast(self, name, column_type)
+    }
+
+    /// `CREATE SCHEMA IF NOT EXISTS` for `table`'s schema.
+    fn render_create_schema(&self, table: &TableName) -> String {
+        create_schema(self, table)
+    }
+
+    /// `CREATE TABLE IF NOT EXISTS` with every column nullable.
+    fn render_create_table(&self, table: &TableName, columns: &[DesiredColumn]) -> String {
+        create_table(self, table, columns)
+    }
+
+    /// The table kind a load's staging table is created as.
+    fn staging_table_kind(&self) -> &'static str {
+        "TABLE"
+    }
+
+    /// The staging or build table for `table` under `staging_id`.
+    fn staging_relation_name(&self, table: &TableName, staging_id: &str) -> TableName {
+        staging_name(table, staging_id)
+    }
+
+    /// The staging table for `table` under `staging_id`, and the statement creating it with `columns` (the `_sqlload_*` metadata included, which the staged batches carry).
+    fn render_create_staging_table(
+        &self,
+        table: &TableName,
+        columns: &[DesiredColumn],
+        staging_id: &str,
+    ) -> (TableName, String) {
+        staging_table(self, table, columns, staging_id)
+    }
+
+    /// The statements creating `build` in `table`'s own shape, so batches land in their final form, what the destination added stays, and the swap copies nothing: from the table's `definition` by default. A `--reload` passes the `differing` live columns, as it rebuilds with the current columns.
+    fn render_create_build_table(
+        &self,
+        build: &TableName,
+        table: &TableName,
+        shape: (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
+    ) -> Vec<String> {
+        build_table(self, build, table, shape)
+    }
+
+    /// The statement changing `column` of `target` to `sql_type` in place.
+    fn render_alter_column_type(&self, target: &str, column: &str, sql_type: &str) -> String {
+        format!("ALTER TABLE {target} ALTER COLUMN {column} TYPE {sql_type}")
+    }
+
+    /// The statements applying `changes` to `table`, whose current columns are `live`.
+    fn render_change_columns(
+        &self,
+        table: &TableName,
+        changes: &[ColumnChange],
+        live: &[LiveColumn],
+    ) -> Vec<String> {
+        alter_statements(self, table, changes, live)
+    }
+
+    /// Whether a staging table's changed types are cast by rewriting it rather than altered in place.
+    fn widens_staging_by_rebuild(&self) -> bool {
+        false
+    }
+
+    /// The statements changing `staging`, made for `old` columns, to hold `new` ones; none when nothing changed. A build table (`built`, the table's live columns it started with) holds the table's own types, and those live columns stay.
+    fn render_staging_changes(
+        &self,
+        staging: &TableName,
+        columns: (&[DesiredColumn], &[DesiredColumn]),
+        built: Option<&[LiveColumn]>,
+    ) -> Vec<String> {
+        staging_changes(self, staging, columns, built)
+    }
+
+    /// Promote the finished build table in place of `target` with no row copied (sqlbuild's staged promotion): by default the old table is dropped and the new one renamed in one transaction, then `indexes` are re-created.
+    fn render_swap(
+        &self,
+        target: &TableName,
+        build: &TableName,
+        indexes: &[String],
+    ) -> Vec<String> {
+        drop_and_rename(self, target, build, indexes)
+    }
+
+    /// One `MERGE`: key matches update every other column, the rest are inserted.
+    fn render_merge(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        unique_key: &[String],
+        source: &str,
+        values: &[String],
+    ) -> String {
+        merge_statement(self, request, unique_key, (source, values))
+    }
+
+    /// `replace` from rows that arrived as text: build a copy beside the table, then swap it in.
+    fn render_replace(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+        insert_from: &str,
+    ) -> Vec<String> {
+        swap_statements(self, request, staging, insert_from)
+    }
+
+    /// Rebuild the table from `source` in one statement, so readers never see it empty (`--reload`).
+    fn render_replace_table_from_relation(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        source: &str,
+        values: &[String],
+    ) -> Vec<String> {
+        recreate_statements(self, request, source, values)
+    }
+
+    /// Atomic statements applying `request.mode` from `staging`, which holds every column, the `_sqlload_*` metadata included; the caller drops `staging` and its swap table.
+    fn render_write(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+    ) -> Vec<String> {
+        write_statements(self, request, staging)
+    }
+
+    /// Whether `statement`, run alone, commits by itself, so a run record cannot share its transaction.
+    fn commits_alone(&self, _statement: &str) -> bool {
+        false
+    }
+
+    /// `statements` with `insert` inside their transaction where the warehouse allows it, so the record commits with the data; otherwise after them.
+    fn render_logged(&self, statements: Vec<String>, insert: String) -> Vec<String> {
+        logged_statements(self, statements, insert)
+    }
+
+    /// The write of `request` from `staging`, with a logged table's run record insert and (unless the staging table is swapped in or rebuilt from at the end) the emptying of the staging table for the next batches.
+    fn render_commit(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+        record: (Option<String>, bool),
+    ) -> Vec<String> {
+        commit_statements(self, request, staging, record)
+    }
+
+    /// `INSERT` statements adding `rows` (each value as text, in `columns`' order) to staging table `table`, in statements of bounded size, each value cast to its column's type.
+    fn render_insert_rows(
+        &self,
+        table: &TableName,
+        columns: &[DesiredColumn],
+        rows: &[Vec<Option<String>>],
+    ) -> Vec<String> {
+        insert_rows(self, table, columns, rows)
+    }
+
+    /// The text of a cursor's maximum `column`, read as `value`, independent of session time zones and output formats.
+    fn render_cursor_text(&self, column: &str, value: CursorValue) -> String {
+        match value {
+            CursorValue::EpochMicros { .. } => format!("CAST(epoch_us(MAX({column})) AS VARCHAR)"),
+            CursorValue::Date => format!("strftime(MAX({column}), '%Y-%m-%d')"),
+            CursorValue::Plain => format!("CAST(MAX({column}) AS VARCHAR)"),
+        }
+    }
+
+    /// A query for a cursor's maximum and how to read it; `None` if a lookback needs a time column.
+    fn render_max_cursor(&self, request: &CursorQuery<'_>) -> Option<CursorRead> {
+        cursor_query(self, request)
+    }
+
+    /// `SELECT DISTINCT file || '|' || version`; without a version column, just the file names.
+    fn render_loaded_files_query(
+        &self,
+        table: &TableName,
+        file_column: &str,
+        version_column: Option<&str>,
+    ) -> String {
+        loaded_files_query(self, table, file_column, version_column)
+    }
+
+    /// The condition choosing staging tables a crashed load may have left, by name (`_` matches any character).
+    fn render_staging_filter(&self, suffix: &str) -> String {
+        format!(
+            "table_name ILIKE {}",
+            self.render_loader_value_literal(&format!("%{suffix}%"))
+        )
+    }
+
+    /// The query listing staging tables a crashed load may have left in `table`'s schema; `database` is the connection's, for warehouses that need one.
+    fn list_staging_relations_sql(&self, table: &TableName, database: Option<&str>) -> String {
+        staging_tables_query(self, table, database)
+    }
+
+    /// Whether the listed staging table `name` is a crashed load's: by default, the time in its name is before `before`.
+    fn is_stale_staging(&self, name: &str, before: NaiveDateTime) -> bool {
+        staging_time(name).is_some_and(|time| time < before)
+    }
+
+    /// `DROP` statements for the stale staging tables among `found`, in `schema_of`'s schema.
+    fn render_stale_staging(
+        &self,
+        schema_of: &TableName,
+        found: &[String],
+        before: NaiveDateTime,
+    ) -> Vec<String> {
+        stale_staging(self, schema_of, found, before)
+    }
+
+    /// `CREATE TABLE IF NOT EXISTS` for a run log of `columns`, and a fallback to try when the warehouse refuses the first.
+    fn render_create_run_log_table_sql(
+        &self,
+        runs: &TableName,
+        columns: &[DesiredColumn],
+    ) -> (String, Option<String>) {
+        (self.render_create_table(runs, columns), None)
+    }
+}

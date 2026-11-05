@@ -1,8 +1,10 @@
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::files::models::{PendingLoad, PendingPhase};
+use crate::adapters::snowflake::models::PlannedStage;
+use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
-use crate::column_types::main::warehouse_type::warehouse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::external_stage::models::PlannedStage;
-use crate::files_destination::models::{PendingLoad, PendingPhase};
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::table_plan::is_direct;
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
@@ -15,10 +17,6 @@ use crate::project::models::MaskMethod;
 use crate::routing::models::Route;
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnOrigin, TableAction};
-use crate::adapters::snowflake::models::StageRoute;
-use crate::adapters::contract::main::display_name::display_name;
-use crate::adapters::contract::main::stored_name::stored_name;
-use crate::adapters::contract::models::WriteMode;
 
 /// A section: a heading with an optional right-aligned note, then each item as a tree branch.
 pub(crate) fn tree(heading: &str, note: &str, items: Vec<Vec<String>>) -> Vec<String> {
@@ -66,7 +64,7 @@ fn row(name: &str, detail: &str) -> String {
 }
 
 pub(crate) fn object_lines(table: &TablePlan) -> Vec<String> {
-    let name = display_name(&table.spec.destination, table.spec.warehouse);
+    let name = sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination);
     let mut lines = vec![match &table.schema.action {
         TableAction::Recreate => row(
             &name,
@@ -379,9 +377,13 @@ fn reload_moves_columns(table: &TablePlan) -> bool {
     if table.mode != WriteMode::Recreate || warehouse != Warehouse::Snowflake {
         return false;
     }
-    let sql = |column_type: &ColumnType| warehouse_type(column_type, warehouse).sql;
+    let sql = |column_type: &ColumnType| {
+        sql_adapter(warehouse)
+            .render_loader_logical_type(column_type)
+            .sql
+    };
     for column in &table.schema.write_columns {
-        let name = stored_name(&column.name, warehouse);
+        let name = sql_adapter(warehouse).stored_name(&column.name);
         let known = live.iter().find(|known| known.name == name);
         if known.is_none_or(|known| sql(&known.column_type) != sql(&column.column_type)) {
             return true;

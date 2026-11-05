@@ -1,3 +1,4 @@
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -7,7 +8,6 @@ use crate::loader::constants::DEFAULT_THREADS;
 use crate::loader::main::_load_table::load_one;
 use crate::loader::models::{LoadRun, ProjectPlan, SharedRun, TableOutcome, TablePlan};
 use crate::project::models::ProjectConfig;
-use crate::adapters::contract::main::display_name::display_name;
 
 /// The most tables loading at once.
 pub(crate) fn thread_count(run: &LoadRun<'_>) -> usize {
@@ -42,7 +42,7 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
             loaded: Ok(loaded),
         },
         Err(error) => TableOutcome {
-            table: display_name(&table.spec.destination, table.spec.warehouse),
+            table: sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination),
             loaded: Err(error.to_string()),
         },
     }
@@ -111,7 +111,8 @@ impl<'a> TableQueue<'a> {
         self.outcomes.push((
             index,
             outcome.unwrap_or_else(|reason| TableOutcome {
-                table: display_name(&table.spec.destination, table.spec.warehouse),
+                table: sql_adapter(table.spec.warehouse)
+                    .render_display_name(&table.spec.destination),
                 loaded: Err(reason),
             }),
         ));

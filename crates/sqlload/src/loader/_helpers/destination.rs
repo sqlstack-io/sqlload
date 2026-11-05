@@ -1,13 +1,13 @@
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use std::collections::{BTreeMap, BTreeSet};
 
 use arrow_array::RecordBatch;
 use tokio::sync::OwnedMutexGuard;
 
-use crate::column_types::models::Warehouse;
 use crate::adapters::contract::constants::STALE_STAGING_HOURS;
-use crate::adapters::contract::main::staging_tables_query::staging_tables_query;
-use crate::adapters::contract::main::stale_staging::stale_staging;
+use crate::column_types::models::Warehouse;
 
+use crate::adapters::contract::models::{TableName, TableShape};
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::append_batch::append_batch;
 #[cfg(feature = "duckdb")]
@@ -22,20 +22,19 @@ use crate::adapters::duckdb::main::query_text::query_text as query_duckdb;
 use crate::adapters::duckdb::main::query_texts::query_texts as query_duckdb_texts;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::table_shape::table_shape as duckdb_table_shape;
-use crate::external_stage::main::route_reference::route_reference;
-use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, LoadRun, ProjectPlan, TablePlan};
-use crate::schema_plan::models::LiveColumn;
 use crate::adapters::snowflake::main::describe_table::describe_table as describe_snowflake;
 use crate::adapters::snowflake::main::query_text::query_text as query_snowflake;
 use crate::adapters::snowflake::main::query_texts::query_texts as query_snowflake_texts;
 use crate::adapters::snowflake::main::remove_stale::remove_stale;
 use crate::adapters::snowflake::main::remove_stale_external::remove_stale_external;
+use crate::adapters::snowflake::main::route_reference::route_reference;
 use crate::adapters::snowflake::main::run_statements::run_statements;
 use crate::adapters::snowflake::main::stage_parquet::stage_parquet;
 use crate::adapters::snowflake::models::{StageRoute, StagedFile};
+use crate::loader::errors::LoaderError;
+use crate::loader::models::{Destination, LoadRun, ProjectPlan, TablePlan};
+use crate::schema_plan::models::LiveColumn;
 use crate::stage_api::models::StageInfo;
-use crate::adapters::contract::models::{TableName, TableShape};
 
 /// The error for a SQL operation on a files target, which plans and loads without SQL.
 fn no_sql() -> LoaderError {
@@ -158,10 +157,10 @@ async fn drop_stale_staging(
         Destination::Snowflake(snowflake) => Some(snowflake.database.as_str()),
         _ => None,
     };
-    let query = staging_tables_query(name, database, warehouse);
+    let query = sql_adapter(warehouse).list_staging_relations_sql(name, database);
     let found = text_values(destination, query).await?;
     let before = chrono::Utc::now() - chrono::Duration::hours(STALE_STAGING_HOURS);
-    let drops = stale_staging(name, &found, before.naive_utc(), warehouse);
+    let drops = sql_adapter(warehouse).render_stale_staging(name, &found, before.naive_utc());
     if !drops.is_empty() {
         tracing::info!(dropped = drops.len(), schema = %name.schema, "dropped staging tables crashed loads left");
     }

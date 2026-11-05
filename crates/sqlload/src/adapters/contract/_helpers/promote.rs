@@ -1,30 +1,27 @@
-//! `merge` and Snowflake's `replace`, ported from sqlbuild's adapters (`render_merge`, `ATOMIC_SWAP` / `render_swap`).
+//! `merge` and `replace`, ported from sqlbuild's adapters (`render_merge`, staged promotion and `render_swap`).
 
-use crate::column_types::models::Warehouse;
-use crate::adapters::contract::_helpers::identifiers::{qualified, quote, with_suffix};
+use crate::adapters::contract::_helpers::identifiers::with_suffix;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::models::{TableName, WriteStatementsRequest};
-
-/// The table a `replace` builds before swapping it in, named after the load's staging table.
-pub(crate) fn swap_table_name(staging: &TableName) -> TableName {
-    with_suffix(staging, SWAP_SUFFIX)
-}
+use crate::adapters::contract::types::SqlAdapter;
 
 /// One `MERGE`: key matches update every other column, the rest are inserted (sqlbuild `render_merge`).
-pub(crate) fn merge_statement(
+pub(crate) fn merge_statement<A: SqlAdapter + ?Sized>(
+    adapter: &A,
     request: &WriteStatementsRequest<'_>,
     unique_key: &[String],
-    source: &str,
-    values: &[String],
+    (source, values): (&str, &[String]),
 ) -> String {
-    let warehouse = request.warehouse;
-    let target = qualified(request.table, warehouse);
+    let target = adapter.render_qualified_name(request.table);
     let names: Vec<String> = request
         .columns
         .iter()
-        .map(|column| quote(&column.name, warehouse))
+        .map(|column| adapter.render_identifier(&column.name))
         .collect();
-    let keys: Vec<String> = unique_key.iter().map(|key| quote(key, warehouse)).collect();
+    let keys: Vec<String> = unique_key
+        .iter()
+        .map(|key| adapter.render_identifier(key))
+        .collect();
     let selected: Vec<String> = values
         .iter()
         .zip(&names)
@@ -56,44 +53,39 @@ pub(crate) fn merge_statement(
     )
 }
 
-/// Swap the finished build table in (sqlbuild's staged promotion): the target takes its place with no row copied. `SWAP WITH` on Snowflake. On DuckDB the old table is dropped and the new one renamed in one transaction, as a table with an index cannot be renamed, then `indexes` are re-created.
-pub(crate) fn promote_statements(
+/// The old table dropped and the build table renamed in its place in one transaction (a table with an index cannot be renamed on DuckDB), then `indexes` re-created.
+pub(crate) fn drop_and_rename<A: SqlAdapter + ?Sized>(
+    adapter: &A,
     target: &TableName,
     build: &TableName,
     indexes: &[String],
-    warehouse: Warehouse,
 ) -> Vec<String> {
-    let (old, new) = (qualified(target, warehouse), qualified(build, warehouse));
-    match warehouse {
-        Warehouse::Snowflake => vec![
-            format!("ALTER TABLE {old} SWAP WITH {new}"),
-            format!("DROP TABLE IF EXISTS {new}"),
-        ],
-        _ => {
-            let mut statements = vec![
-                "BEGIN".to_owned(),
-                format!("DROP TABLE IF EXISTS {old}"),
-                format!(
-                    "ALTER TABLE {new} RENAME TO {}",
-                    quote(&target.table, warehouse)
-                ),
-            ];
-            statements.extend_from_slice(indexes);
-            statements.push("COMMIT".to_owned());
-            statements
-        }
-    }
+    let (old, new) = (
+        adapter.render_qualified_name(target),
+        adapter.render_qualified_name(build),
+    );
+    let mut statements = vec![
+        "BEGIN".to_owned(),
+        format!("DROP TABLE IF EXISTS {old}"),
+        format!(
+            "ALTER TABLE {new} RENAME TO {}",
+            adapter.render_identifier(&target.table)
+        ),
+    ];
+    statements.extend_from_slice(indexes);
+    statements.push("COMMIT".to_owned());
+    statements
 }
 
-/// Snowflake `replace` from rows that arrived as text (streaming, `INSERT`): build a copy beside the table, then `SWAP WITH` it (sqlbuild `ATOMIC_SWAP`); `LIKE ... COPY GRANTS` keeps grants and constraints.
-pub(crate) fn swap_statements(
+/// `replace` from rows that arrived as text (streaming, `INSERT`): build a copy beside the table, then `SWAP WITH` it (sqlbuild `ATOMIC_SWAP`); `LIKE ... COPY GRANTS` keeps grants and constraints.
+pub(crate) fn swap_statements<A: SqlAdapter + ?Sized>(
+    adapter: &A,
     request: &WriteStatementsRequest<'_>,
     staging: &TableName,
     insert_from: &str,
 ) -> Vec<String> {
-    let warehouse = request.warehouse;
-    let target = qualified(request.table, warehouse);
-    let swap = qualified(&swap_table_name(staging), warehouse);
+    let target = adapter.render_qualified_name(request.table);
+    let swap = adapter.render_qualified_name(&with_suffix(staging, SWAP_SUFFIX));
     vec![
         format!("CREATE OR REPLACE TABLE {swap} LIKE {target} COPY GRANTS"),
         format!("INSERT INTO {swap} {insert_from}"),

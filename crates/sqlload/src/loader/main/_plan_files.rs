@@ -1,10 +1,11 @@
 //! Plan one table into a files target: its folder, unfinished loads, the live schema from the newest load's footers, and the cursor window.
 
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::files::main::newest_load_files::newest_load_files;
+use crate::adapters::files::main::write_notes::write_notes;
+use crate::adapters::files::models::{FilesDestination, TableFiles};
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
-use crate::files_destination::main::newest_load_files::newest_load_files;
-use crate::files_destination::main::write_notes::write_notes;
-use crate::files_destination::models::{FilesDestination, TableFiles};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
 use crate::loader::_helpers::table_plan::{CommitRequest, commit_rule};
@@ -19,7 +20,6 @@ use crate::loader::models::{
 };
 use crate::project::models::FilesFormat;
 use crate::schema_plan::models::LiveColumn;
-use crate::adapters::contract::models::WriteMode;
 
 /// One table's plan against the files already in its folder.
 pub(in crate::loader) async fn plan_files_table(

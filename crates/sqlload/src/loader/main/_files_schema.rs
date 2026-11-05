@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::adapters::files::main::fit_live_types::fit_live_types;
 use crate::column_types::models::Warehouse;
-use crate::files_destination::main::fit_live_types::fit_live_types;
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::models::{PlanOptions, TableSpec};
 use crate::schema_plan::main::plan_schema::plan_schema;

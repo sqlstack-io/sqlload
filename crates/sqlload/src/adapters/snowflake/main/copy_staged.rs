@@ -1,28 +1,27 @@
 //! Load a batch's staged files into a table.
 
-use crate::column_types::main::warehouse_type::warehouse_type;
-use crate::column_types::models::{ColumnType, Warehouse};
-use crate::schema_plan::models::DesiredColumn;
+use crate::adapters::contract::types::SqlAdapter;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use crate::adapters::snowflake::constants::{COPY_FILE_FORMAT, MAX_COPY_FILES};
 use crate::adapters::snowflake::models::CopyStaged;
-use crate::adapters::contract::main::qualified_name::qualified_name;
-use crate::adapters::contract::main::quoted_identifier::quoted_identifier;
-use crate::adapters::contract::main::sql_literal::sql_literal;
+use crate::adapters::snowflake::models::SnowflakeSql;
+use crate::column_types::models::{ColumnType, Warehouse};
+use crate::schema_plan::models::DesiredColumn;
 
 /// `COPY` statements loading the files, at most 1,000 each; always `FORCE = TRUE` (SQLLoad never relies on Snowflake's load history) and stopping at the first bad value.
 pub fn copy_staged(request: &CopyStaged<'_>) -> Vec<String> {
     let literals: Vec<String> = request
         .names
         .iter()
-        .map(|name| sql_literal(name, Warehouse::Snowflake))
+        .map(|name| SnowflakeSql.render_loader_value_literal(name))
         .collect();
-    let table = qualified_name(request.table, Warehouse::Snowflake);
+    let table = SnowflakeSql.render_qualified_name(request.table);
     let (stage, folder) = (request.stage, request.folder);
     let (into, from, by_name) = match request.selected {
         Some(columns) => {
             let names: Vec<String> = columns
                 .iter()
-                .map(|column| quoted_identifier(&column.name, Warehouse::Snowflake))
+                .map(|column| SnowflakeSql.render_identifier(&column.name))
                 .collect();
             let values: Vec<String> = columns.iter().map(staged_value).collect();
             (
@@ -51,12 +50,17 @@ pub fn copy_staged(request: &CopyStaged<'_>) -> Vec<String> {
 /// A column read from a staged file: JSON, which the files hold as text, parsed; anything else cast to its type.
 fn staged_value(column: &DesiredColumn) -> String {
     let snowflake = Warehouse::Snowflake;
-    let field = format!("GET($1, {})", sql_literal(&column.name, snowflake));
+    let field = format!(
+        "GET($1, {})",
+        sql_adapter(snowflake).render_loader_value_literal(&column.name)
+    );
     match column.column_type {
         ColumnType::Json => format!("PARSE_JSON(CAST({field} AS VARCHAR))"),
         _ => format!(
             "CAST({field} AS {})",
-            warehouse_type(&column.column_type, snowflake).sql
+            sql_adapter(snowflake)
+                .render_loader_logical_type(&column.column_type)
+                .sql
         ),
     }
 }

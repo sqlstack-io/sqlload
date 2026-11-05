@@ -3,7 +3,7 @@ use crate::column_types::models::{ColumnType, Warehouse};
 use crate::column_types::tests::test_types::{ParseTypeErrorTestCase, ParseTypeTestCase};
 
 const SNOWFLAKE: &[Warehouse] = &[Warehouse::Snowflake];
-const POSTGRES: &[Warehouse] = &[Warehouse::Postgres];
+const DUCKDB: &[Warehouse] = &[Warehouse::DuckDb];
 const MIXED: &[Warehouse] = &[Warehouse::Snowflake, Warehouse::DuckDb];
 
 #[test]
@@ -91,11 +91,11 @@ fn given_a_valid_type_when_parsing_then_it_maps_onto_the_portable_vocabulary() {
             expected_warnings: 0,
         },
         ParseTypeTestCase {
-            description: "a Postgres name is accepted when every destination is Postgres",
-            text: "jsonb",
-            destinations: POSTGRES,
-            expected_type: ColumnType::Json,
-            expected_written_as: Some("jsonb"),
+            description: "a name DuckDB shares with Postgres is accepted when every destination is DuckDB",
+            text: "timestamptz",
+            destinations: DUCKDB,
+            expected_type: ColumnType::TimestampTz,
+            expected_written_as: Some("timestamptz"),
             expected_warnings: 0,
         },
         ParseTypeTestCase {
@@ -123,9 +123,9 @@ fn given_a_valid_type_when_parsing_then_it_maps_onto_the_portable_vocabulary() {
             expected_warnings: 1,
         },
         ParseTypeTestCase {
-            description: "DuckDB and MotherDuck count as one engine for native types",
+            description: "one engine twice counts once for native types",
             text: "native(\"HUGEINT\")",
-            destinations: &[Warehouse::DuckDb, Warehouse::MotherDuck],
+            destinations: &[Warehouse::DuckDb, Warehouse::DuckDb],
             expected_type: ColumnType::Native("HUGEINT".to_owned()),
             expected_written_as: None,
             expected_warnings: 0,
@@ -213,9 +213,9 @@ fn given_an_invalid_type_when_parsing_then_the_error_explains_the_fix() {
         },
         ParseTypeErrorTestCase {
             description: "a Postgres name names the portable replacement",
-            text: "timestamptz",
-            destinations: &[Warehouse::Postgres, Warehouse::Snowflake],
-            expected_message: "use the portable name \"timestamp_tz\"",
+            text: "jsonb",
+            destinations: SNOWFLAKE,
+            expected_message: "use the portable name \"json\"",
         },
         ParseTypeErrorTestCase {
             description: "a session-dependent timestamp is rejected",
@@ -226,7 +226,7 @@ fn given_an_invalid_type_when_parsing_then_the_error_explains_the_fix() {
         ParseTypeErrorTestCase {
             description: "a 32-bit float is rejected",
             text: "real",
-            destinations: POSTGRES,
+            destinations: DUCKDB,
             expected_message: "use \"float\"",
         },
         ParseTypeErrorTestCase {

@@ -1,6 +1,6 @@
-use crate::column_types::models::ColumnType;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::tests::test_types::CursorTextTestCase;
+use crate::column_types::models::ColumnType;
 
 #[test]
 fn given_a_cursor_flag_when_normalising_then_every_system_reads_the_same_bound() {
