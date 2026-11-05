@@ -12,7 +12,7 @@ fn given_a_cursor_range_when_selected_tables_have_cursors_of_different_types_the
             selectors: &["days", "nums"],
             start: "2026-11-02",
             expected_plan: "days (date or timestamp), nums (integer). Fix: select tables of one cursor type per run",
-            expected_absent: "days (cursor",
+            expected_absent: "day from",
         },
         MixedCursorTestCase {
             description: "a text cursor would compare a date as text, silently: refused with the rest",

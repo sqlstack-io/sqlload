@@ -345,6 +345,15 @@ pub(crate) struct SourceRowUpgradeTestCase {
     pub(crate) expected_rows: &'static str,
 }
 
+/// A files source of one partition, whose partition column is its cursor.
+pub(crate) struct CursorSource {
+    pub(crate) source: &'static str,
+    /// The partition column and its type.
+    pub(crate) partition: (&'static str, &'static str),
+    pub(crate) value: &'static str,
+}
+
+/// One `--start-cursor` over a selection of `CursorSource`s, and what the plan says.
 pub(crate) struct MixedCursorTestCase {
     pub(crate) description: &'static str,
     pub(crate) selectors: &'static [&'static str],

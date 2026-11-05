@@ -23,10 +23,11 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    BatchedScenarioTestCase, DebugStageTestCase, FilesScenario, FilesScenarioTestCase,
-    FilesTargetScenarioTestCase, LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile,
-    RouteFiles, RouteOutcome, RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase,
-    TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
+    BatchedScenarioTestCase, CursorSource, DebugStageTestCase, FilesScenario,
+    FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase,
+    MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome, RouteTestCase,
+    ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase, WrittenPartition,
+    WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -1366,15 +1367,36 @@ pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let root = directory.path().display().to_string();
     let partitions = [
-        ("days", "day", "date", "2026-11-01"),
-        ("nums", "n", "int", "5"),
-        ("later", "day", "date", "2026-11-03"),
-        ("texts", "k", "text", "a"),
+        CursorSource {
+            source: "days",
+            partition: ("day", "date"),
+            value: "2026-11-01",
+        },
+        CursorSource {
+            source: "nums",
+            partition: ("n", "int"),
+            value: "5",
+        },
+        CursorSource {
+            source: "later",
+            partition: ("day", "date"),
+            value: "2026-11-03",
+        },
+        CursorSource {
+            source: "texts",
+            partition: ("k", "text"),
+            value: "a",
+        },
     ];
     let mut text = format!(
         "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n"
     );
-    for (source, column, column_type, value) in partitions {
+    for CursorSource {
+        source,
+        partition: (column, column_type),
+        value,
+    } in partitions
+    {
         let folder = directory
             .path()
             .join(source)
