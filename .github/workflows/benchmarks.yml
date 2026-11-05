@@ -4,6 +4,8 @@ name: Benchmarks
 # on one runner. On demand only, reusing the containers job's cache of the release build. Shared
 # runners are noisy, so compare loaders within a run, not runs with each other.
 on:
+  push:
+    branches: [wip/benchmarks]
   workflow_dispatch:
     inputs:
       size:
@@ -39,7 +41,7 @@ jobs:
       - run: docker pull postgres:17
       - name: Run the suite
         env:
-          SIZE: ${{ inputs.size }}
+          SIZE: ${{ inputs.size || 'reduced' }}
           SCENARIOS: ${{ inputs.scenarios }}
         run: make bench-compare BENCH_OUT=benchmarks/results/run BENCH_ARGS="--size ${SIZE} --scenarios '${SCENARIOS}'"
       - name: Report
@@ -48,7 +50,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: benchmark-results-${{ inputs.size }}
+          name: benchmark-results-${{ inputs.size || 'reduced' }}
           path: |
             benchmarks/results/run/results.json
             benchmarks/results/run/results.md
