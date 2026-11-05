@@ -196,7 +196,7 @@ fn filled_columns(
             live.name == SnowflakeSql.stored_name(&column.name)
                 && live
                     .fraction_digits
-                    .is_some_and(|digits| digits < MAX_FRACTION_DIGITS)
+                    .is_some_and(|digits| digits < i64::from(MAX_FRACTION_DIGITS))
         });
         let value = match (found, column.name.as_str()) {
             (
