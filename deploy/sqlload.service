@@ -9,7 +9,7 @@ After=network-online.target
 Type=exec
 User=sqlload
 Group=sqlload
-# Secrets referenced as ${NAME} in the config, e.g. SNOWFLAKE_TOKEN or AWS_ACCESS_KEY_ID.
+# Secrets referenced as ${ENV:NAME} in the config, e.g. SNOWFLAKE_TOKEN or AWS_ACCESS_KEY_ID.
 EnvironmentFile=/etc/sqlload/sqlload.env
 ExecStart=/usr/local/bin/sqlload -c /etc/sqlload/sqlload.toml --log-format json run
 Restart=always

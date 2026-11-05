@@ -6,7 +6,7 @@ default_target = "dev"
 kind = "snowflake"
 account = "acct"
 user = "LOADER"
-auth = { method = "key_pair", private_key_file = "${KEY_FILE}" }
+auth = { method = "key_pair", private_key_file = "${ENV:KEY_FILE}" }
 database = "ANALYTICS"
 load_method = { type = "internal_user_stage" }
 
@@ -14,7 +14,7 @@ load_method = { type = "internal_user_stage" }
 kind = "postgres"
 host = "localhost"
 user = "reader"
-password = "${PG_PASSWORD}"
+password = "${ENV:PG_PASSWORD}"
 database = "app"
 
 [targets.dev]
@@ -77,9 +77,9 @@ csv = { delimiter = ";", null_values = ["NA", ""] }
 "#;
 
 /// Connections and a target that the error cases' sources can refer to.
-pub(crate) const CONNECTIONS: &str = "[connections.wh]\nkind = \"duckdb\"\npath = \":memory:\"\n[connections.pg]\nkind = \"postgres\"\nhost = \"h\"\nuser = \"u\"\ndatabase = \"d\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
+pub(crate) const CONNECTIONS: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[connections.pg]\nkind = \"postgres\"\nhost = \"h\"\nuser = \"u\"\ndatabase = \"d\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 
-/// Every `${NAME}` resolves to `<NAME>`.
+/// Every `${ENV:NAME}` resolves to `<NAME>`.
 pub(crate) fn environment(name: &str) -> Option<String> {
     Some(format!("<{name}>"))
 }

@@ -10,7 +10,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "on_schema_change",
     "auto_widen",
     "type_change_rebuild",
-    "batch",
+    "batch_size",
     #[cfg(feature = "container-tests")]
     "test_loader_route",
 ];
@@ -99,7 +99,7 @@ pub const DEFAULT_TABLE_NAME: &str = "{source}__{table}";
 pub const DEFAULT_FILES_TABLE_NAME: &str = "{source}";
 
 /// The `batch` value that opts a table out of windows and ordered reads.
-pub const WHOLE_BATCH: &str = "whole";
+pub const WHOLE_BATCH: &str = "none";
 
 /// The parts of an existing stage's name in a Snowflake connection's `stage`: `DATABASE.SCHEMA.STAGE`.
 pub const STAGE_NAME_PARTS: usize = 3;

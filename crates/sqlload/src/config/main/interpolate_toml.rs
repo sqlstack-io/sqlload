@@ -1,8 +1,8 @@
-//! Resolve `${NAME}` references in parsed TOML.
+//! Resolve `${ENV:NAME}` references in parsed TOML.
 
 use crate::config::_helpers::interpolate::interpolate_value;
 
-/// `value` with `${NAME}` in every string replaced by what `lookup` returns; `$${` stays literal.
+/// `value` with `${ENV:NAME}` in every string replaced by what `lookup` returns; `$${` stays literal.
 pub fn interpolate_toml(
     mut value: toml::Value,
     lookup: &dyn Fn(&str) -> Option<String>,

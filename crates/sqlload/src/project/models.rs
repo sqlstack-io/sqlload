@@ -25,16 +25,16 @@ pub struct ProjectConfig {
     /// The target used when a source names none.
     #[serde(default)]
     pub default_target: Option<String>,
-    /// The most tables loading at once (each table's batches still commit one at a time); `--threads` overrides it.
+    /// The most tables loading at once (each table's batches still commit one at a time); `--concurrency` overrides it.
     #[serde(default)]
-    pub threads: Option<usize>,
+    pub concurrency: Option<usize>,
     #[serde(default)]
     pub connections: BTreeMap<String, ConnectionConfig>,
     #[serde(default)]
     pub targets: BTreeMap<String, TargetConfig>,
     #[serde(default)]
     pub sources: BTreeMap<String, SourceConfig>,
-    /// Every connection's settings after `${NAME}` interpolation, for Python table functions.
+    /// Every connection's settings after `${ENV:NAME}` interpolation, for Python table functions.
     #[serde(skip)]
     pub connection_settings: serde_json::Map<String, serde_json::Value>,
     /// The file declaring each Python source, by source name.
@@ -121,7 +121,7 @@ pub enum ConnectionConfig {
     #[serde(rename = "duckdb")]
     DuckDb {
         /// The database file; `:memory:` for an in-memory database.
-        path: String,
+        database: String,
     },
     /// An HTTP API, for Python sources; its settings reach table functions as `ctx.connection`.
     Http {
@@ -239,7 +239,7 @@ pub struct SourceConfig {
     pub skip_tables_with_columns: Vec<String>,
     #[serde(default)]
     pub allow_columns: Vec<String>,
-    /// The key for `mask = { col = "hmac" }`, normally `${ENV}`.
+    /// The key for `mask = { col = "hmac" }`, normally `${ENV:MASK_KEY}`.
     #[serde(default)]
     pub mask_key: Option<crate::auth::models::Secret>,
     /// Defaults for every table of the source.
@@ -332,9 +332,9 @@ pub struct TableSettings {
     #[cfg(feature = "container-tests")]
     #[serde(default)]
     pub test_loader_route: Option<bool>,
-    /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones.
+    /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones; `"none"` commits the whole read once.
     #[serde(default, deserialize_with = "deserialize_optional_batch")]
-    pub batch: Option<BatchStep>,
+    pub batch_size: Option<BatchStep>,
 }
 
 /// One table's settings: everything a source can set, plus what only a table can.
@@ -402,7 +402,7 @@ impl std::fmt::Display for WriteStrategy {
     }
 }
 
-/// A cursor table's `batch`: each run reads and commits one cursor window of this size at a time.
+/// A cursor table's `batch_size`: each run reads and commits one cursor window of this size at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BatchStep {
     /// A date or timestamp cursor's window, such as `"1d"`.

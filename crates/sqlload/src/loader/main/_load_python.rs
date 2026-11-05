@@ -1,4 +1,4 @@
-//! Load a Python table batch by batch: call its table function (once per `batch` window), plan the table as the yielded columns appear, and stage and commit the rows as they come; nothing beyond the current batch is held.
+//! Load a Python table batch by batch: call its table function (once per `batch_size` window), plan the table as the yielded columns appear, and stage and commit the rows as they come; nothing beyond the current batch is held.
 
 use crate::loader::_helpers::run_log::reconcile_before_read;
 use crate::loader::errors::LoaderError;

@@ -7,7 +7,7 @@ import pytest
 PROJECT = """\
 [connections.wh]
 kind = "duckdb"
-path = ":memory:"
+database = ":memory:"
 
 [connections.app_pg]
 kind = "postgres"

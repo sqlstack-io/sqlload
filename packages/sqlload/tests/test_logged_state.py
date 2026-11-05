@@ -16,7 +16,7 @@ python_paths = ["sources"]
 
 [connections.wh]
 kind = "duckdb"
-path = "wh.duckdb"
+database = "wh.duckdb"
 
 [targets.dev]
 connection = "wh"

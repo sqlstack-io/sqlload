@@ -71,7 +71,7 @@ fn date_plan(
 ) -> Result<WindowPlan, String> {
     if !step.as_secs().is_multiple_of(SECONDS_PER_DAY) || step.subsec_nanos() != 0 {
         return Err(format!(
-            "a date cursor's batch must be whole days, not {}",
+            "a date cursor's batch_size must be whole days, not {}",
             humantime::format_duration(step)
         ));
     }

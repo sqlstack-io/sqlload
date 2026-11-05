@@ -1,4 +1,4 @@
-//! Split a cursor range into the windows of a table's `batch`.
+//! Split a cursor range into the windows of a table's `batch_size`.
 
 use crate::batch_plan::_helpers::bounds::{integer_plan, time_plan};
 use crate::batch_plan::constants::MAX_WINDOWS;
@@ -10,7 +10,7 @@ use crate::project::models::BatchStep;
 pub fn split_windows(split: &WindowSplit<'_>) -> Result<WindowPlan, String> {
     let Some(from) = split.from else {
         return Err(
-            "batch needs a start to split the cursor range: set cursor_start for the first load"
+            "batch_size needs a start to split the cursor range: set cursor_start for the first load"
                 .to_owned(),
         );
     };
@@ -25,12 +25,12 @@ pub fn split_windows(split: &WindowSplit<'_>) -> Result<WindowPlan, String> {
         }
         (BatchStep::Duration(step), cursor_type) => time_plan(split, from, step, cursor_type)?,
         (BatchStep::Whole, _) => {
-            return Err("batch = \"whole\" reads in one piece; it has no windows".to_owned());
+            return Err("batch_size = \"none\" reads in one piece; it has no windows".to_owned());
         }
     };
     if plan.count > MAX_WINDOWS {
         return Err(format!(
-            "batch splits the read into {} windows, more than {MAX_WINDOWS}; use a larger batch, or narrow the read with --start-cursor/--end-cursor",
+            "batch_size splits the read into {} windows, more than {MAX_WINDOWS}; use a larger batch_size, or narrow the read with --start-cursor/--end-cursor",
             plan.count
         ));
     }

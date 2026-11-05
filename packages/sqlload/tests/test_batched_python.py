@@ -18,7 +18,7 @@ python_paths = ["sources"]
 
 [connections.wh]
 kind = "duckdb"
-path = "wh.duckdb"
+database = "wh.duckdb"
 
 [targets.dev]
 connection = "wh"
@@ -134,7 +134,7 @@ def changed_in_place(ctx):
     yield {"page": 0, "n": ctx.state["token"]}
 
 
-@api.table(write_strategy="delete_insert", cursor_column="day", cursor_start="2026-11-01", batch="1d")
+@api.table(write_strategy="delete_insert", cursor_column="day", cursor_start="2026-11-01", batch_size="1d")
 def windowed(ctx):
     calls = HERE / "data" / "calls.json"
     seen = json.loads(calls.read_text()) if calls.exists() else []
@@ -364,7 +364,7 @@ def test_given_columns_added_over_batches_when_loading_then_each_change_reads_th
 
 
 def test_given_a_slow_table_when_loading_at_once_then_it_does_not_hold_up_the_small_ones(project: Path) -> None:
-	done = sqlload(project, "load", "--threads", "2", "api__a_slow", "api__b_small", "api__c_small")
+	done = sqlload(project, "load", "--concurrency", "2", "api__a_slow", "api__b_small", "api__c_small")
 	assert done.returncode == 0, done.stdout + done.stderr
 	loaded = [line.split()[1] for line in done.stdout.splitlines() if line.startswith("loaded")]
 	assert loaded == ["RAW.api__a_slow", "RAW.api__b_small", "RAW.api__c_small"]
@@ -372,16 +372,16 @@ def test_given_a_slow_table_when_loading_at_once_then_it_does_not_hold_up_the_sm
 
 def test_given_parallel_tables_creating_a_new_schema_when_loading_then_every_table_loads(project: Path) -> None:
 	names = [f"fresh__t{number}" for number in range(8)]
-	done = sqlload(project, "load", "--threads", "8", *names)
+	done = sqlload(project, "load", "--concurrency", "8", *names)
 	assert done.returncode == 0, done.stdout + done.stderr
 	for number, name in enumerate(names):
 		assert query(project, f'SELECT id FROM "NEW_SCHEMA"."{name}"') == [(number,)]
 
 
 def test_given_a_source_sharing_a_client_when_loading_then_its_tables_run_one_at_a_time_unless_it_opts_in(project: Path) -> None:
-	alone = sqlload(project, "load", "--threads", "3", "shared__one", "shared__two", "shared__three")
+	alone = sqlload(project, "load", "--concurrency", "3", "shared__one", "shared__two", "shared__three")
 	assert alone.returncode == 0, alone.stdout + alone.stderr
-	beside = sqlload(project, "load", "--threads", "2", "together__left", "together__right")
+	beside = sqlload(project, "load", "--concurrency", "2", "together__left", "together__right")
 	assert beside.returncode == 0, beside.stdout + beside.stderr
 
 
@@ -420,13 +420,13 @@ def test_given_batch_whole_when_planning_a_python_table_then_the_plan_says_so(pr
 	(project / "sources" / "whole.py").write_text(
 		"import sqlload as sl\n"
 		"whole = sl.source('whole')\n"
-		"@whole.table(write_strategy='delete_insert', cursor_column='day', cursor_start='2026-11-01', batch='whole')\n"
+		"@whole.table(write_strategy='delete_insert', cursor_column='day', cursor_start='2026-11-01', batch_size='none')\n"
 		"def days(ctx):\n"
 		"    yield {'day': '2026-11-01'}\n"
 	)
 	done = sqlload(project, "plan", "whole__days")
 	assert done.returncode == 0, done.stdout + done.stderr
-	assert 'one commit for the whole read (batch = "whole")' in done.stdout
+	assert 'one commit for the whole read (batch_size = "none")' in done.stdout
 
 
 def test_given_a_column_added_mid_commit_when_loading_into_files_then_no_value_is_dropped(project: Path) -> None:

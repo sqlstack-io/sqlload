@@ -1,6 +1,8 @@
 use toml::Value;
 
-/// Replace `${NAME}` in every string with the value `lookup` returns; `$${` stays literal.
+use crate::config::constants::ENVIRONMENT_PREFIX;
+
+/// Replace `${ENV:NAME}` in every string with the value `lookup` returns; `$${` stays literal.
 pub(crate) fn interpolate_value(
     value: &mut Value,
     lookup: &dyn Fn(&str) -> Option<String>,
@@ -39,7 +41,12 @@ fn interpolate_text(text: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Resu
         let end = body
             .find('}')
             .ok_or_else(|| format!("unterminated ${{ in {text:?}"))?;
-        let name = &body[..end];
+        let name = body[..end].strip_prefix(ENVIRONMENT_PREFIX).ok_or_else(|| {
+            format!(
+                "${{{}}} in {text:?} is not ${{ENV:NAME}}, the only interpolation; write $${{ for a literal ${{",
+                &body[..end]
+            )
+        })?;
         let resolved =
             lookup(name).ok_or_else(|| format!("environment variable {name} is not set"))?;
         output.push_str(&resolved);

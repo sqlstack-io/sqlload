@@ -1,14 +1,14 @@
 pub(crate) const BASE: &str = r#"
 [source]
 kind = "kafka"
-brokers = "${BROKERS}"
+brokers = "${ENV:BROKERS}"
 include = ["orders.*"]
 
 [destination]
 kind = "snowflake"
 account = "myorg-myaccount"
 user = "LOADER"
-auth = { method = "pat", token = "${TOKEN}" }
+auth = { method = "pat", token = "${ENV:TOKEN}" }
 database = "MY_DB"
 schema = "RAW"
 "#;

@@ -140,12 +140,12 @@ def test_given_the_sizes_when_reading_the_multi_table_scenario_then_it_holds_all
 	assert BY_NAME["pg_multi"].rows(datagen.SIZES["tiny"]) == datagen.SIZES["tiny"].narrow
 
 
-def test_given_each_loader_when_asked_about_scenarios_then_python_is_dlt_only_and_threads_only_multi() -> None:
+def test_given_each_loader_when_asked_about_scenarios_then_python_is_dlt_only_and_concurrency_only_multi() -> None:
 	by_name = {competitor.name: competitor for competitor in all_competitors()}
 	assert by_name["ingestr"].unsupported(BY_NAME["py_flat"]) == HIDDEN
 	assert by_name["dlt"].unsupported(BY_NAME["py_bytes"]) is None
-	assert by_name["sqlload (--threads 1)"].unsupported(BY_NAME["pg_narrow"]) == HIDDEN
-	assert by_name["sqlload (--threads 1)"].unsupported(BY_NAME["pg_multi"]) is None
+	assert by_name["sqlload (--concurrency 1)"].unsupported(BY_NAME["pg_narrow"]) == HIDDEN
+	assert by_name["sqlload (--concurrency 1)"].unsupported(BY_NAME["pg_multi"]) is None
 	assert by_name["sqlload"].unsupported(BY_NAME["files_snowflake"]) == HIDDEN
 
 

@@ -69,7 +69,7 @@ database = "app"
 
 [connections.local]
 kind = "duckdb"
-path = ":memory:"
+database = ":memory:"
 
 [targets.dev]
 connection = "local"
@@ -180,7 +180,7 @@ pub(crate) async fn run_batched(
         let options = PlanOptions {
             end_cursor: run.end_cursor.map(str::to_owned),
             batch_bytes: test_case.batch_bytes,
-            threads: test_case.threads,
+            concurrency: test_case.concurrency,
             ..PlanOptions::default()
         };
         let plan = plan_project(&project, &destinations, &options)
@@ -370,7 +370,7 @@ pub(crate) async fn run_large_partition(
     let scenario = FilesScenario {
         description: test_case.description,
         store: local_store,
-        settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\nbatch = \"1d\"\n",
+        settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\nbatch_size = \"1d\"\n",
         runs: vec![
             WrittenRun {
                 files: first,
@@ -491,7 +491,7 @@ async fn run_written_files(
     let (store, connection) = (scenario.store)(endpoint, directory);
     let prefix = format!("scores-{}/", uuid::Uuid::new_v4());
     let text = format!(
-        "[connections.files]\n{}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"{prefix}\"\n{}\n",
+        "[connections.files]\n{}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"{prefix}\"\n{}\n",
         connection, scenario.settings
     );
     let folder = open_folder(&Location { store, prefix }).map_err(|error| error.to_string())?;
@@ -808,7 +808,7 @@ pub(crate) async fn run_source_row_upgrade(
     })
     .map_err(|error| error.to_string())?;
     let text = format!(
-        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
+        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
         test_case.settings
     );
     let project_destinations =
@@ -1310,7 +1310,7 @@ pub(crate) async fn run_metadata_round_trip(
     let target_text = files_target_project(port, &connection, "", "write_strategy = \"replace\"")
         .replace("PREFIX", &prefix);
     let source_text = format!(
-        "[connections.lake]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\npath = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"{prefix}/app/orders/\"\nwrite_strategy = \"replace\"\n"
+        "[connections.lake]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"{prefix}/app/orders/\"\nwrite_strategy = \"replace\"\n"
     );
     let target_project =
         parse_project(&target_text, &|_| None).map_err(|error| error.to_string())?;

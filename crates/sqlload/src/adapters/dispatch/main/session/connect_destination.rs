@@ -23,7 +23,7 @@ pub async fn connect_destination(
         .ok_or_else(|| LoaderError::Invalid(format!("target {name:?} does not exist")))?;
     let destination = match project.connections.get(&target.connection) {
         #[cfg(feature = "duckdb")]
-        Some(ConnectionConfig::DuckDb { path }) => Destination::DuckDb(open_duckdb(path)?),
+        Some(ConnectionConfig::DuckDb { database }) => Destination::DuckDb(open_duckdb(database)?),
         #[cfg(not(feature = "duckdb"))]
         Some(ConnectionConfig::DuckDb { .. }) => {
             return Err(LoaderError::Invalid(format!(

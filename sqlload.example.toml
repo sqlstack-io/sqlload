@@ -1,8 +1,8 @@
-# sqlload configuration. `${NAME}` is replaced from the environment; `$${` is a literal `${`.
+# sqlload configuration. `${ENV:NAME}` is replaced from the environment; `$${` is a literal `${`.
 
 [source]
 kind = "kafka"
-brokers = "${KAFKA_BROKERS}"
+brokers = "${ENV:KAFKA_BROKERS}"
 include = ["shop.*"]
 exclude = ["shop.*.dlq"]
 # `{stream}` is the lower-case table name; `{table}` and `{table_flat}` also work.
@@ -26,7 +26,7 @@ startup_interval = "500ms"
 kind = "snowflake"
 account = "myorg-myaccount"
 user = "SQLLOAD"
-auth = { method = "pat", token = "${SNOWFLAKE_TOKEN}" }
+auth = { method = "pat", token = "${ENV:SNOWFLAKE_TOKEN}" }
 # auth = { method = "key_pair", private_key_file = "/etc/sqlload/key.p8" }
 role = "SQLLOAD_ROLE"
 # Needed for `COPY` loads and `plan`/`apply`; streaming does not use it.

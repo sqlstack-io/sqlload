@@ -46,6 +46,12 @@ pub fn cursor_text(text: &str, column_type: &ColumnType) -> Result<String, Strin
             )),
         },
         (ColumnType::TimestampTz | ColumnType::TimestampNtz, Err(_), None) => Err(unreadable()),
+        (ColumnType::Int | ColumnType::SmallInt, _, _) => match text.parse::<i64>() {
+            Ok(value) => Ok(value.to_string()),
+            Err(_) => Err(format!(
+                "{text:?} is not an integer, which an integer cursor needs"
+            )),
+        },
         _ => Ok(text.to_owned()),
     }
 }

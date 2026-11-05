@@ -184,7 +184,7 @@ fn given_a_partition_of_more_than_1000_files_when_delete_insert_loads_it_then_it
     let test_cases = [LargePartitionTestCase {
         description: "every file of a 1,001-file partition loads once, with the column only its files have; the rewritten neighbour replaces only its own partition",
         files: 1001,
-        expected_plan: "batch is ignored: a files source commits in batches of whole partitions",
+        expected_plan: "batch_size is ignored: a files source commits in batches of whole partitions",
         expected_result: "1003,1001,1002,7/8/9",
     }];
     run_async(async {

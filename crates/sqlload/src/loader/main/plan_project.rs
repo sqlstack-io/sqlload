@@ -49,12 +49,7 @@ pub async fn plan_project(
             spec.files = files.clone();
             spec.python = module.map(|module| python_table(module, &spec.source_table));
             let qualified = spec.source_table.qualified_name();
-            if !selected(
-                &options.select,
-                source_name,
-                &spec.destination.table,
-                &qualified,
-            ) {
+            if !selected(options, (source_name, &spec.destination.table, &qualified)) {
                 continue;
             }
             let destination = destinations.get(&spec.target).ok_or_else(|| {

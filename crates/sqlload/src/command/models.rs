@@ -102,14 +102,27 @@ pub struct ResetArgs {
 /// Table selection and policy flags for loader commands.
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub struct LoaderArgs {
-    /// Sources or tables to select (source names, destination table names or `schema.table`); all when empty.
+    /// Sources or tables to select (source names, destination table names or `schema.table`), the same as --select; all when neither is given.
+    #[arg(value_name = "SELECTOR")]
+    pub positional_select: Vec<String>,
+    /// Sources or tables to select, combined with any given positionally.
+    #[arg(long, short = 's', num_args = 1.., value_name = "SELECTOR")]
     pub select: Vec<String>,
+    /// Sources or tables to leave out, named as for --select; wins over --select.
+    #[arg(long, num_args = 1.., value_name = "SELECTOR")]
+    pub exclude: Vec<String>,
     /// Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would otherwise block.
     #[arg(long)]
     pub allow_type_change_rebuild: bool,
     /// Rebuild the selected tables from the whole source, with the current columns and types.
     #[arg(long)]
     pub reload: bool,
+    /// Backfill from this cursor value instead of the destination's maximum, typed from each selected table's cursor (an integer, or RFC 3339 or a date).
+    #[arg(long, value_name = "VALUE", conflicts_with_all = ["start_cursor_ts", "start_cursor_int", "end_cursor_ts", "end_cursor_int"])]
+    pub start_cursor: Option<String>,
+    /// Backfill only cursor values below this one, typed from each selected table's cursor.
+    #[arg(long, value_name = "VALUE", conflicts_with_all = ["start_cursor_ts", "start_cursor_int", "end_cursor_ts", "end_cursor_int"])]
+    pub end_cursor: Option<String>,
     /// Backfill from this timestamp (RFC 3339 or a date) instead of the destination's maximum.
     #[arg(long, conflicts_with = "start_cursor_int")]
     pub start_cursor_ts: Option<String>,
@@ -122,9 +135,9 @@ pub struct LoaderArgs {
     /// Backfill only integer cursor values below this one.
     #[arg(long)]
     pub end_cursor_int: Option<i64>,
-    /// The most tables loading at once (default: the project's `threads`, else 4); one table's batches always commit one at a time.
+    /// The most tables loading at once (default: the project's `concurrency`, else 4); one table's batches always commit one at a time.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
-    pub threads: Option<u16>,
+    pub concurrency: Option<u16>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (for tests).
     #[arg(long, hide = true, value_parser = clap::value_parser!(u64).range(1..))]
     pub batch_bytes: Option<u64>,

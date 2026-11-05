@@ -56,7 +56,7 @@ SCENARIOS: list[Scenario] = [
 		"Postgres narrow table: load, append 1% new rows, load again (the second load is timed)",
 		"narrow",
 	),
-	Scenario("pg_multi", "postgres", "narrow", "narrow", f"The narrow rows split over {MULTI_TABLES} Postgres tables: sqlload's --threads 1 and its default", "multi"),
+	Scenario("pg_multi", "postgres", "narrow", "narrow", f"The narrow rows split over {MULTI_TABLES} Postgres tables: sqlload's --concurrency 1 and its default", "multi"),
 	Scenario("files_parquet", "files", "narrow", "files", "Parquet files (10 parts) in a local folder", "narrow"),
 	Scenario("files_csv", "files", "narrow", "files", "CSV files (10 parts, header) in a local folder", "narrow"),
 	Scenario("files_ndjson", "files", "narrow", "files", "NDJSON files (10 parts) in a local folder", "narrow"),

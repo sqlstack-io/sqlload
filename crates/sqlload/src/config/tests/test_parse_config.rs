@@ -50,8 +50,13 @@ fn given_invalid_config_text_when_parsing_then_the_error_names_the_problem() {
         },
         ParseConfigErrorTestCase {
             description: "an unset environment variable is an error",
-            text: "[staging]\nkind = \"none\"\n[metrics]\nlisten = \"${MISSING}\"\n",
+            text: "[staging]\nkind = \"none\"\n[metrics]\nlisten = \"${ENV:MISSING}\"\n",
             expected_error: "MISSING is not set",
+        },
+        ParseConfigErrorTestCase {
+            description: "a reference without ENV: is an error, even when the variable is set",
+            text: "[staging]\nkind = \"none\"\n[metrics]\nlisten = \"${PATH}\"\n",
+            expected_error: "${PATH} in \"${PATH}\" is not ${ENV:NAME}",
         },
         ParseConfigErrorTestCase {
             description: "s3 staging needs its bucket section",

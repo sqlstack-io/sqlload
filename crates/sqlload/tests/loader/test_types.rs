@@ -246,7 +246,7 @@ pub(crate) struct BatchedScenarioTestCase {
     pub(crate) settings: &'static str,
     /// The hidden `--batch-bytes`, so a few rows make several commits.
     pub(crate) batch_bytes: Option<usize>,
-    pub(crate) threads: Option<usize>,
+    pub(crate) concurrency: Option<usize>,
     pub(crate) runs: &'static [BatchedRun],
     /// Each run's `<load error, or ok> => <check query result>`.
     pub(crate) expected_outcomes: &'static [&'static str],

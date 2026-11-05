@@ -10,7 +10,7 @@ use crate::project::models::ProjectConfig;
 use crate::python_sources::main::connection_settings::connection_settings;
 use crate::python_sources::models::PythonSource;
 
-/// Parse and validate a project's TOML text (resolving `${NAME}` through `lookup`) with `python` sources added, checked by the same rules as `[sources]` entries; Python settings are not interpolated.
+/// Parse and validate a project's TOML text (resolving `${ENV:NAME}` through `lookup`) with `python` sources added, checked by the same rules as `[sources]` entries; Python settings are not interpolated.
 pub fn parse_python_project(
     text: &str,
     lookup: &dyn Fn(&str) -> Option<String>,

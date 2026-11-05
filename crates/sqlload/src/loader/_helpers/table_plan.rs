@@ -156,7 +156,7 @@ pub(crate) async fn plan_table(
     with_run_log(plan, destination, options).await
 }
 
-/// Why the table's `batch` setting has no effect, if it has none: a files source commits by whole partitions, `replace` and `--reload` swap the whole table in once, and windows need a cursor.
+/// Why the table's `batch_size` setting has no effect, if it has none: a files source commits by whole partitions, `replace` and `--reload` swap the whole table in once, and windows need a cursor.
 fn ignored_batch(plan: &TablePlan) -> Option<String> {
     let spec = &plan.spec;
     let step = spec.batch?;
@@ -169,7 +169,7 @@ fn ignored_batch(plan: &TablePlan) -> Option<String> {
         }
         _ => return None,
     };
-    Some(format!("batch is ignored: {reason}"))
+    Some(format!("batch_size is ignored: {reason}"))
 }
 
 /// A table's columns and schema plan once more during its load, when its source shows new columns; nothing else about its plan is read or checked again. `known` is the live columns when they are known to be current (a Python table's first batch, just after plan); otherwise one read of them, except that a files target has no SQL to read them with and keeps `stale`, what plan saw.
@@ -814,7 +814,7 @@ pub(crate) struct CommitRequest<'a> {
     pub(crate) mode: &'a WriteMode,
 }
 
-/// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch` windows; an ordered Postgres read (an index leads with a non-text cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads, for `batch = "whole"`, and for `append` without a cursor or logged state, which would have nowhere to resume from; about every 1 GB for other tables without a cursor.
+/// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch_size` windows; an ordered Postgres read (an index leads with a non-text cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads, for `batch_size = "none"`, and for `append` without a cursor or logged state, which would have nowhere to resume from; about every 1 GB for other tables without a cursor.
 pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, String> {
     let spec = request.spec;
     if let Some(files) = request.files {

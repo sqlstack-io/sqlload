@@ -64,7 +64,7 @@ CREATE VIEW public.orders AS SELECT id, name, placed_at, 10 / d AS v FROM public
 INSERT INTO public.orders_raw VALUES (1, 'a', '2026-11-03 01:00:00+00', 1), (2, 'b', '2026-11-03 07:00:00+00', 1);";
 
 /// `batch` finer than the `{cursor:date}` partition.
-const DELETE_INSERT_BY_DAY_IN_WINDOWS: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"placed_at\"\nbatch = \"6h\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n";
+const DELETE_INSERT_BY_DAY_IN_WINDOWS: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"placed_at\"\nbatch_size = \"6h\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n";
 
 const FAILS_IN_WINDOW_2: FilesTargetRun = FilesTargetRun {
     source_change: "UPDATE public.orders_raw SET name = 'a2' WHERE id = 1; UPDATE public.orders_raw SET d = 0 WHERE id = 2;",

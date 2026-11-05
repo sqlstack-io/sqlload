@@ -63,7 +63,7 @@ class Settings:
 	def auth_toml(self) -> str:
 		if self.private_key_file:
 			return f'{{ method = "key_pair", private_key_file = "{self.private_key_file}" }}'
-		return f'{{ method = "pat", token = "${{{TOKEN_ENV}}}" }}'
+		return f'{{ method = "pat", token = "${{ENV:{TOKEN_ENV}}}" }}'
 
 	def connection_toml(self, load_method: str) -> str:
 		role = f'role = "{self.role}"\n' if self.role else ""

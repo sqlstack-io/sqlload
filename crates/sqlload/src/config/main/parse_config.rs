@@ -5,7 +5,7 @@ use crate::config::_helpers::validate::validate;
 use crate::config::errors::ConfigError;
 use crate::config::models::Config;
 
-/// Parse and validate TOML text, resolving `${NAME}` through `lookup`.
+/// Parse and validate TOML text, resolving `${ENV:NAME}` through `lookup`.
 pub fn parse_config(
     text: &str,
     lookup: &dyn Fn(&str) -> Option<String>,

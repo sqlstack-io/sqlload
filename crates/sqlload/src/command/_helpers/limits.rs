@@ -9,8 +9,8 @@ pub(crate) fn raise_open_file_limit() {
     }
 }
 
-/// The blocking threads a loader project's runtime needs: each table loading holds one for its whole load, and its reads and encoding need others, so `threads` tables must never use up the pool, which would hang with no error. `None` for anything else (an exporter configuration), which keeps the runtime's default. `cli_threads` is `--threads`.
-pub(crate) fn blocking_threads(cli_threads: Option<u16>, text: &str) -> Option<usize> {
+/// The blocking threads a loader project's runtime needs: each table loading holds one for its whole load, and its reads and encoding need others, so `concurrency` tables must never use up the pool, which would hang with no error. `None` for anything else (an exporter configuration), which keeps the runtime's default. `cli_concurrency` is `--concurrency`.
+pub(crate) fn blocking_threads(cli_concurrency: Option<u16>, text: &str) -> Option<usize> {
     let project = match toml::from_str::<toml::Table>(text) {
         Ok(project) => project,
         Err(_) => return None,
@@ -19,11 +19,11 @@ pub(crate) fn blocking_threads(cli_threads: Option<u16>, text: &str) -> Option<u
         return None;
     }
     let configured = project
-        .get("threads")
+        .get("concurrency")
         .and_then(toml::Value::as_integer)
         .map(usize::try_from)
         .and_then(Result::ok);
-    let threads = cli_threads
+    let threads = cli_concurrency
         .map(usize::from)
         .or(configured)
         .unwrap_or(DEFAULT_THREADS)

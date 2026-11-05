@@ -100,8 +100,8 @@ def _spec(run_dir: Path, scenario: Scenario, context: Context, **settings: objec
 class SqlLoad(Competitor):
 	"""The sqlload extension wheel built from this repository; its `sqlload load` runs in-process."""
 
-	def __init__(self, *, threads: int | None = None, direct: bool = False, external: bool = False, label: str = "") -> None:
-		self.threads = threads
+	def __init__(self, *, concurrency: int | None = None, direct: bool = False, external: bool = False, label: str = "") -> None:
+		self.concurrency = concurrency
 		#: Files in S3 into Snowflake, which Snowflake reads itself.
 		self.direct = direct
 		#: Postgres into Snowflake through the external stage instead of the user stage.
@@ -109,7 +109,7 @@ class SqlLoad(Competitor):
 		self.name = f"sqlload ({label})" if label else "sqlload"
 
 	def unsupported(self, scenario: Scenario) -> str | None:
-		if self.threads is not None:
+		if self.concurrency is not None:
 			return None if scenario.name == "pg_multi" else HIDDEN
 		if self.external:
 			return None if scenario.source else HIDDEN
@@ -128,7 +128,7 @@ class SqlLoad(Competitor):
 		return f"{SCHEMA}.{scenario.table}"
 
 	def invocation(self, scenario: Scenario, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
-		argv = [str(SQLLOAD), "load", *(["--threads", str(self.threads)] if self.threads else [])]
+		argv = [str(SQLLOAD), "load", *(["--concurrency", str(self.concurrency)] if self.concurrency else [])]
 		return Invocation(argv, self._project_dir(scenario, context, run_dir), self._env(scenario, run_dir))
 
 	def plan_invocation(self, scenario: Scenario, context: Context, run_dir: Path) -> tuple[Invocation, str] | None:
@@ -164,7 +164,7 @@ class SqlLoad(Competitor):
 				+ f'\n[sources.app.tables."public.{scenario.source}"]\nname = "{scenario.table}"\n'
 			)
 		text = (
-			f'[connections.wh]\nkind = "duckdb"\npath = "{self.destination(run_dir)}"\n\n'
+			f'[connections.wh]\nkind = "duckdb"\ndatabase = "{self.destination(run_dir)}"\n\n'
 			f'[targets.dev]\nconnection = "wh"\nloader_schema = "{SCHEMA}"\n'
 		)
 		if scenario.group == "postgres":
@@ -183,7 +183,7 @@ class SqlLoad(Competitor):
 		include = "public.multi_*" if scenario.name == "pg_multi" else f"public.{scenario.source or scenario.table}"
 		text = (
 			f'[connections.app_pg]\nkind = "postgres"\nhost = "127.0.0.1"\nport = {context.postgres.port}\n'
-			f'user = "{pg.USER}"\npassword = "${{PGPASSWORD}}"\ndatabase = "{pg.DATABASE}"\n\n'
+			f'user = "{pg.USER}"\npassword = "${{ENV:PGPASSWORD}}"\ndatabase = "{pg.DATABASE}"\n\n'
 			f'[sources.app]\nkind = "postgres"\nconnection = "app_pg"\ninclude = ["{include}"]\n'
 		)
 		if scenario.name == "pg_incremental":
@@ -313,7 +313,7 @@ class Ingestr(Competitor):
 def all_competitors() -> list[Competitor]:
 	return [
 		SqlLoad(),
-		SqlLoad(threads=1, label="--threads 1"),
+		SqlLoad(concurrency=1, label="--concurrency 1"),
 		SqlLoad(direct=True, label="direct"),
 		SqlLoad(external=True, label="external stage"),
 		Dlt("pyarrow"),

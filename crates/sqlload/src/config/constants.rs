@@ -41,3 +41,6 @@ pub const SIZE_UNITS: &[(&str, f64)] = &[
 /// `{topic}`, `{table}`, `{stream}`, `{date}` (UTC `YYYY-MM-DD`) and `{hour}` (UTC `HH`).
 pub const DEFAULT_S3_PATH: &str = "{topic}/date={date}/";
 pub const S3_PATH_PLACEHOLDERS: &[&str] = &["topic", "table", "stream", "date", "hour"];
+
+/// What starts an environment variable reference: `${ENV:NAME}`.
+pub const ENVIRONMENT_PREFIX: &str = "ENV:";

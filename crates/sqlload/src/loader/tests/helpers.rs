@@ -129,7 +129,7 @@ pub(crate) fn python_spec(settings: &str) -> Result<TableSpec, String> {
     let python: Vec<PythonSource> =
         serde_json::from_str(&sources).map_err(|error| error.to_string())?;
     let project = parse_python_project(
-        "[connections.wh]\nkind = \"duckdb\"\npath = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
+        "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
         &|_| None,
         &python,
     )

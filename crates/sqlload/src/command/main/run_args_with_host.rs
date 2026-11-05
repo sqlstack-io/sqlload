@@ -33,7 +33,7 @@ where
         Err(error) => return fail(&format!("cannot read {}: {error}", cli.config.display())),
     };
     let cli_threads = match &cli.command {
-        Command::Plan(args) | Command::Apply(args) | Command::Load(args) => args.threads,
+        Command::Plan(args) | Command::Apply(args) | Command::Load(args) => args.concurrency,
         _ => None,
     };
     let mut builder = tokio::runtime::Builder::new_multi_thread();
