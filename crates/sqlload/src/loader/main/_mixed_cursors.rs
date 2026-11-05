@@ -4,7 +4,7 @@ use crate::column_types::models::ColumnType;
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::models::{PlanOptions, ProjectPlan, TablePlan};
 
-/// The kind of value `table`'s cursor compares: integers, times (dates and timestamps alike), or its own type; `None` without a cursor.
+/// The kind of value `table`'s cursor compares: integers, numbers, text, times (dates and timestamps alike), or its own type; `None` without a cursor, or when a table already blocked has no known cursor type.
 fn cursor_kind(table: &TablePlan) -> Option<String> {
     let cursor = table.spec.cursor.as_ref()?;
     let read = table
@@ -24,7 +24,10 @@ fn cursor_kind(table: &TablePlan) -> Option<String> {
         Some(ColumnType::Date | ColumnType::TimestampTz | ColumnType::TimestampNtz) => {
             "date or timestamp".to_owned()
         }
+        Some(ColumnType::Text | ColumnType::Varchar(_)) => "text".to_owned(),
+        Some(ColumnType::Decimal { .. } | ColumnType::Float) => "number".to_owned(),
         Some(other) => other.to_string(),
+        None if table.schema.blocked.is_some() || table.spec.python.is_none() => return None,
         None => "unknown until its first load".to_owned(),
     })
 }
@@ -59,7 +62,10 @@ pub(in crate::loader) fn block_mixed_cursors(
         .iter_mut()
         .filter(|table| table.spec.cursor.is_some())
     {
-        table.schema = blocked_plan(vec![reason.clone()]);
+        match &mut table.schema.blocked {
+            Some(blocked) => blocked.reasons.push(reason.clone()),
+            None => table.schema = blocked_plan(vec![reason.clone()]),
+        }
     }
     plan
 }

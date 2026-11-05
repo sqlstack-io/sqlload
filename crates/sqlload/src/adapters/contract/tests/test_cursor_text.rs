@@ -84,6 +84,24 @@ fn given_a_cursor_flag_when_normalising_then_every_system_reads_the_same_bound()
             expected_text: Err("is not a number"),
         },
         CursorTextTestCase {
+            description: "a float cursor takes exponent notation as written",
+            text: "1e3",
+            column_type: ColumnType::Float,
+            expected_text: Ok("1e3"),
+        },
+        CursorTextTestCase {
+            description: "a float cursor refuses NaN",
+            text: "NaN",
+            column_type: ColumnType::Float,
+            expected_text: Err("is not a number"),
+        },
+        CursorTextTestCase {
+            description: "a time cursor takes a time",
+            text: "10:30:00",
+            column_type: ColumnType::Time,
+            expected_text: Ok("10:30:00"),
+        },
+        CursorTextTestCase {
             description: "a time cursor needs a time",
             text: "2026-11-04",
             column_type: ColumnType::Time,
