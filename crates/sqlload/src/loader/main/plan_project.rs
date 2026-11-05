@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::adapters::dispatch::main::files_destination::files_destination;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::folder_conflict::folder_conflict;
 use crate::adapters::files::models::FolderClaim;
@@ -86,7 +87,7 @@ fn folder_claims(
 ) -> Vec<FolderClaim> {
     let mut claims: Vec<FolderClaim> = Vec::new();
     for spec in specs {
-        let Some(Destination::Files(files)) = destinations.get(&spec.target) else {
+        let Some(files) = destinations.get(&spec.target).and_then(files_destination) else {
             continue;
         };
         let name = format!(

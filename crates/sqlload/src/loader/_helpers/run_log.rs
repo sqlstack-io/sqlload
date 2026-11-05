@@ -8,6 +8,7 @@ use crate::adapters::contract::models::WriteMode;
 use crate::adapters::dispatch::main::ddl_guard::ddl_guard;
 use crate::adapters::dispatch::main::execute::execute;
 use crate::adapters::dispatch::main::live_columns::live_columns;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::models::PendingPhase;
@@ -44,15 +45,15 @@ pub(crate) async fn read_run_log(
     let spec = &table.spec;
     let mut texts: Vec<String> = Vec::new();
     let mut exists = false;
-    match destination {
-        Destination::Files(_) => {
+    match sql_adapter(spec.warehouse).runs_sql() {
+        false => {
             let folder = open_folder(&records_location(table)?)?;
             for file in list_files(&folder).await? {
                 let bytes = read_file(&folder, &file.relative_key).await?;
                 texts.push(String::from_utf8_lossy(&bytes).into_owned());
             }
         }
-        destination => {
+        true => {
             let runs = runs_table(&spec.destination);
             exists = live_columns(destination, &runs).await?.is_some();
             if exists {
@@ -127,13 +128,13 @@ pub(crate) async fn append_run(
     record: &RunRecord,
 ) -> Result<(), LoaderError> {
     let spec = &table.spec;
-    match destination {
-        Destination::Files(_) => {
+    match sql_adapter(spec.warehouse).runs_sql() {
+        false => {
             let folder = open_folder(&records_location(table)?)?;
             let json = record_json(record)?;
             Ok(write_file(&folder, &record_object_name(record), Bytes::from(json)).await?)
         }
-        destination => {
+        true => {
             ensure_runs_table(table, destination).await?;
             let insert = insert_run(&runs_table(&spec.destination), record, spec.warehouse)
                 .map_err(LoaderError::Invalid)?;

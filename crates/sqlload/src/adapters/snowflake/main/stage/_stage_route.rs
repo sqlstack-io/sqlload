@@ -8,7 +8,7 @@ use crate::adapters::snowflake::models::{ForcedStage, StageRoute};
 use crate::adapters::snowflake::models::{PlannedStage, RouteChoice, RouteRequest, StepFailure};
 
 /// The table's route: what the connection's `stage` forces (failing with the reason if it cannot be used), else the first of `@~`, `@%table`, Snowpipe Streaming and `INSERT` the role can use; a probe failing for any other reason than privileges or a missing object fails the plan. Each probe changes nothing and is asked once per run. Also the stage `apply` must create, if any.
-pub async fn stage_route(
+pub(in crate::adapters) async fn stage_route(
     request: &RouteRequest<'_>,
 ) -> Result<(RouteChoice, Option<PlannedStage>), String> {
     match &request.snowflake.stage {

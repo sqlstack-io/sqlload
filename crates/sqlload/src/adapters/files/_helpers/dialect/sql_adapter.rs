@@ -10,6 +10,10 @@ impl SqlAdapter for ParquetFiles {
         Warehouse::Parquet
     }
 
+    fn runs_sql(&self) -> bool {
+        false
+    }
+
     fn render_loader_logical_type(&self, column_type: &ColumnType) -> WarehouseType {
         match arrow_field("", column_type) {
             Some(field) => WarehouseType {

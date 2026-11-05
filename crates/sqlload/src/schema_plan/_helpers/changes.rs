@@ -1,5 +1,5 @@
 use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
-use crate::column_types::models::{TypeFit, Warehouse};
+use crate::column_types::models::TypeFit;
 use crate::project::models::{OnSchemaChange, Policy};
 use crate::schema_plan::constants::ALLOW_REBUILD_FLAG;
 use crate::schema_plan::models::{
@@ -64,12 +64,13 @@ pub(crate) fn existing_column(
         write: true,
         ..ColumnDecision::default()
     };
+    let adapter = sql_adapter(rules.warehouse);
     match (
-        sql_adapter(rules.warehouse).type_fit(&column.column_type, &live.column_type),
-        rules.warehouse,
+        adapter.type_fit(&column.column_type, &live.column_type),
+        adapter.runs_sql(),
     ) {
         (TypeFit::Fits, _) => written,
-        (_, Warehouse::Parquet) => ColumnDecision {
+        (_, false) => ColumnDecision {
             problem: Some(format!(
                 "{} is {} in the existing files but {} in the source; existing files cannot be altered, so pin the files' type (columns = {{ {} = \"{}\" }}) or rewrite every file with --reload",
                 live.name, live.column_type, column.column_type, column.name, live.column_type

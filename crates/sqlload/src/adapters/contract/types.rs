@@ -31,6 +31,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// The warehouse this adapter renders for.
     fn warehouse(&self) -> Warehouse;
 
+    /// Whether the destination runs SQL; a files target writes Parquet and alters nothing in place.
+    fn runs_sql(&self) -> bool {
+        true
+    }
+
+    /// Whether a `--reload` build table starts `LIKE` the table to keep its grants, and so keeps the live columns.
+    fn builds_like_target(&self) -> bool {
+        false
+    }
+
     /// How the warehouse spells `column_type` in DDL, and what is lost if it cannot hold it exactly.
     fn render_loader_logical_type(&self, column_type: &ColumnType) -> WarehouseType;
 
@@ -92,6 +102,14 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// The expression turning staging column `name` into the table's type.
     fn render_source_expression_cast(&self, name: &str, column_type: &ColumnType) -> String {
         source_expression_cast(self, name, column_type)
+    }
+
+    /// A query returning a row when `table` holds one.
+    fn render_any_row_query(&self, table: &TableName) -> String {
+        format!(
+            "SELECT 'x' FROM {} LIMIT 1",
+            self.render_qualified_name(table)
+        )
     }
 
     /// `CREATE SCHEMA IF NOT EXISTS` for `table`'s schema.

@@ -2,14 +2,14 @@ use crate::adapters::contract::main::cursor_bound::cursor_bound;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::CursorQuery;
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::main::choose_stage::choose_stage;
+use crate::adapters::dispatch::main::files_destination::files_destination;
 use crate::adapters::dispatch::main::live_columns::live_columns;
 use crate::adapters::dispatch::main::single_text::single_text;
 use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::models::Destination;
-use crate::adapters::snowflake::constants::USER_STAGE;
 use crate::adapters::snowflake::main::copy::direct_problem::direct_problem;
-use crate::adapters::snowflake::main::stage::stage_route::stage_route;
-use crate::adapters::snowflake::models::RouteRequest;
 use crate::adapters::snowflake::models::{CopyColumn, CopyValue, DirectCheck};
 use crate::adapters::snowflake::models::{ExternalStage, StageRoute};
 use crate::batch_plan::main::file_groups::file_groups;
@@ -54,7 +54,6 @@ use crate::routing::models::Route;
 use crate::routing::models::RouteOverrides;
 use crate::routing::models::Step;
 use crate::routing::models::Store;
-use crate::routing::models::WriterAccepts;
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
@@ -185,15 +184,17 @@ pub(crate) async fn replan_columns(
 ) -> Result<ReplannedColumns, LoaderError> {
     let live = match (known, destination) {
         (Some(known), _) => known.map(<[LiveColumn]>::to_vec),
-        (None, Destination::Files(_)) => stale.map(<[LiveColumn]>::to_vec),
+        (None, destination) if files_destination(destination).is_some() => {
+            stale.map(<[LiveColumn]>::to_vec)
+        }
         (None, _) => live_columns(destination, &spec.destination).await?,
     };
     let spec = with_live_columns(spec, live.as_deref()).unwrap_or_else(|| spec.clone());
     let read = read_columns(&spec).map_err(|problems| LoaderError::Invalid(problems.join("; ")))?;
     let desired = desired_columns(&spec, &read);
-    let schema = match destination {
-        Destination::Files(_) => files_schema(&spec, &desired, live.as_deref(), options),
-        _ => {
+    let schema = match files_destination(destination) {
+        Some(_) => files_schema(&spec, &desired, live.as_deref(), options),
+        None => {
             let rules = SchemaRules {
                 warehouse: spec.warehouse,
                 contract: spec.contract,
@@ -251,7 +252,7 @@ async fn plan_table_once(
     destination: &Destination,
     options: &PlanOptions,
 ) -> Result<TablePlan, LoaderError> {
-    if let Destination::Files(files) = destination {
+    if let Some(files) = files_destination(destination) {
         return plan_files_table(spec, files, options).await;
     }
     let live = live_columns(destination, &spec.destination).await?;
@@ -392,23 +393,19 @@ async fn plan_table_once(
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
     let exists = live.is_some();
-    let chosen = match (destination, &schema.blocked) {
-        (Destination::Snowflake(snowflake), None) => {
-            let request = RouteRequest {
-                destination: &spec.destination,
-                table_exists: exists,
-                direct_append: mode == WriteMode::Append && !spec.logged,
-                snowflake,
-            };
-            match stage_route(&request).await {
-                Ok(chosen) => Some(chosen),
-                Err(problem) => {
+    let chosen = match &schema.blocked {
+        None => {
+            let direct_append = mode == WriteMode::Append && !spec.logged;
+            match choose_stage(destination, (&spec.destination, exists, direct_append)).await {
+                Some(Ok(chosen)) => Some(chosen),
+                Some(Err(problem)) => {
                     schema = blocked_plan(vec![problem]);
                     None
                 }
+                None => None,
             }
         }
-        _ => None,
+        Some(_) => None,
     };
     let (choice, planned_stage) = chosen.unzip();
     let planned_stage = planned_stage.flatten();
@@ -485,49 +482,6 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
             let live = table.live.as_deref().unwrap_or_default();
             Some(sql_adapter(warehouse).render_change_columns(&spec.destination, changes, live))
         }
-    }
-}
-
-/// What a destination can take.
-fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> WriterAccepts {
-    let stored = |store: Store| WriterAccepts {
-        arrow: false,
-        pulls_from: vec![store.clone()],
-        pull_formats: vec![FileFormat::Parquet],
-        staging: vec![store],
-        rows_into: None,
-    };
-    match (destination, stage) {
-        #[cfg(feature = "duckdb")]
-        (Destination::DuckDb(_), _) => WriterAccepts {
-            arrow: true,
-            ..WriterAccepts::default()
-        },
-        (Destination::Files(_), _) => WriterAccepts {
-            arrow: true,
-            ..WriterAccepts::default()
-        },
-        (Destination::Snowflake(_), Some(StageRoute::External(stage))) => {
-            stored(Store::ObjectStore(stage.location.to_string()))
-        }
-        (Destination::Snowflake(_), Some(StageRoute::Internal { name })) => {
-            stored(Store::InternalStage(format!("@{name}")))
-        }
-        (Destination::Snowflake(_), Some(StageRoute::TargetTable)) => {
-            stored(Store::InternalStage("@%table".to_owned()))
-        }
-        (Destination::Snowflake(_), Some(StageRoute::StagingTable)) => stored(
-            Store::InternalStage("the staging table's @%table".to_owned()),
-        ),
-        (Destination::Snowflake(_), Some(StageRoute::Streaming { .. })) => WriterAccepts {
-            rows_into: Some("Snowpipe Streaming into a transient staging table".to_owned()),
-            ..WriterAccepts::default()
-        },
-        (Destination::Snowflake(_), Some(StageRoute::Insert)) => WriterAccepts {
-            rows_into: Some("batched INSERT into a transient staging table".to_owned()),
-            ..WriterAccepts::default()
-        },
-        (Destination::Snowflake(_), _) => stored(Store::InternalStage(format!("@{USER_STAGE}"))),
     }
 }
 

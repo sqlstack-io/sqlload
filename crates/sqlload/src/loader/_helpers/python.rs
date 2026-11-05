@@ -278,13 +278,11 @@ pub(crate) async fn refuse_emptying(
     if !replaces || table.spec.allow_empty || !table.exists {
         return Ok(());
     }
-    let has_rows = match destination {
-        Destination::Files(_) => true,
-        destination => {
-            let query = format!(
-                "SELECT 'x' FROM {} LIMIT 1",
-                sql_adapter(table.spec.warehouse).render_qualified_name(&table.spec.destination)
-            );
+    let adapter = sql_adapter(table.spec.warehouse);
+    let has_rows = match adapter.runs_sql() {
+        false => true,
+        true => {
+            let query = adapter.render_any_row_query(&table.spec.destination);
             single_text(destination, query).await?.is_some()
         }
     };

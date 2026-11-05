@@ -6,7 +6,7 @@ use crate::http::errors::ApiError;
 use crate::sql_api::main::execute_sql::execute_sql;
 
 /// The name, URL and storage integration of each stage `query` (a `SHOW STAGES`) lists.
-pub async fn show_stages(
+pub(in crate::adapters) async fn show_stages(
     destination: &SnowflakeDestination,
     query: &str,
 ) -> Result<Vec<ShownStage>, ApiError> {
