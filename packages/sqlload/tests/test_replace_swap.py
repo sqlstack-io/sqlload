@@ -166,6 +166,16 @@ def test_given_a_destination_column_when_the_source_starts_carrying_it_mid_load_
     assert query(root, "SELECT id, note FROM raw.api__things ORDER BY id") == [(1, None), (2, "now")]
 
 
+def test_given_a_macro_named_arrow_when_loading_then_the_batches_still_load(tmp_path: Path) -> None:
+    root = project(tmp_path, FAILING)
+    assert sqlload(root, "load").returncode == 0
+    with duckdb.connect(str(root / "wh.duckdb")) as connection:
+        connection.execute("CREATE MACRO arrow(x) AS TABLE SELECT 'shadow' AS id")
+    second = sqlload(root, "load", run=3)
+    assert second.returncode == 0, second.stderr
+    assert query(root, "SELECT count(*), min(id) FROM raw.api__things") == [(6, 300)]
+
+
 @pytest.mark.parametrize(
     ("strategy", "column_type", "value"),
     [

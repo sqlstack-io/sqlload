@@ -28,7 +28,7 @@ pub async fn append_batch(
         let list = columns.join(", ");
         connection
             .prepare(&format!(
-                "INSERT INTO {target} ({list}) SELECT {list} FROM arrow(?)"
+                "INSERT INTO {target} ({list}) SELECT {list} FROM system.main.arrow(?)"
             ))?
             .execute([&ArrowBatchRegistration::new(batch)])?;
         Ok(())
