@@ -200,7 +200,13 @@ pub(crate) async fn run_batched(
             .await
             .map_err(|error| error.to_string())?
             .unwrap_or_default();
-        outcomes.push(format!("{error} => {result}"));
+        let batch_line = lines
+            .iter()
+            .filter(|_| run.show_batch)
+            .filter_map(|line| line.split_once("batch   "))
+            .map(|(_, rest)| format!(" | batch   {rest}"))
+            .collect::<String>();
+        outcomes.push(format!("{error} => {result}{batch_line}"));
     }
     Ok(outcomes)
 }

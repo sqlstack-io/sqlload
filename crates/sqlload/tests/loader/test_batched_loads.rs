@@ -46,6 +46,21 @@ CREATE VIEW public.events AS SELECT id, seq, 10 / d AS v FROM public.events_raw;
 INSERT INTO public.events_raw VALUES (1, 1, 1), (2, 2, 1), (3, 3, 0), (4, 4, 1);
 ";
 
+/// An integer cursor whose `batch` windows end at the source's maximum, read at plan.
+const INTEGER: &str = "
+CREATE TABLE public.events (id int8 NOT NULL, v text);
+INSERT INTO public.events VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e');
+";
+
+const INTEGER_SETTINGS: &str = r#"
+[sources.app.tables."public.events"]
+write_strategy = "append"
+cursor_column = "id"
+cursor_start = "1"
+append_cursor_inclusive = false
+batch = 2
+"#;
+
 const PARALLEL: &str = "
 CREATE TABLE public.a (id int8);
 CREATE TABLE public.b (id int8);
@@ -75,18 +90,21 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                         destination_change: "",
                         end_cursor: Some("2026-11-06"),
                         check_query: IDS,
+                        show_batch: false,
                     },
                     BatchedRun {
                         source_change: "UPDATE public.events_raw SET d = 1 WHERE id = 3;",
                         destination_change: "",
                         end_cursor: Some("2026-11-06"),
                         check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) || ' ' || CAST(count(DISTINCT _sqlload_load_id) AS VARCHAR) FROM raw.app__events",
+                        show_batch: false,
                     },
                     BatchedRun {
                         source_change: "DELETE FROM public.events_raw WHERE id = 4; INSERT INTO public.events_raw VALUES (5, '2026-11-04', 1);",
                         destination_change: "",
                         end_cursor: Some("2026-11-06"),
                         check_query: IDS,
+                        show_batch: false,
                     },
                 ],
                 expected_outcomes: &[
@@ -107,18 +125,21 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                         destination_change: "",
                         end_cursor: Some("3"),
                         check_query: IDS,
+                        show_batch: false,
                     },
                     BatchedRun {
                         source_change: "",
                         destination_change: "CREATE UNIQUE INDEX events_v ON raw.app__events (v)",
                         end_cursor: None,
                         check_query: IDS,
+                        show_batch: false,
                     },
                     BatchedRun {
                         source_change: "UPDATE public.events SET v = 'e' WHERE id = 5;",
                         destination_change: "",
                         end_cursor: None,
                         check_query: IDS,
+                        show_batch: false,
                     },
                 ],
                 expected_outcomes: &[
@@ -139,17 +160,46 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                         destination_change: "",
                         end_cursor: None,
                         check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__events",
+                        show_batch: false,
                     },
                     BatchedRun {
                         source_change: "UPDATE public.events_raw SET d = 1 WHERE id = 3;",
                         destination_change: "",
                         end_cursor: None,
                         check_query: IDS,
+                        show_batch: false,
                     },
                 ],
                 expected_outcomes: &[
                     "raw.app__events: Postgres query failed => 0",
                     "ok => 1,2,3,4",
+                ],
+            },
+            BatchedScenarioTestCase {
+                description: "an integer batch without --end-cursor-int ends at the source's maximum, read at plan",
+                setup: INTEGER,
+                settings: INTEGER_SETTINGS,
+                batch_bytes: None,
+                threads: None,
+                runs: &[
+                    BatchedRun {
+                        source_change: "",
+                        destination_change: "",
+                        end_cursor: None,
+                        check_query: IDS,
+                        show_batch: true,
+                    },
+                    BatchedRun {
+                        source_change: "INSERT INTO public.events VALUES (6, 'f'), (7, 'g');",
+                        destination_change: "",
+                        end_cursor: None,
+                        check_query: IDS,
+                        show_batch: true,
+                    },
+                ],
+                expected_outcomes: &[
+                    "ok => 2,3,4,5 | batch   3 cursor windows of 2, read and committed one at a time, up to the source's maximum 5 (read at plan)",
+                    "ok => 2,3,4,5,6,7 | batch   2 cursor windows of 2, read and committed one at a time, up to the source's maximum 7 (read at plan)",
                 ],
             },
             BatchedScenarioTestCase {
@@ -163,6 +213,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     destination_change: "",
                     end_cursor: None,
                     check_query: "SELECT (SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM raw.app__a) || ' ' || (SELECT string_agg(CAST(id AS VARCHAR), ',') FROM raw.app__b)",
+                    show_batch: false,
                 }],
                 expected_outcomes: &["raw.app__c: Postgres query failed => 1,2 3"],
             },

@@ -79,7 +79,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Integer(10),
             cursor_type: Some(ColumnType::Int),
             expected_windows: Err(
-                "an integer batch needs --end-cursor-* to know where the last window ends",
+                "an integer batch needs --end-cursor-int to know where the last window ends (a Postgres source ends at its current maximum)",
             ),
         },
         SplitWindowsTestCase {

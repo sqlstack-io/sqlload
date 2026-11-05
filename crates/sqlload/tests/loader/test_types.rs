@@ -221,6 +221,8 @@ pub(crate) struct BatchedRun {
     pub(crate) end_cursor: Option<&'static str>,
     /// A query on DuckDB after the run, giving one text result.
     pub(crate) check_query: &'static str,
+    /// Add the plan's `batch` line to the run's outcome.
+    pub(crate) show_batch: bool,
 }
 
 /// Loads that commit in batches, run in order on fresh source tables and a fresh DuckDB.

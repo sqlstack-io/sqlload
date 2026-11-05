@@ -47,7 +47,7 @@ fn integer_bounds(from: &str, to: Option<&str>, step: u64) -> Result<Vec<String>
     };
     let Some(to) = to else {
         return Err(
-            "an integer batch needs --end-cursor-* to know where the last window ends".to_owned(),
+            "an integer batch needs --end-cursor-int to know where the last window ends (a Postgres source ends at its current maximum)".to_owned(),
         );
     };
     let (mut at, end) = (parse(from)?, parse(to)?);

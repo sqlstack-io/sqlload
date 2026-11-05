@@ -6,7 +6,7 @@ use crate::files_destination::main::folder_conflict::folder_conflict;
 use crate::files_destination::models::FolderClaim;
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::resolve_tables;
-use crate::loader::_helpers::sources::{selected, source_tables};
+use crate::loader::_helpers::sources::{selected, source_ends, source_tables};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_table_folder::table_folder;
@@ -35,7 +35,8 @@ pub async fn plan_project(
         plan.problems.extend(resolved.problems);
         plan.skipped.extend(resolved.skipped);
         claims.extend(folder_claims(&resolved.specs, destinations));
-        for mut spec in resolved.specs {
+        let specs = source_ends(project, (source_name, source), resolved.specs, options).await?;
+        for mut spec in specs {
             spec.files = files.clone();
             spec.python = module.map(|module| python_table(module, &spec.source_table));
             let qualified = spec.source_table.qualified_name();

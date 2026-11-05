@@ -19,17 +19,19 @@ use crate::loader::_helpers::resolve::source_target;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    Destination, FilesSource, PlanOptions, SourceReader, TablePlan, TableSpec,
+    Destination, FilesSource, PlanOptions, SourceEnd, SourceReader, TablePlan, TableSpec,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
+use crate::postgres_source::main::cursor_end::cursor_end;
 use crate::postgres_source::main::read_catalog::read_catalog;
 use crate::postgres_source::models::{
     CopyRequest, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable, WireType,
 };
 use crate::project::models::{
-    ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride, WriteStrategy,
+    BatchStep, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride,
+    WriteStrategy,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::similar_names::main::close_name::close_name;
@@ -514,6 +516,57 @@ pub(crate) async fn read_source(
             table.spec.source_table.qualified_name()
         ))),
     }
+}
+
+/// `specs` with `source_end` filled for the selected Postgres tables whose integer `batch` has no `--end-cursor-int` to end its windows: the cursor's current maximum, read once at plan; the source is connected only when one needs it.
+pub(crate) async fn source_ends(
+    project: &ProjectConfig,
+    (source_name, source): (&str, &SourceConfig),
+    mut specs: Vec<TableSpec>,
+    options: &PlanOptions,
+) -> Result<Vec<TableSpec>, LoaderError> {
+    if source.kind != SourceKind::Postgres || options.end_cursor.is_some() {
+        return Ok(specs);
+    }
+    let mut client: Option<Client> = None;
+    for spec in &mut specs {
+        let integer_cursor = spec.cursor.as_ref().and_then(|cursor| {
+            spec.source_table
+                .columns
+                .iter()
+                .find(|column| column.name == cursor.column)
+                .filter(|column| {
+                    matches!(
+                        column.column_type,
+                        Ok(ColumnType::Int | ColumnType::SmallInt)
+                    )
+                })
+                .map(|column| column.name.clone())
+        });
+        let wanted = matches!(spec.batch, Some(BatchStep::Integer(_)))
+            && selected(
+                &options.select,
+                source_name,
+                &spec.destination.table,
+                &spec.source_table.qualified_name(),
+            );
+        let Some(column) = integer_cursor.filter(|_| wanted) else {
+            continue;
+        };
+        if client.is_none() {
+            client = Some(connect_source(project, source).await?);
+        }
+        let Some(connected) = &client else {
+            continue;
+        };
+        spec.source_end = Some(
+            match cursor_end(connected, &spec.source_table, &column).await? {
+                Some((maximum, end)) => SourceEnd::Maximum { maximum, end },
+                None => SourceEnd::Empty,
+            },
+        );
+    }
+    Ok(specs)
 }
 
 /// Whether `selectors` pick a table, by source name, destination name or `schema.table`.

@@ -2,7 +2,7 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::files_destination::models::{PendingLoad, PendingPhase};
 use crate::files_source::models::SourceFormat;
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
-use crate::loader::models::{CommitRule, FilesOutput, PythonTable, TablePlan};
+use crate::loader::models::{CommitRule, FilesOutput, PythonTable, SourceEnd, TablePlan};
 use crate::project::models::BatchStep;
 use crate::project::models::FilesFormat;
 use crate::routing::models::Route;
@@ -220,8 +220,15 @@ fn batch_line(table: &TablePlan) -> String {
                 Some(BatchStep::Integer(step)) => step.to_string(),
                 None => String::new(),
             };
+            let end = match &spec.source_end {
+                Some(SourceEnd::Maximum { maximum, .. }) => {
+                    format!(", up to the source's maximum {maximum} (read at plan)")
+                }
+                Some(SourceEnd::Empty) => ", none: the source has no cursor values".to_owned(),
+                None => String::new(),
+            };
             format!(
-                "{} cursor windows of {step}, read and committed one at a time",
+                "{} cursor windows of {step}, read and committed one at a time{end}",
                 windows.len()
             )
         }

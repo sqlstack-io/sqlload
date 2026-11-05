@@ -177,6 +177,7 @@ pub(crate) fn build_spec(
         unique_key,
         cursor,
         batch,
+        source_end: None,
         pinned: columns.pinned,
         excluded_columns: columns.excluded,
         masked: MaskRules {

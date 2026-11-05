@@ -72,6 +72,8 @@ pub struct TableSpec {
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
+    /// Where an integer `batch`'s windows end without `--end-cursor-int`: the Postgres source's cursor maximum, read at plan.
+    pub source_end: Option<SourceEnd>,
     pub pinned: BTreeMap<String, ColumnType>,
     /// Source columns not loaded, with the rule that dropped each.
     pub excluded_columns: Vec<(String, String)>,
@@ -330,6 +332,15 @@ pub enum Destination {
     Snowflake(Box<SnowflakeDestination>),
     /// Parquet files in an s3 or filesystem connection.
     Files(Box<FilesDestination>),
+}
+
+/// A Postgres table's integer cursor as plan found it, ending its `batch` windows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceEnd {
+    /// The table has no cursor value, so there is nothing to read.
+    Empty,
+    /// The largest value: windows end one past it.
+    Maximum { maximum: String, end: String },
 }
 
 /// How a table's rows are cut into commits.

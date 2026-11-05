@@ -18,6 +18,7 @@ use crate::loader::models::CursorSpec;
 use crate::loader::models::Destination;
 use crate::loader::models::PlanOptions;
 use crate::loader::models::ReadWindow;
+use crate::loader::models::SourceEnd;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
 use crate::postgres_source::main::plan_read::plan_read;
@@ -687,9 +688,15 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
         return Ok(CommitRule::Size);
     };
     if let (Some(step), Some(window)) = (spec.batch, request.window) {
+        let to = match (&window.to, &spec.source_end) {
+            (Some(to), _) => Some(to.as_str()),
+            (None, Some(SourceEnd::Maximum { end, .. })) => Some(end.as_str()),
+            (None, Some(SourceEnd::Empty)) => window.from.as_deref(),
+            (None, None) => None,
+        };
         let windows = split_windows(&WindowSplit {
             from: window.from.as_deref(),
-            to: window.to.as_deref(),
+            to,
             inclusive: window.inclusive,
             step,
             cursor_type: request
