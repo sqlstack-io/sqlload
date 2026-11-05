@@ -93,6 +93,8 @@ BENCH_ARGS can add `--scenarios` to narrow it to one scenario, as the last `--sc
 
 - `pg_snowflake` loads the Postgres narrow table with sqlload, both dlt backends and ingestr;
   `pg_wide_snowflake` and `pg_wide_nokey_snowflake` load the wide table, with and without its primary key.
+  `sqlload (external stage)` runs them through the S3 external stage instead of the user stage `@~`.
+- `files_snowflake` also runs ingestr, reading the same Parquet parts from S3.
 - `files_snowflake` loads 10 Parquet parts with sqlload's direct route (Snowflake reads the files
   itself) and with `shaping = "loader"`. Each run first checks `sqlload plan` names the expected
   route, and is invalid if not.
