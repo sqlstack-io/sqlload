@@ -1,10 +1,10 @@
 //! Gather what planning a files table needs: its columns, path, cursor type and current files.
 
+use crate::adapters::files::main::output_problems::output_problems;
+use crate::adapters::files::main::read_table_state::read_table_state;
+use crate::adapters::files::models::{FilesDestination, OutputCheck, TablePath};
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::open_folder::open_folder;
-use crate::files_destination::main::output_problems::output_problems;
-use crate::files_destination::main::read_table_state::read_table_state;
-use crate::files_destination::models::{FilesDestination, OutputCheck, TablePath};
 use crate::loader::_helpers::table_plan::{blocked_table, desired_columns, read_columns};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_table_folder::table_folder;

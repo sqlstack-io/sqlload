@@ -1,7 +1,7 @@
 //! Run SQL statements in one session.
 
-use crate::http::errors::ApiError;
 use crate::adapters::snowflake::models::SnowflakeDestination;
+use crate::http::errors::ApiError;
 use crate::sql_api::main::execute_script::execute_script;
 use crate::sql_api::main::execute_sql::execute_sql;
 

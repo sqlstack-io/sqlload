@@ -2,8 +2,8 @@
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
 
-use crate::column_types::models::ColumnType;
 use crate::adapters::contract::constants::{CURSOR_TIMESTAMP_FORMAT, NAIVE_TIMESTAMP_FORMATS};
+use crate::column_types::models::ColumnType;
 
 /// `text` as the cursor literal every system reads alike: zoned instants in UTC with `+00`, wall-clock times without an offset.
 pub fn cursor_text(text: &str, column_type: &ColumnType) -> Result<String, String> {

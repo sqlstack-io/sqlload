@@ -1,10 +1,8 @@
-use crate::column_types::models::Warehouse;
 use crate::adapters::contract::main::staging_id::staging_id;
-use crate::adapters::contract::main::staging_table::staging_table;
-use crate::adapters::contract::main::staging_tables_query::staging_tables_query;
-use crate::adapters::contract::main::stale_staging::stale_staging;
 use crate::adapters::contract::tests::helpers::{accounts, columns, ten_oclock};
 use crate::adapters::contract::tests::test_types::{StagingIdTestCase, StaleStagingTestCase};
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::column_types::models::Warehouse;
 
 #[test]
 fn given_staging_tables_when_a_load_starts_then_only_those_named_older_than_the_cut_are_dropped()
@@ -55,7 +53,7 @@ fn given_staging_tables_when_a_load_starts_then_only_those_named_older_than_the_
             .map(|name| (*name).to_owned())
             .collect();
         assert_eq!(
-            stale_staging(&accounts(), &found, before, test_case.warehouse),
+            sql_adapter(test_case.warehouse).render_stale_staging(&accounts(), &found, before),
             test_case.expected_statements,
             "{}",
             test_case.description
@@ -74,7 +72,11 @@ fn given_a_load_when_naming_its_staging_table_then_the_name_holds_its_start_time
     }];
     for test_case in test_cases {
         let id = staging_id(test_case.load_id, ten_oclock()?);
-        let (staging, _) = staging_table(&accounts(), &columns(), &id, Warehouse::DuckDb);
+        let (staging, _) = sql_adapter(Warehouse::DuckDb).render_create_staging_table(
+            &accounts(),
+            &columns(),
+            &id,
+        );
         assert_eq!(
             staging.table, test_case.expected_name,
             "{}",
@@ -103,7 +105,7 @@ fn given_a_schema_when_listing_its_staging_tables_then_snowflake_names_its_datab
             [Warehouse::DuckDb, Warehouse::Snowflake][usize::from(!test_case.load_id.is_empty())];
         let database = Some(test_case.load_id).filter(|name| !name.is_empty());
         assert_eq!(
-            staging_tables_query(&accounts(), database, warehouse),
+            sql_adapter(warehouse).list_staging_relations_sql(&accounts(), database),
             test_case.expected_name,
             "{}",
             test_case.description

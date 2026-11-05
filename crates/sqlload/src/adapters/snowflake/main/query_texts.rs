@@ -1,7 +1,7 @@
 //! Run a query returning one text column.
 
-use crate::http::errors::ApiError;
 use crate::adapters::snowflake::models::SnowflakeDestination;
+use crate::http::errors::ApiError;
 use crate::sql_api::main::execute_sql::execute_sql;
 
 /// The first column of every row of `query`, as text; SQL `NULL`s are skipped.

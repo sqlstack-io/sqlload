@@ -1,9 +1,8 @@
-use crate::column_types::models::Warehouse;
-use crate::adapters::contract::_helpers::write::write_statements;
-use crate::adapters::contract::main::staging_table::staging_table;
 use crate::adapters::contract::models::{WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::tests::helpers::{accounts, columns};
 use crate::adapters::contract::tests::test_types::WriteStatementsTestCase;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::column_types::models::Warehouse;
 
 const SF_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS\" (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
 const DUCK_INSERT: &str = "INSERT INTO \"raw\".\"app__accounts\" (\"id\", \"profile\", \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\") SELECT \"id\", CAST(\"profile\" AS JSON), \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\" FROM \"raw\".\"app__accounts__sqlload_staging_load1\"";
@@ -100,9 +99,9 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
     for test_case in test_cases {
         let table = accounts();
         let columns = columns();
-        let (staging, _) = staging_table(&table, &columns, "load-1", test_case.warehouse);
+        let (staging, _) = sql_adapter(test_case.warehouse)
+            .render_create_staging_table(&table, &columns, "load-1");
         let request = WriteStatementsRequest {
-            warehouse: test_case.warehouse,
             table: &table,
             columns: &columns,
             mode: &test_case.mode,
@@ -110,7 +109,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             built: None,
         };
         assert_eq!(
-            write_statements(&request, &staging),
+            sql_adapter(test_case.warehouse).render_write(&request, &staging),
             test_case.expected_statements,
             "{}",
             test_case.description

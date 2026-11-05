@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::files_destination::main::folder_conflict::folder_conflict;
-use crate::files_destination::models::FolderClaim;
+use crate::adapters::files::main::folder_conflict::folder_conflict;
+use crate::adapters::files::models::FolderClaim;
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::sources::{selected, source_ends, source_tables, unmatched_selectors};

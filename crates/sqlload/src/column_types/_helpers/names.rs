@@ -4,7 +4,7 @@ use crate::column_types::constants::{
     TIME_PRECISION_DIGITS,
 };
 use crate::column_types::errors::TypeError;
-use crate::column_types::models::{ColumnType, Warehouse};
+use crate::column_types::models::ColumnType;
 
 /// Where a recognised type name comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,22 +13,18 @@ pub(crate) enum NameKind {
     Portable,
     /// A portable alias or a standard SQL name that means the same everywhere.
     Standard,
-    /// A name only these warehouses use.
-    Specific(&'static [Warehouse]),
+    /// A name only these engines use, by name.
+    Specific(&'static [&'static str]),
 }
 
-const SNOWFLAKE: &[Warehouse] = &[Warehouse::Snowflake];
-const POSTGRES: &[Warehouse] = &[Warehouse::Postgres];
-const BIGQUERY: &[Warehouse] = &[Warehouse::BigQuery];
-const CLICKHOUSE: &[Warehouse] = &[Warehouse::ClickHouse];
-const SQL_SERVER: &[Warehouse] = &[Warehouse::SqlServer];
-const SNOWFLAKE_DATABRICKS: &[Warehouse] = &[Warehouse::Snowflake, Warehouse::Databricks];
-const POSTGRES_DUCKDB: &[Warehouse] = &[
-    Warehouse::Postgres,
-    Warehouse::DuckDb,
-    Warehouse::MotherDuck,
-];
-const DUCKDB_SQLITE: &[Warehouse] = &[Warehouse::DuckDb, Warehouse::MotherDuck, Warehouse::Sqlite];
+const SNOWFLAKE: &[&str] = &["Snowflake"];
+const POSTGRES: &[&str] = &["Postgres"];
+const BIGQUERY: &[&str] = &["BigQuery"];
+const CLICKHOUSE: &[&str] = &["ClickHouse"];
+const SQL_SERVER: &[&str] = &["SQL Server"];
+const SNOWFLAKE_DATABRICKS: &[&str] = &["Snowflake", "Databricks"];
+const POSTGRES_DUCKDB: &[&str] = &["Postgres", "DuckDB", "MotherDuck"];
+const DUCKDB_SQLITE: &[&str] = &["DuckDB", "MotherDuck", "SQLite"];
 
 /// Names that take no arguments.
 const PLAIN_NAMES: &[(&str, ColumnType, NameKind)] = &[

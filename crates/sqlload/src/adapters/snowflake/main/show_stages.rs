@@ -1,8 +1,8 @@
 //! List stage objects.
 
-use crate::external_stage::models::ShownStage;
-use crate::http::errors::ApiError;
+use crate::adapters::snowflake::models::ShownStage;
 use crate::adapters::snowflake::models::SnowflakeDestination;
+use crate::http::errors::ApiError;
 use crate::sql_api::main::execute_sql::execute_sql;
 
 /// The name, URL and storage integration of each stage `query` (a `SHOW STAGES`) lists.

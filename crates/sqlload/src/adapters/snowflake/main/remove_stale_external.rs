@@ -2,11 +2,11 @@
 
 use std::collections::BTreeMap;
 
+use crate::adapters::snowflake::constants::{EXTERNAL_STAGE_FOLDER, STALE_STAGE_HOURS};
+use crate::adapters::snowflake::models::ExternalStage;
 use crate::file_store::main::delete_files::delete_files;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
-use crate::adapters::snowflake::constants::{EXTERNAL_STAGE_FOLDER, STALE_STAGE_HOURS};
-use crate::adapters::snowflake::models::ExternalStage;
 use crate::store_paths::models::Location;
 
 /// Delete every load folder under `_sqlload/` below the stage URL whose files are all older than a day; returns how many, with SQLLoad's own S3 client.

@@ -1,6 +1,6 @@
-use crate::column_types::models::Warehouse;
-use crate::adapters::contract::main::sql_literal::sql_literal;
 use crate::adapters::contract::tests::test_types::SqlLiteralTestCase;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::column_types::models::Warehouse;
 
 #[test]
 fn given_text_when_quoting_a_literal_then_the_warehouse_reads_it_back_unchanged() {
@@ -20,7 +20,7 @@ fn given_text_when_quoting_a_literal_then_the_warehouse_reads_it_back_unchanged(
     ];
     for test_case in test_cases {
         assert_eq!(
-            sql_literal(test_case.text, test_case.warehouse),
+            sql_adapter(test_case.warehouse).render_loader_value_literal(test_case.text),
             test_case.expected_literal,
             "{}",
             test_case.description

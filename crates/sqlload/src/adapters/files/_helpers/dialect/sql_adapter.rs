@@ -1,0 +1,25 @@
+//! Parquet files in the contract: they plan with Arrow's types, and run no SQL.
+
+use crate::adapters::contract::types::SqlAdapter;
+use crate::adapters::files::models::ParquetFiles;
+use crate::column_types::main::arrow_field::arrow_field;
+use crate::column_types::models::{ColumnType, Warehouse, WarehouseType};
+
+impl SqlAdapter for ParquetFiles {
+    fn warehouse(&self) -> Warehouse {
+        Warehouse::Parquet
+    }
+
+    fn render_loader_logical_type(&self, column_type: &ColumnType) -> WarehouseType {
+        match arrow_field("", column_type) {
+            Some(field) => WarehouseType {
+                sql: field.data_type().to_string(),
+                lossy: None,
+            },
+            None => WarehouseType {
+                sql: column_type.to_string(),
+                lossy: Some("a native type has no Arrow type, so Parquet files cannot hold it"),
+            },
+        }
+    }
+}

@@ -1,17 +1,17 @@
+use crate::adapters::contract::models::TableName;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::current_run::current_run;
 use crate::run_log::main::decode_runs::decode_runs;
 use crate::run_log::main::finished_record::finished_record;
 use crate::run_log::main::insert_run::insert_run;
-use crate::run_log::main::logged_statements::logged_statements;
 use crate::run_log::main::record_object_name::record_object_name;
 use crate::run_log::main::runs_setup::runs_setup;
 use crate::run_log::main::runs_table::runs_table;
 use crate::run_log::main::select_runs::select_runs;
 use crate::run_log::models::{RunEvent, RunOutcome, RunRecord};
 use crate::run_log::tests::test_types::{CurrentRunTestCase, FinishedRecordTestCase};
-use crate::adapters::contract::models::TableName;
 
 /// A run of `shop__orders` with a cursor, a token holding a quote and a backslash, and a note.
 pub(crate) fn sample_record() -> RunRecord {
@@ -104,19 +104,25 @@ pub(crate) fn append_logged(warehouse: Warehouse) -> Result<String, String> {
         "INSERT INTO t SELECT 1".to_owned(),
         "COMMIT".to_owned(),
     ];
-    Ok(logged_statements(statements, "INSERT INTO runs".to_owned(), warehouse).join(";\n"))
+    Ok(sql_adapter(warehouse)
+        .render_logged(statements, "INSERT INTO runs".to_owned())
+        .join(";\n"))
 }
 
 /// A merge's one statement with the record's insert.
 pub(crate) fn merge_logged(warehouse: Warehouse) -> Result<String, String> {
     let statements = vec!["MERGE INTO t USING s".to_owned()];
-    Ok(logged_statements(statements, "INSERT INTO runs".to_owned(), warehouse).join(";\n"))
+    Ok(sql_adapter(warehouse)
+        .render_logged(statements, "INSERT INTO runs".to_owned())
+        .join(";\n"))
 }
 
 /// A rebuild's one statement (DDL) with the record's insert.
 pub(crate) fn recreate_logged(warehouse: Warehouse) -> Result<String, String> {
     let statements = vec!["CREATE OR REPLACE TABLE t AS SELECT 1".to_owned()];
-    Ok(logged_statements(statements, "INSERT INTO runs".to_owned(), warehouse).join(";\n"))
+    Ok(sql_adapter(warehouse)
+        .render_logged(statements, "INSERT INTO runs".to_owned())
+        .join(";\n"))
 }
 
 /// Snowflake's swap with the record's insert.
@@ -125,7 +131,9 @@ pub(crate) fn swap_logged(warehouse: Warehouse) -> Result<String, String> {
         "CREATE OR REPLACE TABLE swap LIKE t".to_owned(),
         "ALTER TABLE t SWAP WITH swap".to_owned(),
     ];
-    Ok(logged_statements(statements, "INSERT INTO runs".to_owned(), warehouse).join(";\n"))
+    Ok(sql_adapter(warehouse)
+        .render_logged(statements, "INSERT INTO runs".to_owned())
+        .join(";\n"))
 }
 
 /// The current record's run id among the case's records, and the unreadable ones as `<run id>: <reason's start>`.

@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
+use crate::adapters::snowflake::constants::{LOADER_STATEMENT_TIMEOUT_SECS, SESSION_SCHEMA};
+use crate::adapters::snowflake::models::{SnowflakeAccount, SnowflakeDestination};
 use crate::auth::models::Authenticator;
 use crate::config::models::{DestinationConfig, DestinationKind};
 use crate::http::errors::ApiError;
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
-use crate::adapters::snowflake::constants::{LOADER_STATEMENT_TIMEOUT_SECS, SESSION_SCHEMA};
-use crate::adapters::snowflake::models::{SnowflakeAccount, SnowflakeDestination};
 use crate::sql_api::models::SqlClient;
 use crate::stage_api::models::DriverSession;
 

@@ -1,6 +1,6 @@
-use crate::column_types::models::{ColumnType, Warehouse};
 use crate::adapters::contract::tests::helpers::changed_staging;
 use crate::adapters::contract::tests::test_types::StagingChangesTestCase;
+use crate::column_types::models::{ColumnType, Warehouse};
 
 #[test]
 fn given_a_wider_plan_mid_load_when_changing_the_staging_table_then_it_holds_the_new_columns() {

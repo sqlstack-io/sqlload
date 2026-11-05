@@ -46,18 +46,11 @@ impl std::fmt::Display for ColumnType {
     }
 }
 
-/// An engine SQLLoad reads from or writes to; every engine sqlbuild has an adapter for, plus Parquet files.
+/// An engine SQLLoad writes to: one per warehouse adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Warehouse {
     Snowflake,
-    BigQuery,
-    Databricks,
-    Postgres,
     DuckDb,
-    MotherDuck,
-    ClickHouse,
-    SqlServer,
-    Sqlite,
     /// Parquet files in an object store or directory: no SQL dialect, columns are Arrow types.
     Parquet,
 }
@@ -66,14 +59,7 @@ impl std::fmt::Display for Warehouse {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Snowflake => "Snowflake",
-            Self::BigQuery => "BigQuery",
-            Self::Databricks => "Databricks",
-            Self::Postgres => "Postgres",
             Self::DuckDb => "DuckDB",
-            Self::MotherDuck => "MotherDuck",
-            Self::ClickHouse => "ClickHouse",
-            Self::SqlServer => "SQL Server",
-            Self::Sqlite => "SQLite",
             Self::Parquet => "Parquet files",
         })
     }

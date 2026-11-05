@@ -1,11 +1,18 @@
+use crate::adapters::contract::main::cursor_bound::cursor_bound;
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::CursorQuery;
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
+use crate::adapters::snowflake::constants::USER_STAGE;
+use crate::adapters::snowflake::main::direct_problem::direct_problem;
+use crate::adapters::snowflake::main::stage_route::stage_route;
+use crate::adapters::snowflake::models::RouteRequest;
+use crate::adapters::snowflake::models::{CopyColumn, CopyValue, DirectCheck};
+use crate::adapters::snowflake::models::{ExternalStage, StageRoute};
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
 use crate::column_types::models::ColumnType;
-use crate::external_stage::main::direct_problem::direct_problem;
-use crate::external_stage::main::stage_route::stage_route;
-use crate::external_stage::models::RouteRequest;
-use crate::external_stage::models::{CopyColumn, CopyValue, DirectCheck};
 use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
@@ -57,17 +64,7 @@ use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::SchemaPlan;
 use crate::schema_plan::models::SchemaRules;
 use crate::schema_plan::models::TableAction;
-use crate::adapters::snowflake::constants::USER_STAGE;
-use crate::adapters::snowflake::models::{ExternalStage, StageRoute};
 use crate::store_paths::models::StoreKind;
-use crate::adapters::contract::main::alter_statements::alter_statements;
-use crate::adapters::contract::main::create_schema::create_schema;
-use crate::adapters::contract::main::create_table::create_table;
-use crate::adapters::contract::main::cursor_bound::cursor_bound;
-use crate::adapters::contract::main::cursor_query::cursor_query;
-use crate::adapters::contract::main::cursor_text::cursor_text;
-use crate::adapters::contract::models::CursorQuery;
-use crate::adapters::contract::models::WriteMode;
 
 /// The source table without its excluded columns.
 pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {
@@ -480,17 +477,13 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     match &table.schema.action {
         TableAction::Unchanged | TableAction::Recreate => None,
         TableAction::Create => Some(vec![
-            create_schema(&spec.destination, warehouse),
-            create_table(&spec.destination, &table.schema.write_columns, warehouse),
+            sql_adapter(warehouse).render_create_schema(&spec.destination),
+            sql_adapter(warehouse)
+                .render_create_table(&spec.destination, &table.schema.write_columns),
         ]),
         TableAction::Alter(changes) => {
             let live = table.live.as_deref().unwrap_or_default();
-            Some(alter_statements(
-                &spec.destination,
-                changes,
-                live,
-                warehouse,
-            ))
+            Some(sql_adapter(warehouse).render_change_columns(&spec.destination, changes, live))
         }
     }
 }
@@ -777,12 +770,11 @@ async fn lower_bound(
         }));
     }
     let spec = request.spec;
-    let query = cursor_query(&CursorQuery {
+    let query = sql_adapter(spec.warehouse).render_max_cursor(&CursorQuery {
         table: &spec.destination,
         column: &cursor.column,
         column_type: cursor_type,
         lookback: cursor.lookback,
-        warehouse: spec.warehouse,
     });
     let Some(query) = query else {
         return Ok(Err(format!(

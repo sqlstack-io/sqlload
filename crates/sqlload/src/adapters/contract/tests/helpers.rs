@@ -1,7 +1,7 @@
-use crate::column_types::models::ColumnType;
+use crate::adapters::contract::models::TableName;
+use crate::column_types::models::{ColumnType, LiveColumnType};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
-use crate::adapters::contract::models::TableName;
 
 /// `raw.app__accounts`.
 pub(crate) fn accounts() -> TableName {
@@ -51,10 +51,9 @@ pub(crate) fn changed_staging(
         .zip(new_types)
         .map(|(name, column_type)| column(name, column_type.clone()))
         .collect();
-    crate::adapters::contract::main::staging_changes::staging_changes(
+    crate::adapters::dispatch::main::sql_adapter::sql_adapter(warehouse).render_staging_changes(
         &staging,
         (&old, &new),
-        warehouse,
         None,
     )
 }
@@ -78,10 +77,28 @@ pub(crate) fn inserted(rows: usize, value_bytes: usize) -> Vec<String> {
         column("gone", ColumnType::Text),
     ];
     let row = vec![Some("1".to_owned()), Some("x".repeat(value_bytes)), None];
-    crate::adapters::contract::main::insert_rows::insert_rows(
-        &accounts(),
-        &columns,
-        &vec![row; rows],
+    crate::adapters::dispatch::main::sql_adapter::sql_adapter(
         crate::column_types::models::Warehouse::Snowflake,
     )
+    .render_insert_rows(&accounts(), &columns, &vec![row; rows])
+}
+
+/// A decimal type.
+pub(crate) const fn decimal(precision: u8, scale: u8) -> ColumnType {
+    ColumnType::Decimal { precision, scale }
+}
+
+/// A reported column type.
+pub(crate) fn live(
+    data_type: &str,
+    precision: Option<i64>,
+    scale: Option<i64>,
+    char_length: Option<i64>,
+) -> LiveColumnType {
+    LiveColumnType {
+        data_type: data_type.to_owned(),
+        precision,
+        scale,
+        char_length,
+    }
 }

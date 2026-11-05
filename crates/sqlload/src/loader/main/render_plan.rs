@@ -1,6 +1,6 @@
 //! Print a plan in the `sqb plan` style.
 
-use crate::external_stage::models::PlannedStage;
+use crate::adapters::snowflake::models::PlannedStage;
 use crate::loader::_helpers::render::{
     blocked_lines, load_lines, object_lines, stage_object_lines, tree, warning_lines,
 };
