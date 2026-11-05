@@ -146,6 +146,12 @@ impl TargetConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SourceConfig {
     pub kind: SourceKind,
+    /// A Python source declares a `@source.client`, which its tables share; added by discovery.
+    #[serde(default)]
+    pub shared_client: bool,
+    /// Let the tables of a Python source that shares a client load at the same time; off because clients are rarely thread-safe.
+    #[serde(default)]
+    pub parallel_tables: bool,
     /// The connection the source reads; optional for Python sources.
     #[serde(default)]
     pub connection: String,

@@ -14,5 +14,6 @@ pub fn own_connection(destination: &DuckDbDestination) -> Result<DuckDbDestinati
         .try_clone()?;
     Ok(DuckDbDestination {
         connection: Arc::new(Mutex::new(connection)),
+        ddl: destination.ddl.clone(),
     })
 }

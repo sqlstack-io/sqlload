@@ -187,6 +187,8 @@ def _source_declaration(source: Source, relative: str) -> dict[str, Any]:
 	settings: dict[str, Any] = {key: _setting(value) for key, value in source.settings.items() if value is not None}
 	if source.description is not None:
 		settings["description"] = source.description
+	if source.client_factory is not None:
+		settings["shared_client"] = True
 	settings["tables"] = {table.name: _table_settings(table) for table in source.tables}
 	return {"name": source.name, "module": relative, "settings": settings}
 

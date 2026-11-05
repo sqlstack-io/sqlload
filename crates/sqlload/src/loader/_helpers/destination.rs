@@ -1,4 +1,13 @@
+use std::collections::BTreeMap;
+
 use arrow_array::RecordBatch;
+use tokio::sync::OwnedMutexGuard;
+
+use crate::column_types::models::Warehouse;
+use crate::write_sql::constants::STALE_STAGING_HOURS;
+use crate::write_sql::main::create_schema::create_schema;
+use crate::write_sql::main::staging_tables_query::staging_tables_query;
+use crate::write_sql::main::stale_staging::stale_staging;
 
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::append_batch::append_batch;
@@ -13,7 +22,7 @@ use crate::duckdb_destination::main::query_text::query_text as query_duckdb;
 #[cfg(feature = "duckdb")]
 use crate::duckdb_destination::main::query_texts::query_texts as query_duckdb_texts;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::Destination;
+use crate::loader::models::{Destination, LoadRun, ProjectPlan, TablePlan};
 use crate::schema_plan::models::LiveColumn;
 use crate::snowflake_destination::main::describe_table::describe_table as describe_snowflake;
 use crate::snowflake_destination::main::query_text::query_text as query_snowflake;
@@ -35,6 +44,7 @@ pub(crate) async fn live_columns(
     destination: &Destination,
     table: &TableName,
 ) -> Result<Option<Vec<LiveColumn>>, LoaderError> {
+    tracing::debug!(table = %table.table, "reading the table's live columns");
     match destination {
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(describe_duckdb(duckdb, table).await?),
@@ -80,6 +90,88 @@ pub(crate) async fn text_values(
         Destination::Snowflake(snowflake) => Ok(query_snowflake_texts(snowflake, &query).await?),
         Destination::Files(_) => Err(no_sql()),
     }
+}
+
+/// Run schema changes with the destination's other loading tables' schema changes held off, so parallel tables never conflict in its catalog.
+pub(crate) async fn execute_ddl(
+    destination: &Destination,
+    statements: Vec<String>,
+) -> Result<(), LoaderError> {
+    let _held = ddl_guard(destination).await;
+    execute(destination, statements).await
+}
+
+/// The destination's schema changes held off until the guard drops; a files target has none.
+pub(crate) async fn ddl_guard(destination: &Destination) -> Option<OwnedMutexGuard<()>> {
+    let lock = match destination {
+        #[cfg(feature = "duckdb")]
+        Destination::DuckDb(duckdb) => Some(duckdb.ddl.clone()),
+        Destination::Snowflake(snowflake) => Some(snowflake.ddl.clone()),
+        Destination::Files(_) => None,
+    };
+    match lock {
+        Some(lock) => Some(lock.lock_owned().await),
+        None => None,
+    }
+}
+
+/// Before tables load at once: create the schemas of tables that do not exist yet (Python tables, which `apply` does not create), so their first loads never race to, and drop staging tables crashed loads left there over a day ago. A failure only warns: the table it concerns reports it, if it matters.
+pub(crate) async fn prepare_schemas(run: &LoadRun<'_>, plan: &ProjectPlan) {
+    let mut schemas: BTreeMap<(String, Option<String>, String), &TablePlan> = BTreeMap::new();
+    for table in plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_none() && table.output.is_none())
+    {
+        let name = &table.spec.destination;
+        schemas
+            .entry((
+                table.spec.target.clone(),
+                name.database.clone(),
+                name.schema.clone(),
+            ))
+            .and_modify(|seen| {
+                if !table.exists {
+                    *seen = table;
+                }
+            })
+            .or_insert(table);
+    }
+    for table in schemas.into_values() {
+        let Some(destination) = run.destinations.get(&table.spec.target) else {
+            continue;
+        };
+        let name = &table.spec.destination;
+        if !table.exists {
+            let create = create_schema(name, table.spec.warehouse);
+            if let Err(error) = execute(destination, vec![create]).await {
+                tracing::warn!(%error, schema = %name.schema, "cannot create the schema before loading");
+            }
+        }
+        if let Err(error) = drop_stale_staging(destination, name, table.spec.warehouse).await {
+            tracing::warn!(%error, schema = %name.schema, "cannot clean up old staging tables");
+        }
+    }
+}
+
+/// Drop the staging tables in `name`'s schema that crashed loads left over a day ago.
+async fn drop_stale_staging(
+    destination: &Destination,
+    name: &TableName,
+    warehouse: Warehouse,
+) -> Result<(), LoaderError> {
+    let database = match destination {
+        Destination::Snowflake(snowflake) => Some(snowflake.database.as_str()),
+        _ => None,
+    };
+    let query = staging_tables_query(name, database, warehouse);
+    let found = text_values(destination, query).await?;
+    let before = chrono::Utc::now() - chrono::Duration::hours(STALE_STAGING_HOURS);
+    let drops = stale_staging(name, &found, before.naive_utc(), warehouse);
+    if !drops.is_empty() {
+        tracing::info!(dropped = drops.len(), schema = %name.schema, "dropped staging tables crashed loads left");
+    }
+    execute(destination, drops).await
 }
 
 /// The destination for one table's load: DuckDB gets a connection of its own, so the table's transactions never mix with another table loading at the same time.

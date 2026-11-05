@@ -49,6 +49,8 @@ pub const PYTHON_SOURCE_KEYS: &[&str] = &[
     "exclude_columns",
     "allow_columns",
     "mask_key",
+    "shared_client",
+    "parallel_tables",
     "tables",
 ];
 

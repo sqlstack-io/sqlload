@@ -4,13 +4,13 @@ use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
-use crate::loader::_helpers::destination::execute;
+use crate::loader::_helpers::destination::execute_ddl;
 use crate::loader::_helpers::destination::single_text;
 use crate::loader::_helpers::publish::staged_columns;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
 use crate::loader::_helpers::run_log::run_entry;
-use crate::loader::_helpers::table_plan::plan_table;
+use crate::loader::_helpers::table_plan::replan_columns;
 use crate::loader::_helpers::table_plan::schema_statements;
 use crate::loader::constants::EMPTY_REPLACE_PROBLEM;
 use crate::loader::constants::NO_DATA_NOTE;
@@ -743,11 +743,15 @@ impl PythonFeed {
             Some(publisher) => &publisher.destination,
             None => load.destination,
         };
-        let replanned = replan(load, &self.table, &data, destination).await?;
+        let known = self
+            .publisher
+            .is_none()
+            .then_some(self.table.live.as_deref());
+        let replanned = replan(load, &self.table, (&data, known), destination).await?;
         let old = staged_columns(&self.table);
         let statements = schema_statements(&replanned);
         if let Some(statements) = statements {
-            execute(destination, statements).await?;
+            execute_ddl(destination, statements).await?;
             self.changes.extend(change_lines(&replanned));
         }
         if let Some(publisher) = &mut self.publisher {
@@ -757,9 +761,10 @@ impl PythonFeed {
                     (&old, &staged_columns(&replanned)),
                     replanned.spec.warehouse,
                 );
-                execute(&publisher.destination, changes).await?;
+                execute_ddl(&publisher.destination, changes).await?;
             }
             publisher.table = replanned.clone();
+            publisher.widen_files().await?;
         }
         self.table = TablePlan {
             live: replanned.live.clone().or(self.table.live.clone()),
@@ -806,11 +811,11 @@ impl PythonFeed {
     }
 }
 
-/// `planned` planned again for the columns `data` has; the cursor window, write mode, commits and run log stay as planned before the read, so they match what the function was asked for.
+/// `planned` with its columns planned again for those `data` has (`known` being the live columns when they need no read); everything else stays as planned before the read, so it matches what the function was asked for.
 async fn replan(
     load: &PythonLoad<'_>,
     planned: &TablePlan,
-    data: &YieldedData<'_>,
+    (data, known): (&YieldedData<'_>, Option<Option<&[LiveColumn]>>),
     destination: &Destination,
 ) -> Result<TablePlan, LoaderError> {
     let spec = &planned.spec;
@@ -845,20 +850,19 @@ async fn replan(
     };
     inferred.python = spec.python.clone();
     inferred.listed = true;
-    let replanned = plan_table(&inferred, destination, load.options).await?;
-    if let Some(blocked) = &replanned.schema.blocked {
-        return Err(LoaderError::Invalid(format!(
-            "the yielded data does not fit the table: {}",
-            blocked.reasons.join("; ")
-        )));
-    }
+    let columns = replan_columns(
+        &inferred,
+        (destination, planned.live.as_deref()),
+        known,
+        load.options,
+    )
+    .await?;
     Ok(TablePlan {
-        mode: planned.mode.clone(),
-        window: planned.window.clone(),
-        cursor_note: planned.cursor_note.clone(),
-        logged: planned.logged.clone(),
-        commits: planned.commits.clone(),
-        ..replanned
+        spec: columns.spec,
+        read_columns: columns.read_columns,
+        live: columns.live,
+        schema: columns.schema,
+        ..planned.clone()
     })
 }
 

@@ -11,6 +11,7 @@ use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::errors::LoaderError;
+use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
 use crate::loader::main::_plan_files::plan_files_table;
 use crate::loader::models::CommitRule;
@@ -18,6 +19,7 @@ use crate::loader::models::CursorSpec;
 use crate::loader::models::Destination;
 use crate::loader::models::PlanOptions;
 use crate::loader::models::ReadWindow;
+use crate::loader::models::ReplannedColumns;
 use crate::loader::models::SourceEnd;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
@@ -159,29 +161,55 @@ fn ignored_batch(plan: &TablePlan) -> Option<String> {
     Some(format!("batch is ignored: {reason}"))
 }
 
-/// A table's read columns, live columns and schema plan once more (one read of the live columns), for a load whose source shows new columns; the rest of its plan stays.
+/// A table's columns and schema plan once more during its load, when its source shows new columns; nothing else about its plan is read or checked again. `known` is the live columns when they are known to be current (a Python table's first batch, just after plan); otherwise one read of them, except that a files target has no SQL to read them with and keeps `stale`, what plan saw.
 pub(crate) async fn replan_columns(
     spec: &TableSpec,
-    destination: &Destination,
+    (destination, stale): (&Destination, Option<&[LiveColumn]>),
+    known: Option<Option<&[LiveColumn]>>,
     options: &PlanOptions,
-) -> Result<(Vec<ReadColumn>, Option<Vec<LiveColumn>>, SchemaPlan), LoaderError> {
-    let live = live_columns(destination, &spec.destination).await?;
-    let read = read_columns(spec).map_err(|problems| LoaderError::Invalid(problems.join("; ")))?;
-    let rules = SchemaRules {
-        warehouse: spec.warehouse,
-        contract: spec.contract,
-        on_schema_change: spec.on_schema_change,
-        type_change_rebuild: spec.type_change_rebuild,
-        rebuild_allowed: options.rebuild_allowed,
+) -> Result<ReplannedColumns, LoaderError> {
+    let live = match (known, destination) {
+        (Some(known), _) => known.map(<[LiveColumn]>::to_vec),
+        (None, Destination::Files(_)) => stale.map(<[LiveColumn]>::to_vec),
+        (None, _) => live_columns(destination, &spec.destination).await?,
     };
-    let schema = plan_schema(&desired_columns(spec, &read), live.as_deref(), rules);
+    let spec = with_live_columns(spec, live.as_deref()).unwrap_or_else(|| spec.clone());
+    let read = read_columns(&spec).map_err(|problems| LoaderError::Invalid(problems.join("; ")))?;
+    let desired = desired_columns(&spec, &read);
+    let schema = match destination {
+        Destination::Files(_) => files_schema(&spec, &desired, live.as_deref(), options),
+        _ => {
+            let rules = SchemaRules {
+                warehouse: spec.warehouse,
+                contract: spec.contract,
+                on_schema_change: spec.on_schema_change,
+                type_change_rebuild: spec.type_change_rebuild,
+                rebuild_allowed: options.rebuild_allowed,
+            };
+            let compared = live.as_deref().filter(|_| !options.reload);
+            let mut schema = plan_schema(&desired, compared, rules);
+            if options.reload && live.is_some() {
+                schema.action = TableAction::Recreate;
+            }
+            schema
+        }
+    };
     if let Some(blocked) = &schema.blocked {
+        let what = match spec.python {
+            Some(_) => "the yielded data does",
+            None => "the files' new columns do",
+        };
         return Err(LoaderError::Invalid(format!(
-            "the files' new columns do not fit the table: {}",
+            "{what} not fit the table: {}",
             blocked.reasons.join("; ")
         )));
     }
-    Ok((read, live, schema))
+    Ok(ReplannedColumns {
+        spec,
+        read_columns: read,
+        live,
+        schema,
+    })
 }
 
 /// How a table's columns are read: by name (files and Python tables, whose batches carry the names) or by Postgres expression.
@@ -702,7 +730,7 @@ pub(crate) struct CommitRequest<'a> {
     pub(crate) mode: &'a WriteMode,
 }
 
-/// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch` windows; an ordered Postgres read (an index leads with a non-text cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads, for `batch = "whole"`, and for `append` without a cursor; about every 1 GB for other tables without a cursor.
+/// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch` windows; an ordered Postgres read (an index leads with a non-text cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads, for `batch = "whole"`, and for `append` without a cursor or logged state, which would have nowhere to resume from; about every 1 GB for other tables without a cursor.
 pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, String> {
     let spec = request.spec;
     if let Some(files) = request.files {
@@ -717,7 +745,9 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
     }
     let Some(cursor) = &spec.cursor else {
         return Ok(match request.mode {
-            WriteMode::Append => CommitRule::Whole(WholeReason::AppendWithoutCursor),
+            WriteMode::Append if !spec.logged => {
+                CommitRule::Whole(WholeReason::AppendWithoutCursor)
+            }
             _ => CommitRule::Size,
         });
     };

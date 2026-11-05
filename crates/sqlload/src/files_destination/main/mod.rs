@@ -10,6 +10,7 @@ pub mod newest_load_files;
 pub mod open_writer;
 pub mod output_problems;
 pub mod partition_window;
+pub mod partitions_finished;
 pub mod plan_replaced_files;
 pub mod read_table_state;
 pub mod repair_table;

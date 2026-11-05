@@ -83,7 +83,7 @@ def windowed(ctx):
     yield {"day": str(ctx.cursor_value), "n": len(seen)}
 
 
-@api.table(write_strategy="append")
+@api.table(write_strategy="merge", unique_key=["page", "n"])
 def big(ctx):
     for page in range(200):
         yield [{"page": page, "n": n, "pad": "x" * 200} for n in range(1000)]

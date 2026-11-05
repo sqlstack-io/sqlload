@@ -289,6 +289,15 @@ pub struct LoadRun<'a> {
     pub options: &'a PlanOptions,
 }
 
+/// What every table of a load shares, owned so each table can run on a thread of its own.
+#[derive(Debug)]
+pub struct SharedRun {
+    pub project: ProjectConfig,
+    pub destinations: BTreeMap<String, Destination>,
+    pub host: Option<std::sync::Arc<dyn PythonHost>>,
+    pub options: PlanOptions,
+}
+
 /// One table's load: its rows, or why it failed (other tables still load).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableOutcome {
@@ -303,6 +312,16 @@ pub struct TableLoaded {
     /// `created ...` and `altered ...` lines.
     pub changes: Vec<String>,
     pub note: Option<String>,
+}
+
+/// A table's columns planned once more during its load, for rows showing new columns.
+#[derive(Debug)]
+pub struct ReplannedColumns {
+    /// The table's spec, with a Python table's live columns among its source's.
+    pub spec: TableSpec,
+    pub read_columns: Vec<ReadColumn>,
+    pub live: Option<Vec<LiveColumn>>,
+    pub schema: SchemaPlan,
 }
 
 /// A Python table's load as its function's batches arrive: the plan for the columns seen so far, and where the batches go.

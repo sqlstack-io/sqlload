@@ -12,6 +12,8 @@ pub struct SnowflakeDestination {
     pub driver: Arc<DriverSession>,
     pub http: reqwest::Client,
     pub database: String,
+    /// Held while a load's tables change the schema, one at a time.
+    pub ddl: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// One connection's settings.

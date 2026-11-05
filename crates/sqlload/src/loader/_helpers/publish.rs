@@ -13,6 +13,7 @@ use crate::files_destination::main::clear_pending::clear_pending;
 use crate::files_destination::main::close_writer::close_writer;
 use crate::files_destination::main::mark_pending::mark_pending;
 use crate::files_destination::main::open_writer::open_writer;
+use crate::files_destination::main::partitions_finished::partitions_finished;
 use crate::files_destination::main::write_rows::write_rows;
 use crate::files_destination::models::FilesWriter;
 use crate::files_destination::models::PartitionFolder;
@@ -28,6 +29,7 @@ use crate::loader::_helpers::destination::append_rows;
 use crate::loader::_helpers::destination::execute;
 use crate::loader::_helpers::destination::stage_file;
 use crate::loader::_helpers::destination::table_destination;
+use crate::loader::_helpers::destination::{ddl_guard, execute_ddl};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_runs_table;
@@ -77,6 +79,7 @@ use crate::write_sql::main::commit_statements::commit_statements;
 use crate::write_sql::main::cursor_text::cursor_text;
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::staging_changes::staging_changes;
+use crate::write_sql::main::staging_id::staging_id;
 use crate::write_sql::main::staging_table::staging_table;
 use crate::write_sql::main::swap_table::swap_table;
 use crate::write_sql::models::TableName;
@@ -194,10 +197,10 @@ impl Publisher {
                 let (staging, create) = staging_table(
                     &table.spec.destination,
                     &staged_columns(&table),
-                    &load_id,
+                    &staging_id(&load_id, chrono::Utc::now().naive_utc()),
                     table.spec.warehouse,
                 );
-                execute(&destination, vec![create]).await?;
+                execute_ddl(&destination, vec![create]).await?;
                 Some(staging)
             }
         };
@@ -288,6 +291,7 @@ impl Publisher {
     /// A point where the rows so far may commit, replacing `range` under `delete_insert`: the batch is loaded (one `COPY` for all its files), then committed unless the table commits only at the end, or is logged and its `ctx.state` has not changed since the last commit (its rows then wait in the staging table).
     pub(crate) async fn cut(&mut self, range: CommitRange) -> Result<(), LoaderError> {
         self.flush_batch().await?;
+        let unfinished = self.partition_unfinished(&range)?;
         self.waiting_range = Some(match (self.waiting_range.take(), range) {
             (Some(CommitRange::Window { from, .. }), CommitRange::Window { to, .. }) => {
                 CommitRange::Window { from, to }
@@ -299,7 +303,7 @@ impl Publisher {
             (_, range) => range,
         });
         let unchanged = self.run.is_some() && self.state == self.committed_state;
-        if self.direct || self.at_end || unchanged {
+        if self.direct || self.at_end || unchanged || unfinished {
             return Ok(());
         }
         self.commit(false).await
@@ -340,7 +344,7 @@ impl Publisher {
                 .iter()
                 .map(|table| format!("DROP TABLE IF EXISTS {}", qualified_name(table, warehouse)))
                 .collect();
-            if let Err(error) = execute(&self.destination, drops).await {
+            if let Err(error) = execute_ddl(&self.destination, drops).await {
                 tracing::warn!(%error, table = %staging.table, "cannot drop the staging table");
             }
         }
@@ -450,6 +454,10 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
+        let _held = match self.at_end {
+            true => ddl_guard(&self.destination).await,
+            false => None,
+        };
         execute(&self.destination, statements).await?;
         self.committed_rows += self.waiting_rows;
         self.waiting_rows = 0;
@@ -533,8 +541,18 @@ impl Publisher {
         };
         widened.files = Some(files_source);
         widened.listed = spec.listed;
-        let (read_columns, live, schema) =
-            replan_columns(&widened, &self.destination, run.options).await?;
+        let replanned_columns = replan_columns(
+            &widened,
+            (&self.destination, self.table.live.as_deref()),
+            None,
+            run.options,
+        )
+        .await?;
+        let (read_columns, live, schema) = (
+            replanned_columns.read_columns,
+            replanned_columns.live,
+            replanned_columns.schema,
+        );
         let read_as: Vec<DesiredColumn> = read_columns
             .iter()
             .map(|column| DesiredColumn {
@@ -556,7 +574,7 @@ impl Publisher {
         };
         let old = staged_columns(&self.table);
         if let Some(statements) = schema_statements(&replanned) {
-            execute(&self.destination, statements).await?;
+            execute_ddl(&self.destination, statements).await?;
         }
         if let Some(staging) = &self.staging {
             let changes = staging_changes(
@@ -564,10 +582,10 @@ impl Publisher {
                 (&old, &staged_columns(&replanned)),
                 replanned.spec.warehouse,
             );
-            execute(&self.destination, changes).await?;
+            execute_ddl(&self.destination, changes).await?;
         }
         self.table = replanned;
-        Ok(())
+        self.widen_files().await
     }
 }
 
@@ -921,6 +939,66 @@ impl Publisher {
         self.commits += 1;
         self.committed_state = self.state.clone();
         Ok(())
+    }
+
+    /// Whether a files target's `delete_insert` would end this commit inside a partition it wrote (a `batch` finer than the partition): the commit then waits for the rest of the partition, so a failure leaves its old files in place and none of the new ones.
+    fn partition_unfinished(&self, range: &CommitRange) -> Result<bool, LoaderError> {
+        let (
+            Some(sink),
+            WriteMode::DeleteInsert { cursor_column, .. },
+            CommitRange::Window { to: Some(to), .. },
+        ) = (&self.files, &self.table.mode, range)
+        else {
+            return Ok(false);
+        };
+        let cursor_type = self
+            .table
+            .schema
+            .write_columns
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(cursor_column))
+            .map(|column| &column.column_type);
+        let (Some(partition), Some(writer), Some(cursor_type)) =
+            (&sink.output.path.partition, &sink.writer, cursor_type)
+        else {
+            return Ok(false);
+        };
+        partitions_finished(&writer.partitions, partition.by, cursor_type, to)
+            .map(|finished| !finished)
+            .map_err(LoaderError::Invalid)
+    }
+
+    /// The columns grew while a files commit is being written: store its open files, and write later rows to new files holding the new columns too.
+    pub(crate) async fn widen_files(&mut self) -> Result<(), LoaderError> {
+        let Some(sink) = self.files.as_mut() else {
+            return Ok(());
+        };
+        let Some(mut writer) = sink.writer.take() else {
+            return Ok(());
+        };
+        let cursor_column = self
+            .table
+            .spec
+            .cursor
+            .as_ref()
+            .map(|cursor| cursor.column.as_str());
+        let opened = open_writer(WriterRequest {
+            folder: sink.folder.clone(),
+            path: &sink.output.path,
+            cursor_column,
+            columns: &self.table.schema.write_columns,
+            load_id: &self.load_id,
+            file_id: &writer.file_id,
+            loaded_at: &self.loaded_at,
+        });
+        let closed = close_writer(&mut writer, false).await.map(|_| ());
+        let schema = opened.map(|opened| opened.schema);
+        if let Ok(schema) = &schema {
+            writer.schema = schema.clone();
+        }
+        sink.writer = Some(writer);
+        closed?;
+        schema.map(|_| ()).map_err(LoaderError::Invalid)
     }
 
     /// Whether the last commit still has replaced files to delete that no partition written took with it.

@@ -47,6 +47,7 @@ SOURCE_SETTINGS: frozenset[str] = frozenset(
 		"destination_path",
 		"exclude_columns",
 		"mask_key",
+		"parallel_tables",
 		"schema",
 		"table_name",
 	}
@@ -130,6 +131,8 @@ def source(name: str, *, description: str | None = None, **settings: Any) -> Sou
 	"""A source tables attach to with `@<source>.table(...)`; `settings` are its connection,
 	destination and the defaults its tables share."""
 	_check_settings(settings, TABLE_SETTINGS | SOURCE_SETTINGS, "source")
+	if not isinstance(settings.get("parallel_tables", False), bool):
+		raise TypeError(f"source {name}: parallel_tables must be True or False")
 	return Source(name=name, description=description, settings=dict(settings))
 
 

@@ -9,7 +9,7 @@ use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
 use crate::files_destination::models::PendingPhase;
-use crate::loader::_helpers::destination::{execute, live_columns, text_values};
+use crate::loader::_helpers::destination::{ddl_guard, execute, live_columns, text_values};
 use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, PythonLoad, RunEntry, TablePlan, TableSpec};
@@ -168,6 +168,7 @@ pub(crate) async fn ensure_runs_table(
     let Some(setup) = runs_setup(&spec.destination, spec.warehouse, exists) else {
         return Ok(());
     };
+    let _held = ddl_guard(destination).await;
     execute(destination, vec![setup.schema]).await?;
     match (
         execute(destination, vec![setup.create]).await,
