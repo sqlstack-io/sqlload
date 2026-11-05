@@ -33,7 +33,10 @@ pub fn staging_changes(
             .or_else(|| {
                 started
                     .iter()
-                    .find(|known| known.name == stored)
+                    .find(|known| match warehouse {
+                        Warehouse::Snowflake => known.name == stored,
+                        _ => known.name.eq_ignore_ascii_case(&stored),
+                    })
                     .map(|known| &known.column_type)
             });
         match known {

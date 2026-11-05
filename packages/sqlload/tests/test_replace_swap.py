@@ -153,11 +153,14 @@ def things(ctx):
 """
 
 
-def test_given_a_destination_column_when_the_source_starts_carrying_it_mid_load_then_it_fills(tmp_path: Path) -> None:
+@pytest.mark.parametrize("added", ["note", "Note"])
+def test_given_a_destination_column_when_the_source_starts_carrying_it_mid_load_then_it_fills(
+    tmp_path: Path, added: str
+) -> None:
     root = project(tmp_path, STARTING_TO_CARRY)
     assert sqlload(root, "load").returncode == 0
     with duckdb.connect(str(root / "wh.duckdb")) as connection:
-        connection.execute("ALTER TABLE raw.api__things ADD COLUMN note VARCHAR")
+        connection.execute(f"ALTER TABLE raw.api__things ADD COLUMN {added} VARCHAR")
     second = sqlload(root, "load", run=2)
     assert second.returncode == 0, second.stderr
     assert query(root, "SELECT id, note FROM raw.api__things ORDER BY id") == [(1, None), (2, "now")]
