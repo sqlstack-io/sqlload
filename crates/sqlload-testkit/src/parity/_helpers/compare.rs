@@ -1,3 +1,8 @@
+use std::any::Any;
+use std::io::Write;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use sqlload::column_types::models::Warehouse;
 use sqlload::file_store::main::delete_files::delete_files;
 use sqlload::file_store::main::list_files::list_files;
 use sqlload::file_store::main::open_folder::open_folder;
@@ -12,6 +17,8 @@ use sqlload::loader::models::{Destination, LoadRun, PlanOptions};
 use sqlload::project::main::parse_project::parse_project;
 use sqlload::snowflake_destination::main::query_texts::query_texts;
 use sqlload::store_paths::models::{Location, StoreKind};
+use sqlload::write_sql::main::stored_name::stored_name;
+use tokio::runtime::Runtime;
 
 use crate::parity::_helpers::files::{case_files, parquet_file};
 use crate::parity::models::{Live, ParityCase, Side};
@@ -116,21 +123,28 @@ async fn differences(text: &str, live: &Live, tables: (&str, &str)) -> Result<Ve
     let Some(Destination::Snowflake(snowflake)) = destinations.get("direct") else {
         return Err("no Snowflake connection".to_owned());
     };
+    let schema = stored_name(&live.schema, Warehouse::Snowflake);
     let columns = query_texts(
         snowflake,
         &format!(
             "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{}' AND TABLE_NAME = '{}' AND COLUMN_NAME NOT IN ('_SQLLOAD_LOAD_ID', '_SQLLOAD_LOADED_AT') ORDER BY COLUMN_NAME",
-            live.schema, tables.0
+            schema, tables.0
         ),
     )
     .await
     .map_err(|error| error.to_string())?;
+    if columns.is_empty() {
+        return Err(format!(
+            "no columns found for {schema}.{} in the information schema",
+            tables.0
+        ));
+    }
     let select: Vec<String> = columns
         .iter()
         .map(|column| format!("COALESCE(TO_VARCHAR(\"{column}\"), '<NULL>')"))
         .collect();
     let row = select.join(" || '|' || ");
-    let table = |name: &str| format!("\"{}\".\"{name}\"", live.schema);
+    let table = |name: &str| format!("\"{schema}\".\"{name}\"");
     let query = format!(
         "SELECT 'left only: ' || r FROM (SELECT {row} AS r FROM {0} MINUS SELECT {row} FROM {1}) UNION ALL SELECT 'right only: ' || r FROM (SELECT {row} AS r FROM {1} MINUS SELECT {row} FROM {0}) UNION ALL SELECT 'left has ' || (SELECT COUNT(*) FROM {0}) || ' rows, right has ' || (SELECT COUNT(*) FROM {1}) WHERE (SELECT COUNT(*) FROM {0}) <> (SELECT COUNT(*) FROM {1})",
         table(tables.0),
@@ -141,30 +155,64 @@ async fn differences(text: &str, live: &Live, tables: (&str, &str)) -> Result<Ve
         .map_err(|error| error.to_string())
 }
 
-/// Load the case both ways and compare: `same rows`, `both fail`, or what differed.
-pub(crate) async fn run_case(live: &Live, test_case: &ParityCase) -> Result<String, String> {
+/// Load the case both ways and compare: `same rows`, `both fail`, or what differed. Its tables and files go whatever happened, a panic included, after its error is printed.
+pub(crate) fn run_case(
+    runtime: &Runtime,
+    live: &Live,
+    test_case: &ParityCase,
+) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().simple().to_string();
-    let short = id.get(..8).unwrap_or_default();
-    let folder_key = format!("{}parity-{short}/{}/", live.prefix, test_case.name);
-    let folder = lake_folder(live, &folder_key).await?;
-    for (key, batch) in case_files(test_case.files)? {
-        write_file(&folder, key, parquet_file(&batch)?)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
+    let short = id.get(..8).unwrap_or_default().to_ascii_uppercase();
+    let folder_key = format!(
+        "{}parity-{}/{}/",
+        live.prefix,
+        short.to_ascii_lowercase(),
+        test_case.name
+    );
     let upper = test_case.name.to_ascii_uppercase();
     let tables = (
         format!("PARITY_{short}_{upper}_LEFT"),
         format!("PARITY_{short}_{upper}_RIGHT"),
     );
     let text = project_text(live, &folder_key, test_case, (&tables.0, &tables.1));
-    let outcome = compare(&text, live, test_case, (&tables.0, &tables.1)).await;
-    if let Ok(files) = list_files(&folder).await {
-        let keys: Vec<String> = files.into_iter().map(|file| file.relative_key).collect();
-        let _ = delete_files(&folder, &keys).await;
+    let names = (tables.0.as_str(), tables.1.as_str());
+    let ran = catch_unwind(AssertUnwindSafe(|| {
+        runtime.block_on(async {
+            write_files(live, &folder_key, test_case).await?;
+            compare(&text, live, test_case, names).await
+        })
+    }));
+    let outcome = ran.unwrap_or_else(|panic| Err(panic_text(panic.as_ref())));
+    if let Err(reason) = &outcome {
+        let _ = writeln!(std::io::stdout(), "{}: error: {reason}", test_case.name);
     }
-    drop_tables(&text, live, (&tables.0, &tables.1)).await;
+    for problem in runtime.block_on(clean_up(&text, live, &folder_key, names)) {
+        let _ = writeln!(
+            std::io::stdout(),
+            "{}: cleanup failed: {problem}",
+            test_case.name
+        );
+    }
     outcome
+}
+
+fn panic_text(panic: &(dyn Any + Send)) -> String {
+    let text = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("no message");
+    format!("the case panicked: {text}")
+}
+
+async fn write_files(live: &Live, folder_key: &str, test_case: &ParityCase) -> Result<(), String> {
+    let folder = lake_folder(live, folder_key).await?;
+    for (key, batch) in case_files(test_case.files)? {
+        write_file(&folder, key, parquet_file(&batch)?)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 async fn compare(
@@ -175,6 +223,15 @@ async fn compare(
 ) -> Result<String, String> {
     let (left_plan, left) = load_side(text, "left").await?;
     let (_, right) = load_side(text, "right").await?;
+    for (side, failure) in [("left", &left), ("right", &right)] {
+        if let Some(reason) = failure {
+            let _ = writeln!(
+                std::io::stdout(),
+                "{}: {side} failed: {reason}",
+                test_case.name
+            );
+        }
+    }
     let direct = left_plan.contains("destination loads parquet files from");
     if test_case.left_is_direct && left.is_none() && !direct {
         return Ok(format!("the left side did not load directly:\n{left_plan}"));
@@ -193,18 +250,49 @@ async fn compare(
     }
 }
 
-async fn drop_tables(text: &str, live: &Live, tables: (&str, &str)) {
-    let Ok(project) = parse_project(text, &no_variables) else {
-        return;
-    };
-    let Ok(destinations) = connect_targets(&project).await else {
-        return;
-    };
+/// Delete the case's files and drop its tables; what could not be cleaned up.
+async fn clean_up(text: &str, live: &Live, folder_key: &str, tables: (&str, &str)) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    match delete_case_files(live, folder_key).await {
+        Ok(()) => {}
+        Err(problem) => problems.push(problem),
+    }
+    match drop_tables(text, live, tables).await {
+        Ok(()) => {}
+        Err(problem) => problems.push(problem),
+    }
+    problems
+}
+
+async fn delete_case_files(live: &Live, folder_key: &str) -> Result<(), String> {
+    let folder = lake_folder(live, folder_key).await?;
+    let files = list_files(&folder)
+        .await
+        .map_err(|error| error.to_string())?;
+    let keys: Vec<String> = files.into_iter().map(|file| file.relative_key).collect();
+    delete_files(&folder, &keys)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn drop_tables(text: &str, live: &Live, tables: (&str, &str)) -> Result<(), String> {
+    let project = parse_project(text, &no_variables).map_err(|error| error.to_string())?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
     let Some(Destination::Snowflake(snowflake)) = destinations.get("direct") else {
-        return;
+        return Err("no Snowflake connection".to_owned());
     };
+    let schema = stored_name(&live.schema, Warehouse::Snowflake);
+    let mut problems: Vec<String> = Vec::new();
     for table in [tables.0, tables.1] {
-        let statement = format!("DROP TABLE IF EXISTS \"{}\".\"{table}\"", live.schema);
-        let _ = query_texts(snowflake, &statement).await;
+        let statement = format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\"");
+        if let Err(error) = query_texts(snowflake, &statement).await {
+            problems.push(format!("{table}: {error}"));
+        }
+    }
+    match problems.is_empty() {
+        true => Ok(()),
+        false => Err(problems.join("; ")),
     }
 }

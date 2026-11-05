@@ -3,7 +3,7 @@ use crate::external_stage::models::CopyValue;
 use crate::external_stage::tests::helpers::{column, direct_sql, lake, many_files, order_columns};
 use crate::external_stage::tests::test_types::DirectCopiesTestCase;
 
-const TWO_FILES: &str = "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"ID\", \"NAME\", \"DAY\", \"_SQLLOAD_SOURCE_FILE\", \"_SQLLOAD_SOURCE_VERSION\") FROM (SELECT CAST(GET($1, 'id') AS NUMBER(38,0)), CAST(GET($1, 'name') AS VARCHAR), CASE WHEN METADATA$FILENAME IN ('shop/orders/day=2026-11-03/part-0.parquet', 's3://lake/raw/shop/orders/day=2026-11-03/part-0.parquet') THEN CAST('2026-11-03' AS DATE) WHEN METADATA$FILENAME IN ('shop/orders/day=2026-11-04/part-0.parquet', 's3://lake/raw/shop/orders/day=2026-11-04/part-0.parquet') THEN CAST('2026-11-04' AS DATE) ELSE NULL END, CASE WHEN METADATA$FILENAME IN ('shop/orders/day=2026-11-03/part-0.parquet', 's3://lake/raw/shop/orders/day=2026-11-03/part-0.parquet') THEN 's3://lake/raw/shop/orders/day=2026-11-03/part-0.parquet' WHEN METADATA$FILENAME IN ('shop/orders/day=2026-11-04/part-0.parquet', 's3://lake/raw/shop/orders/day=2026-11-04/part-0.parquet') THEN 's3://lake/raw/shop/orders/day=2026-11-04/part-0.parquet' ELSE TO_VARCHAR(TO_NUMBER('sqlload: unexpected staged file ' || METADATA$FILENAME)) END, CASE WHEN METADATA$FILENAME IN ('shop/orders/day=2026-11-03/part-0.parquet', 's3://lake/raw/shop/orders/day=2026-11-03/part-0.parquet') THEN 'etag-2026-11-03' WHEN METADATA$FILENAME IN ('shop/orders/day=2026-11-04/part-0.parquet', 's3://lake/raw/shop/orders/day=2026-11-04/part-0.parquet') THEN 'etag-2026-11-04' ELSE NULL END FROM @\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"/shop/orders/) FILES = ('day=2026-11-03/part-0.parquet', 'day=2026-11-04/part-0.parquet') FILE_FORMAT = (TYPE = PARQUET USE_LOGICAL_TYPE = TRUE BINARY_AS_TEXT = FALSE) ON_ERROR = ABORT_STATEMENT FORCE = TRUE";
+const TWO_FILES: &str = "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"ID\", \"NAME\", \"DAY\", \"_SQLLOAD_SOURCE_FILE\", \"_SQLLOAD_SOURCE_VERSION\") FROM (SELECT CAST(GET($1, 'id') AS NUMBER(38,0)), CAST(GET($1, 'name') AS VARCHAR), CASE WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-03/part-0.parquet' THEN CAST('2026-11-03' AS DATE) WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-04/part-0.parquet' THEN CAST('2026-11-04' AS DATE) ELSE NULL END, CASE WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-03/part-0.parquet' THEN 's3://lake/raw/shop/orders/day=2026-11-03/part-0.parquet' WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-04/part-0.parquet' THEN 's3://lake/raw/shop/orders/day=2026-11-04/part-0.parquet' ELSE TO_VARCHAR(TO_NUMBER('sqlload: unexpected staged file ' || METADATA$FILENAME)) END, CASE WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-03/part-0.parquet' THEN 'etag-2026-11-03' WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-04/part-0.parquet' THEN 'etag-2026-11-04' ELSE NULL END FROM @\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"/shop/orders/) FILES = ('day=2026-11-03/part-0.parquet', 'day=2026-11-04/part-0.parquet') FILE_FORMAT = (TYPE = PARQUET USE_LOGICAL_TYPE = TRUE BINARY_AS_TEXT = FALSE) ON_ERROR = ABORT_STATEMENT FORCE = TRUE";
 
 #[test]
 fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the_rust_reader() {
@@ -19,13 +19,27 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             expected_copies: Ok((1, TWO_FILES)),
         },
         DirectCopiesTestCase {
+            description: "on an external stage METADATA$FILENAME is the bucket-relative key: the stage's prefix included, no URL",
+            files: vec![("part-0.parquet".to_owned(), "2026-11-04")],
+            columns: vec![column(
+                "_sqlload_source_file",
+                ColumnType::Text,
+                CopyValue::SourceFile,
+            )],
+            source: "raw/shop/orders/",
+            expected_copies: Ok((
+                1,
+                "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"_SQLLOAD_SOURCE_FILE\") FROM (SELECT CASE WHEN METADATA$FILENAME = 'raw/shop/orders/part-0.parquet' THEN 's3://lake/raw/shop/orders/part-0.parquet' ELSE TO_VARCHAR(TO_NUMBER('sqlload: unexpected staged file ' || METADATA$FILENAME)) END FROM @\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"/shop/orders/)",
+            )),
+        },
+        DirectCopiesTestCase {
             description: "a timestamp partition is printed in full with its offset",
             files: vec![("hour=x/part-0.parquet".to_owned(), "2026-11-04T10:00:00Z")],
             columns: vec![column("day", ColumnType::TimestampTz, CopyValue::Partition)],
             source: "raw/shop/orders/",
             expected_copies: Ok((
                 1,
-                "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"DAY\") FROM (SELECT CASE WHEN METADATA$FILENAME IN ('shop/orders/hour=x/part-0.parquet', 's3://lake/raw/shop/orders/hour=x/part-0.parquet') THEN CAST('2026-11-04 10:00:00.000000 +00:00' AS TIMESTAMP_TZ(6)) ELSE NULL END FROM",
+                "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"DAY\") FROM (SELECT CASE WHEN METADATA$FILENAME = 'raw/shop/orders/hour=x/part-0.parquet' THEN CAST('2026-11-04 10:00:00.000000 +00:00' AS TIMESTAMP_TZ(6)) ELSE NULL END FROM",
             )),
         },
         DirectCopiesTestCase {
@@ -35,7 +49,7 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             source: "raw/shop/orders/",
             expected_copies: Ok((
                 1,
-                "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"DAY\") FROM (SELECT CASE WHEN METADATA$FILENAME IN ('shop/orders/n=007/part-0.parquet', 's3://lake/raw/shop/orders/n=007/part-0.parquet') THEN CAST('7' AS NUMBER(38,0)) ELSE NULL END FROM",
+                "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"DAY\") FROM (SELECT CASE WHEN METADATA$FILENAME = 'raw/shop/orders/n=007/part-0.parquet' THEN CAST('7' AS NUMBER(38,0)) ELSE NULL END FROM",
             )),
         },
         DirectCopiesTestCase {

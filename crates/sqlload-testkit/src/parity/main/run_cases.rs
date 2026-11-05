@@ -22,7 +22,7 @@ pub fn run_cases(cases: &[ParityCase]) -> Result<BTreeMap<String, String>, Strin
         .build()
         .map_err(|error| error.to_string())?;
     for case in cases {
-        let outcome = match runtime.block_on(run_case(&live, case)) {
+        let outcome = match run_case(&runtime, &live, case) {
             Ok(outcome) => outcome,
             Err(reason) => format!("the case could not run: {reason}"),
         };
