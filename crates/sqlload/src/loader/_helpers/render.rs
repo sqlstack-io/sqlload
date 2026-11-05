@@ -175,7 +175,12 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             },
         ));
     }
-    lines.extend(table.route.as_ref().map(route_line));
+    lines.extend(
+        table
+            .route
+            .as_ref()
+            .map(|route| route_line(route, spec.files.is_some())),
+    );
     lines.extend(
         table
             .cursor_note
@@ -228,9 +233,13 @@ fn files_line(output: &FilesOutput) -> String {
     format!("files   {}  {format}{partition}", output.path.folder)
 }
 
-fn route_line(route: &Route) -> String {
+/// The route's steps; for a files source also why, since whether the destination loads the files itself depends on the table.
+fn route_line(route: &Route, files: bool) -> String {
     let steps: Vec<String> = route.steps.iter().map(ToString::to_string).collect();
-    format!("route  {}", steps.join(" -> "))
+    match files {
+        true => format!("route  {} ({})", steps.join(" -> "), route.reason),
+        false => format!("route  {}", steps.join(" -> ")),
+    }
 }
 
 pub(crate) fn blocked_lines(table: &TablePlan) -> Vec<String> {

@@ -1,5 +1,9 @@
 use crate::project::constants::{FILES_CONNECTION_KINDS, WAREHOUSE_CONNECTION_KINDS};
-use crate::project::models::{ProjectConfig, SourceConfig, TargetConfig};
+use crate::project::models::{
+    ConnectionConfig, ProjectConfig, SourceConfig, StageConfig, TargetConfig,
+};
+use crate::store_paths::main::resolve_location::resolve_location;
+use crate::store_paths::models::{Location, StoreKind};
 
 /// Whether target `name` writes files (its connection is s3 or filesystem).
 pub(crate) fn is_files_target(project: &ProjectConfig, name: &str) -> bool {
@@ -82,6 +86,47 @@ pub(crate) fn destination_kind_problems(
         problems.push(format!(
             "{place} schema is for warehouse targets; a files target places tables with path or destination_path"
         ));
+    }
+    problems
+}
+
+/// Problems with a Snowflake connection's `stage`: an `s3` stage needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing stage, `DATABASE.SCHEMA.STAGE`).
+pub(crate) fn stage_problems(name: &str, connection: &ConnectionConfig) -> Vec<String> {
+    let ConnectionConfig::Snowflake {
+        stage:
+            StageConfig::S3 {
+                url,
+                storage_integration,
+                name: stage_name,
+                ..
+            },
+        ..
+    } = connection
+    else {
+        return Vec::new();
+    };
+    let place = format!("[connections.{name}] stage");
+    let mut problems: Vec<String> = Vec::new();
+    match resolve_location(None, url) {
+        Ok(Location {
+            store: StoreKind::S3 { .. },
+            ..
+        }) => {}
+        Ok(_) => problems.push(format!("{place} url {url:?} must be an s3:// URL")),
+        Err(error) => problems.push(format!("{place} url {url:?}: {error}")),
+    }
+    match (storage_integration, stage_name) {
+        (Some(_), Some(_)) | (None, None) => problems.push(format!(
+            "{place} needs exactly one of storage_integration (SQLLoad creates _SQLLOAD_STAGE in each loader schema) or name (an existing stage)"
+        )),
+        (None, Some(stage_name))
+            if stage_name.split('.').filter(|part| !part.is_empty()).count() != 3 =>
+        {
+            problems.push(format!(
+                "{place} name {stage_name:?} must be DATABASE.SCHEMA.STAGE"
+            ));
+        }
+        _ => {}
     }
     problems
 }

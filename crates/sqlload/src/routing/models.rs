@@ -69,6 +69,8 @@ pub struct ReaderOffer {
     pub unload_to: Vec<Store>,
     /// The data's estimated size, when the source knows it.
     pub estimated_bytes: Option<u64>,
+    /// Why the destination must not read `existing_files` itself even where it can reach them (SQLLoad would load them differently).
+    pub direct_blocked: Option<String>,
 }
 
 /// What a destination can take.

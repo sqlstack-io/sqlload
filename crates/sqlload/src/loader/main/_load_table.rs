@@ -1,10 +1,12 @@
 //! Load one table: read its source (a Python table through the host), stage the rows and apply the write strategy.
 
 use crate::loader::_helpers::destination::{cleanup_staging, execute, finish_staging, stage_batch};
+use crate::loader::_helpers::route::is_direct;
 use crate::loader::_helpers::run_log::{ensure_runs_table, fold_maximum, log_empty_run};
 use crate::loader::_helpers::sources::{open_source, read_source};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
+use crate::loader::main::_load_direct::load_direct;
 use crate::loader::main::_load_files::load_files_table;
 use crate::loader::main::_load_python::read_python_table;
 use crate::loader::models::{
@@ -17,6 +19,7 @@ use crate::run_log::main::logged_statements::logged_statements;
 use crate::run_log::main::runs_table::runs_table;
 use crate::run_log::models::RunOutcome;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
+use crate::snowflake_destination::models::LoadStage;
 use crate::time_text::main::now_utc_text::now_utc_text;
 use crate::write_sql::main::display_name::display_name;
 use crate::write_sql::main::staging_table::staging_table;
@@ -41,6 +44,21 @@ pub(in crate::loader) async fn load_one(
     let destination = run.destinations.get(&planned.spec.target).ok_or_else(|| {
         LoaderError::Invalid(format!("target {:?} is not connected", planned.spec.target))
     })?;
+    if let (Destination::Snowflake(snowflake), true) =
+        (destination, is_direct(planned.route.as_ref()))
+        && let LoadStage::External(stage) = &snowflake.stage
+    {
+        let rows = load_direct(planned, destination, (snowflake, stage)).await?;
+        let name = display_name(&planned.spec.destination, planned.spec.warehouse);
+        return Ok((
+            name,
+            TableLoaded {
+                rows,
+                changes: Vec::new(),
+                note: None,
+            },
+        ));
+    }
     let read = match (&planned.spec.python, &run.host) {
         (Some(_), Some(host)) => {
             let load = PythonLoad {
@@ -163,6 +181,7 @@ async fn stage_and_write(
                 mode: &table.mode,
                 load_id: &session.load_id,
                 loaded_at: &session.loaded_at,
+                hashed: &[],
             },
             &session.staging,
         );

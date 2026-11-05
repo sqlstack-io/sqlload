@@ -8,6 +8,8 @@ pub(crate) struct WriteStatementsTestCase {
     pub(crate) description: &'static str,
     pub(crate) warehouse: Warehouse,
     pub(crate) mode: WriteMode,
+    /// Columns the write hashes in SQL.
+    pub(crate) hashed: &'static [&'static str],
     pub(crate) expected_statements: &'static [&'static str],
 }
 

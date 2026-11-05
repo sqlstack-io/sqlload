@@ -7,6 +7,7 @@ pub mod cursor_text;
 pub mod display_name;
 pub mod loaded_files_query;
 pub mod qualified_name;
+pub mod quoted_identifier;
 pub mod sql_literal;
 pub mod staging_table;
 pub mod stored_name;

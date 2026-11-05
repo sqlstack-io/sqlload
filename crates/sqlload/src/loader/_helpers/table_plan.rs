@@ -267,7 +267,7 @@ async fn plan_table_once(
         _ => None,
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
-    let route = match table_route(spec, destination) {
+    let route = match table_route(spec, destination, files.as_ref()) {
         Ok(route) => Some(route),
         Err(problem) => {
             schema = blocked_plan(vec![problem]);

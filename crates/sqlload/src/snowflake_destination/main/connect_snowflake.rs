@@ -34,5 +34,7 @@ pub fn connect_snowflake(account: SnowflakeAccount) -> Result<SnowflakeDestinati
         driver: Arc::new(DriverSession::new(http.clone(), auth, &destination)),
         http,
         database: account.database,
+        stage: account.stage,
+        ready_stages: Arc::default(),
     })
 }

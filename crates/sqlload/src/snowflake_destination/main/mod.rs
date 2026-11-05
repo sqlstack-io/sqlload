@@ -1,8 +1,14 @@
 pub mod connect_snowflake;
+pub mod copy_external;
+pub mod copy_rows;
 pub mod copy_staged;
 pub mod describe_table;
 pub mod query_text;
 pub mod query_texts;
+pub mod ready_stage;
+pub mod remove_external;
 pub mod remove_staged;
 pub mod run_statements;
+pub mod show_stages;
+pub mod stage_external;
 pub mod stage_parquet;

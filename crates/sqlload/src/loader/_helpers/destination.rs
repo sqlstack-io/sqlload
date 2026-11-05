@@ -14,13 +14,17 @@ use crate::duckdb_destination::main::query_texts::query_texts as query_duckdb_te
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{Destination, StagingSession};
 use crate::schema_plan::models::LiveColumn;
+use crate::snowflake_destination::main::copy_external::copy_external;
 use crate::snowflake_destination::main::copy_staged::copy_staged;
 use crate::snowflake_destination::main::describe_table::describe_table as describe_snowflake;
 use crate::snowflake_destination::main::query_text::query_text as query_snowflake;
 use crate::snowflake_destination::main::query_texts::query_texts as query_snowflake_texts;
+use crate::snowflake_destination::main::remove_external::remove_external;
 use crate::snowflake_destination::main::remove_staged::remove_staged;
 use crate::snowflake_destination::main::run_statements::run_statements;
+use crate::snowflake_destination::main::stage_external::stage_external;
 use crate::snowflake_destination::main::stage_parquet::stage_parquet;
+use crate::snowflake_destination::models::LoadStage;
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::swap_table::swap_table;
 use crate::write_sql::models::TableName;
@@ -93,9 +97,16 @@ pub(crate) async fn stage_batch(
     match destination {
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(append_batch(duckdb, &session.staging, batch).await?),
-        Destination::Snowflake(snowflake) => {
-            Ok(stage_parquet(snowflake, &session.load_id, session.parts, &batch).await?)
-        }
+        Destination::Snowflake(snowflake) => match &snowflake.stage {
+            LoadStage::Internal => {
+                Ok(stage_parquet(snowflake, &session.load_id, session.parts, &batch).await?)
+            }
+            LoadStage::External(stage) => {
+                stage_external(stage, &session.load_id, session.parts, &batch)
+                    .await
+                    .map_err(LoaderError::Invalid)
+            }
+        },
         Destination::Files(_) => Err(no_sql()),
     }
 }
@@ -109,9 +120,19 @@ pub(crate) async fn finish_staging(
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(_) => Ok(()),
         Destination::Snowflake(_) if session.parts == 0 => Ok(()),
-        Destination::Snowflake(snowflake) => {
-            Ok(copy_staged(snowflake, &session.staging, &session.load_id).await?)
-        }
+        Destination::Snowflake(snowflake) => match &snowflake.stage {
+            LoadStage::Internal => {
+                Ok(copy_staged(snowflake, &session.staging, &session.load_id).await?)
+            }
+            LoadStage::External(stage) => copy_external(
+                snowflake,
+                stage,
+                &session.staging,
+                (&session.load_id, session.parts),
+            )
+            .await
+            .map_err(LoaderError::Invalid),
+        },
         Destination::Files(_) => Err(no_sql()),
     }
 }
@@ -129,10 +150,19 @@ pub(crate) async fn cleanup_staging(
     if let Err(error) = execute(destination, drops).await {
         tracing::warn!(%error, table = %session.staging.table, "cannot drop the staging table");
     }
-    if let Destination::Snowflake(snowflake) = destination
-        && session.parts > 0
-        && let Err(error) = remove_staged(snowflake, &session.load_id).await
-    {
+    let Destination::Snowflake(snowflake) = destination else {
+        return;
+    };
+    if session.parts == 0 {
+        return;
+    }
+    let removed = match &snowflake.stage {
+        LoadStage::Internal => remove_staged(snowflake, &session.load_id)
+            .await
+            .map_err(|error| error.to_string()),
+        LoadStage::External(stage) => remove_external(stage, &session.load_id, session.parts).await,
+    };
+    if let Err(error) = removed {
         tracing::warn!(%error, load_id = %session.load_id, "cannot remove the staged files");
     }
 }

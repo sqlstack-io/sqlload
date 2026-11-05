@@ -86,6 +86,18 @@ fn value_expression(request: &WriteStatementsRequest<'_>, column: &DesiredColumn
             literal(request.loaded_at, warehouse),
             warehouse_type(&ColumnType::TimestampTz, warehouse).sql
         ),
+        _ if request.hashed.contains(&column.name) => hashed(
+            &from_staging(&column.name, &column.column_type, warehouse),
+            warehouse,
+        ),
         _ => from_staging(&column.name, &column.column_type, warehouse),
+    }
+}
+
+/// The lowercase hex SHA-256 of `expression`'s UTF-8 text, as `hash` masking computes it.
+fn hashed(expression: &str, warehouse: Warehouse) -> String {
+    match warehouse {
+        Warehouse::Snowflake => format!("SHA2({expression}, 256)"),
+        _ => format!("sha256({expression})"),
     }
 }

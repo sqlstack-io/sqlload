@@ -42,6 +42,8 @@ pub struct WriteStatementsRequest<'a> {
     pub load_id: &'a str,
     /// The load time as an ISO 8601 UTC timestamp.
     pub loaded_at: &'a str,
+    /// Columns staged unmasked that the write hashes (`hash` masking done in SQL): the lowercase hex SHA-256 of their text.
+    pub hashed: &'a [String],
 }
 
 /// A cursor position to read from the destination.

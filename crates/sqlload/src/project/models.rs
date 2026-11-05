@@ -55,6 +55,9 @@ pub enum ConnectionConfig {
         /// Overrides the account URL, for tests.
         #[serde(default)]
         base_url: Option<String>,
+        /// Where loads stage their files: the user stage (default) or an S3 external stage.
+        #[serde(default)]
+        stage: StageConfig,
     },
     Postgres {
         host: String,
@@ -103,6 +106,32 @@ impl ConnectionConfig {
             Self::Http { .. } => "http",
         }
     }
+}
+
+/// Where a Snowflake connection stages the files it loads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StageConfig {
+    /// The user stage `@~`: files are uploaded through Snowflake, no grants needed.
+    #[default]
+    Internal,
+    /// An external stage on an S3 prefix: SQLLoad writes there itself, and Snowflake loads files of a files source under it directly.
+    S3 {
+        /// The stage's location, `s3://bucket/prefix/`.
+        url: String,
+        /// The storage integration of the stage SQLLoad creates (`_SQLLOAD_STAGE` in each loader schema).
+        #[serde(default)]
+        storage_integration: Option<String>,
+        /// An existing stage on `url` to use instead, `DATABASE.SCHEMA.STAGE`.
+        #[serde(default)]
+        name: Option<String>,
+        /// The bucket's region, for SQLLoad's own writes.
+        #[serde(default)]
+        region: Option<String>,
+        /// A custom S3 endpoint for SQLLoad's own writes (tests); Snowflake always reads the bucket itself.
+        #[serde(default)]
+        endpoint: Option<String>,
+    },
 }
 
 /// Where loaded tables go in one environment: a warehouse, or files in an s3 or filesystem connection.
