@@ -1,0 +1,56 @@
+name: Benchmarks
+
+# The comparison suite (benchmarks/): sqlload, dlt and ingestr loading the same data into DuckDB
+# on one runner. On demand only, reusing the containers job's cache of the release build. Shared
+# runners are noisy, so compare loaders within a run, not runs with each other.
+on:
+  workflow_dispatch:
+    inputs:
+      size:
+        description: Dataset size (reduced is 1M narrow rows)
+        type: choice
+        options: [reduced, wide, tiny, full]
+        default: reduced
+      scenarios:
+        description: Comma-separated scenarios or groups (empty for all)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Compare loaders
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: containers
+          save-if: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.9"
+      # A restored cache can hold a partly unpacked copy, which the DuckDB build refuses to unpack over.
+      - run: rm -rf target/duckdb-source*
+      - run: docker pull postgres:17
+      - name: Run the suite
+        env:
+          SIZE: ${{ inputs.size || 'reduced' }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: make bench-compare BENCH_OUT=benchmarks/results/run BENCH_ARGS="--size ${SIZE} --scenarios '${SCENARIOS}'"
+      - name: Report
+        if: always()
+        run: cat benchmarks/results/run/results.md >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results-${{ inputs.size || 'reduced' }}
+          path: |
+            benchmarks/results/run/results.json
+            benchmarks/results/run/results.md

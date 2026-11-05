@@ -1,0 +1,22 @@
+version = 1
+revision = 3
+requires-python = "==3.12.*"
+
+[[package]]
+name = "ingestr"
+version = "1.1.82"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/96/2627c5759d0ab085fd5122f6042a91d01e368d2bc5d094034b8adca961e4/ingestr-1.1.82-py3-none-any.whl", hash = "sha256:84c560a2748e9b3264c3f2a8256185465fde0140740183088c1fec52db49389b", size = 18435, upload-time = "2026-11-03T16:09:46.555Z" },
+]
+
+[[package]]
+name = "sqlload-benchmarks-ingestr"
+version = "0"
+source = { virtual = "." }
+dependencies = [
+    { name = "ingestr" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "ingestr", specifier = "==1.1.82" }]
