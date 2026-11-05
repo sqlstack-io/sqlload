@@ -11,3 +11,10 @@ pub(crate) struct BlockingThreadsTestCase {
     pub(crate) config: &'static str,
     pub(crate) expected_threads: Option<usize>,
 }
+
+pub(crate) struct LoadOptionsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) argv: &'static [&'static str],
+    /// `select | exclude | start | end`, or text the parse error must contain.
+    pub(crate) expected_options: Result<&'static str, &'static str>,
+}

@@ -18,12 +18,12 @@ python_paths = ["sources"]
 
 [connections.wh]
 kind = "duckdb"
-path = "wh.duckdb"
+database = "wh.duckdb"
 
 [connections.shop]
 kind = "http"
 base_url = "https://api.shop.example"
-token = "${SHOP_TOKEN}"
+token = "${ENV:SHOP_TOKEN}"
 
 [targets.dev]
 connection = "wh"

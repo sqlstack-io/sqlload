@@ -12,8 +12,8 @@ use crate::project::models::ProjectConfig;
 /// The most tables loading at once.
 pub(crate) fn thread_count(run: &LoadRun<'_>) -> usize {
     run.options
-        .threads
-        .or(run.project.threads)
+        .concurrency
+        .or(run.project.concurrency)
         .unwrap_or(DEFAULT_THREADS)
         .max(1)
 }

@@ -26,7 +26,8 @@ fn environment_variable(name: &str) -> Option<String> {
     }
 }
 
-fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
+/// The plan options `args` give.
+pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
     let start = cursor_flag(
         "--start-cursor-ts",
         args.start_cursor_ts,
@@ -34,12 +35,13 @@ fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
     )?;
     let end = cursor_flag("--end-cursor-ts", args.end_cursor_ts, args.end_cursor_int)?;
     Ok(PlanOptions {
-        select: args.select,
+        select: [args.positional_select, args.select].concat(),
+        exclude: args.exclude,
         rebuild_allowed: args.allow_type_change_rebuild,
         reload: args.reload,
-        start_cursor: start,
-        end_cursor: end,
-        threads: args.threads.map(usize::from),
+        start_cursor: args.start_cursor.or(start),
+        end_cursor: args.end_cursor.or(end),
+        concurrency: args.concurrency.map(usize::from),
         batch_bytes: args
             .batch_bytes
             .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),

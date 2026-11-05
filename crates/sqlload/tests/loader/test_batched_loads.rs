@@ -20,7 +20,7 @@ exclude = ["public.*_raw"]
 write_strategy = "delete_insert"
 cursor_column = "at"
 cursor_start = "2026-11-01"
-batch = "1d"
+batch_size = "1d"
 "#;
 
 /// An append table with an index on its cursor, read in order; equal cursor values must commit together.
@@ -58,7 +58,7 @@ write_strategy = "append"
 cursor_column = "id"
 cursor_start = "1"
 append_cursor_inclusive = false
-batch = 2
+batch_size = 2
 "#;
 
 /// Timestamps whose read starts from a `cursor_start` in another form than the cursor's own text.
@@ -72,7 +72,7 @@ const START_AS_DATE: &str = r#"
 write_strategy = "append"
 cursor_column = "at"
 cursor_start = "2026-01-01"
-batch = "1d"
+batch_size = "1d"
 "#;
 
 const START_AS_RFC3339: &str = r#"
@@ -80,7 +80,7 @@ const START_AS_RFC3339: &str = r#"
 write_strategy = "append"
 cursor_column = "at"
 cursor_start = "2026-11-01T00:00:00Z"
-batch = "1d"
+batch_size = "1d"
 "#;
 
 const WHOLE_SETTINGS: &str = r#"
@@ -90,7 +90,7 @@ exclude = ["public.*_raw"]
 write_strategy = "append"
 cursor_column = "seq"
 append_cursor_inclusive = false
-batch = "whole"
+batch_size = "none"
 "#;
 
 /// A `delete_insert` table with an index on its cursor, committing along the way.
@@ -124,14 +124,14 @@ INSERT INTO public.events VALUES (1, 'a'), (2, 'b');
 const IGNORED_ON_REPLACE: &str = r#"
 [sources.app.tables."public.events"]
 write_strategy = "replace"
-batch = "1d"
+batch_size = "1d"
 "#;
 
 const IGNORED_WITHOUT_CURSOR: &str = r#"
 [sources.app.tables."public.events"]
 write_strategy = "merge"
 unique_key = ["id"]
-batch = "1d"
+batch_size = "1d"
 "#;
 
 const NO_CURSOR: &str = "
@@ -161,7 +161,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: WINDOWED,
                 settings: WINDOWED_SETTINGS,
                 batch_bytes: None,
-                threads: None,
+                concurrency: None,
                 runs: &[
                     BatchedRun {
                         source_change: "",
@@ -196,7 +196,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: ORDERED,
                 settings: ORDERED_SETTINGS,
                 batch_bytes: Some(1),
-                threads: None,
+                concurrency: None,
                 runs: &[
                     BatchedRun {
                         source_change: "",
@@ -231,7 +231,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: UNORDERED,
                 settings: ORDERED_SETTINGS,
                 batch_bytes: Some(1),
-                threads: None,
+                concurrency: None,
                 runs: &[
                     BatchedRun {
                         source_change: "",
@@ -258,7 +258,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: INTEGER,
                 settings: INTEGER_SETTINGS,
                 batch_bytes: None,
-                threads: None,
+                concurrency: None,
                 runs: &[
                     BatchedRun {
                         source_change: "",
@@ -285,7 +285,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: TIMESTAMPS,
                 settings: START_AS_DATE,
                 batch_bytes: None,
-                threads: None,
+                concurrency: None,
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
@@ -302,7 +302,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: TIMESTAMPS,
                 settings: START_AS_RFC3339,
                 batch_bytes: None,
-                threads: None,
+                concurrency: None,
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
@@ -315,11 +315,11 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 ],
             },
             BatchedScenarioTestCase {
-                description: "batch = whole opts out of an ordered read: a failure keeps nothing of that read",
+                description: "batch_size = none opts out of an ordered read: a failure keeps nothing of that read",
                 setup: ORDERED,
                 settings: WHOLE_SETTINGS,
                 batch_bytes: Some(1),
-                threads: None,
+                concurrency: None,
                 runs: &[
                     BatchedRun {
                         source_change: "",
@@ -344,7 +344,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     },
                 ],
                 expected_outcomes: &[
-                    "ok => 1,2,3 | batch   one commit for the whole read (batch = \"whole\")",
+                    "ok => 1,2,3 | batch   one commit for the whole read (batch_size = \"none\")",
                     "raw.app__events: DuckDB => 1,2,3",
                     "ok => 1,2,3,4,5,6",
                 ],
@@ -354,7 +354,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: DAYS,
                 settings: DAYS_SETTINGS,
                 batch_bytes: Some(1),
-                threads: None,
+                concurrency: None,
                 runs: &[
                     BatchedRun {
                         source_change: "",
@@ -389,7 +389,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: NULL_CURSORS,
                 settings: ORDERED_SETTINGS,
                 batch_bytes: Some(1),
-                threads: None,
+                concurrency: None,
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
@@ -404,7 +404,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: TEXT_CURSOR,
                 settings: ORDERED_SETTINGS,
                 batch_bytes: Some(1),
-                threads: None,
+                concurrency: None,
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
@@ -421,16 +421,16 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: NO_CURSOR,
                 settings: IGNORED_ON_REPLACE,
                 batch_bytes: None,
-                threads: None,
+                concurrency: None,
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
                     end_cursor: None,
                     check_query: IDS,
-                    show: "batch is ignored",
+                    show: "batch_size is ignored",
                 }],
                 expected_outcomes: &[
-                    "ok => 1 | batch is ignored: replace swaps the whole table in once",
+                    "ok => 1 | batch_size is ignored: replace swaps the whole table in once",
                 ],
             },
             BatchedScenarioTestCase {
@@ -438,22 +438,24 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 setup: NO_CURSOR,
                 settings: IGNORED_WITHOUT_CURSOR,
                 batch_bytes: None,
-                threads: None,
+                concurrency: None,
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
                     end_cursor: None,
                     check_query: IDS,
-                    show: "batch is ignored",
+                    show: "batch_size is ignored",
                 }],
-                expected_outcomes: &["ok => 1 | batch is ignored: windows need a cursor_column"],
+                expected_outcomes: &[
+                    "ok => 1 | batch_size is ignored: windows need a cursor_column",
+                ],
             },
             BatchedScenarioTestCase {
                 description: "tables load at once; a failing table leaves the others loaded",
                 setup: PARALLEL,
                 settings: "exclude = [\"public.*_raw\"]",
                 batch_bytes: None,
-                threads: Some(2),
+                concurrency: Some(2),
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",

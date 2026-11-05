@@ -259,7 +259,7 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
     lines
 }
 
-/// How the load commits: by cursor window, in cursor order, by size, by files batch, or as one commit; with a hint to set `batch` for a large first load that would be one commit.
+/// How the load commits: by cursor window, in cursor order, by size, by files batch, or as one commit; with a hint to set `batch_size` for a large first load that would be one commit.
 fn batch_line(table: &TablePlan) -> String {
     let spec = &table.spec;
     let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
@@ -313,7 +313,7 @@ fn batch_line(table: &TablePlan) -> String {
             let estimated = u64::try_from(spec.source_table.estimated_bytes).unwrap_or_default();
             let large = !table.exists && (spec.python.is_some() || estimated > BATCH_BYTES as u64);
             let why = match reason {
-                WholeReason::Chosen => "batch = \"whole\"",
+                WholeReason::Chosen => "batch_size = \"none\"",
                 WholeReason::TextCursor => {
                     "a text cursor, which the source and destination may sort differently"
                 }
@@ -326,7 +326,7 @@ fn batch_line(table: &TablePlan) -> String {
             };
             let hint = match (large, reason) {
                 (true, WholeReason::Unordered) => {
-                    "; for a large first load, set batch (such as batch = \"1d\") to commit it window by window"
+                    "; for a large first load, set batch_size (such as batch_size = \"1d\") to commit it window by window"
                 }
                 _ => "",
             };

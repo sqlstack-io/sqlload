@@ -21,24 +21,24 @@ enum BatchText {
     Integer(u64),
 }
 
-/// Deserialize a `batch`: a duration written as text (`"1d"`), a positive integer step, or `"whole"`.
+/// Deserialize a `batch_size`: a duration written as text (`"1d"`), a positive integer step, or `"none"`.
 pub(crate) fn deserialize_optional_batch<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<BatchStep>, D::Error> {
     match Option::<BatchText>::deserialize(deserializer)? {
         None => Ok(None),
-        Some(BatchText::Integer(0)) => {
-            Err(serde::de::Error::custom("batch must be a positive step"))
-        }
+        Some(BatchText::Integer(0)) => Err(serde::de::Error::custom(
+            "batch_size must be a positive step",
+        )),
         Some(BatchText::Integer(step)) => Ok(Some(BatchStep::Integer(step))),
         Some(BatchText::Duration(text)) if text == WHOLE_BATCH => Ok(Some(BatchStep::Whole)),
         Some(BatchText::Duration(text)) => match humantime::parse_duration(&text) {
             Ok(step) if step.is_zero() => Err(serde::de::Error::custom(
-                "batch must be a positive duration",
+                "batch_size must be a positive duration",
             )),
             Ok(step) => Ok(Some(BatchStep::Duration(step))),
             Err(error) => Err(serde::de::Error::custom(format!(
-                "batch {text:?} is not a duration such as \"1d\" or \"whole\": {error}"
+                "batch_size {text:?} is not a duration such as \"1d\" or \"none\": {error}"
             ))),
         },
     }

@@ -38,7 +38,7 @@ uses DuckDB 2.0.0 and reads every loader's output. Each loader therefore writes 
 | `pg_wide` | Postgres, 1M rows, 40 columns including jsonb | same |
 | `pg_wide_nokey` | the wide rows in a table with no primary key (ingestr loads such tables differently) | same |
 | `pg_incremental` | load, append 1% new rows, load again; the second load is timed | same |
-| `pg_multi` | the 10M narrow rows split over 8 tables | sqlload, default threads and `--threads 1` |
+| `pg_multi` | the 10M narrow rows split over 8 tables | sqlload, default concurrency and `--concurrency 1` |
 | `files_parquet`, `files_csv`, `files_ndjson` | the same rows in 10 local part files | sqlload, dlt, ingestr |
 | `py_flat`, `py_nested` | a generator of pages of dicts, 1M rows each | sqlload, dlt |
 | `py_bytes` | the flat rows as 4 MiB chunks of NDJSON | sqlload (`sl.ndjson`), dlt |

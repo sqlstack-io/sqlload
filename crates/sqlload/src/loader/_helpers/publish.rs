@@ -1092,7 +1092,7 @@ impl Publisher {
         Ok(())
     }
 
-    /// Whether a files target's `delete_insert` would end this commit inside a partition it wrote (a `batch` finer than the partition): the commit then waits for the rest of the partition, so a failure leaves its old files in place and none of the new ones.
+    /// Whether a files target's `delete_insert` would end this commit inside a partition it wrote (a `batch_size` finer than the partition): the commit then waits for the rest of the partition, so a failure leaves its old files in place and none of the new ones.
     fn partition_unfinished(&self, range: &CommitRange) -> Result<bool, LoaderError> {
         let (
             Some(sink),

@@ -68,7 +68,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(DAY),
             cursor_type: Some(ColumnType::Date),
             expected_windows: Err(
-                "batch needs a start to split the cursor range: set cursor_start for the first load",
+                "batch_size needs a start to split the cursor range: set cursor_start for the first load",
             ),
         },
         SplitWindowsTestCase {
@@ -83,13 +83,13 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             ),
         },
         SplitWindowsTestCase {
-            description: "a date cursor's batch is whole days",
+            description: "a date cursor's batch_size is whole days",
             from: Some("2026-11-04"),
             to: None,
             inclusive: true,
             step: BatchStep::Duration(std::time::Duration::from_secs(3600)),
             cursor_type: Some(ColumnType::Date),
-            expected_windows: Err("a date cursor's batch must be whole days, not 1h"),
+            expected_windows: Err("a date cursor's batch_size must be whole days, not 1h"),
         },
         SplitWindowsTestCase {
             description: "a step giving more than 100,000 windows is refused",
@@ -99,7 +99,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(std::time::Duration::from_secs(60)),
             cursor_type: Some(ColumnType::TimestampTz),
             expected_windows: Err(
-                "batch splits the read into 13675680 windows, more than 100000; use a larger batch, or narrow the read with --start-cursor/--end-cursor",
+                "batch_size splits the read into 13675680 windows, more than 100000; use a larger batch_size, or narrow the read with --start-cursor/--end-cursor",
             ),
         },
         SplitWindowsTestCase {
