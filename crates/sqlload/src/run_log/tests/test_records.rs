@@ -75,12 +75,20 @@ fn given_run_log_records_when_deriving_the_state_then_the_newest_non_backfill_re
             ),
         },
         CurrentRunTestCase {
+            description: "a record from before runs committed in batches (format 1) still reads",
+            records: &[("a", "run", "2026-11-04T10:00:01.000000Z")],
+            raw: &[
+                "{\"format_version\": 1, \"run_id\": \"old\", \"event\": \"run\", \"source\": \"shop\", \"source_table\": \"orders\", \"table_name\": \"shop__orders\", \"cursor_column\": null, \"cursor_before\": null, \"cursor_after\": null, \"state\": null, \"row_count\": 1, \"files\": [], \"note\": null, \"recorded_at\": \"2026-11-04T10:00:02.000000Z\"}",
+            ],
+            expected_run: (Some("old"), &[]),
+        },
+        CurrentRunTestCase {
             description: "a record a newer sqlload wrote is never guessed at",
             records: &[("a", "run", "2026-11-04T10:00:01.000000Z")],
-            raw: &["{\"format_version\": 2, \"run_id\": \"future\", \"event\": \"run\"}"],
+            raw: &["{\"format_version\": 3, \"run_id\": \"future\", \"event\": \"run\"}"],
             expected_run: (
                 Some("a"),
-                &["future: written by a newer sqlload (format_version 2, this one reads 1)"],
+                &["future: written by a newer sqlload (format_version 3, this one reads 2)"],
             ),
         },
     ];

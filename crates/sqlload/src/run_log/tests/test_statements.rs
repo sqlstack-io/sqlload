@@ -37,13 +37,13 @@ fn given_a_run_log_when_writing_sql_then_each_warehouse_gets_its_statements() ->
             description: "DuckDB appends a record, missing fields as NULL",
             warehouse: Warehouse::DuckDb,
             build: insert_sql,
-            expected_sql: "INSERT INTO \"analytics\".\"raw\".\"_sqlload_runs\" (\"run_id\", \"event\", \"source\", \"source_table\", \"table_name\", \"cursor_column\", \"cursor_before\", \"cursor_after\", \"state\", \"row_count\", \"note\", \"recorded_at\", \"format_version\", \"record_json\") VALUES ('load-1', 'run', 'shop', 'orders', 'shop__orders', 'updated_at', NULL, '2026-01-02 00:00:00.000000+00', '\"it''s\\\\x\"', '3', NULL, '2026-11-04T10:00:00.000000Z', '1', <json>)",
+            expected_sql: "INSERT INTO \"analytics\".\"raw\".\"_sqlload_runs\" (\"run_id\", \"event\", \"source\", \"source_table\", \"table_name\", \"cursor_column\", \"cursor_before\", \"cursor_after\", \"state\", \"row_count\", \"note\", \"recorded_at\", \"format_version\", \"record_json\") VALUES ('load-1', 'run', 'shop', 'orders', 'shop__orders', 'updated_at', NULL, '2026-01-02 00:00:00.000000+00', '\"it''s\\\\x\"', '3', NULL, '2026-11-04T10:00:00.000000Z', '2', <json>)",
         },
         StatementTestCase {
             description: "Snowflake upper-cases the names and escapes backslashes",
             warehouse: Warehouse::Snowflake,
             build: insert_sql,
-            expected_sql: "INSERT INTO \"ANALYTICS\".\"RAW\".\"_SQLLOAD_RUNS\" (\"RUN_ID\", \"EVENT\", \"SOURCE\", \"SOURCE_TABLE\", \"TABLE_NAME\", \"CURSOR_COLUMN\", \"CURSOR_BEFORE\", \"CURSOR_AFTER\", \"STATE\", \"ROW_COUNT\", \"NOTE\", \"RECORDED_AT\", \"FORMAT_VERSION\", \"RECORD_JSON\") VALUES ('load-1', 'run', 'shop', 'orders', 'shop__orders', 'updated_at', NULL, '2026-01-02 00:00:00.000000+00', '\"it''s\\\\\\\\x\"', '3', NULL, '2026-11-04T10:00:00.000000Z', '1', <json>)",
+            expected_sql: "INSERT INTO \"ANALYTICS\".\"RAW\".\"_SQLLOAD_RUNS\" (\"RUN_ID\", \"EVENT\", \"SOURCE\", \"SOURCE_TABLE\", \"TABLE_NAME\", \"CURSOR_COLUMN\", \"CURSOR_BEFORE\", \"CURSOR_AFTER\", \"STATE\", \"ROW_COUNT\", \"NOTE\", \"RECORDED_AT\", \"FORMAT_VERSION\", \"RECORD_JSON\") VALUES ('load-1', 'run', 'shop', 'orders', 'shop__orders', 'updated_at', NULL, '2026-01-02 00:00:00.000000+00', '\"it''s\\\\\\\\x\"', '3', NULL, '2026-11-04T10:00:00.000000Z', '2', <json>)",
         },
         StatementTestCase {
             description: "Snowflake reads a table's records oldest first",

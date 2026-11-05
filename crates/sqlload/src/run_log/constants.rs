@@ -4,8 +4,8 @@ pub const RUNS_TABLE: &str = "_sqlload_runs";
 /// The folder below a files table's folder holding its run records, beside its pending markers.
 pub const RUNS_FOLDER: &str = "_sqlload/runs/";
 
-/// The version of the record format, written with every record.
-pub const RECORD_FORMAT_VERSION: u32 = 1;
+/// The version of the record format, written with every record: 2 since a run may commit in batches, a record per commit (`batch`), which an older sqlload must not read as one record per run.
+pub const RECORD_FORMAT_VERSION: u32 = 2;
 
 /// Snowflake time travel for the run log: the most Enterprise edition allows.
 pub const SNOWFLAKE_RETENTION_DAYS: u32 = 90;
