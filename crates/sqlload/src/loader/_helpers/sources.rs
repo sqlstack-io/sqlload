@@ -8,7 +8,8 @@ use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::main::open_folder::open_folder;
 use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
+    NANOSECOND_SCALE, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+    VERSION_SEPARATOR,
 };
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
@@ -487,8 +488,21 @@ pub(crate) async fn plan_files(
             .table
             .columns
             .iter()
-            .filter(|column| column.stored_read == StoredRead::Nanos)
+            .filter(|column| {
+                matches!(
+                    column.stored_read,
+                    StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
+                )
+            })
             .filter(|column| !spec.pinned.contains_key(&column.name))
+            .filter(|column| {
+                !request.live.into_iter().flatten().any(|live| {
+                    live.name.eq_ignore_ascii_case(&column.name)
+                        && live
+                            .fraction_digits
+                            .is_some_and(|digits| digits < NANOSECOND_SCALE)
+                })
+            })
             .map(|column| column.name.clone())
             .collect(),
     };

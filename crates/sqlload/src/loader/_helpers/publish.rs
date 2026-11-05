@@ -53,7 +53,7 @@ use crate::files_source::main::batch_headers::batch_headers;
 use crate::files_source::main::key_columns::key_columns;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
-use crate::files_source::models::{FilesRead, FilesTable, SourceFormat};
+use crate::files_source::models::{FilesRead, FilesTable, SourceFormat, TextChecks};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_runs_table;
@@ -677,12 +677,29 @@ impl Publisher {
                 origin: ColumnOrigin::Source,
             })
             .collect();
+        let inferred: Vec<String> = read_columns
+            .iter()
+            .map(|column| column.name.clone())
+            .filter(|name| {
+                !widened.pinned.contains_key(name)
+                    && !source_files
+                        .partition_types
+                        .iter()
+                        .any(|(partition, _)| partition == name)
+                    && ![SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN]
+                        .contains(&name.as_str())
+            })
+            .collect();
         let replanned = TablePlan {
-            spec: widened,
             files: self.table.files.clone().map(|read| FilesRead {
                 columns: read_as,
+                checks: TextChecks {
+                    inferred,
+                    ..read.checks
+                },
                 ..read
             }),
+            spec: widened,
             read_columns,
             live,
             schema,

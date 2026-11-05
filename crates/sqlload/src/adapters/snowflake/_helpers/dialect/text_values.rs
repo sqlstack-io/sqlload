@@ -9,28 +9,29 @@ use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::{Compression, CsvOptions};
 
-/// The `FILE_FORMAT` a direct `COPY` reads JSON and NDJSON with: one record per object, whether the file holds objects one after another or one top-level array of them.
+/// The `FILE_FORMAT` a direct `COPY` reads JSON and NDJSON with: one record per object, whether the file holds objects one after another or one top-level array of them; a key given twice keeps its last value, as SQLLoad's reader does.
 pub(crate) fn json_file_format(compression: Compression) -> String {
     format!(
-        "TYPE = JSON STRIP_OUTER_ARRAY = TRUE COMPRESSION = {}",
+        "TYPE = JSON STRIP_OUTER_ARRAY = TRUE ALLOW_DUPLICATE = TRUE COMPRESSION = {}",
         compression_name(compression)
     )
 }
 
-/// The value of JSON key `name` (`get` reads it) as `column_type` (`sql_type`), as SQLLoad's own reader converts it: a string's own text and other values' JSON text for text, the value itself for json, a cast otherwise, timestamps with an offset in UTC. An `inferred` column fails the load on a value sampling would not have inferred it from, naming the file, row, key and value.
+/// The value of JSON key `name` (`get` reads it) as `column_type` (`sql_type`), as SQLLoad's own reader converts it: a string's own text and other values' JSON text for text (Snowflake's JSON text: keys sorted, numbers in its own form), the value itself for json (a JSON `null` is NULL), binary, times and timestamps from its text (see `text_cast`), a cast otherwise. An `inferred` column fails the load on a value sampling would not have inferred it from, naming the file, row, key and value.
 pub(crate) fn json_value(
     (name, get): (&str, &str),
     (column_type, sql_type): (&ColumnType, &str),
     inferred: bool,
 ) -> String {
     let value = match column_type {
-        ColumnType::Json => get.to_owned(),
+        ColumnType::Json => format!("IFF(IS_NULL_VALUE({get}), NULL, {get})"),
         ColumnType::Text | ColumnType::Varchar(_) | ColumnType::Uuid => {
             format!("IFF(IS_NULL_VALUE({get}), NULL, TO_VARCHAR({get}))")
         }
-        ColumnType::TimestampTz => {
-            format!("CONVERT_TIMEZONE('UTC', CAST({get} AS {sql_type}))")
-        }
+        ColumnType::Binary
+        | ColumnType::TimestampTz
+        | ColumnType::TimestampNtz
+        | ColumnType::Time => text_cast(&format!("TO_VARCHAR({get})"), (column_type, sql_type)),
         _ => format!("CAST({get} AS {sql_type})"),
     };
     match inferred.then(|| fits(get, column_type)).flatten() {
@@ -79,31 +80,20 @@ pub(crate) fn key_type(types: &[String], (rfc3339, wide): (bool, bool)) -> Optio
 /// The query listing every key of the JSON records in `files` (keys under the stage `from`, as `@"DB"."SCHEMA"."STAGE"/folder/`), read with the temporary file format `format`: each key, its values' `TYPEOF` names, whether every string is an RFC 3339 timestamp, and whether any integer exceeds 64 bits.
 pub(crate) fn keys_query(from: &str, format: &str, pattern: &str) -> String {
     format!(
-        "SELECT f.KEY, TO_JSON(ARRAY_AGG(DISTINCT TYPEOF(f.VALUE))), COALESCE(BOOLAND_AGG(CASE WHEN TYPEOF(f.VALUE) = 'VARCHAR' THEN REGEXP_LIKE(TO_VARCHAR(f.VALUE), '{RFC3339_PATTERN}') END), FALSE), COALESCE(BOOLOR_AGG(CASE WHEN TYPEOF(f.VALUE) = 'INTEGER' THEN CAST(f.VALUE AS NUMBER(38,0)) NOT BETWEEN {MIN_JSON_INT} AND {MAX_JSON_INT} END), FALSE) FROM {from} (FILE_FORMAT => {}, PATTERN => {}) s, LATERAL FLATTEN(INPUT => s.$1) f GROUP BY f.KEY",
+        "SELECT f.KEY, TO_JSON(ARRAY_AGG(DISTINCT TYPEOF(f.VALUE))), COALESCE(BOOLAND_AGG(CASE WHEN TYPEOF(f.VALUE) = 'VARCHAR' THEN REGEXP_LIKE(TO_VARCHAR(f.VALUE), '{RFC3339_PATTERN}') END), FALSE), COALESCE(BOOLOR_AGG(CASE WHEN TYPEOF(f.VALUE) = 'INTEGER' THEN CAST(f.VALUE AS NUMBER(38,0)) NOT BETWEEN {MIN_JSON_INT} AND {MAX_JSON_INT} END), FALSE) FROM {from} (FILE_FORMAT => {}, PATTERN => {}) s, LATERAL FLATTEN(INPUT => s.$1) f WHERE IS_OBJECT(s.$1) GROUP BY f.KEY",
         SnowflakeSql.render_loader_value_literal(format),
         SnowflakeSql.render_loader_value_literal(pattern),
     )
 }
 
-/// The `FILE_FORMAT` a direct `COPY` reads CSV with, as SQLLoad's reader does: `options`' delimiter, quote (a quote inside a quoted field written twice, backslashes plain text) and NULL values, the header skipped.
+/// The `FILE_FORMAT` a direct `COPY` reads CSV with, as SQLLoad's reader does: `options`' delimiter and quote (a quote inside a quoted field written twice, backslashes plain text), the header skipped, every field as text (`csv_field` applies the NULL values, since Snowflake would not turn a quoted empty field into NULL; live, 2026-11-05).
 pub(crate) fn csv_file_format(options: &CsvOptions, compression: Compression) -> String {
     let literal = |text: &str| SnowflakeSql.render_loader_value_literal(text);
-    let nulls: Vec<String> = options
-        .null_values
-        .iter()
-        .filter(|value| !value.is_empty())
-        .map(|value| literal(value))
-        .collect();
     format!(
-        "TYPE = CSV FIELD_DELIMITER = {} FIELD_OPTIONALLY_ENCLOSED_BY = {} ESCAPE = NONE ESCAPE_UNENCLOSED_FIELD = NONE SKIP_HEADER = {} NULL_IF = ({}) EMPTY_FIELD_AS_NULL = {} COMPRESSION = {}",
+        "TYPE = CSV FIELD_DELIMITER = {} FIELD_OPTIONALLY_ENCLOSED_BY = {} ESCAPE = NONE ESCAPE_UNENCLOSED_FIELD = NONE SKIP_HEADER = {} NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = {}",
         literal(&options.delimiter.to_string()),
         literal(&options.quote.to_string()),
         u8::from(options.header),
-        nulls.join(", "),
-        match options.null_values.iter().any(String::is_empty) {
-            true => "TRUE",
-            false => "FALSE",
-        },
         compression_name(compression)
     )
 }
@@ -117,10 +107,7 @@ pub(crate) fn csv_value(
     let value = match column_type {
         ColumnType::Text | ColumnType::Varchar(_) | ColumnType::Uuid => field.to_owned(),
         ColumnType::Json => format!("PARSE_JSON({field})"),
-        ColumnType::TimestampTz => {
-            format!("CONVERT_TIMEZONE('UTC', CAST({field} AS {sql_type}))")
-        }
-        _ => format!("CAST({field} AS {sql_type})"),
+        _ => text_cast(field, (column_type, sql_type)),
     };
     let int = format!(
         "(REGEXP_SUBSTR({field}, '^-?(0|[1-9][0-9]*)$') IS NOT NULL AND TRY_TO_NUMBER({field}) BETWEEN {MIN_JSON_INT} AND {MAX_JSON_INT})"
@@ -145,6 +132,40 @@ pub(crate) fn csv_value(
         ),
         false => value,
     }
+}
+
+/// Text `text` as `column_type` (`sql_type`), as SQLLoad's reader parses it: binary as the text's UTF-8 bytes, times and timestamps cut to microseconds (dropping further digits, as arrow's parser does), timestamps with an offset in UTC.
+fn text_cast(text: &str, (column_type, sql_type): (&ColumnType, &str)) -> String {
+    match column_type {
+        ColumnType::Binary => format!("TO_BINARY({text}, 'UTF-8')"),
+        ColumnType::TimestampTz => {
+            format!("CONVERT_TIMEZONE('UTC', CAST({text} AS TIMESTAMP_TZ(6)))")
+        }
+        ColumnType::TimestampNtz => format!("CAST({text} AS TIMESTAMP_NTZ(6))"),
+        ColumnType::Time => format!("CAST({text} AS TIME(6))"),
+        _ => format!("CAST({text} AS {sql_type})"),
+    }
+}
+
+/// CSV field `position` (from 1) of a direct `COPY`, NULL where its text, unquoted, is one of `null_values`, as SQLLoad's reader decides (the file format itself turns nothing into NULL).
+pub(crate) fn csv_field(position: usize, null_values: &[String]) -> String {
+    null_values
+        .iter()
+        .fold(format!("${position}"), |field, null| {
+            format!(
+                "NULLIF({field}, {})",
+                SnowflakeSql.render_loader_value_literal(null)
+            )
+        })
+}
+
+/// `value`, a direct `COPY`'s value of a JSON key typed `sql_type`, failing the load on a record that is not a JSON object, as SQLLoad's reader does.
+pub(crate) fn json_record_guard(value: &str, sql_type: &str) -> String {
+    format!(
+        "IFF(IS_OBJECT($1), {value}, CAST(TO_VARCHAR(TO_NUMBER({} || METADATA$FILENAME || ' row ' || METADATA$FILE_ROW_NUMBER || {})) AS {sql_type}))",
+        SnowflakeSql.render_loader_value_literal(MISFIT_MARKER),
+        SnowflakeSql.render_loader_value_literal(": the record is not a JSON object"),
+    )
 }
 
 /// An expression failing the load for a value of `name` (`get`) that does not fit `column_type`, naming the column and value, typed as `sql_type`; with `located`, the file and row too (JSON). A CSV error names its file and line itself, and reports a metadata column's placeholder instead of a message that reads one (live, 2026-11-05).

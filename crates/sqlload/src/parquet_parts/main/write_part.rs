@@ -11,7 +11,7 @@ use crate::parquet_parts::constants::{
 use crate::parquet_parts::main::finish_part::finish_part;
 use crate::parquet_parts::models::PartWriter;
 
-/// Write `batch`, a slice at a time; returns the writer and the files it finished (a file ends at about 6 MB, or before a batch of another schema).
+/// Write `batch`, a slice at a time; returns the writer and the files it finished (a file ends at an estimated 12 MB, or before a batch of another schema).
 pub fn write_part(
     mut parts: PartWriter,
     batch: &RecordBatch,

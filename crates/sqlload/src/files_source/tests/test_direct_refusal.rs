@@ -368,10 +368,10 @@ fn given_an_embedded_schema_over_another_parquet_type_when_reading_the_footer_th
             test_case.description
         );
         let columns = parquet_columns(&footer);
-        let found = match &columns[0].direct_refusal {
-            Some(reason) => Err(reason.as_str()),
-            None => Ok(columns[0].stored_read),
-        };
+        let found = columns[0]
+            .direct_refusal
+            .as_deref()
+            .map_or(Ok(columns[0].stored_read), Err);
         assert_eq!(
             found.map_err(|reason| reason.ends_with(test_case.expected.err().unwrap_or(reason))),
             test_case.expected.map_err(|_| true),
