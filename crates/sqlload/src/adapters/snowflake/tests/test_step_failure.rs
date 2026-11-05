@@ -1,4 +1,4 @@
-use crate::adapters::snowflake::_helpers::step_failure::step_failure;
+use crate::adapters::snowflake::_helpers::stage::step_failure::step_failure;
 use crate::adapters::snowflake::main::session::_is_not_found::is_not_found;
 use crate::adapters::snowflake::models::StepFailure;
 use crate::adapters::snowflake::tests::helpers::api_status;

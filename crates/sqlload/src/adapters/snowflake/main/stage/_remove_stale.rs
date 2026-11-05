@@ -1,8 +1,8 @@
 //! Clean up the load folders failed runs left on an internal stage.
 
-use crate::adapters::snowflake::_helpers::stale_folders::stale_folders;
+use crate::adapters::snowflake::_helpers::stage::stale_folders::stale_folders;
 use crate::adapters::snowflake::constants::{STAGE_FOLDER, STALE_STAGE_HOURS};
-use crate::adapters::snowflake::main::stage::remove_staged::remove_staged;
+use crate::adapters::snowflake::main::stage::_remove_staged::remove_staged;
 use crate::adapters::snowflake::models::SnowflakeDestination;
 use crate::http::errors::ApiError;
 use crate::sql_api::main::execute_sql::execute_sql;

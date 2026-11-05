@@ -9,7 +9,7 @@ use crate::column_types::models::{ColumnType, Warehouse};
 use crate::schema_plan::models::DesiredColumn;
 
 /// `COPY` statements loading the files, at most 1,000 each; always `FORCE = TRUE` (SQLLoad never relies on Snowflake's load history) and stopping at the first bad value.
-pub fn copy_staged(request: &CopyStaged<'_>) -> Vec<String> {
+pub(in crate::adapters) fn copy_staged(request: &CopyStaged<'_>) -> Vec<String> {
     let literals: Vec<String> = request
         .names
         .iter()

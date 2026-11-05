@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-FENSU := uvx --from 'fensu-cli==0.28.3' fensu
+FENSU := uvx --from 'fensu-cli==0.28.3' --with 'fensu==0.28.3' fensu
 
 .PHONY: check check-ci test test-unit test-containers test-python verify
 

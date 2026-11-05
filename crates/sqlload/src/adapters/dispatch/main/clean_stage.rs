@@ -6,7 +6,7 @@ use crate::adapters::contract::models::TableName;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::snowflake::main::stage::_remove_stale::remove_stale;
 use crate::adapters::snowflake::main::stage::_remove_stale_external::remove_stale_external;
-use crate::adapters::snowflake::main::stage::route_reference::route_reference;
+use crate::adapters::snowflake::main::stage::_route_reference::route_reference;
 use crate::adapters::snowflake::models::StageRoute;
 
 /// Remove the load folders failed runs left over a day ago on the stage `route` loads `target` through, once per stage of `connection` (`seen`, returned with this stage added); an external stage keeping its files stays as it is, and a staging table's stage goes with its table. Also returns the stage and what was removed, `None` when there was nothing to clean.

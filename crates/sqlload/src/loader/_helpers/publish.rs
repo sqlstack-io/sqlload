@@ -1,4 +1,3 @@
-use crate::adapters::contract::constants::BEGIN_STATEMENT;
 use crate::adapters::contract::constants::COMMIT_STATEMENT;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
@@ -12,6 +11,7 @@ use crate::adapters::contract::types::TableWriter;
 use crate::adapters::dispatch::main::ddl_guard::ddl_guard;
 use crate::adapters::dispatch::main::execute::execute;
 use crate::adapters::dispatch::main::execute_ddl::execute_ddl;
+use crate::adapters::dispatch::main::load_files::load_files;
 use crate::adapters::dispatch::main::open_table_writer::open_table_writer;
 use crate::adapters::dispatch::main::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::table_destination::table_destination;
@@ -30,6 +30,7 @@ use crate::adapters::files::models::PendingPhase;
 use crate::adapters::files::models::PendingRun;
 use crate::adapters::files::models::ReplacedFiles;
 use crate::adapters::files::models::WriterRequest;
+use crate::adapters::snowflake::models::{DirectBatch, DirectLoaded};
 use crate::batch_plan::constants::BATCH_BYTES;
 use crate::batch_plan::main::cut_index::cut_index;
 use crate::batch_plan::main::last_value::last_value;
@@ -46,7 +47,6 @@ use crate::files_source::constants::{
 };
 use crate::files_source::main::batch_columns::batch_columns;
 use crate::files_source::main::batch_footers::batch_footers;
-use crate::files_source::main::batch_refusals::batch_refusals;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, SourceFormat};
@@ -100,17 +100,8 @@ use chrono::DateTime;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::adapters::snowflake::constants::MAX_COPY_SQL_BYTES;
-use crate::adapters::snowflake::main::copy::copy_rows::copy_rows;
-use crate::adapters::snowflake::main::copy::direct_copies::direct_copies;
-use crate::adapters::snowflake::main::copy::script_copy_rows::script_copy_rows;
-use crate::adapters::snowflake::main::stage::stage_reference::stage_reference;
 use crate::adapters::snowflake::models::StageRoute;
-use crate::adapters::snowflake::models::{CopyColumn, CopyValue, DirectCopy};
-use crate::column_types::models::Warehouse;
-use crate::loader::_helpers::table_plan::{copy_columns, direct_check, is_direct};
-use crate::loader::models::{DirectLoaded, TableSpec};
-use crate::project::models::MaskMethod;
+use crate::loader::_helpers::table_plan::is_direct;
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself).
 fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
@@ -122,7 +113,7 @@ fn write_target<'a>(
     table: &'a TablePlan,
     staging: Option<&'a TableName>,
     columns: &'a [DesiredColumn],
-    (load_id, batch, direct, builds): (&'a str, u64, bool, bool),
+    ((load_id, batch), (direct, builds)): ((&'a str, u64), (bool, bool)),
 ) -> WriteTarget<'a> {
     WriteTarget {
         table: &table.spec.destination,
@@ -200,12 +191,13 @@ impl Publisher {
     ) -> Result<Self, LoaderError> {
         let destination = table_destination(destination)?;
         let writer = open_table_writer(&destination, table.stage.clone())?;
-        if run.is_some() && !matches!(destination, Destination::Files(_)) {
+        let runs_sql = sql_adapter(table.spec.warehouse).runs_sql();
+        if run.is_some() && runs_sql {
             ensure_runs_table(&table, &destination).await?;
         }
         let load_id = uuid::Uuid::new_v4().to_string();
-        let files = match (&destination, &table.output) {
-            (Destination::Files(_), Some(output)) => {
+        let files = match (runs_sql, &table.output) {
+            (false, Some(output)) => {
                 let folder = open_folder(&output.path.folder)?;
                 let replaced = files_to_replace(&folder, &table, output).await?;
                 Some(FilesSink {
@@ -216,7 +208,7 @@ impl Publisher {
                     deleted: BTreeSet::new(),
                 })
             }
-            (Destination::Files(_), None) => {
+            (false, None) => {
                 return Err(LoaderError::Invalid(format!(
                     "{}: a files target table has no files planned",
                     table.spec.destination.table
@@ -331,7 +323,7 @@ impl Publisher {
             &self.table,
             self.staging.as_ref(),
             &columns,
-            (&self.load_id, self.batch, self.direct, self.builds),
+            ((&self.load_id, self.batch), (self.direct, self.builds)),
         );
         self.writer.write_batch(&target, batch).await
     }
@@ -416,7 +408,7 @@ impl Publisher {
             &self.table,
             self.staging.as_ref(),
             &columns,
-            (&self.load_id, self.batch, self.direct, self.builds),
+            ((&self.load_id, self.batch), (self.direct, self.builds)),
         );
         self.writer.remove_batch_files(&target).await;
     }
@@ -446,7 +438,7 @@ impl Publisher {
             &self.table,
             self.staging.as_ref(),
             &columns,
-            (&self.load_id, self.batch, self.direct, self.builds),
+            ((&self.load_id, self.batch), (self.direct, self.builds)),
         );
         self.writer.finish_files(&target).await?;
         if self.batch_rows == 0 {
@@ -468,131 +460,36 @@ impl Publisher {
         Ok(())
     }
 
-    /// Load a files batch by having Snowflake `COPY` the files itself, where the plan chose that and the batch's own footers still allow it. `None` when SQLLoad must read this batch itself. A hashed batch's temporary table has its own name, since in the session it would shadow a build table made in the same second.
+    /// Load a files batch by having the destination `COPY` the files itself, where the plan chose that and the batch's own footers still allow it. `None` when SQLLoad must read this batch itself.
     pub(crate) async fn load_direct(
         &mut self,
         (files, footers): (&[DataFile], &BatchFooters),
         range: &CommitRange,
     ) -> Result<Option<DirectLoaded>, LoaderError> {
-        let (Destination::Snowflake(snowflake), Some(StageRoute::External(stage)), Some(read)) =
-            (&self.destination, &self.table.stage, &self.table.files)
-        else {
+        let Some(read) = &self.table.files else {
             return Ok(None);
         };
         if !is_direct(self.table.route.as_ref()) {
             return Ok(None);
         }
-        let spec = &self.table.spec;
-        let refused = batch_refusals(footers, files);
-        if let Some(reason) = direct_check(spec, (read, files, &refused), stage) {
-            tracing::warn!(table = %spec.destination.table, %reason, "SQLLoad reads this batch itself");
-            return Ok(None);
-        }
-        let Some(source) = spec.files.as_ref().map(|files| &files.location) else {
-            return Ok(None);
+        let columns = staged_columns(&self.table);
+        let mode = commit_mode(&self.table.mode, Some(range.clone()));
+        let batch = DirectBatch {
+            spec: &self.table.spec,
+            read,
+            write_columns: &self.table.schema.write_columns,
+            target: write_target(
+                &self.table,
+                self.staging.as_ref(),
+                &columns,
+                ((&self.load_id, self.batch), (self.direct, self.builds)),
+            ),
+            loaded_at: &self.loaded_at,
+            files,
+            footers,
+            mode: &mode,
         };
-        let reference = stage_reference(stage);
-        let hashes = spec
-            .masked
-            .columns
-            .values()
-            .any(|method| *method == MaskMethod::Hash);
-        let copy =
-            |target: &'_ TableName, columns: &[CopyColumn]| -> Result<Vec<String>, LoaderError> {
-                let request = DirectCopy {
-                    target,
-                    stage: &reference,
-                    stage_url: &stage.location,
-                    source,
-                    files,
-                    columns,
-                };
-                let batches = direct_copies(&request).map_err(LoaderError::Invalid)?;
-                Ok(batches.into_iter().map(|batch| batch.sql).collect())
-            };
-        let literals = (self.load_id.as_str(), self.loaded_at.as_str());
-        if hashes {
-            let (staging, create) = sql_adapter(Warehouse::Snowflake).render_create_staging_table(
-                &spec.destination,
-                &staged_columns(&self.table),
-                &format!(
-                    "{}_hashed",
-                    staging_id(&self.load_id, chrono::Utc::now().naive_utc())
-                ),
-            );
-            let create = create.replacen("TRANSIENT TABLE", "TEMPORARY TABLE", 1);
-            let columns = filled_columns(spec, read, &staged_as_text(&self.table), literals);
-            let hashed: Vec<String> = spec
-                .masked
-                .columns
-                .iter()
-                .filter(|(_, method)| **method == MaskMethod::Hash)
-                .map(|(name, _)| name.clone())
-                .collect();
-            let build = self.staging.clone().filter(|_| self.builds);
-            let mode = match build {
-                Some(_) => WriteMode::Append,
-                None => commit_mode(&self.table.mode, Some(range.clone())),
-            };
-            let write = sql_adapter(spec.warehouse).render_commit(
-                &WriteStatementsRequest {
-                    table: build.as_ref().unwrap_or(&spec.destination),
-                    columns: &self.table.schema.write_columns,
-                    mode: &mode,
-                    hashed: &hashed,
-                    built: None,
-                },
-                &staging,
-                (None, true),
-            );
-            let mut script = vec![create];
-            script.extend(copy(&staging, &columns)?);
-            script.extend(write);
-            script.push(format!(
-                "DROP TABLE IF EXISTS {}",
-                sql_adapter(Warehouse::Snowflake).render_qualified_name(&staging)
-            ));
-            if script
-                .iter()
-                .any(|statement| statement.len() > MAX_COPY_SQL_BYTES)
-            {
-                tracing::warn!(table = %spec.destination.table, "a hashed batch's statement is too long; SQLLoad reads this batch itself");
-                return Ok(None);
-            }
-            let rows = script_copy_rows(snowflake, &script).await?;
-            return Ok(Some(match build {
-                Some(_) => DirectLoaded::Staged(rows),
-                None => DirectLoaded::Committed(rows),
-            }));
-        }
-        if self.direct {
-            let columns = filled_columns(spec, read, &self.table.schema.write_columns, literals);
-            let mut copies = copy(&spec.destination, &columns)?;
-            let rows = match copies.len() {
-                1 => copy_rows(snowflake, &copies.remove(0)).await?,
-                _ => {
-                    let mut script = vec![BEGIN_STATEMENT.to_owned()];
-                    script.append(&mut copies);
-                    script.push(COMMIT_STATEMENT.to_owned());
-                    script_copy_rows(snowflake, &script).await?
-                }
-            };
-            return Ok(Some(DirectLoaded::Committed(rows)));
-        }
-        let Some(staging) = self.staging.clone() else {
-            return Ok(None);
-        };
-        let staged = staged_as_text(&self.table);
-        let carried = match self.builds {
-            true => &self.table.schema.write_columns,
-            false => &staged,
-        };
-        let columns = filled_columns(spec, read, carried, literals);
-        let mut rows: u64 = 0;
-        for statement in copy(&staging, &columns)? {
-            rows += copy_rows(snowflake, &statement).await?;
-        }
-        Ok(Some(DirectLoaded::Staged(rows)))
+        load_files(&mut self.writer, &batch).await
     }
 
     /// Note what a direct batch did; a batch that is not yet committed waits for `cut`.
@@ -999,52 +896,6 @@ async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), Stri
         .stage(batch, None)
         .await
         .map_err(|error| error.to_string())
-}
-
-/// The columns a staging table holds, as the staged rows carry them: JSON and UUIDs as text.
-fn staged_as_text(table: &TablePlan) -> Vec<DesiredColumn> {
-    staged_columns(table)
-        .into_iter()
-        .map(|column| match column.column_type {
-            ColumnType::Json | ColumnType::Uuid => DesiredColumn {
-                column_type: ColumnType::Text,
-                ..column
-            },
-            _ => column,
-        })
-        .collect()
-}
-
-/// What each of `columns` is filled with by a direct `COPY`: the files' columns, then this load's metadata as literals, and NULL for a live column the files lack.
-fn filled_columns(
-    spec: &TableSpec,
-    read: &FilesRead,
-    columns: &[DesiredColumn],
-    (load_id, loaded_at): (&str, &str),
-) -> Vec<CopyColumn> {
-    let from_files = copy_columns(spec, read);
-    let snowflake = Warehouse::Snowflake;
-    let mut filled: Vec<CopyColumn> = Vec::with_capacity(columns.len());
-    for column in columns {
-        let found = from_files.iter().find(|found| found.name == column.name);
-        let value = match (found, column.name.as_str()) {
-            (Some(found), _) => found.value.clone(),
-            (None, LOAD_ID_COLUMN) => {
-                CopyValue::Literal(sql_adapter(snowflake).render_loader_value_literal(load_id))
-            }
-            (None, LOADED_AT_COLUMN) => CopyValue::Literal(format!(
-                "CAST({} AS TIMESTAMP_TZ(6))",
-                sql_adapter(snowflake).render_loader_value_literal(loaded_at)
-            )),
-            (None, _) => CopyValue::Literal("NULL".to_owned()),
-        };
-        filled.push(CopyColumn {
-            name: column.name.clone(),
-            column_type: column.column_type.clone(),
-            value,
-        });
-    }
-    filled
 }
 
 /// The Postgres filter reading one cursor window.

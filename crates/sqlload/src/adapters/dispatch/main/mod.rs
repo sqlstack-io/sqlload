@@ -1,4 +1,5 @@
-pub mod append_rows;
+#[cfg(test)]
+pub(in crate::adapters) mod _every_warehouse;
 pub mod check_destination;
 pub mod choose_stage;
 pub mod clean_stage;
@@ -10,10 +11,10 @@ pub mod execute;
 pub mod execute_ddl;
 pub mod files_destination;
 pub mod live_columns;
+pub mod load_files;
 pub mod open_table_writer;
 pub mod single_text;
 pub mod sql_adapter;
-pub mod stage_file;
 pub mod table_destination;
 pub mod table_shape;
 pub mod text_values;

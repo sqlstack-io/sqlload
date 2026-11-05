@@ -102,3 +102,20 @@ pub(crate) fn live(
         char_length,
     }
 }
+
+const WRITE_VERBS: [&str; 6] = [
+    "INSERT INTO",
+    "DELETE FROM",
+    "MERGE INTO",
+    "ALTER TABLE",
+    "DROP TABLE",
+    "CREATE OR REPLACE TABLE",
+];
+
+/// Whether `statement` writes `target` itself.
+pub(crate) fn writes(statement: &str, target: &str) -> bool {
+    WRITE_VERBS.iter().any(|verb| {
+        statement.starts_with(&format!("{verb} {target}"))
+            || statement.starts_with(&format!("{verb} IF EXISTS {target}"))
+    })
+}

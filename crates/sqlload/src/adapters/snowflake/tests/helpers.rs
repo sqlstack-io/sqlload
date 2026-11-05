@@ -1,10 +1,10 @@
 use crate::adapters::contract::models::TableName;
-use crate::adapters::snowflake::_helpers::create_stage::create_stage;
-use crate::adapters::snowflake::_helpers::pick_route::pick_route;
-use crate::adapters::snowflake::_helpers::stale_folders::stale_folders;
-use crate::adapters::snowflake::main::copy::copy_staged::copy_staged;
+use crate::adapters::snowflake::_helpers::stage::create_stage::create_stage;
+use crate::adapters::snowflake::_helpers::stage::pick_route::pick_route;
+use crate::adapters::snowflake::_helpers::stage::stale_folders::stale_folders;
+use crate::adapters::snowflake::main::copy::_copy_staged::copy_staged;
 use crate::adapters::snowflake::main::stage::_stage_lookup::stage_lookup;
-use crate::adapters::snowflake::main::stage::stage_reference::stage_reference;
+use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::CopyStaged;
 use crate::adapters::snowflake::models::{CopyColumn, CopyValue, StepFailure};
 use crate::adapters::snowflake::models::{ExternalStage, StageObject, StageRoute};
@@ -209,7 +209,7 @@ pub(crate) fn direct_sql(
 ) -> Result<(usize, String), String> {
     let files: Vec<DataFile> = files.iter().map(|(key, day)| data_file(key, day)).collect();
     let stage = stage();
-    let batches = crate::adapters::snowflake::main::copy::direct_copies::direct_copies(
+    let batches = crate::adapters::snowflake::main::copy::_direct_copies::direct_copies(
         &crate::adapters::snowflake::models::DirectCopy {
             target: &orders(),
             stage: "@\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"",
