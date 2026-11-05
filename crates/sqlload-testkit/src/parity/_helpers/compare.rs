@@ -2,6 +2,9 @@ use std::any::Any;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use sqlload::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use sqlload::adapters::dispatch::models::Destination;
+use sqlload::adapters::snowflake::main::session::query_texts::query_texts;
 use sqlload::column_types::models::Warehouse;
 use sqlload::file_store::main::delete_files::delete_files;
 use sqlload::file_store::main::list_files::list_files;
@@ -13,11 +16,9 @@ use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::main::load_tables::load_tables;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
-use sqlload::loader::models::{Destination, LoadRun, PlanOptions};
+use sqlload::loader::models::{LoadRun, PlanOptions};
 use sqlload::project::main::parse_project::parse_project;
-use sqlload::snowflake_destination::main::query_texts::query_texts;
 use sqlload::store_paths::models::{Location, StoreKind};
-use sqlload::write_sql::main::stored_name::stored_name;
 use tokio::runtime::Runtime;
 
 use crate::parity::_helpers::files::{case_files, parquet_file};
@@ -125,7 +126,7 @@ async fn differences(text: &str, live: &Live, tables: (&str, &str)) -> Result<Ve
     let Some(Destination::Snowflake(snowflake)) = destinations.get("direct") else {
         return Err("no Snowflake connection".to_owned());
     };
-    let schema = stored_name(&live.schema, Warehouse::Snowflake);
+    let schema = sql_adapter(Warehouse::Snowflake).stored_name(&live.schema);
     let listed = query_texts(
         snowflake,
         &format!(
@@ -182,7 +183,7 @@ async fn self_test(text: &str, live: &Live, tables: (&str, &str)) -> Result<Stri
     let Some(Destination::Snowflake(snowflake)) = destinations.get("direct") else {
         return Err("no Snowflake connection".to_owned());
     };
-    let schema = stored_name(&live.schema, Warehouse::Snowflake);
+    let schema = sql_adapter(Warehouse::Snowflake).stored_name(&live.schema);
     let create = |table: &str, micros: &str| {
         format!(
             "CREATE OR REPLACE TABLE \"{schema}\".\"{table}\" AS SELECT 1 AS \"ID\", 'NaN'::FLOAT AS \"F\", PARSE_JSON('{{\"a\": 1}}') AS \"V\", '2026-11-05 10:00:00.{micros}'::TIMESTAMP_NTZ(6) AS \"AT\""
@@ -343,7 +344,7 @@ async fn drop_tables(text: &str, live: &Live, tables: (&str, &str)) -> Result<()
     let Some(Destination::Snowflake(snowflake)) = destinations.get("direct") else {
         return Err("no Snowflake connection".to_owned());
     };
-    let schema = stored_name(&live.schema, Warehouse::Snowflake);
+    let schema = sql_adapter(Warehouse::Snowflake).stored_name(&live.schema);
     let mut problems: Vec<String> = Vec::new();
     for table in [tables.0, tables.1] {
         let statement = format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\"");

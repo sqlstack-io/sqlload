@@ -1,0 +1,101 @@
+//! Open the destination one target uses.
+
+use crate::adapters::contract::models::TableName;
+use crate::adapters::dispatch::models::Destination;
+#[cfg(feature = "duckdb")]
+use crate::adapters::duckdb::main::_open_duckdb::open_duckdb;
+use crate::adapters::files::models::FilesDestination;
+use crate::adapters::snowflake::main::session::_connect_snowflake::connect_snowflake;
+use crate::adapters::snowflake::main::stage::_forced_stage::forced_stage;
+use crate::adapters::snowflake::models::SnowflakeAccount;
+use crate::loader::errors::LoaderError;
+use crate::project::models::{ConnectionConfig, ProjectConfig};
+use crate::store_paths::models::StoreKind;
+
+/// The open destination of target `name`.
+pub async fn connect_destination(
+    project: &ProjectConfig,
+    name: &str,
+) -> Result<Destination, LoaderError> {
+    let target = project
+        .targets
+        .get(name)
+        .ok_or_else(|| LoaderError::Invalid(format!("target {name:?} does not exist")))?;
+    let destination = match project.connections.get(&target.connection) {
+        #[cfg(feature = "duckdb")]
+        Some(ConnectionConfig::DuckDb { path }) => Destination::DuckDb(open_duckdb(path)?),
+        #[cfg(not(feature = "duckdb"))]
+        Some(ConnectionConfig::DuckDb { .. }) => {
+            return Err(LoaderError::Invalid(format!(
+                "target {name:?}: this sqlload was built without DuckDB (cargo feature \"duckdb\")"
+            )));
+        }
+        Some(ConnectionConfig::Snowflake {
+            account,
+            user,
+            auth,
+            role,
+            warehouse,
+            database,
+            base_url,
+            stage,
+        }) => Destination::Snowflake(Box::new(connect_snowflake(SnowflakeAccount {
+            account: account.clone(),
+            user: user.clone(),
+            auth: auth.clone(),
+            role: role.clone(),
+            warehouse: warehouse.clone(),
+            database: target.database.clone().unwrap_or_else(|| database.clone()),
+            base_url: base_url.clone(),
+            stage: stage
+                .as_ref()
+                .map(|stage| {
+                    forced_stage(
+                        stage,
+                        TableName {
+                            database: Some(
+                                target.database.clone().unwrap_or_else(|| database.clone()),
+                            ),
+                            schema: target.loader_schema.clone().unwrap_or_default(),
+                            table: String::new(),
+                        },
+                    )
+                })
+                .transpose()
+                .map_err(LoaderError::Invalid)?,
+        })?)),
+        Some(ConnectionConfig::S3 {
+            bucket,
+            region,
+            endpoint,
+        }) => Destination::Files(Box::new(FilesDestination {
+            connection: target.connection.clone(),
+            store: StoreKind::S3 {
+                bucket: bucket.clone(),
+                region: region.clone(),
+                endpoint: endpoint.clone(),
+            },
+            max_footer_reads: target.footer_read_limit(),
+        })),
+        Some(ConnectionConfig::Filesystem { root }) => {
+            Destination::Files(Box::new(FilesDestination {
+                connection: target.connection.clone(),
+                store: StoreKind::Filesystem { root: root.clone() },
+                max_footer_reads: target.footer_read_limit(),
+            }))
+        }
+        Some(other) => {
+            return Err(LoaderError::Invalid(format!(
+                "target {name:?}: {} destinations are not supported yet",
+                other.kind()
+            )));
+        }
+        None => {
+            return Err(LoaderError::Invalid(format!(
+                "target {name:?}: connection {:?} does not exist",
+                target.connection
+            )));
+        }
+    };
+    Ok(destination)
+}

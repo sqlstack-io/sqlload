@@ -1,7 +1,7 @@
 //! Work out a files table's folder from its settings.
 
-use crate::files_destination::main::table_path::table_path;
-use crate::files_destination::models::{FilesDestination, TablePath, TablePathRequest};
+use crate::adapters::files::main::table_path::table_path;
+use crate::adapters::files::models::{FilesDestination, TablePath, TablePathRequest};
 use crate::loader::models::TableSpec;
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 

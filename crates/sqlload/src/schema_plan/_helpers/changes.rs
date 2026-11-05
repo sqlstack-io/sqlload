@@ -1,6 +1,5 @@
-use crate::column_types::main::type_fit::type_fit;
-use crate::column_types::main::warehouse_type::warehouse_type;
-use crate::column_types::models::{TypeFit, Warehouse};
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::column_types::models::TypeFit;
 use crate::project::models::{OnSchemaChange, Policy};
 use crate::schema_plan::constants::ALLOW_REBUILD_FLAG;
 use crate::schema_plan::models::{
@@ -22,7 +21,9 @@ pub(crate) struct ColumnDecision {
 pub(crate) fn missing_column(column: &DesiredColumn, rules: SchemaRules) -> ColumnDecision {
     let add = || ColumnChange::Add {
         column: column.clone(),
-        sql_type: warehouse_type(&column.column_type, rules.warehouse).sql,
+        sql_type: sql_adapter(rules.warehouse)
+            .render_loader_logical_type(&column.column_type)
+            .sql,
     };
     let declared = matches!(column.origin, ColumnOrigin::Pinned | ColumnOrigin::Metadata);
     match rules.on_schema_change {
@@ -63,12 +64,13 @@ pub(crate) fn existing_column(
         write: true,
         ..ColumnDecision::default()
     };
+    let adapter = sql_adapter(rules.warehouse);
     match (
-        type_fit(&column.column_type, &live.column_type, rules.warehouse),
-        rules.warehouse,
+        adapter.type_fit(&column.column_type, &live.column_type),
+        adapter.runs_sql(),
     ) {
         (TypeFit::Fits, _) => written,
-        (_, Warehouse::Parquet) => ColumnDecision {
+        (_, false) => ColumnDecision {
             problem: Some(format!(
                 "{} is {} in the existing files but {} in the source; existing files cannot be altered, so pin the files' type (columns = {{ {} = \"{}\" }}) or rewrite every file with --reload",
                 live.name, live.column_type, column.column_type, column.name, live.column_type

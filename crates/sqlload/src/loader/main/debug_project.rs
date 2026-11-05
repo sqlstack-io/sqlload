@@ -1,7 +1,8 @@
 //! `sqlload debug`: check a loader project's configuration and connections.
 
+use crate::adapters::dispatch::main::session::check_destination::check_destination;
+use crate::adapters::dispatch::main::session::connect_destination::connect_destination;
 use crate::loader::main::_check_source::check_source;
-use crate::loader::main::_check_target::check_target;
 use crate::project::models::ProjectConfig;
 
 /// One line per check (`ok`, `warn` or `fail`), and whether nothing failed; `connect = false` skips connecting.
@@ -30,7 +31,11 @@ pub async fn debug_project(project: &ProjectConfig, connect: bool) -> (Vec<Strin
     }
     let mut ok = true;
     for name in project.targets.keys() {
-        let line = match check_target(project, name).await {
+        let checked = match connect_destination(project, name).await {
+            Ok(destination) => check_destination(destination).await,
+            Err(error) => Err(error),
+        };
+        let line = match checked {
             Ok(answer) => format!("ok    target {name}  {answer}"),
             Err(error) => {
                 ok = false;

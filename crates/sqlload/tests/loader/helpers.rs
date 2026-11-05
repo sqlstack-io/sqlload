@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use arrow_array::RecordBatch;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
-use sqlload::duckdb_destination::main::execute_statements::execute_statements;
-use sqlload::duckdb_destination::main::query_text::query_text;
+use sqlload::adapters::dispatch::main::session::execute::execute;
+use sqlload::adapters::dispatch::main::session::single_text::single_text;
+use sqlload::adapters::dispatch::models::Destination;
 use sqlload::file_store::main::list_files::list_files;
 use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::read_file::read_file;
@@ -14,7 +15,7 @@ use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::main::load_tables::load_tables;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
-use sqlload::loader::models::{Destination, LoadRun, PlanOptions, ProjectPlan};
+use sqlload::loader::models::{LoadRun, PlanOptions, ProjectPlan};
 use sqlload::project::main::parse_project::parse_project;
 use sqlload::project::models::ProjectConfig;
 use sqlload::store_paths::models::{Location, StoreKind};
@@ -159,7 +160,7 @@ pub(crate) async fn run_batched(
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
-    let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
+    let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
         return Err("no DuckDB destination".to_owned());
     };
     let mut outcomes: Vec<String> = Vec::new();
@@ -173,7 +174,7 @@ pub(crate) async fn run_batched(
             .split_terminator(';')
             .map(str::to_owned)
             .collect();
-        execute_statements(duckdb, hand_edits)
+        execute(duckdb, hand_edits)
             .await
             .map_err(|error| error.to_string())?;
         let options = PlanOptions {
@@ -197,7 +198,7 @@ pub(crate) async fn run_batched(
                 || "ok".to_owned(),
                 |error| error.splitn(3, ": ").take(2).collect::<Vec<_>>().join(": "),
             );
-        let result = query_text(duckdb, run.check_query.to_owned())
+        let result = single_text(duckdb, run.check_query.to_owned())
             .await
             .map_err(|error| error.to_string())?
             .unwrap_or_default();
@@ -243,7 +244,7 @@ pub(crate) async fn run_scenario(
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
-    let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
+    let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
         return Err("no DuckDB destination".to_owned());
     };
     for (index, run) in test_case.runs.iter().enumerate() {
@@ -256,7 +257,7 @@ pub(crate) async fn run_scenario(
             .split_terminator(';')
             .map(str::to_owned)
             .collect();
-        execute_statements(duckdb, hand_edits)
+        execute(duckdb, hand_edits)
             .await
             .map_err(|error| error.to_string())?;
         let options = PlanOptions {
@@ -276,7 +277,7 @@ pub(crate) async fn run_scenario(
             index + 1
         );
     }
-    query_text(duckdb, test_case.check_query.to_owned())
+    single_text(duckdb, test_case.check_query.to_owned())
         .await
         .map_err(|error| error.to_string())
 }
@@ -498,7 +499,7 @@ async fn run_written_files(
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
-    let Some(Destination::DuckDb(duckdb)) = destinations.get("dev") else {
+    let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
         return Err("no DuckDB destination".to_owned());
     };
     for (index, run) in scenario.runs.into_iter().enumerate() {
@@ -528,7 +529,7 @@ async fn run_written_files(
             index + 1
         );
     }
-    query_text(duckdb, scenario.check_query.to_owned())
+    single_text(duckdb, scenario.check_query.to_owned())
         .await
         .map_err(|error| error.to_string())
 }
@@ -814,7 +815,7 @@ pub(crate) async fn run_source_row_upgrade(
         connect_targets(&parse_project(&text, &|_| None).map_err(|error| error.to_string())?)
             .await
             .map_err(|error| error.to_string())?;
-    let Some(Destination::DuckDb(duckdb)) = project_destinations.get("dev") else {
+    let Some(duckdb @ Destination::DuckDb(_)) = project_destinations.get("dev") else {
         return Err("no DuckDB destination".to_owned());
     };
     for (key, ids) in [("a.parquet", &[1_i64, 2][..]), ("b.parquet", &[3][..])] {
@@ -828,7 +829,7 @@ pub(crate) async fn run_source_row_upgrade(
             .await
             .map_err(|error| error.to_string())?;
         run_once(&text, &project_destinations, &PlanOptions::default()).await?;
-        execute_statements(
+        execute(
             duckdb,
             [(
                 "a.parquet",
@@ -842,7 +843,7 @@ pub(crate) async fn run_source_row_upgrade(
         .await
         .map_err(|error| error.to_string())?;
     }
-    query_text(
+    single_text(
         duckdb,
         "SELECT string_agg(id || ':' || coalesce(CAST(_sqlload_source_row AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.scores".to_owned(),
     )
@@ -1281,7 +1282,7 @@ pub(crate) async fn run_metadata_round_trip(
     let duckdb_targets = connect_targets(&source_project)
         .await
         .map_err(|error| error.to_string())?;
-    let Some(Destination::DuckDb(duckdb)) = duckdb_targets.get("dev") else {
+    let Some(duckdb @ Destination::DuckDb(_)) = duckdb_targets.get("dev") else {
         return Err("no DuckDB destination".to_owned());
     };
     let mut plan = String::new();
@@ -1296,7 +1297,7 @@ pub(crate) async fn run_metadata_round_trip(
         plan = plan_text(&source_text, &duckdb_targets).await?;
         run_once(&source_text, &duckdb_targets, &PlanOptions::default()).await?;
     }
-    let checked = query_text(duckdb, check.replace("{stamp}", &stamp))
+    let checked = single_text(duckdb, check.replace("{stamp}", &stamp))
         .await
         .map_err(|error| error.to_string())?;
     Ok((plan, checked))

@@ -1,18 +1,24 @@
+use crate::adapters::contract::main::cursor_bound::cursor_bound;
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::CursorQuery;
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
+use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
+use crate::adapters::dispatch::main::route::route_warning::route_warning;
+use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
+use crate::adapters::dispatch::main::session::live_columns::live_columns;
+use crate::adapters::dispatch::main::session::single_text::single_text;
+use crate::adapters::dispatch::models::Destination;
+use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
 use crate::column_types::models::ColumnType;
-use crate::external_stage::main::direct_problem::direct_problem;
-use crate::external_stage::main::stage_route::stage_route;
-use crate::external_stage::models::RouteRequest;
-use crate::external_stage::models::{CopyColumn, CopyValue, DirectCheck};
-use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
-};
+use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
-use crate::files_source::models::{DataFile, SourceFormat};
-use crate::loader::_helpers::destination::live_columns;
-use crate::loader::_helpers::destination::single_text;
+use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::FilesPlanRequest;
 use crate::loader::_helpers::sources::files_read_columns;
@@ -24,7 +30,6 @@ use crate::loader::main::_logged_plan::with_run_log;
 use crate::loader::main::_plan_files::plan_files_table;
 use crate::loader::models::CommitRule;
 use crate::loader::models::CursorSpec;
-use crate::loader::models::Destination;
 use crate::loader::models::PlanOptions;
 use crate::loader::models::ReadWindow;
 use crate::loader::models::ReplannedColumns;
@@ -37,7 +42,6 @@ use crate::postgres_source::models::ReadColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::BatchStep;
 use crate::project::models::Contract;
-use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -47,7 +51,6 @@ use crate::routing::models::Route;
 use crate::routing::models::RouteOverrides;
 use crate::routing::models::Step;
 use crate::routing::models::Store;
-use crate::routing::models::WriterAccepts;
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
@@ -57,17 +60,7 @@ use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::SchemaPlan;
 use crate::schema_plan::models::SchemaRules;
 use crate::schema_plan::models::TableAction;
-use crate::snowflake_destination::constants::USER_STAGE;
-use crate::snowflake_destination::models::{ExternalStage, StageRoute};
 use crate::store_paths::models::StoreKind;
-use crate::write_sql::main::alter_statements::alter_statements;
-use crate::write_sql::main::create_schema::create_schema;
-use crate::write_sql::main::create_table::create_table;
-use crate::write_sql::main::cursor_bound::cursor_bound;
-use crate::write_sql::main::cursor_query::cursor_query;
-use crate::write_sql::main::cursor_text::cursor_text;
-use crate::write_sql::models::CursorQuery;
-use crate::write_sql::models::WriteMode;
 
 /// The source table without its excluded columns.
 pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {
@@ -188,15 +181,17 @@ pub(crate) async fn replan_columns(
 ) -> Result<ReplannedColumns, LoaderError> {
     let live = match (known, destination) {
         (Some(known), _) => known.map(<[LiveColumn]>::to_vec),
-        (None, Destination::Files(_)) => stale.map(<[LiveColumn]>::to_vec),
+        (None, destination) if files_destination(destination).is_some() => {
+            stale.map(<[LiveColumn]>::to_vec)
+        }
         (None, _) => live_columns(destination, &spec.destination).await?,
     };
     let spec = with_live_columns(spec, live.as_deref()).unwrap_or_else(|| spec.clone());
     let read = read_columns(&spec).map_err(|problems| LoaderError::Invalid(problems.join("; ")))?;
     let desired = desired_columns(&spec, &read);
-    let schema = match destination {
-        Destination::Files(_) => files_schema(&spec, &desired, live.as_deref(), options),
-        _ => {
+    let schema = match files_destination(destination) {
+        Some(_) => files_schema(&spec, &desired, live.as_deref(), options),
+        None => {
             let rules = SchemaRules {
                 warehouse: spec.warehouse,
                 contract: spec.contract,
@@ -254,7 +249,7 @@ async fn plan_table_once(
     destination: &Destination,
     options: &PlanOptions,
 ) -> Result<TablePlan, LoaderError> {
-    if let Destination::Files(files) = destination {
+    if let Some(files) = files_destination(destination) {
         return plan_files_table(spec, files, options).await;
     }
     let live = live_columns(destination, &spec.destination).await?;
@@ -395,23 +390,19 @@ async fn plan_table_once(
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
     let exists = live.is_some();
-    let chosen = match (destination, &schema.blocked) {
-        (Destination::Snowflake(snowflake), None) => {
-            let request = RouteRequest {
-                destination: &spec.destination,
-                table_exists: exists,
-                direct_append: mode == WriteMode::Append && !spec.logged,
-                snowflake,
-            };
-            match stage_route(&request).await {
-                Ok(chosen) => Some(chosen),
-                Err(problem) => {
+    let chosen = match &schema.blocked {
+        None => {
+            let direct_append = mode == WriteMode::Append && !spec.logged;
+            match choose_stage(destination, (&spec.destination, exists, direct_append)).await {
+                Some(Ok(chosen)) => Some(chosen),
+                Some(Err(problem)) => {
                     schema = blocked_plan(vec![problem]);
                     None
                 }
+                None => None,
             }
         }
-        _ => None,
+        Some(_) => None,
     };
     let (choice, planned_stage) = chosen.unzip();
     let planned_stage = planned_stage.flatten();
@@ -419,12 +410,9 @@ async fn plan_table_once(
         Some(choice) => (Some(choice.route), choice.passed_over),
         None => (None, Vec::new()),
     };
-    if stage == Some(StageRoute::Insert) {
-        schema.warnings.push(
-            "rows load by batched INSERT, the slowest route; no stage or streaming was usable"
-                .to_owned(),
-        );
-    }
+    schema
+        .warnings
+        .extend(route_warning(stage.as_ref()).map(str::to_owned));
     let route = match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
         Ok(route) => Some(route),
         Err(problem) => {
@@ -480,61 +468,14 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     match &table.schema.action {
         TableAction::Unchanged | TableAction::Recreate => None,
         TableAction::Create => Some(vec![
-            create_schema(&spec.destination, warehouse),
-            create_table(&spec.destination, &table.schema.write_columns, warehouse),
+            sql_adapter(warehouse).render_create_schema(&spec.destination),
+            sql_adapter(warehouse)
+                .render_create_table(&spec.destination, &table.schema.write_columns),
         ]),
         TableAction::Alter(changes) => {
             let live = table.live.as_deref().unwrap_or_default();
-            Some(alter_statements(
-                &spec.destination,
-                changes,
-                live,
-                warehouse,
-            ))
+            Some(sql_adapter(warehouse).render_change_columns(&spec.destination, changes, live))
         }
-    }
-}
-
-/// What a destination can take.
-fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> WriterAccepts {
-    let stored = |store: Store| WriterAccepts {
-        arrow: false,
-        pulls_from: vec![store.clone()],
-        pull_formats: vec![FileFormat::Parquet],
-        staging: vec![store],
-        rows_into: None,
-    };
-    match (destination, stage) {
-        #[cfg(feature = "duckdb")]
-        (Destination::DuckDb(_), _) => WriterAccepts {
-            arrow: true,
-            ..WriterAccepts::default()
-        },
-        (Destination::Files(_), _) => WriterAccepts {
-            arrow: true,
-            ..WriterAccepts::default()
-        },
-        (Destination::Snowflake(_), Some(StageRoute::External(stage))) => {
-            stored(Store::ObjectStore(stage.location.to_string()))
-        }
-        (Destination::Snowflake(_), Some(StageRoute::Internal { name })) => {
-            stored(Store::InternalStage(format!("@{name}")))
-        }
-        (Destination::Snowflake(_), Some(StageRoute::TargetTable)) => {
-            stored(Store::InternalStage("@%table".to_owned()))
-        }
-        (Destination::Snowflake(_), Some(StageRoute::StagingTable)) => stored(
-            Store::InternalStage("the staging table's @%table".to_owned()),
-        ),
-        (Destination::Snowflake(_), Some(StageRoute::Streaming { .. })) => WriterAccepts {
-            rows_into: Some("Snowpipe Streaming into a transient staging table".to_owned()),
-            ..WriterAccepts::default()
-        },
-        (Destination::Snowflake(_), Some(StageRoute::Insert)) => WriterAccepts {
-            rows_into: Some("batched INSERT into a transient staging table".to_owned()),
-            ..WriterAccepts::default()
-        },
-        (Destination::Snowflake(_), _) => stored(Store::InternalStage(format!("@{USER_STAGE}"))),
     }
 }
 
@@ -555,12 +496,7 @@ fn reader_offer(
             SourceFormat::Csv => FileFormat::Csv,
         },
     });
-    let direct_blocked = match (read, stage) {
-        (Some(read), Some(StageRoute::External(stage))) => {
-            direct_check(spec, (read, read.files.as_slice(), &[]), stage)
-        }
-        _ => None,
-    };
+    let direct_blocked = read.and_then(|read| direct_blocked(spec, read, stage));
     ReaderOffer {
         arrow: true,
         existing_files,
@@ -571,79 +507,6 @@ fn reader_offer(
         },
         direct_blocked,
     }
-}
-
-/// Why Snowflake must not `COPY` these of a files table's files straight from `stage`; `refused` is what a batch's own footers refuse, beyond what plan sampled.
-pub(crate) fn direct_check(
-    spec: &TableSpec,
-    (read, files, refused): (&FilesRead, &[DataFile], &[(String, String)]),
-    stage: &ExternalStage,
-) -> Option<String> {
-    let source = spec.files.as_ref()?;
-    let mut all_refused: Vec<(String, String)> = refused.to_vec();
-    for column in &source.table.columns {
-        if let Some(arrow_type) = &column.direct_refusal {
-            all_refused.push((column.name.clone(), arrow_type.clone()));
-        }
-    }
-    let masks: Vec<(String, MaskMethod)> = spec
-        .masked
-        .columns
-        .iter()
-        .map(|(name, method)| (name.clone(), *method))
-        .collect();
-    direct_problem(&DirectCheck {
-        stage_url: &stage.location,
-        source: &source.location,
-        format: source.encoding.format,
-        files,
-        columns: &copy_columns(spec, read),
-        refused: &all_refused,
-        masks: &masks,
-        shaped_by_loader: spec.shaped_by_loader,
-    })
-}
-
-/// The columns a direct `COPY` of a files table fills, in the order the files source reads them, each from the files, its path, or the file's name, version and row number.
-pub(crate) fn copy_columns(spec: &TableSpec, read: &FilesRead) -> Vec<CopyColumn> {
-    read.columns
-        .iter()
-        .map(|column| CopyColumn {
-            name: column.name.clone(),
-            column_type: column.column_type.clone(),
-            value: match column.name.as_str() {
-                SOURCE_FILE_COLUMN => CopyValue::SourceFile,
-                SOURCE_VERSION_COLUMN => CopyValue::SourceVersion,
-                SOURCE_ROW_COLUMN => CopyValue::SourceRow,
-                name if partition_column(spec, name) => CopyValue::Partition,
-                name => CopyValue::File {
-                    file_type: file_type(spec, name),
-                },
-            },
-        })
-        .collect()
-}
-
-/// Whether `name` is one of the files source's partition columns.
-fn partition_column(spec: &TableSpec, name: &str) -> bool {
-    spec.files
-        .iter()
-        .flat_map(|files| files.partition_types.iter())
-        .any(|(partition, _)| partition == name)
-}
-
-/// The type the known files hold column `name` as; a type with no portable equivalent is named as one the direct `COPY` never loads.
-fn file_type(spec: &TableSpec, name: &str) -> Option<ColumnType> {
-    let files = spec.files.as_ref()?;
-    let found = files
-        .table
-        .columns
-        .iter()
-        .find(|found| found.name == name)?;
-    Some(match &found.column_type {
-        Ok(column_type) => column_type.clone(),
-        Err(reason) => ColumnType::Native(format!("unsupported ({reason})")),
-    })
 }
 
 /// Whether `route` has the destination load a files source's own files.
@@ -777,12 +640,11 @@ async fn lower_bound(
         }));
     }
     let spec = request.spec;
-    let query = cursor_query(&CursorQuery {
+    let query = sql_adapter(spec.warehouse).render_max_cursor(&CursorQuery {
         table: &spec.destination,
         column: &cursor.column,
         column_type: cursor_type,
         lookback: cursor.lookback,
-        warehouse: spec.warehouse,
     });
     let Some(query) = query else {
         return Ok(Err(format!(

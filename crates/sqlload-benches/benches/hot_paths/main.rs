@@ -14,12 +14,12 @@ use std::hint::black_box;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use gungraun::{library_benchmark, library_benchmark_group, main};
+use sqlload::adapters::files::main::close_writer::close_writer;
+use sqlload::adapters::files::main::open_writer::open_writer;
+use sqlload::adapters::files::main::write_rows::write_rows;
+use sqlload::adapters::files::models::{TablePath, WriterRequest};
 use sqlload::column_types::models::ColumnType;
 use sqlload::file_store::models::OpenFolder;
-use sqlload::files_destination::main::close_writer::close_writer;
-use sqlload::files_destination::main::open_writer::open_writer;
-use sqlload::files_destination::main::write_rows::write_rows;
-use sqlload::files_destination::models::{TablePath, WriterRequest};
 use sqlload::files_source::main::discover_files::discover_files;
 use sqlload::files_source::main::read_files::read_files;
 use sqlload::files_source::models::{
@@ -157,7 +157,7 @@ fn write_stage_parts(batches: Vec<RecordBatch>) -> usize {
     file.map_or(0, |bytes| bytes.len())
 }
 
-// The Parquet files of a files target (`files_destination`).
+// The Parquet files of a files target (`adapters::files`).
 #[library_benchmark]
 #[bench::narrow_50k_rows(setup = narrow_parquet_input, teardown = expect_files)]
 fn arrow_to_target_parquet(input: ParquetInput) -> (u64, Vec<String>) {

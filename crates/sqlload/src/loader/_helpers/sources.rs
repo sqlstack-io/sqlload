@@ -1,6 +1,9 @@
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use arrow_array::RecordBatch;
 use tokio_postgres::Client;
 
+use crate::adapters::dispatch::main::session::text_values::text_values;
+use crate::adapters::dispatch::models::Destination;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::main::open_folder::open_folder;
@@ -14,14 +17,12 @@ use crate::files_source::models::{
     BatchFooters, DataFile, FileSelection, FilesRead, FilesTable, LoadedFile, SourceFormat,
     TextChecks,
 };
-use crate::loader::_helpers::destination::text_values;
 use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::source_target;
 use crate::loader::constants::{PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    CommitRule, Destination, FilesSource, PlanOptions, SourceEnd, SourceReader, TablePlan,
-    TableSpec,
+    CommitRule, FilesSource, PlanOptions, SourceEnd, SourceReader, TablePlan, TableSpec,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
@@ -40,7 +41,6 @@ use crate::similar_names::main::close_name::close_name;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
-use crate::write_sql::main::loaded_files_query::loaded_files_query;
 
 /// A client for a source's Postgres connection.
 pub(crate) async fn connect_source(
@@ -433,11 +433,10 @@ pub(crate) async fn plan_files(
         match skips_loaded && live_has(SOURCE_FILE_COLUMN) && !request.options.reload {
             true => {
                 let version = live_has(SOURCE_VERSION_COLUMN).then_some(SOURCE_VERSION_COLUMN);
-                let query = loaded_files_query(
+                let query = sql_adapter(spec.warehouse).render_loaded_files_query(
                     &spec.destination,
                     SOURCE_FILE_COLUMN,
                     version,
-                    spec.warehouse,
                 );
                 text_values(request.destination, query)
                     .await?

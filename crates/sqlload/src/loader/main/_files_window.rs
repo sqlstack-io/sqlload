@@ -1,17 +1,17 @@
 //! Choose a files table's cursor window: whole partitions for delete_insert, rows after the newest files' maximum for append.
 
+use crate::adapters::contract::main::cursor_bound::cursor_bound;
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::{CursorValue, WriteMode};
+use crate::adapters::files::main::check_window::check_window;
+use crate::adapters::files::main::cursor_maximum::cursor_maximum;
+use crate::adapters::files::main::partition_window::partition_window;
+use crate::adapters::files::models::{PartitionBy, PartitionWindowRequest};
 use crate::column_types::models::ColumnType;
-use crate::files_destination::main::check_window::check_window;
-use crate::files_destination::main::cursor_maximum::cursor_maximum;
-use crate::files_destination::main::partition_window::partition_window;
-use crate::files_destination::models::{PartitionBy, PartitionWindowRequest};
 use crate::loader::_helpers::table_plan::{Window, source_filter};
 use crate::loader::constants::{EXCLUSIVE_BOUND, INCLUSIVE_BOUND};
 use crate::loader::models::FilesWindowRequest;
 use crate::project::models::WriteStrategy;
-use crate::write_sql::main::cursor_bound::cursor_bound;
-use crate::write_sql::main::cursor_text::cursor_text;
-use crate::write_sql::models::{CursorValue, WriteMode};
 
 /// The source filter, write mode and `plan` note: partitions from the newest one (`delete_insert`) or rows after the newest files' maximum (`append`).
 pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Result<Window, String> {

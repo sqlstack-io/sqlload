@@ -1,20 +1,18 @@
 //! Read a table's run log records.
 
+use crate::adapters::contract::models::TableName;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
-use crate::write_sql::main::qualified_name::qualified_name;
-use crate::write_sql::main::sql_literal::sql_literal;
-use crate::write_sql::main::stored_name::stored_name;
-use crate::write_sql::models::TableName;
 
 /// The JSON of every record for destination table `table_name`, oldest first (ties by run id).
 pub fn select_runs(runs: &TableName, table_name: &str, warehouse: Warehouse) -> String {
-    let column = |name: &str| format!("\"{}\"", stored_name(name, warehouse));
+    let column = |name: &str| format!("\"{}\"", sql_adapter(warehouse).stored_name(name));
     format!(
         "SELECT {} FROM {} WHERE {} = {} ORDER BY {}, {}",
         column("record_json"),
-        qualified_name(runs, warehouse),
+        sql_adapter(warehouse).render_qualified_name(runs),
         column("table_name"),
-        sql_literal(table_name, warehouse),
+        sql_adapter(warehouse).render_loader_value_literal(table_name),
         column("recorded_at"),
         column("run_id")
     )

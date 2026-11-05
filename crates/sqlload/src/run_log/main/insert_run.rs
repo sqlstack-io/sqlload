@@ -1,12 +1,10 @@
 //! Append one record to the run log table.
 
+use crate::adapters::contract::models::TableName;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 use crate::run_log::constants::RUNS_COLUMNS;
 use crate::run_log::models::RunRecord;
-use crate::write_sql::main::qualified_name::qualified_name;
-use crate::write_sql::main::sql_literal::sql_literal;
-use crate::write_sql::main::stored_name::stored_name;
-use crate::write_sql::models::TableName;
 
 /// `INSERT INTO <runs> (...) VALUES (...)` for `record`, NULL for fields it does not have.
 pub fn insert_run(
@@ -33,18 +31,18 @@ pub fn insert_run(
     ];
     let names: Vec<String> = RUNS_COLUMNS
         .iter()
-        .map(|name| format!("\"{}\"", stored_name(name, warehouse)))
+        .map(|name| format!("\"{}\"", sql_adapter(warehouse).stored_name(name)))
         .collect();
     let literals: Vec<String> = values
         .iter()
         .map(|value| match value {
-            Some(text) => sql_literal(text, warehouse),
+            Some(text) => sql_adapter(warehouse).render_loader_value_literal(text),
             None => "NULL".to_owned(),
         })
         .collect();
     Ok(format!(
         "INSERT INTO {} ({}) VALUES ({})",
-        qualified_name(runs, warehouse),
+        sql_adapter(warehouse).render_qualified_name(runs),
         names.join(", "),
         literals.join(", ")
     ))

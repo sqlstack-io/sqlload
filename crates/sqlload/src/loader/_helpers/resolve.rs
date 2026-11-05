@@ -1,3 +1,5 @@
+use crate::adapters::dispatch::main::dialect::connection_warehouse::connection_warehouse;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 use crate::loader::_helpers::specs::ColumnSelection;
 use crate::loader::_helpers::specs::{
@@ -5,7 +7,7 @@ use crate::loader::_helpers::specs::{
 };
 use crate::loader::models::{ResolvedTables, SkippedTable, TableSpec};
 use crate::postgres_source::models::SourceTable;
-use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig, TableOverride};
+use crate::project::models::{ProjectConfig, SourceConfig, TableOverride};
 
 /// The specs for `discovered` tables of source `source_name`, with problems and skipped tables.
 pub(crate) fn resolve_tables(
@@ -123,27 +125,21 @@ pub(crate) fn source_target(
         .connections
         .get(&target.connection)
         .ok_or_else(|| format!("connection {:?} does not exist", target.connection))?;
-    let (warehouse, database) = match connection {
-        ConnectionConfig::Snowflake { database, .. } => {
-            (Warehouse::Snowflake, Some(database.clone()))
-        }
-        ConnectionConfig::DuckDb { .. } => (Warehouse::DuckDb, None),
-        ConnectionConfig::S3 { .. } | ConnectionConfig::Filesystem { .. } => {
-            return Ok(ResolvedTarget {
-                name,
-                warehouse: Warehouse::Parquet,
-                database: None,
-                schema: String::new(),
-                path: Some(target.path_template().to_owned()),
-            });
-        }
-        ConnectionConfig::Postgres { .. } | ConnectionConfig::Http { .. } => {
-            return Err(format!(
-                "target {name:?} uses a {} connection, which is not a destination",
-                connection.kind()
-            ));
-        }
+    let Some((warehouse, database)) = connection_warehouse(connection) else {
+        return Err(format!(
+            "target {name:?} uses a {} connection, which is not a destination",
+            connection.kind()
+        ));
     };
+    if !sql_adapter(warehouse).runs_sql() {
+        return Ok(ResolvedTarget {
+            name,
+            warehouse,
+            database: None,
+            schema: String::new(),
+            path: Some(target.path_template().to_owned()),
+        });
+    }
     let schema = source
         .schema
         .clone()

@@ -17,7 +17,7 @@ pub(crate) fn check_destinations(
     let others: BTreeSet<Warehouse> = destinations
         .iter()
         .copied()
-        .filter(|destination| !allowed.contains(destination))
+        .filter(|destination| !allowed.contains(&destination.to_string().as_str()))
         .collect();
     if others.is_empty() {
         return Ok(());
@@ -36,13 +36,7 @@ pub(crate) fn check_destinations(
 
 /// A warning when a `native` type is passed to more than one kind of warehouse.
 pub(crate) fn native_warnings(name: &str, destinations: &[Warehouse]) -> Vec<String> {
-    let engines: BTreeSet<Warehouse> = destinations
-        .iter()
-        .map(|destination| match destination {
-            Warehouse::MotherDuck => Warehouse::DuckDb,
-            other => *other,
-        })
-        .collect();
+    let engines: BTreeSet<Warehouse> = destinations.iter().copied().collect();
     if engines.len() <= 1 {
         return Vec::new();
     }

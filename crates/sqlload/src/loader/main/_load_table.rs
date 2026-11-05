@@ -1,12 +1,12 @@
 //! Load one table: read its source (a Python table through the host) and commit its rows batch by batch.
 
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::loader::_helpers::publish::publish_table;
 use crate::loader::_helpers::sources::{open_source, source_readers};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_python::load_python;
-use crate::loader::models::{Destination, LoadRun, PythonLoad, TableLoaded, TablePlan};
-use crate::write_sql::main::display_name::display_name;
+use crate::loader::models::{LoadRun, PythonLoad, TableLoaded, TablePlan};
 
 /// Load one table; returns its name as reported and what the load did.
 pub(in crate::loader) async fn load_one(
@@ -26,9 +26,10 @@ pub(in crate::loader) async fn load_one(
     let destination = run.destinations.get(&planned.spec.target).ok_or_else(|| {
         LoaderError::Invalid(format!("target {:?} is not connected", planned.spec.target))
     })?;
-    let name = match (destination, &planned.output) {
-        (Destination::Files(_), Some(output)) => output.path.folder.to_string(),
-        _ => display_name(&planned.spec.destination, planned.spec.warehouse),
+    let adapter = sql_adapter(planned.spec.warehouse);
+    let name = match &planned.output {
+        Some(output) if !adapter.runs_sql() => output.path.folder.to_string(),
+        _ => adapter.render_display_name(&planned.spec.destination),
     };
     let loaded = match (&planned.spec.python, &run.host) {
         (Some(_), Some(host)) => {

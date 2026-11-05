@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-FENSU := uvx --from 'fensu-cli==0.28.3' fensu
+FENSU := uvx --from 'fensu-cli==0.28.3' --with 'fensu==0.28.3' fensu
 
 .PHONY: check check-ci test test-unit test-containers test-python verify bench-perf bench-wheel bench-compare bench-snowflake bench-e2e test-bench-harness
 
@@ -8,12 +8,14 @@ check:
 	cargo fmt --all
 	cargo clippy --workspace --all-targets --features sqlload/container-tests --quiet -- -D warnings
 	cargo clippy -p sqlload --all-targets --no-default-features --features cli,container-tests --quiet -- -D warnings
+	cargo clippy -p sqlload --lib --no-default-features --features cli --quiet -- -D warnings
 	$(FENSU) check
 
 check-ci:
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --features sqlload/container-tests --quiet -- -D warnings
 	cargo clippy -p sqlload --all-targets --no-default-features --features cli,container-tests --quiet -- -D warnings
+	cargo clippy -p sqlload --lib --no-default-features --features cli --quiet -- -D warnings
 	$(FENSU) check
 
 test-unit:

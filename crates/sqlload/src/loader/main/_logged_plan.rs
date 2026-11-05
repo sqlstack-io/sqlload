@@ -1,14 +1,15 @@
 //! Add a logged table's run log to its plan: its current state, a reset to read from, or a disagreement with the data to reconcile.
 
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::models::Destination;
 use crate::loader::_helpers::run_log::{
     committed_runs, data_disagreement, read_run_log, unreadable_problems,
 };
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, LoggedPlan, PlanOptions, TablePlan};
+use crate::loader::models::{LoggedPlan, PlanOptions, TablePlan};
 use crate::run_log::main::current_run::current_run;
 use crate::run_log::models::RunEvent;
-use crate::write_sql::models::WriteMode;
 
 /// `plan` with its run log when the table is logged: after `sqlload state reset`, the next run reads from the reset position (unless flags choose the window); otherwise a logged cursor that disagrees with the data's maximum is noted, and the data wins. A record that cannot be read blocks the table until a reset follows it.
 pub(in crate::loader) async fn with_run_log(

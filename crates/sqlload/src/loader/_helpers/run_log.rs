@@ -3,16 +3,23 @@ use std::cmp::Ordering;
 use arrow_array::RecordBatch;
 use bytes::Bytes;
 
+use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::session::ddl_guard::ddl_guard;
+use crate::adapters::dispatch::main::session::execute::execute;
+use crate::adapters::dispatch::main::session::live_columns::live_columns;
+use crate::adapters::dispatch::main::session::text_values::text_values;
+use crate::adapters::dispatch::models::Destination;
+use crate::adapters::files::models::PendingPhase;
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
-use crate::files_destination::models::PendingPhase;
-use crate::loader::_helpers::destination::{ddl_guard, execute, live_columns, text_values};
 use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{Destination, PythonLoad, RunEntry, TablePlan, TableSpec};
+use crate::loader::models::{PythonLoad, RunEntry, TablePlan, TableSpec};
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::cursor_order::cursor_order;
 use crate::run_log::main::decode_runs::decode_runs;
@@ -29,8 +36,6 @@ use crate::run_log::models::{
 };
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
-use crate::write_sql::main::cursor_text::cursor_text;
-use crate::write_sql::models::WriteMode;
 
 /// Every record of the table, oldest first, and those that cannot be used, none when the log does not exist (never written, or deleted); and whether a warehouse's `_sqlload_runs` exists.
 pub(crate) async fn read_run_log(
@@ -40,15 +45,15 @@ pub(crate) async fn read_run_log(
     let spec = &table.spec;
     let mut texts: Vec<String> = Vec::new();
     let mut exists = false;
-    match destination {
-        Destination::Files(_) => {
+    match sql_adapter(spec.warehouse).runs_sql() {
+        false => {
             let folder = open_folder(&records_location(table)?)?;
             for file in list_files(&folder).await? {
                 let bytes = read_file(&folder, &file.relative_key).await?;
                 texts.push(String::from_utf8_lossy(&bytes).into_owned());
             }
         }
-        destination => {
+        true => {
             let runs = runs_table(&spec.destination);
             exists = live_columns(destination, &runs).await?.is_some();
             if exists {
@@ -123,13 +128,13 @@ pub(crate) async fn append_run(
     record: &RunRecord,
 ) -> Result<(), LoaderError> {
     let spec = &table.spec;
-    match destination {
-        Destination::Files(_) => {
+    match sql_adapter(spec.warehouse).runs_sql() {
+        false => {
             let folder = open_folder(&records_location(table)?)?;
             let json = record_json(record)?;
             Ok(write_file(&folder, &record_object_name(record), Bytes::from(json)).await?)
         }
-        destination => {
+        true => {
             ensure_runs_table(table, destination).await?;
             let insert = insert_run(&runs_table(&spec.destination), record, spec.warehouse)
                 .map_err(LoaderError::Invalid)?;

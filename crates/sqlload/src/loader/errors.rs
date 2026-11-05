@@ -1,7 +1,7 @@
 #[cfg(feature = "duckdb")]
-use crate::duckdb_destination::errors::DuckDbError;
+use crate::adapters::duckdb::errors::DuckDbError;
+use crate::adapters::files::errors::FilesDestinationError;
 use crate::file_store::errors::StoreError;
-use crate::files_destination::errors::FilesDestinationError;
 use crate::files_source::errors::FilesError;
 use crate::http::errors::ApiError;
 use crate::postgres_source::errors::PostgresError;

@@ -2,8 +2,8 @@
 
 use chrono::{Duration as TimeDelta, NaiveDate, NaiveDateTime};
 
+use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
 use crate::batch_plan::models::{CursorWindow, WindowPlan, WindowStep};
-use crate::write_sql::constants::CURSOR_TIMESTAMP_FORMAT;
 
 /// Window `index` (from 0) of `plan`: from the start plus `index` steps to one step later, the last one ending at the plan's end.
 pub fn window_at(plan: &WindowPlan, index: u64) -> Result<CursorWindow, String> {

@@ -2,15 +2,17 @@
 
 use std::collections::BTreeMap;
 
-use crate::files_destination::main::folder_conflict::folder_conflict;
-use crate::files_destination::models::FolderClaim;
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::models::Destination;
+use crate::adapters::files::main::folder_conflict::folder_conflict;
+use crate::adapters::files::models::FolderClaim;
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::sources::{selected, source_ends, source_tables, unmatched_selectors};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_table_folder::table_folder;
-use crate::loader::models::{Destination, PlanOptions, ProjectPlan, SkippedTable, TableSpec};
+use crate::loader::models::{PlanOptions, ProjectPlan, SkippedTable, TableSpec};
 use crate::project::models::{NewTables, ProjectConfig};
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
@@ -85,7 +87,7 @@ fn folder_claims(
 ) -> Vec<FolderClaim> {
     let mut claims: Vec<FolderClaim> = Vec::new();
     for spec in specs {
-        let Some(Destination::Files(files)) = destinations.get(&spec.target) else {
+        let Some(files) = destinations.get(&spec.target).and_then(files_destination) else {
             continue;
         };
         let name = format!(
