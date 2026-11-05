@@ -1,8 +1,10 @@
 pub mod batch_columns;
 pub mod batch_footers;
+pub mod batch_headers;
 pub mod batch_refusals;
 pub mod discover_files;
 pub mod footer_columns;
+pub mod key_columns;
 pub mod read_files;
 pub mod read_footers;
 pub mod select_files;

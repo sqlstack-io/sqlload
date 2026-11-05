@@ -11,6 +11,7 @@ use crate::adapters::snowflake::models::{ExternalStage, StageObject, StageRoute}
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
+use crate::files_source::models::StoredRead;
 use crate::http::errors::ApiError;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
@@ -156,6 +157,8 @@ pub(crate) fn order_columns() -> Vec<CopyColumn> {
             ColumnType::Int,
             CopyValue::File {
                 file_type: Some(ColumnType::Int),
+                stored: StoredRead::Plain,
+                short: false,
             },
         ),
         column(
@@ -163,6 +166,8 @@ pub(crate) fn order_columns() -> Vec<CopyColumn> {
             ColumnType::Text,
             CopyValue::File {
                 file_type: Some(ColumnType::Text),
+                stored: StoredRead::Plain,
+                short: false,
             },
         ),
         column("day", ColumnType::Date, CopyValue::Partition),
@@ -217,6 +222,9 @@ pub(crate) fn direct_sql(
             source,
             files: &files,
             columns,
+            encoding: &crate::files_source::models::FilesEncoding::default(),
+            inferred: &[],
+            headers: &std::collections::BTreeMap::new(),
         },
     )?;
     Ok((

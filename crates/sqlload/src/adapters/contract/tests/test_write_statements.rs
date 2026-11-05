@@ -39,7 +39,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             },
             expected_statements: &[
                 "BEGIN",
-                "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE \"UPDATED_AT\" >= CAST('2026-11-04T09:00:00Z' AS TIMESTAMP_TZ(6))",
+                "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE \"UPDATED_AT\" >= CAST('2026-11-04T09:00:00Z' AS TIMESTAMP_TZ(9))",
                 SF_INSERT,
                 "COMMIT",
             ],
@@ -82,7 +82,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             },
             expected_statements: &[
                 "BEGIN",
-                "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE \"UPDATED_AT\" IN (CAST('2026-11-01' AS TIMESTAMP_TZ(6)), CAST('2026-11-03' AS TIMESTAMP_TZ(6)))",
+                "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE \"UPDATED_AT\" IN (CAST('2026-11-01' AS TIMESTAMP_TZ(9)), CAST('2026-11-03' AS TIMESTAMP_TZ(9)))",
                 SF_INSERT,
                 "COMMIT",
             ],
@@ -92,7 +92,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::Recreate,
             expected_statements: &[
-                "CREATE OR REPLACE TABLE \"RAW\".\"APP__ACCOUNTS\" (\"ID\" NUMBER(38,0), \"PROFILE\" VARIANT, \"UPDATED_AT\" TIMESTAMP_TZ(6), \"_SQLLOAD_LOAD_ID\" VARCHAR, \"_SQLLOAD_LOADED_AT\" TIMESTAMP_TZ(6)) COPY GRANTS AS SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"",
+                "CREATE OR REPLACE TABLE \"RAW\".\"APP__ACCOUNTS\" (\"ID\" NUMBER(38,0), \"PROFILE\" VARIANT, \"UPDATED_AT\" TIMESTAMP_TZ(9), \"_SQLLOAD_LOAD_ID\" VARCHAR, \"_SQLLOAD_LOADED_AT\" TIMESTAMP_TZ(9)) COPY GRANTS AS SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"",
             ],
         },
     ];

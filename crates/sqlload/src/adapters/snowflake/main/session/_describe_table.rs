@@ -17,7 +17,7 @@ pub(in crate::adapters) async fn describe_table(
     let literal = |text: &str| SnowflakeSql.render_loader_value_literal(text);
     let database = table.database.as_deref().unwrap_or(&destination.database);
     let query = format!(
-        "SELECT COLUMN_NAME, DATA_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH FROM \"{}\".INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} ORDER BY ORDINAL_POSITION",
+        "SELECT COLUMN_NAME, DATA_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH, DATETIME_PRECISION FROM \"{}\".INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} ORDER BY ORDINAL_POSITION",
         SnowflakeSql.stored_name(database).replace('"', "\"\""),
         literal(&SnowflakeSql.stored_name(&table.schema)),
         literal(&SnowflakeSql.stored_name(&table.table)),
@@ -38,6 +38,7 @@ pub(in crate::adapters) async fn describe_table(
                 scale: row.get(3).and_then(number),
                 char_length: row.get(4).and_then(number),
             }),
+            fraction_digits: row.get(5).and_then(number),
         })
         .collect();
     Ok((!columns.is_empty()).then_some(columns))

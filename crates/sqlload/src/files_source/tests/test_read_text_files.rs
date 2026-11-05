@@ -166,6 +166,15 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             expected_rows: Ok("1|2"),
         },
         ReadTextFilesTestCase {
+            description: "ndjson: only the last value of a key repeated in one object is checked against the inferred type, as Snowflake keeps only that one",
+            encoding: encoding(SourceFormat::Ndjson),
+            files: &[("b.ndjson", "{\"id\":1}\n")],
+            unsampled: &[("a.ndjson", "{\"id\":\"x\",\"id\":2}\n")],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("2\n1"),
+        },
+        ReadTextFilesTestCase {
             description: "an inferred int column rejects a leading zero outside the sample",
             encoding: encoding(SourceFormat::Csv),
             files: &[("b.csv", "id\n1\n")],

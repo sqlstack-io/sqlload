@@ -2,7 +2,6 @@
 
 use crate::adapters::snowflake::_helpers::dialect::values::{copyable_type, plain_key};
 use crate::adapters::snowflake::models::{CopyValue, DirectCheck};
-use crate::files_source::models::SourceFormat;
 use crate::project::models::MaskMethod;
 use crate::store_paths::models::StoreKind;
 
@@ -10,12 +9,6 @@ use crate::store_paths::models::StoreKind;
 pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<String> {
     if check.shaped_by_loader {
         return Some("the table sets shaping = \"loader\"".to_owned());
-    }
-    if check.format != SourceFormat::Parquet {
-        return Some(format!(
-            "{} files are parsed by SQLLoad, whose type inference and checks differ from Snowflake's",
-            check.format
-        ));
     }
     let (
         StoreKind::S3 {
@@ -55,7 +48,7 @@ pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<Str
     for (name, method) in check.masks {
         let column = check.columns.iter().find(|column| column.name == *name);
         let text_file = column.is_some_and(|column| match &column.value {
-            CopyValue::File { file_type } => file_type.as_ref().is_none_or(|file_type| {
+            CopyValue::File { file_type, .. } => file_type.as_ref().is_none_or(|file_type| {
                 *file_type == crate::column_types::models::ColumnType::Text
             }),
             _ => true,
@@ -108,6 +101,7 @@ pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<Str
         }
         if let CopyValue::File {
             file_type: Some(file_type),
+            ..
         } = &column.value
             && *file_type != column.column_type
             && !(*file_type == crate::column_types::models::ColumnType::Text

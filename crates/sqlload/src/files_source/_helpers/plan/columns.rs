@@ -1,12 +1,14 @@
-use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
+use arrow_schema::{DataType, SchemaRef, TimeUnit};
 use parquet::arrow::arrow_reader::ArrowReaderMetadata;
-use parquet::basic::{LogicalType, TimeUnit as ParquetTimeUnit};
-use parquet::schema::types::{Type as ParquetType, TypePtr};
+use parquet::basic::{
+    ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit, Type as PhysicalType,
+};
+use parquet::schema::types::Type as ParquetType;
 
 use crate::column_types::main::portable_type::portable_type;
 use crate::column_types::models::ColumnType;
-use crate::files_source::constants::{LOADER_COLUMNS, MAX_DIRECT_DECIMAL_PRECISION, UTC_ZONES};
-use crate::files_source::models::FileColumn;
+use crate::files_source::constants::{LOADER_COLUMNS, MAX_DIRECT_DECIMAL_PRECISION};
+use crate::files_source::models::{FileColumn, StoredRead};
 
 /// A column seen in sampled files: its type, or `None` while every sampled value was NULL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +17,7 @@ pub(crate) struct SampledColumn {
     pub(crate) column_type: Option<Result<ColumnType, String>>,
     /// How the column is held when a direct `COPY` does not load it exactly.
     pub(crate) direct_refusal: Option<String>,
+    pub(crate) stored_read: StoredRead,
 }
 
 /// Whether `name` is one of the loader's own columns, ignoring case.
@@ -44,8 +47,20 @@ pub(crate) fn schema_columns(schema: &SchemaRef) -> Vec<SampledColumn> {
             name: field.name().clone(),
             column_type: Some(portable_type(field)),
             direct_refusal: direct_refusal(field.data_type()),
+            stored_read: arrow_read(field.data_type()),
         })
         .collect()
+}
+
+/// The top-level field `name` of a Parquet schema.
+fn stored_field<'a>(
+    fields: &'a [std::sync::Arc<ParquetType>],
+    name: &str,
+) -> Option<&'a ParquetType> {
+    fields
+        .iter()
+        .find(|field| field.name() == name)
+        .map(AsRef::as_ref)
 }
 
 /// The columns of a Parquet footer, each checked for the direct route against what the file itself stores as well as its Arrow type: plan samples these, and each batch's check reads the same.
@@ -60,43 +75,107 @@ pub(crate) fn parquet_columns(footer: &ArrowReaderMetadata) -> Vec<SampledColumn
         .schema()
         .fields()
         .iter()
-        .map(|field| SampledColumn {
-            name: field.name().clone(),
-            column_type: Some(portable_type(field)),
-            direct_refusal: stored_or_arrow_refusal(field, stored),
+        .map(|field| {
+            let (direct_refusal, stored_read) =
+                match stored_read(field.data_type(), stored_field(stored, field.name())) {
+                    Ok(read) => (direct_refusal(field.data_type()), read),
+                    Err(refusal) => (Some(refusal), StoredRead::Plain),
+                };
+            SampledColumn {
+                name: field.name().clone(),
+                column_type: Some(portable_type(field)),
+                direct_refusal,
+                stored_read,
+            }
         })
         .collect()
 }
 
-fn stored_or_arrow_refusal(field: &Field, stored: &[TypePtr]) -> Option<String> {
-    let column = stored.iter().find(|column| column.name() == field.name());
-    direct_refusal(field.data_type())
-        .or_else(|| stored_refusal(field.data_type(), column.map(AsRef::as_ref)))
-}
-
-/// `data_type` and the logical type missing when the file's own column does not carry the one Snowflake needs to read it as `data_type`: an embedded Arrow schema can name a timestamp over a bare INT64 or an INT96 (decision 96), where Snowflake sees something else.
-pub(crate) fn stored_refusal(data_type: &DataType, stored: Option<&ParquetType>) -> Option<String> {
-    let logical = stored.and_then(|column| column.get_basic_info().logical_type_ref());
-    let missing = match (data_type, logical) {
-        (DataType::Timestamp(..), Some(LogicalType::Timestamp(timestamp)))
-            if matches!(
-                timestamp.unit,
-                ParquetTimeUnit::MILLIS | ParquetTimeUnit::MICROS
-            ) =>
-        {
-            None
+/// How a stage read returns a column of Arrow type `data_type`, from the type alone (nanoseconds or not).
+pub(crate) fn arrow_read(data_type: &DataType) -> StoredRead {
+    match data_type {
+        DataType::Timestamp(TimeUnit::Nanosecond, _) | DataType::Time64(TimeUnit::Nanosecond) => {
+            StoredRead::Nanos
         }
-        (DataType::Timestamp(..), _) => Some("millisecond or microsecond timestamp"),
-        (DataType::Date32, Some(LogicalType::Date)) => None,
-        (DataType::Date32, _) => Some("date"),
-        (DataType::Decimal128(..), Some(LogicalType::Decimal { .. })) => None,
-        (DataType::Decimal128(..), _) => Some("decimal"),
-        _ => None,
-    };
-    missing.map(|missing| format!("{data_type} with no {missing} logical type"))
+        DataType::Dictionary(_, value) => arrow_read(value),
+        _ => StoredRead::Plain,
+    }
 }
 
-/// `data_type` as text unless a direct `COPY` is known to load it exactly (decision 96): nanosecond and INT96 timestamps, seconds and `Date64` (bare integers in the file, whose unit Snowflake guesses from their size), `UInt64`, `Float16`, `Decimal256`, timestamps in a zone other than UTC and anything else not listed stay with SQLLoad until parity proves them.
+/// How a stage read returns column `stored`, which an embedded Arrow schema reads as `data_type`, or why a direct `COPY` cannot load it exactly (decision 96; live, 2026-11-05). With `USE_LOGICAL_TYPE`, every timestamp, time and date the file annotates reads exactly, nanoseconds and INT96 included (INT96 only where SQLLoad reads it at nanoseconds too: no embedded type, or one of nanoseconds); a bare INT64 under an Arrow timestamp or `Date64` is converted from its Arrow unit; any other column without the logical type its Arrow type needs is refused.
+pub(crate) fn stored_read(
+    data_type: &DataType,
+    stored: Option<&ParquetType>,
+) -> Result<StoredRead, String> {
+    let logical = stored.and_then(|column| column.get_basic_info().logical_type_ref());
+    let physical = stored
+        .filter(|column| {
+            column.is_primitive() && column.get_basic_info().converted_type() == ConvertedType::NONE
+        })
+        .map(ParquetType::get_physical_type);
+    let read = match (data_type, logical, physical) {
+        (DataType::Dictionary(_, value), _, _) => return stored_read(value, stored),
+        (DataType::Timestamp(..), Some(LogicalType::Timestamp(timestamp)), _)
+        | (DataType::Time32(_) | DataType::Time64(_), Some(LogicalType::Time(timestamp)), _) => {
+            match timestamp.unit {
+                ParquetTimeUnit::NANOS => Some(StoredRead::Nanos),
+                _ => Some(StoredRead::Plain),
+            }
+        }
+        (DataType::Timestamp(TimeUnit::Nanosecond, _), None, Some(PhysicalType::INT96)) => {
+            Some(StoredRead::Nanos)
+        }
+        (DataType::Timestamp(unit, _), None, Some(PhysicalType::INT64)) => {
+            Some(StoredRead::Epoch(match unit {
+                TimeUnit::Second => 0,
+                TimeUnit::Millisecond => 3,
+                TimeUnit::Microsecond => 6,
+                TimeUnit::Nanosecond => 9,
+            }))
+        }
+        (DataType::Date64, None, Some(PhysicalType::INT64)) => Some(StoredRead::Epoch(3)),
+        (DataType::Date32 | DataType::Date64, Some(LogicalType::Date), _) => {
+            Some(StoredRead::Plain)
+        }
+        (
+            DataType::Decimal32(..)
+            | DataType::Decimal64(..)
+            | DataType::Decimal128(..)
+            | DataType::Decimal256(..),
+            Some(LogicalType::Decimal { .. }),
+            _,
+        ) => Some(StoredRead::Plain),
+        (
+            DataType::Timestamp(..)
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Decimal32(..)
+            | DataType::Decimal64(..)
+            | DataType::Decimal128(..)
+            | DataType::Decimal256(..),
+            _,
+            _,
+        ) => None,
+        _ => Some(StoredRead::Plain),
+    };
+    read.ok_or_else(|| {
+        let held = match (logical, physical) {
+            (Some(logical), _) => format!("{logical:?}"),
+            (None, Some(physical)) => physical.to_string(),
+            (None, None) => match stored {
+                Some(column) if column.is_primitive() => {
+                    column.get_basic_info().converted_type().to_string()
+                }
+                _ => "nothing".to_owned(),
+            },
+        };
+        format!("{data_type} stored as {held}")
+    })
+}
+
+/// `data_type` as text unless a direct `COPY` is known to load it exactly (decision 96; live, 2026-11-05): `Float16` makes Snowflake reject the whole file, a decimal over 38 digits does not fit, and nested and other types not listed have no portable type yet.
 pub(crate) fn direct_refusal(data_type: &DataType) -> Option<String> {
     let exact = match data_type {
         DataType::Boolean
@@ -107,16 +186,26 @@ pub(crate) fn direct_refusal(data_type: &DataType) -> Option<String> {
         | DataType::UInt8
         | DataType::UInt16
         | DataType::UInt32
+        | DataType::UInt64
         | DataType::Float32
         | DataType::Float64
         | DataType::Utf8
         | DataType::LargeUtf8
         | DataType::Utf8View
-        | DataType::Date32 => true,
-        DataType::Decimal128(precision, _) => *precision <= MAX_DIRECT_DECIMAL_PRECISION,
-        DataType::Timestamp(TimeUnit::Millisecond | TimeUnit::Microsecond, zone) => {
-            zone.as_deref().is_none_or(|zone| UTC_ZONES.contains(&zone))
-        }
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Timestamp(..) => true,
+        DataType::Decimal32(precision, _)
+        | DataType::Decimal64(precision, _)
+        | DataType::Decimal128(precision, _)
+        | DataType::Decimal256(precision, _) => *precision <= MAX_DIRECT_DECIMAL_PRECISION,
+        DataType::Dictionary(_, value) => return direct_refusal(value),
         _ => false,
     };
     (!exact).then(|| data_type.to_string())
@@ -149,8 +238,16 @@ pub(crate) fn merge_columns(
             continue;
         };
         if existing.direct_refusal.is_none() {
-            existing.direct_refusal = column.direct_refusal;
+            existing.direct_refusal = match joined_read(existing.stored_read, column.stored_read) {
+                Some(_) => column.direct_refusal,
+                None => Some(format!(
+                    "{} stored as a bare integer in some files only (in {} or newer ones)",
+                    column.name, merge.key
+                )),
+            };
         }
+        existing.stored_read =
+            joined_read(existing.stored_read, column.stored_read).unwrap_or(existing.stored_read);
         match (&existing.column_type, column.column_type) {
             (_, None) => {}
             (None, found_type) => existing.column_type = found_type,
@@ -170,6 +267,15 @@ pub(crate) fn merge_columns(
         }
     }
     (columns, problems)
+}
+
+/// How a column read two ways in different files is read in all of them: nanoseconds where any file has them (a cast keeps shorter values whole), and `None` when only some files hold bare integers, which take their own conversion.
+pub(crate) fn joined_read(seen: StoredRead, found: StoredRead) -> Option<StoredRead> {
+    match (seen, found) {
+        (seen, found) if seen == found => Some(seen),
+        (StoredRead::Epoch(_), _) | (_, StoredRead::Epoch(_)) => None,
+        _ => Some(StoredRead::Nanos),
+    }
 }
 
 /// A problem for each pair of columns whose names differ only in case, which most warehouses cannot hold apart.
@@ -206,6 +312,7 @@ pub(crate) fn merge_schema(
             name: column.name,
             column_type: Some(column.column_type),
             direct_refusal: column.direct_refusal,
+            stored_read: column.stored_read,
         })
         .collect();
     let merge = ColumnMerge {
@@ -225,6 +332,7 @@ pub(crate) fn file_columns(columns: Vec<SampledColumn>) -> Vec<FileColumn> {
             name: column.name,
             column_type: column.column_type.unwrap_or(Ok(ColumnType::Text)),
             direct_refusal: column.direct_refusal,
+            stored_read: column.stored_read,
         })
         .collect()
 }

@@ -16,6 +16,11 @@ fn given_batches_when_writing_parts_then_files_are_complete_parquet_split_by_sch
             expected_files: &[10, 5],
         },
         WritePartTestCase {
+            description: "one batch of about 20 MB is written in slices of 8,192 rows, ending each file at the slice where its estimate reaches 12 MB",
+            batches: &[("id", 16_000_000)],
+            expected_files: &[9_052_160, 6_947_840],
+        },
+        WritePartTestCase {
             description: "nothing written gives no file",
             batches: &[],
             expected_files: &[],

@@ -19,6 +19,8 @@ pub(crate) fn copyable_type(column_type: &ColumnType) -> bool {
             | ColumnType::Json
             | ColumnType::Text
             | ColumnType::Date
+            | ColumnType::Time
+            | ColumnType::Binary
             | ColumnType::TimestampTz
             | ColumnType::TimestampNtz
     )

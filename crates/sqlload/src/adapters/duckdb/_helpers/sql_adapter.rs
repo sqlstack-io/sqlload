@@ -10,6 +10,10 @@ impl SqlAdapter for DuckDbSql {
         Warehouse::DuckDb
     }
 
+    fn keeps_nanoseconds(&self) -> bool {
+        false
+    }
+
     fn render_loader_logical_type(&self, column_type: &ColumnType) -> WarehouseType {
         logical_type(column_type)
     }

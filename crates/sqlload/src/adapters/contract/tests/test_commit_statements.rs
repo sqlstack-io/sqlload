@@ -33,7 +33,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             keep_staging: false,
             expected_statements: &[
                 "BEGIN",
-                "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE \"UPDATED_AT\" >= CAST('2026-11-04 00:00:00.000000+00' AS TIMESTAMP_TZ(6)) AND \"UPDATED_AT\" < CAST('2026-11-05 00:00:00.000000+00' AS TIMESTAMP_TZ(6))",
+                "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE \"UPDATED_AT\" >= CAST('2026-11-04 00:00:00.000000+00' AS TIMESTAMP_TZ(9)) AND \"UPDATED_AT\" < CAST('2026-11-05 00:00:00.000000+00' AS TIMESTAMP_TZ(9))",
                 SF_INSERT,
                 RUN,
                 SF_EMPTY,

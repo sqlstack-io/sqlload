@@ -127,7 +127,8 @@ pub(crate) struct StoredColumnTestCase {
     /// The embedded Arrow schema's type for `at`.
     pub(crate) embedded: Option<arrow_schema::DataType>,
     pub(crate) expected_read: arrow_schema::DataType,
-    pub(crate) expected_refusal: Option<&'static str>,
+    /// How a stage read returns the column, or the end of why it is refused.
+    pub(crate) expected: Result<crate::files_source::models::StoredRead, &'static str>,
 }
 
 pub(crate) struct StoredRefusalTestCase {
@@ -135,5 +136,6 @@ pub(crate) struct StoredRefusalTestCase {
     pub(crate) data_type: arrow_schema::DataType,
     /// The Parquet schema of a column the file holds, or `None` for no such column.
     pub(crate) message: Option<&'static str>,
-    pub(crate) expected_refusal: Option<&'static str>,
+    /// How a stage read returns the column, or why it is refused.
+    pub(crate) expected_read: Result<crate::files_source::models::StoredRead, &'static str>,
 }

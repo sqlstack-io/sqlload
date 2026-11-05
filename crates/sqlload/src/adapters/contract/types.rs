@@ -43,6 +43,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         false
     }
 
+    /// Whether SQLLoad's reader keeps nanosecond times and timestamps whole for the warehouse, instead of cutting them to microseconds.
+    fn keeps_nanoseconds(&self) -> bool {
+        true
+    }
+
     /// How the warehouse spells `column_type` in DDL, and what is lost if it cannot hold it exactly.
     fn render_loader_logical_type(&self, column_type: &ColumnType) -> WarehouseType;
 

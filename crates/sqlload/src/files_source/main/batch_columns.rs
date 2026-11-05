@@ -1,7 +1,7 @@
 //! Combine the footers of one batch's Parquet files with the columns known so far.
 
 use crate::files_source::_helpers::plan::columns::{
-    ColumnMerge, SampledColumn, drop_loader_columns, file_columns, merge_columns, schema_columns,
+    ColumnMerge, SampledColumn, drop_loader_columns, file_columns, merge_columns, parquet_columns,
 };
 use crate::files_source::models::{BatchFooters, DataFile, FileColumn};
 
@@ -18,16 +18,20 @@ pub fn batch_columns(
             name: column.name.clone(),
             column_type: Some(column.column_type.clone()),
             direct_refusal: column.direct_refusal.clone(),
+            stored_read: column.stored_read,
         })
         .collect();
     let mut problems: Vec<String> = Vec::new();
     for data in files {
-        let Some(footer) = footers.0.get(&data.file.relative_key) else {
+        let Some(footer) = footers.parquet.get(&data.file.relative_key) else {
             continue;
         };
-        let (mut found, _) = drop_loader_columns(schema_columns(footer.schema()));
+        let (mut found, _) = drop_loader_columns(parquet_columns(footer));
         for column in &mut found {
             column.direct_refusal = None;
+            if let Some(seen) = known.iter().find(|seen| seen.name == column.name) {
+                column.stored_read = seen.stored_read;
+            }
         }
         let merge = ColumnMerge {
             key: &data.file.relative_key,

@@ -41,7 +41,7 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             source: "raw/shop/orders/",
             expected_copies: Ok((
                 1,
-                "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"DAY\") FROM (SELECT CASE WHEN METADATA$FILENAME = 'raw/shop/orders/hour=x/part-0.parquet' THEN CAST('2026-11-04 10:00:00.000000 +00:00' AS TIMESTAMP_TZ(6)) ELSE NULL END FROM",
+                "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"DAY\") FROM (SELECT CASE WHEN METADATA$FILENAME = 'raw/shop/orders/hour=x/part-0.parquet' THEN CAST('2026-11-04 10:00:00.000000 +00:00' AS TIMESTAMP_TZ(9)) ELSE NULL END FROM",
             )),
         },
         DirectCopiesTestCase {

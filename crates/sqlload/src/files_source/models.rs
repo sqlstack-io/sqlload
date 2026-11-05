@@ -24,6 +24,19 @@ pub struct FileColumn {
     pub column_type: Result<ColumnType, String>,
     /// How the column is held when a direct `COPY` does not load it exactly, among the files this was read from.
     pub direct_refusal: Option<String>,
+    /// How a stage read returns the column's values, where that takes more than a cast.
+    pub stored_read: StoredRead,
+}
+
+/// How a stage read returns a Parquet column's values (with `USE_LOGICAL_TYPE`), where loading them exactly takes more than a cast.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StoredRead {
+    #[default]
+    Plain,
+    /// Nanosecond times or timestamps: kept whole, unless the live column holds fewer digits.
+    Nanos,
+    /// A bare integer an embedded Arrow type names a timestamp or date: units of 10^-scale seconds since the epoch.
+    Epoch(u8),
 }
 
 /// What a files source holds: its data files and their combined schema.
@@ -50,12 +63,18 @@ pub struct FilesRead {
     pub checks: TextChecks,
     /// Data columns, partition columns and the source-file column, as the table has them.
     pub columns: Vec<DesiredColumn>,
+    /// Time and timestamp columns read at nanoseconds, as the files hold them, where the destination keeps them.
+    pub nanos: Vec<String>,
     pub batch_rows: usize,
 }
 
 /// One batch's Parquet footers by relative key, read once; a file missing here has its footer read when it is.
 #[derive(Debug, Clone, Default)]
-pub struct BatchFooters(pub std::collections::BTreeMap<String, ArrowReaderMetadata>);
+pub struct BatchFooters {
+    pub parquet: std::collections::BTreeMap<String, ArrowReaderMetadata>,
+    /// CSV files' column names by relative key, read once where the destination reads the files itself (by position).
+    pub headers: std::collections::BTreeMap<String, Vec<String>>,
+}
 
 /// The columns a JSON or CSV read checks its keys and values against.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

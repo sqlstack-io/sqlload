@@ -21,7 +21,7 @@ use sqlload::project::main::parse_project::parse_project;
 use sqlload::store_paths::models::{Location, StoreKind};
 use tokio::runtime::Runtime;
 
-use crate::parity::_helpers::files::{case_files, parquet_file};
+use crate::parity::_helpers::files::case_files;
 use crate::parity::constants::{NO_ROWS, SELF_TEST_PASSED};
 use crate::parity::main::comparison_sql::comparison_sql;
 use crate::parity::models::{ComparedColumn, Live, ParityCase, ParityFiles, Side};
@@ -209,7 +209,7 @@ async fn self_test(text: &str, live: &Live, tables: (&str, &str)) -> Result<Stri
     })
 }
 
-/// Load the case both ways and compare: `same rows`, `both fail`, or what differed. Its tables and files go whatever happened, a panic included, after its error is printed.
+/// Load the case both ways and compare: `same rows`, `both fail` (not where the left side failed because its SQL does not compile), or what differed. Its tables and files go whatever happened, a panic included, after its error is printed.
 pub(crate) fn run_case(
     runtime: &Runtime,
     live: &Live,
@@ -264,14 +264,10 @@ fn panic_text(panic: &(dyn Any + Send)) -> String {
 
 async fn write_files(live: &Live, folder_key: &str, test_case: &ParityCase) -> Result<(), String> {
     let folder = lake_folder(live, folder_key).await?;
-    for (key, batch) in case_files(test_case.files)? {
-        write_file(
-            &folder,
-            key,
-            parquet_file(&batch, test_case.embedded_schema)?,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
+    for (key, bytes) in case_files(test_case.files, test_case.embedded_schema)? {
+        write_file(&folder, key, bytes)
+            .await
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -293,11 +289,14 @@ async fn compare(
             );
         }
     }
-    let direct = left_plan.contains("destination loads parquet files from");
+    let direct = left_plan.contains("destination loads ");
     if test_case.left_is_direct && left.is_none() && !direct {
         return Ok(format!("the left side did not load directly:\n{left_plan}"));
     }
     match (left, right) {
+        (Some(reason), Some(_)) if reason.contains("SQL compilation error") => {
+            Ok(format!("the left side's SQL does not compile: {reason}"))
+        }
         (Some(_), Some(_)) => Ok("both fail".to_owned()),
         (Some(reason), None) => Ok(format!("only the left side failed: {reason}")),
         (None, Some(reason)) => Ok(format!("only the right side failed: {reason}")),

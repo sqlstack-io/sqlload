@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, Int64Array, RecordBatch, StringArray, new_null_array};
 use arrow_cast::{CastOptions, cast_with_options};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::files_source::constants::{
@@ -12,13 +12,27 @@ use crate::files_source::errors::ShapeError;
 use crate::files_source::models::DataFile;
 use crate::schema_plan::models::DesiredColumn;
 
-/// The Arrow schema of the batches handed on: one field per output column.
-pub(crate) fn output_schema(columns: &[DesiredColumn]) -> Result<SchemaRef, String> {
+/// The Arrow schema of the batches handed on: one field per output column, at nanoseconds for the `nanos` columns.
+pub(crate) fn output_schema(
+    columns: &[DesiredColumn],
+    nanos: &[String],
+) -> Result<SchemaRef, String> {
     let fields: Vec<Field> = columns
         .iter()
         .map(|column| {
-            arrow_field(&column.name, &column.column_type)
-                .ok_or_else(|| format!("{} has no Arrow representation", column.name))
+            let field = arrow_field(&column.name, &column.column_type)
+                .ok_or_else(|| format!("{} has no Arrow representation", column.name))?;
+            let nanos_type = match (field.data_type(), nanos.contains(&column.name)) {
+                (DataType::Timestamp(_, zone), true) => {
+                    Some(DataType::Timestamp(TimeUnit::Nanosecond, zone.clone()))
+                }
+                (DataType::Time64(_), true) => Some(DataType::Time64(TimeUnit::Nanosecond)),
+                _ => None,
+            };
+            Ok(match nanos_type {
+                Some(data_type) => field.with_data_type(data_type),
+                None => field,
+            })
         })
         .collect::<Result<_, String>>()?;
     Ok(Arc::new(Schema::new(fields)))

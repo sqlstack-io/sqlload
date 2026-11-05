@@ -3,11 +3,14 @@ use crate::auth::models::Authenticator;
 use crate::column_types::models::ColumnType;
 use crate::config::models::{AuthConfig, DestinationConfig};
 use crate::file_store::models::OpenFolder;
-use crate::files_source::models::{BatchFooters, DataFile, FilesRead, SourceFormat};
+use crate::files_source::models::{
+    BatchFooters, DataFile, FilesEncoding, FilesRead, SourceFormat, StoredRead,
+};
+use crate::loader::errors::LoaderError;
 use crate::loader::models::TableSpec;
 use crate::parquet_parts::models::PartWriter;
 use crate::project::models::MaskMethod;
-use crate::schema_plan::models::DesiredColumn;
+use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 use crate::sql_api::models::SqlClient;
 use crate::stage_api::models::DriverSession;
 use crate::stage_api::models::StageInfo;
@@ -129,8 +132,12 @@ pub struct SnowflakeSql;
 /// Where one column of a direct `COPY` gets its value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CopyValue {
-    /// The file's column of the same name; `file_type` is the type the files hold it as (`None` when no sampled file has it).
-    File { file_type: Option<ColumnType> },
+    /// The file's column of the same name; `file_type` is the type the files hold it as (`None` when no sampled file has it), `stored` how a stage read returns it, and `short` that the live column keeps fewer than 9 digits after the second, so the value is cut to microseconds toward zero as SQLLoad's own reader does.
+    File {
+        file_type: Option<ColumnType>,
+        stored: StoredRead,
+        short: bool,
+    },
     /// The file's value of this partition column, from its path.
     Partition,
     /// The file's full name, as the files source records it.
@@ -163,6 +170,11 @@ pub struct DirectCopy<'a> {
     pub source: &'a Location,
     pub files: &'a [DataFile],
     pub columns: &'a [CopyColumn],
+    pub encoding: &'a FilesEncoding,
+    /// Columns whose types were inferred from sampled values, whose every value must fit the inferred type (JSON, NDJSON and CSV).
+    pub inferred: &'a [String],
+    /// CSV files' column names by relative key, which place each column.
+    pub headers: &'a std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// One `COPY` statement and the files it loads.
@@ -267,6 +279,8 @@ pub struct SnowflakeWriter {
     pub staged: Vec<String>,
     /// The upload credentials this batch fetched, for all its files.
     pub stage: Option<StageInfo>,
+    /// The batch's files still uploading, a few at a time, while the next ones are read and encoded.
+    pub uploads: tokio::task::JoinSet<Result<(), LoaderError>>,
 }
 
 /// What a direct batch's `COPY` did, with the rows it loaded.
@@ -293,4 +307,6 @@ pub struct DirectBatch<'a> {
     pub footers: &'a BatchFooters,
     /// The write mode of the batch's commit.
     pub mode: &'a WriteMode,
+    /// The live table's columns as plan read them.
+    pub live: Option<&'a [LiveColumn]>,
 }
