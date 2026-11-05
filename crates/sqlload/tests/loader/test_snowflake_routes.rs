@@ -396,6 +396,21 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
         RouteTestCase {
+            description: "replace on the direct route: each batch COPYs straight into the build table that is swapped in, rows written once",
+            stage: MANAGED,
+            settings: "write_strategy = \"replace\"",
+            files: RouteFiles::Bucket,
+            file_set: two_batches,
+            prepare: integration,
+            expected_plan: &[PULLS],
+            expected_sent: &[
+                "COPY INTO \"DB\".\"RAW\".\"ORDERS__SQLLOAD_STAGING_",
+                "METADATA$FILENAME",
+            ],
+            expected_unsent: &["INSERT INTO", "/_sqlload/", "TEMPORARY TABLE"],
+            ..BASE
+        },
+        RouteTestCase {
             description: "a hashed column under replace: each batch's temporary table is hashed into the table that is swapped in",
             stage: MANAGED,
             settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nmask = { extra = \"hash\" }",
