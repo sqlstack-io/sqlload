@@ -1360,3 +1360,43 @@ pub(crate) async fn run_metadata_round_trip(
         .map_err(|error| error.to_string())?;
     Ok((plan, checked))
 }
+
+/// The plan for `selectors` with `--start-cursor start` over four NDJSON sources whose partition cursors are two dates, an integer and text, loading into DuckDB.
+pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result<String, String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let root = directory.path().display().to_string();
+    let partitions = [
+        ("days", "day", "date", "2026-11-01"),
+        ("nums", "n", "int", "5"),
+        ("later", "day", "date", "2026-11-03"),
+        ("texts", "k", "text", "a"),
+    ];
+    let mut text = format!(
+        "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n"
+    );
+    for (source, column, column_type, value) in partitions {
+        let folder = directory
+            .path()
+            .join(source)
+            .join(format!("{column}={value}"));
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        std::fs::write(folder.join("a.ndjson"), "{\"id\":1}\n")
+            .map_err(|error| error.to_string())?;
+        text.push_str(&format!(
+            "\n[sources.{source}]\nkind = \"files\"\nconnection = \"files\"\npath = \"{source}/\"\nformat = \"ndjson\"\npartition_columns = {{ {column} = \"{column_type}\" }}\nwrite_strategy = \"append\"\ncursor_column = \"{column}\"\n"
+        ));
+    }
+    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let options = PlanOptions {
+        select: selectors.iter().map(ToString::to_string).collect(),
+        start_cursor: Some(start.to_owned()),
+        ..PlanOptions::default()
+    };
+    let plan = plan_project(&project, &destinations, &options)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(render_plan(&plan).0.join("\n"))
+}

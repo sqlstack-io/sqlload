@@ -344,3 +344,13 @@ pub(crate) struct SourceRowUpgradeTestCase {
     /// Each row's id and row number, `-` for NULL.
     pub(crate) expected_rows: &'static str,
 }
+
+pub(crate) struct MixedCursorTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) selectors: &'static [&'static str],
+    pub(crate) start: &'static str,
+    /// Text the plan must contain.
+    pub(crate) expected_plan: &'static str,
+    /// Text the plan must not contain.
+    pub(crate) expected_absent: &'static str,
+}
