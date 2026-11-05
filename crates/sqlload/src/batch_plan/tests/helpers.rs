@@ -9,7 +9,9 @@ use crate::batch_plan::main::last_value::last_value;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::{CursorWindow, WindowSplit};
-use crate::batch_plan::tests::test_types::{FileGroupsTestCase, SplitWindowsTestCase};
+use crate::batch_plan::tests::test_types::{
+    FileGroupsTestCase, PartitionFiles, SplitWindowsTestCase,
+};
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
 
@@ -50,7 +52,7 @@ pub(crate) fn groups(test_case: &FileGroupsTestCase) -> Vec<(usize, Vec<String>)
     let files: Vec<DataFile> = test_case
         .partitions
         .iter()
-        .flat_map(|(day, count)| (0..*count).map(move |index| data_file(day, index)))
+        .flat_map(|partition| (0..partition.files).map(move |index| data_file(partition, index)))
         .collect();
     file_groups(&files, test_case.by_value)
         .into_iter()
@@ -58,17 +60,23 @@ pub(crate) fn groups(test_case: &FileGroupsTestCase) -> Vec<(usize, Vec<String>)
         .collect()
 }
 
-fn data_file(day: &str, index: usize) -> DataFile {
-    let key = format!("day={day}/part-{index:05}.parquet");
+fn data_file(partition: &PartitionFiles, index: usize) -> DataFile {
+    let key = format!(
+        "region={}/day={}/part-{index:05}.parquet",
+        partition.region, partition.day
+    );
     DataFile {
         file: StoredFile {
             path: object_store::path::Path::from(key.as_str()),
             relative_key: key,
-            size: 1,
+            size: partition.file_bytes,
             etag: None,
             modified_ms: 0,
         },
-        partitions: vec![("day".to_owned(), day.to_owned())],
+        partitions: vec![
+            ("region".to_owned(), partition.region.to_owned()),
+            ("day".to_owned(), partition.day.to_owned()),
+        ],
     }
 }
 

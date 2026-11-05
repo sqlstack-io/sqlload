@@ -14,8 +14,8 @@ pub(crate) struct SplitWindowsTestCase {
 
 pub(crate) struct FileGroupsTestCase {
     pub(crate) description: &'static str,
-    /// Files per `day` partition, in key order.
-    pub(crate) partitions: &'static [(&'static str, usize)],
+    /// The files listed, in key order.
+    pub(crate) partitions: &'static [PartitionFiles],
     pub(crate) by_value: Option<&'static str>,
     /// Each group's file count and the values it replaces.
     pub(crate) expected_groups: &'static [(usize, &'static [&'static str])],
@@ -27,4 +27,12 @@ pub(crate) struct CutIndexTestCase {
     pub(crate) last: Option<&'static str>,
     pub(crate) expected_cut: usize,
     pub(crate) expected_last: Option<&'static str>,
+}
+
+/// Some equal files of one `region` and `day`.
+pub(crate) struct PartitionFiles {
+    pub(crate) region: &'static str,
+    pub(crate) day: &'static str,
+    pub(crate) files: usize,
+    pub(crate) file_bytes: u64,
 }
