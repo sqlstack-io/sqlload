@@ -18,3 +18,9 @@ pub(crate) struct LoadOptionsTestCase {
     /// `select | exclude | start | end`, or text the parse error must contain.
     pub(crate) expected_options: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct PlanFailureTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) json: bool,
+    pub(crate) expected_output: &'static str,
+}

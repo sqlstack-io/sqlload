@@ -1,7 +1,7 @@
 //! Parse the given arguments and run one subcommand with a host for Python sources, for the `sqlload` Python package.
 
 use std::ffi::OsString;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::Arc;
 
 use clap::Parser;
@@ -11,6 +11,7 @@ use crate::command::_helpers::limits::blocking_threads;
 use crate::command::_helpers::loader_commands::run_loader;
 use crate::command::_helpers::logging::init_logging;
 use crate::command::models::{Cli, Command, LoaderRequest};
+use crate::loader::_helpers::plan_view::paint;
 use crate::project::main::is_project::is_project;
 use crate::python_sources::types::PythonHost;
 
@@ -55,16 +56,24 @@ where
             };
             return run_loader(request).await;
         }
-        run_exporter_command(&cli.config, cli.command).await
+        run_exporter_command(&cli.config, cli.command)
+            .await
+            .map(|lines| (lines, true))
     });
+    let colour =
+        !cli.no_color && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal();
     match outcome {
-        Ok(lines) => {
+        Ok((lines, ok)) => {
+            let lines = match colour {
+                true => paint(lines),
+                false => lines,
+            };
             let mut stdout = std::io::stdout().lock();
             for line in lines {
                 let _ = writeln!(stdout, "{line}");
             }
             let _ = stdout.flush();
-            0
+            u8::from(!ok)
         }
         Err(error) => fail(&error),
     }

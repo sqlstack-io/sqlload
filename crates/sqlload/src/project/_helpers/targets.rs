@@ -14,7 +14,7 @@ pub(crate) fn stage_problems(name: &str, connection: &ConnectionConfig) -> Vec<S
     };
     let Some(load_method) = load_method else {
         return vec![format!(
-            "connection {name}: load_method is required: how should data get into Snowflake? Add one of these to [connections.{name}]: load_method = {{ type = \"external_stage\", url = \"s3://...\", storage_integration = \"...\" }} (fastest), or load_method = {{ type = \"internal_user_stage\" }} (no setup)"
+            "connection {name}: load_method is required: how should data get into Snowflake? Fix: add one of these to [connections.{name}]:\nload_method = {{ type = \"external_stage\", url = \"s3://...\", storage_integration = \"...\" }}   (fastest)\nload_method = {{ type = \"internal_user_stage\" }}   (no setup)"
         )];
     };
     let LoadMethod::ExternalStage {

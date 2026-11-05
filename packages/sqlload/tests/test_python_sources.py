@@ -171,7 +171,7 @@ def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_f
 	load(project)
 	give(project, "rows", [{"id": 2, "code": 7, "meta": {"k": 2}, "extra": True}])
 	done = load(project)
-	assert "loaded  RAW.shop__rows  1 rows" in done.stdout
+	assert "loaded   RAW.shop__rows  1 rows" in done.stdout
 	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
 	assert [name for name, _ in columns] == ["id", "code", "meta", "_sqlload_load_id", "_sqlload_loaded_at", "extra"]
 	assert query(project, 'SELECT id, code, meta, extra FROM "RAW"."shop__rows" ORDER BY id') == [
@@ -202,7 +202,7 @@ def test_given_a_generator_that_raises_when_loading_then_only_its_table_fails_an
 	give(project, "bad", {"rows": [{"id": 1}], "raise": "the API returned 503"})
 	done = sqlload(project, "load")
 	assert done.returncode == 1
-	assert "loaded  RAW.shop__good  1 rows" in done.stdout + done.stderr
+	assert "loaded   RAW.shop__good  1 rows" in done.stdout + done.stderr
 	assert "failed  RAW.shop__bad  RuntimeError: the API returned 503" in done.stdout + done.stderr
 	assert "shop.py" in done.stderr
 	assert query(project, "SELECT table_name FROM information_schema.tables ORDER BY table_name") == [("shop__good",)]
@@ -437,8 +437,8 @@ def test_given_a_declared_key_the_data_does_not_have_when_loading_then_the_table
 @pytest.mark.parametrize(
 	("settings", "expected_line", "expected_tables"),
 	[
-		("", "loaded  RAW.shop__rows  0 rows (table created on first data)", []),
-		("columns={'id': 'int'}", "loaded  RAW.shop__rows  0 rows", [("id", "BIGINT")]),
+		("", "loaded   RAW.shop__rows  0 rows (table created on first data)", []),
+		("columns={'id': 'int'}", "loaded   RAW.shop__rows  0 rows", [("id", "BIGINT")]),
 	],
 	ids=["nothing declared", "declared columns"],
 )

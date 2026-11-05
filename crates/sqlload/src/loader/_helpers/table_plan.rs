@@ -422,6 +422,7 @@ async fn plan_table_once(
             }
         },
     };
+    schema.warnings.extend(copy_warning(route.as_ref()));
     let commits = commit_rule(&CommitRequest {
         spec,
         window: read.as_ref(),
@@ -568,6 +569,22 @@ fn hmac_warnings(
             )
         })
         .collect()
+}
+
+/// The warning for files `copy_to_internal_stage` downloads and uploads, which a storage integration would spare.
+fn copy_warning(route: Option<&Route>) -> Option<String> {
+    let [
+        Step::UseFiles(files),
+        Step::CopyFiles(Store::InternalStage(stage)),
+        Step::DestinationPulls(_),
+    ] = route?.steps.as_slice()
+    else {
+        return None;
+    };
+    Some(format!(
+        "copy_to_internal_stage: every file is downloaded and uploaded to {stage} (much slower than a direct load).\nA storage integration for {} avoids this.",
+        files.store
+    ))
 }
 
 /// The route a table's data takes into `destination`; `read` is a files table's planned read.

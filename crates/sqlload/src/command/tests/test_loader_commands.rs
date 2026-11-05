@@ -1,5 +1,5 @@
-use crate::command::tests::helpers::debug_without_host;
-use crate::command::tests::test_types::LoaderCommandTestCase;
+use crate::command::tests::helpers::{debug_without_host, plan_without_host};
+use crate::command::tests::test_types::{LoaderCommandTestCase, PlanFailureTestCase};
 
 const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 
@@ -24,6 +24,32 @@ fn given_the_standalone_executable_when_a_project_has_python_paths_then_it_says_
             error.contains(test_case.expected_error)
                 && error.is_empty() == test_case.expected_error.is_empty(),
             "{}: {error}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_snowflake_connection_without_load_method_when_planning_then_the_plan_fails_naming_the_fix()
+ {
+    let project = "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
+    let test_cases = [
+        PlanFailureTestCase {
+            description: "text: an Errors section with the reason and the fix, and no error: prefix",
+            json: false,
+            expected_output: "Errors (1)\n└── connection wh\n    ├── reason  load_method is required: how should data get into Snowflake?\n    └── fix     add one of these to [connections.wh]:\n                load_method = { type = \"external_stage\", url = \"s3://...\", storage_integration = \"...\" }   (fastest)\n                load_method = { type = \"internal_user_stage\" }   (no setup)\n\n✗ Plan failed with errors",
+        },
+        PlanFailureTestCase {
+            description: "--json: sqlbuild's error shape",
+            json: true,
+            expected_output: "{\"error\":{\"code\":\"config\",\"help\":null,\"message\":\"invalid project:\\n  - connection wh: load_method is required",
+        },
+    ];
+    for test_case in test_cases {
+        let output = plan_without_host(project, test_case.json);
+        assert!(
+            output.starts_with(test_case.expected_output),
+            "{}: {output}",
             test_case.description
         );
     }

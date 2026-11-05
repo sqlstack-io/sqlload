@@ -375,7 +375,7 @@ pub(crate) async fn run_large_partition(
             WrittenRun {
                 files: first,
                 expected_error: "",
-                expected_plan: "2 batches of whole partitions (up to 1000 files or about 1 GB each); each batch's footers are combined",
+                expected_plan: "2 batches of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined",
             },
             WrittenRun {
                 files: vec![(rewritten.key, parquet_bytes(&rewritten)?)],

@@ -13,7 +13,7 @@ const MANAGED: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\",
 const KEEPS: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\", keep_staged_files = true }";
 const OWN_STAGE: &str = "COPY INTO \"DB\".\"RAW\".\"ORDERS\"";
 const MANAGED_REF: &str = "FROM @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\"";
-const WRITES_PARQUET: &str = "write Parquet to";
+const WRITES_PARQUET: &str = "Parquet -> ";
 const FILES_STRATEGIES: [&str; 3] = [
     "write_strategy = \"append\"\n",
     "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\n",
@@ -30,9 +30,10 @@ const FORMATS: [(&str, &str, (RouteFileSet, &str)); 5] = [
     ("json", "format = \"json\"\n", (json_layouts, "v")),
     ("csv", "format = \"csv\"\n", (every_csv_type, "s")),
 ];
-const PULLS_ANY: &str = " files from s3://fake-bucket/src/";
-const READS: &str = " into Arrow";
-const PULLS: &str = "destination loads parquet files from s3://fake-bucket/src/";
+const PULLS_ANY: &str = "COPYs directly from s3://fake-bucket/src/";
+const READS: &str = " as Arrow";
+const PULLS: &str =
+    "Snowflake COPYs directly from s3://fake-bucket/src/ (nothing through the loader)";
 
 const USER: &str = "{ type = \"internal_user_stage\" }";
 const TABLE: &str = "{ type = \"internal_table_stage\" }";
@@ -65,7 +66,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "@~: one credentials fetch for the plan's probe and one for each of the two batches",
             file_set: two_batches,
-            expected_plan: &["write Parquet to internal stage @~"],
+            expected_plan: &["read parquet as Arrow -> Parquet -> PUT to @~ -> COPY"],
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @~/sqlload/",
@@ -78,14 +79,17 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "files no external stage covers fail the plan with the fix, never going through SQLLoad",
             settings: DIRECT,
-            expected_error: "cannot be read by Snowflake: no external stage covers it. Fix: add a storage integration",
+            expected_error: "cannot be read by Snowflake: no external stage covers it\n    └── fix     add a storage integration that allows this bucket (the fast path)",
             expected_unsent: &["COPY INTO"],
             ..BASE
         },
         RouteTestCase {
             description: "copy_to_internal_stage: the files are uploaded unchanged to @~ and Snowflake loads them there, then they are removed",
             settings: "write_strategy = \"append\"\ncopy_to_internal_stage = true",
-            expected_plan: &["copy_to_internal_stage"],
+            expected_plan: &[
+                "parquet files from s3://fake-bucket/src/ uploaded unchanged to @~ -> COPY",
+                "copy_to_internal_stage: every file is downloaded and uploaded to @~ (much slower than a direct load).",
+            ],
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @~/sqlload/",
@@ -113,7 +117,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "@%table: an append into a table this load creates uses its own table stage",
             stage: TABLE,
-            expected_plan: &["write Parquet to internal stage @%table"],
+            expected_plan: &["Parquet -> PUT to @%table -> COPY"],
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @\"DB\".\"RAW\".%\"ORDERS\"/sqlload/",
