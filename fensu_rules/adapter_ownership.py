@@ -8,7 +8,7 @@ from fensu import AnalyzerId, Family, Fault, File, RuleContext, rule
 
 WAREHOUSE_CODE: re.Pattern[str] = re.compile(
     r"\b(?:Destination|Writer|Warehouse)::(?:DuckDb|Snowflake|Files|Parquet)\b"
-    r"|\b(?:StageRoute|ForcedStage|StageObject)::\w+"
+    r"|\b(?:StageRoute|ForcedStage|StageObject)::(?:\w+|\{|\*)"
     r"|\badapters::(?:snowflake|duckdb)::(?:main|_helpers)\b"
 )
 COMMENT: str = "//"

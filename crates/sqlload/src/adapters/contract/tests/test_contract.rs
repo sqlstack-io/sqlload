@@ -1,3 +1,4 @@
+use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::tests::helpers::{accounts, columns, writes};
 use crate::adapters::contract::tests::test_types::ContractTestCase;
@@ -63,7 +64,14 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
         let adapter = sql_adapter(warehouse);
         let target = adapter.render_qualified_name(&accounts());
         let name = adapter.render_identifier(&accounts().table);
-        let from_staging = format!("FROM {}", adapter.render_qualified_name(&staging));
+        let swap = TableName {
+            table: format!("{}{SWAP_SUFFIX}", staging.table),
+            ..staging.clone()
+        };
+        let sources = [
+            format!("FROM {}", adapter.render_qualified_name(&staging)),
+            format!("FROM {}", adapter.render_qualified_name(&swap)),
+        ];
         for test_case in &test_cases {
             let statements = adapter.render_commit(
                 &WriteStatementsRequest {
@@ -78,7 +86,8 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
             );
             let copies = statements
                 .iter()
-                .filter(|statement| statement.contains(&from_staging))
+                .filter(|statement| !statement.starts_with("DELETE"))
+                .filter(|statement| sources.iter().any(|source| statement.contains(source)))
                 .count();
             assert_eq!(
                 copies, test_case.expected_copies,
