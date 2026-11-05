@@ -319,7 +319,7 @@ pub struct DirectBatch<'a> {
     pub source_folder: Option<&'a OpenFolder>,
 }
 
-/// A hashed batch's statements, sent in one request or split over several through a delta table holding only hashed values.
+/// A batch's statements through a temporary table, which hashes masked columns: sent in one request, or split over several through a delta table whose masked columns are already hashed.
 #[derive(Debug)]
 pub(in crate::adapters) struct HashedScript {
     /// Creates the temporary table the `COPY`s fill with plain values.
@@ -330,7 +330,7 @@ pub(in crate::adapters) struct HashedScript {
     pub(in crate::adapters) drop_staging: String,
     /// Creates the transient delta table a split batch hashes into.
     pub(in crate::adapters) create_delta: String,
-    /// Hashes the temporary table into the delta, keeping JSON and UUIDs as text so `finish` casts them once.
+    /// Moves the temporary table into the delta, hashing masked columns; nothing is cast.
     pub(in crate::adapters) hash_into_delta: Vec<String>,
     /// Writes the delta into the target.
     pub(in crate::adapters) finish: Vec<String>,

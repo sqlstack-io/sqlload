@@ -172,18 +172,15 @@ impl SnowflakeWriter {
             > MAX_SCRIPT_BYTES;
         if hashes || oversized {
             let id = staging_id(batch.target.load_id, chrono::Utc::now().naive_utc());
+            let held = held_types(batch.write_columns);
             let (staging, create) = SnowflakeSql.render_create_staging_table(
                 &spec.destination,
-                batch.target.columns,
+                &held,
                 &format!("{id}_hashed"),
             );
             let create = create.replacen("TRANSIENT TABLE", "TEMPORARY TABLE", 1);
-            let columns = filled_columns(
-                spec,
-                (read, batch.live),
-                &staged_as_text(batch.target.columns),
-                literals,
-            );
+            let columns = filled_columns(spec, (read, batch.live), batch.write_columns, literals);
+            let bare = staged_as_text(batch.write_columns);
             let hashed: Vec<String> = spec
                 .masked
                 .columns
@@ -201,22 +198,20 @@ impl SnowflakeWriter {
                 None => batch.mode,
             };
             let target = build.as_ref().unwrap_or(&spec.destination);
-            let write_into = |(table, columns): (&TableName, &[DesiredColumn]),
-                              mode: &WriteMode,
-                              hashed: &[String],
-                              from: &TableName| {
-                SnowflakeSql.render_commit(
-                    &WriteStatementsRequest {
-                        table,
-                        columns,
-                        mode,
-                        hashed,
-                        built: None,
-                    },
-                    from,
-                    (None, true),
-                )
-            };
+            let write_into =
+                |table: &TableName, mode: &WriteMode, hashed: &[String], from: &TableName| {
+                    SnowflakeSql.render_commit(
+                        &WriteStatementsRequest {
+                            table,
+                            columns: &bare,
+                            mode,
+                            hashed,
+                            built: None,
+                        },
+                        from,
+                        (None, true),
+                    )
+                };
             let drop = |table: &TableName| {
                 format!(
                     "DROP TABLE IF EXISTS {}",
@@ -229,30 +224,24 @@ impl SnowflakeWriter {
                 .any(|statement| statement.len() > MAX_COPY_SQL_BYTES)
             {
                 return Err(LoaderError::Invalid(format!(
-                    "a hashed batch of {} has a statement over Snowflake's size limit; load fewer files per batch",
+                    "a batch of {} has a statement over Snowflake's size limit; load fewer files per batch",
                     spec.destination.table
                 )));
             }
             let (delta, create_delta) = SnowflakeSql.render_create_staging_table(
                 &spec.destination,
-                batch.write_columns,
+                &held,
                 &format!("{id}_delta"),
             );
-            let as_text = staged_as_text(batch.write_columns);
             let rows = self
                 .run_hashed(HashedScript {
                     create,
                     copies,
-                    write: write_into((target, batch.write_columns), mode, &hashed, &staging),
+                    write: write_into(target, mode, &hashed, &staging),
                     drop_staging: drop(&staging),
                     create_delta,
-                    hash_into_delta: write_into(
-                        (&delta, &as_text),
-                        &WriteMode::Append,
-                        &hashed,
-                        &staging,
-                    ),
-                    finish: write_into((target, batch.write_columns), mode, &[], &delta),
+                    hash_into_delta: write_into(&delta, &WriteMode::Append, &hashed, &staging),
+                    finish: write_into(target, mode, &[], &delta),
                     drop_delta: drop(&delta),
                 })
                 .await?;
@@ -320,7 +309,7 @@ impl SnowflakeWriter {
         if let Err(error) =
             script_copy_rows(&self.destination, std::slice::from_ref(&script.drop_delta)).await
         {
-            tracing::warn!(%error, "cannot drop a hashed batch's delta table; it holds only hashed values");
+            tracing::warn!(%error, "cannot drop a split batch's delta table; its masked columns are already hashed, and the next load drops it after a day");
         }
         loaded
     }
@@ -349,6 +338,21 @@ fn hashed_requests(script: &HashedScript) -> Vec<Vec<String>> {
         request.push(script.drop_staging.clone());
     }
     requests
+}
+
+/// The columns a temporary or delta table holds a direct `COPY`'s values in: their own types, JSON as `VARIANT`, so writing them on casts nothing.
+fn held_types(columns: &[DesiredColumn]) -> Vec<DesiredColumn> {
+    columns
+        .iter()
+        .cloned()
+        .map(|column| match column.column_type {
+            ColumnType::Json => DesiredColumn {
+                column_type: ColumnType::Native("VARIANT".to_owned()),
+                ..column
+            },
+            _ => column,
+        })
+        .collect()
 }
 
 /// The columns a staging table holds, as the staged rows carry them: JSON and UUIDs as text.
