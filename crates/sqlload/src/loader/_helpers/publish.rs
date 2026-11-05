@@ -7,6 +7,7 @@ use crate::file_store::main::delete_files::delete_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
+use crate::file_store::models::OpenFolder as StoreFolder;
 use crate::files_destination::main::clear_pending::clear_pending;
 use crate::files_destination::main::close_writer::close_writer;
 use crate::files_destination::main::mark_pending::mark_pending;
@@ -18,17 +19,23 @@ use crate::files_destination::models::PendingPhase;
 use crate::files_destination::models::PendingRun;
 use crate::files_destination::models::ReplacedFiles;
 use crate::files_destination::models::WriterRequest;
+use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
+use crate::files_source::main::batch_columns::batch_columns;
 use crate::files_source::models::DataFile;
+use crate::files_source::models::{FilesRead, FilesTable, SourceFormat};
 use crate::loader::_helpers::destination::append_rows;
 use crate::loader::_helpers::destination::execute;
 use crate::loader::_helpers::destination::stage_file;
 use crate::loader::_helpers::destination::table_destination;
+use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::sources::ReadPart;
+use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::table_plan::source_filter;
+use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
 use crate::loader::errors::LoaderError;
@@ -37,6 +44,7 @@ use crate::loader::models::CommitRange;
 use crate::loader::models::CommitRule;
 use crate::loader::models::Destination;
 use crate::loader::models::FilesSink;
+use crate::loader::models::LoadRun;
 use crate::loader::models::Publisher;
 use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
@@ -64,6 +72,7 @@ use crate::snowflake_destination::main::remove_staged::remove_staged;
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
 use crate::write_sql::main::qualified_name::qualified_name;
+use crate::write_sql::main::staging_changes::staging_changes;
 use crate::write_sql::main::staging_table::staging_table;
 use crate::write_sql::main::swap_table::swap_table;
 use crate::write_sql::main::write_statements::write_statements;
@@ -468,6 +477,97 @@ impl Publisher {
     }
 }
 
+impl Publisher {
+    /// Before a files batch: combine its Parquet files' footers with the columns known so far; when they add columns, plan the table for them (one read of the live columns) and apply the schema changes once, to the table and the staging table.
+    async fn widen_for(
+        &mut self,
+        run: &LoadRun<'_>,
+        folder: &StoreFolder,
+        files: &[DataFile],
+    ) -> Result<(), LoaderError> {
+        let spec = &self.table.spec;
+        let Some(source_files) = spec
+            .files
+            .as_ref()
+            .filter(|source| source.encoding.format == SourceFormat::Parquet)
+        else {
+            return Ok(());
+        };
+        let replaced: Vec<&str> = source_files
+            .partition_types
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
+            .collect();
+        let (columns, problems) =
+            batch_columns(folder, files, &source_files.table.columns, &replaced).await?;
+        if !problems.is_empty() {
+            return Err(LoaderError::Invalid(problems.join("; ")));
+        }
+        if columns == source_files.table.columns {
+            return Ok(());
+        }
+        let source = run.project.sources.get(&spec.source_name).ok_or_else(|| {
+            LoaderError::Invalid(format!("source {:?} does not exist", spec.source_name))
+        })?;
+        let found = FilesTable {
+            columns,
+            ..source_files.table.clone()
+        };
+        let (source_table, files_source) = files_source_parts(
+            &spec.source_name,
+            source,
+            spec.warehouse,
+            (source_files.location.clone(), found),
+        )?;
+        let resolved = resolve_tables(run.project, &spec.source_name, &[source_table]);
+        let mut widened = match (resolved.problems.first(), resolved.specs.into_iter().next()) {
+            (None, Some(widened)) => widened,
+            (problem, _) => {
+                return Err(LoaderError::Invalid(problem.cloned().unwrap_or_else(
+                    || "the files' new columns leave the table unselected".to_owned(),
+                )));
+            }
+        };
+        widened.files = Some(files_source);
+        widened.listed = spec.listed;
+        let (read_columns, live, schema) =
+            replan_columns(&widened, &self.destination, run.options).await?;
+        let replanned = TablePlan {
+            spec: widened,
+            files: self.table.files.clone().map(|read| FilesRead {
+                columns: read_columns
+                    .iter()
+                    .map(|column| DesiredColumn {
+                        name: column.name.clone(),
+                        column_type: column.output.clone(),
+                        origin: ColumnOrigin::Source,
+                    })
+                    .collect(),
+                ..read
+            }),
+            read_columns,
+            live,
+            schema,
+            ..self.table.clone()
+        };
+        let old = staged_columns(&self.table);
+        if let Some(statements) = schema_statements(&replanned) {
+            execute(&self.destination, statements).await?;
+        }
+        if let Some(staging) = &self.staging {
+            let changes = staging_changes(
+                staging,
+                (&old, &staged_columns(&replanned)),
+                replanned.spec.warehouse,
+            );
+            execute(&self.destination, changes).await?;
+        }
+        self.table = replanned;
+        Ok(())
+    }
+}
+
 /// The write mode of one commit: the planned one, with a `delete_insert` narrowed to the commit's window or partitions.
 fn commit_mode(planned: &WriteMode, range: Option<CommitRange>) -> WriteMode {
     match (planned, range) {
@@ -497,11 +597,10 @@ fn commit_mode(planned: &WriteMode, range: Option<CommitRange>) -> WriteMode {
 pub(crate) async fn publish_table(
     reader: &SourceReader,
     table: &TablePlan,
-    destination: &Destination,
-    run: Option<&RunEntry>,
+    (destination, run): (&Destination, &LoadRun<'_>),
 ) -> Result<u64, LoaderError> {
-    let publisher = Publisher::open(table.clone(), destination, run.cloned()).await?;
-    let published = feed(reader, table, publisher).await;
+    let publisher = Publisher::open(table.clone(), destination, None).await?;
+    let published = feed(reader, table, publisher, run).await;
     let (mut publisher, result) = published;
     publisher.close().await;
     result
@@ -512,6 +611,7 @@ async fn feed(
     reader: &SourceReader,
     table: &TablePlan,
     mut publisher: Publisher,
+    run: &LoadRun<'_>,
 ) -> (Publisher, Result<u64, LoaderError>) {
     let fed = async {
         match &table.commits {
@@ -541,11 +641,15 @@ async fn feed(
                         .iter()
                         .filter_map(|index| planned.and_then(|files| files.get(*index)).cloned())
                         .collect();
+                    if let SourceReader::Files(folder) = reader {
+                        publisher.widen_for(run, folder, &files).await?;
+                    }
                     let part = ReadPart {
                         files: Some(files),
                         ..ReadPart::default()
                     };
-                    read_source(reader, table, part, async |batch| {
+                    let current = publisher.table.clone();
+                    read_source(reader, &current, part, async |batch| {
                         stage(&mut publisher, batch).await
                     })
                     .await?;

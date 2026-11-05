@@ -154,6 +154,17 @@ pub(crate) async fn discover_files_table(
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
     }
+    files_source_parts(source_name, source, warehouse, (location, table))
+}
+
+/// A files source's table and files from the files found: the file columns, partition columns and source-file columns as one source table.
+pub(crate) fn files_source_parts(
+    source_name: &str,
+    source: &SourceConfig,
+    warehouse: Warehouse,
+    (location, table): (Location, FilesTable),
+) -> Result<(SourceTable, FilesSource), LoaderError> {
+    let encoding = source.files_encoding();
     let mut partition_types: Vec<(String, ColumnType)> = Vec::new();
     for (name, text) in &source.partition_columns {
         let parsed = parse_type(text, &[warehouse])

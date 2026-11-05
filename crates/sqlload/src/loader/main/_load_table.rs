@@ -45,7 +45,7 @@ pub(in crate::loader) async fn load_one(
         (None, _) => {
             let reader = open_source(project, source).await?;
             TableLoaded {
-                rows: publish_table(&reader, planned, destination, None).await?,
+                rows: publish_table(&reader, planned, (destination, run)).await?,
                 changes: Vec::new(),
                 note: None,
             }

@@ -1,6 +1,9 @@
+use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::files_destination::models::{PendingLoad, PendingPhase};
+use crate::files_source::models::SourceFormat;
 use crate::loader::constants::PLAN_DETAIL_COLUMN;
-use crate::loader::models::{FilesOutput, PythonTable, TablePlan};
+use crate::loader::models::{CommitRule, FilesOutput, PythonTable, TablePlan};
+use crate::project::models::BatchStep;
 use crate::project::models::FilesFormat;
 use crate::routing::models::Route;
 use crate::run_log::main::describe_state::describe_state;
@@ -176,6 +179,7 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
         ));
     }
     lines.extend(table.route.as_ref().map(route_line));
+    lines.push(batch_line(table));
     lines.extend(
         table
             .cursor_note
@@ -203,6 +207,67 @@ pub(crate) fn load_lines(table: &TablePlan) -> Vec<String> {
             .map(|note| format!("note    {note}")),
     );
     lines
+}
+
+/// How the load commits: by cursor window, in cursor order, by size, by files batch, or as one commit; with a hint to set `batch` for a large first load that would be one commit.
+fn batch_line(table: &TablePlan) -> String {
+    let spec = &table.spec;
+    let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+    let described = match (&table.commits, at_end) {
+        (CommitRule::Windows(windows), _) => {
+            let step = match spec.batch {
+                Some(BatchStep::Duration(step)) => humantime::format_duration(step).to_string(),
+                Some(BatchStep::Integer(step)) => step.to_string(),
+                None => String::new(),
+            };
+            format!(
+                "{} cursor windows of {step}, read and committed one at a time",
+                windows.len()
+            )
+        }
+        (CommitRule::FileGroups(groups), _) => {
+            let parquet = spec
+                .files
+                .as_ref()
+                .is_some_and(|files| files.encoding.format == SourceFormat::Parquet);
+            let drift = match parquet {
+                true => "; each batch's footers are combined, so later batches may add columns",
+                false => "",
+            };
+            format!(
+                "{} batches of whole partitions (up to {MAX_BATCH_FILES} files each){drift}",
+                groups.len()
+            )
+        }
+        (_, true) => {
+            "about 1 GB at a time into the staging table, swapped in once at the end".to_owned()
+        }
+        (CommitRule::Ordered { column }, false) => format!(
+            "read in {column} order (an index leads with it), committing about every 1 GB between distinct values"
+        ),
+        (CommitRule::Size, false) => "committing about every 1 GB".to_owned(),
+        (CommitRule::Whole, false) => {
+            let estimated = match u64::try_from(spec.source_table.estimated_bytes) {
+                Ok(bytes) => bytes,
+                Err(_) => 0,
+            };
+            let large = !table.exists && (spec.python.is_some() || estimated > BATCH_BYTES as u64);
+            let hint = match large {
+                true => {
+                    "; for a large first load, set batch (such as batch = \"1d\") to commit it window by window"
+                }
+                false => "",
+            };
+            format!(
+                "one commit for the whole read (committing part of an unordered cursor read could skip rows){hint}"
+            )
+        }
+    };
+    let logged = match table.logged {
+        Some(_) => ", and only when ctx.state has changed",
+        None => "",
+    };
+    format!("batch   {described}{logged}")
 }
 
 fn pending_line(load: &PendingLoad) -> String {

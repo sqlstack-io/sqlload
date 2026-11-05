@@ -38,6 +38,7 @@ use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
+use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::SchemaPlan;
 use crate::schema_plan::models::SchemaRules;
 use crate::schema_plan::models::TableAction;
@@ -136,6 +137,31 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     with_run_log(plan, destination, options).await
+}
+
+/// A table's read columns, live columns and schema plan once more (one read of the live columns), for a load whose source shows new columns; the rest of its plan stays.
+pub(crate) async fn replan_columns(
+    spec: &TableSpec,
+    destination: &Destination,
+    options: &PlanOptions,
+) -> Result<(Vec<ReadColumn>, Option<Vec<LiveColumn>>, SchemaPlan), LoaderError> {
+    let live = live_columns(destination, &spec.destination).await?;
+    let read = read_columns(spec).map_err(|problems| LoaderError::Invalid(problems.join("; ")))?;
+    let rules = SchemaRules {
+        warehouse: spec.warehouse,
+        contract: spec.contract,
+        on_schema_change: spec.on_schema_change,
+        type_change_rebuild: spec.type_change_rebuild,
+        rebuild_allowed: options.rebuild_allowed,
+    };
+    let schema = plan_schema(&desired_columns(spec, &read), live.as_deref(), rules);
+    if let Some(blocked) = &schema.blocked {
+        return Err(LoaderError::Invalid(format!(
+            "the files' new columns do not fit the table: {}",
+            blocked.reasons.join("; ")
+        )));
+    }
+    Ok((read, live, schema))
 }
 
 /// How a table's columns are read: by name (files and Python tables, whose batches carry the names) or by Postgres expression.
