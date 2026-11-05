@@ -15,7 +15,7 @@ pub(crate) struct SplitWindowsTestCase {
 pub(crate) struct FileGroupsTestCase {
     pub(crate) description: &'static str,
     /// The files listed, in key order.
-    pub(crate) partitions: &'static [PartitionFiles],
+    pub(crate) partitions: Vec<PartitionFiles>,
     pub(crate) by_value: Option<&'static str>,
     /// Each group's file count and the values it replaces.
     pub(crate) expected_groups: &'static [(usize, &'static [&'static str])],

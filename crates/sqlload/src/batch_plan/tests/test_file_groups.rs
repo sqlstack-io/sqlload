@@ -18,25 +18,25 @@ fn given_partitioned_files_when_grouping_them_then_batches_hold_whole_partitions
     let test_cases = [
         FileGroupsTestCase {
             description: "small partitions share a batch",
-            partitions: &[eu("2026-11-01", 400), eu("2026-11-02", 500)],
+            partitions: vec![eu("2026-11-01", 400), eu("2026-11-02", 500)],
             by_value: None,
             expected_groups: &[(900, &[])],
         },
         FileGroupsTestCase {
             description: "a partition that would pass 1,000 files starts the next batch",
-            partitions: &[eu("2026-11-01", 600), eu("2026-11-02", 600)],
+            partitions: vec![eu("2026-11-01", 600), eu("2026-11-02", 600)],
             by_value: None,
             expected_groups: &[(600, &[]), (600, &[])],
         },
         FileGroupsTestCase {
             description: "a partition of more than 1,000 files is split when it is not replaced as a whole",
-            partitions: &[eu("2026-11-01", 2500)],
+            partitions: vec![eu("2026-11-01", 2500)],
             by_value: None,
             expected_groups: &[(1000, &[]), (1000, &[]), (500, &[])],
         },
         FileGroupsTestCase {
             description: "about 1 GB closes a batch before 1,000 files do",
-            partitions: &[
+            partitions: vec![
                 PartitionFiles {
                     region: "eu",
                     day: "2026-11-01",
@@ -55,7 +55,7 @@ fn given_partitioned_files_when_grouping_them_then_batches_hold_whole_partitions
         },
         FileGroupsTestCase {
             description: "delete_insert keeps a value's files together however many, listing the values",
-            partitions: &[
+            partitions: vec![
                 eu("2026-11-01", 10),
                 eu("2026-11-02", 1500),
                 eu("2026-11-03", 5),
@@ -69,7 +69,7 @@ fn given_partitioned_files_when_grouping_them_then_batches_hold_whole_partitions
         },
         FileGroupsTestCase {
             description: "delete_insert packs whole values up to 1,000 files",
-            partitions: &[
+            partitions: vec![
                 eu("2026-11-01", 300),
                 eu("2026-11-02", 300),
                 eu("2026-11-03", 500),
@@ -79,7 +79,7 @@ fn given_partitioned_files_when_grouping_them_then_batches_hold_whole_partitions
         },
         FileGroupsTestCase {
             description: "delete_insert never splits a partition for its size either",
-            partitions: &[PartitionFiles {
+            partitions: vec![PartitionFiles {
                 region: "eu",
                 day: "2026-11-01",
                 files: 3,
@@ -90,7 +90,7 @@ fn given_partitioned_files_when_grouping_them_then_batches_hold_whole_partitions
         },
         FileGroupsTestCase {
             description: "a value's files commit together even when another partition key comes first and more than 1,000 are listed apart",
-            partitions: &[
+            partitions: vec![
                 eu("2026-11-01", 700),
                 eu("2026-11-02", 2),
                 PartitionFiles {
