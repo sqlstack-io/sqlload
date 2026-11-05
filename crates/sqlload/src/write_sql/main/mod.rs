@@ -1,4 +1,5 @@
 pub mod alter_statements;
+pub mod commit_statements;
 pub mod create_schema;
 pub mod create_table;
 pub mod cursor_bound;

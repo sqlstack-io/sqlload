@@ -56,7 +56,6 @@ use crate::parquet_parts::models::PartWriter;
 use crate::run_log::constants::BEGIN_STATEMENT;
 use crate::run_log::constants::COMMIT_STATEMENT;
 use crate::run_log::main::insert_run::insert_run;
-use crate::run_log::main::logged_statements::logged_statements;
 use crate::run_log::main::record_object_name::record_object_name;
 use crate::run_log::main::runs_location::runs_location;
 use crate::run_log::main::runs_table::runs_table;
@@ -71,11 +70,11 @@ use crate::snowflake_destination::main::copy_staged::copy_staged;
 use crate::snowflake_destination::main::remove_staged::remove_staged;
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
+use crate::write_sql::main::commit_statements::commit_statements;
 use crate::write_sql::main::qualified_name::qualified_name;
 use crate::write_sql::main::staging_changes::staging_changes;
 use crate::write_sql::main::staging_table::staging_table;
 use crate::write_sql::main::swap_table::swap_table;
-use crate::write_sql::main::write_statements::write_statements;
 use crate::write_sql::models::TableName;
 use crate::write_sql::models::WriteMode;
 use crate::write_sql::models::WriteStatementsRequest;
@@ -426,29 +425,26 @@ impl Publisher {
         };
         let spec = &self.table.spec;
         let mode = commit_mode(&self.table.mode, self.waiting_range.take());
-        let statements = write_statements(
+        let warehouse = spec.warehouse;
+        let runs = runs_table(&spec.destination);
+        let run_insert = match &self.run {
+            Some(_) => {
+                let record = self.record(self.waiting_rows)?;
+                Some(insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid)?)
+            }
+            None => None,
+        };
+        let spec = &self.table.spec;
+        let statements = commit_statements(
             &WriteStatementsRequest {
-                warehouse: spec.warehouse,
+                warehouse,
                 table: &spec.destination,
                 columns: &self.table.schema.write_columns,
                 mode: &mode,
             },
             &staging,
+            (run_insert, self.at_end),
         );
-        let warehouse = spec.warehouse;
-        let runs = runs_table(&spec.destination);
-        let mut statements = match &self.run {
-            Some(_) => {
-                let record = self.record(self.waiting_rows)?;
-                let insert = insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid)?;
-                logged_statements(statements, insert, warehouse)
-            }
-            None => statements,
-        };
-        if !self.at_end {
-            let empty = format!("DELETE FROM {}", qualified_name(&staging, warehouse));
-            statements = logged_statements(statements, empty, warehouse);
-        }
         execute(&self.destination, statements).await?;
         self.committed_rows += self.waiting_rows;
         self.waiting_rows = 0;

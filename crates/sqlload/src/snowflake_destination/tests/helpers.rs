@@ -1,0 +1,34 @@
+use chrono::{DateTime, Utc};
+
+use crate::snowflake_destination::_helpers::stale_folders::stale_folders;
+use crate::snowflake_destination::main::copy_staged::copy_staged;
+use crate::write_sql::models::TableName;
+
+/// The `COPY` statements for `files` staged parts of batch 1 of load `load-1`: how many, and the first.
+pub(crate) fn copies(files: usize) -> (usize, String) {
+    let table = TableName {
+        database: Some("analytics".to_owned()),
+        schema: "raw".to_owned(),
+        table: "shop__orders".to_owned(),
+    };
+    let names: Vec<String> = (1..=files)
+        .map(|part| format!("part-{part:05}.parquet"))
+        .collect();
+    let statements = copy_staged(&table, "sqlload/load-1/00001/", &names);
+    (
+        statements.len(),
+        statements.first().cloned().unwrap_or_default(),
+    )
+}
+
+/// The load folders older than a day before 2026-11-05 10:00 UTC.
+pub(crate) fn stale(listed: &[(&str, &str)]) -> Vec<String> {
+    let listed: Vec<(String, String)> = listed
+        .iter()
+        .map(|(name, modified)| ((*name).to_owned(), (*modified).to_owned()))
+        .collect();
+    let before = DateTime::parse_from_rfc3339("2026-11-04T10:00:00Z")
+        .map(|time| time.with_timezone(&Utc))
+        .unwrap_or_default();
+    stale_folders(&listed, before)
+}
