@@ -109,9 +109,10 @@ const WRITE_VERBS: [&str; 6] = [
     "CREATE OR REPLACE TABLE",
 ];
 
-/// Whether `statement` writes `target` (its qualified name, and its bare `name` as a rename takes it).
+/// Whether `statement` writes `target` (its qualified name, or its bare `name` as a rename may take it).
 pub(crate) fn writes(statement: &str, (target, name): (&str, &str)) -> bool {
     statement.ends_with(&format!("RENAME TO {name}"))
+        || statement.ends_with(&format!("RENAME TO {target}"))
         || WRITE_VERBS.iter().any(|verb| {
             statement.starts_with(&format!("{verb} {target}"))
                 || statement.starts_with(&format!("{verb} IF EXISTS {target}"))
