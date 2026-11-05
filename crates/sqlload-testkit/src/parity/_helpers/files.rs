@@ -4,7 +4,7 @@ use arrow_array::types::{Date32Type, Decimal128Type};
 use arrow_array::{
     ArrayRef, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
     Int64Array, PrimitiveArray, RecordBatch, StringArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    TimestampMillisecondArray, UInt8Array, UInt16Array, UInt32Array,
 };
 use bytes::Bytes;
 
@@ -229,8 +229,8 @@ fn float_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
     Ok(vec![("part-0.parquet", batch)])
 }
 
-/// Instants in microseconds, milliseconds and seconds: sub-millisecond digits, before and after 1970, and a NULL.
-fn edge_instants() -> [Vec<Option<i64>>; 3] {
+/// Instants in microseconds and milliseconds: sub-millisecond digits, before and after 1970, and a NULL.
+fn edge_instants() -> [Vec<Option<i64>>; 2] {
     let micros = vec![
         Some(1_700_000_000_123_456),
         Some(1_700_000_000_123_457),
@@ -247,20 +247,12 @@ fn edge_instants() -> [Vec<Option<i64>>; 3] {
         Some(0),
         None,
     ];
-    let seconds = vec![
-        Some(1_700_000_000),
-        Some(1_700_000_001),
-        Some(-1),
-        Some(-1_501),
-        Some(0),
-        None,
-    ];
-    [micros, millis, seconds]
+    [micros, millis]
 }
 
-/// Each timestamp unit in the Arrow zone `+00:00`. Without the embedded schema the seconds read as plain integers, as this Parquet writer stores them with no logical type; other writers store milliseconds.
+/// Each timestamp unit the direct route allows, in the Arrow zone `+00:00`.
 fn offset_timestamps() -> Result<Vec<(&'static str, RecordBatch)>, String> {
-    let [micros, millis, seconds] = edge_instants();
+    let [micros, millis] = edge_instants();
     let batch = RecordBatch::try_from_iter([
         ("id", array(Int64Array::from(vec![1, 2, 3, 4, 5, 6]))),
         (
@@ -271,18 +263,14 @@ fn offset_timestamps() -> Result<Vec<(&'static str, RecordBatch)>, String> {
             "millis",
             array(TimestampMillisecondArray::from(millis).with_timezone("+00:00")),
         ),
-        (
-            "seconds",
-            array(TimestampSecondArray::from(seconds).with_timezone("+00:00")),
-        ),
     ])
     .map_err(|error| error.to_string())?;
     Ok(vec![("part-0.parquet", batch)])
 }
 
-/// Each timestamp unit, with sub-millisecond digits before and after 1970, with and without UTC.
+/// Each timestamp unit the direct route allows, with sub-millisecond digits before and after 1970, with and without UTC.
 fn timestamp_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
-    let [micros, millis, seconds] = edge_instants();
+    let [micros, millis] = edge_instants();
     let batch = RecordBatch::try_from_iter([
         ("id", array(Int64Array::from(vec![1, 2, 3, 4, 5, 6]))),
         (
@@ -301,11 +289,6 @@ fn timestamp_edges() -> Result<Vec<(&'static str, RecordBatch)>, String> {
             "millis_wall",
             array(TimestampMillisecondArray::from(millis)),
         ),
-        (
-            "seconds_zoned",
-            array(TimestampSecondArray::from(seconds.clone()).with_timezone("UTC")),
-        ),
-        ("seconds_wall", array(TimestampSecondArray::from(seconds))),
     ])
     .map_err(|error| error.to_string())?;
     Ok(vec![("part-0.parquet", batch)])

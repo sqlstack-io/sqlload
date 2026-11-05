@@ -33,9 +33,9 @@ pub enum ParityFiles {
     BadPartition,
     /// NaN and both infinities, in both float widths.
     FloatEdges,
-    /// Timestamps of each unit with sub-millisecond digits, before and after 1970.
+    /// Timestamps of each unit the direct route allows, with sub-millisecond digits, before and after 1970.
     TimestampEdges,
-    /// Timestamps of each unit in the Arrow zone `+00:00`, with sub-millisecond digits, before and after 1970.
+    /// Timestamps of each unit the direct route allows, in the Arrow zone `+00:00`, with sub-millisecond digits, before and after 1970.
     OffsetTimestamps,
     /// Decimals at the edges of precision and scale.
     DecimalEdges,

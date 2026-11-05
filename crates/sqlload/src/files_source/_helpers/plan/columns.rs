@@ -45,7 +45,7 @@ pub(crate) fn schema_columns(schema: &SchemaRef) -> Vec<SampledColumn> {
         .collect()
 }
 
-/// `data_type` as text unless a direct `COPY` is known to load it exactly (decision 96): nanosecond and INT96 timestamps, `Date64`, `UInt64`, `Float16`, `Decimal256`, timestamps in a zone other than UTC and anything else not listed stay with SQLLoad until parity proves them.
+/// `data_type` as text unless a direct `COPY` is known to load it exactly (decision 96): nanosecond and INT96 timestamps, seconds and `Date64` (bare integers in the file, whose unit Snowflake guesses from their size), `UInt64`, `Float16`, `Decimal256`, timestamps in a zone other than UTC and anything else not listed stay with SQLLoad until parity proves them.
 pub(crate) fn direct_refusal(data_type: &DataType) -> Option<String> {
     let exact = match data_type {
         DataType::Boolean
@@ -63,10 +63,9 @@ pub(crate) fn direct_refusal(data_type: &DataType) -> Option<String> {
         | DataType::Utf8View
         | DataType::Date32 => true,
         DataType::Decimal128(precision, _) => *precision <= MAX_DIRECT_DECIMAL_PRECISION,
-        DataType::Timestamp(
-            TimeUnit::Second | TimeUnit::Millisecond | TimeUnit::Microsecond,
-            zone,
-        ) => zone.as_deref().is_none_or(|zone| UTC_ZONES.contains(&zone)),
+        DataType::Timestamp(TimeUnit::Millisecond | TimeUnit::Microsecond, zone) => {
+            zone.as_deref().is_none_or(|zone| UTC_ZONES.contains(&zone))
+        }
         _ => false,
     };
     (!exact).then(|| data_type.to_string())

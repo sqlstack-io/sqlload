@@ -65,7 +65,7 @@ fn given_the_same_files_when_snowflake_and_sqlload_each_load_them_then_rows_and_
             expected_outcome: SAME,
         },
         ParityTestCase {
-            description: "each timestamp unit with sub-millisecond digits, before and after 1970",
+            description: "milliseconds and microseconds with sub-millisecond digits, before and after 1970; seconds stay on SQLLoad, so they prove nothing here",
             case: ParityCase {
                 name: "timestamps",
                 files: ParityFiles::TimestampEdges,

@@ -83,9 +83,9 @@ fn given_a_files_arrow_type_when_choosing_the_route_then_only_exact_ones_go_dire
             expected_exact: true,
         },
         DirectRefusalTestCase {
-            description: "seconds",
+            description: "seconds, a bare integer in the file",
             data_type: timestamp(TimeUnit::Second, None),
-            expected_exact: true,
+            expected_exact: false,
         },
         DirectRefusalTestCase {
             description: "milliseconds",
@@ -235,6 +235,13 @@ fn given_a_files_footer_when_reading_its_zone_then_the_direct_filter_sees_what_t
             embedded_schema: true,
             expected_read: timestamp(TimeUnit::Microsecond, Some("+00:00")),
             expected_exact: true,
+        },
+        FooterZoneTestCase {
+            description: "seconds through an embedded schema stay refused",
+            written: timestamp(TimeUnit::Second, Some("+00:00")),
+            embedded_schema: true,
+            expected_read: timestamp(TimeUnit::Second, Some("+00:00")),
+            expected_exact: false,
         },
         FooterZoneTestCase {
             description: "+01:00 through an embedded schema stays refused",
