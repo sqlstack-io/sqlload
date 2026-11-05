@@ -56,7 +56,7 @@ fn given_invalid_config_text_when_parsing_then_the_error_names_the_problem() {
         ParseConfigErrorTestCase {
             description: "a reference without ENV: is an error, even when the variable is set",
             text: "[staging]\nkind = \"none\"\n[metrics]\nlisten = \"${PATH}\"\n",
-            expected_error: "${PATH} is not ${ENV:NAME}",
+            expected_error: "a value has a ${...} that is not ${ENV:NAME}",
         },
         ParseConfigErrorTestCase {
             description: "s3 staging needs its bucket section",

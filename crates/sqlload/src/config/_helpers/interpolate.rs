@@ -38,14 +38,11 @@ fn interpolate_text(text: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Resu
             rest = &tail[1..];
             continue;
         };
-        let end = body
-            .find('}')
-            .ok_or_else(|| format!("unterminated ${{ in {text:?}"))?;
+        let end = body.find('}').ok_or_else(|| {
+            "a value has an unterminated ${ (write $${ for a literal ${)".to_owned()
+        })?;
         let name = body[..end].strip_prefix(ENVIRONMENT_PREFIX).ok_or_else(|| {
-            format!(
-                "${{{}}} is not ${{ENV:NAME}}, the only interpolation; write $${{ for a literal ${{",
-                &body[..end]
-            )
+            "a value has a ${...} that is not ${ENV:NAME}, the only interpolation (write $${ for a literal ${)".to_owned()
         })?;
         let resolved =
             lookup(name).ok_or_else(|| format!("environment variable {name} is not set"))?;
