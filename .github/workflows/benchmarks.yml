@@ -4,14 +4,12 @@ name: Benchmarks
 # on one runner. On demand only, reusing the containers job's cache of the release build. Shared
 # runners are noisy, so compare loaders within a run, not runs with each other.
 on:
-  push:
-    branches: [wip/benchmarks]
   workflow_dispatch:
     inputs:
       size:
         description: Dataset size (reduced is 1M narrow rows)
         type: choice
-        options: [reduced, tiny, full]
+        options: [reduced, wide, tiny, full]
         default: reduced
       scenarios:
         description: Comma-separated scenarios or groups (empty for all)

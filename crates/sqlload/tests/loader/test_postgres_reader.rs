@@ -66,6 +66,7 @@ fn given_a_postgres_table_of_every_type_when_copied_then_each_value_arrives_exac
             order_by: None,
             batch_rows: 2,
             batch_bytes: usize::MAX,
+            helpers: &[],
         };
         let rows = copy_table(&client, request, async |batch| {
             batches.push(batch);
@@ -221,6 +222,76 @@ fn given_a_postgres_table_of_every_type_when_copied_then_each_value_arrives_exac
                 test_case.description
             );
         }
+        Ok(())
+    })
+}
+
+const SPLIT_ROWS: i64 = 70_000;
+
+const SPLIT_SETUP: &str = "
+CREATE TABLE public.padded (id int8 NOT NULL, pad text NOT NULL);
+ALTER TABLE public.padded ALTER COLUMN pad SET STORAGE PLAIN;
+INSERT INTO public.padded SELECT i, repeat(md5(i::text), 59) FROM generate_series(1, 70000) AS s(i);
+";
+
+#[test]
+fn given_a_table_over_the_split_size_when_copied_with_a_helper_then_both_read_and_every_row_arrives_once()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        let helpers = vec![connect(&postgres).await?];
+        let watcher = connect(&postgres).await?;
+        client
+            .batch_execute(SPLIT_SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let tables = read_catalog(&client, &["public.padded".to_owned()], &[])
+            .await
+            .map_err(|error| error.to_string())?;
+        let table = tables.first().ok_or("no table found")?;
+        let columns = plan_read(table, &BTreeMap::new()).map_err(|problems| problems.join("; "))?;
+        let request = CopyRequest {
+            table,
+            columns,
+            filter: None,
+            order_by: None,
+            batch_rows: 1_000,
+            batch_bytes: usize::MAX,
+            helpers: &helpers,
+        };
+        let mut ids: Vec<String> = Vec::new();
+        let mut copying_at_first_batch: Option<i64> = None;
+        let rows = copy_table(&client, request, async |batch| {
+            if copying_at_first_batch.is_none() {
+                let row = watcher
+                    .query_one(
+                        "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE 'COPY (SELECT%padded%'",
+                        &[],
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                copying_at_first_batch = Some(row.get(0));
+            }
+            ids.extend(column_values(std::slice::from_ref(&batch), "id")?);
+            Ok(())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
+        let sum: i64 = ids
+            .iter()
+            .map(|id| id.parse::<i64>().map_err(|error| error.to_string()))
+            .sum::<Result<i64, String>>()?;
+        assert_eq!(rows, SPLIT_ROWS as u64);
+        assert_eq!(ids.len(), SPLIT_ROWS as usize, "every row arrives");
+        assert_eq!(distinct.len(), SPLIT_ROWS as usize, "no row arrives twice");
+        assert_eq!(sum, SPLIT_ROWS * (SPLIT_ROWS + 1) / 2);
+        assert_eq!(
+            copying_at_first_batch,
+            Some(2),
+            "the client and its helper each read a range"
+        );
         Ok(())
     })
 }

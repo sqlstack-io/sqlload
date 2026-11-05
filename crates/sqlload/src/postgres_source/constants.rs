@@ -104,3 +104,18 @@ pub const NATIVE_TYPE_NAMES: &[(&str, PgType)] = &[
 pub const SESSION_OPTIONS: &str = "-c TimeZone=UTC -c standard_conforming_strings=on";
 /// Batches read ahead of the consumer, so Postgres keeps sending while one is written.
 pub const COPY_QUEUE_BATCHES: usize = 2;
+/// Bytes of `COPY` data the socket reader groups before passing them to the decoder.
+pub const COPY_READ_AHEAD_BYTES: usize = 1024 * 1024;
+/// Groups read off the socket ahead of the decoder, so Postgres keeps sending while chunks are decoded.
+pub const COPY_READ_AHEAD_GROUPS: usize = 8;
+/// Opens the snapshot a split read shares across its connections.
+pub const SPLIT_BEGIN: &str = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
+/// Whether a table can be read in `ctid` ranges (a plain table, Postgres 14+ for TID range scans), and its pages now.
+pub const SPLIT_PAGES_SQL: &str = "
+SELECT current_setting('server_version_num')::int >= 140000 AND c.relkind = 'r',
+       pg_relation_size(c.oid) / current_setting('block_size')::bigint
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND c.relname = $2";
+/// Pages (8 KiB each by default, so 128 MiB) below which a table is read in one pass: more connections would not pay off.
+pub const SPLIT_READ_MIN_PAGES: i64 = 16_384;
