@@ -224,6 +224,7 @@ pub(crate) fn direct_sql(
             columns,
             encoding: &crate::files_source::models::FilesEncoding::default(),
             inferred: &[],
+            headers: &std::collections::BTreeMap::new(),
         },
     )?;
     Ok((

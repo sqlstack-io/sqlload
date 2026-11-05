@@ -70,7 +70,11 @@ pub struct FilesRead {
 
 /// One batch's Parquet footers by relative key, read once; a file missing here has its footer read when it is.
 #[derive(Debug, Clone, Default)]
-pub struct BatchFooters(pub std::collections::BTreeMap<String, ArrowReaderMetadata>);
+pub struct BatchFooters {
+    pub parquet: std::collections::BTreeMap<String, ArrowReaderMetadata>,
+    /// CSV files' column names by relative key, read once where the destination reads the files itself (by position).
+    pub headers: std::collections::BTreeMap<String, Vec<String>>,
+}
 
 /// The columns a JSON or CSV read checks its keys and values against.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

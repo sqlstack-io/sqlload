@@ -52,7 +52,7 @@ async fn read_parquet(
     on_batch: &mut impl AsyncFnMut(RecordBatch) -> Result<(), String>,
 ) -> Result<u64, String> {
     let reader = object_reader(file.folder, &file.data.file);
-    let builder = match footers.0.get(&file.data.file.relative_key) {
+    let builder = match footers.parquet.get(&file.data.file.relative_key) {
         Some(footer) => ParquetRecordBatchStreamBuilder::new_with_metadata(reader, footer.clone()),
         None => ParquetRecordBatchStreamBuilder::new(reader)
             .await

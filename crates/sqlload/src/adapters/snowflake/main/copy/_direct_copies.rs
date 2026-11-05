@@ -2,7 +2,9 @@
 
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
-use crate::adapters::snowflake::_helpers::dialect::json_values::{json_file_format, json_value};
+use crate::adapters::snowflake::_helpers::dialect::text_values::{
+    csv_file_format, csv_value, json_file_format, json_value,
+};
 use crate::adapters::snowflake::_helpers::dialect::values::partition_text;
 use crate::adapters::snowflake::constants::{
     COPY_OPTIONS, MAX_COPY_SQL_BYTES, MAX_FILES_PER_COPY, PARQUET_COPY_FORMAT,
@@ -27,11 +29,27 @@ pub(in crate::adapters) fn direct_copies(
                 request.source, request.stage_url
             )
         })?;
+    let mut groups: Vec<(Option<&[String]>, Vec<DataFile>)> = Vec::new();
+    for data in request.files {
+        let header = request
+            .headers
+            .get(&data.file.relative_key)
+            .map(Vec::as_slice);
+        match groups.iter_mut().find(|(seen, _)| *seen == header) {
+            Some((_, files)) => files.push(data.clone()),
+            None => groups.push((header, vec![data.clone()])),
+        }
+    }
     let mut batches: Vec<CopyBatch> = Vec::new();
-    for chunk in request.files.chunks(MAX_FILES_PER_COPY) {
+    for chunk in groups.iter().flat_map(|(header, files)| {
+        files
+            .chunks(MAX_FILES_PER_COPY)
+            .map(|chunk| (*header, chunk))
+    }) {
+        let (header, chunk) = chunk;
         let mut pending: Vec<&[DataFile]> = vec![chunk];
         while let Some(files) = pending.pop() {
-            let sql = copy_sql(request, folder, files)?;
+            let sql = copy_sql(request, (folder, header), files)?;
             match (sql.len() > MAX_COPY_SQL_BYTES, files.len()) {
                 (true, count) if count > 1 => {
                     let (first, second) = files.split_at(count / 2);
@@ -51,8 +69,12 @@ pub(in crate::adapters) fn direct_copies(
     Ok(batches)
 }
 
-/// One `COPY` of `files`, which lie in `folder` below the stage URL.
-fn copy_sql(request: &DirectCopy<'_>, folder: &str, files: &[DataFile]) -> Result<String, String> {
+/// One `COPY` of `files`, which lie in `folder` below the stage URL; CSV files share one `header`, which places their columns.
+fn copy_sql(
+    request: &DirectCopy<'_>,
+    (folder, header): (&str, Option<&[String]>),
+    files: &[DataFile],
+) -> Result<String, String> {
     let snowflake = Warehouse::Snowflake;
     let literal = |text: &str| sql_adapter(snowflake).render_loader_value_literal(text);
     let matches: Vec<String> = files
@@ -84,6 +106,20 @@ fn copy_sql(request: &DirectCopy<'_>, folder: &str, files: &[DataFile]) -> Resul
             Ok(format!("CASE {} ELSE {otherwise} END", arms.join(" ")))
         };
         let value = match &column.value {
+            CopyValue::File { .. } if request.encoding.format == SourceFormat::Csv => {
+                match header
+                    .unwrap_or_default()
+                    .iter()
+                    .position(|name| *name == column.name)
+                {
+                    Some(position) => csv_value(
+                        (&column.name, &format!("${}", position + 1)),
+                        (&column.column_type, &sql_type),
+                        request.inferred.contains(&column.name),
+                    ),
+                    None => "NULL".to_owned(),
+                }
+            }
             CopyValue::File { .. } if request.encoding.format != SourceFormat::Parquet => {
                 json_value(
                     (&column.name, &format!("GET($1, {})", literal(&column.name))),
@@ -131,6 +167,10 @@ fn copy_sql(request: &DirectCopy<'_>, folder: &str, files: &[DataFile]) -> Resul
         .collect();
     let file_format = match request.encoding.format {
         SourceFormat::Parquet => PARQUET_COPY_FORMAT.to_owned(),
+        SourceFormat::Csv => format!(
+            "FILE_FORMAT = ({})",
+            csv_file_format(&request.encoding.csv, request.encoding.compression)
+        ),
         _ => format!(
             "FILE_FORMAT = ({})",
             json_file_format(request.encoding.compression)

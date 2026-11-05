@@ -32,6 +32,20 @@ pub(crate) fn case_files(
                 ("lines.json", Bytes::from(JSON_OBJECTS)),
             ]);
         }
+        ParityFiles::CsvValues => {
+            return Ok(vec![
+                ("part-0.csv", Bytes::from(CSV_VALUES)),
+                ("part-1.csv", Bytes::from(CSV_REORDERED)),
+            ]);
+        }
+        ParityFiles::CsvLateMisfit => {
+            let mut text = String::from("id,qty\n");
+            for id in 1..=10_000 {
+                text.push_str(&format!("{id},{id}\n"));
+            }
+            text.push_str("10001,x\n");
+            return Ok(vec![("part-0.csv", Bytes::from(text))]);
+        }
         ParityFiles::LateKey => {
             return Ok(vec![(
                 "part-0.ndjson",
@@ -49,6 +63,8 @@ pub(crate) fn case_files(
         ParityFiles::Int96Timestamps
         | ParityFiles::NdjsonValues
         | ParityFiles::JsonLayouts
+        | ParityFiles::CsvValues
+        | ParityFiles::CsvLateMisfit
         | ParityFiles::LateKey
         | ParityFiles::LateMisfit => Ok(Vec::new()),
         ParityFiles::EveryType => every_type(),
@@ -653,3 +669,15 @@ fn past_sample(last: &str) -> Bytes {
     text.push_str(&format!("{{\"id\":10001,{last}}}\n"));
     Bytes::from(text)
 }
+
+/// CSV of every inferred type: 64-bit integer edges, floats from integers and exponents, booleans in any case, RFC 3339 timestamps with offsets, text that looks like numbers, quoted delimiters, quotes, backslashes, line breaks and spaces, and empty fields as NULL.
+const CSV_VALUES: &str = concat!(
+    "id,n,f,b,s,ts,mixed,u\n",
+    "1,1,1.5,true,plain,2026-11-05T12:00:00.123456Z,007,\"Ünïcødé \"\"q\"\" \\ x\"\n",
+    "2,-9223372036854775808,3,FALSE,,1969-12-31T23:59:59.999999-02:00,7,\n",
+    "3,,-0.25,,\"with, comma\",,True,\"line\nbreak\"\n",
+    "4,9223372036854775807,2e10,false,x,2000-01-01T00:00:00+05:30,text,\"   spaced  \"\n",
+);
+
+/// A CSV file whose header puts the columns in another order and lacks some.
+const CSV_REORDERED: &str = "u,id,s\nz,5,y\n";

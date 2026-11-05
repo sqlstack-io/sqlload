@@ -23,7 +23,7 @@ pub fn batch_columns(
         .collect();
     let mut problems: Vec<String> = Vec::new();
     for data in files {
-        let Some(footer) = footers.0.get(&data.file.relative_key) else {
+        let Some(footer) = footers.parquet.get(&data.file.relative_key) else {
             continue;
         };
         let (mut found, _) = drop_loader_columns(parquet_columns(footer));

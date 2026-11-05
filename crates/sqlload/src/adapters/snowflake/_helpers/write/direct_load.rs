@@ -66,6 +66,7 @@ impl SnowflakeWriter {
                     columns,
                     encoding: &spec_files.encoding,
                     inferred: &read.checks.inferred,
+                    headers: &batch.footers.headers,
                 };
                 let batches = direct_copies(&request).map_err(LoaderError::Invalid)?;
                 Ok(batches.into_iter().map(|batch| batch.sql).collect())

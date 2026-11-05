@@ -4,7 +4,7 @@ use crate::adapters::snowflake::constants::USER_STAGE;
 use crate::adapters::snowflake::models::StageRoute;
 use crate::routing::models::{FileFormat, Store, WriterAccepts};
 
-/// What Snowflake takes over `stage`: Parquet files on that stage (and JSON on an external stage, read where it lies), or rows sent without files; the user stage when none was chosen.
+/// What Snowflake takes over `stage`: Parquet files on that stage (and JSON and CSV on an external stage, read where they lie), or rows sent without files; the user stage when none was chosen.
 pub(in crate::adapters) fn writer_accepts(stage: Option<&StageRoute>) -> WriterAccepts {
     let stored = |store: Store| WriterAccepts {
         arrow: false,
@@ -15,7 +15,7 @@ pub(in crate::adapters) fn writer_accepts(stage: Option<&StageRoute>) -> WriterA
     };
     match stage {
         Some(StageRoute::External(stage)) => WriterAccepts {
-            pull_formats: vec![FileFormat::Parquet, FileFormat::Json],
+            pull_formats: vec![FileFormat::Parquet, FileFormat::Json, FileFormat::Csv],
             ..stored(Store::ObjectStore(stage.location.to_string()))
         },
         Some(StageRoute::Internal { name }) => stored(Store::InternalStage(format!("@{name}"))),
