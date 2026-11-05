@@ -32,7 +32,7 @@ const FORMATS: [(&str, &str, (RouteFileSet, &str)); 5] = [
     ("csv", "format = \"csv\"\n", (every_csv_type, "s")),
 ];
 const PULLS_ANY: &str = "COPYs directly from s3://fake-bucket/src/";
-const READS: &str = " as Arrow";
+const READS: &str = " into Arrow";
 const PULLS: &str =
     "Snowflake COPYs directly from s3://fake-bucket/src/ (nothing through the loader)";
 
@@ -68,7 +68,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "@~: one credentials fetch for the plan's probe and one for each of the two batches",
             file_set: two_batches,
-            expected_plan: &["read parquet as Arrow -> Parquet -> PUT to @~ -> COPY"],
+            expected_plan: &["read parquet into Arrow -> Parquet -> PUT to @~ -> COPY"],
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @~/sqlload/",
@@ -89,7 +89,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             description: "copy_to_internal_stage: the files are uploaded unchanged to @~ and Snowflake loads them there, then they are removed",
             settings: "write_strategy = \"append\"\ncopy_to_internal_stage = true",
             expected_plan: &[
-                "parquet files from s3://fake-bucket/src/ uploaded unchanged to @~ -> COPY",
+                "src/ uploaded unchanged to @~ -> COPY",
                 "copy_to_internal_stage: every file is downloaded and uploaded to @~ (much slower than a direct load).",
             ],
             expected_sent: &[
