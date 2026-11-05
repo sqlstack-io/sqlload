@@ -109,7 +109,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             runs: &[ScenarioRun {
                 source_change: "",
                 destination_change: "",
-                expected_error: "public.unlisted: new table and new_tables = \"fail\"",
+                expected_error: "public.unlisted\n    └── reason  new table and new_tables = \"fail\"",
                 ..OK
             }],
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",

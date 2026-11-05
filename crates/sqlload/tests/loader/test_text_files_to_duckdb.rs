@@ -337,7 +337,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
                     },
                 ],
                 expected_error: "",
-                expected_plan: "files   2 to read of 2 listed, 1 skipped (names that do not fit ndjson",
+                expected_plan: "files   2 new of 2 listed, 1 skipped (names that do not fit ndjson",
             }],
             check_query: "SELECT sum(v) || ',' || (SELECT typeof(v) FROM raw.scores LIMIT 1) FROM raw.scores",
             expected_result: "2.5,DOUBLE",
