@@ -401,3 +401,22 @@ def test_given_a_column_added_mid_commit_when_loading_into_files_then_no_value_i
 	assert done.returncode == 0, done.stdout + done.stderr
 	rows = [row for path in sorted((project / "lake").rglob("*.parquet")) for row in pq.read_table(path).to_pylist()]
 	assert sorted((row["id"], row.get("b"), row.get("c")) for row in rows) == [(1, None, None), (2, 1, None), (3, 2, 1)]
+
+
+def test_given_delete_insert_when_a_read_yields_no_rows_then_rows_deleted_upstream_go(project: Path) -> None:
+	(project / "sources" / "days.py").write_text(
+		"import json\n"
+		"from pathlib import Path\n"
+		"import sqlload as sl\n"
+		"HERE = Path(__file__).resolve().parent.parent\n"
+		"days = sl.source('days')\n"
+		"@days.table(write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'}, cursor_start='2026-11-01')\n"
+		"def rows(ctx):\n"
+		"    yield from json.loads((HERE / 'data' / 'rows.json').read_text())\n"
+	)
+	(project / "data" / "rows.json").write_text('[{"day": "2026-11-01", "id": 1}, {"day": "2026-11-02", "id": 2}]')
+	assert sqlload(project, "load", "days__rows").returncode == 0
+	(project / "data" / "rows.json").write_text("[]")
+	done = sqlload(project, "load", "days__rows")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT id FROM "RAW"."days__rows"') == [(1,)]

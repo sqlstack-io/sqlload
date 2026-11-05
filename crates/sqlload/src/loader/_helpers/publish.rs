@@ -312,15 +312,19 @@ impl Publisher {
         self.commit(false).await
     }
 
-    /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it); a logged table records `state`, where its function left `ctx.state`, even without rows.
+    /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it, and a `delete_insert` read of no rows still clears its range, since its rows were deleted upstream); a logged table records `state`, where its function left `ctx.state`, even without rows.
     pub(crate) async fn finish(&mut self, state: Option<String>) -> Result<u64, LoaderError> {
         self.flush_batch().await?;
         if state.is_some() {
             self.state = state;
         }
+        let empty_range = self.commits == 0
+            && matches!(self.table.mode, WriteMode::DeleteInsert { .. })
+            && !matches!(self.table.commits, CommitRule::Windows(_));
         let pending = self.waiting_rows > 0
             || (self.waiting_range.is_some() && self.files.is_none())
             || self.at_end
+            || empty_range
             || self.leftover_deletes();
         match (self.direct, pending, &self.run) {
             (false, true, _) => self.commit(true).await?,
