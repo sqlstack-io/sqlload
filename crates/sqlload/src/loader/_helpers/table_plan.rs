@@ -2,7 +2,13 @@ use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
 use crate::column_types::models::ColumnType;
+use crate::external_stage::main::direct_problem::direct_problem;
+use crate::external_stage::models::{CopyColumn, CopyValue, DirectCheck};
+use crate::files_source::constants::{
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+};
 use crate::files_source::models::FilesRead;
+use crate::files_source::models::{DataFile, SourceFormat};
 use crate::loader::_helpers::destination::live_columns;
 use crate::loader::_helpers::destination::single_text;
 use crate::loader::_helpers::python::with_live_columns;
@@ -14,6 +20,7 @@ use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
 use crate::loader::main::_plan_files::plan_files_table;
+use crate::loader::main::_stage_route::{RouteRequest, stage_route};
 use crate::loader::models::CommitRule;
 use crate::loader::models::CursorSpec;
 use crate::loader::models::Destination;
@@ -29,6 +36,8 @@ use crate::postgres_source::models::ReadColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::BatchStep;
 use crate::project::models::Contract;
+use crate::project::models::MaskMethod;
+use crate::routing::models::Step;
 use crate::project::models::WriteStrategy;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -48,6 +57,7 @@ use crate::schema_plan::models::SchemaPlan;
 use crate::schema_plan::models::SchemaRules;
 use crate::schema_plan::models::TableAction;
 use crate::snowflake_destination::constants::USER_STAGE;
+use crate::snowflake_destination::models::{ExternalStage, StageRoute};
 use crate::store_paths::models::StoreKind;
 use crate::write_sql::main::alter_statements::alter_statements;
 use crate::write_sql::main::create_schema::create_schema;
@@ -117,6 +127,9 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         exists: false,
         logged: None,
         commits: CommitRule::Whole(WholeReason::Blocked),
+        stage: None,
+        passed_over: Vec::new(),
+        planned_stage: None,
     }
 }
 
@@ -258,6 +271,9 @@ async fn plan_table_once(
                 output: None,
                 logged: None,
                 commits: CommitRule::Whole(WholeReason::Blocked),
+                stage: None,
+                passed_over: Vec::new(),
+                planned_stage: None,
             });
         }
     };
@@ -373,14 +389,44 @@ async fn plan_table_once(
         _ => None,
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
-    let route = match table_route(spec, destination) {
+    let exists = live.is_some();
+    let chosen = match (destination, &schema.blocked) {
+        (Destination::Snowflake(snowflake), None) => {
+            let request = RouteRequest {
+                spec,
+                table_exists: exists,
+                direct_append: mode == WriteMode::Append && !spec.logged,
+                snowflake,
+            };
+            match stage_route(&request).await {
+                Ok(chosen) => Some(chosen),
+                Err(problem) => {
+                    schema = blocked_plan(vec![problem]);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let (choice, planned_stage) = chosen.unzip();
+    let planned_stage = planned_stage.flatten();
+    let (stage, passed_over) = match choice {
+        Some(choice) => (Some(choice.route), choice.passed_over),
+        None => (None, Vec::new()),
+    };
+    if stage == Some(StageRoute::Insert) {
+        schema.warnings.push(
+            "rows load by batched INSERT, the slowest route; no stage or streaming was usable"
+                .to_owned(),
+        );
+    }
+    let route = match table_route(spec, (files.as_ref(), &mode), stage.as_ref(), destination) {
         Ok(route) => Some(route),
         Err(problem) => {
             schema = blocked_plan(vec![problem]);
             None
         }
     };
-    let exists = live.is_some();
     let commits = commit_rule(&CommitRequest {
         spec,
         window: read.as_ref(),
@@ -413,6 +459,9 @@ async fn plan_table_once(
         exists,
         logged: None,
         commits,
+        stage,
+        passed_over,
+        planned_stage,
     })
 }
 
@@ -442,38 +491,71 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
 }
 
 /// What a destination can take.
-fn writer_accepts(destination: &Destination) -> WriterAccepts {
-    match destination {
+fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> WriterAccepts {
+    let stored = |store: Store| WriterAccepts {
+        arrow: false,
+        pulls_from: vec![store.clone()],
+        pull_formats: vec![FileFormat::Parquet],
+        staging: vec![store],
+        rows_into: None,
+    };
+    match (destination, stage) {
         #[cfg(feature = "duckdb")]
-        Destination::DuckDb(_) => WriterAccepts {
+        (Destination::DuckDb(_), _) => WriterAccepts {
             arrow: true,
             ..WriterAccepts::default()
         },
-        Destination::Files(_) => WriterAccepts {
+        (Destination::Files(_), _) => WriterAccepts {
             arrow: true,
             ..WriterAccepts::default()
         },
-        Destination::Snowflake(_) => {
-            let stage = Store::InternalStage(format!("@{USER_STAGE}"));
-            WriterAccepts {
-                arrow: false,
-                pulls_from: vec![stage.clone()],
-                pull_formats: vec![FileFormat::Parquet],
-                staging: vec![stage],
-            }
+        (Destination::Snowflake(_), Some(StageRoute::External(stage))) => {
+            stored(Store::ObjectStore(stage.location.to_string()))
         }
+        (Destination::Snowflake(_), Some(StageRoute::Internal { name })) => {
+            stored(Store::InternalStage(format!("@{name}")))
+        }
+        (Destination::Snowflake(_), Some(StageRoute::TargetTable)) => {
+            stored(Store::InternalStage("@%table".to_owned()))
+        }
+        (Destination::Snowflake(_), Some(StageRoute::StagingTable)) => stored(
+            Store::InternalStage("the staging table's @%table".to_owned()),
+        ),
+        (Destination::Snowflake(_), Some(StageRoute::Streaming { .. })) => WriterAccepts {
+            rows_into: Some("Snowpipe Streaming into a transient staging table".to_owned()),
+            ..WriterAccepts::default()
+        },
+        (Destination::Snowflake(_), Some(StageRoute::Insert)) => WriterAccepts {
+            rows_into: Some("batched INSERT into a transient staging table".to_owned()),
+            ..WriterAccepts::default()
+        },
+        (Destination::Snowflake(_), _) => stored(Store::InternalStage(format!("@{USER_STAGE}"))),
     }
 }
 
-/// What a table's source offers: rows as Arrow, plus the files themselves for a files source.
-fn reader_offer(spec: &TableSpec) -> ReaderOffer {
+/// What a table's source offers: rows as Arrow, plus the files themselves for a files source, with why the destination must not read them itself.
+fn reader_offer(
+    spec: &TableSpec,
+    (read, mode): (Option<&FilesRead>, &WriteMode),
+    stage: Option<&StageRoute>,
+) -> ReaderOffer {
     let existing_files = spec.files.as_ref().map(|files| FileSet {
         store: match files.location.store {
             StoreKind::S3 { .. } => Store::ObjectStore(files.location.to_string()),
             StoreKind::Filesystem { .. } => Store::Local(files.location.to_string()),
         },
-        format: FileFormat::Parquet,
+        format: match files.encoding.format {
+            SourceFormat::Parquet => FileFormat::Parquet,
+            SourceFormat::Ndjson | SourceFormat::Json => FileFormat::Json,
+            SourceFormat::Csv => FileFormat::Csv,
+        },
     });
+    let direct_blocked = match (read, stage) {
+        (Some(read), Some(StageRoute::External(stage))) => {
+            direct_check(spec, (read, read.files.as_slice()), mode, stage)
+        }
+        _ => None,
+    };
     ReaderOffer {
         arrow: true,
         existing_files,
@@ -482,15 +564,97 @@ fn reader_offer(spec: &TableSpec) -> ReaderOffer {
             Ok(bytes) => Some(bytes),
             Err(_) => None,
         },
+        direct_blocked,
     }
 }
 
-/// The route a table's data takes into `destination`.
-pub(crate) fn table_route(spec: &TableSpec, destination: &Destination) -> Result<Route, String> {
-    let reader = reader_offer(spec);
+/// Why Snowflake must not `COPY` these of a files table's files straight from `stage`.
+pub(crate) fn direct_check(
+    spec: &TableSpec,
+    (read, files): (&FilesRead, &[DataFile]),
+    mode: &WriteMode,
+    stage: &ExternalStage,
+) -> Option<String> {
+    let source = spec.files.as_ref()?;
+    let masks: Vec<(String, MaskMethod)> = spec
+        .masked
+        .columns
+        .iter()
+        .map(|(name, method)| (name.clone(), *method))
+        .collect();
+    direct_problem(&DirectCheck {
+        stage_url: &stage.location,
+        source: &source.location,
+        format: source.encoding.format,
+        files,
+        columns: &copy_columns(spec, read),
+        masks: &masks,
+        whole_table: matches!(mode, WriteMode::Replace | WriteMode::Recreate),
+        shaped_by_loader: spec.shaped_by_loader,
+    })
+}
+
+/// The columns a direct `COPY` of a files table fills, in the order the files source reads them, each from the files, its path, or the file's name, version and row number.
+pub(crate) fn copy_columns(spec: &TableSpec, read: &FilesRead) -> Vec<CopyColumn> {
+    read.columns
+        .iter()
+        .map(|column| CopyColumn {
+            name: column.name.clone(),
+            column_type: column.column_type.clone(),
+            value: match column.name.as_str() {
+                SOURCE_FILE_COLUMN => CopyValue::SourceFile,
+                SOURCE_VERSION_COLUMN => CopyValue::SourceVersion,
+                SOURCE_ROW_COLUMN => CopyValue::SourceRow,
+                name if partition_column(spec, name) => CopyValue::Partition,
+                name => CopyValue::File {
+                    file_type: file_type(spec, name),
+                },
+            },
+        })
+        .collect()
+}
+
+/// Whether `name` is one of the files source's partition columns.
+fn partition_column(spec: &TableSpec, name: &str) -> bool {
+    spec.files
+        .iter()
+        .flat_map(|files| files.partition_types.iter())
+        .any(|(partition, _)| partition == name)
+}
+
+/// The type the known files hold column `name` as; a type with no portable equivalent is named as one the direct `COPY` never loads.
+fn file_type(spec: &TableSpec, name: &str) -> Option<ColumnType> {
+    let files = spec.files.as_ref()?;
+    let found = files
+        .table
+        .columns
+        .iter()
+        .find(|found| found.name == name)?;
+    Some(match &found.column_type {
+        Ok(column_type) => column_type.clone(),
+        Err(reason) => ColumnType::Native(format!("unsupported ({reason})")),
+    })
+}
+
+/// Whether `route` has the destination load a files source's own files.
+pub(crate) fn is_direct(route: Option<&Route>) -> bool {
+    route.is_some_and(|route| {
+        matches!(route.steps.first(), Some(Step::UseFiles(_)))
+            && matches!(route.steps.last(), Some(Step::DestinationPulls(_)))
+    })
+}
+
+/// The route a table's data takes into `destination`; `read` is a files table's planned read.
+pub(crate) fn table_route(
+    spec: &TableSpec,
+    read: (Option<&FilesRead>, &WriteMode),
+    stage: Option<&StageRoute>,
+    destination: &Destination,
+) -> Result<Route, String> {
+    let reader = reader_offer(spec, read, stage);
     plan_route(
         &reader,
-        &writer_accepts(destination),
+        &writer_accepts(destination, stage),
         RouteOverrides::default(),
     )
     .map_err(|error| error.to_string())

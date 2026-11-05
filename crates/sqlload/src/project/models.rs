@@ -42,6 +42,42 @@ pub struct ProjectConfig {
     pub python_modules: BTreeMap<String, String>,
 }
 
+/// The route a Snowflake connection's loads must take; one it cannot use fails at plan, never falling back.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StageConfig {
+    /// The user stage `@~`.
+    User,
+    /// The table stage `@%table`: the target's for an owned direct append, otherwise the staging table's.
+    Table,
+    /// Snowpipe Streaming into a transient staging table.
+    Streaming,
+    /// Batched multi-row `INSERT` into a transient staging table.
+    Insert,
+    /// A named internal stage.
+    Internal { name: String },
+    /// An external stage on an S3 prefix: SQLLoad writes there itself, and Snowflake loads files of a files source under it directly.
+    S3 {
+        /// The stage's location, `s3://bucket/prefix/`.
+        url: String,
+        /// The storage integration of the stage SQLLoad creates (`_SQLLOAD_STAGE` in each loader schema).
+        #[serde(default)]
+        storage_integration: Option<String>,
+        /// An existing stage on `url` to use instead, `DATABASE.SCHEMA.STAGE`.
+        #[serde(default)]
+        name: Option<String>,
+        /// The bucket's region, for SQLLoad's own writes.
+        #[serde(default)]
+        region: Option<String>,
+        /// A custom S3 endpoint for SQLLoad's own writes (tests); Snowflake always reads the bucket itself.
+        #[serde(default)]
+        endpoint: Option<String>,
+        /// Keep staged files after their batch commits, and leave this stage out of the cleanup of old ones.
+        #[serde(default)]
+        keep_staged_files: bool,
+    },
+}
+
 /// How to reach one system.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -58,6 +94,9 @@ pub enum ConnectionConfig {
         /// Overrides the account URL, for tests.
         #[serde(default)]
         base_url: Option<String>,
+        /// Forces how loads reach Snowflake; without it, the first route the role can use: `@~`, `@%table`, Snowpipe Streaming, then `INSERT`.
+        #[serde(default)]
+        stage: Option<StageConfig>,
     },
     Postgres {
         host: String,
@@ -286,6 +325,9 @@ pub struct TableSettings {
     /// Where a Python table's position is kept: derived from the data (default) or in the run log.
     #[serde(default)]
     pub state: Option<StateMode>,
+    /// `"loader"`: SQLLoad shapes the rows itself, so plain values of masked columns never reach Snowflake.
+    #[serde(default)]
+    pub shaping: Option<Shaping>,
     /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones.
     #[serde(default, deserialize_with = "deserialize_optional_batch")]
     pub batch: Option<BatchStep>,
@@ -354,6 +396,13 @@ impl std::fmt::Display for WriteStrategy {
             Self::Replace => "replace",
         })
     }
+}
+
+/// Who shapes a files source's rows, when it is forced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Shaping {
+    Loader,
 }
 
 /// A cursor table's `batch`: each run reads and commits one cursor window of this size at a time.

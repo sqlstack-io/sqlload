@@ -6,6 +6,9 @@ pub const SOURCE_FILE_COLUMN: &str = "_sqlload_source_file";
 /// The column holding the version of each row's source file (its ETag, or size and modification time), to notice files rewritten in place.
 pub const SOURCE_VERSION_COLUMN: &str = "_sqlload_source_version";
 
+/// The column holding a row's number in its source file, from 1.
+pub const SOURCE_ROW_COLUMN: &str = "_sqlload_source_row";
+
 /// Separates a file name from its version in the loaded-files query; versions never contain it.
 pub const VERSION_SEPARATOR: char = '|';
 
@@ -45,4 +48,5 @@ pub const LOADER_COLUMNS: &[&str] = &[
     LOADED_AT_COLUMN,
     SOURCE_FILE_COLUMN,
     SOURCE_VERSION_COLUMN,
+    SOURCE_ROW_COLUMN,
 ];

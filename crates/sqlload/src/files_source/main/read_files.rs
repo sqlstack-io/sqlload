@@ -63,7 +63,7 @@ async fn read_parquet(
         .map_err(|error| error.to_string())?;
     let mut rows: u64 = 0;
     while let Some(batch) = stream.try_next().await.map_err(|error| error.to_string())? {
-        let shaped = shape_batch(&batch, file.data, &file.file_name, file.schema)
+        let shaped = shape_batch(&batch, file.data, (&file.file_name, rows), file.schema)
             .map_err(|error| error.reason)?;
         rows += shaped.num_rows() as u64;
         on_batch(shaped).await?;
@@ -81,16 +81,15 @@ async fn read_text(
     let mut reader = TextReader::open(file.folder, &file.data.file, codec, file.request).await?;
     let mut rows: u64 = 0;
     while let Some((batch, lines)) = reader.next_batch().await? {
-        let shaped =
-            shape_batch(&batch, file.data, &file.file_name, file.schema).map_err(|error| {
-                match error.row.and_then(|row| lines.get(row)) {
-                    Some(line) => format!(
-                        "line {line}: {}; fix the file, or pin a type that holds the value",
-                        error.reason
-                    ),
-                    None => error.reason,
-                }
-            })?;
+        let shaped = shape_batch(&batch, file.data, (&file.file_name, rows), file.schema).map_err(
+            |error| match error.row.and_then(|row| lines.get(row)) {
+                Some(line) => format!(
+                    "line {line}: {}; fix the file, or pin a type that holds the value",
+                    error.reason
+                ),
+                None => error.reason,
+            },
+        )?;
         rows += shaped.num_rows() as u64;
         on_batch(shaped).await?;
     }

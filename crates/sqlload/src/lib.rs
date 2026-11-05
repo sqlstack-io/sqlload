@@ -15,6 +15,7 @@ pub mod delivery;
 pub mod duckdb_destination;
 pub mod envelope;
 pub mod exporter;
+pub mod external_stage;
 pub mod file_format;
 pub mod file_store;
 pub mod files_destination;

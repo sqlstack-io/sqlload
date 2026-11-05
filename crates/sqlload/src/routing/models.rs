@@ -69,6 +69,8 @@ pub struct ReaderOffer {
     pub unload_to: Vec<Store>,
     /// The data's estimated size, when the source knows it.
     pub estimated_bytes: Option<u64>,
+    /// Why the destination must not read `existing_files` itself even where it can reach them (SQLLoad would load them differently).
+    pub direct_blocked: Option<String>,
 }
 
 /// What a destination can take.
@@ -82,6 +84,8 @@ pub struct WriterAccepts {
     pub pull_formats: Vec<FileFormat>,
     /// Stores where SQLLoad may write files for it to pull, in order of preference (external first).
     pub staging: Vec<Store>,
+    /// How it takes rows when no store is usable, such as Snowpipe Streaming.
+    pub rows_into: Option<String>,
 }
 
 /// How a warehouse source is read.
@@ -128,6 +132,8 @@ pub enum Step {
     DestinationPulls(FileSet),
     /// The destination takes Arrow batches.
     DestinationTakesArrow,
+    /// The rows go in without files, this way.
+    RowsInto(String),
 }
 
 impl std::fmt::Display for Step {
@@ -148,6 +154,7 @@ impl std::fmt::Display for Step {
                 )
             }
             Self::DestinationTakesArrow => formatter.write_str("destination takes Arrow"),
+            Self::RowsInto(how) => formatter.write_str(how),
         }
     }
 }

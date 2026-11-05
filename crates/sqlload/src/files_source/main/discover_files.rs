@@ -11,7 +11,7 @@ use crate::files_source::_helpers::plan::encoding::{file_codec, file_names};
 use crate::files_source::_helpers::plan::partitions::data_file;
 use crate::files_source::_helpers::text::sample::sample_file;
 use crate::files_source::constants::{
-    SCHEMA_SAMPLE_FILES, SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN,
+    SCHEMA_SAMPLE_FILES, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::{Codec, DataFile, FilesEncoding, FilesTable, SourceFormat};
@@ -26,7 +26,7 @@ pub async fn discover_files(
     let replaced: Vec<&str> = partition_columns
         .iter()
         .map(String::as_str)
-        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN])
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
         .collect();
     let text_format = encoding.format != SourceFormat::Parquet;
     let mut columns: Vec<SampledColumn> = Vec::new();

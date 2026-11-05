@@ -25,9 +25,10 @@ use crate::run_log::main::later_cursor::later_cursor;
 use crate::run_log::main::next_stamp::next_stamp;
 use crate::run_log::models::{RunOutcome, RunRecord, UnreadableRecord};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
-use crate::snowflake_destination::models::SnowflakeDestination;
+use crate::snowflake_destination::models::{SnowflakeDestination, StageRoute};
 use crate::stage_api::models::StageInfo;
 use crate::store_paths::models::Location;
+use crate::streaming_api::models::StreamingClient;
 use crate::write_sql::models::{TableName, WriteMode};
 
 /// Where a setting's value came from, for `plan`.
@@ -73,6 +74,8 @@ pub struct TableSpec {
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
+    /// `shaping = "loader"`: Snowflake never reads the files itself.
+    pub shaped_by_loader: bool,
     /// Where an integer `batch`'s windows end without `--end-cursor-int`: the Postgres source's cursor maximum, read at plan.
     pub source_end: Option<SourceEnd>,
     pub pinned: BTreeMap<String, ColumnType>,
@@ -175,6 +178,21 @@ pub struct TablePlan {
     pub logged: Option<LoggedPlan>,
     /// How the rows are cut into commits.
     pub commits: CommitRule,
+    /// How the rows reach Snowflake.
+    pub stage: Option<StageRoute>,
+    /// Why routes earlier in the chain were passed over.
+    pub passed_over: Vec<String>,
+    /// The stage `apply` must create.
+    pub planned_stage: Option<PlannedStage>,
+}
+
+/// A stage `apply` creates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedStage {
+    /// As SQL, which also tells stages apart.
+    pub name: String,
+    pub url: String,
+    pub statements: Vec<String>,
 }
 
 /// A logged table's run log and what it means for this run.
@@ -432,6 +450,12 @@ pub struct Publisher {
     pub batch: u64,
     /// Snowflake: the upload credentials this batch fetched, for all its files.
     pub stage: Option<StageInfo>,
+    /// Snowflake: how this load's rows go in.
+    pub route: Option<StageRoute>,
+    /// Snowflake: the folder of an external stage, written with SQLLoad's own client.
+    pub external_folder: Option<OpenFolder>,
+    /// Snowflake: the channel rows are streaming through.
+    pub stream: Option<RowStream>,
     /// Snowflake: the batch's Parquet being written, and the names of its files staged so far.
     pub parts: PartWriter,
     pub staged: Vec<String>,
@@ -455,6 +479,26 @@ pub struct Publisher {
     pub batch_bytes: usize,
     /// A files target's folder and the commit being written.
     pub files: Option<FilesSink>,
+}
+
+/// What a direct batch's `COPY` did, with the rows it loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectLoaded {
+    /// Committed with the `COPY`.
+    Committed(u64),
+    /// In the staging table, waiting for the commit.
+    Staged(u64),
+}
+
+/// A channel a load's rows stream through.
+#[derive(Debug)]
+pub struct RowStream {
+    pub client: StreamingClient,
+    pub pipe: String,
+    pub channel: String,
+    pub continuation: String,
+    /// The offset of the last request sent, 0 before any.
+    pub offset: i64,
 }
 
 /// A files target table's load: its folder, what the load replaces, and the files of the commit being written.

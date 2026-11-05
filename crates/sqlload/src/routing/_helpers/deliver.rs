@@ -16,6 +16,13 @@ pub(crate) fn deliver_arrow(
             reason: format!("{reason}; the destination takes Arrow directly"),
         });
     }
+    if let Some(how) = &writer.rows_into {
+        steps.push(Step::RowsInto(how.clone()));
+        return Ok(Route {
+            steps,
+            reason: format!("{reason}; {how}"),
+        });
+    }
     let staging = ordered_stores(&writer.staging, preference)?;
     let Some(store) = staging
         .into_iter()

@@ -27,7 +27,9 @@ pub(crate) fn parse_stage_info(data: &Value) -> Result<StageInfo, String> {
         prefix.push('/');
     }
     let region = text(stage, "region")?;
-    let endpoint = match stage["endPoint"].as_str().filter(|value| !value.is_empty()) {
+    let named = stage["endPoint"].as_str().filter(|value| !value.is_empty());
+    let endpoint = match named {
+        Some(endpoint) if endpoint.contains("://") => endpoint.to_owned(),
         Some(endpoint) => format!("https://{endpoint}"),
         None => format!("https://s3.{region}.amazonaws.com"),
     };
@@ -52,7 +54,7 @@ pub(crate) fn parse_stage_info(data: &Value) -> Result<StageInfo, String> {
         target: ObjectTarget {
             endpoint,
             bucket: bucket.to_owned(),
-            path_style: false,
+            path_style: named.is_some_and(|endpoint| endpoint.contains("://")),
             prefix,
             region,
             credentials: AwsCredentials {
