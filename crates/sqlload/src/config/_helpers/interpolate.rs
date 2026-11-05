@@ -43,7 +43,7 @@ fn interpolate_text(text: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Resu
             .ok_or_else(|| format!("unterminated ${{ in {text:?}"))?;
         let name = body[..end].strip_prefix(ENVIRONMENT_PREFIX).ok_or_else(|| {
             format!(
-                "${{{}}} in {text:?} is not ${{ENV:NAME}}, the only interpolation; write $${{ for a literal ${{",
+                "${{{}}} is not ${{ENV:NAME}}, the only interpolation; write $${{ for a literal ${{",
                 &body[..end]
             )
         })?;

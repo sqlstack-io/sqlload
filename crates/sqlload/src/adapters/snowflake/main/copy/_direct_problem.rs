@@ -3,6 +3,7 @@
 use crate::adapters::snowflake::_helpers::dialect::values::{copyable_type, plain_key};
 use crate::adapters::snowflake::main::copy::_stage_covers::stage_covers;
 use crate::adapters::snowflake::models::{CopyValue, DirectCheck};
+use crate::files_source::models::SourceFormat;
 use crate::project::models::MaskMethod;
 
 /// Why Snowflake cannot load the files exactly as SQLLoad would with a direct `COPY` from the stage (`stage_url`, or files copied to an internal stage when `None`), or `None` when it can.
@@ -12,7 +13,17 @@ pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<Str
     {
         return Some(format!("the files are outside the stage url {stage_url}"));
     }
-    let odd_key = std::iter::once(check.source.prefix.as_str())
+    if check.stage_url.is_none()
+        && matches!(check.format, SourceFormat::Json | SourceFormat::Ndjson)
+    {
+        return Some(
+            "copy_to_internal_stage cannot load JSON or NDJSON yet: keys first seen after plan's sample would be missed; add a storage integration for these files instead".to_owned(),
+        );
+    }
+    let odd_key = check
+        .stage_url
+        .map(|_| check.source.prefix.as_str())
+        .into_iter()
         .chain(
             check
                 .files

@@ -75,6 +75,8 @@ pub struct ReaderOffer {
     pub needs_loader: Option<String>,
     /// `copy_to_internal_stage`: files the destination cannot reach are uploaded unchanged to a store it can, never read by SQLLoad.
     pub copy_to_internal_stage: bool,
+    /// The destination's store paths name `existing_files`, but it cannot read them (the same bucket on another endpoint).
+    pub out_of_reach: bool,
 }
 
 /// What a destination can take.
