@@ -60,6 +60,7 @@ pub(crate) fn tables_from_rows(
                 columns: Vec::new(),
                 estimated_rows: row.get(10),
                 estimated_bytes: row.get(11),
+                comment: row.get(12),
             });
         table.columns.push(column_from_row(row));
     }

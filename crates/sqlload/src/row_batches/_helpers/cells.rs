@@ -13,7 +13,7 @@ use crate::column_types::models::ColumnType;
 use crate::row_batches::constants::{INT_DIGITS, MIN_TIMESTAMP_LENGTH, SECONDS_PER_DAY, UTC_ZONE};
 use crate::row_batches::models::Cell;
 
-/// The type `cells` suggest, by the files sources' rules (`None` when every cell is NULL), and the cells as UTC microseconds when that type is `timestamp_tz`; a decimal column holds 38 digits at the largest scale seen, so later batches fit.
+/// The type `cells` suggest, by the files sources' rules (`None` when every cell is NULL), and the cells as UTC microseconds when that type is `timestamp_tz`; a decimal column holds at least the 19 digits of any 64-bit integer before the point at the largest scale seen, so a later batch's larger scale can still widen it within 38 digits.
 pub(crate) fn column_type(cells: &[Cell]) -> (Option<ColumnType>, Vec<Option<i64>>) {
     let mut seen: Option<ColumnType> = None;
     let mut micros: Vec<Option<i64>> = Vec::new();
@@ -38,10 +38,9 @@ pub(crate) fn column_type(cells: &[Cell]) -> (Option<ColumnType>, Vec<Option<i64
     }
     micros.resize(cells.len(), None);
     let widest = seen.map(|column_type| match column_type {
-        ColumnType::Decimal { scale, .. } => ColumnType::Decimal {
-            precision: MAX_DECIMAL_PRECISION,
-            scale,
-        },
+        ColumnType::Decimal { precision, scale } => {
+            decimal(precision.saturating_sub(scale).max(INT_DIGITS), scale)
+        }
         other => other,
     });
     (widest, micros)

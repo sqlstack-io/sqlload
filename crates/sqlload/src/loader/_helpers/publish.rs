@@ -354,7 +354,7 @@ impl Publisher {
         self.commit(false).await
     }
 
-    /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it, and a `delete_insert` read of no rows still clears its range, since its rows were deleted upstream); a logged table records `state`, where its function left `ctx.state`, even without rows; a swapped-in table gets its description as its comment again.
+    /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it, and a `delete_insert` read of no rows still clears its range, since its rows were deleted upstream); a logged table records `state`, where its function left `ctx.state`, even without rows; a swapped-in table gets its description as its comment again, where a failure only warns, as its rows are already in.
     pub(crate) async fn finish(&mut self, state: Option<String>) -> Result<u64, LoaderError> {
         self.flush_batch().await?;
         if state.is_some() {
@@ -376,11 +376,14 @@ impl Publisher {
             }
             _ => {}
         }
-        if self.at_end && self.files.is_none() {
-            let spec = &self.table.spec;
-            let comment = sql_adapter(spec.warehouse)
-                .render_table_comment(&spec.destination, &spec.description);
-            execute(&self.destination, vec![comment]).await?;
+        let spec = &self.table.spec;
+        let comment = sql_adapter(spec.warehouse)
+            .render_table_comment(&spec.destination, &spec.description)
+            .filter(|_| self.at_end && self.files.is_none());
+        if let Some(comment) = comment
+            && let Err(error) = execute(&self.destination, vec![comment]).await
+        {
+            tracing::warn!(table = %spec.destination.table, %error, "the swapped-in table kept no description: setting its comment failed");
         }
         Ok(self.committed_rows)
     }

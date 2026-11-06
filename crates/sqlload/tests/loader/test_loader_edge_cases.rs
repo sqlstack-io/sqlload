@@ -10,6 +10,8 @@ const OK: ScenarioRun = ScenarioRun {
     expected_error: "",
     reload: false,
     window: (None, None),
+    settings: "",
+    select: &[],
 };
 
 #[test]
@@ -102,11 +104,27 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                 OK,
                 ScenarioRun {
                     source_change: "CREATE TABLE public.later (id int8 PRIMARY KEY); CREATE TABLE public.approved (id int8 PRIMARY KEY);",
+                    settings: "[sources.app.tables.\"public.later\"]\n[sources.app.tables.\"public.approved\"]\n",
                     ..OK
                 },
             ],
             check_query: "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'raw'",
             expected_result: "app__approved,app__present",
+        },
+        ScenarioTestCase {
+            description: "new_tables = skip: selecting only a later table does not make it look present at the first load",
+            setup: "CREATE TABLE public.present (id int8 PRIMARY KEY);",
+            settings: "new_tables = \"skip\"\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    source_change: "CREATE TABLE public.later (id int8 PRIMARY KEY);",
+                    select: &["public.later"],
+                    ..OK
+                },
+            ],
+            check_query: "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "app__present",
         },
         ScenarioTestCase {
             description: "new_tables = fail stops the plan and names a table that appears after the first load",
@@ -123,6 +141,36 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             ],
             check_query: "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'raw'",
             expected_result: "app__present",
+        },
+        ScenarioTestCase {
+            description: "a discovered table needs no description; one with a source comment carries it to the destination table",
+            setup: "CREATE TABLE public.plain (id int8 PRIMARY KEY); CREATE TABLE public.noted (id int8 PRIMARY KEY); COMMENT ON TABLE public.noted IS 'Noted it''s here.';",
+            settings: "",
+            runs: &[OK],
+            check_query: "SELECT string_agg(table_name || '=' || coalesce(comment, 'null'), ',' ORDER BY table_name) FROM duckdb_tables() WHERE schema_name = 'raw'",
+            expected_result: "app__noted=Noted it's here.,app__plain=null",
+        },
+        ScenarioTestCase {
+            description: "a table entry without a description fails the plan with where to add one",
+            setup: "CREATE TABLE public.listed (id int8 PRIMARY KEY); COMMENT ON TABLE public.listed IS 'Only the source says so.';",
+            settings: "[sources.app.tables.\"public.listed\"]\ndescription = \"\"\n",
+            runs: &[ScenarioRun {
+                expected_error: "app__listed\n    └── reason  no description; add description = \"...\" under [sources.app.tables.\"public.listed\"]",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "a table named in include without a description fails the plan",
+            setup: "CREATE TABLE public.named (id int8 PRIMARY KEY);",
+            settings: "include = [\"public.named\"]\n",
+            runs: &[ScenarioRun {
+                expected_error: "app__named\n    └── reason  no description; add description = \"...\" under [sources.app.tables.\"public.named\"]",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
         },
         ScenarioTestCase {
             description: "--reload rebuilds a table whose source type changed incompatibly",

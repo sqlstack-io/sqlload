@@ -24,6 +24,7 @@ use crate::schema_plan::models::LiveColumn;
 /// The columns of the inferred table, as `name:type` joined by commas.
 pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
     let planned = SourceTable {
+        comment: None,
         schema: String::new(),
         name: "t".to_owned(),
         columns: test_case

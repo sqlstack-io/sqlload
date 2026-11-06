@@ -104,7 +104,8 @@ class Source:
 		description: str | None = None,
 		**settings: Any,
 	) -> Table | Callable[[TableFunction], Table]:
-		"""Attach a table to this source: `@shop.table` or `@shop.table(unique_key="id", ...)`."""
+		"""Attach a table to this source: `@shop.table` or `@shop.table(unique_key="id", ...)`; its
+		description, which `plan` requires, is `description` or else the function's docstring."""
 		_check_settings(settings, TABLE_SETTINGS | TABLE_ONLY_SETTINGS, "table")
 
 		def attach(table_function: TableFunction) -> Table:
@@ -128,10 +129,10 @@ class Source:
 		return factory
 
 
-
 def _docstring(function: TableFunction) -> str | None:
 	"""A plain function's own docstring, the table's description when none is given."""
 	return inspect.getdoc(function) if inspect.isfunction(function) else None
+
 
 def source(name: str, *, description: str | None = None, **settings: Any) -> Source:
 	"""A source tables attach to with `@<source>.table(...)`; `settings` are its connection,
@@ -160,7 +161,8 @@ def table(
 	description: str | None = None,
 	**settings: Any,
 ) -> Table | Callable[[TableFunction], Table]:
-	"""A standalone table, with the target's defaults: `@sl.table` or `@sl.table(...)`."""
+	"""A standalone table, with the target's defaults: `@sl.table` or `@sl.table(...)`; its
+	description, which `plan` requires, is `description` or else the function's docstring."""
 	_check_settings(settings, TABLE_SETTINGS | TABLE_ONLY_SETTINGS, "table")
 
 	def declare(table_function: TableFunction) -> Table:
