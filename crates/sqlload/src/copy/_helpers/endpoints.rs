@@ -101,6 +101,17 @@ fn uri_endpoint(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<End
     let (body, locator) = rest.split_once('#').unwrap_or((rest, ""));
     match scheme {
         "postgres" | "postgresql" => postgres(shown, scheme, rest, role),
+        "s3" if body
+            .split('/')
+            .next()
+            .is_some_and(|bucket| bucket.contains('@')) =>
+        {
+            Err(format!(
+                "the {} s3://{REDACTED}@{} carries credentials, which s3:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
+                role.label(),
+                rest.rsplit_once('@').map_or("", |(_, after)| after)
+            ))
+        }
         "duckdb" | "s3" | "file" if shown != format!("{scheme}://{rest}") => Err(format!(
             "the {} {shown} carries credentials, which {scheme}:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
             role.label()
