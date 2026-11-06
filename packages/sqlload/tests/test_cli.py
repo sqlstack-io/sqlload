@@ -1,5 +1,6 @@
 """The `sqlload` console script runs the native command line in-process."""
 
+import json
 import os
 import signal
 import subprocess
@@ -31,6 +32,20 @@ def test_given_a_bad_flag_when_run_then_the_usage_error_exits_2() -> None:
 	done = run("--no-such-flag")
 	assert done.returncode == 2
 	assert "unexpected argument" in done.stderr
+
+
+@pytest.mark.parametrize(
+	"config_name",
+	[
+		pytest.param("sqlload.toml", id="toml syntax error"),
+		pytest.param("missing.toml", id="missing config file"),
+	],
+)
+def test_given_plan_json_when_the_config_cannot_be_used_then_stdout_is_one_json_error(tmp_path: Path, config_name: str) -> None:
+	(tmp_path / "sqlload.toml").write_text("[connections.wh\nkind = 'duckdb'\n")
+	done = run("plan", "--json", "-c", str(tmp_path / config_name))
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert json.loads(done.stdout)["error"]["code"] == "config", done.stdout + done.stderr
 
 
 def test_given_the_version_when_imported_then_it_matches_the_package() -> None:

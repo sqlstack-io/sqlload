@@ -112,6 +112,18 @@ pub(crate) fn error_item(name: &str, reasons: &[String]) -> PlanItem {
     }
 }
 
+/// `errors` with items of exactly the same details merged into one that names each, so a reason shared by many tables is printed once.
+pub(crate) fn merged_errors(errors: Vec<PlanItem>) -> Vec<PlanItem> {
+    let mut merged: Vec<PlanItem> = Vec::new();
+    for item in errors {
+        match merged.iter_mut().find(|seen| seen.details == item.details) {
+            Some(seen) => seen.name = format!("{}, {}", seen.name, item.name),
+            None => merged.push(item),
+        }
+    }
+    merged
+}
+
 /// A project problem, `subject: reason`, as an `Errors` item.
 pub(crate) fn problem_item(problem: &str) -> PlanItem {
     match problem.split_once(": ") {
@@ -665,7 +677,7 @@ fn counted(count: usize, (one, many): (&str, &str)) -> String {
     }
 }
 
-/// The plan's sections: what `apply` creates or changes, what `load` moves, and what stops or should be known; tables stopped for the same reasons share one `Errors` item.
+/// The plan's sections: what `apply` creates or changes, what `load` moves, and what stops or should be known; one `Errors` item per table or problem.
 pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
     let ready: Vec<_> = plan
         .tables
@@ -695,18 +707,12 @@ pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
             })
             .count();
     let alters = stages.len() + changed.len() - creates;
-    let mut errors: Vec<PlanItem> = Vec::new();
-    for item in plan
+    let errors: Vec<PlanItem> = plan
         .tables
         .iter()
         .filter_map(blocked_item)
         .chain(plan.problems.iter().map(|problem| problem_item(problem)))
-    {
-        match errors.iter_mut().find(|seen| seen.details == item.details) {
-            Some(seen) => seen.name = format!("{}, {}", seen.name, item.name),
-            None => errors.push(item),
-        }
-    }
+        .collect();
     let clauses = [
         (creates, ("object to create", "objects to create")),
         (alters, ("to alter", "to alter")),
