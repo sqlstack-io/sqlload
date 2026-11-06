@@ -40,7 +40,7 @@ def project(tmp_path: Path, tables: str) -> Path:
 def sqlload(root: Path, *args: str, run: int = 1) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "RUN": str(run), "HOME": str(root)}
     command = [sys.executable, "-c", "from sqlload._cli import main; main()", *args]
-    return subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=120, check=False)
+    return subprocess.run(command, cwd=root, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, check=False)
 
 
 def query(root: Path, sql: str) -> list[tuple[Any, ...]]:
@@ -83,10 +83,20 @@ def test_given_two_replaces_when_loading_then_the_second_replaces_every_row_and_
 def test_given_a_reload_when_loading_then_it_swaps_in_the_whole_table(tmp_path: Path) -> None:
     root = project(tmp_path, REPLACED)
     assert sqlload(root, "load").returncode == 0
-    reloaded = sqlload(root, "load", "--reload", run=2)
+    reloaded = sqlload(root, "load", "--reload", "--yes", run=2)
     assert reloaded.returncode == 0, reloaded.stderr
     assert tables(root) == ["api__things"]
     assert query(root, "SELECT count(*), min(id) FROM raw.api__things") == [(9, 200)]
+
+
+def test_given_a_reload_without_yes_off_a_terminal_when_loading_then_it_is_refused_and_nothing_changes(tmp_path: Path) -> None:
+    root = project(tmp_path, REPLACED)
+    assert sqlload(root, "load").returncode == 0
+    before = query(root, "SELECT count(*), min(id) FROM raw.api__things")
+    refused = sqlload(root, "load", "--reload", run=2)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "--reload rebuilds api__things from the whole source, replacing what they hold; confirm it in a terminal, or add --yes" in refused.stderr
+    assert query(root, "SELECT count(*), min(id) FROM raw.api__things") == before
 
 
 FAILING = """

@@ -554,7 +554,7 @@ def test_given_environments_and_build_folders_under_python_paths_when_discoverin
 	("settings", "args", "fails", "expected_rows"),
 	[
 		("write_strategy='replace'", (), True, [(1,)]),
-		("write_strategy='append'", ("--reload",), True, [(1,)]),
+		("write_strategy='append'", ("--reload", "--yes"), True, [(1,)]),
 		("write_strategy='replace', allow_empty=True", (), False, []),
 		("write_strategy='append'", (), False, [(1,)]),
 		("write_strategy='merge', unique_key='id'", (), False, [(1,)]),

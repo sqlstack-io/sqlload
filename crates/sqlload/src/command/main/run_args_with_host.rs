@@ -63,6 +63,7 @@ where
                 config: &cli.config,
                 command: cli.command,
                 host,
+                no_color: cli.no_color,
             };
             return run_loader(request).await;
         }
