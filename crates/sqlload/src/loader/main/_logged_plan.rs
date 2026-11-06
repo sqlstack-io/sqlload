@@ -11,7 +11,7 @@ use crate::loader::models::{LoggedPlan, PlanOptions, TablePlan};
 use crate::run_log::main::current_run::current_run;
 use crate::run_log::models::RunEvent;
 
-/// `plan` with its run log when the table is logged: after `sqlload state reset`, the next run reads from the reset position (unless flags choose the window); otherwise a logged cursor that disagrees with the data's maximum is noted, and the data wins. A record that cannot be read blocks the table until a reset follows it.
+/// `plan` with its run log when the table is logged: after `sqlload logged-state reset`, the next run reads from the reset position (unless flags choose the window); otherwise a logged cursor that disagrees with the data's maximum is noted, and the data wins. A record that cannot be read blocks the table until a reset follows it.
 pub(in crate::loader) async fn with_run_log(
     mut plan: TablePlan,
     destination: &Destination,
@@ -62,7 +62,7 @@ pub(in crate::loader) async fn with_run_log(
     }
     if let (Some(data), Some(record)) = (&disagreement, &current) {
         plan.schema.warnings.push(format!(
-            "the run log has {} {} but the data's maximum is {data}; the load reads from the data's position and appends a reconciliation (sqlload state verify reports it)",
+            "the run log has {} {} but the data's maximum is {data}; the load reads from the data's position and appends a reconciliation (sqlload logged-state verify reports it)",
             record.cursor_column.as_deref().unwrap_or("cursor"),
             record.cursor_after.as_deref().unwrap_or("not set"),
         ));

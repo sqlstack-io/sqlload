@@ -8,7 +8,7 @@ pub enum RunEvent {
     Run,
     /// A load with `--start/--end-cursor-*`; recorded, but it does not move the state.
     Backfill,
-    /// `sqlload state reset`: the next run reads from this position.
+    /// `sqlload logged-state reset`: the next run reads from this position.
     Reset,
     /// The data's position replaced a logged one that disagreed with it.
     Reconcile,
