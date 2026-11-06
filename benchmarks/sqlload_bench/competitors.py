@@ -12,6 +12,9 @@ from sqlload_bench.datagen import Dataset
 from sqlload_bench.measure import clean_env
 from sqlload_bench.scenarios import MULTI_TABLES, Scenario
 
+#: The description every benchmark table gets, as SQLLoad requires one.
+DESCRIPTION = "Benchmark table."
+
 BENCH_ROOT = Path(__file__).resolve().parent.parent
 RUNNERS = BENCH_ROOT / "runners"
 DLT_PYTHON = BENCH_ROOT / "envs/dlt/.venv/bin/python"
@@ -161,7 +164,7 @@ class SqlLoad(Competitor):
 			stage = context.warehouse.stage_toml() if self.external else '{ type = "internal_user_stage" }'
 			return (
 				context.warehouse.connection_toml(stage) + "\n" + self._postgres(scenario, context)
-				+ f'\n[sources.app.tables."public.{scenario.source}"]\nname = "{scenario.table}"\n'
+				+ f'name = "{scenario.table}"\n'
 			)
 		text = (
 			f'[connections.wh]\nkind = "duckdb"\ndatabase = "{self.destination(run_dir)}"\n\n'
@@ -174,13 +177,15 @@ class SqlLoad(Competitor):
 			return text + (
 				f'\n[connections.files]\nkind = "filesystem"\nroot = "{context.dataset.path("files")}"\n\n'
 				f'[sources.{scenario.table}]\nkind = "files"\nconnection = "files"\npath = "{file_format}/"\nformat = "{file_format}"\n'
+				f'description = "{DESCRIPTION}"\n'
 			)
 		return 'python_paths = ["sources"]\n\n' + text
 
 	@staticmethod
 	def _postgres(scenario: Scenario, context: Context) -> str:
 		assert context.postgres is not None
-		include = "public.multi_*" if scenario.name == "pg_multi" else f"public.{scenario.source or scenario.table}"
+		tables = [pg.multi_table(index) for index in range(MULTI_TABLES)] if scenario.name == "pg_multi" else [scenario.source or scenario.table]
+		include = "public.multi_*" if scenario.name == "pg_multi" else f"public.{tables[0]}"
 		text = (
 			f'[connections.app_pg]\nkind = "postgres"\nhost = "127.0.0.1"\nport = {context.postgres.port}\n'
 			f'user = "{pg.USER}"\npassword = "${{ENV:PGPASSWORD}}"\ndatabase = "{pg.DATABASE}"\n\n'
@@ -189,7 +194,7 @@ class SqlLoad(Competitor):
 		if scenario.name == "pg_incremental":
 			# `id` only grows, so the next load starts after the loaded maximum rather than at it.
 			text += 'write_strategy = "append"\ncursor_column = "id"\nappend_cursor_inclusive = false\n'
-		return text
+		return text + "".join(f'\n[sources.app.tables."public.{table}"]\ndescription = "{DESCRIPTION}"\n' for table in tables)
 
 	def _files_snowflake(self, scenario: Scenario, context: Context) -> str:
 		settings = context.warehouse
@@ -198,7 +203,7 @@ class SqlLoad(Competitor):
 		return settings.connection_toml(settings.stage_toml()) + (
 			f'\n[connections.lake]\nkind = "s3"\nbucket = "{settings.bucket}"\nregion = "{settings.region}"\n\n'
 			f'[sources.files]\nkind = "files"\nconnection = "lake"\npath = "{key}"\nformat = "parquet"\n'
-			f'table_name = "{scenario.table}"\nwrite_strategy = "append"\n'
+			f'table_name = "{scenario.table}"\nwrite_strategy = "append"\ndescription = "{DESCRIPTION}"\n'
 		)
 
 	@staticmethod
@@ -212,7 +217,7 @@ class SqlLoad(Competitor):
 		}[scenario.name]
 		return (
 			"import sqlload as sl\n\nfrom sqlload_bench import pydata\n\n\n"
-			f"@sl.table(name='{scenario.table}', write_strategy='append')\n"
+			f"@sl.table(name='{scenario.table}', description='{DESCRIPTION}', write_strategy='append')\n"
 			f"def rows(ctx):\n    {body}\n"
 		)
 

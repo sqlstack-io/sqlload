@@ -1,8 +1,7 @@
 use sqlload::loader::main::debug_project::debug_project;
-use sqlload::project::main::parse_project::parse_project;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
-use crate::helpers::{duckdb_project, run_async};
+use crate::helpers::{described_project, duckdb_project, run_async};
 use crate::test_types::DebugProjectTestCase;
 
 #[test]
@@ -63,7 +62,7 @@ fn given_a_loader_project_when_debugging_then_every_connection_is_checked_and_re
         std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
         for test_case in test_cases {
             let text = duckdb_project(postgres.port, &(test_case.extra)(postgres.port, &directory));
-            let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+            let project = described_project(&text).await?;
             let (lines, ok) = debug_project(&project, test_case.connect).await;
             assert_eq!(
                 lines.len(),

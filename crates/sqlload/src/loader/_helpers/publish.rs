@@ -354,7 +354,7 @@ impl Publisher {
         self.commit(false).await
     }
 
-    /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it, and a `delete_insert` read of no rows still clears its range, since its rows were deleted upstream); a logged table records `state`, where its function left `ctx.state`, even without rows.
+    /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it, and a `delete_insert` read of no rows still clears its range, since its rows were deleted upstream); a logged table records `state`, where its function left `ctx.state`, even without rows; a swapped-in table gets its description as its comment again.
     pub(crate) async fn finish(&mut self, state: Option<String>) -> Result<u64, LoaderError> {
         self.flush_batch().await?;
         if state.is_some() {
@@ -375,6 +375,12 @@ impl Publisher {
                 append_run(&self.table, &self.destination, &record).await?;
             }
             _ => {}
+        }
+        if self.at_end && self.files.is_none() {
+            let spec = &self.table.spec;
+            let comment = sql_adapter(spec.warehouse)
+                .render_table_comment(&spec.destination, &spec.description);
+            execute(&self.destination, vec![comment]).await?;
         }
         Ok(self.committed_rows)
     }
@@ -664,7 +670,7 @@ impl Publisher {
             }
         };
         widened.files = Some(files_source);
-        widened.listed = spec.listed;
+        widened.approved = spec.approved;
         let replanned_columns = replan_columns(
             &widened,
             (&self.destination, self.table.live.as_deref()),

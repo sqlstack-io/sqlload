@@ -46,7 +46,7 @@ fn project_text(live: &Live, folder: &str, test_case: &ParityCase, tables: (&str
     };
     let source = |name: &str, table: &str, side: &Side| {
         format!(
-            "[sources.{name}]\nkind = \"files\"\nconnection = \"lake\"\npath = \"{folder}\"\ndestination = \"{}\"\ntable_name = \"{table}\"\npartition_columns = {{ {} }}\n{}\n\n",
+            "[sources.{name}]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"{folder}\"\ndestination = \"{}\"\ntable_name = \"{table}\"\npartition_columns = {{ {} }}\n{}\n\n",
             side.target,
             test_case.partition_columns,
             side.settings.replace("SOURCE", name)

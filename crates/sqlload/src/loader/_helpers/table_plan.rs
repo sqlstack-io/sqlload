@@ -57,6 +57,7 @@ use crate::routing::models::Store;
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
+use crate::schema_plan::models::ColumnChange;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
@@ -480,7 +481,7 @@ async fn plan_table_once(
     })
 }
 
-/// The statements that bring the table's schema in line with its plan; `None` when there is nothing to run: unchanged, rebuilt by the load itself, or a files target.
+/// The statements that bring the table's schema in line with its plan, a created or rebuilt table getting its description as its comment; `None` when there is nothing to run: unchanged, rebuilt by the load itself, or a files target.
 pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     let spec = &table.spec;
     let warehouse = spec.warehouse;
@@ -493,10 +494,19 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
             sql_adapter(warehouse).render_create_schema(&spec.destination),
             sql_adapter(warehouse)
                 .render_create_table(&spec.destination, &table.schema.write_columns),
+            sql_adapter(warehouse).render_table_comment(&spec.destination, &spec.description),
         ]),
         TableAction::Alter(changes) => {
             let live = table.live.as_deref().unwrap_or_default();
-            Some(sql_adapter(warehouse).render_change_columns(&spec.destination, changes, live))
+            let adapter = sql_adapter(warehouse);
+            let mut statements = adapter.render_change_columns(&spec.destination, changes, live);
+            if changes
+                .iter()
+                .any(|change| matches!(change, ColumnChange::Rebuild { .. }))
+            {
+                statements.push(adapter.render_table_comment(&spec.destination, &spec.description));
+            }
+            Some(statements)
         }
     }
 }

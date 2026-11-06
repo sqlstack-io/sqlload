@@ -44,7 +44,7 @@ import sqlload as sl
 api = sl.source("api")
 
 
-@api.table(write_strategy="append")
+@api.table(description="Test table.", write_strategy="append")
 def growing(ctx):
     yield pa.table({"id": [1]})
     yield pa.table({"id": [2], "b": [1]})
@@ -77,7 +77,7 @@ def rows(page):
     return [{"page": page, "n": n} for n in range(ROWS)]
 
 
-@api.table(write_strategy="append", state="logged")
+@api.table(description="Test table.", write_strategy="append", state="logged")
 def before(ctx):
     for page in range(ctx.state or 0, PAGES):
         if page == fail_at():
@@ -86,7 +86,7 @@ def before(ctx):
         yield from rows(page)
 
 
-@api.table(write_strategy="append", state="logged")
+@api.table(description="Test table.", write_strategy="append", state="logged")
 def after(ctx):
     for page in range(ctx.state or 0, PAGES):
         if page == fail_at():
@@ -95,7 +95,7 @@ def after(ctx):
         ctx.state = page + 1
 
 
-@api.table(write_strategy="append", state="logged")
+@api.table(description="Test table.", write_strategy="append", state="logged")
 def ended(ctx):
     page = ctx.state or 0
     for page in range(page, PAGES):
@@ -105,7 +105,7 @@ def ended(ctx):
     ctx.state = PAGES
 
 
-@api.table(write_strategy="append", state="logged")
+@api.table(description="Test table.", write_strategy="append", state="logged")
 def mutated_before(ctx):
     for page in range((ctx.state or {}).get("page", 0), PAGES):
         if page == fail_at():
@@ -116,7 +116,7 @@ def mutated_before(ctx):
         yield from rows(page)
 
 
-@api.table(write_strategy="append", state="logged")
+@api.table(description="Test table.", write_strategy="append", state="logged")
 def mutated_after(ctx):
     for page in range((ctx.state or {}).get("page", 0), PAGES):
         if page == fail_at():
@@ -127,14 +127,14 @@ def mutated_after(ctx):
         ctx.state = s
 
 
-@api.table(write_strategy="append", state="logged")
+@api.table(description="Test table.", write_strategy="append", state="logged")
 def changed_in_place(ctx):
     ctx.state = ctx.state or {"token": 0}
     ctx.state["token"] += 1
     yield {"page": 0, "n": ctx.state["token"]}
 
 
-@api.table(write_strategy="delete_insert", cursor_column="day", cursor_start="2026-11-01", batch_size="1d")
+@api.table(description="Test table.", write_strategy="delete_insert", cursor_column="day", cursor_start="2026-11-01", batch_size="1d")
 def windowed(ctx):
     calls = HERE / "data" / "calls.json"
     seen = json.loads(calls.read_text()) if calls.exists() else []
@@ -143,7 +143,7 @@ def windowed(ctx):
     yield {"day": str(ctx.cursor_value), "n": len(seen)}
 
 
-@api.table(write_strategy="append")
+@api.table(description="Test table.", write_strategy="append")
 def appended(ctx):
     for page in range(PAGES):
         if page == fail_at():
@@ -151,7 +151,7 @@ def appended(ctx):
         yield rows(page)
 
 
-@api.table(write_strategy="append")
+@api.table(description="Test table.", write_strategy="append")
 def growing(ctx):
     yield pa.table({"id": [1]})
     yield pa.table({"id": [2], "b": [1]})
@@ -166,18 +166,18 @@ def wait_for(name):
         time.sleep(0.02)
 
 
-@api.table(write_strategy="append")
+@api.table(description="Test table.", write_strategy="append")
 def a_slow(ctx):
     wait_for("c_small")
     yield {"id": 1}
 
 
-@api.table(write_strategy="append")
+@api.table(description="Test table.", write_strategy="append")
 def b_small(ctx):
     yield {"id": 2}
 
 
-@api.table(write_strategy="append")
+@api.table(description="Test table.", write_strategy="append")
 def c_small(ctx):
     (HERE / "data" / "c_small").touch()
     yield {"id": 3}
@@ -187,7 +187,7 @@ fresh = sl.source("fresh", schema="NEW_SCHEMA", write_strategy="append")
 for number in range(8):
     def _one(ctx, number=number):
         yield {"id": number}
-    fresh.table(name=f"t{number}")(_one)
+    fresh.table(description="Test table.", name=f"t{number}")(_one)
 
 
 shared = sl.source("shared", write_strategy="append")
@@ -207,9 +207,9 @@ def alone(ctx):
     yield {"id": 1}
 
 
-shared.table(name="one")(alone)
-shared.table(name="two")(alone)
-shared.table(name="three")(alone)
+shared.table(description="Test table.", name="one")(alone)
+shared.table(description="Test table.", name="two")(alone)
+shared.table(description="Test table.", name="three")(alone)
 
 together = sl.source("together", write_strategy="append", parallel_tables=True)
 
@@ -228,11 +228,11 @@ def beside(other):
     return function
 
 
-together.table(name="left")(beside("right"))
-together.table(name="right")(beside("left"))
+together.table(description="Test table.", name="left")(beside("right"))
+together.table(description="Test table.", name="right")(beside("left"))
 
 
-@api.table(write_strategy="merge", unique_key=["page", "n"])
+@api.table(description="Test table.", write_strategy="merge", unique_key=["page", "n"])
 def big(ctx):
     for page in range(200):
         yield [{"page": page, "n": n, "pad": "x" * 200} for n in range(1000)]
@@ -389,7 +389,7 @@ def test_given_a_source_sharing_a_client_when_loading_then_its_tables_run_one_at
 	("settings", "expected_error", "expected_message"),
 	[
 		("sl.source('s', parallel_tables='yes')", TypeError, "parallel_tables must be True or False"),
-		("sl.table(parallel_tables=True)", TypeError, "parallel_tables"),
+		("sl.table(description='Test table.', parallel_tables=True)", TypeError, "parallel_tables"),
 	],
 	ids=["not a bool", "on a table"],
 )
@@ -420,7 +420,7 @@ def test_given_batch_whole_when_planning_a_python_table_then_the_plan_says_so(pr
 	(project / "sources" / "whole.py").write_text(
 		"import sqlload as sl\n"
 		"whole = sl.source('whole')\n"
-		"@whole.table(write_strategy='delete_insert', cursor_column='day', cursor_start='2026-11-01', batch_size='none')\n"
+		"@whole.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', cursor_start='2026-11-01', batch_size='none')\n"
 		"def days(ctx):\n"
 		"    yield {'day': '2026-11-01'}\n"
 	)
@@ -445,7 +445,7 @@ def test_given_delete_insert_when_a_read_yields_no_rows_then_rows_deleted_upstre
 		"import sqlload as sl\n"
 		"HERE = Path(__file__).resolve().parent.parent\n"
 		"days = sl.source('days')\n"
-		"@days.table(write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'}, cursor_start='2026-11-01')\n"
+		"@days.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'}, cursor_start='2026-11-01')\n"
 		"def rows(ctx):\n"
 		"    yield from json.loads((HERE / 'data' / 'rows.json').read_text())\n"
 	)
@@ -468,7 +468,7 @@ def test_given_a_first_load_with_no_rows_when_its_schema_is_new_then_no_schema_i
 	(project / "sources" / "empty.py").write_text(
 		"import sqlload as sl\n"
 		"empty = sl.source('empty', schema='NEVER_MADE')\n"
-		"@empty.table(write_strategy='append')\n"
+		"@empty.table(description='Test table.', write_strategy='append')\n"
 		"def nothing(ctx):\n"
 		"    return\n"
 		"    yield\n"
@@ -482,7 +482,7 @@ def test_given_shaping_when_declaring_a_python_table_then_it_is_refused_as_an_un
 	(project / "sources" / "shaped.py").write_text(
 		"import sqlload as sl\n"
 		"shaped = sl.source('shaped')\n"
-		"@shaped.table(write_strategy='append', shaping='loader')\n"
+		"@shaped.table(description='Test table.', write_strategy='append', shaping='loader')\n"
 		"def rows(ctx):\n"
 		"    yield {'id': 1}\n"
 	)

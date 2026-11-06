@@ -11,11 +11,11 @@ from sqlload._declare import Connection
 def test_given_a_source_when_tables_attach_then_settings_fall_back_to_the_source() -> None:
 	shop = sl.source("shop", connection="shop", destination="prod", write_strategy="merge")
 
-	@shop.table(unique_key="order_id")
+	@shop.table(description="Test table.", unique_key="order_id")
 	def shop_orders(ctx: sl.Context):
 		yield {"order_id": 1}
 
-	@shop.table(name="stores", write_strategy="replace")
+	@shop.table(description="Test table.", name="stores", write_strategy="replace")
 	def shop_stores(ctx: sl.Context):
 		yield []
 
@@ -39,7 +39,7 @@ def test_given_unknown_settings_when_declaring_then_it_fails_closed() -> None:
 	with pytest.raises(TypeError, match="unknown source setting.*colour"):
 		sl.source("shop", colour="blue")
 	with pytest.raises(TypeError, match="unknown table setting.*uniq_key"):
-		sl.table(uniq_key="id")
+		sl.table(description="Test table.", uniq_key="id")
 
 
 def test_given_a_client_when_declared_twice_then_it_fails() -> None:

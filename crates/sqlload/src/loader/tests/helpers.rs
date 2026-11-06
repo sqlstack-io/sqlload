@@ -122,8 +122,11 @@ pub(crate) fn spelling(test_case: &SourceSpellingTestCase) -> Result<String, Str
     Ok(source_spelling(test_case.stored, &spec))
 }
 
-/// The spec of Python table `t` with `settings` (the host's JSON), loading into DuckDB.
+/// The spec of Python table `t` with `settings` (the host's JSON) and a description, loading into DuckDB.
 pub(crate) fn python_spec(settings: &str) -> Result<TableSpec, String> {
+    let mut settings: serde_json::Value =
+        serde_json::from_str(settings).map_err(|error| error.to_string())?;
+    settings["description"] = serde_json::Value::from("Table t.");
     let sources = format!(
         r#"[{{"name": "s", "module": "s.py", "settings": {{"mask_key": "k", "tables": {{"t": {settings}}}}}}}]"#
     );
