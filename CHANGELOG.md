@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0](https://github.com/sqlstack-io/sqlload/compare/v0.9.0...v0.10.0) (2026-11-06)
+
+
+### Features
+
+* **cli:** sqlload contract diff compares declared columns with live tables ([#47](https://github.com/sqlstack-io/sqlload/issues/47)) ([6a097b7](https://github.com/sqlstack-io/sqlload/commit/6a097b7aca943f45072b0286542ed262004aff12))
+* **cli:** sqlload copy runs one table between named connections or URIs ([#46](https://github.com/sqlstack-io/sqlload/issues/46)) ([b64c378](https://github.com/sqlstack-io/sqlload/commit/b64c37855a382b10a992ec9406257f4889e069a8))
+
 ## [0.9.0](https://github.com/sqlstack-io/sqlload/compare/v0.8.0...v0.9.0) (2026-11-06)
 
 
