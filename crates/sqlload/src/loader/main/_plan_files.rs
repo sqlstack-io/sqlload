@@ -2,18 +2,22 @@
 
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::files::main::newest_load_files::newest_load_files;
+use crate::adapters::files::main::read_table_state::read_table_state;
 use crate::adapters::files::main::write_notes::write_notes;
 use crate::adapters::files::models::{FilesDestination, TableFiles};
 use crate::column_types::models::ColumnType;
+use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
 use crate::loader::_helpers::table_plan::{CommitRequest, commit_rule};
-use crate::loader::_helpers::table_plan::{blocked_plan, blocked_table, read_window};
+use crate::loader::_helpers::table_plan::{
+    blocked_plan, blocked_table, check_output, desired_columns, read_columns, read_window,
+};
 use crate::loader::errors::LoaderError;
-use crate::loader::main::_files_context::files_context;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_files_window::files_window;
+use crate::loader::main::_table_folder::table_folder;
 use crate::loader::models::{
     CommitRule, FilesContext, FilesOutput, FilesWindowRequest, LiveFiles, PlanOptions, TablePlan,
     TableSpec, WholeReason,
@@ -153,4 +157,44 @@ async fn live_schema(
             .collect()
     });
     Ok(Ok(LiveFiles { footers, live }))
+}
+
+/// The table's context, or its blocked plan (marked existing when its folder holds data files).
+async fn files_context(
+    spec: &TableSpec,
+    destination: &FilesDestination,
+) -> Result<Result<FilesContext, TablePlan>, LoaderError> {
+    if spec.files.is_some() {
+        return Ok(Err(blocked_table(
+            spec,
+            vec!["a files source cannot load into a files target yet".to_owned()],
+        )));
+    }
+    let read_columns = match read_columns(spec) {
+        Ok(read) => read,
+        Err(problems) => return Ok(Err(blocked_table(spec, problems))),
+    };
+    let desired = desired_columns(spec, &read_columns);
+    let path = match table_folder(spec, destination) {
+        Ok(path) => path,
+        Err(problem) => return Ok(Err(blocked_table(spec, vec![problem]))),
+    };
+    let (cursor_type, mut problems) = check_output(spec, &path, &desired);
+    let folder = open_folder(&path.folder)?;
+    let state = read_table_state(&folder, &path, cursor_type.as_ref()).await?;
+    problems.extend(state.listed.problems.clone());
+    if !problems.is_empty() {
+        return Ok(Err(TablePlan {
+            exists: state.exists,
+            ..blocked_table(spec, problems)
+        }));
+    }
+    Ok(Ok(FilesContext {
+        read_columns,
+        desired,
+        path,
+        cursor_type,
+        folder,
+        state,
+    }))
 }
