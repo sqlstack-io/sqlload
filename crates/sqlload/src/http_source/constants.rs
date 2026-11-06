@@ -39,5 +39,8 @@ pub const SECRET_HEADER_WORDS: &[&str] = &[
     "cookie",
     "session",
     "signature",
-    "password",
+    "pass",
+    "credential",
+    "jwt",
+    "bearer",
 ];
