@@ -26,6 +26,7 @@ pub(crate) fn findings(
             kind: RELATION_MISSING,
             message: format!("physical relation {relation} does not exist"),
             physical_type: None,
+            source_type: None,
         }];
     };
     let declared_type = |name: &str| {
@@ -48,6 +49,7 @@ pub(crate) fn findings(
                 kind: MISSING_PHYSICAL_COLUMN,
                 message: format!("declared column '{name}' is absent from the physical relation"),
                 physical_type: None,
+                source_type: None,
             }),
     );
     found
@@ -92,6 +94,7 @@ fn live_finding(
                 "column '{name}' is declared {declared} but physical type is {physical}"
             ),
             physical_type: Some(physical),
+            source_type: None,
         }),
         (None, Contract::Enforced) => Some(ContractFinding {
             column: Some(column.name.clone()),
@@ -102,6 +105,7 @@ fn live_finding(
                 column.name
             ),
             physical_type: Some(physical),
+            source_type: None,
         }),
         (None, Contract::None) => None,
     }

@@ -27,3 +27,12 @@ pub const FILES_EXTRA_COLUMN: &str = "files_extra_column";
 
 /// File keys a files finding names before it only counts the rest.
 pub const NAMED_FILES: usize = 3;
+
+/// With `--source`: a column the source would load that the live table lacks.
+pub const SOURCE_NEW_COLUMN: &str = "source_new_column";
+
+/// With `--source`: a live column the source would no longer load.
+pub const SOURCE_MISSING_COLUMN: &str = "source_missing_column";
+
+/// With `--source`: a column the source would load as another type than the live table holds.
+pub const SOURCE_TYPE_MISMATCH: &str = "source_type_mismatch";

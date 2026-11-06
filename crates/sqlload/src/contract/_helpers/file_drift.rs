@@ -38,6 +38,7 @@ pub(crate) fn file_drift(live: &[LiveColumn], files: &[FileSchema]) -> Vec<Contr
                 named(&keys)
             ),
             physical_type: Some(held),
+            source_type: None,
         }));
         found.extend((!missing.is_empty()).then(|| ContractFinding {
             column: Some(column.name.clone()),
@@ -49,6 +50,7 @@ pub(crate) fn file_drift(live: &[LiveColumn], files: &[FileSchema]) -> Vec<Contr
                 named(&missing)
             ),
             physical_type: None,
+            source_type: None,
         }));
     }
     found.extend(extra_columns(live, files));
@@ -79,6 +81,7 @@ fn extra_columns(live: &[LiveColumn], files: &[FileSchema]) -> Vec<ContractFindi
                 named(&keys)
             ),
             physical_type: Some(held),
+            source_type: None,
         })
         .collect()
 }
