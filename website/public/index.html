@@ -72,25 +72,27 @@ Plan ready  1 selected, 2 objects to create, 1 to load
 Objects (2)                                         sqlload apply
 ├── @"SQLLOAD_TEST"."SQLLOAD_RAW"."_SQLLOAD_STAGE"  create stage on s3://your-bucket/sqlload/
 └── SQLLOAD_RAW.ORDERS                              create table
-    ├── id         int             -&gt; NUMBER(38,0)
-    ├── status     text            -&gt; VARCHAR
-    ├── amount     decimal(12,2)   -&gt; NUMBER(12,2)
-    ├── created_at timestamp_ntz   -&gt; TIMESTAMP_NTZ(9)
+    ├── id            int             -&gt; NUMBER(38,0)
+    ├── customer_name text            -&gt; VARCHAR
+    ├── created_at    timestamp_tz    -&gt; TIMESTAMP_TZ(9)
+    ├── amount        decimal(12,2)   -&gt; NUMBER(12,2)
+    ├── is_active     bool            -&gt; BOOLEAN
+    ├── quantity      int             -&gt; NUMBER(38,0)
     └── + _sqlload_source_file, _source_version, _source_row, _load_id, _loaded_at
 
 Loads (1)                                           sqlload load
 └── orders                                          replace
     ├── source  files  s3://your-bucket/sqlload/orders/  parquet
-    ├── files   1 to read of 1 listed
+    ├── files   10 to read of 10 listed
     ├── route   <span class="ok">Snowflake COPYs directly from s3://your-bucket/sqlload/orders/ (nothing through the loader)</span>
     └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; <span class="dim">…</span>
 
 <span class="ok">✓ Plan complete  1 selected, 2 objects to create, 1 to load</span>
 created  @"SQLLOAD_TEST"."SQLLOAD_RAW"."_SQLLOAD_STAGE"  stage on s3://your-bucket/sqlload/
-created  SQLLOAD_RAW.ORDERS                              9 columns
-loaded   SQLLOAD_RAW.ORDERS                              1,000 rows  3.9s
+created  SQLLOAD_RAW.ORDERS                              11 columns
+loaded   SQLLOAD_RAW.ORDERS                              1,000,000 rows  5.8s
 
-<span class="ok">✓ Completed  1 loaded, 1,000 rows, 9.3s</span></pre>
+<span class="ok">✓ Completed  1 loaded, 1,000,000 rows, 12.1s</span></pre>
 			</div>
 
 			<section class="speed" aria-labelledby="speed-title">
