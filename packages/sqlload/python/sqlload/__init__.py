@@ -19,7 +19,8 @@ The table loads into `shop__orders` (`{source}__{table}`, or the `table_name` th
 sets).
 
 A table function yields dicts, lists of dicts, `sl.json(...)` / `sl.ndjson(...)` bytes, or Arrow
-data (pyarrow, polars, pandas); SQLLoad detects which.
+data (pyarrow, polars, pandas); SQLLoad detects which. A `state="logged"` table can yield
+`sl.checkpoint(position)` between them.
 """
 
 import os
@@ -27,7 +28,7 @@ import shutil
 import sysconfig
 from importlib.metadata import version
 
-from sqlload._data import json, ndjson
+from sqlload._data import checkpoint, json, ndjson
 from sqlload._declare import Context, Source, Table, source, table
 
 __version__: str = version("sqlload")
@@ -37,6 +38,7 @@ __all__ = [
 	"Source",
 	"Table",
 	"__version__",
+	"checkpoint",
 	"executable",
 	"json",
 	"ndjson",

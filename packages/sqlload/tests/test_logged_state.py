@@ -378,8 +378,13 @@ def test_given_a_files_target_when_resetting_then_the_reset_is_an_object_and_the
 			"ctx.state needs state='logged' on table t",
 		),
 		("import sqlload as sl\n@sl.table(description='Test table.', state='logged')\ndef t(ctx):\n    ctx.state = object()\n    yield {'n': 1}\n", "ctx.state of table t is not JSON"),
+		(
+			"import sqlload as sl\n@sl.table(description='Test table.')\ndef t(ctx):\n    yield {'n': 1}\n    yield sl.checkpoint(1)\n",
+			"sl.checkpoint needs state='logged' on the table",
+		),
+		("import sqlload as sl\n@sl.table(description='Test table.', state='logged')\ndef t(ctx):\n    yield sl.checkpoint(object())\n", "sl.checkpoint state is not JSON"),
 	],
-	ids=["bad value", "state without logged", "state not json"],
+	ids=["bad value", "state without logged", "state not json", "checkpoint without logged", "checkpoint not json"],
 )
 def test_given_bad_logged_state_use_when_loading_then_it_fails_clearly(tmp_path: Path, module: str, message: str) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT)

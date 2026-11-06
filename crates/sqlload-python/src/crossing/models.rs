@@ -85,6 +85,8 @@ pub(crate) enum Crossed {
     },
     ArrowStream(RecordBatchStreamReader),
     ArrowBatch(RecordBatch),
+    /// An `sl.checkpoint(...)`: no rows; its state is committed after every piece yielded before it.
+    Checkpoint,
     Failed(CrossError),
 }
 
@@ -95,7 +97,7 @@ impl Crossed {
             Self::Columns(columns) => columns.approximate_bytes(),
             Self::Json { bytes, .. } => bytes.len(),
             Self::ArrowBatch(batch) => batch.get_array_memory_size(),
-            Self::ArrowStream(_) | Self::Failed(_) => 0,
+            Self::ArrowStream(_) | Self::Checkpoint | Self::Failed(_) => 0,
         }
     }
 }

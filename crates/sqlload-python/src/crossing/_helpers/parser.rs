@@ -218,6 +218,7 @@ impl Output {
                 let batch = self.arrow(&batch)?;
                 open = self.send(batch, started);
             }
+            Crossed::Checkpoint => {}
             Crossed::Failed(error) => return Err(error),
         }
         Ok(open)
