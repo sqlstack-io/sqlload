@@ -115,6 +115,9 @@ pub struct ContractArgs {
     /// On files targets, also read every file's footer and report the files whose columns differ from the newest load's.
     #[arg(long)]
     pub all_files: bool,
+    /// Also report where what each table's source would load differs from the live table, for columns no declaration names.
+    #[arg(long)]
+    pub source: bool,
 }
 
 /// `sqlload copy`'s endpoints and write settings.

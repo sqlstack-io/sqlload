@@ -719,6 +719,15 @@ def test_given_a_loaded_python_table_when_generating_its_contract_then_it_prints
 	assert ((project / "sources" / "shop.py").read_text(), (project / "sqlload.toml").read_text()) == (module, toml)
 
 
+def test_given_a_python_table_when_diffing_with_source_then_it_is_inspection_unavailable_since_its_columns_are_known_only_when_it_runs(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', columns={'code': 'text'})(rows)\n")
+	give(project, "rows", [{"id": 1, "code": "x1"}])
+	load(project)
+	done = sqlload(project, "contract", "diff", "--source", "--json")
+	findings = json.loads(done.stdout)["resources"][0]["findings"]
+	assert (done.returncode, [finding["kind"] for finding in findings], "known only when it runs" in findings[0]["message"]) == (1, ["inspection_unavailable"], True), done.stdout + done.stderr
+
+
 def test_given_a_files_target_with_an_older_file_of_other_columns_when_diffing_all_files_then_the_drift_is_reported(tmp_path: Path) -> None:
 	import pyarrow as pa
 	import pyarrow.parquet as pq

@@ -148,6 +148,16 @@ column whose files differ from that load: another type (`files_type_mismatch`), 
 A file it cannot read, or a store error, makes that table `inspection_unavailable`. It changes
 nothing; on warehouse tables it adds nothing.
 
+`--source` also compares what each table's source would load, from the catalog or file footers
+listed as `plan` lists them, with the live table, for the columns no declaration names: a column the
+source has that the table lacks (`source_new_column`), one it would load as another type
+(`source_type_mismatch`), and a live column the source no longer has (`source_missing_column`).
+A type counts only when the live column does not hold it as it is. These findings carry a
+`source_type` field in `--json`. Tables under `contract = "enforced"` add none, since their
+declaration decides what loads. A Python table's columns are inferred only when it runs, so it is
+`inspection_unavailable` under `--source` and makes the command exit 1: declare its columns, leave
+it out with `--exclude`, or compare after a load.
+
 `sqlload contract generate [SELECTOR ...]` takes the same selection and options and proposes the
 declarations that adopt each live table: every live column nothing declares, with its live type.
 `--write` writes them into the table's `columns` in `sqlload.toml`, creating
