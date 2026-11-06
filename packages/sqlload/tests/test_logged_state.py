@@ -260,7 +260,7 @@ def test_given_reload_when_loading_a_logged_table_then_it_reads_from_the_start_a
 	project = make_project(tmp_path, DUCKDB_PROJECT)
 	give(project, "pages", [[{"n": 1}], [{"n": 2}]])
 	ok(project, "load", "api__pages")
-	ok(project, "load", "--reload", "api__pages")
+	ok(project, "load", "--reload", "--yes", "api__pages")
 	assert seen(project, "pages") == {"state": None, "is_reload": True}
 	assert query(project, 'SELECT n FROM "RAW"."api__pages" ORDER BY n') == [(1,), (2,)]
 	assert runs(project, "api__pages")[-1] == ("run", "2", None, "2")

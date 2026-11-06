@@ -86,7 +86,8 @@ How a table commits, as `plan` shows on its `batch` line:
 - Any other cursor table commits once per read, as do text cursors and `append` without a cursor
   or logged state, since a rerun could otherwise skip or duplicate rows.
 - Files sources commit at 1,000 files or about 1 GB; under `delete_insert` a partition is never split.
-- `replace` and `--reload` swap the whole table in once, at the end.
+- `replace` and `--reload` swap the whole table in once, at the end. `load --reload` shows the
+  plan and asks first; off a terminal it needs `--yes`.
 
 Windows on a Postgres table are read in one `REPEATABLE READ` snapshot, so a row moving between
 windows is read once. That snapshot stays open on the source for the whole table load: it counts

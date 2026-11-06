@@ -116,9 +116,12 @@ pub struct LoaderArgs {
     /// Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would otherwise block.
     #[arg(long)]
     pub allow_type_change_rebuild: bool,
-    /// Rebuild the selected tables from the whole source, with the current columns and types.
+    /// Rebuild the selected tables from the whole source, with the current columns and types; asks first unless --yes.
     #[arg(long)]
     pub reload: bool,
+    /// Rebuild with --reload without asking.
+    #[arg(long)]
+    pub yes: bool,
     /// Backfill from this cursor value instead of the destination's maximum, typed from each selected table's cursor (an integer, or RFC 3339 or a date).
     #[arg(long, value_name = "VALUE")]
     pub start_cursor: Option<String>,
@@ -152,4 +155,6 @@ pub struct LoaderRequest<'a> {
     pub command: Command,
     /// Runs Python sources; `None` in the standalone executable.
     pub host: Option<std::sync::Arc<dyn crate::python_sources::types::PythonHost>>,
+    /// `--no-color`, for the plan a `--reload` prompt shows.
+    pub no_color: bool,
 }
