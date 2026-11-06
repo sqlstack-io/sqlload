@@ -26,7 +26,12 @@ pub fn render_contract(report: &ContractReport, json: bool) -> (Vec<String>, boo
                 .map(|finding| format!("        {}: {}", finding.kind, finding.message)),
         );
     }
-    lines.extend(report.problems.iter().map(|problem| format!("  ERROR {problem}")));
+    lines.extend(
+        report
+            .problems
+            .iter()
+            .map(|problem| format!("  ERROR {problem}")),
+    );
     lines.push(String::new());
     lines.push(format!("{} contract difference(s)", report.differences));
     (lines, agrees)

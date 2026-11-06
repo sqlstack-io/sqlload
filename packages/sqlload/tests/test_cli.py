@@ -105,3 +105,27 @@ def test_given_a_literal_password_in_a_uri_when_the_copy_fails_then_no_output_sh
 	assert "app:***@127.0.0.1" in done.stderr, done.stderr
 	assert "hunter2" not in done.stdout + done.stderr
 
+
+def test_given_a_loaded_files_table_when_its_declaration_differs_then_contract_diff_reports_it_and_exits_1(tmp_path: Path) -> None:
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	(tmp_path / "data").mkdir()
+	pq.write_table(pa.table({"id": pa.array([1], pa.int64()), "status": ["open"], "amount": [1.5]}), tmp_path / "data" / "p.parquet")
+	config = tmp_path / "sqlload.toml"
+	config.write_text(
+		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
+	)
+	assert "relation_missing" in run("contract", "diff", "-c", str(config)).stdout
+	assert run("load", "-c", str(config)).returncode == 0
+	agreed = run("contract", "diff", "-c", str(config))
+	assert (agreed.returncode, agreed.stdout.splitlines()[1:]) == (0, ["  OK    table:orders", "", "0 contract difference(s)"]), agreed.stdout + agreed.stderr
+	config.write_text(config.read_text() + 'contract = "enforced"\n\n[sources.orders.tables.orders]\ncolumns = { id = "int", status = "int" }\n')
+	differs = run("contract", "diff", "--json", "-c", str(config))
+	assert differs.returncode == 1, differs.stdout + differs.stderr
+	assert [(finding["kind"], finding["column"]) for finding in json.loads(differs.stdout)["resources"][0]["findings"]] == [
+		("type_mismatch", "status"),
+		("missing_declaration", "amount"),
+	]
+

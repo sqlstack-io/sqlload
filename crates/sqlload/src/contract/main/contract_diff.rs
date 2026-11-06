@@ -7,9 +7,8 @@ use crate::adapters::dispatch::models::Destination;
 use crate::contract::_helpers::compare::findings;
 use crate::contract::constants::INSPECTION_UNAVAILABLE;
 use crate::contract::models::{ContractFinding, ContractReport, ContractResource};
-use crate::loader::_helpers::resolve::resolve_tables;
-use crate::loader::_helpers::sources::{selected, source_tables, unmatched_selectors};
 use crate::loader::errors::LoaderError;
+use crate::loader::main::selected_specs::selected_specs;
 use crate::loader::models::{PlanOptions, TableSpec};
 use crate::project::models::ProjectConfig;
 
@@ -31,32 +30,20 @@ pub async fn contract_diff(
         from_target: from.map(str::to_owned),
         ..ContractReport::default()
     };
-    let mut names: Vec<(String, String)> = Vec::new();
-    for (source_name, source) in &project.sources {
-        let discovered = match source_tables(project, source_name, source).await? {
-            Ok((discovered, _)) => discovered,
-            Err(problem) => {
-                report.problems.push(format!("[sources.{source_name}]: {problem}"));
-                continue;
-            }
-        };
-        let resolved = resolve_tables(project, source_name, &discovered);
-        report.problems.extend(resolved.problems);
-        for spec in resolved.specs {
-            let qualified = spec.source_table.qualified_name();
-            names.push((spec.destination.table.clone(), qualified.clone()));
-            if !selected(options, (source_name, &spec.destination.table, &qualified)) {
-                continue;
-            }
-            let target = from.unwrap_or(&spec.target);
-            let destination = destinations.get(target).ok_or_else(|| {
-                LoaderError::Invalid(format!("target {target:?} is not connected"))
-            })?;
-            report.resources.push(resource(&spec, destination).await);
-        }
+    let chosen = selected_specs(project, options).await?;
+    report.problems = chosen.problems;
+    for spec in &chosen.specs {
+        let target = from.unwrap_or(&spec.target);
+        let destination = destinations
+            .get(target)
+            .ok_or_else(|| LoaderError::Invalid(format!("target {target:?} is not connected")))?;
+        report.resources.push(resource(spec, destination).await);
     }
-    report.problems.extend(unmatched_selectors(project, options, &names));
-    report.differences = report.resources.iter().map(|resource| resource.findings.len()).sum();
+    report.differences = report
+        .resources
+        .iter()
+        .map(|resource| resource.findings.len())
+        .sum();
     Ok(report)
 }
 

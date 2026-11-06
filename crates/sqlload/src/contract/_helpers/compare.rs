@@ -27,10 +27,7 @@ pub(crate) fn findings(
             physical_type: None,
         }];
     };
-    let own = |name: &str| {
-        name.to_ascii_lowercase()
-            .starts_with(SQLLOAD_COLUMN_PREFIX)
-    };
+    let own = |name: &str| name.to_ascii_lowercase().starts_with(SQLLOAD_COLUMN_PREFIX);
     let declared_type = |name: &str| {
         declared
             .iter()
@@ -44,7 +41,7 @@ pub(crate) fn findings(
     found.extend(
         declared
             .iter()
-            .filter(|(name, _)| !live.iter().any(|column| column.name.eq_ignore_ascii_case(name)))
+            .filter(|(name, _)| !is_live(live, name))
             .map(|(name, column_type)| ContractFinding {
                 column: Some(name.clone()),
                 declared_type: Some(column_type.to_string()),
@@ -54,6 +51,12 @@ pub(crate) fn findings(
             }),
     );
     found
+}
+
+/// Whether `live` has a column named `name`, ignoring case.
+fn is_live(live: &[LiveColumn], name: &str) -> bool {
+    live.iter()
+        .any(|column| column.name.eq_ignore_ascii_case(name))
 }
 
 /// The finding for one live column, if it has one.
@@ -69,14 +72,19 @@ fn live_finding(
             column: Some(name.clone()),
             declared_type: Some(declared.to_string()),
             kind: TYPE_MISMATCH,
-            message: format!("column '{name}' is declared {declared} but physical type is {physical}"),
+            message: format!(
+                "column '{name}' is declared {declared} but physical type is {physical}"
+            ),
             physical_type: Some(physical),
         }),
         (None, Contract::Enforced) => Some(ContractFinding {
             column: Some(column.name.clone()),
             declared_type: None,
             kind: MISSING_DECLARATION,
-            message: format!("physical column '{}' ({physical}) is not declared", column.name),
+            message: format!(
+                "physical column '{}' ({physical}) is not declared",
+                column.name
+            ),
             physical_type: Some(physical),
         }),
         (None, Contract::None) => None,
