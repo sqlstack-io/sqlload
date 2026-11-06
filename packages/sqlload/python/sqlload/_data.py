@@ -46,5 +46,6 @@ def checkpoint(state: Any) -> Checkpoint:
 	"""The position (any JSON value) that covers exactly the rows yielded before it, for a `state="logged"`
 	table: `yield sl.checkpoint(page.next_token)` after a page's rows. A commit records the latest checkpoint
 	whose rows are all in it, so a run that fails part-way resumes there without loading any row twice; the
-	next run reads it as `ctx.state`."""
+	next run reads it as `ctx.state`. Rows yielded after the last checkpoint are read again by the next run
+	unless the function leaves the final position in `ctx.state`; `sl.checkpoint(None)` clears the position."""
 	return Checkpoint(state)
