@@ -156,6 +156,22 @@ pub struct ResolvedTables {
     pub problems: Vec<String>,
 }
 
+/// The selected tables of one project for `contract`, before any destination is read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SelectedTables {
+    pub tables: Vec<SelectedTable>,
+    /// Problems with sources, tables' settings or selectors.
+    pub problems: Vec<String>,
+}
+
+/// One selected table and what its source would load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedTable {
+    pub spec: TableSpec,
+    /// The columns `plan` would ask the table to have, from its source's catalog or file footers as listed, pinned ones included; or why they cannot be read.
+    pub source_columns: Result<Vec<DesiredColumn>, Vec<String>>,
+}
+
 /// One table's plan against the live destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TablePlan {

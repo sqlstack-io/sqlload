@@ -167,7 +167,7 @@ def test_given_new_files_of_other_columns_when_diffing_with_source_then_each_und
 	agreed = run("contract", "diff", "--source", "-c", str(config))
 	assert (agreed.returncode, agreed.stdout.splitlines()[1]) == (0, "  OK    table:orders"), agreed.stdout + agreed.stderr
 	(tmp_path / "data" / "p.parquet").unlink()
-	pq.write_table(pa.table({"id": pa.array([2], pa.int64()), "code": ["b"], "qty": ["two"], "fresh": ["a"]}), tmp_path / "data" / "q.parquet")
+	pq.write_table(pa.table({"id": pa.array([2], pa.int64()), "code": pa.array([7], pa.int64()), "qty": ["two"], "fresh": ["a"]}), tmp_path / "data" / "q.parquet")
 	assert run("contract", "diff", "-c", str(config)).returncode == 0
 	done = run("contract", "diff", "--source", "--json", "-c", str(config))
 	findings = json.loads(done.stdout)["resources"][0]["findings"]
@@ -176,6 +176,9 @@ def test_given_new_files_of_other_columns_when_diffing_with_source_then_each_und
 		("source_new_column", "fresh", "text", None),
 		("source_missing_column", "gone", None, "bool"),
 	]), done.stdout + done.stderr
+	config.write_text(config.read_text().replace('description = "Orders."\n', 'description = "Orders."\ncontract = "enforced"\n'))
+	enforced = run("contract", "diff", "--source", "--json", "-c", str(config))
+	assert [finding["kind"] for finding in json.loads(enforced.stdout)["resources"][0]["findings"] if finding["kind"].startswith("source_")] == [], enforced.stdout + enforced.stderr
 
 
 def test_given_a_loaded_table_when_generating_its_contract_then_write_declares_the_live_columns_and_overwrite_retypes(tmp_path: Path) -> None:

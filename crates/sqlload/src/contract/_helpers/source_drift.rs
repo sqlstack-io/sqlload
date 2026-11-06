@@ -1,56 +1,43 @@
 //! What a table's source would load against its live table, for columns no declaration names.
 
-use crate::contract::_helpers::compare::{agrees, is_own};
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::column_types::models::TypeFit;
+use crate::contract::_helpers::compare::is_own;
 use crate::contract::constants::{
     INSPECTION_UNAVAILABLE, SOURCE_MISSING_COLUMN, SOURCE_NEW_COLUMN, SOURCE_TYPE_MISMATCH,
 };
 use crate::contract::models::ContractFinding;
-use crate::loader::models::{TablePlan, TableSpec};
-use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
+use crate::loader::models::TableSpec;
+use crate::project::models::Contract;
+use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 
-/// The findings for `spec` from its plan among `planned`: source columns the live table lacks or holds as another type, then undeclared live columns the source no longer has; nothing before the table exists, and one `inspection_unavailable` for a Python table, whose columns are inferred only when it runs, or when planning stopped before the source's columns were known. Declared and SQLLoad's own columns are left to the declaration comparison.
+/// The findings for `spec`, whose source would load `source_columns`, against `live` (`None` before the table exists, which gives none): source columns the live table lacks or holds as a type they do not fit, then undeclared live columns the source no longer has. Declared, SQLLoad's own and enforced tables' columns are left to the declaration comparison; a Python table, whose columns are inferred only when it runs, and a source whose columns cannot be read are one `inspection_unavailable`.
 pub(crate) fn source_drift(
-    spec: &TableSpec,
-    planned: &[TablePlan],
+    (spec, source_columns): (&TableSpec, &Result<Vec<DesiredColumn>, Vec<String>>),
+    live: Option<&[LiveColumn]>,
     relation: &str,
 ) -> Vec<ContractFinding> {
-    let Some(plan) = planned.iter().find(|plan| {
-        plan.spec.source_name == spec.source_name && plan.spec.destination == spec.destination
-    }) else {
+    let Some(live) = live.filter(|_| spec.contract == Contract::None) else {
         return Vec::new();
     };
-    if spec.python.is_some() {
-        return vec![ContractFinding {
+    let unavailable = |reason: String| {
+        vec![ContractFinding {
             column: None,
             declared_type: None,
             kind: INSPECTION_UNAVAILABLE,
-            message: format!(
-                "cannot read what the source of {relation} would load: a Python table's columns are known only when it runs, so declare them or compare after a load"
-            ),
+            message: format!("cannot read what the source of {relation} would load: {reason}"),
             physical_type: None,
             source_type: None,
-        }];
+        }]
+    };
+    if spec.python.is_some() {
+        return unavailable(
+            "a Python table's columns are known only when it runs, so declare them or compare after a load".to_owned(),
+        );
     }
-    if plan.schema.desired.is_empty() {
-        return plan
-            .schema
-            .blocked
-            .iter()
-            .map(|blocked| ContractFinding {
-                column: None,
-                declared_type: None,
-                kind: INSPECTION_UNAVAILABLE,
-                message: format!(
-                    "cannot read what the source of {relation} would load: {}",
-                    blocked.reasons.join("; ")
-                ),
-                physical_type: None,
-                source_type: None,
-            })
-            .collect();
-    }
-    let Some(live) = plan.live.as_deref() else {
-        return Vec::new();
+    let desired = match source_columns {
+        Ok(desired) => desired,
+        Err(problems) => return unavailable(problems.join("; ")),
     };
     let undeclared = |name: &str| {
         !is_own(name)
@@ -59,48 +46,15 @@ pub(crate) fn source_drift(
                 .keys()
                 .any(|declared| declared.eq_ignore_ascii_case(name))
     };
-    let loaded: Vec<&DesiredColumn> = plan
-        .schema
-        .desired
+    let loaded: Vec<&DesiredColumn> = desired
         .iter()
         .filter(|column| matches!(column.origin, ColumnOrigin::Source | ColumnOrigin::Inferred))
         .filter(|column| undeclared(&column.name))
         .collect();
-    let mut found: Vec<ContractFinding> = Vec::new();
-    for column in &loaded {
-        let source = column.column_type.to_string();
-        match live
-            .iter()
-            .find(|held| held.name.eq_ignore_ascii_case(&column.name))
-        {
-            None => found.push(ContractFinding {
-                column: Some(column.name.clone()),
-                declared_type: None,
-                kind: SOURCE_NEW_COLUMN,
-                message: format!(
-                    "column '{}' ({source}) is in the source but not in the physical relation",
-                    column.name
-                ),
-                physical_type: None,
-                source_type: Some(source),
-            }),
-            Some(held) if !agrees(spec.warehouse, &column.column_type, &held.column_type) => {
-                let physical = held.column_type.to_string();
-                found.push(ContractFinding {
-                    column: Some(held.name.clone()),
-                    declared_type: None,
-                    kind: SOURCE_TYPE_MISMATCH,
-                    message: format!(
-                        "column '{}' would load as {source} but physical type is {physical}",
-                        held.name
-                    ),
-                    physical_type: Some(physical),
-                    source_type: Some(source),
-                });
-            }
-            Some(_) => {}
-        }
-    }
+    let mut found: Vec<ContractFinding> = loaded
+        .iter()
+        .filter_map(|column| column_finding(spec, column, live))
+        .collect();
     found.extend(
         live.iter()
             .filter(|held| undeclared(&held.name) && !is_loaded(&loaded, &held.name))
@@ -117,6 +71,44 @@ pub(crate) fn source_drift(
             }),
     );
     found
+}
+
+/// The finding for one column the source would load: absent from `live`, or of a type the live column does not hold as it is.
+fn column_finding(
+    spec: &TableSpec,
+    column: &DesiredColumn,
+    live: &[LiveColumn],
+) -> Option<ContractFinding> {
+    let source = column.column_type.to_string();
+    let Some(held) = live
+        .iter()
+        .find(|held| held.name.eq_ignore_ascii_case(&column.name))
+    else {
+        return Some(ContractFinding {
+            column: Some(column.name.clone()),
+            declared_type: None,
+            kind: SOURCE_NEW_COLUMN,
+            message: format!(
+                "column '{}' ({source}) is in the source but not in the physical relation",
+                column.name
+            ),
+            physical_type: None,
+            source_type: Some(source),
+        });
+    };
+    let fit = sql_adapter(spec.warehouse).type_fit(&column.column_type, &held.column_type);
+    let physical = held.column_type.to_string();
+    (!matches!(fit, TypeFit::Fits)).then(|| ContractFinding {
+        column: Some(held.name.clone()),
+        declared_type: None,
+        kind: SOURCE_TYPE_MISMATCH,
+        message: format!(
+            "column '{}' would load as {source} but physical type is {physical}",
+            held.name
+        ),
+        physical_type: Some(physical),
+        source_type: Some(source),
+    })
 }
 
 /// Whether the source would load a column named `name`, ignoring case.

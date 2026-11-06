@@ -64,7 +64,7 @@ pub struct ContractRequest {
     pub generate: Option<bool>,
     /// `--all-files`: on files targets, also read every file's footer and report the files that differ from the newest load.
     pub all_files: bool,
-    /// `--source`: also plan each table as `plan` does and report where what its source would load differs from its live table, for columns no declaration names.
+    /// `--source`: also report where what each table's source would load differs from its live table, for columns no declaration names.
     pub source: bool,
 }
 

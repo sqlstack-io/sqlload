@@ -118,7 +118,6 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
 /// A schema plan that stops the table for `reasons`.
 pub(crate) fn blocked_plan(reasons: Vec<String>) -> SchemaPlan {
     SchemaPlan {
-        desired: Vec::new(),
         action: TableAction::Unchanged,
         write_columns: Vec::new(),
         warnings: Vec::new(),

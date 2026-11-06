@@ -724,7 +724,8 @@ def test_given_a_python_table_when_diffing_with_source_then_it_is_inspection_una
 	give(project, "rows", [{"id": 1, "code": "x1"}])
 	load(project)
 	done = sqlload(project, "contract", "diff", "--source", "--json")
-	assert (done.returncode, [finding["kind"] for finding in json.loads(done.stdout)["resources"][0]["findings"]]) == (1, ["inspection_unavailable"]), done.stdout + done.stderr
+	findings = json.loads(done.stdout)["resources"][0]["findings"]
+	assert (done.returncode, [finding["kind"] for finding in findings], "known only when it runs" in findings[0]["message"]) == (1, ["inspection_unavailable"], True), done.stdout + done.stderr
 
 
 def test_given_a_files_target_with_an_older_file_of_other_columns_when_diffing_all_files_then_the_drift_is_reported(tmp_path: Path) -> None:
