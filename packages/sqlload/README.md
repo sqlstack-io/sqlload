@@ -143,6 +143,18 @@ target, in that target's database and schema (declared types are read for its wa
 `sqb contract diff --json`'s field names. Tables on a files target are reported as problems: they
 have no catalog to compare yet.
 
+`sqlload contract generate [SELECTOR ...]` takes the same selection and options and proposes the
+declarations that adopt each live table: every live column nothing declares, with its live type.
+`--write` writes them into the table's `columns` in `sqlload.toml`, creating
+`[sources.app.tables."public.orders"]` when needed and keeping the rest of the file (comments,
+layout) as it was; the edited file must still parse, or nothing is written. Declared columns are
+left alone unless `--overwrite` is also given, which retypes them to their live type and removes
+declared columns the table lacks. A database or files table declares only columns its source
+has, in the source's spelling; masked columns stay under `mask`. Python tables are never edited:
+the report prints the whole `columns={...}` to paste into the table's declaration. A table found
+by an `include` pattern with no description is not written, since its new entry would then need
+one. The exit code is that of `diff`, after the write.
+
 ## Descriptions
 
 A table someone writes needs a description, which becomes the destination table's comment;
