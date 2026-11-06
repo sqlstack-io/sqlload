@@ -31,6 +31,8 @@ pub struct RowColumns {
     rows: usize,
     /// The column the next key is likely to name: rows usually repeat the previous row's key order.
     guess: usize,
+    /// The columns that flattening a listed object made.
+    flattened: Vec<String>,
 }
 
 impl RowColumns {
@@ -78,6 +80,16 @@ impl RowColumns {
                     }
             })
             .sum()
+    }
+
+    /// Record the columns that flattening a listed object made.
+    pub fn set_flattened(&mut self, names: Vec<String>) {
+        self.flattened = names;
+    }
+
+    /// The columns that flattening a listed object made.
+    pub fn flattened(&self) -> &[String] {
+        &self.flattened
     }
 
     /// The finished rows.

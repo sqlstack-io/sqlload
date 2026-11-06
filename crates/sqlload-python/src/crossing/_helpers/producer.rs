@@ -183,7 +183,7 @@ impl<'py> Producer<'py> {
                     batch_rows: usize::MAX,
                 },
             },
-            None => Crossed::Columns(walk_rows(rows)?),
+            None => Crossed::Columns(walk_rows(rows, &self.dispatch.flatten)?),
         };
         CrossingStats::add(&self.stats.gil_nanos, started.elapsed());
         self.send(crossed)

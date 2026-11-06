@@ -1,114 +1,220 @@
-//! Expanding one listed object column of a batch.
+//! Expanding one listed object column of a batch, and marking which columns flattening made.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema};
 
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::models::ColumnType;
-use crate::row_batches::constants::FLATTEN_SEPARATOR;
+use crate::row_batches::constants::{FLATTEN_SEPARATOR, FLATTENED_METADATA_KEY};
 use crate::row_batches::main::columns_batch::columns_batch;
 use crate::row_batches::main::json_rows::json_rows;
 use crate::row_batches::models::{JsonLayout, JsonRead};
 
-/// `columns` as a batch of `rows` rows.
+/// `columns` as a batch of `rows` rows whose schema lists `flattened`, the columns flattening made.
 pub(crate) fn rebuilt(
     columns: Vec<(Arc<Field>, ArrayRef)>,
     rows: usize,
+    flattened: &[String],
 ) -> Result<RecordBatch, String> {
     let (fields, arrays): (Vec<Arc<Field>>, Vec<ArrayRef>) = columns.into_iter().unzip();
     let options = RecordBatchOptions::new().with_row_count(Some(rows));
-    RecordBatch::try_new_with_options(Arc::new(Schema::new(fields)), arrays, &options)
+    let schema = marked(Schema::new(fields), flattened);
+    RecordBatch::try_new_with_options(Arc::new(schema), arrays, &options)
         .map_err(|error| error.to_string())
 }
 
-/// The listed column's objects as one column per key, named `<object>__<key>`; a name `schema` already has is an error.
+/// `schema` listing `flattened` in its metadata (none when empty).
+pub(crate) fn marked(schema: Schema, flattened: &[String]) -> Schema {
+    match flattened.is_empty() {
+        true => schema,
+        false => {
+            let mut metadata = schema.metadata().clone();
+            metadata.insert(
+                FLATTENED_METADATA_KEY.to_owned(),
+                serde_json::to_string(flattened).unwrap_or_default(),
+            );
+            schema.with_metadata(metadata)
+        }
+    }
+}
+
+/// The columns `schema`'s metadata says flattening made.
+pub(crate) fn flattened_names(schema: &Schema) -> Vec<String> {
+    schema
+        .metadata()
+        .get(FLATTENED_METADATA_KEY)
+        .and_then(|names| serde_json::from_str(names).ok())
+        .unwrap_or_default()
+}
+
+/// Which object each flattened column came from, and the batch's other columns, so no name comes from two places.
+pub(crate) struct Names<'a> {
+    pub(crate) plain: &'a Schema,
+    pub(crate) made: HashMap<String, String>,
+}
+
+impl Names<'_> {
+    /// Claim `<object>__<key>` for `object`; an error when another column or object already gives it.
+    pub(crate) fn claim(&mut self, object: &str, key: &str) -> Result<String, String> {
+        let name = format!("{object}{FLATTEN_SEPARATOR}{key}");
+        let field = self
+            .plain
+            .fields()
+            .iter()
+            .any(|field| *field.name() == name);
+        let other = self.made.get(&name).filter(|from| from.as_str() != object);
+        let clash = match (field, other) {
+            (true, _) => Some("which the data already has".to_owned()),
+            (false, Some(from)) => Some(format!("which flattening {from} also gives")),
+            (false, None) => None,
+        };
+        match clash {
+            Some(clash) => Err(format!(
+                "flatten {object}: the key {key} gives column {name}, {clash}; rename one of them or leave {object} unflattened"
+            )),
+            None => {
+                self.made.insert(name.clone(), object.to_owned());
+                Ok(name)
+            }
+        }
+    }
+}
+
+/// The listed column's objects as one column per key, named by `names`: a struct's children as they are, JSON objects typed by inference; nothing for a column of NULLs.
 pub(crate) fn key_columns(
     field: &Field,
     array: &ArrayRef,
-    schema: &Schema,
+    names: &mut Names<'_>,
 ) -> Result<Vec<(Arc<Field>, ArrayRef)>, String> {
+    let is_json = field
+        .metadata()
+        .get(ARROW_TYPE_METADATA_KEY)
+        .is_some_and(|kind| *kind == ColumnType::Json.to_string());
+    let keys = match (array.data_type(), is_json) {
+        _ if array.logical_null_count() == array.len() => Vec::new(),
+        (DataType::Struct(_), _) => struct_children(array)?,
+        (DataType::Utf8, true) => json_keys(field, array)?,
+        (DataType::Utf8, false) => {
+            return Err(shape_error(field.name(), text_row(array), "a text value"));
+        }
+        (data_type, _) => {
+            return Err(shape_error(
+                field.name(),
+                first_value(array),
+                &shape(data_type),
+            ));
+        }
+    };
+    keys.into_iter()
+        .map(|(key, values)| {
+            let name = names.claim(field.name(), key.name())?;
+            Ok((Arc::new(key.as_ref().clone().with_name(name)), values))
+        })
+        .collect()
+}
+
+/// A struct column's children, NULL wherever the struct is.
+fn struct_children(array: &ArrayRef) -> Result<Vec<(Arc<Field>, ArrayRef)>, String> {
+    let structs = array.as_struct();
+    let missing: BooleanArray = (0..structs.len())
+        .map(|row| Some(structs.is_null(row)))
+        .collect();
+    let fields = structs.fields().iter().cloned();
+    fields
+        .zip(structs.columns())
+        .map(|(child_field, child)| {
+            let child =
+                arrow_select::nullif::nullif(child, &missing).map_err(|error| error.to_string())?;
+            Ok((child_field, child))
+        })
+        .collect()
+}
+
+/// A JSON column's objects read back as typed columns, one per key.
+fn json_keys(field: &Field, array: &ArrayRef) -> Result<Vec<(Arc<Field>, ArrayRef)>, String> {
     let document = object_lines(field, array)?;
     let read = JsonRead {
         layout: JsonLayout::Document,
         path: None,
         batch_rows: array.len().max(1),
     };
-    let mut gathered: Vec<RecordBatch> = Vec::new();
+    let mut keys: Vec<(Arc<Field>, ArrayRef)> = Vec::new();
     json_rows(document.as_bytes(), &read, |columns| {
-        gathered.push(columns_batch(columns)?);
+        let batch = columns_batch(columns)?;
+        keys.extend(
+            batch
+                .schema()
+                .fields()
+                .iter()
+                .cloned()
+                .zip(batch.columns().iter().cloned()),
+        );
         Ok(())
     })
     .map_err(|error| format!("flatten {}: {error}", field.name()))?;
-    named_columns(field, gathered, schema)
+    Ok(keys)
 }
 
-/// The expanded keys' columns named `<object>__<key>`; a name `schema` already has is an error.
-fn named_columns(
-    field: &Field,
-    gathered: Vec<RecordBatch>,
-    schema: &Schema,
-) -> Result<Vec<(Arc<Field>, ArrayRef)>, String> {
-    let mut named: Vec<(Arc<Field>, ArrayRef)> = Vec::new();
-    for expanded in gathered {
-        for (key, values) in expanded.schema().fields().iter().zip(expanded.columns()) {
-            let name = format!("{}{FLATTEN_SEPARATOR}{}", field.name(), key.name());
-            if schema.fields().iter().any(|other| *other.name() == name) {
-                return Err(format!(
-                    "flatten {}: the key {} gives column {name}, which the data already has; rename one of them or leave {} unflattened",
-                    field.name(),
-                    key.name(),
-                    field.name()
-                ));
-            }
-            named.push((
-                Arc::new(key.as_ref().clone().with_name(name)),
-                values.clone(),
-            ));
-        }
-    }
-    Ok(named)
-}
-
-/// The listed column as one JSON object per line (`{}` for NULL), or an error naming the first row whose value is not an object.
+/// The JSON column as one object per line (`{}` for NULL), or an error naming the first row that holds something else.
 fn object_lines(field: &Field, array: &ArrayRef) -> Result<String, String> {
-    let is_json = field
-        .metadata()
-        .get(ARROW_TYPE_METADATA_KEY)
-        .is_some_and(|kind| *kind == ColumnType::Json.to_string());
-    let shape_error = |row: usize, shape: String| {
-        format!(
-            "flatten {}: row {} holds {shape}, not an object; the shape changed, so leave {} unflattened or fix the source",
-            field.name(),
-            row + 1,
-            field.name()
-        )
-    };
-    let texts = match (array.data_type(), is_json) {
-        (DataType::Null, _) => None,
-        (DataType::Utf8, true) => Some(array.as_string::<i32>()),
-        (data_type, _) => {
-            let row = (0..array.len())
-                .find(|row| array.is_valid(*row))
-                .unwrap_or_default();
-            return Err(shape_error(row, format!("a {data_type} value")));
-        }
-    };
+    let texts = array.as_string::<i32>();
     let mut document = String::new();
     for row in 0..array.len() {
-        let text = texts
-            .filter(|texts| texts.is_valid(row))
-            .map_or("null", |texts| texts.value(row).trim());
+        let text = match texts.is_valid(row) {
+            true => texts.value(row).trim(),
+            false => "null",
+        };
         let line = match (text, text.starts_with('{'), text.starts_with('[')) {
             ("null", _, _) => "{}",
             (object, true, _) => object,
-            (_, false, true) => return Err(shape_error(row, "a list".to_owned())),
-            (_, false, false) => return Err(shape_error(row, "a scalar".to_owned())),
+            (_, false, true) => return Err(shape_error(field.name(), row, "a list")),
+            (_, false, false) => return Err(shape_error(field.name(), row, "a scalar")),
         };
         document.push_str(line);
         document.push('\n');
     }
     Ok(document)
+}
+
+/// The first row of a text column that does not hold an object's JSON, else the first non-NULL row.
+fn text_row(array: &ArrayRef) -> usize {
+    let texts = array.as_string::<i32>();
+    (0..array.len())
+        .find(|row| texts.is_valid(*row) && !texts.value(*row).trim_start().starts_with('{'))
+        .unwrap_or_else(|| first_value(array))
+}
+
+fn first_value(array: &ArrayRef) -> usize {
+    (0..array.len())
+        .find(|row| array.is_valid(*row))
+        .unwrap_or_default()
+}
+
+/// A value's shape in words.
+pub(crate) fn shape(data_type: &DataType) -> String {
+    match data_type {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => "a text value".to_owned(),
+        DataType::Boolean => "a boolean".to_owned(),
+        DataType::Date32 | DataType::Date64 => "a date".to_owned(),
+        DataType::Timestamp(..) => "a timestamp".to_owned(),
+        DataType::Decimal128(..) | DataType::Decimal256(..) => "a decimal".to_owned(),
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(..) => {
+            "a list".to_owned()
+        }
+        DataType::Map(..) => "a map".to_owned(),
+        numeric if numeric.is_numeric() => "a number".to_owned(),
+        other => format!("a {other} value"),
+    }
+}
+
+/// The error for a listed column whose row `row` (0-based, in its batch) holds `shape` instead of an object.
+pub(crate) fn shape_error(object: &str, row: usize, shape: &str) -> String {
+    format!(
+        "flatten {object}: row {} of a batch holds {shape}, not an object; the shape changed, so leave {object} unflattened or fix the source",
+        row + 1
+    )
 }

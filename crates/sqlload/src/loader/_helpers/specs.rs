@@ -162,6 +162,7 @@ pub(crate) fn build_spec(
             "flatten applies to Python tables; nested values from this source stay JSON".to_owned(),
         );
     }
+    problems.extend(flatten_problems(context, overrides));
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -285,6 +286,39 @@ pub(crate) struct ColumnRules {
     pub(crate) exclude: Vec<String>,
     pub(crate) allow: Vec<String>,
     pub(crate) skip_tables_with: Vec<String>,
+}
+
+/// Listed objects that are paths rather than top-level names, or that another column setting names: after flattening, no column carries the object's own name, so an exclusion, mask or pin on it would silently stop applying.
+fn flatten_problems(context: &SourceContext<'_>, overrides: &TableOverride) -> Vec<String> {
+    let exclude: Vec<String> = [
+        context.source.exclude_columns.clone(),
+        overrides.exclude_columns.clone(),
+    ]
+    .concat();
+    overrides
+        .flatten
+        .iter()
+        .filter_map(|object| {
+            let excluded = exclude.iter().find(|pattern| {
+                glob(pattern).is_ok_and(|glob| glob.compile_matcher().is_match(object))
+            });
+            let setting = match (excluded, overrides.mask.contains_key(object), overrides.columns.contains_key(object)) {
+                _ if object.contains('.') => {
+                    return Some(format!(
+                        "flatten {object}: flatten names top-level objects, not paths; list {} instead (its nested values stay JSON)",
+                        object.split('.').next().unwrap_or_default()
+                    ));
+                }
+                (Some(pattern), _, _) => format!("exclude_columns {pattern}"),
+                (None, true, _) => "mask".to_owned(),
+                (None, false, true) => "columns".to_owned(),
+                (None, false, false) => return None,
+            };
+            Some(format!(
+                "flatten {object}: {setting} also names {object}, which flattening replaces with {object}__<key> columns; name those columns instead, or leave {object} unflattened"
+            ))
+        })
+        .collect()
 }
 
 /// What the column rules decide for one table.
