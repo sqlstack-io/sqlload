@@ -154,6 +154,7 @@ pub(crate) fn build_spec(
         .description
         .as_deref()
         .or(files_description)
+        .or(table.comment.as_deref())
         .map(str::trim)
         .filter(|text| !text.is_empty());
     if !overrides.flatten.is_empty() && context.source.kind != SourceKind::Python {
@@ -230,13 +231,28 @@ pub(crate) fn build_spec(
     })
 }
 
-/// Why a planned table without a description is blocked, with where to give it: a files source's one table takes the source's own `description`.
+/// Why a table someone wrote is blocked without a description they wrote, with where to give it; `None` when it has one, or when it was discovered (matched by an `include` pattern, not named), which takes the source's own table comment or none (D203). Python tables, files sources (described by the source's own `description`), `[sources.*.tables]` entries and tables named exactly in `include` are written.
 pub(crate) fn missing_description(
     source_name: &str,
     source: &SourceConfig,
     table: &SourceTable,
-) -> String {
-    match source.kind {
+) -> Option<String> {
+    let qualified = table.qualified_name();
+    let entry = source.tables.get(&qualified);
+    let written = source.kind != SourceKind::Postgres
+        || entry.is_some()
+        || source.include.contains(&qualified);
+    let described = [
+        entry.and_then(|entry| entry.description.as_deref()),
+        source
+            .description
+            .as_deref()
+            .filter(|_| source.kind == SourceKind::Files),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|text| !text.trim().is_empty());
+    let fix = match source.kind {
         SourceKind::Python => {
             "no description; add description=\"...\" to its table declaration, or a docstring to its function".to_owned()
         }
@@ -244,10 +260,10 @@ pub(crate) fn missing_description(
             format!("no description; add description = \"...\" under [sources.{source_name}]")
         }
         SourceKind::Postgres => format!(
-            "no description; add description = \"...\" under [sources.{source_name}.tables.\"{}\"]",
-            table.qualified_name()
+            "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
         ),
-    }
+    };
+    (written && !described).then_some(fix)
 }
 
 fn glob(pattern: &str) -> Result<Glob, String> {

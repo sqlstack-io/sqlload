@@ -49,11 +49,13 @@ pub async fn plan_project(
         }));
         let specs = source_ends(project, (source_name, source), resolved.specs, options).await?;
         let mut planned: Vec<TablePlan> = Vec::new();
+        let mut unselected: Vec<TableSpec> = Vec::new();
         for mut spec in specs {
             spec.files = files.clone();
             spec.python = module.map(|module| python_table(module, &spec.source_table));
             let qualified = spec.source_table.qualified_name();
             if !selected(options, (source_name, &spec.destination.table, &qualified)) {
+                unselected.push(spec);
                 continue;
             }
             let destination = destinations.get(&spec.target).ok_or_else(|| {
@@ -61,7 +63,13 @@ pub async fn plan_project(
             })?;
             planned.push(plan_table(&spec, destination, options).await?);
         }
-        plan = admit_tables(plan, (source_name, source), planned);
+        plan = admit_tables(
+            plan,
+            (source_name, source),
+            (planned, &unselected),
+            (destinations, options),
+        )
+        .await?;
     }
     plan.warnings
         .extend(unmatched_selectors(project, options, &names));

@@ -16,9 +16,11 @@ executable without Python is the `sqlload-cli` package.
 ## Table data types
 
 A table function's dicts are typed like JSON: numbers, booleans and text keep their types, and
-nested dicts and lists become JSON. `Decimal` becomes `decimal(38,s)`, `date` becomes `date`, a
-naive `datetime` becomes `timestamp_ntz` and one with a UTC offset `timestamp_tz`; other values
-become text. Enums give their values,
+nested dicts and lists become JSON. `Decimal` becomes a decimal with room for at least 19 digits
+before the point (more digits than 38 in all become text, NaN and infinity NULL), `date` becomes
+`date`, a naive `datetime` becomes `timestamp_ntz` and one with a UTC offset `timestamp_tz` (a
+column mixing both becomes text); subclasses such as `pandas.Timestamp` and other values become
+text. Enums give their values,
 dataclasses become JSON objects, and numpy numbers count as numbers. Arrow input (pyarrow, polars,
 pandas) keeps its own types.
 
@@ -39,11 +41,12 @@ table's cursor (an integer, an RFC 3339 timestamp or a date).
 
 ## Descriptions
 
-Every table needs a description, which becomes the destination table's comment; `plan` fails
-for a table without one. In `sqlload.toml` it goes under the table
-(`[sources.app.tables."public.orders"]` with `description = "..."`), or under the source itself
-for a files source, which is one table. A Python table takes `description="..."` or its
-function's docstring.
+A table someone writes needs a description, which becomes the destination table's comment;
+`plan` fails for such a table without one. That covers Python tables (`description="..."` or the
+function's docstring), files sources (the source's own `description`, as a files source is one
+table), `[sources.app.tables."public.orders"]` entries (`description = "..."` there), and tables
+named exactly in `include`. A table found by an `include` pattern needs none: it takes the
+source's own table comment (Postgres `COMMENT ON TABLE`) when there is one, and none otherwise.
 
 ## Schema changes
 
@@ -57,9 +60,12 @@ widens the table as before.
 ## New tables
 
 With `new_tables = "skip"`, a table that appears after the source's first load loads only once
-`include` names it exactly (`include = ["public.*", "public.refunds"]`); a
-`[sources.*.tables]` entry only sets its options. `new_tables = "fail"` stops the plan instead.
-Tables present at the first load count as approved.
+`include` names it exactly (`include = ["public.*", "public.refunds"]`, with a description under
+`[sources.app.tables."public.refunds"]`); a `[sources.*.tables]` entry alone only sets its options.
+`new_tables = "fail"` stops the plan instead. The first load is the one before any of the
+source's tables exists in the destination, whichever tables are selected; tables present then
+count as approved. A table that did not load then (blocked by a problem, say) counts as new
+afterwards, so name it in `include`.
 
 ## Python sources
 

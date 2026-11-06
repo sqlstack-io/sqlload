@@ -1,7 +1,10 @@
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use arrow_array::RecordBatch;
+use std::collections::BTreeMap;
 use tokio_postgres::Client;
 
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::main::parse_type::parse_type;
@@ -21,7 +24,7 @@ use crate::files_source::models::{
 use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::source_target;
 use crate::loader::_helpers::specs::missing_description;
-use crate::loader::_helpers::table_plan::blocked_plan;
+use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -268,6 +271,7 @@ pub(crate) fn files_source_parts(
         primary_key: Vec::new(),
         indexed_columns: Vec::new(),
         estimated_rows: -1,
+        comment: None,
         estimated_bytes: table
             .files
             .iter()
@@ -703,13 +707,14 @@ pub(crate) fn selected(
         && !options.exclude.iter().any(picks)
 }
 
-/// `planned`, the selected tables of one source, added to `plan`, which is returned: a table that appeared after the source's first load (none of its tables existed yet) and is not named exactly in `include` is skipped or fails as `new_tables` says, and a table without a description is blocked.
-pub(crate) fn admit_tables(
+/// `planned`, the selected tables of one source, added to `plan`, which is returned (`unselected` and `found`, the destinations and options, tell whether this is the source's first load): a table that appeared after the source's first load (`first_load`: none of its tables, selected or not, existed yet) and is not named exactly in `include` is skipped or fails as `new_tables` says, and a table without a description is blocked.
+pub(crate) async fn admit_tables(
     mut plan: ProjectPlan,
     (source_name, source): (&String, &SourceConfig),
-    planned: Vec<TablePlan>,
-) -> ProjectPlan {
-    let first_load = !planned.iter().any(|table| table.exists);
+    (planned, unselected): (Vec<TablePlan>, &[TableSpec]),
+    found: (&BTreeMap<String, Destination>, &PlanOptions),
+) -> Result<ProjectPlan, LoaderError> {
+    let first_load = first_load(&planned, unselected, found).await?;
     for mut table in planned {
         let spec = &table.spec;
         let qualified = spec.source_table.qualified_name();
@@ -730,16 +735,41 @@ pub(crate) fn admit_tables(
                 "{qualified}: new table and new_tables = \"fail\"; add it to include or exclude it"
             )),
             _ => {
-                if spec.description.is_empty() {
-                    table.schema = blocked_plan(vec![missing_description(
-                        source_name,
-                        source,
-                        &spec.source_table,
-                    )]);
+                if let Some(problem) = missing_description(source_name, source, &spec.source_table)
+                {
+                    table.schema = blocked_plan(vec![problem]);
                 }
                 plan.tables.push(table);
             }
         }
     }
-    plan
+    Ok(plan)
+}
+
+/// Whether this is the source's first load: none of its tables exists in the destination, whether selected (`planned`) or not (`unselected`, looked up only while none is found, a table that cannot be read counting as absent), so `--select` cannot make a later table look present at the first load.
+async fn first_load(
+    planned: &[TablePlan],
+    unselected: &[TableSpec],
+    (destinations, options): (&BTreeMap<String, Destination>, &PlanOptions),
+) -> Result<bool, LoaderError> {
+    if planned.iter().any(|table| table.exists) {
+        return Ok(false);
+    }
+    for spec in unselected {
+        let Some(destination) = destinations.get(&spec.target) else {
+            continue;
+        };
+        let exists = match files_destination(destination) {
+            Some(_) => plan_table(spec, destination, options)
+                .await
+                .is_ok_and(|table| table.exists),
+            None => live_columns(destination, &spec.destination)
+                .await
+                .is_ok_and(|live| live.is_some()),
+        };
+        if exists {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }

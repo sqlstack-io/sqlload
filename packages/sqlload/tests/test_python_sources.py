@@ -323,37 +323,48 @@ shop.table(description='Test table.', write_strategy='append'{settings})(priced)
 
 
 @pytest.mark.parametrize(
-	("settings", "amount", "expected_code", "expected_line", "expected_rows"),
+	("settings", "first", "amount", "expected_code", "expected_line", "expected_rows"),
 	[
 		(
 			"",
+			1,
 			"2.50",
 			1,
-			"failed   RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but decimal(38,2) in the source; pin a type the table can hold, for example columns = { amount = \"int\" }; or set auto_widen = true to widen it",
+			"failed   RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but decimal(21,2) in the source; pin the wider type to widen it, for example columns = { amount = \"decimal(21,2)\" }, or set auto_widen = true",
 			[(1, 1)],
 		),
 		(
 			", auto_widen=True",
+			1,
 			"2.50",
 			0,
-			"altered  RAW.shop__priced  widen  amount int -> decimal(38,2) (DECIMAL(38,2))  in place",
+			"altered  RAW.shop__priced  widen  amount int -> decimal(21,2) (DECIMAL(21,2))  in place",
 			[(1, Decimal("1.00")), (2, Decimal("2.50"))],
 		),
 		(
 			", auto_widen=True",
+			"10",
+			"10.5",
+			0,
+			"altered  RAW.shop__priced  widen  amount decimal(19,0) -> decimal(20,1) (DECIMAL(20,1))  in place",
+			[(1, Decimal("10.0")), (2, Decimal("10.5"))],
+		),
+		(
+			", auto_widen=True",
+			1,
 			2.5,
 			1,
 			"failed   RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but float in the source",
 			[(1, 1)],
 		),
 	],
-	ids=["fails-without-auto-widen", "auto-widen-to-decimal", "never-to-float"],
+	ids=["fails-without-auto-widen", "auto-widen-to-decimal", "auto-widen-decimal-scale", "never-to-float"],
 )
 def test_given_an_inferred_column_that_outgrows_the_table_when_loading_then_auto_widen_decides(
-	tmp_path: Path, settings: str, amount: Any, expected_code: int, expected_line: str, expected_rows: list[tuple[Any, ...]]
+	tmp_path: Path, settings: str, first: Any, amount: Any, expected_code: int, expected_line: str, expected_rows: list[tuple[Any, ...]]
 ) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, PRICED_TABLE.replace("{settings}", settings))
-	give(project, "priced", [{"id": 1, "amount": 1}])
+	give(project, "priced", [{"id": 1, "amount": first}])
 	load(project)
 	give(project, "priced", [{"id": 2, "amount": amount}])
 	done = sqlload(project, "load")

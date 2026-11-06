@@ -99,6 +99,7 @@ pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
             indexed_columns: Vec::new(),
             estimated_rows: -1,
             estimated_bytes: -1,
+            comment: None,
         });
     }
     tables
