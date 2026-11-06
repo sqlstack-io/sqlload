@@ -43,11 +43,11 @@ pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, S
 async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
     let endpoint = &calls.endpoint;
     let shown = redacted(&format!("GET {url}"), &endpoint.secrets);
+    let own = same_origin(&endpoint.base_url, url);
     let mut request = calls.http.get(url.clone());
-    for (name, value) in &endpoint.headers {
+    for (name, value) in endpoint.headers.iter().filter(|_| own) {
         request = request.header(name, value);
     }
-    let own = same_origin(&endpoint.base_url, url);
     request = match (&endpoint.credential, own) {
         (Credential::Header { name, value }, true) => request.header(name, value),
         (Credential::Query { name, value }, true) => request.query(&[(name, value)]),
@@ -55,9 +55,12 @@ async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
     };
     let response = match request.send().await {
         Ok(response) => response,
+        Err(error) if error.is_builder() => {
+            return Err(format!("{shown}: {}", transport_text(error)));
+        }
         Err(error) => {
             return Ok(Attempt::Retry {
-                reason: format!("{shown}: {}", error.without_url()),
+                reason: format!("{shown}: {}", transport_text(error)),
                 after: None,
             });
         }
@@ -68,19 +71,31 @@ async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
         Some(Ok(link)) => link_header_next(link),
         Some(Err(_)) | None => None,
     };
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| format!("{shown}: reading the body failed: {}", error.without_url()))?;
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(Attempt::Retry {
+                reason: format!(
+                    "{shown}: reading the body failed: {}",
+                    transport_text(error)
+                ),
+                after: None,
+            });
+        }
+    };
     let skipped = calls.on_status.get(&status) == Some(&StatusAction::Skip);
     let excerpt = || {
-        let text: String = String::from_utf8_lossy(&body)
+        redacted(&String::from_utf8_lossy(&body), &endpoint.secrets)
             .chars()
             .take(ERROR_EXCERPT_CHARS)
-            .collect();
-        redacted(&text, &endpoint.secrets)
+            .collect::<String>()
     };
     Ok(match status {
+        300..=399 => {
+            return Err(format!(
+                "{shown}: HTTP {status}: a redirect to another host is not followed, so credentials never leave the connection's origin; use the final URL as base_url"
+            ));
+        }
         200..=299 => Attempt::Done(Some(Fetched {
             bytes: body.to_vec(),
             next_link,
@@ -111,8 +126,20 @@ fn retry_after(response: &reqwest::Response) -> Option<Duration> {
 
 /// `delay` scaled by a factor between 0.5 and 1, so retries of parallel requests spread out.
 fn jittered(delay: Duration) -> Duration {
-    let nanos = SystemTime::now()
+    let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.subsec_nanos());
-    delay.mul_f64(0.5 + f64::from(nanos % 1_000) / 2_000.0)
+        .map_or(0, |elapsed| elapsed.subsec_micros());
+    delay.mul_f64(0.5 + f64::from(micros % 1_000) / 2_000.0)
+}
+
+/// A transport error without its URL, with the causes reqwest's own text leaves out.
+fn transport_text(error: reqwest::Error) -> String {
+    let error = error.without_url();
+    let mut text = error.to_string();
+    let mut cause = std::error::Error::source(&error);
+    while let Some(inner) = cause {
+        text.push_str(&format!(": {inner}"));
+        cause = inner.source();
+    }
+    text
 }

@@ -43,13 +43,17 @@ fn is_name(text: &str) -> bool {
     !text.is_empty() && !text.contains(['.', '[', ']', '*', '$'])
 }
 
-/// The rows `selector` points at in `document`: an array's items, one object, or none.
-pub(crate) fn selected_rows<'a>(document: &'a Value, selector: &Selector) -> Vec<&'a Value> {
-    let node = selector
+/// The node `selector` points at in `document`, if the path exists.
+pub(crate) fn selected_node<'a>(document: &'a Value, selector: &Selector) -> Option<&'a Value> {
+    selector
         .rows
         .iter()
-        .try_fold(document, |node, name| node.get(name));
-    match node {
+        .try_fold(document, |node, name| node.get(name))
+}
+
+/// The rows `selector` points at in `document`: an array's items, one object, or none.
+pub(crate) fn selected_rows<'a>(document: &'a Value, selector: &Selector) -> Vec<&'a Value> {
+    match selected_node(document, selector) {
         Some(Value::Array(items)) => items.iter().collect(),
         Some(Value::Null) | None => Vec::new(),
         Some(other) => vec![other],

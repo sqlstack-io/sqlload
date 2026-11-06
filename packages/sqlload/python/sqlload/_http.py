@@ -82,6 +82,12 @@ def basic() -> Auth:
 	return Auth({"kind": "basic"})
 
 
+def _param_text(value: Any) -> str:
+	"""A request parameter JSON has no form for, such as a `datetime` cursor value: ISO text for dates and times, else `str()`."""
+	isoformat = getattr(value, "isoformat", None)
+	return isoformat() if callable(isoformat) else str(value)
+
+
 class Job:
 	"""An HTTP job definition; a table function returns or yields it, and Rust runs it."""
 
@@ -89,7 +95,7 @@ class Job:
 		self._definition = definition
 
 	def __sqlload_http_job__(self) -> str:
-		return json.dumps(self._definition)
+		return json.dumps(self._definition, default=_param_text)
 
 	def __iter__(self) -> Iterator["Job"]:
 		"""`yield from job` hands the job itself to Rust."""
@@ -155,6 +161,10 @@ class Http:
 		"""Every page of `path` once per key of `over`, up to `concurrency` at a time: `over` is a paginate whose
 		`select` picks the keys (`"$.items[*].id"` fills `{id}`), or values (`["uk", "fr"]` fill the one placeholder;
 		dicts fill them by name)."""
+		if isinstance(over, Job) and over._definition["kind"] != "paginate":
+			raise TypeError("fan_out over= takes a paginate job or values, not another fan_out")
+		if isinstance(over, (str, bytes)):
+			raise TypeError("fan_out over= takes a paginate job or a list of values, not one string")
 		over_spec = (
 			{"kind": "paginate", **{k: v for k, v in over._definition.items() if k != "kind"}}
 			if isinstance(over, Job)
