@@ -70,7 +70,6 @@ pub struct ContractReport {
     pub resources: Vec<ContractResource>,
     /// Problems that stopped tables from being compared, such as a source that could not be listed; any makes the command fail.
     pub problems: Vec<String>,
-    /// Files `contract generate --write` updated.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Files `contract generate --write` updated, relative to the project folder.
     pub written_paths: Vec<String>,
 }

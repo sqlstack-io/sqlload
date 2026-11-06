@@ -38,7 +38,7 @@ pub fn render_contract(report: &ContractReport, json: bool) -> (Vec<String>, boo
         .iter()
         .filter_map(|resource| resource.adoption.as_ref())
         .any(|adoption| adoption.paste.is_none());
-    if unwritten && report.written_paths.is_empty() {
+    if unwritten {
         lines.push(String::new());
         lines.push("Run contract generate --write to update sqlload.toml.".to_owned());
     }

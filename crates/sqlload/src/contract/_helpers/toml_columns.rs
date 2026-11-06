@@ -51,10 +51,16 @@ pub(crate) fn write_adoption(
             )
         })?;
     for column in &adoption.columns {
-        columns.insert(
-            &column.column,
-            Item::Value(Value::from(column.physical_type.as_str())),
-        );
+        let mut typed = Value::from(column.physical_type.as_str());
+        match columns.get_mut(&column.column).and_then(Item::as_value_mut) {
+            Some(existing) => {
+                *typed.decor_mut() = existing.decor().clone();
+                *existing = typed;
+            }
+            None => {
+                columns.insert(&column.column, Item::Value(typed));
+            }
+        }
     }
     for name in &adoption.removed {
         columns.remove(name);

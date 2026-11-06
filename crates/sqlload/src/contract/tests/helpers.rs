@@ -1,7 +1,8 @@
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::contract::_helpers::adopt::adoption;
-use crate::contract::main::adopt_contracts::adopt_contracts;
+use crate::contract::_helpers::read_from::other_warehouse;
 use crate::contract::main::render_contract::render_contract;
+use crate::contract::main::write_contracts::write_contracts;
 use crate::contract::models::{AdoptedColumn, Adoption, ContractReport, ContractResource};
 use crate::contract::tests::test_types::AdoptionTestCase;
 use crate::loader::_helpers::python::{python_table, python_tables};
@@ -140,6 +141,14 @@ fn write(text: &str, description: &str) -> Result<Vec<String>, String> {
         }],
         ..ContractReport::default()
     };
-    let (text, report) = adopt_contracts(text, report)?;
+    let (text, report) = write_contracts(text, report)?;
     Ok([vec![text.unwrap_or_default()], report.problems].concat())
+}
+
+/// The sources of a project with DuckDB targets `dev` and `test` and Snowflake target `prod` (source `orders` into `dev`, `events` into `prod`) whose own warehouse differs from `from`'s.
+pub(crate) fn other_warehouse_sources(from: Option<&str>) -> Vec<String> {
+    let text = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[connections.sf]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"DB\"\nload_method = { type = \"internal_user_stage\" }\n[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[targets.test]\nconnection = \"wh\"\nloader_schema = \"TEST\"\n[targets.prod]\nconnection = \"sf\"\nloader_schema = \"RAW\"\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"o/\"\ndescription = \"O.\"\ndestination = \"dev\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"e/\"\ndescription = \"E.\"\ndestination = \"prod\"\n";
+    parse_python_project(text, &|_| None, &[])
+        .map(|project| other_warehouse(&project, from))
+        .unwrap_or_else(|error| vec![format!("error: {error}")])
 }

@@ -153,7 +153,11 @@ declared columns the table lacks. A database or files table declares only column
 has, in the source's spelling; masked columns stay under `mask`. Python tables are never edited:
 the report prints the whole `columns={...}` to paste into the table's declaration. A table found
 by an `include` pattern with no description is not written, since its new entry would then need
-one. The exit code is that of `diff`, after the write.
+one. The file is replaced atomically with its permissions kept, and only if nobody changed it
+while the command ran. Adopted columns become pinned types, so a CSV or JSON source converts
+them while reading. With `--from`, a table whose own target is another kind of warehouse is not
+adopted (its types could be ones its own warehouse cannot take). The exit code is that of
+`diff`, after the write.
 
 ## Descriptions
 

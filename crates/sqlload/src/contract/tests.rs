@@ -4,6 +4,8 @@ mod adoption;
 mod findings;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_read_from.rs"]
+mod read_from;
 #[path = "tests/test_types.rs"]
 mod test_types;
 #[path = "tests/test_write.rs"]

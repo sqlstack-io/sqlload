@@ -179,7 +179,7 @@ def test_given_a_loaded_table_when_generating_its_contract_then_write_declares_t
 	], proposed.stdout
 	assert config.read_text() == before
 	written = run("contract", "generate", "--write", "-c", str(config))
-	assert (written.returncode, f"Updated repository declarations:\n  {config}" in written.stdout) == (0, True), written.stdout + written.stderr
+	assert (written.returncode, "Updated repository declarations:\n  sqlload.toml" in written.stdout) == (0, True), written.stdout + written.stderr
 	assert config.read_text() == before + '\n[sources.orders.tables.orders.columns]\nid = "int"\nstatus = "text"\namount = "float"\n'
 	assert run("contract", "diff", "-c", str(config)).returncode == 0
 	config.write_text(config.read_text().replace('status = "text"', 'status = "int"'))

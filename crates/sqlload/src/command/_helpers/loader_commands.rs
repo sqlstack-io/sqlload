@@ -5,11 +5,12 @@ use std::collections::BTreeMap;
 
 use crate::adapters::dispatch::models::Destination;
 use crate::command::_helpers::output::confirm_reload;
+use crate::command::_helpers::project_file::replace_file;
 use crate::command::constants::RELOAD_DECLINED;
 use crate::command::models::{Command, ContractAction, LoaderArgs, LoaderRequest, StateAction};
-use crate::contract::main::adopt_contracts::adopt_contracts;
 use crate::contract::main::compare_contracts::compare_contracts;
 use crate::contract::main::render_contract::render_contract;
+use crate::contract::main::write_contracts::write_contracts;
 use crate::contract::models::{ContractReport, ContractRequest};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
@@ -305,7 +306,7 @@ fn write_adoptions(
     (config, text): (&Path, &str),
     variables: &BTreeMap<String, String>,
 ) -> Result<ContractReport, String> {
-    let (updated, mut report) = adopt_contracts(text, report)?;
+    let (updated, mut report) = write_contracts(text, report)?;
     let Some(updated) = updated else {
         return Ok(report);
     };
@@ -315,10 +316,10 @@ fn write_adoptions(
             config.display()
         )
     })?;
-    let staged = config.with_extension("toml.sqlload-tmp");
-    std::fs::write(&staged, updated)
-        .and_then(|()| std::fs::rename(&staged, config))
-        .map_err(|error| format!("cannot write {}: {error}", config.display()))?;
-    report.written_paths.push(config.display().to_string());
+    replace_file(config, (text, &updated))?;
+    report.written_paths.push(config.file_name().map_or_else(
+        || config.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    ));
     Ok(report)
 }

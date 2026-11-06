@@ -34,3 +34,10 @@ pub(crate) struct WriteTestCase {
     /// The file written (empty when unchanged), then the problems left; or `error: ...`.
     pub(crate) expected_lines: &'static [&'static str],
 }
+
+/// Which sources `--from` would read from another kind of warehouse than their own.
+pub(crate) struct OtherWarehouseTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) from: Option<&'static str>,
+    pub(crate) expected_sources: &'static [&'static str],
+}

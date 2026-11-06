@@ -7,7 +7,7 @@ use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::models::Destination;
 use crate::contract::_helpers::adopt::adoption;
 use crate::contract::_helpers::compare::findings;
-use crate::contract::_helpers::read_from::read_from;
+use crate::contract::_helpers::read_from::{other_warehouse, read_from};
 use crate::contract::constants::INSPECTION_UNAVAILABLE;
 use crate::contract::models::{ContractFinding, ContractReport, ContractRequest, ContractResource};
 use crate::loader::errors::LoaderError;
@@ -15,13 +15,14 @@ use crate::loader::main::selected_specs::selected_specs;
 use crate::loader::models::{PlanOptions, TableSpec};
 use crate::project::models::ProjectConfig;
 
-/// Each selected table's differences, reading only the destinations (sources are listed for their tables, never read); `request.from` reads every table from that target instead of its own, resolving its database and schema there as if the source loaded into it, and `request.generate` adds each table's adoption. Tables on a files target are problems: they have no SQL catalog to compare.
+/// Each selected table's differences, reading only the destinations (sources are listed for their tables, never read); `request.from` reads every table from that target instead of its own, resolving its database and schema there as if the source loaded into it, and `request.generate` adds each table's adoption, except for tables whose own target is another kind of warehouse than `from`, which are problems. Tables on a files target are problems: they have no SQL catalog to compare.
 pub async fn compare_contracts(
     project: &ProjectConfig,
     destinations: &BTreeMap<String, Destination>,
     options: &PlanOptions,
     request: &ContractRequest,
 ) -> Result<ContractReport, LoaderError> {
+    let elsewhere = other_warehouse(project, request.from.as_deref());
     let project = read_from(project, destinations, request.from.as_deref())?;
     let mut report = ContractReport {
         from_target: request.from.clone(),
@@ -40,9 +41,19 @@ pub async fn compare_contracts(
         let destination = destinations.get(&spec.target).ok_or_else(|| {
             LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
         })?;
+        let generate = match elsewhere.contains(&spec.source_name) {
+            true => {
+                report.problems.extend(request.generate.map(|_| format!(
+                    "{}: not adopted: its own target is another kind of warehouse than --from {}, whose types it may not take",
+                    spec.destination.table, spec.target
+                )));
+                None
+            }
+            false => request.generate,
+        };
         report
             .resources
-            .push(resource(spec, destination, request.generate).await);
+            .push(resource(spec, destination, generate).await);
     }
     report.differences = report
         .resources

@@ -13,6 +13,14 @@ fn given_a_project_file_when_writing_adoptions_then_only_the_tables_columns_chan
             ],
         },
         WriteTestCase {
+            description: "a retyped column keeps the comments above and after it",
+            text: "[sources.app.tables.\"public.orders\"]\n[sources.app.tables.\"public.orders\".columns]\n# int until the v2 migration\nstatus = \"int\"  # see the migration notes\ngone = \"text\"\n",
+            table_description: "Orders.",
+            expected_lines: &[
+                "[sources.app.tables.\"public.orders\"]\n[sources.app.tables.\"public.orders\".columns]\n# int until the v2 migration\nstatus = \"text\"  # see the migration notes\namount = \"float\"\n",
+            ],
+        },
+        WriteTestCase {
             description: "a table with no entry gets one after its source, with the description it had from its source comment",
             text: "[sources.app]\nkind = \"postgres\"\ninclude = [\"public.*\"]\n\n[targets.dev]\nconnection = \"wh\"\n",
             table_description: "Orders from the app.",
