@@ -143,7 +143,7 @@ fn in_any_footer(footers: &BatchFooters, name: &str) -> bool {
     footers.parquet.values().any(has)
 }
 
-/// Why the batch's footers disagree on `name`, or hold it in a way only SQLLoad reads exactly: a different portable type, or any file holding it as nanoseconds or epoch integers, which plan's sample may not have seen and DuckDB would cast differently. Arrow-only differences (Int32 and Int64, Utf8 and LargeUtf8, dictionary strings) DuckDB promotes exactly.
+/// Why the batch's footers disagree on `name`, or hold it in a way only SQLLoad reads exactly: a different portable type, or any file storing it as nanoseconds (whatever Arrow type it names), which plan's sample may not have seen and DuckDB would cast differently. Epoch integers fail earlier, in `batch_refusals`. Arrow-only differences (Int32 and Int64, Utf8 and LargeUtf8, dictionary strings) DuckDB promotes exactly.
 fn disagreeing(footers: &BatchFooters, name: &str) -> Option<String> {
     let typed = |footer: &ArrowReaderMetadata| {
         let schema = footer.schema().clone();
@@ -154,7 +154,7 @@ fn disagreeing(footers: &BatchFooters, name: &str) -> Option<String> {
             .map(|field| {
                 (
                     portable_type(field).map_err(|_| field.data_type().to_string()),
-                    stored_read_of(field.data_type()),
+                    stored_read_of(footer, name).unwrap_or_default(),
                 )
             })
     };
