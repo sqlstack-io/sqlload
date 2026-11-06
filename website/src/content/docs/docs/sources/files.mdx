@@ -1,0 +1,75 @@
+---
+title: "Files"
+description: "Load Parquet, CSV, JSON or NDJSON files from S3 or a local folder, including files the destination reads itself."
+---
+
+A files source is one table built from every file under a folder.
+
+```toml
+[connections.lake]
+kind = "s3"
+bucket = "example-bucket"
+region = "eu-west-2"
+
+[sources.events]
+kind = "files"
+connection = "lake"
+path = "events/"
+format = "parquet"
+description = "Click events, partitioned by day."
+partition_columns = { dt = "date" }
+write_strategy = "delete_insert"
+cursor_column = "dt"
+```
+
+| Setting | Meaning |
+|---------|---------|
+| `connection` | An `s3` or `filesystem` connection. |
+| `path` | The folder holding the files, relative to the connection. |
+| `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`. |
+| `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
+| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … |
+| `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
+| `copy_to_internal_stage` | Snowflake only: upload files no external stage covers to the user stage. See [Load methods](/docs/concepts/load-methods/#files-into-snowflake). |
+
+## Which files load
+
+| Strategy | Reads |
+|----------|-------|
+| `append` | Only files not loaded yet, by `_sqlload_source_file`. A file rewritten in place since it loaded fails the table, with the fix. |
+| `delete_insert` with a partition `cursor_column` | The newest loaded partition and everything after it, replacing those partitions whole. |
+| `replace` | Every file, swapped in as a new table. |
+
+`merge` isn't supported for files sources: a file would be read again once its rows are updated.
+
+```console
+$ sqlload load
+…
+└── events_log                                      append
+    ├── source  files  lake/events/  parquet
+    ├── files   1 new of 3 listed
+    ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
+…
+loaded   raw.events_log  1 rows  0.0s
+```
+
+Large loads commit at 1,000 files or about 1 GB. Under `delete_insert` a partition is never split
+across commits.
+
+## Columns
+
+Parquet columns come from the files' footers. CSV and JSON columns are inferred from a sample of
+records, unless you pin them with `columns`. Each row also gets `_sqlload_source_file`,
+`_sqlload_source_version` and `_sqlload_source_row` ([Columns SQLLoad
+adds](/docs/concepts/projects/#columns-sqlload-adds)).
+
+## Files the destination reads itself
+
+When the destination can load the files exactly by itself, it does, and no row passes through
+SQLLoad:
+
+- **DuckDB** reads Parquet in S3 or a local folder with `read_parquet`.
+- **Snowflake** runs `COPY` from an external stage over the files' bucket, for Parquet, JSON,
+  NDJSON and CSV.
+
+`plan` names the route for each table. See [Load methods](/docs/concepts/load-methods/).

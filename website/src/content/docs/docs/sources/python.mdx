@@ -1,10 +1,84 @@
 ---
 title: "Python sources"
-description: "Declare tables in Python with sqlload.source and @source.table: rows, Arrow data, JSON bytes, HTTP jobs, cursors and logged state."
+description: "Any API, SaaS or custom source as a table, with the same plan, apply and load as every other source. REST APIs built with sl.http run entirely in Rust."
 ---
 
-Python sources are tables whose rows come from a Python function. They need the `sqlload` package
-([Install](/docs/install/)); `sqlload-cli` doesn't run them.
+Python sources turn any API, SaaS product or custom system into tables:
+
+- **Any source as a table.** A Python function that fetches the data becomes a table, declared
+  with `sl.source` and `@source.table`.
+- **The same loader as every other source.** Python tables take part in `plan`, `apply` and
+  `load`, with the same [write strategies](/docs/concepts/write-strategies/),
+  [cursors](/docs/concepts/cursors/) and [contracts](/docs/concepts/contracts/) as Postgres tables
+  and files.
+
+They need the `sqlload` package ([Install](/docs/install/)); `sqlload-cli` doesn't run them.
+
+## REST APIs run in Rust
+
+For a predictable REST API (paginated, fanned out over keys, retried, rows picked out of the JSON)
+describe the job with `sl.http`. Python only describes it; SQLLoad runs it entirely in Rust:
+requests, pages, retries, JSON parsing and conversion to Arrow. No row crosses between Python and
+Rust, so there is no per-row Python cost.
+
+```python
+import sqlload as sl
+
+shop = sl.source("shop", connection="shop", write_strategy="merge")
+api = sl.http(shop, auth=sl.bearer(), rate_limit="10/s", retries=5)
+
+
+@shop.table(description="Orders, one row per order.", unique_key="order_id")
+def orders(ctx):
+    return api.paginate(
+        "/orders", paginator=sl.page_number("page"), select="$.items"
+    )
+```
+
+The same holds for JSON you already have as bytes: yield `sl.json(data)` or `sl.ndjson(data)`
+and the bytes are parsed in Rust. See [HTTP APIs](#http-apis) for the full reference.
+
+## Describe the job, or yield the rows
+
+| You have | Yield | Where the work happens |
+|----------|-------|------------------------|
+| A REST API that `sl.http` can describe | An `sl.http` job | Entirely in Rust: requests, pages, parsing, Arrow. |
+| JSON or NDJSON as bytes, such as a response body or a file | `sl.json(data)` or `sl.ndjson(data)` | The bytes cross once; parsing and Arrow conversion run in Rust. |
+| Arrow data: pyarrow, polars or pandas | The table, batch or DataFrame | Python builds it; it crosses as Arrow batches through the Arrow C interface, keeping its types. |
+| Rows built in Python, such as from an SDK | Dicts, or lists of dicts | Python handles every row; SQLLoad types and converts them. |
+
+Pick the first row that fits. Describe the job when `sl.http` covers the API; yield your own rows
+or Arrow data when the source needs Python: an SDK, unusual authentication, or logic between
+requests.
+
+## The API at a glance
+
+```python
+import sqlload as sl
+
+# A source: the settings its tables share.
+shop = sl.source("shop", write_strategy="merge")
+
+
+# A table: one function, one table.
+@shop.table(unique_key="order_id", cursor_column="updated_at")
+def orders(ctx: sl.Context):
+    """Orders from the shop, one row per order."""
+    # ctx.cursor_value is where the last load ended.
+    for page in fetch_orders(updated_after=ctx.cursor_value):
+        # Dicts, Arrow data, JSON bytes or an sl.http job.
+        yield page
+```
+
+| Name | What it is |
+|------|------------|
+| [`sl.source`](#declaring) | A source: its connection, target and the settings its tables share. |
+| [`@source.table`](#declaring) | A table, from a function. Declaring it never runs it; the function runs when the table loads. |
+| [`ctx`](#the-context) | The run's context: `ctx.cursor_value` and `ctx.cursor_end` for the cursor window, `ctx.state` for a [logged position](#logged-state), `ctx.client` and `ctx.connection`. |
+| [What a function yields](#what-a-function-yields) | Dicts, Arrow data, `sl.json` and `sl.ndjson` bytes, `sl.http` jobs and `sl.checkpoint` positions, in any mix. |
+| [`sl.http`](#http-apis) | REST jobs that run entirely in Rust. |
+
+## Setting up
 
 List the folders holding them in `sqlload.toml`:
 
@@ -34,8 +108,10 @@ shop = sl.source("shop", write_strategy="merge")
 def orders(ctx: sl.Context):
     """Orders from the shop, one row per order."""
     yield [
-        {"order_id": 1, "status": "paid", "total": 42.5, "updated_at": "2026-11-01T09:30:00Z"},
-        {"order_id": 2, "status": "placed", "total": 18.0, "updated_at": "2026-11-02T14:05:00Z"},
+        {"order_id": 1, "status": "paid", "total": 42.5,
+         "updated_at": "2026-11-01T09:30:00Z"},
+        {"order_id": 2, "status": "placed", "total": 18.0,
+         "updated_at": "2026-11-02T14:05:00Z"},
     ]
 ```
 
@@ -128,10 +204,19 @@ import sqlload as sl
 store = sl.source("store")
 
 
-@store.table(description="Orders", flatten=["customer"], columns={"total": "decimal(18,2)"})
+@store.table(
+    description="Orders",
+    flatten=["customer"],
+    columns={"total": "decimal(18,2)"},
+)
 def store_orders(ctx):
-    yield {"order_id": 7, "total": Decimal("12.50"), "placed_on": date(2026, 11, 1),
-           "customer": {"country": "GB", "address": {"city": "Leeds"}}, "line_totals": {"sku-14": 12.5}}
+    yield {
+        "order_id": 7,
+        "total": Decimal("12.50"),
+        "placed_on": date(2026, 11, 1),
+        "customer": {"country": "GB", "address": {"city": "Leeds"}},
+        "line_totals": {"sku-14": 12.5},
+    }
 ```
 
 That loads these DuckDB columns: `order_id BIGINT`, `total DECIMAL(18,2)`, `placed_on DATE`,
@@ -168,8 +253,8 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 
 ## HTTP APIs
 
-`sl.http` builds HTTP jobs that run entirely in Rust: requests, pages, fan-out, retries and parsing.
-The function returns or yields the job, and Python's part ends there.
+The full `sl.http` reference. Every job below runs in Rust, as described in
+[Describe the job, or yield the rows](#describe-the-job-or-yield-the-rows).
 
 ```toml
 [connections.shop]
@@ -187,14 +272,25 @@ api = sl.http(shop, auth=sl.bearer(), rate_limit="10/s", retries=5)
 
 @shop.table(description="Orders, one row per order.", unique_key="order_id")
 def orders(ctx):
-    return api.paginate("/orders", paginator=sl.page_number("page"), select="$.items")
+    return api.paginate(
+        "/orders", paginator=sl.page_number("page"), select="$.items"
+    )
 
 
-@shop.table(description="Order lines.", unique_key=["order_id", "line_no"])
+@shop.table(
+    description="Order lines.", unique_key=["order_id", "line_no"]
+)
 def order_items(ctx):
-    order_ids = api.paginate("/orders", paginator=sl.page_number("page"), select="$.items[*].order_id")
-    return api.fan_out("/orders/{order_id}/items", over=order_ids, concurrency=8,
-                       select="$.items", on_status={404: "skip"})
+    order_ids = api.paginate(
+        "/orders", paginator=sl.page_number("page"), select="$.items[*].order_id"
+    )
+    return api.fan_out(
+        "/orders/{order_id}/items",
+        over=order_ids,
+        concurrency=8,
+        select="$.items",
+        on_status={404: "skip"},
+    )
 ```
 
 ```console
@@ -241,7 +337,8 @@ loaded   raw.shop__orders       5 rows  1.0s
 
 ## Logged state
 
-A table whose position the data can't carry, such as a sync token, sets `state="logged"`:
+Most tables need no state: their position is the data's own `cursor_column`. A table whose
+position the data can't carry, such as an API's sync token, opts in with `state="logged"`:
 
 ```python
 @shop.table(write_strategy="append", state="logged")
@@ -258,8 +355,8 @@ def events(ctx: sl.Context):
 ```
 
 `sl.checkpoint(position)` takes any JSON value and covers exactly the rows yielded before it.
-`sl.checkpoint(None)` clears the position. See [Logged state](/docs/concepts/cursors/#logged-state)
-and [`sqlload state`](/docs/cli/state/).
+`sl.checkpoint(None)` clears the position. See [Logged state](/docs/concepts/cursors/#logged-state).
+To inspect or correct a logged position, see [Logged state](/docs/sources/logged-state/).
 
 ## Other functions
 

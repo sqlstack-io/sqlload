@@ -1,7 +1,13 @@
 ---
-title: "state"
-description: "Inspect and correct the run log of state = \"logged\" tables."
+title: "Logged state"
+description: "The sqlload state command, for Python tables with state=\"logged\": inspect and correct their logged position."
 ---
+
+This page is only for [Python tables](/docs/sources/python/#logged-state) with `state="logged"`:
+tables that keep a position the data can't carry, such as an API sync token. Most projects never
+use it, because tables with a `cursor_column` find their position in the loaded data.
+
+`sqlload state` shows and corrects that logged position:
 
 ```bash
 sqlload state show      [SELECT ...]
@@ -11,7 +17,7 @@ sqlload state reset     SELECT ... (--to VALUE | --clear) [--yes]
 ```
 
 These commands work on Python tables with `state="logged"`, whose position is kept in an
-append-only run log. See [Logged state](/docs/concepts/cursors/#logged-state). With no selector,
+append-only run log. See [Cursors and state](/docs/concepts/cursors/#logged-state). With no selector,
 every logged table is selected; `reset` needs the tables or sources named.
 
 | Command | Does |
