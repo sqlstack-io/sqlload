@@ -207,6 +207,7 @@ impl Output {
                 let batch = normalise_batch(&batch).map_err(CrossError::Data)?;
                 open = self.send(batch, started);
             }
+            Crossed::Checkpoint => {}
             Crossed::Failed(error) => return Err(error),
         }
         Ok(open)

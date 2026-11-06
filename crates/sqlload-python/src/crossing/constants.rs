@@ -15,3 +15,6 @@ pub(crate) const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// The `sqlload._runtime` function orjson calls for values it cannot write itself.
 pub(crate) const CROSSING_DEFAULT: &str = "crossing_default";
+
+/// The method of an `sl.checkpoint` that returns its state as JSON.
+pub(crate) const CHECKPOINT_METHOD: &str = "__sqlload_checkpoint__";
