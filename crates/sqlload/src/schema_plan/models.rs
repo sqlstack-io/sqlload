@@ -127,6 +127,8 @@ pub struct Blocked {
 /// The decision for one table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaPlan {
+    /// The columns the source would load, pinned or not, before any is kept, added or refused; empty when planning stopped before the columns were known.
+    pub desired: Vec<DesiredColumn>,
     pub action: TableAction,
     /// The columns each loaded row carries, in table order.
     pub write_columns: Vec<DesiredColumn>,

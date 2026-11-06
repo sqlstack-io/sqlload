@@ -28,6 +28,7 @@ pub fn plan_schema(
     }
     let Some(live) = live else {
         return SchemaPlan {
+            desired: desired.to_vec(),
             action: TableAction::Create,
             write_columns: kept.into_iter().cloned().collect(),
             warnings,
@@ -55,6 +56,7 @@ pub fn plan_schema(
         }
     }
     SchemaPlan {
+        desired: desired.to_vec(),
         action: match changes.is_empty() {
             true => TableAction::Unchanged,
             false => TableAction::Alter(changes),

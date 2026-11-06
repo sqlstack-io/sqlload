@@ -11,15 +11,17 @@ use crate::contract::_helpers::adopt::adoption;
 use crate::contract::_helpers::compare::findings;
 use crate::contract::_helpers::file_drift::file_drift;
 use crate::contract::_helpers::read_from::{other_warehouse, read_from};
+use crate::contract::_helpers::source_drift::source_drift;
 use crate::contract::constants::INSPECTION_UNAVAILABLE;
 use crate::contract::models::{ContractFinding, ContractReport, ContractRequest, ContractResource};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::files_columns::files_columns;
+use crate::loader::main::plan_project::plan_project;
 use crate::loader::main::selected_specs::selected_specs;
-use crate::loader::models::{FilesColumns, PlanOptions, TableSpec};
+use crate::loader::models::{FilesColumns, PlanOptions, TablePlan, TableSpec};
 use crate::project::models::ProjectConfig;
 
-/// Each selected table's differences, reading only the destinations (sources are listed for their tables, never read); `request.from` reads every table from that target instead of its own, resolving its database and schema there as if the source loaded into it, and `request.generate` adds each table's adoption, except for tables whose own target is another kind of warehouse than `from`, which are problems. A table on a files target is compared with its newest load's footers, as `plan` reads them, and with `request.all_files` every file's footer is compared with that load too.
+/// Each selected table's differences, reading only the destinations (sources are listed for their tables, never read); `request.from` reads every table from that target instead of its own, resolving its database and schema there as if the source loaded into it, and `request.generate` adds each table's adoption, except for tables whose own target is another kind of warehouse than `from`, which are problems. A table on a files target is compared with its newest load's footers, as `plan` reads them, and with `request.all_files` every file's footer is compared with that load too. With `request.source` the tables are also planned as `plan` plans them (reading their sources), and what each would load is compared with its live table for undeclared columns.
 pub async fn compare_contracts(
     project: &ProjectConfig,
     destinations: &BTreeMap<String, Destination>,
@@ -31,6 +33,10 @@ pub async fn compare_contracts(
     let mut report = ContractReport {
         from_target: request.from.clone(),
         ..ContractReport::default()
+    };
+    let planned = match request.source {
+        true => plan_project(&project, destinations, options).await?.tables,
+        false => Vec::new(),
     };
     let chosen = selected_specs(&project, options).await?;
     report.problems = chosen.problems;
@@ -49,8 +55,10 @@ pub async fn compare_contracts(
             false => request.generate,
         };
         let resource = match files_destination(destination) {
-            Some(files) => files_resource(spec, files, (generate, request.all_files)).await,
-            None => resource(spec, destination, generate).await,
+            Some(files) => {
+                files_resource((spec, &planned), files, (generate, request.all_files)).await
+            }
+            None => resource((spec, &planned), destination, generate).await,
         };
         report.resources.push(resource);
     }
@@ -62,9 +70,9 @@ pub async fn compare_contracts(
     Ok(report)
 }
 
-/// One table's comparison, with its adoption under `generate`; a table whose columns cannot be read is one `inspection_unavailable` finding.
+/// One table's comparison, with its adoption under `generate` and its source drift from its plan among `planned`; a table whose columns cannot be read is one `inspection_unavailable` finding.
 async fn resource(
-    spec: &TableSpec,
+    (spec, planned): (&TableSpec, &[TablePlan]),
     destination: &Destination,
     generate: Option<bool>,
 ) -> ContractResource {
@@ -87,10 +95,13 @@ async fn resource(
                 kind: INSPECTION_UNAVAILABLE,
                 message: format!("cannot read the columns of {relation}: {error}"),
                 physical_type: None,
+                source_type: None,
             }],
             None,
         ),
     };
+    let mut findings = findings;
+    findings.extend(source_drift(spec, planned, &relation));
     ContractResource {
         findings,
         relation,
@@ -100,9 +111,9 @@ async fn resource(
     }
 }
 
-/// One files table's comparison: declared columns against the newest load's footers, `relation_missing` before any file; with `all_files`, also each column on which older files differ from that load. Folder, listing and footer problems (an unreadable file, a store error) are `inspection_unavailable` findings; footer types with no portable type are never adopted, since their type would be the reason, not a type.
+/// One files table's comparison, with its source drift from its plan among `planned`: declared columns against the newest load's footers, `relation_missing` before any file; with `all_files`, also each column on which older files differ from that load. Folder, listing and footer problems (an unreadable file, a store error) are `inspection_unavailable` findings; footer types with no portable type are never adopted, since their type would be the reason, not a type.
 async fn files_resource(
-    spec: &TableSpec,
+    (spec, planned): (&TableSpec, &[TablePlan]),
     destination: &FilesDestination,
     (generate, all_files): (Option<bool>, bool),
 ) -> ContractResource {
@@ -126,6 +137,7 @@ async fn files_resource(
             kind: INSPECTION_UNAVAILABLE,
             message: format!("cannot read the columns of {relation}: {problem}"),
             physical_type: None,
+            source_type: None,
         })
         .collect();
     let readable = read.problems.is_empty();
@@ -147,6 +159,7 @@ async fn files_resource(
         }
         _ => None,
     };
+    found.extend(source_drift(spec, planned, &relation));
     ContractResource {
         findings: found,
         relation,

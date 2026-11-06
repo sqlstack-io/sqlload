@@ -8,6 +8,9 @@ pub struct ContractFinding {
     pub kind: &'static str,
     pub message: String,
     pub physical_type: Option<String>,
+    /// With `--source`: the type the source would load the column as; absent from other findings, so their JSON keeps sqb's fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
 }
 
 /// One table's comparison.
@@ -61,6 +64,8 @@ pub struct ContractRequest {
     pub generate: Option<bool>,
     /// `--all-files`: on files targets, also read every file's footer and report the files that differ from the newest load.
     pub all_files: bool,
+    /// `--source`: also plan each table as `plan` does and report where what its source would load differs from its live table, for columns no declaration names.
+    pub source: bool,
 }
 
 /// Every selected table's comparison.
