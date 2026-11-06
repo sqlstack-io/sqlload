@@ -1,6 +1,7 @@
 //! A destination table's live columns.
 
 use crate::adapters::contract::models::TableName;
+use crate::adapters::databricks::main::session::_describe_table::describe_table as describe_databricks;
 use crate::adapters::dispatch::_helpers::no_sql::no_sql;
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
@@ -19,6 +20,7 @@ pub async fn live_columns(
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(describe_duckdb(duckdb, table).await?),
         Destination::Snowflake(snowflake) => Ok(describe_snowflake(snowflake, table).await?),
+        Destination::Databricks(databricks) => Ok(describe_databricks(databricks, table).await?),
         Destination::Files(_) => Err(no_sql()),
     }
 }

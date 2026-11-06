@@ -190,6 +190,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         alter_statements(self, table, changes, live)
     }
 
+    /// The statement rewriting `target` from its own rows through `select`, in place and keeping its grants.
+    fn render_rebuild_table(&self, target: &str, select: &str) -> String {
+        format!("CREATE OR REPLACE TABLE {target} COPY GRANTS AS SELECT {select} FROM {target}")
+    }
+
     /// Whether a staging table's changed types are cast by rewriting it rather than altered in place.
     fn widens_staging_by_rebuild(&self) -> bool {
         false

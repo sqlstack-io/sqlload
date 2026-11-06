@@ -7,10 +7,19 @@ use crate::project::models::{
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// Problems with a Snowflake connection's `load_method`: it is required; an `external_stage` needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing one).
+/// Problems with where a warehouse connection stages files: a Databricks `volume` must be `catalog.schema.volume`; a Snowflake `load_method` is required, and an `external_stage` needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing one).
 pub(crate) fn stage_problems(name: &str, connection: &ConnectionConfig) -> Vec<String> {
-    let ConnectionConfig::Snowflake { load_method, .. } = connection else {
-        return Vec::new();
+    let load_method = match connection {
+        ConnectionConfig::Snowflake { load_method, .. } => load_method,
+        ConnectionConfig::Databricks { volume, .. } => {
+            return match volume.split('.').filter(|part| !part.is_empty()).count() {
+                STAGE_NAME_PARTS => Vec::new(),
+                _ => vec![format!(
+                    "[connections.{name}] volume {volume:?} must be CATALOG.SCHEMA.VOLUME, an existing Unity Catalog volume"
+                )],
+            };
+        }
+        _ => return Vec::new(),
     };
     let Some(load_method) = load_method else {
         return vec![format!(
@@ -105,7 +114,7 @@ pub(crate) fn target_problems(
         (false, false) => problems.push(format!(
             "{place} connection {:?} is a {kind} connection; targets load into {} or write files to {}",
             target.connection,
-            WAREHOUSE_CONNECTION_KINDS.join(" or "),
+            WAREHOUSE_CONNECTION_KINDS.join(", "),
             FILES_CONNECTION_KINDS.join(" or ")
         )),
     }

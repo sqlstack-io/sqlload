@@ -302,7 +302,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "a target cannot load into a source database",
             text: "[targets.other]\nconnection = \"pg\"\nloader_schema = \"RAW\"\n",
-            expected_message: "is a postgres connection; targets load into snowflake or duckdb or write files to s3 or filesystem",
+            expected_message: "is a postgres connection; targets load into snowflake, databricks, duckdb or write files to s3 or filesystem",
         },
         ParseProjectErrorTestCase {
             description: "destination_path needs a files target",

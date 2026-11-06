@@ -66,6 +66,45 @@ fn given_a_reported_column_type_when_reading_it_back_then_it_maps_to_the_portabl
             warehouse: Warehouse::DuckDb,
             expected_type: ColumnType::TimestampTz,
         },
+        LiveTypeTestCase {
+            description: "Databricks bigint is int",
+            live: live("bigint", None, None, None),
+            warehouse: Warehouse::Databricks,
+            expected_type: ColumnType::Int,
+        },
+        LiveTypeTestCase {
+            description: "Databricks decimal(18,2) is a decimal",
+            live: live("decimal(18,2)", Some(18), Some(2), None),
+            warehouse: Warehouse::Databricks,
+            expected_type: ColumnType::Decimal {
+                precision: 18,
+                scale: 2,
+            },
+        },
+        LiveTypeTestCase {
+            description: "Databricks varchar(10) keeps its length",
+            live: live("varchar(10)", None, None, Some(0)),
+            warehouse: Warehouse::Databricks,
+            expected_type: ColumnType::Varchar(10),
+        },
+        LiveTypeTestCase {
+            description: "Databricks timestamp is timestamp_tz and timestamp_ntz is timestamp_ntz",
+            live: live("timestamp_ntz", None, None, None),
+            warehouse: Warehouse::Databricks,
+            expected_type: ColumnType::TimestampNtz,
+        },
+        LiveTypeTestCase {
+            description: "Databricks timestamp is an instant",
+            live: live("timestamp", None, None, None),
+            warehouse: Warehouse::Databricks,
+            expected_type: ColumnType::TimestampTz,
+        },
+        LiveTypeTestCase {
+            description: "Databricks array<string> passes through as native",
+            live: live("array<string>", None, None, None),
+            warehouse: Warehouse::Databricks,
+            expected_type: ColumnType::Native("array<string>".to_owned()),
+        },
     ];
     for test_case in test_cases {
         assert_eq!(

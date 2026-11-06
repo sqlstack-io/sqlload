@@ -79,7 +79,7 @@ pub const PROJECT_MARKER_KEYS: &[&str] = &["connections", "targets", "sources"];
 pub const TABLE_PLACEHOLDER: &str = "{table}";
 
 /// The warehouse connection kinds a target may load into.
-pub const WAREHOUSE_CONNECTION_KINDS: &[&str] = &["snowflake", "duckdb"];
+pub const WAREHOUSE_CONNECTION_KINDS: &[&str] = &["snowflake", "databricks", "duckdb"];
 
 /// The connection kinds a target writes files into.
 pub const FILES_CONNECTION_KINDS: &[&str] = &["s3", "filesystem"];

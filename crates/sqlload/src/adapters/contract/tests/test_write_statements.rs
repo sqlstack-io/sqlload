@@ -9,6 +9,8 @@ const DUCK_INSERT: &str = "INSERT INTO \"raw\".\"app__accounts\" (\"id\", \"prof
 
 const SF_SWAP_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1_SWAP\" (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
 
+const DB_INSERT: &str = "INSERT INTO `raw`.`app__accounts` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, parse_json(`profile`), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`";
+
 #[test]
 fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
     let test_cases = [
@@ -93,6 +95,59 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             mode: WriteMode::Recreate,
             expected_statements: &[
                 "CREATE OR REPLACE TABLE \"RAW\".\"APP__ACCOUNTS\" (\"ID\" NUMBER(38,0), \"PROFILE\" VARIANT, \"UPDATED_AT\" TIMESTAMP_TZ(9), \"_SQLLOAD_LOAD_ID\" VARCHAR, \"_SQLLOAD_LOADED_AT\" TIMESTAMP_TZ(9)) COPY GRANTS AS SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "append on Databricks is one INSERT, since every statement commits alone",
+            warehouse: Warehouse::Databricks,
+            mode: WriteMode::Append,
+            expected_statements: &[DB_INSERT],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert on Databricks is one MERGE inserting every staged row and deleting the window",
+            warehouse: Warehouse::Databricks,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "updated_at".to_owned(),
+                from: Some("2026-11-04T09:00:00Z".to_owned()),
+                to: Some("2026-11-05T09:00:00Z".to_owned()),
+                values: Vec::new(),
+            },
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`updated_at` >= CAST('2026-11-04T09:00:00Z' AS TIMESTAMP) AND __target.`updated_at` < CAST('2026-11-05T09:00:00Z' AS TIMESTAMP) THEN DELETE",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert by partition values on Databricks deletes the listed values",
+            warehouse: Warehouse::Databricks,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "updated_at".to_owned(),
+                from: None,
+                to: None,
+                values: vec!["2026-11-01".to_owned(), "2026-11-03".to_owned()],
+            },
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`updated_at` IN (CAST('2026-11-01' AS TIMESTAMP), CAST('2026-11-03' AS TIMESTAMP)) THEN DELETE",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "an unbounded delete_insert on Databricks deletes every row it does not insert",
+            warehouse: Warehouse::Databricks,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "updated_at".to_owned(),
+                from: None,
+                to: None,
+                values: Vec::new(),
+            },
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE THEN DELETE",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "replace from text rows on Databricks overwrites the table in one commit",
+            warehouse: Warehouse::Databricks,
+            mode: WriteMode::Replace,
+            expected_statements: &[
+                "INSERT OVERWRITE `raw`.`app__accounts` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, parse_json(`profile`), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`",
             ],
         },
     ];

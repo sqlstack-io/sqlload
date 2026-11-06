@@ -17,6 +17,12 @@ fn given_text_when_quoting_a_literal_then_the_warehouse_reads_it_back_unchanged(
             warehouse: Warehouse::DuckDb,
             expected_literal: "'a\\''b'",
         },
+        SqlLiteralTestCase {
+            description: "Databricks escapes backslashes and quotes with a backslash, since '' joins two literals",
+            text: "a\\'b",
+            warehouse: Warehouse::Databricks,
+            expected_literal: "'a\\\\\\'b'",
+        },
     ];
     for test_case in test_cases {
         assert_eq!(
