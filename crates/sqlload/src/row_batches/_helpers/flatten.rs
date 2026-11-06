@@ -9,6 +9,7 @@ use arrow_schema::{DataType, Field, Schema};
 
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::models::ColumnType;
+use crate::row_batches::_helpers::arrow_json::normalise_column;
 use crate::row_batches::constants::{
     FLATTEN_SEPARATOR, FLATTENED_METADATA_KEY, FLATTENED_SEPARATOR,
 };
@@ -129,8 +130,13 @@ pub(crate) fn key_columns(
         _ if array.logical_null_count() == array.len() => Vec::new(),
         (DataType::Struct(_), _) => struct_children(array)?,
         (DataType::Utf8, true) => json_keys(field, array)?,
+        (DataType::Map(..), _) => {
+            let (json_field, json_array) = normalise_column(field.name(), array)?;
+            json_keys(&json_field, &json_array)?
+        }
         (DataType::Utf8, false) => {
-            return Err(shape_error(field.name(), text_row(array), "a text value"));
+            let (row, shape) = text_shape(array);
+            return Err(shape_error(field.name(), row, shape));
         }
         (data_type, _) => {
             return Err(shape_error(
@@ -160,7 +166,10 @@ fn struct_children(array: &ArrayRef) -> Result<Vec<(Arc<Field>, ArrayRef)>, Stri
         .map(|(child_field, child)| {
             let child =
                 arrow_select::nullif::nullif(child, &missing).map_err(|error| error.to_string())?;
-            Ok((child_field, child))
+            Ok((
+                Arc::new(child_field.as_ref().clone().with_nullable(true)),
+                child,
+            ))
         })
         .collect()
 }
@@ -211,12 +220,20 @@ fn object_lines(field: &Field, array: &ArrayRef) -> Result<String, String> {
     Ok(document)
 }
 
-/// The first row of a text column that does not hold an object's JSON, else the first non-NULL row.
-fn text_row(array: &ArrayRef) -> usize {
+/// The first row of a plain text column that does not hold an object's JSON, and its shape: text, or, when other rows hold objects (a column mixing objects with numbers or booleans became text), a scalar.
+fn text_shape(array: &ArrayRef) -> (usize, &'static str) {
     let texts = array.as_string::<i32>();
-    (0..array.len())
-        .find(|row| texts.is_valid(*row) && !texts.value(*row).trim_start().starts_with('{'))
-        .unwrap_or_else(|| first_value(array))
+    let object = |row: usize| texts.value(row).trim_start().starts_with('{');
+    let valid = (0..array.len()).filter(|row| texts.is_valid(*row));
+    let mixed = valid.clone().any(object);
+    let row = valid
+        .clone()
+        .find(|row| !object(*row))
+        .unwrap_or_else(|| first_value(array));
+    match mixed {
+        true => (row, "a scalar (other rows hold objects)"),
+        false => (row, "a text value"),
+    }
 }
 
 fn first_value(array: &ArrayRef) -> usize {

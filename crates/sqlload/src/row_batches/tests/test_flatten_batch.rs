@@ -49,7 +49,9 @@ fn given_listed_objects_when_flattening_then_one_level_becomes_typed_columns_and
             description: "objects mixed with a scalar name the scalar's row",
             rows: "{\"c\":{\"a\":1}}\n{\"c\":\"GB\"}\n",
             flatten: &["c"],
-            expected_batch: Err("flatten c: row 2 of a batch holds a text value, not an object"),
+            expected_batch: Err(
+                "flatten c: row 2 of a batch holds a scalar (other rows hold objects), not an object",
+            ),
         },
         FlattenBatchTestCase {
             description: "a number where an object was listed fails in words",
