@@ -19,6 +19,7 @@ pub mod file_format;
 pub mod file_store;
 pub mod files_source;
 pub mod http;
+pub mod http_source;
 pub mod kafka;
 pub mod loader;
 pub mod masking;

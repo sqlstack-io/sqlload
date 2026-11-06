@@ -6,21 +6,24 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use arrow_array::RecordBatch;
+use sqlload::http_source::main::run_http_job::run_http_job;
 use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::flatten_batch::flatten_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
 use sqlload::row_batches::main::normalise_batch::normalise_batch;
+use sqlload::row_batches::models::{JsonLayout, JsonRead};
 
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{
-    Crossed, CrossingOptions, CrossingStats, Dispatch, PanicSite, ParseJob, Parsed,
+    Crossed, CrossingOptions, CrossingStats, Dispatch, PanicSite, ParseJob, Parsed, ReadContext,
 };
 
 /// Where one piece's batches go, and the read's counters.
 struct Output {
     sender: SyncSender<Parsed>,
     stats: Arc<CrossingStats>,
-    flatten: Arc<Vec<String>>,
+    /// The objects to flatten and the connections an `sl.http` job may use.
+    context: Arc<ReadContext>,
 }
 
 /// Start parser threads and one passing their batches to `sender` in yield order; each channel holds one batch and `max_queued + parse_threads - 2` pieces wait behind the one being passed on, so at most `max_queued + parse_threads` batches are in flight.
@@ -28,9 +31,10 @@ pub(crate) fn start_parsers(
     options: CrossingOptions,
     sender: SyncSender<Parsed>,
     stats: &Arc<CrossingStats>,
-    flatten: Vec<String>,
+    context: ReadContext,
 ) -> Dispatch {
-    let flatten = Arc::new(flatten);
+    let flatten = Arc::new(context.flatten.clone());
+    let context = Arc::new(context);
     let workers = options.parse_threads.max(1);
     let waiting = (options.max_queued.max(1) + workers).saturating_sub(2);
     let (order_sender, order_receiver) = sync_channel(waiting);
@@ -40,8 +44,8 @@ pub(crate) fn start_parsers(
         let jobs = jobs.clone();
         let stats = stats.clone();
         let panic_at = options.panic_at;
-        let flatten = flatten.clone();
-        std::thread::spawn(move || work(&jobs, (&stats, &flatten), panic_at));
+        let context = context.clone();
+        std::thread::spawn(move || work(&jobs, (&stats, &context), panic_at));
     }
     std::thread::spawn(move || {
         let fallback = sender.clone();
@@ -100,7 +104,7 @@ pub(crate) fn panic_if(panic_at: Option<PanicSite>, site: PanicSite) {
 /// Parse jobs until the dispatcher stops; a panic fails the piece, not the thread.
 fn work(
     jobs: &Mutex<Receiver<ParseJob>>,
-    (stats, flatten): (&Arc<CrossingStats>, &Arc<Vec<String>>),
+    (stats, context): (&Arc<CrossingStats>, &Arc<ReadContext>),
     panic_at: Option<PanicSite>,
 ) {
     loop {
@@ -114,7 +118,7 @@ fn work(
         let output = Output {
             sender,
             stats: stats.clone(),
-            flatten: flatten.clone(),
+            context: context.clone(),
         };
         let bytes = crossed.queued_bytes();
         let parsed = catch_unwind(AssertUnwindSafe(|| {
@@ -189,7 +193,7 @@ impl Output {
             Crossed::Json { bytes, read } => {
                 let mut started = started;
                 json_rows(&bytes, &read, &mut |columns| {
-                    let batch = flatten_batch(&columns_batch(columns)?, &self.flatten)?;
+                    let batch = flatten_batch(&columns_batch(columns)?, &self.context.flatten)?;
                     open = open && self.send(batch, started);
                     started = Instant::now();
                     match open {
@@ -218,6 +222,8 @@ impl Output {
                 let batch = self.arrow(&batch)?;
                 open = self.send(batch, started);
             }
+            Crossed::Http(definition) => open = self.http(&definition)?,
+            Crossed::Checkpoint => {}
             Crossed::Failed(error) => return Err(error),
         }
         Ok(open)
@@ -225,8 +231,38 @@ impl Output {
 
     /// A yielded Arrow batch with its listed struct columns flattened, then in the loader's types.
     fn arrow(&self, batch: &RecordBatch) -> Result<RecordBatch, CrossError> {
-        let flattened = flatten_batch(batch, &self.flatten).map_err(CrossError::Data)?;
+        let flattened = flatten_batch(batch, &self.context.flatten).map_err(CrossError::Data)?;
         normalise_batch(&flattened).map_err(CrossError::Data)
+    }
+
+    /// Run an `sl.http` job, parsing each page into batches as it arrives; `Ok(false)` once the consumer has gone, which cancels the requests in flight.
+    fn http(&self, definition: &str) -> Result<bool, CrossError> {
+        let mut open = true;
+        let mut failed: Option<String> = None;
+        run_http_job(definition, &self.context.connections, |page| {
+            let read = JsonRead {
+                layout: JsonLayout::Document,
+                path: page.path.clone(),
+                batch_rows: usize::MAX,
+            };
+            let parsed = json_rows(&page.bytes, &read, &mut |columns| {
+                let batch = flatten_batch(&columns_batch(columns)?, &self.context.flatten)?;
+                open = open && self.send(batch, Instant::now());
+                match open {
+                    true => Ok(()),
+                    false => Err("the consumer stopped reading".to_owned()),
+                }
+            });
+            if let (Err(reason), true) = (parsed, open) {
+                failed = Some(format!("{}: {reason}", page.source));
+            }
+            open && failed.is_none()
+        })
+        .map_err(CrossError::Data)?;
+        match failed {
+            Some(reason) => Err(CrossError::Data(reason)),
+            None => Ok(open),
+        }
     }
 
     /// Count `batch`, parsed since `started`, and pass it on; `false` once the consumer has gone.
