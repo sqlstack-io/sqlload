@@ -247,7 +247,7 @@ fn given_copy_endpoints_when_building_the_project_then_secrets_stay_out_of_its_t
             destination: "./out",
             project: "",
             expected_lines: &[
-                "the source s3://key:***@bucket/raw/ carries credentials, which s3:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
+                "the source s3://***@bucket/raw/ carries credentials, which s3:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
             ],
         },
         CopyProjectTestCase {
@@ -266,6 +266,24 @@ fn given_copy_endpoints_when_building_the_project_then_secrets_stay_out_of_its_t
             project: "",
             expected_lines: &[
                 "the source s3://key:***@bucket/p carries credentials, which s3:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "credentials in a duckdb URI are refused",
+            source: "./in",
+            destination: "duckdb://u:hunter2@h/x.duckdb#a.b",
+            project: "",
+            expected_lines: &[
+                "the destination duckdb://u:***@h/x.duckdb#a.b carries credentials, which duckdb:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "a token before an s3 bucket is refused, not kept in the bucket name",
+            source: "s3://hunter2@bucket/p",
+            destination: "./out",
+            project: "",
+            expected_lines: &[
+                "the source s3://***@bucket/p carries credentials, which s3:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
             ],
         },
         CopyProjectTestCase {
