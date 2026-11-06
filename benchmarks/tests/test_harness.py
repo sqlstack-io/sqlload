@@ -116,7 +116,7 @@ def test_given_equal_values_in_different_text_forms_when_comparing_then_they_mat
 @pytest.mark.parametrize(
 	("competitor", "expected_text"),
 	[
-		(SqlLoad(direct=True, label="direct"), "destination loads parquet files from"),
+		(SqlLoad(direct=True, label="direct"), "Snowflake COPYs directly from"),
 	],
 	ids=["direct"],
 )

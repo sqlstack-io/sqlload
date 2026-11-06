@@ -138,7 +138,7 @@ class SqlLoad(Competitor):
 		return Invocation(argv, self._project_dir(scenario, context, run_dir), self._env(scenario, context, run_dir))
 
 	def plan_invocation(self, scenario: Scenario, context: Context, run_dir: Path) -> tuple[Invocation, str] | None:
-		expected = {"files_snowflake": "destination loads parquet files from", "files_parquet": "DuckDB reads directly from", "files_s3_parquet": "DuckDB reads directly from"}
+		expected = {"files_snowflake": "Snowflake COPYs directly from", "files_parquet": "DuckDB reads directly from", "files_s3_parquet": "DuckDB reads directly from"}
 		if scenario.name not in expected:
 			return None
 		return Invocation([str(SQLLOAD), "plan"], self._project_dir(scenario, context, run_dir), self._env(scenario, context, run_dir)), expected[scenario.name]
