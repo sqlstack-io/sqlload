@@ -1,15 +1,14 @@
 use std::collections::BTreeMap;
 
-use crate::copy::constants::{
-    DESTINATION_CONNECTION, DESTINATION_PASSWORD_VARIABLE, SOURCE_CONNECTION,
-    SOURCE_PASSWORD_VARIABLE,
-};
+use crate::copy::constants::{DESTINATION_PASSWORD_VARIABLE, SOURCE_PASSWORD_VARIABLE};
 
 /// The project `sqlload copy` runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyProject {
     /// The project's TOML: passwords only as `${ENV:NAME}` references.
     pub text: String,
+    /// What `--print-toml` prints: the same without named connections, so it can be added to the sqlload.toml that has them.
+    pub printed: String,
     /// Values for the references to literal URI passwords, read before the process environment.
     pub variables: BTreeMap<String, String>,
     /// Things to tell the user before the copy runs.
@@ -24,14 +23,6 @@ pub enum Role {
 }
 
 impl Role {
-    /// The name of the connection a URI at this end becomes.
-    pub fn connection(self) -> &'static str {
-        match self {
-            Self::Source => SOURCE_CONNECTION,
-            Self::Destination => DESTINATION_CONNECTION,
-        }
-    }
-
     /// The variable a literal password at this end is kept in.
     pub fn password_variable(self) -> &'static str {
         match self {
@@ -52,8 +43,10 @@ impl Role {
 /// One end of the copy: its connection's settings and what it names there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Endpoint {
-    /// The connection's name in the project.
+    /// The connection's name in the project; set once the copy's table is known for a URI or folder.
     pub connection: String,
+    /// Named in sqlload.toml rather than given as a URI or folder.
+    pub named: bool,
     /// The connection's settings as TOML, `${ENV:NAME}` references unresolved.
     pub settings: toml::Table,
     /// After the connection: `schema.table` for databases and warehouses, a folder for files.
@@ -62,6 +55,8 @@ pub struct Endpoint {
     pub secret: Option<(String, String)>,
     /// The endpoint as messages show it, passwords redacted.
     pub shown: String,
+    /// The endpoint for the table's description (its warehouse comment): no user, password or host.
+    pub described: String,
 }
 
 /// What `sqlload copy` was asked to do.

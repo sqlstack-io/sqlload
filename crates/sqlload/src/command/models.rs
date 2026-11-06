@@ -91,7 +91,7 @@ pub struct ContractArgs {
     /// Sources or tables to leave out; wins over --select.
     #[arg(long, num_args = 1.., value_name = "SELECTOR")]
     pub exclude: Vec<String>,
-    /// Read every table from this target instead of its own (same schema and table name).
+    /// Read every table as if its source loaded into this target, in that target's database and schema.
     #[arg(long, value_name = "TARGET")]
     pub from: Option<String>,
     /// Print the report as one JSON document.
