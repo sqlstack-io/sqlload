@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::column_types::models::ColumnType;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::column_types::models::{ColumnType, Warehouse};
 use crate::contract::constants::{
     MISSING_DECLARATION, MISSING_PHYSICAL_COLUMN, RELATION_MISSING, SQLLOAD_COLUMN_PREFIX,
     TYPE_MISMATCH,
@@ -11,12 +12,12 @@ use crate::contract::models::ContractFinding;
 use crate::project::models::Contract;
 use crate::schema_plan::models::LiveColumn;
 
-/// The differences between `declared` and `live` (`None` when the table does not exist): live columns first in table order, then declared columns the table lacks. Undeclared live columns count only under `contract = "enforced"`; SQLLoad's own columns never count.
+/// The differences between `declared` and `live` (`None` when the table does not exist) for `relation` on `warehouse`: live columns first in table order, then declared columns the table lacks. A type agrees when it is the same or the warehouse stores both alike (`varchar(50)` as DuckDB's `VARCHAR`); a wider live type is still a difference. Undeclared live columns count only under `contract = "enforced"`; SQLLoad's own columns never count.
 pub(crate) fn findings(
     declared: &BTreeMap<String, ColumnType>,
     contract: Contract,
     live: Option<&[LiveColumn]>,
-    relation: &str,
+    (warehouse, relation): (Warehouse, &str),
 ) -> Vec<ContractFinding> {
     let Some(live) = live else {
         return vec![ContractFinding {
@@ -36,7 +37,7 @@ pub(crate) fn findings(
     let mut found: Vec<ContractFinding> = live
         .iter()
         .filter(|column| !own(&column.name))
-        .filter_map(|column| live_finding(column, declared_type(&column.name), contract))
+        .filter_map(|column| live_finding(column, declared_type(&column.name), contract, warehouse))
         .collect();
     found.extend(
         declared
@@ -59,15 +60,26 @@ fn is_live(live: &[LiveColumn], name: &str) -> bool {
         .any(|column| column.name.eq_ignore_ascii_case(name))
 }
 
+/// Whether `live` stores what `declared` declares: the same type, or one the warehouse renders the same way.
+fn agrees(warehouse: Warehouse, declared: &ColumnType, live: &ColumnType) -> bool {
+    let sql = |column_type: &ColumnType| {
+        sql_adapter(warehouse)
+            .render_loader_logical_type(column_type)
+            .sql
+    };
+    declared == live || sql(declared).eq_ignore_ascii_case(&sql(live))
+}
+
 /// The finding for one live column, if it has one.
 fn live_finding(
     column: &LiveColumn,
     declared: Option<(&String, &ColumnType)>,
     contract: Contract,
+    warehouse: Warehouse,
 ) -> Option<ContractFinding> {
     let physical = column.column_type.to_string();
     match (declared, contract) {
-        (Some((_, declared)), _) if *declared == column.column_type => None,
+        (Some((_, declared)), _) if agrees(warehouse, declared, &column.column_type) => None,
         (Some((name, declared)), _) => Some(ContractFinding {
             column: Some(name.clone()),
             declared_type: Some(declared.to_string()),

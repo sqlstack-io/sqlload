@@ -129,3 +129,28 @@ def test_given_a_loaded_files_table_when_its_declaration_differs_then_contract_d
 		("missing_declaration", "amount"),
 	]
 
+
+def test_given_a_table_loaded_into_another_target_when_diffing_from_it_then_its_schema_there_is_read(tmp_path: Path) -> None:
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	(tmp_path / "data").mkdir()
+	pq.write_table(pa.table({"id": pa.array([1], pa.int64())}), tmp_path / "data" / "p.parquet")
+	config = tmp_path / "sqlload.toml"
+	targets = (
+		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n'
+		f'[connections.dev]\nkind = "duckdb"\ndatabase = "{tmp_path / "dev.duckdb"}"\n\n'
+		f'[connections.prod]\nkind = "duckdb"\ndatabase = "{tmp_path / "prod.duckdb"}"\n\n'
+		'[targets.dev]\nconnection = "dev"\nloader_schema = "RAW"\n\n'
+		'[targets.prod]\nconnection = "prod"\nloader_schema = "STAGE"\n\n'
+		'[targets.lake]\nconnection = "files"\n\n'
+	)
+	source = '[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\ndestination = "{}"\n'
+	config.write_text(targets + source.format("prod"))
+	assert run("load", "-c", str(config)).returncode == 0
+	config.write_text(targets + source.format("dev"))
+	assert "relation_missing" in run("contract", "diff", "-c", str(config)).stdout
+	from_prod = run("contract", "diff", "--from", "prod", "--json", "-c", str(config))
+	assert (from_prod.returncode, json.loads(from_prod.stdout)["resources"][0]["relation"]) == (0, "STAGE.orders"), from_prod.stdout + from_prod.stderr
+	from_lake = run("contract", "diff", "--from", "lake", "--json", "-c", str(config))
+	assert (from_lake.returncode, json.loads(from_lake.stdout)["problems"]) == (1, ["orders: target lake writes files; contract diff compares warehouse tables (DuckDB, Snowflake) only"]), from_lake.stdout + from_lake.stderr
