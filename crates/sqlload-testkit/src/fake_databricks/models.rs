@@ -36,10 +36,30 @@ pub struct FakeState {
     pub copied: Vec<Vec<String>>,
     /// Tokens handed out.
     pub tokens: u64,
-    /// How many of the next authorized requests are refused with 401, as an expired token is.
+    /// How many of the next authorized requests are refused with 401, as an expired token is; the token each was sent with stays refused.
     pub refuse_requests: usize,
+    /// Tokens refused so far; a request sending one again is refused too.
+    pub refused_tokens: BTreeSet<String>,
+    /// Polls each new statement answers `PENDING` to before it is done.
+    pub pending_polls: usize,
+    /// HTTP statuses the next statement polls fail with.
+    pub poll_failures: VecDeque<u16>,
+    /// Statements not yet done: the polls left and the finished answer, by statement id.
+    pub running: BTreeMap<String, (usize, Value)>,
+    /// When set, results come in chunks of this many rows, each after the first fetched by its link.
+    pub chunk_rows: Option<usize>,
+    /// Later result chunks, by statement id and chunk index.
+    pub chunks: BTreeMap<(String, usize), Value>,
+    /// When set, directory listings come in pages of this many entries.
+    pub page_entries: Option<usize>,
+    /// Statements cancelled, by id.
+    pub cancelled: Vec<String>,
+    /// Statement ids handed out.
+    pub statement_ids: u64,
     /// Every file upload, by path, including overwrites.
     pub puts: Vec<String>,
+    /// A folder and a file written into it just after the folder is next listed, as a load starting meanwhile would.
+    pub write_after_listing: Option<(String, String)>,
 }
 
 impl FakeState {
@@ -97,6 +117,16 @@ impl FakeDatabricks {
             .filter(|path| path.starts_with(&prefix))
             .cloned()
             .collect()
+    }
+
+    /// Make an empty folder, and the folders above it.
+    pub fn place_folder(&self, path: &str) {
+        let mut state = self.state.lock();
+        let mut folder = path.trim_end_matches('/');
+        while folder.len() > FAKE_VOLUME_PATH.len() {
+            state.directories.insert(folder.to_owned());
+            folder = folder.rsplit_once('/').map_or("", |(above, _)| above);
+        }
     }
 
     /// Put a file in the volume as if written at `modified_ms`, creating its folders.

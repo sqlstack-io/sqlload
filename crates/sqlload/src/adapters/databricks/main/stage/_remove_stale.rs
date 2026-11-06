@@ -1,15 +1,14 @@
 //! Remove the load folders failed runs left in the staging volume.
 
-use crate::adapters::databricks::_helpers::stage::folders::stale_folders;
+use crate::adapters::databricks::_helpers::stage::folders::stale_removals;
 use crate::adapters::databricks::constants::{STAGE_FOLDER, STALE_STAGE_HOURS};
-use crate::adapters::databricks::main::stage::_remove_folder::remove_folder;
-use crate::adapters::databricks::models::DatabricksDestination;
+use crate::adapters::databricks::models::{DatabricksDestination, ListedLoad};
+use crate::databricks_api::main::delete_path::delete_path;
 use crate::databricks_api::main::list_directory::list_directory;
-use crate::databricks_api::models::DirectoryEntry;
 use crate::http::errors::ApiError;
 use crate::time_text::main::now_ms::now_ms;
 
-/// Remove the load folders in `<volume>/sqlload` whose files are all over a day old; how many went.
+/// Remove the files of load folders in `<volume>/sqlload` whose files are all over a day old, then those folders and empty ones while they stay empty; how many load folders went. A folder another load writes into meanwhile is kept, and a removal that fails only warns.
 pub(in crate::adapters) async fn remove_stale(
     destination: &DatabricksDestination,
 ) -> Result<usize, ApiError> {
@@ -18,21 +17,46 @@ pub(in crate::adapters) async fn remove_stale(
     let Some(loads) = list_directory(api, &root).await? else {
         return Ok(0);
     };
-    let mut listed: Vec<(DirectoryEntry, Vec<DirectoryEntry>)> = Vec::new();
+    let mut listed: Vec<ListedLoad> = Vec::new();
     for load in loads.into_iter().filter(|load| load.is_directory) {
-        let mut files: Vec<DirectoryEntry> = Vec::new();
-        for batch in list_directory(api, &load.path).await?.unwrap_or_default() {
-            match batch.is_directory {
-                true => files.extend(list_directory(api, &batch.path).await?.unwrap_or_default()),
-                false => files.push(batch),
+        let mut found = ListedLoad {
+            folder: load.path.clone(),
+            ..ListedLoad::default()
+        };
+        for entry in list_directory(api, &load.path).await?.unwrap_or_default() {
+            match entry.is_directory {
+                true => {
+                    let files = list_directory(api, &entry.path).await?.unwrap_or_default();
+                    found
+                        .files
+                        .extend(files.into_iter().filter(|file| !file.is_directory));
+                    found.batches.push(entry.path);
+                }
+                false => found.files.push(entry),
             }
         }
-        listed.push((load, files));
+        listed.push(found);
     }
-    let before_ms = now_ms() - STALE_STAGE_HOURS * 3_600_000;
-    let stale = stale_folders(&listed, before_ms);
-    for folder in &stale {
-        remove_folder(api, folder).await?;
+    let removals = stale_removals(&listed, now_ms() - STALE_STAGE_HOURS * 3_600_000);
+    for file in &removals.files {
+        if let Err(error) = delete_path(api, file, false).await {
+            tracing::warn!(%error, file, "cannot remove a stale staged file");
+        }
     }
-    Ok(stale.len())
+    let loads: Vec<&str> = listed
+        .iter()
+        .map(|load| load.folder.trim_end_matches('/'))
+        .collect();
+    let mut removed = 0;
+    for folder in &removals.folders {
+        let deleted = delete_path(api, folder, true).await;
+        match (deleted, loads.contains(&folder.as_str())) {
+            (Ok(()), true) => removed += 1,
+            (Ok(()), false) => {}
+            (Err(error), _) => {
+                tracing::debug!(%error, folder, "a staged folder is not empty; kept")
+            }
+        }
+    }
+    Ok(removed)
 }

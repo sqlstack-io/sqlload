@@ -125,7 +125,8 @@ pub(crate) fn run_statement(state: &SharedState, body: &[u8]) -> Outcome {
     let statement = request["statement"].as_str().unwrap_or_default().to_owned();
     let mut state = state.lock();
     state.statements.push(statement.clone());
-    Ok(state.answer(&statement))
+    let answer = state.answer(&statement);
+    Ok(state.deliver(answer))
 }
 
 impl FakeState {

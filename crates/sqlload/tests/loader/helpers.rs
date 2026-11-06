@@ -23,11 +23,12 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    BatchedScenarioTestCase, CursorSource, DatabricksLoadTestCase, DatabricksOutcome,
-    DebugStageTestCase, FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase,
-    LargePartitionTestCase, LiveDatabricks, LiveDatabricksTestCase, MetadataRoundTripTestCase,
-    ParquetFile, RouteFiles, RouteOutcome, RouteTestCase, ScenarioTestCase,
-    SourceRowUpgradeTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
+    BatchedScenarioTestCase, CursorSource, DatabricksAnswerTestCase, DatabricksLoadTestCase,
+    DatabricksOutcome, DebugStageTestCase, FilesScenario, FilesScenarioTestCase,
+    FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks, LiveDatabricksTestCase,
+    MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome, RouteTestCase,
+    ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase, WrittenPartition,
+    WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -1104,7 +1105,7 @@ pub(crate) fn expired_token(fake: &sqlload_testkit::fake_databricks::models::Fak
     fake.state.lock().refuse_requests = 1;
 }
 
-/// A failed run's folder two days old, and a folder another load is still filling.
+/// A failed run's folder two days old, a folder another load is still filling, an empty folder a failed run left, and an empty folder a starting load writes its first file into just after cleanup lists it.
 pub(crate) fn stale_and_running_loads(
     fake: &sqlload_testkit::fake_databricks::models::FakeDatabricks,
 ) {
@@ -1119,6 +1120,65 @@ pub(crate) fn stale_and_running_loads(
         b"PAR1",
         now_ms,
     );
+    fake.place_folder("/Volumes/main/raw/stage/sqlload/abandoned-load/00001");
+    fake.place_folder("/Volumes/main/raw/stage/sqlload/starting-load/00001");
+    fake.state.lock().write_after_listing = Some((
+        "/Volumes/main/raw/stage/sqlload/starting-load/00001".to_owned(),
+        "/Volumes/main/raw/stage/sqlload/starting-load/00001/part-00001.parquet".to_owned(),
+    ));
+}
+
+/// The stale and running load folders, with the warehouse answering every statement after a poll (the first poll failing with 503), results one row per chunk, and listings one entry per page.
+pub(crate) fn slow_paged_answers(fake: &sqlload_testkit::fake_databricks::models::FakeDatabricks) {
+    stale_and_running_loads(fake);
+    let mut state = fake.state.lock();
+    state.pending_polls = 1;
+    state.poll_failures.push_back(503);
+    state.chunk_rows = Some(1);
+    state.page_entries = Some(1);
+}
+
+/// Every statement answers after a poll, and the first poll is refused outright.
+pub(crate) fn poll_refused(fake: &sqlload_testkit::fake_databricks::models::FakeDatabricks) {
+    let mut state = fake.state.lock();
+    state.pending_polls = 1;
+    state.poll_failures.push_back(400);
+}
+
+/// Create a three-column table on a fresh fake delivering answers as the case says, then read its columns back through the client.
+pub(crate) async fn databricks_columns(
+    test_case: &DatabricksAnswerTestCase,
+) -> Result<Vec<Option<String>>, String> {
+    let fake =
+        sqlload_testkit::fake_databricks::main::start_fake_databricks::start_fake_databricks()
+            .await?;
+    {
+        let mut state = fake.state.lock();
+        state.chunk_rows = test_case.chunk_rows;
+        state.pending_polls = test_case.pending_polls;
+    }
+    let http = sqlload::http::main::http_client::build_http_client(
+        &sqlload::http::models::ConnectionCounter::default(),
+    )
+    .map_err(|error| error.to_string())?;
+    let api = sqlload::databricks_api::models::DatabricksClient::new(
+        http,
+        &fake.base_url,
+        "wh",
+        ("id", sqlload::auth::models::Secret("secret".to_owned())),
+    );
+    let execute = sqlload::databricks_api::main::execute_statement::execute_statement;
+    execute(&api, "CREATE TABLE IF NOT EXISTS `main`.`raw`.`orders` (`id` BIGINT, `amount` decimal(12,2), `note` STRING)")
+        .await
+        .map_err(|error| error.to_string())?;
+    let rows = execute(&api, "SELECT column_name, full_data_type FROM `main`.information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders'")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(rows
+        .rows
+        .into_iter()
+        .map(|row| row.into_iter().next().flatten())
+        .collect())
 }
 
 /// Load the case's files into a fresh fake Databricks workspace; what was planned and sent, and what the volume still holds.
@@ -1161,6 +1221,7 @@ pub(crate) async fn run_databricks(
         rows,
         copies: state.copied.len(),
         left,
+        cancelled: state.cancelled.len(),
     })
 }
 
@@ -1218,7 +1279,11 @@ pub(crate) async fn run_live_databricks(
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
-    let (_, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let options = PlanOptions {
+        reload: load.reload,
+        ..PlanOptions::default()
+    };
+    let (_, outcome) = plan_apply_load(&project, &destinations, &options).await;
     let destination = destinations
         .get("dev")
         .ok_or_else(|| "no dev target".to_owned())?;

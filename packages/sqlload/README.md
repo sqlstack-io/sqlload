@@ -304,16 +304,20 @@ catalog = "main"
 volume = "main.raw.sqlload_stage"   # catalog.schema.volume
 ```
 
-The service principal needs `USE CATALOG`, `USE SCHEMA` and `CREATE TABLE` where it loads, and
-`READ VOLUME` and `WRITE VOLUME` on the volume. `debug` checks that the volume lists.
+The service principal needs `USE CATALOG`, `USE SCHEMA` and `CREATE TABLE` where it loads
+(`CREATE SCHEMA` too when the schema does not exist yet), ownership of or `MANAGE` on the tables it
+replaces or rewrites, and `READ VOLUME` and `WRITE VOLUME` on the volume. `debug` checks that the
+volume lists.
 
 Each batch is written as Parquet to `<volume>/sqlload/<load id>/<batch>/` and loaded with one
 `COPY INTO`. The batch's folder is removed once the `COPY` commits, and when it fails; the next load
-removes folders failed runs left after a day. This is the only route: there is no `INSERT`
+removes what failed runs left after a day, deleting only files it listed as old and folders that
+are empty, so a load writing meanwhile keeps its files. This is the only route: there is no `INSERT`
 fallback. Files of a files source pass through SQLLoad on the way to the volume.
 
 The Statement Execution API runs every statement in its own transaction, so each write is one
-statement: `append` is the `COPY` into the table, `delete_insert` is one `MERGE` that inserts the
+statement: `append` is the `COPY` into the table (into a staging table, then one `INSERT`, for a
+logged table), `delete_insert` is one `MERGE` that inserts the
 batch and deletes the rows it replaces, and `merge` is one `MERGE` on the key. The run record
 commits after it.
 

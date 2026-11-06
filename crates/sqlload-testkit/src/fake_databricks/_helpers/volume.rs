@@ -51,9 +51,9 @@ pub(crate) fn delete_directory(state: &SharedState, path: &str) -> Outcome {
 }
 
 /// The files and directories directly in `path`.
-pub(crate) fn list_directory(state: &SharedState, path: &str) -> Outcome {
+pub(crate) fn list_directory(state: &SharedState, path: &str, page_token: Option<&str>) -> Outcome {
     let path = path.trim_end_matches('/');
-    let state = state.lock();
+    let mut state = state.lock();
     if !state.directories.contains(path) {
         return Err(missing(path));
     }
@@ -84,7 +84,27 @@ pub(crate) fn list_directory(state: &SharedState, path: &str) -> Outcome {
                 })
             }),
     );
-    Ok(json!({ "contents": contents }))
+    let start: usize = match page_token.map(str::parse) {
+        Some(Ok(start)) => start,
+        _ => 0,
+    };
+    let size = state
+        .page_entries
+        .filter(|size| *size > 0)
+        .unwrap_or(usize::MAX);
+    let end = start.saturating_add(size).min(contents.len());
+    let page: Vec<Value> = contents
+        .get(start..end)
+        .map(<[Value]>::to_vec)
+        .unwrap_or_default();
+    let next = (end < contents.len()).then(|| end.to_string());
+    if let Some((folder, file)) = state.write_after_listing.clone()
+        && folder == path
+    {
+        state.write_after_listing = None;
+        state.write_file(&file, b"PAR1".to_vec(), now_ms());
+    }
+    Ok(json!({ "contents": page, "next_page_token": next }))
 }
 
 pub(crate) fn now_ms() -> i64 {

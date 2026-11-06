@@ -392,6 +392,8 @@ pub(crate) struct DatabricksLoadTestCase {
     pub(crate) expected_copies: usize,
     /// Files and folders left under the volume's `sqlload/` folder.
     pub(crate) expected_left: &'static [&'static str],
+    /// Statements cancelled after polling them failed.
+    pub(crate) expected_cancelled: usize,
 }
 
 /// What one Databricks load planned, sent and left behind.
@@ -402,6 +404,7 @@ pub(crate) struct DatabricksOutcome {
     pub(crate) rows: usize,
     pub(crate) copies: usize,
     pub(crate) left: Vec<String>,
+    pub(crate) cancelled: usize,
 }
 
 /// A real Databricks workspace the live test may load into: only its `sqlload_` schema.
@@ -420,6 +423,19 @@ pub(crate) struct LiveDatabricksTestCase {
     pub(crate) source: &'static str,
     pub(crate) settings: &'static str,
     pub(crate) file_set: RouteFileSet,
+    /// Plan and load with `--reload`, reading every file again.
+    pub(crate) reload: bool,
     /// Rows in the table afterwards.
     pub(crate) expected_rows: &'static str,
+}
+
+/// One query against the fake workspace with its answers delivered a given way.
+pub(crate) struct DatabricksAnswerTestCase {
+    pub(crate) description: &'static str,
+    /// Rows per result chunk; `None` sends every row in the first.
+    pub(crate) chunk_rows: Option<usize>,
+    /// Polls before each statement is done.
+    pub(crate) pending_polls: usize,
+    /// The column names `information_schema.columns` returns, in order.
+    pub(crate) expected_columns: &'static [&'static str],
 }

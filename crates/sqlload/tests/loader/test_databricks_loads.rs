@@ -1,10 +1,11 @@
 use sqlload::databricks_api::main::execute_statement::execute_statement;
 
 use crate::helpers::{
-    copy_fails, expired_token, found, live_databricks, not_found, nothing_in_databricks, run_async,
-    run_databricks, run_live_databricks, stale_and_running_loads, two_batches, two_days,
+    copy_fails, databricks_columns, expired_token, found, live_databricks, not_found,
+    nothing_in_databricks, poll_refused, run_async, run_databricks, run_live_databricks,
+    slow_paged_answers, stale_and_running_loads, two_batches, two_days,
 };
-use crate::test_types::{DatabricksLoadTestCase, LiveDatabricksTestCase};
+use crate::test_types::{DatabricksAnswerTestCase, DatabricksLoadTestCase, LiveDatabricksTestCase};
 
 const STAGED: &str = "/Volumes/main/raw/stage/sqlload/";
 const COPY_ORDERS: &str = "COPY INTO `main`.`raw`.`orders` FROM (SELECT ";
@@ -14,6 +15,7 @@ const LIVE_APPEND: LiveDatabricksTestCase = LiveDatabricksTestCase {
     source: "orders_append",
     settings: "write_strategy = \"append\"",
     file_set: two_days,
+    reload: false,
     expected_rows: "6",
 };
 
@@ -29,6 +31,7 @@ const BASE: DatabricksLoadTestCase = DatabricksLoadTestCase {
     expected_rows: None,
     expected_copies: 1,
     expected_left: &[],
+    expected_cancelled: 0,
 };
 
 #[test]
@@ -93,14 +96,39 @@ fn given_a_databricks_target_when_loading_files_then_each_batch_is_staged_copied
             ..BASE
         },
         DatabricksLoadTestCase {
-            description: "a failed run's folder over a day old is removed; a load still writing keeps its folder",
+            description: "a failed run's folder over a day old is removed; a load still writing keeps its folder, and a load that starts writing into an empty folder after cleanup listed it keeps its file",
             prepare: stale_and_running_loads,
             expected_rows: Some(6),
             expected_left: &[
                 "/Volumes/main/raw/stage/sqlload/running-load",
                 "/Volumes/main/raw/stage/sqlload/running-load/00001",
                 "/Volumes/main/raw/stage/sqlload/running-load/00001/part-00001.parquet",
+                "/Volumes/main/raw/stage/sqlload/starting-load",
+                "/Volumes/main/raw/stage/sqlload/starting-load/00001",
+                "/Volumes/main/raw/stage/sqlload/starting-load/00001/part-00001.parquet",
             ],
+            ..BASE
+        },
+        DatabricksLoadTestCase {
+            description: "statements answered after a poll (the first poll failing with 503 and retried), results in one-row chunks and listings in one-entry pages load and clean up the same",
+            prepare: slow_paged_answers,
+            expected_rows: Some(6),
+            expected_left: &[
+                "/Volumes/main/raw/stage/sqlload/running-load",
+                "/Volumes/main/raw/stage/sqlload/running-load/00001",
+                "/Volumes/main/raw/stage/sqlload/running-load/00001/part-00001.parquet",
+                "/Volumes/main/raw/stage/sqlload/starting-load",
+                "/Volumes/main/raw/stage/sqlload/starting-load/00001",
+                "/Volumes/main/raw/stage/sqlload/starting-load/00001/part-00001.parquet",
+            ],
+            ..BASE
+        },
+        DatabricksLoadTestCase {
+            description: "a poll refused outright fails the load and cancels the statement it stopped waiting for",
+            prepare: poll_refused,
+            expected_error: "poll failed",
+            expected_copies: 0,
+            expected_cancelled: 1,
             ..BASE
         },
     ];
@@ -146,6 +174,11 @@ fn given_a_databricks_target_when_loading_files_then_each_batch_is_staged_copied
             );
             assert_eq!(
                 outcome.copies, test_case.expected_copies,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(
+                outcome.cancelled, test_case.expected_cancelled,
                 "{}",
                 test_case.description
             );
@@ -208,6 +241,13 @@ fn given_a_live_databricks_workspace_when_loading_with_each_strategy_then_rows_l
             settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"",
             ..LIVE_APPEND
         },
+        LiveDatabricksTestCase {
+            description: "delete_insert again: the MERGE deletes the window it reinserts, so the rows are not doubled",
+            source: "orders_days",
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"",
+            reload: true,
+            ..LIVE_APPEND
+        },
     ];
     run_async(async {
         let api = sqlload::databricks_api::models::DatabricksClient::new(
@@ -245,6 +285,46 @@ fn given_a_live_databricks_workspace_when_loading_with_each_strategy_then_rows_l
         let dropped =
             execute_statement(&api, &format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).await;
         dropped.map_err(|error| error.to_string())?;
+        Ok(())
+    })
+}
+
+#[test]
+fn given_databricks_answers_after_polls_or_in_chunks_when_reading_them_then_every_row_arrives_in_order()
+-> Result<(), String> {
+    let test_cases = [
+        DatabricksAnswerTestCase {
+            description: "every row in the first chunk, answered at once",
+            chunk_rows: None,
+            pending_polls: 0,
+            expected_columns: &["id", "amount", "note"],
+        },
+        DatabricksAnswerTestCase {
+            description: "one row per chunk: the rest come through each chunk's link",
+            chunk_rows: Some(1),
+            pending_polls: 0,
+            expected_columns: &["id", "amount", "note"],
+        },
+        DatabricksAnswerTestCase {
+            description: "two rows then one, answered after two polls",
+            chunk_rows: Some(2),
+            pending_polls: 2,
+            expected_columns: &["id", "amount", "note"],
+        },
+    ];
+    run_async(async {
+        for test_case in &test_cases {
+            let columns = databricks_columns(test_case).await?;
+            let names: Vec<&str> = columns
+                .iter()
+                .map(|name| name.as_deref().unwrap_or("NULL"))
+                .collect();
+            assert_eq!(
+                names, test_case.expected_columns,
+                "{}",
+                test_case.description
+            );
+        }
         Ok(())
     })
 }

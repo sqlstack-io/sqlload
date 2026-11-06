@@ -29,3 +29,18 @@ pub struct DatabricksWriter {
     /// The batch's files still uploading, a few at a time, while the next ones are read and encoded.
     pub uploads: tokio::task::JoinSet<Result<(), LoaderError>>,
 }
+
+/// One load folder of `<volume>/sqlload` as listed: its batch folders and every file under it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListedLoad {
+    pub folder: String,
+    pub batches: Vec<String>,
+    pub files: Vec<crate::databricks_api::models::DirectoryEntry>,
+}
+
+/// What stale-folder cleanup removes: files known from the listing to be old, then folders, deepest first, each removed only if it is empty by then.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaleRemovals {
+    pub files: Vec<String>,
+    pub folders: Vec<String>,
+}
