@@ -39,8 +39,11 @@ pub const READ_CHUNK_BYTES: usize = 256 * 1024;
 /// Files sampled to work out the schema (their footers, or their first records): the newest by key, so recent schema changes are seen.
 pub const SCHEMA_SAMPLE_FILES: usize = 20;
 
-/// Footers read at once when a destination reads many.
+/// Parquet footers (or CSV header lines) read at once, at plan and for each batch.
 pub const CONCURRENT_FOOTER_READS: usize = 16;
+
+/// JSON and CSV files sampled at once at plan: each sample holds up to `SAMPLE_ROWS` records, so fewer than footers.
+pub const CONCURRENT_TEXT_SAMPLES: usize = 4;
 
 /// Columns the loader writes itself (load metadata and source tracking): a files source drops them from its files, matched ignoring case, and this load fills its own.
 pub const LOADER_COLUMNS: &[&str] = &[

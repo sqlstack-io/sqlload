@@ -2,16 +2,14 @@
 
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::models::OpenFolder;
-use crate::files_source::_helpers::parquet::footers::parquet_footer;
 use crate::files_source::_helpers::plan::columns::{
     ColumnMerge, SampledColumn, case_problems, drop_loader_columns, file_columns, merge_columns,
-    parquet_columns,
 };
 use crate::files_source::_helpers::plan::encoding::{file_codec, file_names};
 use crate::files_source::_helpers::plan::partitions::data_file;
-use crate::files_source::_helpers::text::sample::sample_file;
+use crate::files_source::_helpers::plan::sample::newest_columns;
 use crate::files_source::constants::{
-    SCHEMA_SAMPLE_FILES, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::{Codec, DataFile, FilesEncoding, FilesTable, SourceFormat};
@@ -31,9 +29,9 @@ pub async fn discover_files(
     let text_format = encoding.format != SourceFormat::Parquet;
     let mut columns: Vec<SampledColumn> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
-    for (data, codec) in files.iter().rev().take(SCHEMA_SAMPLE_FILES) {
-        let (found, loader) =
-            drop_loader_columns(file_columns_of(folder, data, *codec, encoding).await?);
+    let sampled = newest_columns(folder, &files, encoding).await?;
+    for ((data, _), found) in files.iter().rev().zip(sampled) {
+        let (found, loader) = drop_loader_columns(found);
         for name in loader {
             if !dropped.contains(&name) {
                 dropped.push(name);
@@ -87,23 +85,5 @@ async fn listed_files(
             ),
         }),
         false => Ok((files, skipped, problems)),
-    }
-}
-
-/// One file's columns: from its Parquet footer, or from its first JSON or CSV records.
-async fn file_columns_of(
-    folder: &OpenFolder,
-    data: &DataFile,
-    codec: Codec,
-    encoding: &FilesEncoding,
-) -> Result<Vec<SampledColumn>, FilesError> {
-    match encoding.format {
-        SourceFormat::Parquet => Ok(parquet_columns(&parquet_footer(folder, &data.file).await?)),
-        _ => sample_file(folder, &data.file, codec, encoding)
-            .await
-            .map_err(|reason| FilesError::File {
-                key: data.file.relative_key.clone(),
-                reason,
-            }),
     }
 }
