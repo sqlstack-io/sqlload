@@ -1,11 +1,5 @@
-/// The source and the target of the project `sqlload copy` builds.
-pub const COPY_NAME: &str = "copy";
-
-/// The connection a source URI becomes.
-pub const SOURCE_CONNECTION: &str = "copy_source";
-
-/// The connection a destination URI becomes.
-pub const DESTINATION_CONNECTION: &str = "copy_destination";
+/// The start of the source's and target's names, `copy_<table>`.
+pub const COPY_PREFIX: &str = "copy_";
 
 /// Where a literal password in the source URI is kept, so the project text only references it.
 pub const SOURCE_PASSWORD_VARIABLE: &str = "SQLLOAD_COPY_SOURCE_PASSWORD";
@@ -14,7 +8,7 @@ pub const SOURCE_PASSWORD_VARIABLE: &str = "SQLLOAD_COPY_SOURCE_PASSWORD";
 pub const DESTINATION_PASSWORD_VARIABLE: &str = "SQLLOAD_COPY_DESTINATION_PASSWORD";
 
 /// The first line of the project `sqlload copy --print-toml` prints.
-pub const PROJECT_HEADER: &str = "# Written by `sqlload copy --print-toml`; add it to sqlload.toml to load this table on every run.\n\n";
+pub const PROJECT_HEADER: &str = "# Written by `sqlload copy --print-toml`; append it to sqlload.toml (it adds a target, a source and any URI connections) to load this table on every run.\n\n";
 
 /// What a password shows as.
 pub const REDACTED: &str = "***";

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/sqlstack-io/sqlload/compare/v0.8.0...v0.9.0) (2026-11-06)
+
+
+### Features
+
+* **python:** sl.checkpoint commits exactly the rows yielded before it ([#44](https://github.com/sqlstack-io/sqlload/issues/44)) ([4f6fcc9](https://github.com/sqlstack-io/sqlload/commit/4f6fcc973445244108b9935d23cf36fdba1d3787))
+* **python:** sl.http paginate and fan_out jobs run in Rust ([#43](https://github.com/sqlstack-io/sqlload/issues/43)) ([18c571f](https://github.com/sqlstack-io/sqlload/commit/18c571fc7cc06a9b06587a3df59c08e5013a419e))
+
 ## [0.8.0](https://github.com/sqlstack-io/sqlload/compare/v0.7.0...v0.8.0) (2026-11-06)
 
 

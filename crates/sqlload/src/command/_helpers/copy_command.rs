@@ -26,7 +26,7 @@ pub(crate) async fn run_copy(request: LoaderRequest<'_>) -> Result<(Vec<String>,
         let _ = writeln!(std::io::stderr(), "warning: {warning}");
     }
     if args.print_toml {
-        return Ok((vec![format!("{PROJECT_HEADER}{}", copy.text)], true));
+        return Ok((vec![format!("{PROJECT_HEADER}{}", copy.printed)], true));
     }
     run_loader(LoaderRequest {
         text: &copy.text,
