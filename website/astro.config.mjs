@@ -1,13 +1,37 @@
+import { readFile, writeFile } from 'node:fs/promises';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import { sqlloadDark, sqlloadLight } from './src/code-themes.mjs';
 import { redirects, sidebar } from './src/navigation.mjs';
 
-// The public domain is not chosen yet. SITE_URL (such as https://example.com) sets it; Cloudflare
-// Pages builds fall back to the deployment's own URL. Every link in the site is root-relative, so
-// the pages work without either; only the llms.txt files, which need absolute URLs, are left out.
-const site = process.env.SITE_URL || process.env.CF_PAGES_URL || undefined;
+// The site lives at https://sqlload.io. Cloudflare Pages builds of main use it; preview builds use
+// their own deployment URL, so their canonical links and llms.txt point at the preview. SITE_URL
+// overrides both. Every link in the site is root-relative, so the pages work without a site URL;
+// only the sitemap and llms.txt files, which need absolute URLs, are left out.
+const site =
+	process.env.SITE_URL ||
+	(process.env.CF_PAGES_BRANCH === 'main' ? 'https://sqlload.io' : process.env.CF_PAGES_URL) ||
+	undefined;
+
+// The homepage is a static file in public/, so Starlight gives it no canonical link and the sitemap
+// leaves it out. Add both once the build is done, from the same site URL as the docs pages.
+const homepageSiteUrls = {
+	name: 'sqlload-homepage-site-urls',
+	hooks: {
+		'astro:build:done': async ({ dir }) => {
+			if (!site) return;
+			const home = new URL('/', site).href;
+			const index = new URL('index.html', dir);
+			const html = await readFile(index, 'utf8');
+			const tags = `<link rel="canonical" href="${home}" />\n\t\t<meta property="og:url" content="${home}" />\n\t</head>`;
+			await writeFile(index, html.replace('</head>', tags));
+			const sitemap = new URL('sitemap-0.xml', dir);
+			const xml = await readFile(sitemap, 'utf8');
+			await writeFile(sitemap, xml.replace('<url>', `<url><loc>${home}</loc></url><url>`));
+		},
+	},
+};
 
 export default defineConfig({
 	site,
@@ -78,5 +102,6 @@ export default defineConfig({
 				]
 				: [],
 		}),
+		homepageSiteUrls,
 	],
 });

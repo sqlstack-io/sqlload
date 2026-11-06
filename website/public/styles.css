@@ -815,12 +815,14 @@ footer a {
 /* Hero visual: sqlload fix turns a messy query into a clean one. */
 .hero {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+	/* Wide enough at 1280 for the hero terminal's 107-column route line at 11px. */
+	grid-template-columns: minmax(0, 1fr) minmax(0, 760px);
 	gap: 48px;
 	align-items: center;
 }
 
 .hero-visual.terminal {
+	font-size: 11px;
 	border: 1px solid var(--panel-border);
 	border-left: 1px solid var(--inner-line);
 	border-radius: var(--radius);

@@ -16,10 +16,10 @@ footer's SQLStack symbols are unchanged copies from the same repository.
 
 ## Domain
 
-No domain is set. Every link is root-relative, so the site works wherever it is served. Set
-`SITE_URL` (such as `https://example.com`) at build time for absolute URLs, the sitemap and the
-`llms.txt` files; Cloudflare Pages builds use the deployment's own URL (`CF_PAGES_URL`) when
-`SITE_URL` is unset. Without either, the build leaves out `llms.txt`.
+The site is https://sqlload.io. Cloudflare Pages builds of `main` use it for canonical links, the
+sitemap and the `llms.txt` files; preview builds use their own deployment URL (`CF_PAGES_URL`).
+`SITE_URL` overrides both. Every link is root-relative, so the site works wherever it is served;
+a local build without `SITE_URL` leaves out the sitemap and `llms.txt`.
 
 ## Hosting
 
@@ -36,8 +36,7 @@ Requires Node 22.12 or newer.
 ```bash
 npm install
 npm run dev      # live preview
-npm run build    # static site in dist/, including the search index
+npm run build    # checks content (scripts/check-content.mjs), then builds dist/ with the search index
 npm run preview  # serve dist/
 python3 scripts/check_links.py dist
-python3 scripts/check_content.py   # every page in the sidebar; no system SQLLoad does not ship
 ```

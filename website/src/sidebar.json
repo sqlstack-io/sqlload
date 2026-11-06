@@ -26,5 +26,5 @@
 		]
 	},
 	{ "label": "Reference", "items": ["docs/configuration", "docs/types", "docs/supported-systems"] },
-	{ "label": "About", "items": ["docs/benchmarks", "docs/compared", "docs/troubleshooting"] }
+	{ "label": "About", "items": ["docs/benchmarks", "docs/compared", "docs/troubleshooting", "docs/roadmap"] }
 ]
