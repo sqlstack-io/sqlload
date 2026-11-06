@@ -28,7 +28,6 @@ pub struct ContractReport {
     /// The target read instead of each table's own, from `--from`.
     pub from_target: Option<String>,
     pub resources: Vec<ContractResource>,
-    /// Problems that stopped tables from being compared, such as a source that could not be listed.
-    #[serde(skip)]
+    /// Problems that stopped tables from being compared, such as a source that could not be listed; any makes the command fail.
     pub problems: Vec<String>,
 }
