@@ -41,7 +41,9 @@ fn given_python_sources_when_parsing_the_project_then_they_join_it_under_the_sam
             toml: "",
             sources: r#"[{"name": "t", "module": "sources/t.py", "settings": {"tables": {"t": {"max_table_nesting": 1}}}}]"#,
             read: |_| String::new(),
-            expected_value: Err("unknown key \"max_table_nesting\" in Python table t (sources/t.py)"),
+            expected_value: Err(
+                "unknown key \"max_table_nesting\" in Python table t (sources/t.py)",
+            ),
         },
         ParsePythonProjectTestCase {
             description: "a Python source may not take a declarative source's keys",

@@ -57,7 +57,12 @@ impl PythonHost for ExtensionHost {
                 ),
                 false => None,
             };
-            Ok(table_batches(&iterator, snapshot.as_ref(), options))
+            Ok(table_batches(
+                &iterator,
+                snapshot.as_ref(),
+                options,
+                request.flatten.clone(),
+            ))
         })
         .map(|batches| Box::new(PythonBatches(batches)) as Box<dyn BatchStream>)
         .map_err(|error| error_text(&error))

@@ -37,13 +37,25 @@ fn given_listed_objects_when_flattening_then_one_level_becomes_typed_columns_and
             description: "a list where an object was listed fails with the column, the row and the shape",
             rows: "{\"c\":{\"a\":1}}\n{\"c\":[1,2]}\n",
             flatten: &["c"],
-            expected_batch: Err("flatten c: row 2 holds a list, not an object"),
+            expected_batch: Err("flatten c: row 2 of a batch holds a list, not an object"),
         },
         FlattenBatchTestCase {
             description: "a scalar column where an object was listed fails",
             rows: "{\"c\":\"GB\"}\n",
             flatten: &["c"],
-            expected_batch: Err("flatten c: row 1 holds a Utf8 value, not an object"),
+            expected_batch: Err("flatten c: row 1 of a batch holds a text value, not an object"),
+        },
+        FlattenBatchTestCase {
+            description: "objects mixed with a scalar name the scalar's row",
+            rows: "{\"c\":{\"a\":1}}\n{\"c\":\"GB\"}\n",
+            flatten: &["c"],
+            expected_batch: Err("flatten c: row 2 of a batch holds a text value, not an object"),
+        },
+        FlattenBatchTestCase {
+            description: "a number where an object was listed fails in words",
+            rows: "{\"c\":5}\n",
+            flatten: &["c"],
+            expected_batch: Err("flatten c: row 1 of a batch holds a number, not an object"),
         },
         FlattenBatchTestCase {
             description: "a flattened name that is already a field fails",
@@ -51,6 +63,14 @@ fn given_listed_objects_when_flattening_then_one_level_becomes_typed_columns_and
             flatten: &["c"],
             expected_batch: Err(
                 "flatten c: the key a gives column c__a, which the data already has",
+            ),
+        },
+        FlattenBatchTestCase {
+            description: "two listed objects giving the same name fail",
+            rows: "{\"a\":{\"_b\":1},\"a_\":{\"b\":2}}\n",
+            flatten: &["a", "a_"],
+            expected_batch: Err(
+                "flatten a_: the key b gives column a___b, which flattening a also gives",
             ),
         },
     ];

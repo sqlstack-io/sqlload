@@ -729,7 +729,7 @@ def test_given_an_enforced_contract_without_declared_columns_when_planning_then_
 			[{"order_id": 7, "customer": {"country": "GB"}}],
 			[{"order_id": 8, "customer": "GB"}],
 			1,
-			"flatten customer: row 1 holds a Utf8 value, not an object",
+			"flatten customer: row 1 of a batch holds a text value, not an object",
 			[("order_id", "BIGINT"), ("customer__country", "VARCHAR"), ("_sqlload_load_id", "VARCHAR"), ("_sqlload_loaded_at", "TIMESTAMP WITH TIME ZONE")],
 		),
 	],
@@ -749,7 +749,6 @@ def test_given_flatten_when_loading_then_only_the_listed_object_expands_one_leve
 	assert expected_text in done.stdout, done.stdout + done.stderr
 	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
 	assert columns == expected_columns
-
 
 
 FLATTEN_YIELDS = {
@@ -775,6 +774,56 @@ def test_given_flatten_when_a_key_collides_with_a_field_then_the_load_fails(tmp_
 	done = sqlload(project, "load")
 	assert done.returncode == 1
 	assert "flatten customer: the key country gives column customer__country, which the data already has" in done.stdout, done.stdout + done.stderr
+
+
+
+TYPED_FLATTEN = {
+	"dicts": "[{'id': 1, 'totals': {'net': __import__('decimal').Decimal('12.50'), 'day': __import__('datetime').date(2024, 1, 2), 'at': __import__('datetime').datetime(2024, 1, 2, 3, 4, 5)}}]",
+	"arrow": "__import__('pyarrow').table({'id': [1], 'totals': __import__('pyarrow').array([{'net': __import__('decimal').Decimal('12.50'), 'day': __import__('datetime').date(2024, 1, 2), 'at': __import__('datetime').datetime(2024, 1, 2, 3, 4, 5)}], __import__('pyarrow').struct([('net', __import__('pyarrow').decimal128(4, 2)), ('day', __import__('pyarrow').date32()), ('at', __import__('pyarrow').timestamp('us'))]))})",
+}
+
+
+@pytest.mark.parametrize("test_case", ["dicts", "arrow"])
+def test_given_flatten_when_the_object_holds_typed_values_then_its_columns_keep_their_types(tmp_path: Path, test_case: str) -> None:
+	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', flatten=['totals'])(lambda ctx: [{TYPED_FLATTEN[test_case]}])\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	load(project)
+	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__t' ORDER BY ordinal_position")
+	assert [(name, kind.split("(")[0]) for name, kind in columns[:4]] == [("id", "BIGINT"), ("totals__net", "DECIMAL"), ("totals__day", "DATE"), ("totals__at", "TIMESTAMP")]
+	assert query(project, 'SELECT totals__net::VARCHAR, totals__day::VARCHAR, totals__at::VARCHAR FROM "RAW".shop__t') == [("12.50", "2024-01-02", "2024-01-02 03:04:05")]
+
+
+def test_given_flatten_when_a_later_batch_has_a_field_of_a_flattened_name_then_the_load_fails(tmp_path: Path) -> None:
+	module = "import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [[{'id': 1, 'customer': {'country': 'GB'}}], sl.json(b'[{\"id\": 2, \"customer__country\": \"x\"}]')])\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	done = sqlload(project, "load")
+	assert done.returncode == 1
+	assert "flatten: column customer__country comes both from a field of the rows and from flattening a listed object" in done.stdout, done.stdout + done.stderr
+
+
+@pytest.mark.parametrize(
+	("settings", "expected_problem"),
+	[
+		("exclude_columns=['cust*']", "flatten customer: exclude_columns cust* also names customer, which flattening replaces with customer__<key> columns"),
+		("mask={'customer': 'hash'}", "flatten customer: mask also names customer"),
+		("columns={'customer': 'json'}", "flatten customer: columns also names customer"),
+	],
+	ids=["exclude", "mask", "pin"],
+)
+def test_given_flatten_and_a_setting_on_the_same_object_when_planning_then_it_is_refused(tmp_path: Path, settings: str, expected_problem: str) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', flatten=['customer'], {settings})(rows)\n")
+	give(project, "rows", [{"id": 1, "customer": {"country": "GB"}}])
+	done = sqlload(project, "plan")
+	assert done.returncode == 1
+	assert expected_problem in done.stdout, done.stdout + done.stderr
+
+
+def test_given_flatten_with_a_path_when_planning_then_it_is_refused(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', flatten=['customer.address'])(rows)\n")
+	give(project, "rows", [{"id": 1}])
+	done = sqlload(project, "plan")
+	assert done.returncode == 1
+	assert "flatten customer.address: flatten names top-level objects, not paths; list customer instead" in done.stdout, done.stdout + done.stderr
 
 
 def test_given_flatten_on_a_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:

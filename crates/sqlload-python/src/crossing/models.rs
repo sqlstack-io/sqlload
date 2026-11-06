@@ -71,6 +71,8 @@ pub(crate) struct Dispatch {
     pub(crate) jobs: Sender<ParseJob>,
     /// Holds the byte budget the generator waits on.
     pub(crate) stats: Arc<CrossingStats>,
+    /// Top-level objects expanded one level into `<object>__<key>` columns.
+    pub(crate) flatten: Arc<Vec<String>>,
 }
 
 /// One piece of yielded data, crossed into Rust and waiting to be parsed.

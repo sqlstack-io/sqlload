@@ -358,6 +358,8 @@ pub struct PythonFeed {
     pub state: Option<String>,
     /// The time of the reconciliation this load appended, which its records follow.
     pub reconciled: Option<String>,
+    /// Each column seen so far, and whether flattening a listed object made it, so no column comes from both.
+    pub flattened: std::collections::BTreeMap<String, bool>,
 }
 
 /// A Postgres table's integer cursor as plan found it, ending its `batch_size` windows.
