@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0](https://github.com/sqlstack-io/sqlload/compare/v0.13.0...v0.14.0) (2026-11-06)
+
+
+### Features
+
+* **contract:** diff --source compares what each source would load with its live table ([#61](https://github.com/sqlstack-io/sqlload/issues/61)) ([c5a39d7](https://github.com/sqlstack-io/sqlload/commit/c5a39d7168cad47f884cec846e9fe5c7e908ccf1))
+* **databricks:** Databricks SQL warehouse target through a Unity Catalog volume ([#64](https://github.com/sqlstack-io/sqlload/issues/64)) ([9e5dcfd](https://github.com/sqlstack-io/sqlload/commit/9e5dcfd32ec8cf973f21873704941d227b96b26f))
+
 ## [0.13.0](https://github.com/sqlstack-io/sqlload/compare/v0.12.0...v0.13.0) (2026-11-06)
 
 
