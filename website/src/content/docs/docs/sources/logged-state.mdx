@@ -33,11 +33,11 @@ deleted from the log.
 
 ```console
 $ sqlload logged-state show
-raw.shop__events  state 4 (run dd3ba5e3-f778-4fe3-9fdd-87e980fc116a at 2026-11-06T19:39:58.007235Z)
-  2026-11-06T19:39:57.848181Z  0cd1cb07-1322-4df5-8fe3-a55a862a1cf3  run  - -> -, state 2  6 rows
-  2026-11-06T19:39:58.007235Z  dd3ba5e3-f778-4fe3-9fdd-87e980fc116a  run  - -> -, state 4  6 rows
+raw.shop__events  state 4 (run e9f46950-4e6e-4956-ae4f-1fbeb498b3ff at 2026-11-06T23:02:50.939416Z)
+  2026-11-06T23:02:50.785656Z  32e4f7ad-9c92-49d4-9e6e-29c8be864d99  run  - -> -, state 2  6 rows
+  2026-11-06T23:02:50.939416Z  e9f46950-4e6e-4956-ae4f-1fbeb498b3ff  run  - -> -, state 4  6 rows
 $ sqlload logged-state verify
-raw.shop__events  ok  state 4 (run dd3ba5e3-f778-4fe3-9fdd-87e980fc116a at 2026-11-06T19:39:58.007235Z)
+raw.shop__events  ok  state 4 (run e9f46950-4e6e-4956-ae4f-1fbeb498b3ff at 2026-11-06T23:02:50.939416Z)
 $ sqlload logged-state reset shop__events --to 0
 would append  raw.shop__events  reset  - -> -, state 0 (add --yes to append it)
 ```
