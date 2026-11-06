@@ -6,11 +6,12 @@ use std::sync::Arc;
 
 use clap::Parser;
 
+use crate::command::_helpers::copy_command::run_copy;
 use crate::command::_helpers::exporter_commands::run_exporter_command;
-use crate::command::_helpers::limits::blocking_threads;
+use crate::command::_helpers::limits::runtime;
 use crate::command::_helpers::loader_commands::{json_error, run_loader};
 use crate::command::_helpers::logging::init_logging;
-use crate::command::_helpers::output::print_lines;
+use crate::command::_helpers::output::{config_text, print_lines};
 use crate::command::models::{Cli, Command, LoaderRequest};
 use crate::project::main::is_project::is_project;
 use crate::python_sources::types::PythonHost;
@@ -30,42 +31,33 @@ where
     };
     init_logging(cli.log_format);
     let json = matches!(&cli.command, Command::Plan(args) if args.json);
-    let text = match std::fs::read_to_string(&cli.config) {
+    let copies = matches!(&cli.command, Command::Copy(_));
+    let text = match config_text(&cli.config, copies) {
         Ok(text) => text,
-        Err(error) => {
-            let message = format!("cannot read {}: {error}", cli.config.display());
-            return failed(json, "config", &message);
-        }
+        Err(message) => return failed(json, "config", &message),
     };
     let cli_threads = match &cli.command {
         Command::Plan(args) | Command::Apply(args) | Command::Load(args) => args.concurrency,
         _ => None,
     };
-    let mut builder = tokio::runtime::Builder::new_multi_thread();
-    builder.enable_all();
-    if let Some(blocking) = blocking_threads(cli_threads, &text) {
-        builder.max_blocking_threads(blocking);
-    }
-    let runtime = match builder.build() {
+    let runtime = match runtime(cli_threads, &text) {
         Ok(runtime) => runtime,
-        Err(error) => {
-            return failed(
-                json,
-                "plan",
-                &format!("cannot start the async runtime: {error}"),
-            );
-        }
+        Err(message) => return failed(json, "plan", &message),
     };
     let outcome = runtime.block_on(async {
-        if is_project(&text) {
+        if copies || is_project(&text) {
             let request = LoaderRequest {
                 text: &text,
                 config: &cli.config,
                 command: cli.command,
                 host,
                 no_color: cli.no_color,
+                variables: Default::default(),
             };
-            return run_loader(request).await;
+            return match copies {
+                true => run_copy(request).await,
+                false => run_loader(request).await,
+            };
         }
         run_exporter_command(&cli.config, cli.command)
             .await

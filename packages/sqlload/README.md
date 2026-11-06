@@ -108,6 +108,25 @@ pip uninstall sqlload-cli
 `schema.table`. `--start-cursor`/`--end-cursor` backfill a cursor range, typed from each selected
 table's cursor (an integer, an RFC 3339 timestamp or a date).
 
+## Copying one table
+
+`sqlload copy SOURCE DESTINATION` copies one table once, through the same plan and load as a
+project, and needs no `sqlload.toml`. Each end is a connection named in `sqlload.toml`
+(`app:public.accounts`, `warehouse:RAW.ACCOUNTS`) or a URI: `postgresql://user:${ENV:PGPASSWORD}@host:5432/db#schema.table`,
+`duckdb://file.duckdb#SCHEMA.TABLE`, `s3://bucket/prefix/?region=eu-west-2`, `file:///folder` or a
+folder. Snowflake needs auth and a `load_method`, so it is always a named connection.
+
+```sh
+sqlload copy app:public.accounts duckdb://wh.duckdb#RAW.ACCOUNTS --write-strategy merge --unique-key id
+sqlload copy s3://example-bucket/exports/orders/ warehouse:RAW.ORDERS --format ndjson
+```
+
+`--write-strategy`, `--unique-key`, `--cursor-column` and `--format` (a files source's format)
+set the table; `--print-toml` prints the copy as a project to paste into `sqlload.toml` instead of
+running it. A password written into a URI never reaches the printed project, plans or errors:
+the project refers to it as `${ENV:SQLLOAD_COPY_SOURCE_PASSWORD}` (or `..._DESTINATION_...`) and
+`copy` warns that `${ENV:NAME}` in the URI keeps it out of shell history.
+
 ## Descriptions
 
 A table someone writes needs a description, which becomes the destination table's comment;

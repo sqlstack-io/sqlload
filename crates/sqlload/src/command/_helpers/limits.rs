@@ -30,3 +30,18 @@ pub(crate) fn blocking_threads(cli_concurrency: Option<u16>, text: &str) -> Opti
         .max(1);
     Some(threads.saturating_add(SPARE_BLOCKING_THREADS))
 }
+
+/// The async runtime, its blocking pool sized for `cli_threads` or the project's `concurrency`.
+pub(crate) fn runtime(
+    cli_threads: Option<u16>,
+    text: &str,
+) -> Result<tokio::runtime::Runtime, String> {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if let Some(blocking) = blocking_threads(cli_threads, text) {
+        builder.max_blocking_threads(blocking);
+    }
+    builder
+        .build()
+        .map_err(|error| format!("cannot start the async runtime: {error}"))
+}

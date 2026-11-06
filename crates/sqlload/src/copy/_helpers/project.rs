@@ -1,0 +1,255 @@
+//! The one-table project a copy runs.
+
+use std::collections::BTreeMap;
+
+use toml::{Table, Value};
+
+use crate::copy::_helpers::endpoints::endpoint;
+use crate::copy::constants::COPY_PREFIX;
+use crate::copy::models::{CopyProject, CopyRequest, Endpoint, Role};
+
+/// Connection kinds that hold files: a copy from one is a files source, and into one a files target.
+const FILE_KINDS: &[&str] = &["s3", "filesystem"];
+
+/// The project copying `request.source` into `request.destination`, with `connections` the project's own (as written, references unresolved). Its target and source are `copy_<table>`, and URI connections `copy_<table>_source` and `copy_<table>_destination`.
+pub(crate) fn project(
+    request: &CopyRequest,
+    connections: &Table,
+    taken: &[String],
+) -> Result<CopyProject, String> {
+    let mut source = endpoint(&request.source, Role::Source, connections)?;
+    let mut destination = endpoint(&request.destination, Role::Destination, connections)?;
+    let table = source_table(&source)?;
+    let base = free_base(&format!("{COPY_PREFIX}{}", identifier(&table)), taken);
+    for (end, role) in [
+        (&mut source, Role::Source),
+        (&mut destination, Role::Destination),
+    ] {
+        if !end.named {
+            end.connection = format!("{base}_{}", role.label());
+        }
+    }
+    let (target, schema, name) = target(&destination, &table)?;
+    let mut source_table = source_settings(request, &source, schema, &name)?;
+    source_table.insert("destination".to_owned(), text_value(&base));
+    let document = |with_named: bool| {
+        let mut text = Table::new();
+        text.insert(
+            "connections".to_owned(),
+            Value::Table(connection_tables([&source, &destination], with_named)),
+        );
+        text.insert(
+            "targets".to_owned(),
+            Value::Table(single(&base, target.clone())),
+        );
+        text.insert(
+            "sources".to_owned(),
+            Value::Table(single(&base, source_table.clone())),
+        );
+        toml::to_string(&text).map_err(|error| format!("cannot write the copy's project: {error}"))
+    };
+    let variables: BTreeMap<String, String> = [&source.secret, &destination.secret]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+    let warnings: Vec<String> = [&source, &destination]
+        .iter()
+        .filter(|end| end.secret.is_some())
+        .map(|end| format!("{} has a literal password; use ${{ENV:NAME}} in the URI so it stays out of shell history", end.shown))
+        .collect();
+    Ok(CopyProject {
+        text: document(true)?,
+        printed: document(false)?,
+        variables,
+        warnings,
+    })
+}
+
+/// `base`, or `base_2`, `base_3`, ... when sqlload.toml already has a target, source or connection of that name, so the printed entry can be appended.
+fn free_base(base: &str, taken: &[String]) -> String {
+    let used = |name: &str| {
+        [
+            name.to_owned(),
+            format!("{name}_source"),
+            format!("{name}_destination"),
+        ]
+        .iter()
+        .any(|candidate| taken.contains(candidate))
+    };
+    std::iter::once(base.to_owned())
+        .chain((2_u32..).map(|n| format!("{base}_{n}")))
+        .find(|name| !used(name))
+        .unwrap_or_default()
+}
+
+/// `name` lower-cased, with every character other than a letter, digit or `_` as `_`.
+fn identifier(name: &str) -> String {
+    name.chars()
+        .map(|character| match character.is_ascii_alphanumeric() {
+            true => character.to_ascii_lowercase(),
+            false => '_',
+        })
+        .collect()
+}
+
+/// The source's table name: the part after the last dot of its locator, or of its folder for files.
+fn source_table(source: &Endpoint) -> Result<String, String> {
+    let name = source
+        .locator
+        .trim_end_matches('/')
+        .rsplit(['.', '/'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            source
+                .settings
+                .get("root")
+                .and_then(Value::as_str)
+                .and_then(|root| {
+                    root.trim_end_matches(['/', '\\'])
+                        .rsplit(['/', '\\'])
+                        .next()
+                })
+        })
+        .unwrap_or_default();
+    match name.is_empty() {
+        true => Err(format!(
+            "the source {} names no table; add one, as connection:schema.table or a URI ending #schema.table",
+            source.shown
+        )),
+        false => Ok(name.to_owned()),
+    }
+}
+
+/// The connections of `ends`, leaving out named ones unless `with_named`.
+fn connection_tables(ends: [&Endpoint; 2], with_named: bool) -> Table {
+    ends.into_iter()
+        .filter(|end| with_named || !end.named)
+        .map(|end| (end.connection.clone(), Value::Table(end.settings.clone())))
+        .collect()
+}
+
+/// The target section, and the destination's schema and table name.
+fn target(destination: &Endpoint, table: &str) -> Result<(Table, Option<String>, String), String> {
+    let mut target = Table::new();
+    target.insert("connection".to_owned(), text_value(&destination.connection));
+    match FILE_KINDS.contains(&kind(destination)) {
+        true => {
+            let folder = destination.locator.trim_matches('/');
+            let path = match folder.is_empty() {
+                true => "{table}/".to_owned(),
+                false => format!("{folder}/{{table}}/"),
+            };
+            target.insert("path".to_owned(), Value::String(path));
+            Ok((target, None, table.to_owned()))
+        }
+        false => {
+            let (schema, name) = destination.locator.split_once('.').ok_or_else(|| {
+                format!(
+                    "the destination {} names no table; end it with SCHEMA.TABLE",
+                    destination.shown
+                )
+            })?;
+            target.insert("loader_schema".to_owned(), text_value(schema));
+            Ok((target, Some(schema.to_owned()), name.to_owned()))
+        }
+    }
+}
+
+/// The source section: a database table by `schema.table`, or a folder of files.
+fn source_settings(
+    request: &CopyRequest,
+    source: &Endpoint,
+    schema: Option<String>,
+    name: &str,
+) -> Result<Table, String> {
+    let mut settings = Table::new();
+    settings.insert("connection".to_owned(), text_value(&source.connection));
+    settings.insert(
+        "description".to_owned(),
+        Value::String(format!("Copied from {}.", source.described)),
+    );
+    settings.extend(schema.map(|schema| ("schema".to_owned(), Value::String(schema))));
+    settings.extend(table_settings(request));
+    match kind(source) {
+        "postgres" => {
+            settings.insert("kind".to_owned(), text_value("postgres"));
+            settings.insert(
+                "include".to_owned(),
+                Value::Array(vec![text_value(&source.locator)]),
+            );
+            let mut named = Table::new();
+            named.insert("name".to_owned(), text_value(name));
+            named.insert(
+                "description".to_owned(),
+                Value::String(format!("Copied from {}.", source.described)),
+            );
+            settings.insert(
+                "tables".to_owned(),
+                Value::Table(single(&source.locator, named)),
+            );
+        }
+        files if FILE_KINDS.contains(&files) => {
+            settings.insert("kind".to_owned(), text_value("files"));
+            settings.insert("path".to_owned(), text_value(&source.locator));
+            settings.insert("table_name".to_owned(), text_value(name));
+            settings.extend(
+                request
+                    .format
+                    .clone()
+                    .map(|format| ("format".to_owned(), Value::String(format))),
+            );
+        }
+        other => {
+            return Err(format!(
+                "the source {} is a {other} connection; copy reads Postgres tables and files (s3://, file://, a folder)",
+                source.shown
+            ));
+        }
+    }
+    Ok(settings)
+}
+
+/// The write settings the command line gives.
+fn table_settings(request: &CopyRequest) -> Vec<(String, Value)> {
+    let mut settings: Vec<(String, Value)> = Vec::new();
+    settings.extend(
+        request
+            .write_strategy
+            .clone()
+            .map(|strategy| ("write_strategy".to_owned(), Value::String(strategy))),
+    );
+    settings.extend((!request.unique_key.is_empty()).then(|| {
+        let keys: Vec<Value> = request
+            .unique_key
+            .iter()
+            .map(|key| text_value(key))
+            .collect();
+        ("unique_key".to_owned(), Value::Array(keys))
+    }));
+    settings.extend(
+        request
+            .cursor_column
+            .clone()
+            .map(|column| ("cursor_column".to_owned(), Value::String(column))),
+    );
+    settings
+}
+
+fn kind(end: &Endpoint) -> &str {
+    end.settings
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+fn single(key: &str, table: Table) -> Table {
+    let mut outer = Table::new();
+    outer.insert(key.to_owned(), Value::Table(table));
+    outer
+}
+
+fn text_value(text: &str) -> Value {
+    Value::String(text.to_owned())
+}
