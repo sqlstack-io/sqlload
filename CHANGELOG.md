@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/sqlstack-io/sqlload/compare/v0.11.0...v0.11.1) (2026-11-06)
+
+
+### Performance Improvements
+
+* **files:** read the schema sample's footers and records a few at a time ([#51](https://github.com/sqlstack-io/sqlload/issues/51)) ([5ab2b9e](https://github.com/sqlstack-io/sqlload/commit/5ab2b9ea263f6791b33740a9ccdcedae33aeb675))
+
 ## [0.11.0](https://github.com/sqlstack-io/sqlload/compare/v0.10.0...v0.11.0) (2026-11-06)
 
 
