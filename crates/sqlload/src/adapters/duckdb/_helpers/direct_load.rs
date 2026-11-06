@@ -143,7 +143,7 @@ fn in_any_footer(footers: &BatchFooters, name: &str) -> bool {
     footers.parquet.values().any(has)
 }
 
-/// Why the batch's footers disagree on `name`: a different portable type, or a different way of holding it (nanoseconds, epoch integers), where DuckDB would promote every file to one type and SQLLoad would read each exactly. Arrow-only differences (Int32 and Int64, Utf8 and LargeUtf8, dictionary strings) DuckDB promotes exactly.
+/// Why the batch's footers disagree on `name`, or hold it in a way only SQLLoad reads exactly: a different portable type, or any file holding it as nanoseconds or epoch integers, which plan's sample may not have seen and DuckDB would cast differently. Arrow-only differences (Int32 and Int64, Utf8 and LargeUtf8, dictionary strings) DuckDB promotes exactly.
 fn disagreeing(footers: &BatchFooters, name: &str) -> Option<String> {
     let typed = |footer: &ArrowReaderMetadata| {
         let schema = footer.schema().clone();
@@ -162,8 +162,8 @@ fn disagreeing(footers: &BatchFooters, name: &str) -> Option<String> {
         footers.parquet.values().filter_map(typed).collect();
     let first = held.first()?;
     held.iter()
-        .find(|other| *other != first)
-        .map(|_| format!("column {name} is held in different ways by this batch's files"))
+        .find(|other| *other != first || other.1 != StoredRead::Plain)
+        .map(|_| format!("column {name} is held in different ways by this batch's files, or in a way a cast would not keep exactly"))
 }
 
 /// The rows the batch's footers record.
