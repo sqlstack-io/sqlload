@@ -54,7 +54,10 @@ def dump(root: int) -> None:
 		if not name or name in DUMP_SKIP:
 			continue
 		print(f"\n::group::Threads of {name} (pid {pid})", flush=True)
-		subprocess.run(["sudo", "-n", "gdb", "-p", str(pid), "-batch", "-nx", "-ex", "set pagination off", "-ex", "thread apply all bt"], check=False, timeout=300)
+		try:
+			subprocess.run(["sudo", "-n", "timeout", "120", "gdb", "-p", str(pid), "-batch", "-nx", "-ex", "set pagination off", "-ex", "thread apply all bt"], check=False, timeout=150)
+		except subprocess.TimeoutExpired:
+			print(f"gdb did not finish on pid {pid}", flush=True)
 		print("::endgroup::", flush=True)
 
 
@@ -69,14 +72,22 @@ def main() -> int:
 			sys.stdout.buffer.flush()
 			last_output[0] = time.monotonic()
 
+	def stop(signum: int, _frame: object) -> None:
+		os.killpg(process.pid, signal.SIGKILL)
+		sys.exit(128 + signum)
+
+	signal.signal(signal.SIGTERM, stop)
+	signal.signal(signal.SIGINT, stop)
 	reader = threading.Thread(target=relay, daemon=True)
 	reader.start()
 	while process.poll() is None:
 		if time.monotonic() - last_output[0] > stall:
 			print(f"\n::error::No test finished for {stall:.0f} seconds; dumping the test processes' threads.", flush=True)
-			dump(process.pid)
-			os.killpg(process.pid, signal.SIGKILL)
-			process.wait()
+			try:
+				dump(process.pid)
+			finally:
+				os.killpg(process.pid, signal.SIGKILL)
+				process.wait()
 			return 124
 		time.sleep(5)
 	reader.join(timeout=10)

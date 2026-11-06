@@ -109,19 +109,21 @@ jobs:
       - name: Build container tests
         run: cargo test -p sqlload --features container-tests --test exporter --test loader --no-run --quiet
       - name: Install gdb for stall dumps
+        continue-on-error: true
         run: command -v gdb || (sudo apt-get update -qq && sudo apt-get install -y -qq gdb)
-      # A run of the tests takes about five minutes. When no test finishes for five minutes, the
-      # wrapper prints every thread's stack in the test process, so a hang names the stuck call.
+      # A run of the tests takes about five minutes. When the tests print nothing for seven minutes
+      # (libtest marks each finished test, and notes one running past 60 seconds), the wrapper
+      # prints every thread's stack in the test process, so a hang names the stuck call.
       - name: Run container tests
         timeout-minutes: 20
-        run: python3 .github/scripts/run_with_stall_dump.py 300 make test-containers
+        run: python3 .github/scripts/run_with_stall_dump.py 420 make test-containers
       - name: Dump containers and disk after a failure
         if: failure()
         run: |
           docker ps -a
           for container in $(docker ps -aq); do
             echo "::group::Logs of $(docker inspect --format '{{.Name}} {{.Config.Image}}' "${container}")"
-            docker logs --tail 300 --timestamps "${container}" 2>&1
+            docker logs --tail 300 --timestamps "${container}" 2>&1 || true
             echo "::endgroup::"
           done
           df -h
