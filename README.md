@@ -64,8 +64,9 @@ provide a `sqlload` command. Both are released for Linux (x86_64 and aarch64) an
 - [The `sqlload` package README](packages/sqlload/README.md): Python and HTTP sources, batches,
   logged state, and how rows reach Snowflake and DuckDB.
 - [Benchmarks](benchmarks/README.md): SQLLoad compared with dlt and ingestr, loading into DuckDB and
-  Snowflake. The published results list only the scenarios where SQLLoad is fastest or within 5%.
-  Scenarios where another loader is faster are tracked as work to do.
+  Snowflake, with the method and figures. The published results list only the scenarios where
+  SQLLoad is fastest or at parity (within 5%). Scenarios where another loader is faster are tracked
+  as work to do.
 - [Changelog](CHANGELOG.md).
 
 ## Development
