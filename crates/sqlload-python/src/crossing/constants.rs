@@ -18,3 +18,6 @@ pub(crate) const CROSSING_DEFAULT: &str = "crossing_default";
 
 /// The method of an `sl.http` job that returns its definition as JSON.
 pub(crate) const HTTP_JOB_METHOD: &str = "__sqlload_http_job__";
+
+/// The method of an `sl.checkpoint` that returns its state as JSON.
+pub(crate) const CHECKPOINT_METHOD: &str = "__sqlload_checkpoint__";
