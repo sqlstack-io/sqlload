@@ -48,8 +48,14 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
 
 /// The project in `request.text`, with its Python sources discovered through the host when it has `python_paths`.
 async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfig, String> {
-    let project =
-        parse_project(request.text, &environment_variable).map_err(|error| error.to_string())?;
+    let lookup = |name: &str| {
+        request
+            .variables
+            .get(name)
+            .cloned()
+            .or_else(|| environment_variable(name))
+    };
+    let project = parse_project(request.text, &lookup).map_err(|error| error.to_string())?;
     if project.python_paths.is_empty() {
         return Ok(project);
     }
@@ -65,7 +71,7 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
     let found = tokio::task::spawn_blocking(move || host.discover(&root, &paths))
         .await
         .map_err(|error| format!("Python discovery failed: {error}"))??;
-    parse_python_project(request.text, &environment_variable, &found)
+    parse_python_project(request.text, &lookup, &found)
         .map_err(|error| error.to_string())
 }
 
