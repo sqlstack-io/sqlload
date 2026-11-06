@@ -8,6 +8,7 @@ use base64::Engine;
 use serde_json::{Map, Value};
 
 use crate::http_source::_helpers::urls::encoded;
+use crate::http_source::constants::SECRET_HEADER_WORDS;
 use crate::http_source::models::{Auth, ClientSpec, Credential, Endpoint, Limiter};
 
 /// The endpoint of `client`'s connection: its `base_url`, headers and the credential its `auth` names.
@@ -78,7 +79,7 @@ pub(crate) fn endpoint(
     })
 }
 
-/// Every text an error must never show: the token and password as they are and percent-encoded, the credential as sent (`Bearer ...`, `Basic ...` and its base64), and every header value.
+/// Every text an error must never show: the token and password as they are and percent-encoded, the credential as sent (`Bearer ...`, `Basic ...` and its base64), and the values of headers whose names look secret (`X-Api-Key`, `Cookie`, ...); other header values such as `Accept` or a version stay readable.
 fn secret_texts(
     credential: &Credential,
     headers: &BTreeMap<String, String>,
@@ -91,10 +92,21 @@ fn secret_texts(
         secrets.push(value.clone());
         secrets.extend(value.split_once(' ').map(|(_, rest)| rest.to_owned()));
     }
-    secrets.extend(headers.values().cloned());
+    secrets.extend(
+        headers
+            .iter()
+            .filter(|(name, _)| secret_name(name))
+            .map(|(_, value)| value.clone()),
+    );
     secrets.retain(|secret| !secret.is_empty());
     secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
     secrets
+}
+
+/// Whether a header's name says its value is a secret.
+fn secret_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    SECRET_HEADER_WORDS.iter().any(|word| name.contains(word))
 }
 
 /// The connection's `headers` that are text.

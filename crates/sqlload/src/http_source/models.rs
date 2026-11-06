@@ -185,6 +185,7 @@ pub enum Attempt {
 pub struct Fetched {
     pub bytes: Vec<u8>,
     pub next_link: Option<String>,
+    pub url: reqwest::Url,
 }
 
 /// Where a fan-out's keys come from: listed values, or another endpoint's pages.

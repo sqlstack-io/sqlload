@@ -75,6 +75,13 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
                 "fan-out path /orders has no placeholder, so every key would request the same URL; add one such as {id}",
             ],
         },
+        JobProblemsTestCase {
+            description: "a fan-out whose own select names a key field",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"},"select":"$.items[*].sku","concurrency":2,"over":{"kind":"values","values":[1]}}"#,
+            expected_problems: &[
+                "select \"$.items[*].sku\" names a key field (sku); that form is for fan_out's over, so select the rows instead",
+            ],
+        },
     ];
     for test_case in test_cases {
         let job: HttpJob = serde_json::from_str(test_case.job).expect(test_case.description);

@@ -36,16 +36,16 @@ pub(crate) async fn paginate(
         let Some(fetched) = fetch(calls, &url).await? else {
             return Ok(());
         };
-        let digest = digest(&fetched.bytes);
-        if previous == Some(digest) {
+        let digest = counted(&request.paginator).then(|| digest(&fetched.bytes));
+        if digest.is_some() && previous == digest {
             return Err(format!(
                 "{shown}: the response repeats the previous page; the API may ignore the paginator's parameter"
             ));
         }
-        previous = Some(digest);
+        previous = digest;
         let document = parsed(request, &rows, &fetched.bytes)
             .map_err(|error| format!("{shown}: the response is not JSON: {error}"))?;
-        let next = next_url(request, (&first, &url), (&fetched, document.as_ref(), step))
+        let next = next_url(request, &first, (&fetched, document.as_ref(), step))
             .map_err(|error| format!("{shown}: {error}"))?;
         let has_rows = document.as_ref().is_none_or(|document| {
             selected_node(document, &rows).is_some_and(|node| !node.is_null())
@@ -83,6 +83,17 @@ fn parsed(request: &Request, rows: &Selector, bytes: &[u8]) -> Result<Option<Val
     }
 }
 
+/// Whether the paginator moves by a counter whatever the response says, so only a repeated body reveals an API ignoring it; the others follow the response, and the seen URLs catch their loops.
+fn counted(paginator: &Paginator) -> bool {
+    match paginator {
+        Paginator::Offset { .. } | Paginator::PageNumber { .. } => true,
+        Paginator::Single
+        | Paginator::NextLink { .. }
+        | Paginator::LinkHeader
+        | Paginator::Cursor { .. } => false,
+    }
+}
+
 fn digest(bytes: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     bytes.hash(&mut hasher);
@@ -108,15 +119,16 @@ fn start_params(paginator: &Paginator) -> Vec<(String, String)> {
     }
 }
 
-/// The page after `fetched` (the `step`th), or `None` at the end; `document` is the parsed response whenever the paginator reads the body.
+/// The page after `fetched` (the `step`th), or `None` at the end; links resolve against the URL the response came from, after any redirect; `document` is the parsed response whenever the paginator reads the body.
 fn next_url(
     request: &Request,
-    (first, current): (&Url, &Url),
+    first: &Url,
     (fetched, document, step): (&Fetched, Option<&Value>, u64),
 ) -> Result<Option<Url>, String> {
     let body = || document.ok_or_else(|| "the paginator needs a JSON response".to_owned());
     let joined = |link: String| {
-        current
+        fetched
+            .url
             .join(&link)
             .map(Some)
             .map_err(|error| format!("next page {link} is not a URL: {error}"))

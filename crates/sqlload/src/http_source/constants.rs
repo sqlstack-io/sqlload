@@ -29,3 +29,15 @@ pub const NEXT_RELATION: &str = "next";
 
 /// Path segments that would climb the URL's path if a fan-out key filled one unencoded.
 pub const DOT_SEGMENTS: &[&str] = &[".", ".."];
+
+/// Words in a header's name that mark its value as a secret to redact from errors.
+pub const SECRET_HEADER_WORDS: &[&str] = &[
+    "auth",
+    "token",
+    "key",
+    "secret",
+    "cookie",
+    "session",
+    "signature",
+    "password",
+];

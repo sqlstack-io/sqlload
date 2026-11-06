@@ -47,6 +47,11 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/wrapped": lambda query: self.reply(200, {"items": ORDERS[:2]}),
 			"/v1/gap": lambda query: self.reply(200, {"items": ORDERS[:3]} if query["p"] == "1" else {}),
 			"/v1/comma": self.comma,
+			"/v1/moved": lambda query: self.reply(302, {}, {"Location": "/v1/landed/"}),
+			"/v1/landed/": lambda query: self.reply(200, {"items": ORDERS[:3], "next": "more"}),
+			"/v1/landed/more": lambda query: self.reply(200, {"items": ORDERS[3:], "next": None}),
+			"/v1/sparse": self.sparse,
+			"/v1/echo": lambda query: self.reply(400, {"message": f"version {self.headers.get('X-Version')} session {self.headers.get('X-Session-Id')}"}),
 		}.get(url.path)
 		if route is not None:
 			return route(query)
@@ -95,6 +100,11 @@ class Api(BaseHTTPRequestHandler):
 		page = int(query.get("page", "0"))
 		headers = {"Link": f'<{self.server_url()}/v1/comma?fields=a,b&page=1>; rel=next'} if page == 0 else {}
 		self.reply(200, ORDERS[page * 4 : page * 4 + 4], headers)
+
+	def sparse(self, query: dict[str, str]) -> None:
+		page = int(query.get("page", "0"))
+		headers = {"Link": f'<{self.server_url()}/v1/sparse?page={page + 1}>; rel="next"'} if page < 2 else {}
+		self.reply(200, ORDERS[:2] if page == 2 else [], headers)
 
 	def flaky(self, query: dict[str, str]) -> None:
 		self.server.flaky += 1  # type: ignore[attr-defined]
@@ -201,8 +211,21 @@ ALL_ORDERS = [(row["order_id"], row["status"]) for row in ORDERS]
 		("api.paginate('/flaky', paginator=sl.single())", ALL_ORDERS[:2]),
 		("api.paginate('/comma', paginator=sl.link_header())", ALL_ORDERS),
 		("api.paginate('/gap', paginator=sl.page_number('p'), select='$.items')", ALL_ORDERS[:3]),
+		("api.paginate('/moved', paginator=sl.next_link('$.next'), select='$.items')", ALL_ORDERS),
+		("api.paginate('/sparse', paginator=sl.link_header())", ALL_ORDERS[:2]),
 	],
-	ids=["next-link", "offset", "page-number", "cursor", "link-header", "retries-429-and-503", "link-with-comma-unquoted-rel", "page-without-the-selected-key-ends"],
+	ids=[
+		"next-link",
+		"offset",
+		"page-number",
+		"cursor",
+		"link-header",
+		"retries-429-and-503",
+		"link-with-comma-unquoted-rel",
+		"page-without-the-selected-key-ends",
+		"same-origin-redirect-then-relative-next-link",
+		"link-header-through-empty-pages",
+	],
 )
 def test_given_a_paginated_endpoint_when_a_table_returns_its_job_then_every_page_loads(
 	tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_rows: list[tuple[Any, ...]]
@@ -263,6 +286,14 @@ def test_given_a_fan_out_when_loading_then_each_key_is_requested_and_a_skipped_s
 			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/long', paginator=sl.single())\n",
 			"HTTP 400",
 		),
+		(
+			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/wrapped', paginator=sl.page_number('p'), select='$.items')\n",
+			"the response repeats the previous page",
+		),
+		(
+			"versioned = sl.http(shop, auth=sl.bearer(), headers={'X-Version': '1', 'X-Session-Id': 'abcdef12'})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return versioned.paginate('/echo', paginator=sl.single())\n",
+			"version 1 session ***",
+		),
 	],
 	ids=[
 		"server-error-retried-and-redacted",
@@ -272,6 +303,8 @@ def test_given_a_fan_out_when_loading_then_each_key_is_requested_and_a_skipped_s
 		"pagination-cycle",
 		"page-number-over-an-object",
 		"token-at-the-excerpt-cut",
+		"page-number-api-ignoring-the-page",
+		"only-secret-looking-headers-redacted",
 	],
 )
 def test_given_a_failing_job_when_loading_then_the_error_names_the_request_and_hides_secrets(
@@ -301,7 +334,7 @@ def test_given_an_api_key_in_the_query_when_loading_then_it_is_sent_only_to_the_
 @pytest.mark.parametrize(
 	("path", "paginator", "expected_text"),
 	[
-		("/redir", "sl.single()", "HTTP 302: a redirect to another host is not followed"),
+		("/redir", "sl.single()", "HTTP 302: the redirect was not followed"),
 		("/away", "sl.next_link('$.next')", ""),
 	],
 	ids=["redirect", "next-link-to-another-host"],

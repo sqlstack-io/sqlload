@@ -25,14 +25,7 @@ pub(crate) fn job_problems(job: &HttpJob) -> Vec<String> {
     match job {
         HttpJob::Paginate(request) => {
             let mut problems = request_problems(request);
-            let field = match selector(request.select.as_deref()) {
-                Ok(selected) => selected.field,
-                Err(_) => None,
-            };
-            problems.extend(
-                field
-                    .map(|field| format!("select {:?} names a key field ({field}); that form is for fan_out's over, so select the rows instead", request.select.clone().unwrap_or_default())),
-            );
+            problems.extend(field_problem(request));
             problems.extend(placeholders(&request.path).first().map(|name| {
                 format!(
                     "paginate path {} has the placeholder {{{name}}}; use fan_out to fill it",
@@ -43,6 +36,18 @@ pub(crate) fn job_problems(job: &HttpJob) -> Vec<String> {
         }
         HttpJob::FanOut(fan_out) => fan_out_problems(fan_out),
     }
+}
+
+/// Why the rows' `select` names a key field, which only fan_out's over reads, if it does.
+fn field_problem(request: &Request) -> Option<String> {
+    let field = match selector(request.select.as_deref()) {
+        Ok(selected) => selected.field?,
+        Err(_) => return None,
+    };
+    Some(format!(
+        "select {:?} names a key field ({field}); that form is for fan_out's over, so select the rows instead",
+        request.select.clone().unwrap_or_default()
+    ))
 }
 
 fn request_problems(request: &Request) -> Vec<String> {
@@ -111,6 +116,7 @@ fn fan_out_problems(fan_out: &FanOut) -> Vec<String> {
     let path = &fan_out.request.path;
     let wanted = placeholders(path);
     let mut problems = request_problems(&fan_out.request);
+    problems.extend(field_problem(&fan_out.request));
     problems.extend(
         (fan_out.concurrency == 0).then(|| "fan_out concurrency must be at least 1".to_owned()),
     );

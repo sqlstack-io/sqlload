@@ -9,7 +9,7 @@ use crate::http::constants::{FIRST_SERVER_ERROR, TOO_MANY_REQUESTS};
 use crate::http::models::RetryPolicy;
 use crate::http_source::_helpers::urls::{link_header_next, redacted, same_origin};
 use crate::http_source::constants::{
-    ERROR_EXCERPT_CHARS, FIRST_RETRY_DELAY, MAX_RETRY_AFTER, MAX_RETRY_DELAY,
+    ERROR_EXCERPT_CHARS, FIRST_RETRY_DELAY, MAX_REDIRECTS, MAX_RETRY_AFTER, MAX_RETRY_DELAY,
 };
 use crate::http_source::models::{Attempt, Calls, Credential, Fetched, StatusAction};
 
@@ -66,6 +66,7 @@ async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
         }
     };
     let status = response.status().as_u16();
+    let landed = response.url().clone();
     let after = retry_after(&response);
     let next_link = match response.headers().get(LINK).map(|link| link.to_str()) {
         Some(Ok(link)) => link_header_next(link),
@@ -91,16 +92,17 @@ async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
             .collect::<String>()
     };
     Ok(match status {
-        300..=399 => {
-            return Err(format!(
-                "{shown}: HTTP {status}: a redirect to another host is not followed, so credentials never leave the connection's origin; use the final URL as base_url"
-            ));
-        }
         200..=299 => Attempt::Done(Some(Fetched {
             bytes: body.to_vec(),
             next_link,
+            url: landed,
         })),
         _ if skipped => Attempt::Done(None),
+        300..=399 => {
+            return Err(format!(
+                "{shown}: HTTP {status}: the redirect was not followed: it leads to another origin, has no Location, or goes past {MAX_REDIRECTS} hops; credentials never leave the connection's origin, so use the final URL as base_url"
+            ));
+        }
         TOO_MANY_REQUESTS | FIRST_SERVER_ERROR.. => Attempt::Retry {
             reason: format!("{shown}: HTTP {status}: {}", excerpt()),
             after,
