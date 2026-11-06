@@ -70,3 +70,38 @@ def test_given_a_command_waiting_on_the_network_when_interrupted_then_it_ends_at
 	assert time.monotonic() - started < 3
 	assert process.returncode in (-signal.SIGINT, 128 + signal.SIGINT)
 	assert "Traceback" not in stderr
+
+
+def copied(folder: Path) -> list[tuple[int, str]]:
+	import duckdb
+
+	with duckdb.connect(str(folder / "wh.duckdb"), read_only=True) as connection:
+		return connection.execute('SELECT id, status FROM "RAW"."ORDERS" ORDER BY id').fetchall()
+
+
+def test_given_no_project_when_copying_a_folder_then_its_rows_load_and_print_toml_gives_a_project_that_loads_the_same(tmp_path: Path) -> None:
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	(tmp_path / "orders").mkdir()
+	pq.write_table(pa.table({"id": [1, 2], "status": ["open", "shut"]}), tmp_path / "orders" / "part-0.parquet")
+	missing = str(tmp_path / "sqlload.toml")
+	done = run("copy", str(tmp_path / "orders"), f"duckdb://{tmp_path / 'wh.duckdb'}#RAW.ORDERS", "-c", missing)
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert copied(tmp_path) == [(1, "open"), (2, "shut")]
+	printed = run("copy", str(tmp_path / "orders"), f"duckdb://{tmp_path / 'again.duckdb'}#RAW.ORDERS", "--print-toml", "-c", missing)
+	assert printed.returncode == 0, printed.stderr
+	(tmp_path / "project").mkdir()
+	(tmp_path / "project" / "sqlload.toml").write_text(printed.stdout)
+	loaded = run("load", "-c", str(tmp_path / "project" / "sqlload.toml"))
+	assert loaded.returncode == 0, loaded.stdout + loaded.stderr
+	(tmp_path / "again.duckdb").rename(tmp_path / "wh.duckdb")
+	assert copied(tmp_path) == [(1, "open"), (2, "shut")]
+
+
+def test_given_a_literal_password_in_a_uri_when_the_copy_fails_then_no_output_shows_it(tmp_path: Path) -> None:
+	done = run("copy", "postgresql://app:hunter2-secret@127.0.0.1:1/shop#public.accounts", f"duckdb://{tmp_path / 'wh.duckdb'}#RAW.ACCOUNTS", "-c", str(tmp_path / "sqlload.toml"))
+	assert done.returncode == 1
+	assert "app:***@127.0.0.1" in done.stderr, done.stderr
+	assert "hunter2" not in done.stdout + done.stderr
+
