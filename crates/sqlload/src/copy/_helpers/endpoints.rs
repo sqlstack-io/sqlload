@@ -1,17 +1,57 @@
-//! Reading `sqlload copy`'s endpoints: a connection named in the project, or a URI.
+//! Reading `sqlload copy`'s endpoints: a connection named in the project, a URI, or a local folder.
 
 use toml::{Table, Value};
 
 use crate::copy::constants::{REDACTED, S3_SETTINGS};
 use crate::copy::models::{Endpoint, Role};
 
-/// The endpoint `text` names at `role`: `connection:locator` for a connection in `connections`, a URI, or a local folder.
+/// The endpoint `text` names at `role`: `connection:locator` for a connection in `connections` (or a bare name), a URI, or a local folder; every message shows `text` with its password redacted.
 pub(crate) fn endpoint(text: &str, role: Role, connections: &Table) -> Result<Endpoint, String> {
+    let shown = redacted_uri(text);
     match (text.split_once("://"), text.split_once(':')) {
-        (Some((scheme, rest)), _) => uri_endpoint(text, scheme, rest, role),
-        (None, Some((name, locator))) => named(name, locator, connections, role),
-        (None, None) => Ok(folder(text, text, role)),
+        (Some((scheme, rest)), _) => uri_endpoint(&shown, scheme, rest, role),
+        (None, Some((name, locator))) if one_slash_uri(name, locator) => Err(format!(
+            "the {} {shown} looks like a URI with one slash; write {name}://...",
+            role.label()
+        )),
+        (None, Some((name, locator))) if names_connection(name, locator, connections) => {
+            named(name, locator, connections, role)
+        }
+        (None, Some(_) | None) => Ok(folder(text, &shown)),
     }
+}
+
+/// `text` with the password of any `user:password@` redacted, whether or not it parses as a URI.
+pub(crate) fn redacted_uri(text: &str) -> String {
+    let start = text
+        .find("://")
+        .map(|index| index + 3)
+        .or_else(|| text.find(":/").map(|index| index + 2))
+        .unwrap_or(0);
+    let Some(at) = text.rfind('@').filter(|at| *at >= start) else {
+        return text.to_owned();
+    };
+    match text[start..at].find(':') {
+        Some(colon) => format!("{}{REDACTED}{}", &text[..start + colon + 1], &text[at..]),
+        None => text.to_owned(),
+    }
+}
+
+/// `scheme:/rest`: a URI typed with one slash, never a connection or a folder.
+fn one_slash_uri(name: &str, locator: &str) -> bool {
+    bare_name(name) && locator.starts_with('/') && !locator.starts_with("//")
+}
+
+/// Whether `name:locator` names a connection: one in sqlload.toml, or a bare name before something that is not a path (so `C:\data` and `./a:b` stay folders).
+fn names_connection(name: &str, locator: &str, connections: &Table) -> bool {
+    connections.contains_key(name) || (bare_name(name) && !locator.starts_with(['/', '\\']))
+}
+
+fn bare_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '-'
+        })
 }
 
 fn named(name: &str, locator: &str, connections: &Table, role: Role) -> Result<Endpoint, String> {
@@ -32,92 +72,144 @@ fn named(name: &str, locator: &str, connections: &Table, role: Role) -> Result<E
         })?;
     Ok(Endpoint {
         connection: name.to_owned(),
+        named: true,
         settings,
         locator: locator.to_owned(),
         secret: None,
         shown: format!("{name}:{locator}"),
+        described: format!("{name}:{locator}"),
     })
 }
 
-fn uri_endpoint(text: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoint, String> {
+fn uri_endpoint(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoint, String> {
     let (body, locator) = rest.split_once('#').unwrap_or((rest, ""));
     match scheme {
-        "postgres" | "postgresql" => postgres(scheme, body, locator, role),
-        "duckdb" => Ok(Endpoint {
-            connection: role.connection().to_owned(),
-            settings: settings(&[("kind", "duckdb"), ("database", body)]),
-            locator: locator.to_owned(),
-            secret: None,
-            shown: text.to_owned(),
-        }),
-        "s3" => s3(text, body, role),
-        "file" => Ok(folder(body, text, role)),
+        "postgres" | "postgresql" => postgres(shown, scheme, rest, role),
+        "duckdb" => Ok(unnamed(
+            settings(&[("kind", "duckdb"), ("database", body)]),
+            locator,
+            shown,
+            format!("DuckDB table {locator}"),
+        )),
+        "s3" => s3(shown, body, role),
+        "file" => Ok(folder(body, shown)),
         "snowflake" => Err(format!(
-            "the {} {text}: a Snowflake connection needs auth and a load_method, which a URI does not carry; declare it under [connections] in sqlload.toml and name it, as warehouse:SCHEMA.TABLE",
+            "the {} {shown}: a Snowflake connection needs auth and a load_method, which a URI does not carry; declare it under [connections] in sqlload.toml and name it, as warehouse:SCHEMA.TABLE",
             role.label()
         )),
         other => Err(format!(
-            "the {} {text} has the scheme {other}://; use postgresql://, duckdb://, s3://, file:// or a connection named in sqlload.toml",
+            "the {} {shown} has the scheme {other}://; use postgresql://, duckdb://, s3://, file:// or a connection named in sqlload.toml",
             role.label()
         )),
     }
 }
 
-/// `postgresql://user[:password]@host[:port]/database#schema.table`; a literal password moves into a variable, so the project only references it.
-fn postgres(scheme: &str, body: &str, locator: &str, role: Role) -> Result<Endpoint, String> {
+/// `postgresql://user[:password]@host[:port]/database#schema.table`; `${ENV:NAME}` works in every part, and a literal password moves into a variable so the project only references it.
+fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoint, String> {
     let problem = |what: &str| {
         format!(
-            "the {} {scheme}://...: {what}; write it as {scheme}://user:${{ENV:PGPASSWORD}}@host:5432/database#schema.table",
+            "the {} {shown}: {what}; write it as {scheme}://user:${{ENV:PGPASSWORD}}@host:5432/database#schema.table",
             role.label()
         )
     };
-    let (userinfo, place) = body
-        .rsplit_once('@')
-        .ok_or_else(|| problem("it names no user"))?;
-    let (host_port, database) = place
-        .split_once('/')
-        .filter(|(_, database)| !database.is_empty() && !database.contains(['/', '?']))
-        .ok_or_else(|| problem("it names no database, or has a query"))?;
-    let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
-    let (host, port) = host_port.split_once(':').unwrap_or((host_port, "5432"));
-    let port: i64 = port
-        .parse()
-        .map_err(|_| problem(&format!("port {port} is not a number")))?;
-    let password = decoded(password);
-    let literal = !password.is_empty() && !password.contains("${");
-    let secret = literal.then(|| (role.password_variable().to_owned(), password.clone()));
+    let at = find_outside(rest, '@', true).ok_or_else(|| problem("it names no user"))?;
+    let (userinfo, after) = (&rest[..at], &rest[at + 1..]);
+    let (place, locator) = after.split_once('#').unwrap_or((after, ""));
+    let slash = find_outside(place, '/', false).ok_or_else(|| problem("it names no database"))?;
+    let (host_port, database) = (&place[..slash], &place[slash + 1..]);
+    if database.is_empty() || database.contains(['/', '?']) {
+        return Err(problem("it names no database, or has a query"));
+    }
+    let (user, password) = match find_outside(userinfo, ':', false) {
+        Some(colon) => (&userinfo[..colon], decoded(&userinfo[colon + 1..])),
+        None => (userinfo, String::new()),
+    };
+    let (host, port) = host_and_port(host_port);
+    let port = match port {
+        Some(port) => Value::Integer(
+            port.parse()
+                .map_err(|_| problem(&format!("port {port} is not a number")))?,
+        ),
+        None => Value::Integer(5432),
+    };
+    let literal = !password.is_empty() && !is_reference(&password);
     let mut table = settings(&[
         ("kind", "postgres"),
         ("host", host),
         ("user", &decoded(user)),
         ("database", &decoded(database)),
     ]);
-    table.insert("port".to_owned(), Value::Integer(port));
+    table.insert("port".to_owned(), port);
     let reference = format!("${{ENV:{}}}", role.password_variable());
-    match (password.is_empty(), literal) {
-        (true, _) => {}
-        (false, true) => {
-            table.insert("password".to_owned(), Value::String(reference));
-        }
-        (false, false) => {
-            table.insert("password".to_owned(), Value::String(password));
-        }
-    }
-    let shown_user = match userinfo.split_once(':') {
-        Some((user, _)) => format!("{user}:{REDACTED}"),
-        None => user.to_owned(),
+    let (stored, password_shown) = match (password.is_empty(), literal) {
+        (true, _) => (None, String::new()),
+        (false, true) => (Some(reference), format!(":{REDACTED}")),
+        (false, false) => (Some(password.clone()), format!(":{password}")),
     };
-    Ok(Endpoint {
-        connection: role.connection().to_owned(),
-        settings: table,
-        locator: locator.to_owned(),
-        secret,
-        shown: format!("{scheme}://{shown_user}@{place}#{locator}"),
-    })
+    table.extend(stored.map(|stored| ("password".to_owned(), Value::String(stored))));
+    let mut endpoint = unnamed(
+        table,
+        locator,
+        &format!("{scheme}://{user}{password_shown}@{place}#{locator}"),
+        format!("Postgres table {locator}"),
+    );
+    endpoint.secret = literal.then(|| (role.password_variable().to_owned(), password));
+    Ok(endpoint)
+}
+
+/// The host and port of `host:port`, `[v6]:port` or a host alone; `${ENV:...}` spans never split.
+fn host_and_port(text: &str) -> (&str, Option<&str>) {
+    let colon = match text.starts_with('[') {
+        true => text
+            .find(']')
+            .and_then(|close| text[close..].find(':').map(|colon| close + colon)),
+        false => find_outside(text, ':', true),
+    };
+    match colon {
+        Some(colon) => (&text[..colon], Some(&text[colon + 1..])),
+        None => (text, None),
+    }
+}
+
+/// Whether a password is one `${ENV:NAME}` reference rather than literal text.
+fn is_reference(password: &str) -> bool {
+    password
+        .strip_prefix("${ENV:")
+        .and_then(|rest| rest.strip_suffix('}'))
+        .is_some_and(|name| {
+            name.chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+                && name
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        })
+}
+
+/// Where `character` is in `text` outside closed `${...}` spans: its first place, or its last with `last`.
+fn find_outside(text: &str, character: char, last: bool) -> Option<usize> {
+    let mut depth = 0_usize;
+    let mut found: Option<usize> = None;
+    let mut previous = '\0';
+    for (index, current) in text.char_indices() {
+        match current {
+            '{' if previous == '$' && text[index..].contains('}') => depth += 1,
+            '}' if depth > 0 => depth -= 1,
+            _ if current == character && depth == 0 => {
+                found = Some(index);
+                if !last {
+                    return found;
+                }
+            }
+            _ => {}
+        }
+        previous = current;
+    }
+    found
 }
 
 /// `s3://bucket/prefix/`, with `?region=...` and `&endpoint=...`.
-fn s3(text: &str, body: &str, role: Role) -> Result<Endpoint, String> {
+fn s3(shown: &str, body: &str, role: Role) -> Result<Endpoint, String> {
     let (path, query) = body.split_once('?').unwrap_or((body, ""));
     let (bucket, prefix) = path.split_once('/').unwrap_or((path, ""));
     let mut table = settings(&[("kind", "s3"), ("bucket", bucket)]);
@@ -125,30 +217,41 @@ fn s3(text: &str, body: &str, role: Role) -> Result<Endpoint, String> {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         if !S3_SETTINGS.contains(&key) {
             return Err(format!(
-                "the {} {text} sets {key}; an s3:// URI takes only {}",
+                "the {} {shown} sets {key}; an s3:// URI takes only {}",
                 role.label(),
                 S3_SETTINGS.join(" and ")
             ));
         }
         table.insert(key.to_owned(), Value::String(decoded(value)));
     }
-    Ok(Endpoint {
-        connection: role.connection().to_owned(),
-        settings: table,
-        locator: prefix.to_owned(),
-        secret: None,
-        shown: text.to_owned(),
-    })
+    Ok(unnamed(
+        table,
+        prefix,
+        shown,
+        format!("s3://{bucket}/{prefix}"),
+    ))
 }
 
 /// A local folder: the connection's root, with nothing after it.
-fn folder(path: &str, shown: &str, role: Role) -> Endpoint {
+fn folder(path: &str, shown: &str) -> Endpoint {
+    unnamed(
+        settings(&[("kind", "filesystem"), ("root", path)]),
+        "",
+        shown,
+        format!("folder {path}"),
+    )
+}
+
+/// An endpoint given as a URI or folder; its connection is named once the copy's table is known.
+fn unnamed(settings: Table, locator: &str, shown: &str, described: String) -> Endpoint {
     Endpoint {
-        connection: role.connection().to_owned(),
-        settings: settings(&[("kind", "filesystem"), ("root", path)]),
-        locator: String::new(),
+        connection: String::new(),
+        named: false,
+        settings,
+        locator: locator.to_owned(),
         secret: None,
         shown: shown.to_owned(),
+        described,
     }
 }
 
@@ -157,18 +260,6 @@ fn settings(pairs: &[(&str, &str)]) -> Table {
         .iter()
         .map(|(key, value)| ((*key).to_owned(), Value::String((*value).to_owned())))
         .collect()
-}
-
-/// The byte two hex digits spell, if they do.
-fn hex_byte(hex: &[u8]) -> Option<u8> {
-    let digits = match std::str::from_utf8(hex) {
-        Ok(digits) => digits,
-        Err(_) => return None,
-    };
-    match u8::from_str_radix(digits, 16) {
-        Ok(byte) => Some(byte),
-        Err(_) => None,
-    }
 }
 
 /// `text` with `%XX` escapes decoded; an escape that is not hex stays as written.
@@ -193,4 +284,16 @@ fn decoded(text: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The byte two hex digits spell, if they do.
+fn hex_byte(hex: &[u8]) -> Option<u8> {
+    let digits = match std::str::from_utf8(hex) {
+        Ok(digits) => digits,
+        Err(_) => return None,
+    };
+    match u8::from_str_radix(digits, 16) {
+        Ok(byte) => Some(byte),
+        Err(_) => None,
+    }
 }

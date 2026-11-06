@@ -5,33 +5,45 @@ use std::collections::BTreeMap;
 use toml::{Table, Value};
 
 use crate::copy::_helpers::endpoints::endpoint;
-use crate::copy::constants::COPY_NAME;
+use crate::copy::constants::COPY_PREFIX;
 use crate::copy::models::{CopyProject, CopyRequest, Endpoint, Role};
 
 /// Connection kinds that hold files: a copy from one is a files source, and into one a files target.
 const FILE_KINDS: &[&str] = &["s3", "filesystem"];
 
-/// The project copying `request.source` into `request.destination`, with `connections` the project's own (as written, references unresolved).
+/// The project copying `request.source` into `request.destination`, with `connections` the project's own (as written, references unresolved). Its target and source are `copy_<table>`, and URI connections `copy_<table>_source` and `copy_<table>_destination`.
 pub(crate) fn project(request: &CopyRequest, connections: &Table) -> Result<CopyProject, String> {
-    let source = endpoint(&request.source, Role::Source, connections)?;
-    let destination = endpoint(&request.destination, Role::Destination, connections)?;
+    let mut source = endpoint(&request.source, Role::Source, connections)?;
+    let mut destination = endpoint(&request.destination, Role::Destination, connections)?;
     let table = source_table(&source)?;
-    let mut text = Table::new();
-    text.insert("default_target".to_owned(), text_value(COPY_NAME));
-    text.insert(
-        "connections".to_owned(),
-        Value::Table(connection_tables(&source, &destination)),
-    );
+    let base = format!("{COPY_PREFIX}{}", identifier(&table));
+    for (end, role) in [
+        (&mut source, Role::Source),
+        (&mut destination, Role::Destination),
+    ] {
+        if !end.named {
+            end.connection = format!("{base}_{}", role.label());
+        }
+    }
     let (target, schema, name) = target(&destination, &table)?;
-    text.insert(
-        "targets".to_owned(),
-        Value::Table(single(COPY_NAME, target)),
-    );
-    let source_table = source_settings(request, &source, schema, &name)?;
-    text.insert(
-        "sources".to_owned(),
-        Value::Table(single(COPY_NAME, source_table)),
-    );
+    let mut source_table = source_settings(request, &source, schema, &name)?;
+    source_table.insert("destination".to_owned(), text_value(&base));
+    let document = |with_named: bool| {
+        let mut text = Table::new();
+        text.insert(
+            "connections".to_owned(),
+            Value::Table(connection_tables([&source, &destination], with_named)),
+        );
+        text.insert(
+            "targets".to_owned(),
+            Value::Table(single(&base, target.clone())),
+        );
+        text.insert(
+            "sources".to_owned(),
+            Value::Table(single(&base, source_table.clone())),
+        );
+        toml::to_string(&text).map_err(|error| format!("cannot write the copy's project: {error}"))
+    };
     let variables: BTreeMap<String, String> = [&source.secret, &destination.secret]
         .into_iter()
         .flatten()
@@ -42,13 +54,22 @@ pub(crate) fn project(request: &CopyRequest, connections: &Table) -> Result<Copy
         .filter(|end| end.secret.is_some())
         .map(|end| format!("{} has a literal password; use ${{ENV:NAME}} in the URI so it stays out of shell history", end.shown))
         .collect();
-    let body = toml::to_string(&text)
-        .map_err(|error| format!("cannot write the copy's project: {error}"))?;
     Ok(CopyProject {
-        text: body,
+        text: document(true)?,
+        printed: document(false)?,
         variables,
         warnings,
     })
+}
+
+/// `name` lower-cased, with every character other than a letter, digit or `_` as `_`.
+fn identifier(name: &str) -> String {
+    name.chars()
+        .map(|character| match character.is_ascii_alphanumeric() {
+            true => character.to_ascii_lowercase(),
+            false => '_',
+        })
+        .collect()
 }
 
 /// The source's table name: the part after the last dot of its locator, or of its folder for files.
@@ -64,7 +85,11 @@ fn source_table(source: &Endpoint) -> Result<String, String> {
                 .settings
                 .get("root")
                 .and_then(Value::as_str)
-                .and_then(|root| root.trim_end_matches('/').rsplit('/').next())
+                .and_then(|root| {
+                    root.trim_end_matches(['/', '\\'])
+                        .rsplit(['/', '\\'])
+                        .next()
+                })
         })
         .unwrap_or_default();
     match name.is_empty() {
@@ -76,17 +101,12 @@ fn source_table(source: &Endpoint) -> Result<String, String> {
     }
 }
 
-fn connection_tables(source: &Endpoint, destination: &Endpoint) -> Table {
-    let mut tables = Table::new();
-    tables.insert(
-        source.connection.clone(),
-        Value::Table(source.settings.clone()),
-    );
-    tables.insert(
-        destination.connection.clone(),
-        Value::Table(destination.settings.clone()),
-    );
-    tables
+/// The connections of `ends`, leaving out named ones unless `with_named`.
+fn connection_tables(ends: [&Endpoint; 2], with_named: bool) -> Table {
+    ends.into_iter()
+        .filter(|end| with_named || !end.named)
+        .map(|end| (end.connection.clone(), Value::Table(end.settings.clone())))
+        .collect()
 }
 
 /// The target section, and the destination's schema and table name.
@@ -127,7 +147,7 @@ fn source_settings(
     settings.insert("connection".to_owned(), text_value(&source.connection));
     settings.insert(
         "description".to_owned(),
-        Value::String(format!("Copied from {}.", source.shown)),
+        Value::String(format!("Copied from {}.", source.described)),
     );
     settings.extend(schema.map(|schema| ("schema".to_owned(), Value::String(schema))));
     settings.extend(table_settings(request));
@@ -142,7 +162,7 @@ fn source_settings(
             named.insert("name".to_owned(), text_value(name));
             named.insert(
                 "description".to_owned(),
-                Value::String(format!("Copied from {}.", source.shown)),
+                Value::String(format!("Copied from {}.", source.described)),
             );
             settings.insert(
                 "tables".to_owned(),
