@@ -751,6 +751,32 @@ def test_given_flatten_when_loading_then_only_the_listed_object_expands_one_leve
 	assert columns == expected_columns
 
 
+
+FLATTEN_YIELDS = {
+	"dicts": "[{'id': 1, 'customer': {'country': 'GB', 'address': {'city': 'Leeds'}}}, {'id': 2, 'customer': None}]",
+	"bytes": "sl.json(__import__('json').dumps([{'id': 1, 'customer': {'country': 'GB', 'address': {'city': 'Leeds'}}}, {'id': 2, 'customer': None}]).encode())",
+	"arrow": "__import__('pyarrow').table({'id': [1, 2], 'customer': [{'country': 'GB', 'address': {'city': 'Leeds'}}, None]})",
+}
+
+
+@pytest.mark.parametrize("test_case", ["dicts", "bytes", "arrow"])
+def test_given_flatten_when_yielding_dicts_bytes_or_arrow_then_the_tables_match(tmp_path: Path, test_case: str) -> None:
+	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [{FLATTEN_YIELDS[test_case]}])\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	load(project)
+	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__t' ORDER BY ordinal_position")
+	assert columns[:3] == [("id", "BIGINT"), ("customer__country", "VARCHAR"), ("customer__address", "JSON")]
+	assert query(project, 'SELECT id, customer__country, customer__address::VARCHAR FROM "RAW".shop__t ORDER BY id') == [(1, "GB", '{"city":"Leeds"}'), (2, None, None)]
+
+
+def test_given_flatten_when_a_key_collides_with_a_field_then_the_load_fails(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', flatten=['customer'])(rows)\n")
+	give(project, "rows", [{"id": 1, "customer": {"country": "GB"}, "customer__country": "x"}])
+	done = sqlload(project, "load")
+	assert done.returncode == 1
+	assert "flatten customer: the key country gives column customer__country, which the data already has" in done.stdout, done.stdout + done.stderr
+
+
 def test_given_flatten_on_a_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:
 	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "ndjson"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
 	project = make_project(tmp_path, toml, "")
