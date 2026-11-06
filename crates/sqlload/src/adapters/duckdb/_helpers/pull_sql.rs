@@ -57,7 +57,7 @@ pub(crate) fn pull_insert(
         .map(|column| identifier(&column.name))
         .collect();
     format!(
-        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], union_by_name = true, filename = true, file_row_number = true) AS f JOIN (VALUES {}) AS m({}) ON f.filename = m.{}",
+        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], union_by_name = true, filename = true, file_row_number = true, hive_partitioning = false) AS f JOIN (VALUES {}) AS m({}) ON f.filename = m.{}",
         DuckDbSql.render_qualified_name(into),
         targets.join(", "),
         values.join(", "),
