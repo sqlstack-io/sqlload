@@ -139,7 +139,7 @@ table that does not exist yet (`relation_missing`) and, on `contract = "enforced
 columns nothing declares (`missing_declaration`); SQLLoad's own `_sqlload_*` columns never count.
 It exits 0 when every table agrees and 1 otherwise, including when a source cannot be listed or
 a selector matches nothing. `--from TARGET` reads every table as if its source loaded into that
-target, in that target's database and schema, and `--json` prints the report as one document with
+target, in that target's database and schema (declared types are read for its warehouse), and `--json` prints the report as one document with
 `sqb contract diff --json`'s field names. Tables on a files target are reported as problems: they
 have no catalog to compare yet.
 

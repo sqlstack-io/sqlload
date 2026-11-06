@@ -152,5 +152,7 @@ def test_given_a_table_loaded_into_another_target_when_diffing_from_it_then_its_
 	assert "relation_missing" in run("contract", "diff", "-c", str(config)).stdout
 	from_prod = run("contract", "diff", "--from", "prod", "--json", "-c", str(config))
 	assert (from_prod.returncode, json.loads(from_prod.stdout)["resources"][0]["relation"]) == (0, "STAGE.orders"), from_prod.stdout + from_prod.stderr
+	unknown = run("contract", "diff", "--from", "staging", "-c", str(config))
+	assert (unknown.returncode, "--from staging is not a target in sqlload.toml (it has: dev, lake, prod)" in unknown.stderr) == (1, True), unknown.stdout + unknown.stderr
 	from_lake = run("contract", "diff", "--from", "lake", "--json", "-c", str(config))
 	assert (from_lake.returncode, json.loads(from_lake.stdout)["problems"]) == (1, ["orders: target lake writes files; contract diff compares warehouse tables (DuckDB, Snowflake) only"]), from_lake.stdout + from_lake.stderr
