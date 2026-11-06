@@ -71,8 +71,7 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
     let found = tokio::task::spawn_blocking(move || host.discover(&root, &paths))
         .await
         .map_err(|error| format!("Python discovery failed: {error}"))??;
-    parse_python_project(request.text, &lookup, &found)
-        .map_err(|error| error.to_string())
+    parse_python_project(request.text, &lookup, &found).map_err(|error| error.to_string())
 }
 
 /// Run a loader command against the project in `request.text`: the lines to print, and whether it succeeded. Under `plan --json` every failure is a JSON error document.

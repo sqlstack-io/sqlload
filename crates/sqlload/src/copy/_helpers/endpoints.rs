@@ -159,6 +159,18 @@ fn settings(pairs: &[(&str, &str)]) -> Table {
         .collect()
 }
 
+/// The byte two hex digits spell, if they do.
+fn hex_byte(hex: &[u8]) -> Option<u8> {
+    let digits = match std::str::from_utf8(hex) {
+        Ok(digits) => digits,
+        Err(_) => return None,
+    };
+    match u8::from_str_radix(digits, 16) {
+        Ok(byte) => Some(byte),
+        Err(_) => None,
+    }
+}
+
 /// `text` with `%XX` escapes decoded; an escape that is not hex stays as written.
 fn decoded(text: &str) -> String {
     let bytes = text.as_bytes();
@@ -168,7 +180,7 @@ fn decoded(text: &str) -> String {
         let escape = bytes
             .get(index + 1..index + 3)
             .filter(|_| bytes[index] == b'%')
-            .and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok());
+            .and_then(hex_byte);
         match escape {
             Some(byte) => {
                 out.push(byte);

@@ -18,22 +18,32 @@ pub(crate) fn project(request: &CopyRequest, connections: &Table) -> Result<Copy
     let table = source_table(&source)?;
     let mut text = Table::new();
     text.insert("default_target".to_owned(), text_value(COPY_NAME));
-    text.insert("connections".to_owned(), Value::Table(connection_tables(&source, &destination)));
+    text.insert(
+        "connections".to_owned(),
+        Value::Table(connection_tables(&source, &destination)),
+    );
     let (target, schema, name) = target(&destination, &table)?;
-    text.insert("targets".to_owned(), Value::Table(single(COPY_NAME, target)));
+    text.insert(
+        "targets".to_owned(),
+        Value::Table(single(COPY_NAME, target)),
+    );
     let source_table = source_settings(request, &source, schema, &name)?;
-    text.insert("sources".to_owned(), Value::Table(single(COPY_NAME, source_table)));
+    text.insert(
+        "sources".to_owned(),
+        Value::Table(single(COPY_NAME, source_table)),
+    );
     let variables: BTreeMap<String, String> = [&source.secret, &destination.secret]
         .into_iter()
         .flatten()
         .cloned()
         .collect();
-    let warnings = [&source, &destination]
+    let warnings: Vec<String> = [&source, &destination]
         .iter()
         .filter(|end| end.secret.is_some())
         .map(|end| format!("{} has a literal password; use ${{ENV:NAME}} in the URI so it stays out of shell history", end.shown))
         .collect();
-    let body = toml::to_string(&text).map_err(|error| format!("cannot write the copy's project: {error}"))?;
+    let body = toml::to_string(&text)
+        .map_err(|error| format!("cannot write the copy's project: {error}"))?;
     Ok(CopyProject {
         text: body,
         variables,
@@ -68,8 +78,14 @@ fn source_table(source: &Endpoint) -> Result<String, String> {
 
 fn connection_tables(source: &Endpoint, destination: &Endpoint) -> Table {
     let mut tables = Table::new();
-    tables.insert(source.connection.clone(), Value::Table(source.settings.clone()));
-    tables.insert(destination.connection.clone(), Value::Table(destination.settings.clone()));
+    tables.insert(
+        source.connection.clone(),
+        Value::Table(source.settings.clone()),
+    );
+    tables.insert(
+        destination.connection.clone(),
+        Value::Table(destination.settings.clone()),
+    );
     tables
 }
 
@@ -109,22 +125,40 @@ fn source_settings(
 ) -> Result<Table, String> {
     let mut settings = Table::new();
     settings.insert("connection".to_owned(), text_value(&source.connection));
-    settings.insert("description".to_owned(), Value::String(format!("Copied from {}.", source.shown)));
+    settings.insert(
+        "description".to_owned(),
+        Value::String(format!("Copied from {}.", source.shown)),
+    );
     settings.extend(schema.map(|schema| ("schema".to_owned(), Value::String(schema))));
     settings.extend(table_settings(request));
     match kind(source) {
         "postgres" => {
             settings.insert("kind".to_owned(), text_value("postgres"));
-            settings.insert("include".to_owned(), Value::Array(vec![text_value(&source.locator)]));
+            settings.insert(
+                "include".to_owned(),
+                Value::Array(vec![text_value(&source.locator)]),
+            );
             let mut named = Table::new();
             named.insert("name".to_owned(), text_value(name));
-            settings.insert("tables".to_owned(), Value::Table(single(&source.locator, named)));
+            named.insert(
+                "description".to_owned(),
+                Value::String(format!("Copied from {}.", source.shown)),
+            );
+            settings.insert(
+                "tables".to_owned(),
+                Value::Table(single(&source.locator, named)),
+            );
         }
         files if FILE_KINDS.contains(&files) => {
             settings.insert("kind".to_owned(), text_value("files"));
             settings.insert("path".to_owned(), text_value(&source.locator));
             settings.insert("table_name".to_owned(), text_value(name));
-            settings.extend(request.format.clone().map(|format| ("format".to_owned(), Value::String(format))));
+            settings.extend(
+                request
+                    .format
+                    .clone()
+                    .map(|format| ("format".to_owned(), Value::String(format))),
+            );
         }
         other => {
             return Err(format!(
@@ -139,17 +173,34 @@ fn source_settings(
 /// The write settings the command line gives.
 fn table_settings(request: &CopyRequest) -> Vec<(String, Value)> {
     let mut settings: Vec<(String, Value)> = Vec::new();
-    settings.extend(request.write_strategy.clone().map(|strategy| ("write_strategy".to_owned(), Value::String(strategy))));
+    settings.extend(
+        request
+            .write_strategy
+            .clone()
+            .map(|strategy| ("write_strategy".to_owned(), Value::String(strategy))),
+    );
     settings.extend((!request.unique_key.is_empty()).then(|| {
-        let keys = request.unique_key.iter().map(|key| text_value(key)).collect();
+        let keys: Vec<Value> = request
+            .unique_key
+            .iter()
+            .map(|key| text_value(key))
+            .collect();
         ("unique_key".to_owned(), Value::Array(keys))
     }));
-    settings.extend(request.cursor_column.clone().map(|column| ("cursor_column".to_owned(), Value::String(column))));
+    settings.extend(
+        request
+            .cursor_column
+            .clone()
+            .map(|column| ("cursor_column".to_owned(), Value::String(column))),
+    );
     settings
 }
 
 fn kind(end: &Endpoint) -> &str {
-    end.settings.get("kind").and_then(Value::as_str).unwrap_or_default()
+    end.settings
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 fn single(key: &str, table: Table) -> Table {
