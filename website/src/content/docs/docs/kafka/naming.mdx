@@ -1,0 +1,57 @@
+---
+title: "Naming topics"
+description: "How Kafka topics map to Snowflake tables, stages, pipes and consumer groups."
+---
+
+Each topic exports to a table. `[naming]` decides which, in this order:
+
+1. An exact entry in `[naming.map]`.
+2. The first `[[naming.rules]]` entry whose `match` fits the topic.
+3. The default rule: strip `strip_prefix`, upper-case, `.` becomes `__`, other symbols `_`.
+
+Several topics can share a table through rules or map entries. If any of them reaches the table
+through the default rule, the configuration fails, so grouping is always on purpose. Topics whose
+names differ only in case or punctuation can't share a table.
+
+```toml
+[naming]
+strip_prefix = "shop."
+unmatched = "default"
+
+[[naming.rules]]
+match = "shop.{service}_{variant}.{kind}"
+table = "{service}__{kind}"
+
+[naming.map]
+"shop.legacy-orders" = "ORDERS_V1"
+```
+
+`tables` shows how topics map to tables before anything connects. With the example configuration
+and a file of topic names:
+
+```console
+$ sqlload tables --topics-file topics.txt
+shop.legacy-orders	ORDERS_V1	orders_v1	sqlload-orders_v1
+shop.orders_v2.events	ORDERS__EVENTS	orders__events	sqlload-orders__events
+shop.payments_v1.events	PAYMENTS__EVENTS	payments__events	sqlload-payments__events
+```
+
+`shop.orders.dlq` was in the file too, but matches the example's `exclude`, so it isn't listed.
+
+## `[naming]`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `strip_prefix` | none | Removed from the topic before the default rule. |
+| `table_prefix` | `""` | Put in front of every table name. `{stream}` and consumer groups leave it out. |
+| `rules` | none | `[[naming.rules]]` entries, tried in order. `match` is a pattern: `{name}` captures text without dots, `*` matches anything. `table` is a template of the captures, or `skip = true` leaves the topic out. |
+| `map` | none | Exact topic names to table names. These win over rules. |
+| `unmatched` | `default` | A topic no rule or map entry names: `default` applies the default rule, `fail` stops. |
+| `fallback` | none | The table for topics whose derived name isn't a valid identifier, instead of failing. |
+| `stage` | `{table}_SQLLOAD_STAGE` | The stage name, for staged files. |
+| `pipe` | `{table}_SQLLOAD_PIPE` | The pipe name, for Snowpipe loads. |
+| `streaming_pipe` | `{table}-STREAMING` | The pipe Snowpipe Streaming writes through. |
+
+Name templates, and `source.consumer_group` (default `sqlload-{stream}`), can use `{table}`, the
+table name; `{table_flat}`, the table name with `__` as `_`; and `{stream}`, the table name in lower
+case without `table_prefix`.

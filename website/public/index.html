@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>SQLLoad · Load data into your warehouse, and see how first</title>
+		<meta name="description" content="SQLLoad loads Postgres tables, files and Python sources into Snowflake, DuckDB or Parquet files. sqlload plan shows every table, column and route before anything changes. Free and open source, written in Rust." />
+		<meta property="og:title" content="SQLLoad · Load data into your warehouse, and see how first" />
+		<meta property="og:description" content="A free, open-source data loader in Rust that shows you its plan before it changes anything." />
+		<meta property="og:type" content="website" />
+		<meta name="twitter:card" content="summary" />
+		<link rel="icon" type="image/png" sizes="128x128" href="/favicon.png" />
+		<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+		<link rel="stylesheet" href="/styles.css" />
+		<script>
+			(function () {
+				var stored = localStorage.getItem('starlight-theme');
+				var dark = stored ? stored === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+				document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+			})();
+		</script>
+	</head>
+	<body>
+		<header class="site-header">
+			<div class="wrap">
+				<div class="brand-lockup">
+					<a class="brand" href="/" aria-label="SQLLoad home">
+						<img class="logo-for-light" src="/assets/logo-light.png" alt="SQLLoad" width="133" height="30" />
+						<img class="logo-for-dark" src="/assets/logo-dark.png" alt="SQLLoad" width="133" height="30" />
+					</a>
+					<a class="brand-byline" href="https://sqlstack.io">by SQLStack</a>
+				</div>
+				<nav class="nav" aria-label="Main">
+					<a class="hide-sm" href="/#how">How it works</a>
+					<a href="/docs/">Docs</a>
+					<a class="hide-sm" href="/docs/benchmarks/">Benchmarks</a>
+					<a class="nav-icon" href="https://github.com/sqlstack-io/sqlload" aria-label="SQLLoad on GitHub">
+						<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
+					</a>
+					<button class="theme-toggle" type="button" aria-label="Toggle dark mode" data-theme-toggle>
+						<svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
+						<svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
+					</button>
+				</nav>
+			</div>
+		</header>
+
+				<main>
+			<div class="hero wrap">
+				<div class="hero-text">
+					<p class="eyebrow">Rust-powered · Free and open source · Apache-2.0</p>
+					<h1>Load data into your warehouse. Fast.</h1>
+					<p class="tagline">See exactly how, before anything changes.</p>
+					<p class="lede">
+						When your files are already in a bucket or folder, the warehouse loads them itself, and no
+						row passes through the loader. Everything else is staged as Parquet and bulk-loaded, not
+						inserted row by row.
+					</p>
+					<div class="actions">
+						<div class="install">
+							<span><span class="prompt">$</span> uv tool install sqlload</span>
+							<button class="copy" type="button" data-copy="uv tool install sqlload">Copy</button>
+						</div>
+						<span class="actions-break" aria-hidden="true"></span>
+						<a class="button primary" href="/docs/quickstart/">Read the docs</a>
+						<a class="button" href="https://github.com/sqlstack-io/sqlload">View on GitHub</a>
+					</div>
+				</div>
+<pre class="terminal hero-visual" aria-label="sqlload copy loads Parquet files in S3 into Snowflake: the plan shows the column types and that Snowflake copies the files directly, then 10,000,000 rows load."><span class="cmd">sqlload copy --no-color s3://your-bucket/sqlload/orders/ wh:SQLLOAD_RAW.ORDERS</span>
+Plan ready  1 selected, 2 objects to create, 1 to load
+
+Objects (2)                                         sqlload apply
+├── @"SQLLOAD_TEST"."SQLLOAD_RAW"."_SQLLOAD_STAGE"  create stage on s3://your-bucket/sqlload/
+└── SQLLOAD_RAW.ORDERS                              create table
+    ├── id            int             -&gt; NUMBER(38,0)
+    ├── customer_name text            -&gt; VARCHAR
+    ├── created_at    timestamp_tz    -&gt; TIMESTAMP_TZ(9)
+    ├── amount        decimal(12,2)   -&gt; NUMBER(12,2)
+    ├── is_active     bool            -&gt; BOOLEAN
+    ├── quantity      int             -&gt; NUMBER(38,0)
+    └── + _sqlload_source_file, _source_version, _source_row, _load_id, _loaded_at
+
+Loads (1)                                           sqlload load
+└── orders                                          replace
+    ├── source  files  s3://your-bucket/sqlload/orders/  parquet
+    ├── files   10 to read of 10 listed
+    ├── route   <span class="ok">Snowflake COPYs directly from s3://your-bucket/sqlload/orders/ (nothing through the loader)</span>
+    └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; <span class="dim">…</span>
+
+<span class="ok">✓ Plan complete  1 selected, 2 objects to create, 1 to load</span>
+created  @"SQLLOAD_TEST"."SQLLOAD_RAW"."_SQLLOAD_STAGE"  stage on s3://your-bucket/sqlload/
+created  SQLLOAD_RAW.ORDERS                              11 columns
+loaded   SQLLOAD_RAW.ORDERS                              10,000,000 rows  12.0s
+
+<span class="ok">✓ Completed  1 loaded, 10,000,000 rows, 19.6s</span></pre>
+			</div>
+
+			<section class="speed" aria-labelledby="speed-title">
+				<div class="wrap">
+					<div class="speed-head">
+						<h2 id="speed-title">Faster than dlt and ingestr</h2>
+						<a href="/docs/benchmarks/">How we measured →</a>
+					</div>
+					<div class="speed-rows">
+						<div class="speed-row">
+							<h3>S3 Parquet → Snowflake · 1M rows</h3>
+							<dl>
+								<div class="lead"><dt>sqlload</dt><dd><span class="track"><span class="bar" style="width: 52.9%"></span></span><span class="time">10.30 s</span></dd></div>
+								<div><dt>ingestr</dt><dd><span class="track"><span class="bar" style="width: 100.0%"></span></span><span class="time">19.47 s</span></dd></div>
+							</dl>
+						</div>
+						<div class="speed-row">
+							<h3>Postgres → Snowflake · 1M rows</h3>
+							<dl>
+								<div class="lead"><dt>sqlload</dt><dd><span class="track"><span class="bar" style="width: 49.6%"></span></span><span class="time">14.56 s</span></dd></div>
+								<div><dt>ingestr</dt><dd><span class="track"><span class="bar" style="width: 55.8%"></span></span><span class="time">16.38 s</span></dd></div>
+								<div><dt>dlt</dt><dd><span class="track"><span class="bar" style="width: 100.0%"></span></span><span class="time">29.36 s</span></dd></div>
+							</dl>
+						</div>
+						<div class="speed-row">
+							<h3>Parquet → DuckDB · 1M rows</h3>
+							<dl>
+								<div class="lead"><dt>sqlload</dt><dd><span class="track"><span class="bar" style="width: 1.5%"></span></span><span class="time">0.92 s</span></dd></div>
+								<div><dt>ingestr</dt><dd><span class="track"><span class="bar" style="width: 1.5%"></span></span><span class="time">2.12 s</span></dd></div>
+								<div><dt>dlt</dt><dd><span class="track"><span class="bar" style="width: 100.0%"></span></span><span class="time">138.45 s</span></dd></div>
+							</dl>
+						</div>
+					</div>
+					<p class="caption">Wall time, lower is faster. Median of 5 runs on one 4-vCPU machine, 6 November 2026: sqlload 0.11.1 and 0.11.0, ingestr 1.1.82, dlt 1.32.0 (its connectorx backend for Postgres). dlt was not run in the S3 scenario.</p>
+				</div>
+			</section>
+
+			<section>
+				<div class="wrap">
+					<div class="section-head">
+						<h2>The loading framework you keep rebuilding</h2>
+					</div>
+					<div class="problem">
+						<div class="card">
+							<h3>Hidden state drifts from reality</h3>
+							<p>A stored copy of the schema or the cursor disagrees with the warehouse, and the fix is deleting state you can't see.</p>
+						</div>
+						<div class="card">
+							<h3>Types quietly change</h3>
+							<p>Decimals lose digits, JSON turns into strings, and a stray value becomes a second column.</p>
+						</div>
+						<div class="card">
+							<h3>Rows go the long way round</h3>
+							<p>Files already in a bucket are downloaded, parsed and uploaded again, when the warehouse could copy them itself.</p>
+						</div>
+						<div class="card">
+							<h3>You find out in production</h3>
+							<p>Nothing shows which tables, columns and routes a run will touch until it has touched them.</p>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section id="how">
+				<div class="wrap">
+					<div class="section-head">
+						<h2>Plan, apply, load</h2>
+						<p>One <code>sqlload.toml</code>, three commands, and nothing kept outside your warehouse.</p>
+					</div>
+
+					<div class="steps">
+						<div class="step">
+							<div class="step-text">
+								<span class="num">01 · Plan</span>
+								<h3>See every change first</h3>
+								<p>Every table, column, type mapping, write strategy, route and cursor, before anything runs. Problems come with the fix.</p>
+								<p class="more"><a href="/docs/cli/plan-apply-load/">Reading a plan →</a></p>
+							</div>
+<pre class="terminal"><span class="cmd">sqlload plan</span>
+Objects (2)                          sqlload apply
+└── raw.app__orders                  create table
+    ├── order_id    int           -&gt; BIGINT
+    ├── total       decimal(12,2) -&gt; DECIMAL(12,2)
+    └── updated_at  timestamp_tz  -&gt; TIMESTAMP WITH TIME ZONE
+<span class="dim">…</span>
+Errors (1)
+└── app__customers
+    └── reason  <span class="bad">no description; add description = "..."</span>
+                <span class="bad">under [sources.app.tables."public.customers"]</span></pre>
+						</div>
+
+						<div class="step">
+							<div class="step-text">
+								<span class="num">02 · Load</span>
+								<h3>Bulk copy, not row inserts</h3>
+								<p>Files in S3 load into Snowflake straight from an external stage. Parquet loads into DuckDB through DuckDB's own reader. Rows are staged as Parquet and copied in bulk.</p>
+								<p class="more"><a href="/docs/targets/">Load methods and routes →</a></p>
+							</div>
+<pre class="terminal"><span class="cmd">sqlload load</span>
+<span class="dim">…</span>
+└── events                     delete_insert (cursor: dt)
+    ├── source  files  lake/events/  parquet
+    ├── files   2 new of 3 listed
+    └── route   <span class="ok">DuckDB reads directly from lake/events/</span>
+<span class="dim">…</span>
+loaded   raw.events      6 rows  0.0s
+<span class="ok">✓ Completed  2 loaded, 7 rows, 0.1s</span></pre>
+						</div>
+
+						<div class="step">
+							<div class="step-text">
+								<span class="num">03 · Stay stateless</span>
+								<h3>The warehouse is the state</h3>
+								<p>Incremental tables continue from the destination's own maximum. The schema is the live table. No local cache, no schema tables to fall out of sync.</p>
+								<p class="more"><a href="/docs/concepts/cursors/">Cursors and state →</a></p>
+							</div>
+<pre class="terminal"><span class="cmd">sqlload load app__orders</span>
+└── app__orders                merge (unique_key: order_id)
+    ├── source  postgres  app  public.orders
+    └── cursor  updated_at from 2026-10-12 16:00:00+00
+                <span class="ok">(destination maximum)</span>
+
+loaded   raw.app__orders  3 rows  0.0s
+<span class="ok">✓ Completed  1 loaded, 3 rows, 0.1s</span></pre>
+						</div>
+
+						<div class="step">
+							<div class="step-text">
+								<span class="num">04 · Keep types exact</span>
+								<h3>Declare what matters</h3>
+								<p>Portable types, mapped per warehouse. Pin a column and SQLLoad widens the table in place; check declarations against live tables in CI.</p>
+								<p class="more"><a href="/docs/concepts/contracts/">Contracts and schema changes →</a></p>
+							</div>
+<pre class="terminal"><span class="cm"># sqlload.toml</span>
+[sources.app.tables.<span class="str">"public.orders"</span>]
+<span class="arg">columns</span> = { total = <span class="str">"decimal(18,2)"</span> }
+
+<span class="cmd">sqlload plan app__orders</span>
+└── raw.app__orders            alter table
+    └── widen  total decimal(12,2) -&gt; decimal(18,2)  in place
+
+<span class="cmd">sqlload contract diff</span>
+  OK    table:app__orders
+0 contract difference(s)</pre>
+						</div>
+
+						<div class="step">
+							<div class="step-text">
+								<span class="num">05 · Write sources in Python</span>
+								<h3>APIs without the plumbing</h3>
+								<p>Yield dicts, Arrow data or JSON bytes. HTTP pagination, fan-out, retries and rate limits run in Rust.</p>
+								<p class="more"><a href="/docs/sources/python/">Python sources →</a></p>
+							</div>
+<pre class="terminal"><span class="kw">import</span> sqlload <span class="kw">as</span> sl
+
+shop = sl.source(<span class="str">"shop"</span>, <span class="arg">connection</span>=<span class="str">"shop"</span>)
+api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg">rate_limit</span>=<span class="str">"10/s"</span>)
+
+<span class="kw">@</span>shop.table(<span class="arg">unique_key</span>=<span class="str">"order_id"</span>)
+<span class="kw">def</span> orders(ctx):
+    <span class="str">"""Orders, one row per order."""</span>
+    <span class="kw">return</span> api.paginate(<span class="str">"/orders"</span>, <span class="arg">select</span>=<span class="str">"$.items"</span>,
+                        <span class="arg">paginator</span>=sl.page_number(<span class="str">"page"</span>))</pre>
+						</div>
+					</div>
+					<p class="caption">Each panel shows real <code>sqlload</code> output on a small orders example, cut down where marked <code>…</code>.</p>
+				</div>
+			</section>
+
+			<section id="start">
+				<div class="wrap start">
+					<div>
+						<h2>Start in a minute</h2>
+						<p class="lede">
+							Install it, then copy a folder or a Postgres table with one command. No configuration file needed.
+						</p>
+						<ul>
+							<li>Reads Postgres, Parquet, CSV, JSON and NDJSON in S3 or a folder, Python and HTTP APIs.</li>
+							<li>Writes Snowflake, DuckDB, and Parquet files in S3 or a folder.</li>
+							<li>Linux and macOS; Python only for Python sources.</li>
+							<li>Free and open source, Apache-2.0.</li>
+						</ul>
+					</div>
+<pre class="terminal"><span class="cmd">uv tool install sqlload</span>
+<span class="cmd">sqlload copy 'postgresql://postgres:${ENV:PGPASSWORD}@localhost/postgres#public.orders' \
+    duckdb://shop.duckdb#raw.orders --cursor-column updated_at</span>
+<span class="dim">…</span>
+created  raw.orders  8 columns
+loaded   raw.orders  1,001 rows  0.0s
+<span class="ok strong">✓ Completed  1 loaded, 1,001 rows, 0.1s</span></pre>
+				</div>
+			</section>
+
+			<section class="closing">
+				<div class="wrap">
+					<h2>Load your first table</h2>
+					<p>Follow the quickstart, or read how SQLLoad compares with dlt and ingestr.</p>
+					<div class="actions">
+						<a class="button primary" href="/docs/quickstart/">Quickstart</a>
+						<a class="button" href="/docs/compared/">Compared with dlt and ingestr</a>
+					</div>
+				</div>
+			</section>
+		</main>
+
+<footer>
+			<div class="wrap">
+				<span>SQLLoad · Apache-2.0</span>
+				<span>
+					<a href="/docs/">Docs</a> ·
+					<a href="/docs/benchmarks/">Benchmarks</a> ·
+					<a href="https://github.com/sqlstack-io/sqlload">GitHub</a>
+				</span>
+			</div>
+			<div class="wrap sqlstack-family">
+				<a class="sqlstack-parent" href="https://sqlstack.io">
+					<img class="sqlstack-for-light" src="/assets/sqlstack.png" alt="" width="28" height="23" />
+					<img class="sqlstack-for-dark" src="/assets/sqlstack-dark.png" alt="" width="28" height="23" />
+					<span>Part of SQLStack</span>
+				</a>
+				<nav class="sqlstack-tools" aria-label="SQLStack tools">
+					<a href="https://sqlbuild.com">SQLBuild</a>
+					<a href="https://sqlclean.io">SQLClean</a>
+					<a href="https://github.com/sqlstack-io/sqlquack">SQLQuack</a>
+					<a href="/">SQLLoad</a>
+					<a href="https://sqltide.io/">SQLTide</a>
+					<a href="https://fensu.io">Fensu</a>
+				</nav>
+			</div>
+		</footer>
+
+		<script>
+			document.querySelector('[data-theme-toggle]').addEventListener('click', function () {
+				var next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+				document.documentElement.dataset.theme = next;
+				localStorage.setItem('starlight-theme', next);
+			});
+			document.querySelectorAll('[data-copy]').forEach(function (button) {
+				button.addEventListener('click', function () {
+					navigator.clipboard.writeText(button.dataset.copy).then(function () {
+						button.textContent = 'Copied';
+						setTimeout(function () {
+							button.textContent = 'Copy';
+						}, 1500);
+					});
+				});
+			});
+		</script>
+	</body>
+</html>

@@ -1,0 +1,32 @@
+---
+title: "DuckDB"
+description: "Load into DuckDB: Arrow appends, and Parquet files DuckDB reads itself."
+---
+
+Rows from Postgres and Python sources are appended to DuckDB as Arrow, inside the batch's
+transaction.
+
+Parquet files in S3 or a local folder load directly: DuckDB reads them with `read_parquet`, with the
+same values SQLLoad's own reader gives:
+
+```console
+$ sqlload plan
+…
+    ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
+```
+
+SQLLoad's reader loads a files table instead when DuckDB can't load it exactly:
+
+- another format (CSV, JSON, NDJSON);
+- a custom S3 endpoint (in the connection, or `AWS_ENDPOINT` or `AWS_ENDPOINT_URL`);
+- masked columns;
+- a file column named `filename` or `file_row_number`;
+- nanosecond or epoch timestamps, and other types DuckDB wouldn't read exactly;
+- a column loaded as a different type than the files hold;
+- glob characters in a path.
+
+A later batch whose files hold a column differently fails the load, naming the column.
+
+The first load from S3 installs DuckDB's `httpfs` extension into `~/.duckdb`, and `aws` too when
+credentials come from the AWS credential chain rather than `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY`. That needs the network once. Local folders need nothing extra.

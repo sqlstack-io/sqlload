@@ -1,0 +1,39 @@
+name: Website
+
+# Builds the website and checks its links and content. It deploys nothing; hosting builds the site
+# from website/ on its own.
+on:
+  pull_request:
+    paths:
+      - website/**
+      - .github/workflows/website.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and check the website
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: website/.nvmrc
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Check content and build
+        run: npm run build
+      - name: Check links
+        run: python3 scripts/check_links.py dist

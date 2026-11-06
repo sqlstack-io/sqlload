@@ -1,0 +1,132 @@
+---
+title: "contract"
+description: "Compare declared columns with live tables, and adopt live columns into sqlload.toml."
+---
+
+```bash
+sqlload contract diff     [SELECTOR ...] [OPTIONS]
+sqlload contract generate [SELECTOR ...] [OPTIONS] [--write [--overwrite]]
+```
+
+Both read the warehouse's catalog, and list sources to find their tables. They load no rows. See
+[Contracts](/docs/concepts/contracts/) for what declared columns do.
+
+## contract diff
+
+Compares each selected table's declared `columns` with its live table, in SQLLoad's portable
+types, and changes nothing.
+
+```console
+$ sqlload contract diff
+Contract comparison
+  OK    table:app__customers
+  DIFF  table:app__orders
+        type_mismatch: column 'total' is declared decimal(18,2) but physical type is decimal(12,2)
+
+1 contract difference(s)
+```
+
+A type agrees when the warehouse stores it the same way, so `varchar(50)` matches DuckDB's
+`VARCHAR`. A wider live type is a difference. SQLLoad's own `_sqlload_*` columns never count.
+
+| Finding | Meaning |
+|---------|---------|
+| `type_mismatch` | A declared column's live type differs. |
+| `missing_physical_column` | A declared column the table lacks. |
+| `relation_missing` | The table doesn't exist yet. |
+| `missing_declaration` | On `contract = "enforced"` tables: a live column nothing declares. |
+| `files_type_mismatch` | With `--all-files`: files holding a column as another type. |
+| `files_missing_column` | With `--all-files`: files without a column. |
+| `files_extra_column` | With `--all-files`: a column only older files hold. |
+| `inspection_unavailable` | The table couldn't be read, such as a file or store error. |
+
+It exits 0 when every table agrees, and 1 otherwise, including when a source can't be listed or a
+selector matches nothing.
+
+## contract generate
+
+Proposes the declarations that adopt each live table: every live column nothing declares, with its
+live type.
+
+```console
+$ sqlload contract generate app__orders
+Contract comparison
+  OK    table:app__orders
+        adopt: columns of [sources.app.tables."public.orders"]
+          + order_id = "int"
+          + customer_id = "int"
+          + status = "text"
+          + total = "decimal(12,2)"
+          + updated_at = "timestamp_tz"
+
+Run contract generate --write to update sqlload.toml.
+
+0 contract difference(s)
+```
+
+- `--write` writes them into the table's `columns` in `sqlload.toml`, creating its
+  `[sources.app.tables."public.orders"]` entry when needed, and keeping the rest of the file, its
+  comments and layout as they were. The edited file must still parse, or nothing is written. It's
+  replaced atomically, with its permissions, and only if nobody changed it while the command ran.
+- `--overwrite`, with `--write`, also retypes declared columns to their live type and removes
+  declared columns the table lacks.
+- Python tables are never edited: the report prints the whole `columns={...}` to paste into the
+  decorator.
+- A table found by an `include` pattern with no description isn't written, since its new entry
+  would need one.
+- Masked columns stay under `mask`.
+
+The exit code is that of `diff`, after the write.
+
+## Options
+
+| Option | Meaning |
+|--------|---------|
+| `SELECTOR ...`, `-s`, `--select`, `--exclude` | Tables to compare, as for [`plan`](/docs/cli/plan-apply-load/#options). |
+| `--from <TARGET>` | Read every table as if its source loaded into this target, in its database and schema. Declared types are read for that warehouse. |
+| `--json` | Print the report as one JSON document. |
+| `--all-files` | On files targets, also read every file's footer under the table's folder, and report files whose columns differ from the newest load. |
+| `--write` | `generate` only: write the declarations into `sqlload.toml`. |
+| `--overwrite` | `generate` only, with `--write`: also retype and remove declared columns. |
+
+## JSON
+
+```console
+$ sqlload contract diff --json
+{
+  "differences": 1,
+  "from_target": null,
+  "resources": [
+    {
+      "findings": [],
+      "relation": "raw.app__customers",
+      "resource_name": "app__customers",
+      "resource_type": "table"
+    },
+    {
+      "findings": [
+        {
+          "column": "total",
+          "declared_type": "decimal(18,2)",
+          "kind": "type_mismatch",
+          "message": "column 'total' is declared decimal(18,2) but physical type is decimal(12,2)",
+          "physical_type": "decimal(12,2)"
+        }
+      ],
+      "relation": "raw.app__orders",
+      "resource_name": "app__orders",
+      "resource_type": "table"
+    }
+  ],
+  "problems": [],
+  "written_paths": []
+}
+```
+
+The field names are the same as SQLBuild's `sqb contract diff --json`.
+
+## Files targets
+
+On a files target, a table's live columns are the footers of the newest load in its newest
+partition, as `plan` uses. `--all-files` reads every footer under the table's folder, ignoring
+`max_footer_reads`, and names the files behind each finding. It changes nothing.

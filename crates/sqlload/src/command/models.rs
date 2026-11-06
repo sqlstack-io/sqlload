@@ -59,7 +59,7 @@ pub enum Command {
     /// Show per-partition lag and committed offsets.
     Status,
     /// Inspect or change the run log of `state = "logged"` tables.
-    State {
+    LoggedState {
         #[command(subcommand)]
         action: StateAction,
     },
@@ -144,7 +144,7 @@ pub struct CopyArgs {
     pub print_toml: bool,
 }
 
-/// What `sqlload state` does.
+/// What `sqlload logged-state` does.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum StateAction {
     /// Show each logged table's run log and current state; read-only.
@@ -157,7 +157,7 @@ pub enum StateAction {
     Reset(ResetArgs),
 }
 
-/// Table selection for `sqlload state`, and confirmation for the commands that append.
+/// Table selection for `sqlload logged-state`, and confirmation for the commands that append.
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub struct StateArgs {
     /// Sources or tables to select; all when empty.
@@ -167,7 +167,7 @@ pub struct StateArgs {
     pub yes: bool,
 }
 
-/// `sqlload state reset`'s position.
+/// `sqlload logged-state reset`'s position.
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub struct ResetArgs {
     #[command(flatten)]

@@ -1,0 +1,117 @@
+---
+title: "Postgres"
+description: "Load Postgres tables: choosing tables and columns, masking, and how each table is read."
+---
+
+A Postgres source loads the tables of one database that match its `include` patterns, one table
+each, read with binary `COPY` into Arrow.
+
+```toml
+[connections.app]
+kind = "postgres"
+host = "db.example.com"
+port = 5432
+user = "loader"
+password = "${ENV:APP_DB_PASSWORD}"
+database = "shop"
+
+[sources.app]
+kind = "postgres"
+connection = "app"
+description = "The shop's application database."
+include = ["public.*"]
+exclude = ["public.audit_*"]
+write_strategy = "merge"
+
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+cursor_column = "updated_at"
+```
+
+## Choosing tables
+
+`include` and `exclude` are `schema.table` patterns (`*` matches any text). A table must match an
+`include` pattern and no `exclude` pattern. A `[sources.app.tables."schema.table"]` entry sets
+options for one table; on its own, it doesn't add the table.
+
+`new_tables` says what happens when a table that matches `include` appears after the source's
+first load:
+
+| `new_tables` | A new table |
+|--------------|-------------|
+| `sync` (default) | Loads like the others. |
+| `skip` | Is left out until `include` names it exactly, such as `include = ["public.*", "public.refunds"]`. |
+| `fail` | Stops the plan. |
+
+The first load is the one before any of the source's tables exists in the destination, whichever
+tables are selected. Tables present then count as approved.
+
+## Choosing columns
+
+| Setting | Effect |
+|---------|--------|
+| `exclude_columns` | Column patterns to leave out. |
+| `allow_columns` | Column patterns kept even when `exclude_columns` matches them. |
+| `skip_tables_with_columns` | Leave out any table that has a column matching one of these patterns. |
+| `mask` (per table) | Keep a column but replace its values with `hash` (SHA-256 hex) or `hmac` (HMAC-SHA256 hex, keyed by the source's `mask_key`). |
+
+```console
+$ sqlload plan
+Plan ready  1 selected, 1 object to create, 1 to load, 1 skipped
+
+Objects (1)                                         sqlload apply
+└── raw.app__customers                              create table
+    ├── customer_id int    -> BIGINT
+    ├── email       text   -> VARCHAR
+    ├── country     text   -> VARCHAR
+    ├── + _sqlload_load_id, _loaded_at
+    ├── excluded  created_at (exclude_columns *_at)
+    └── masked  email (hmac)
+
+Loads (1)                                           sqlload load
+└── app__customers                                  replace
+    ├── source  postgres  app  public.customers
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    └── batch   about 1 GB at a time into a new table, swapped in once at the end
+
+Skipped (1)
+└── public.orders
+    └── reason  has column total, which matches skip_tables_with_columns
+
+✓ Plan complete  1 selected, 1 object to create, 1 to load, 1 skipped
+```
+
+That plan comes from this source:
+
+```toml
+[sources.app]
+kind = "postgres"
+connection = "app"
+destination = "local"
+include = ["public.*"]
+exclude_columns = ["*_at"]
+allow_columns = ["updated_at"]
+skip_tables_with_columns = ["total"]
+mask_key = "${ENV:MASK_KEY}"
+
+[sources.app.tables."public.customers"]
+description = "Customers."
+mask = { email = "hmac" }
+```
+
+`hash` is the same everywhere, but anyone can recompute it, so guessable values such as emails can
+be recovered. Use `hmac` for personal data. A masked column can't be the `cursor_column` or part of
+the `unique_key`.
+
+## How Postgres is read
+
+SQLLoad reads each table with binary `COPY` into Arrow. A table whose `cursor_column` leads an
+index is read in cursor order and commits about every 1 GB, between distinct cursor values. Windows
+of a [`batch_size`](/docs/concepts/cursors/#batches) are all read in one `REPEATABLE READ`
+snapshot, so a row moving between windows is read once. That snapshot stays open for the whole
+table load: it counts towards `idle_in_transaction_session_timeout`, and vacuum can't remove rows
+it can still see.
+
+`numeric` without a precision has no fixed scale, so `plan` asks you to pin a type for it, such as
+`columns = { amount = "decimal(38,10)" }`. Postgres arrays load as JSON. See
+[Types](/docs/types/).

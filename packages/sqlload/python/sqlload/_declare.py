@@ -222,7 +222,7 @@ class Context:
 	correctly, only slower.
 
 	With `state="logged"`, `state` is the position the last successful run left (`None` on the
-	first run, after `--reload` or `sqlload state reset --clear`); set `ctx.state` to the new
+	first run, after `--reload` or `sqlload logged-state reset --clear`); set `ctx.state` to the new
 	position (any JSON value, such as an API sync token) and SQLLoad records it with the data.
 	"""
 

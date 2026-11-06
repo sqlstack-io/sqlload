@@ -1,0 +1,55 @@
+---
+title: "Troubleshooting"
+description: "Common errors from plan and load, what they mean, and the fix for each."
+---
+
+Most problems show up in `sqlload plan`, under `Errors`, with the fix. The table below lists the
+common ones; each message is copied from SQLLoad.
+
+| Message | Fix |
+|---------|-----|
+| `error: environment variable PGPASSWORD is not set` | Set the variable a `${ENV:NAME}` in `sqlload.toml` refers to. |
+| `no description; add description = "..." under [sources.app.tables."public.orders"]` | Every table SQLLoad writes needs a description. Add one where the message says. |
+| `load_method is required: how should data get into Snowflake?` | Add a `load_method` to the Snowflake connection. See [Snowflake](/docs/targets/snowflake/). |
+| `n_free: numeric without a precision has no fixed scale; pin a type such as "decimal(38,10)" or "text"` | Pin the column in `columns`, such as `columns = { amount = "decimal(38,18)" }`. |
+| `columns "total" is not a column of the source table (names are case-sensitive); did you mean "email"?` | Fix the column name, or move the entry to the right table. |
+| `total has type numeric(12,2), which cannot be read as int` | Pin a type the source column can be read as, usually the same or wider. |
+| `write_strategy = "merge" needs a unique_key (the table has no primary key)` | Set `unique_key`, or use `delete_insert` with a `cursor_column`. |
+| `write_strategy = "replace" reloads the whole table, so it takes no cursor_column` | Remove `cursor_column`, or choose `merge`, `delete_insert` or `append`. |
+| `lookback re-inserts the window on every run with append; use delete_insert (no key needed) or merge` | Change the strategy, or drop `lookback`. |
+| `merge needs a table format to update rows in place; a files target takes append, replace or delete_insert` | Use one of those strategies on a files target. |
+| `... was rewritten in place since it was loaded ...; load it again with --reload, or use delete_insert on a partition cursor` | A files source file changed after it loaded under `append`. Reload, or partition the source. |
+| `--reload rebuilds ... confirm it in a terminal, or add --yes` | Add `--yes` when running without a terminal. |
+| `Python source shop uses connection wh, which target dev loads into` | Give the Python source its own connection; table functions never get warehouse credentials. |
+| `Python table orders is declared twice (...); table names are unique across the project` | Rename one of the functions, or pass `name=` to the decorator. |
+| `skipped rows outside the cursor window; use ctx.cursor_value to read only new data` | A warning: the load is correct, but the function reads more than it needs. Filter on `ctx.cursor_value`. |
+
+## A table is missing from the plan
+
+- It doesn't match `include`, or matches `exclude`.
+- It has a column matching `skip_tables_with_columns`; `plan` lists it under `Skipped`.
+- It appeared after the source's first load, and `new_tables = "skip"`. Name it exactly in
+  `include`.
+
+## A table loads slower than expected
+
+`plan` shows each table's `route`. `Warnings` name routes that are much slower than the usual one,
+such as `copy_to_internal_stage`, `hmac`-masked files, or `load_method = { type = "insert" }`. For
+files into Snowflake, an external stage over the files' bucket lets Snowflake read them in place.
+See [Load methods](/docs/targets/).
+
+## A large first load
+
+A cursor table without an ordered read commits once for the whole read. For a large first load,
+set `batch_size` (such as `batch_size = "1d"`) with `cursor_start`, so it commits window by window.
+See [Batches](/docs/concepts/cursors/#batches).
+
+## Starting a table over
+
+`sqlload load --reload --yes TABLE` rebuilds it from the whole source. Deleting the destination
+table works too: SQLLoad keeps no other state, so the next run loads everything again.
+
+## More output
+
+`--log-format json` writes structured logs to standard error. `sqlload plan --json` prints the
+plan as one JSON document.
