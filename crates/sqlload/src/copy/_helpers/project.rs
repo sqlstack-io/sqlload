@@ -12,11 +12,15 @@ use crate::copy::models::{CopyProject, CopyRequest, Endpoint, Role};
 const FILE_KINDS: &[&str] = &["s3", "filesystem"];
 
 /// The project copying `request.source` into `request.destination`, with `connections` the project's own (as written, references unresolved). Its target and source are `copy_<table>`, and URI connections `copy_<table>_source` and `copy_<table>_destination`.
-pub(crate) fn project(request: &CopyRequest, connections: &Table) -> Result<CopyProject, String> {
+pub(crate) fn project(
+    request: &CopyRequest,
+    connections: &Table,
+    taken: &[String],
+) -> Result<CopyProject, String> {
     let mut source = endpoint(&request.source, Role::Source, connections)?;
     let mut destination = endpoint(&request.destination, Role::Destination, connections)?;
     let table = source_table(&source)?;
-    let base = format!("{COPY_PREFIX}{}", identifier(&table));
+    let base = free_base(&format!("{COPY_PREFIX}{}", identifier(&table)), taken);
     for (end, role) in [
         (&mut source, Role::Source),
         (&mut destination, Role::Destination),
@@ -60,6 +64,23 @@ pub(crate) fn project(request: &CopyRequest, connections: &Table) -> Result<Copy
         variables,
         warnings,
     })
+}
+
+/// `base`, or `base_2`, `base_3`, ... when sqlload.toml already has a target, source or connection of that name, so the printed entry can be appended.
+fn free_base(base: &str, taken: &[String]) -> String {
+    let used = |name: &str| {
+        [
+            name.to_owned(),
+            format!("{name}_source"),
+            format!("{name}_destination"),
+        ]
+        .iter()
+        .any(|candidate| taken.contains(candidate))
+    };
+    std::iter::once(base.to_owned())
+        .chain((2_u32..).map(|n| format!("{base}_{n}")))
+        .find(|name| !used(name))
+        .unwrap_or_default()
 }
 
 /// `name` lower-cased, with every character other than a letter, digit or `_` as `_`.

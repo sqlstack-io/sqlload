@@ -10,12 +10,15 @@ pub(crate) fn endpoint(text: &str, role: Role, connections: &Table) -> Result<En
     let shown = redacted_uri(text);
     match (text.split_once("://"), text.split_once(':')) {
         (Some((scheme, rest)), _) => uri_endpoint(&shown, scheme, rest, role),
+        (None, Some((name, locator))) if connections.contains_key(name) => {
+            named((name, locator), &shown, connections, role)
+        }
         (None, Some((name, locator))) if one_slash_uri(name, locator) => Err(format!(
             "the {} {shown} looks like a URI with one slash; write {name}://...",
             role.label()
         )),
-        (None, Some((name, locator))) if names_connection(name, locator, connections) => {
-            named(name, locator, connections, role)
+        (None, Some((name, locator))) if names_connection(name, locator) => {
+            named((name, locator), &shown, connections, role)
         }
         (None, Some(_) | None) => Ok(folder(text, &shown)),
     }
@@ -37,14 +40,14 @@ pub(crate) fn redacted_uri(text: &str) -> String {
     }
 }
 
-/// `scheme:/rest`: a URI typed with one slash, never a connection or a folder.
+/// `scheme:/rest`: a URI typed with one slash, never a connection or a folder (a one-letter name is a Windows drive).
 fn one_slash_uri(name: &str, locator: &str) -> bool {
-    bare_name(name) && locator.starts_with('/') && !locator.starts_with("//")
+    name.len() > 1 && bare_name(name) && locator.starts_with('/') && !locator.starts_with("//")
 }
 
-/// Whether `name:locator` names a connection: one in sqlload.toml, or a bare name before something that is not a path (so `C:\data` and `./a:b` stay folders).
-fn names_connection(name: &str, locator: &str, connections: &Table) -> bool {
-    connections.contains_key(name) || (bare_name(name) && !locator.starts_with(['/', '\\']))
+/// Whether `name:locator` not in sqlload.toml still reads as a connection name, so it is refused rather than read as a folder: a bare name before something that is not a path (so `C:\data` and `./a:b` stay folders).
+fn names_connection(name: &str, locator: &str) -> bool {
+    bare_name(name) && !locator.starts_with(['/', '\\'])
 }
 
 fn bare_name(name: &str) -> bool {
@@ -54,7 +57,12 @@ fn bare_name(name: &str) -> bool {
         })
 }
 
-fn named(name: &str, locator: &str, connections: &Table, role: Role) -> Result<Endpoint, String> {
+fn named(
+    (name, locator): (&str, &str),
+    shown: &str,
+    connections: &Table,
+    role: Role,
+) -> Result<Endpoint, String> {
     let settings = connections
         .get(name)
         .and_then(Value::as_table)
@@ -62,7 +70,7 @@ fn named(name: &str, locator: &str, connections: &Table, role: Role) -> Result<E
         .ok_or_else(|| {
             let known: Vec<&str> = connections.keys().map(String::as_str).collect();
             format!(
-                "the {} {name}:{locator} names connection {name}, which is not in sqlload.toml (it has: {}); name one of those, or give a URI such as postgresql://user@host/db#schema.table",
+                "the {} {shown} names connection {name}, which is not in sqlload.toml (it has: {}); name one of those, or give a URI such as postgresql://user@host/db#schema.table",
                 role.label(),
                 match known.is_empty() {
                     true => "none".to_owned(),
@@ -112,7 +120,7 @@ fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoin
             role.label()
         )
     };
-    let at = find_outside(rest, '@', true).ok_or_else(|| problem("it names no user"))?;
+    let at = userinfo_end(rest).ok_or_else(|| problem("it names no user"))?;
     let (userinfo, after) = (&rest[..at], &rest[at + 1..]);
     let (place, locator) = after.split_once('#').unwrap_or((after, ""));
     let slash = find_outside(place, '/', false).ok_or_else(|| problem("it names no database"))?;
@@ -125,6 +133,7 @@ fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoin
         None => (userinfo, String::new()),
     };
     let (host, port) = host_and_port(host_port);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
     let port = match port {
         Some(port) => Value::Integer(
             port.parse()
@@ -169,6 +178,19 @@ fn host_and_port(text: &str) -> (&str, Option<&str>) {
         Some(colon) => (&text[..colon], Some(&text[colon + 1..])),
         None => (text, None),
     }
+}
+
+/// The `@` ending the userinfo: the last one outside `${...}` that a `/database` follows before any `#`, so `#` may appear in the password and `@` in the table.
+fn userinfo_end(rest: &str) -> Option<usize> {
+    let ends_userinfo = |at: &usize| {
+        let after = &rest[at + 1..];
+        after
+            .find('/')
+            .is_some_and(|slash| after.find('#').is_none_or(|hash| slash < hash))
+    };
+    let mut candidates: Vec<usize> = rest.match_indices('@').map(|(at, _)| at).collect();
+    candidates.retain(|at| find_outside(&rest[..=*at], '@', true) == Some(*at));
+    candidates.into_iter().rev().find(ends_userinfo)
 }
 
 /// Whether a password is one `${ENV:NAME}` reference rather than literal text.
