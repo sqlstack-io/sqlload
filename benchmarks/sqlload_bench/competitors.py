@@ -212,12 +212,14 @@ class SqlLoad(Competitor):
 		body = {
 			"py_flat": f"yield from pydata.pages({rows}, {seed}, 'flat')",
 			"py_nested": f"yield from pydata.pages({rows}, {seed}, 'nested')",
+			"py_nested_flatten": f"yield from pydata.pages({rows}, {seed}, 'nested')",
 			"py_bytes": f"for chunk in pydata.ndjson_chunks('{data}/python/flat.ndjson'):\n        yield sl.ndjson(chunk)",
 			"py_arrow": f"import pyarrow.parquet as pq\n    yield pq.read_table('{data}/python/flat.parquet')",
 		}[scenario.name]
+		flatten = ", flatten=['customer']" if scenario.name == "py_nested_flatten" else ""
 		return (
 			"import sqlload as sl\n\nfrom sqlload_bench import pydata\n\n\n"
-			f"@sl.table(name='{scenario.table}', description='{DESCRIPTION}', write_strategy='append')\n"
+			f"@sl.table(name='{scenario.table}', description='{DESCRIPTION}', write_strategy='append'{flatten})\n"
 			f"def rows(ctx):\n    {body}\n"
 		)
 

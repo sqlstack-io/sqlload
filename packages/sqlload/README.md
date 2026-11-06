@@ -24,6 +24,25 @@ text. Enums give their values,
 dataclasses become JSON objects, and numpy numbers count as numbers. Arrow input (pyarrow, polars,
 pandas) keeps its own types.
 
+### Flattening objects
+
+Nested values stay one JSON column (`VARIANT` on Snowflake) unless the table lists top-level
+objects in `flatten`:
+
+```python
+@shop.table(description="Orders", flatten=["customer"])
+def orders(ctx):
+    yield {"order_id": 7, "customer": {"country": "GB", "address": {"city": "Leeds"}}, "line_totals": {"sku-14": 12.5}}
+```
+
+Each listed object is expanded exactly one level, into a column per key named `<object>__<key>`
+(`customer__country`, with `customer__address` staying JSON). Objects not listed, such as
+`line_totals` above, stay JSON; maps whose keys are data should never be flattened. Lists are never
+expanded. A missing or null object leaves its columns NULL, and new keys are new columns under
+`on_schema_change`. The load fails when a listed value arrives as a scalar or a list, or when a
+key's column name is already a field. Dicts, `sl.json` bytes and Arrow structs flatten the same
+way. `flatten` applies to Python tables only; `plan` refuses it on other sources.
+
 ## Upgrading from 0.4
 
 Both this package and `sqlload-cli` install a `sqlload` command. Remove the old one first:
