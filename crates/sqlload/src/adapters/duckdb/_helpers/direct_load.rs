@@ -9,8 +9,11 @@ use crate::adapters::duckdb::main::_pull_files::pull_files;
 use crate::adapters::duckdb::models::DuckDbWriter;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
 use crate::files_source::main::batch_refusals::batch_refusals;
+use crate::files_source::models::{BatchFooters, DataFile};
 use crate::loader::errors::LoaderError;
+use crate::loader::models::FilesSource;
 use crate::store_paths::models::{Location, StoreKind};
+use parquet::arrow::arrow_reader::ArrowReaderMetadata;
 
 impl DuckDbWriter {
     /// Load `batch` by having DuckDB read its Parquet files itself, where Arrow batches would go: the load's staging table, the build table, or the table itself, inside a transaction that commits here when it goes straight into the table or a build table (the build stays invisible until the load swaps it in). A batch whose own footers hold a column a cast would not keep exactly fails; files never fall back to SQLLoad. `None` when the table is not a files table.
@@ -34,40 +37,13 @@ impl DuckDbWriter {
         let files: Vec<PulledFile> = batch
             .files
             .iter()
-            .map(|data| PulledFile {
-                url: file_url(&source.location, &data.file.relative_key),
-                constants: [
-                    (
-                        SOURCE_FILE_COLUMN.to_owned(),
-                        Some(format!("{}{}", source.location, data.file.relative_key)),
-                    ),
-                    (SOURCE_VERSION_COLUMN.to_owned(), Some(data.file.version())),
-                ]
-                .into_iter()
-                .chain(source.partition_types.iter().map(|(name, _)| {
-                    let value = data
-                        .partitions
-                        .iter()
-                        .find(|(partition, _)| partition == name)
-                        .map(|(_, value)| value.clone());
-                    (name.clone(), value)
-                }))
-                .collect(),
-            })
+            .map(|data| pulled_file(source, data))
             .collect();
         let in_files: Vec<String> = batch
             .read
             .columns
             .iter()
-            .filter(|column| {
-                batch.footers.parquet.values().any(|footer| {
-                    footer
-                        .schema()
-                        .fields()
-                        .iter()
-                        .any(|field| field.name() == &column.name)
-                })
-            })
+            .filter(|column| in_any_footer(batch.footers, &column.name))
             .map(|column| column.name.clone())
             .collect();
         let target = &batch.target;
@@ -107,4 +83,39 @@ fn file_url(location: &Location, key: &str) -> String {
             std::path::absolute(&path).map_or(path, |absolute| absolute.display().to_string())
         }
     }
+}
+
+/// Where DuckDB reads `data`, and the values SQLLoad gives every row of it: its name and version as the files source records them, and its value of each declared partition column (`None` when its folders lack one).
+fn pulled_file(source: &FilesSource, data: &DataFile) -> PulledFile {
+    let partition = |name: &String| {
+        let value = data
+            .partitions
+            .iter()
+            .find(|(partition, _)| partition == name)
+            .map(|(_, value)| value.clone());
+        (name.clone(), value)
+    };
+    let mut constants = vec![
+        (
+            SOURCE_FILE_COLUMN.to_owned(),
+            Some(format!("{}{}", source.location, data.file.relative_key)),
+        ),
+        (SOURCE_VERSION_COLUMN.to_owned(), Some(data.file.version())),
+    ];
+    for (name, _) in &source.partition_types {
+        constants.push(partition(name));
+    }
+    PulledFile {
+        url: file_url(&source.location, &data.file.relative_key),
+        constants,
+    }
+}
+
+/// Whether any of the batch's Parquet footers has a column named `name`.
+fn in_any_footer(footers: &BatchFooters, name: &str) -> bool {
+    let has = |footer: &ArrowReaderMetadata| {
+        let fields = footer.schema().fields().clone();
+        fields.iter().any(|field| field.name() == name)
+    };
+    footers.parquet.values().any(has)
 }
