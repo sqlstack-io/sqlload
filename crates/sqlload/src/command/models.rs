@@ -63,6 +63,32 @@ pub enum Command {
         #[command(subcommand)]
         action: StateAction,
     },
+    /// Copy one table once, between connections named in sqlload.toml or URIs (sqlload.toml is optional).
+    Copy(CopyArgs),
+}
+
+/// `sqlload copy`'s endpoints and write settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
+pub struct CopyArgs {
+    /// What to copy: `connection:schema.table`, `postgresql://user:${ENV:PGPASSWORD}@host/db#schema.table`, `s3://bucket/prefix/`, `file:///folder` or a folder.
+    pub source: String,
+    /// Where to: `connection:SCHEMA.TABLE`, `duckdb://file.duckdb#SCHEMA.TABLE`, `s3://bucket/prefix/`, `file:///folder` or a folder.
+    pub destination: String,
+    /// append, merge, delete_insert or replace (default: the loader's).
+    #[arg(long)]
+    pub write_strategy: Option<String>,
+    /// The key columns for merge and delete_insert.
+    #[arg(long, num_args = 1.., value_delimiter = ',')]
+    pub unique_key: Vec<String>,
+    /// The column incremental copies continue from.
+    #[arg(long)]
+    pub cursor_column: Option<String>,
+    /// The format of a files source's files: parquet, ndjson, json or csv.
+    #[arg(long)]
+    pub format: Option<String>,
+    /// Print the copy as a project entry for sqlload.toml instead of running it.
+    #[arg(long)]
+    pub print_toml: bool,
 }
 
 /// What `sqlload state` does.
@@ -157,4 +183,6 @@ pub struct LoaderRequest<'a> {
     pub host: Option<std::sync::Arc<dyn crate::python_sources::types::PythonHost>>,
     /// `--no-color`, for the plan a `--reload` prompt shows.
     pub no_color: bool,
+    /// Values for `${ENV:NAME}` references, read before the process environment (`sqlload copy`'s literal URI passwords).
+    pub variables: std::collections::BTreeMap<String, String>,
 }

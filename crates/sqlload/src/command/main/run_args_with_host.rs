@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 
+use crate::command::_helpers::copy_command::run_copy;
 use crate::command::_helpers::exporter_commands::run_exporter_command;
 use crate::command::_helpers::limits::blocking_threads;
 use crate::command::_helpers::loader_commands::{json_error, run_loader};
@@ -30,8 +31,10 @@ where
     };
     init_logging(cli.log_format);
     let json = matches!(&cli.command, Command::Plan(args) if args.json);
+    let copies = matches!(&cli.command, Command::Copy(_));
     let text = match std::fs::read_to_string(&cli.config) {
         Ok(text) => text,
+        Err(error) if copies && error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => {
             let message = format!("cannot read {}: {error}", cli.config.display());
             return failed(json, "config", &message);
@@ -57,6 +60,9 @@ where
         }
     };
     let outcome = runtime.block_on(async {
+        if let Command::Copy(args) = cli.command {
+            return run_copy(&text, &cli.config, args, host, cli.no_color).await;
+        }
         if is_project(&text) {
             let request = LoaderRequest {
                 text: &text,
@@ -64,6 +70,7 @@ where
                 command: cli.command,
                 host,
                 no_color: cli.no_color,
+                variables: Default::default(),
             };
             return run_loader(request).await;
         }
