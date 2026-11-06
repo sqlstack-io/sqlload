@@ -700,6 +700,25 @@ def test_given_a_python_source_on_a_files_targets_connection_when_loading_then_i
 	assert [row["root"] for row in rows] == ["lake"]
 
 
+def test_given_a_loaded_python_table_when_generating_its_contract_then_it_prints_the_columns_to_paste_and_writes_nothing(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', columns={'code': 'text'})(rows)\n")
+	give(project, "rows", [{"id": 1, "code": "x1", "ok": True}])
+	load(project)
+	module = (project / "sources" / "shop.py").read_text()
+	toml = (project / "sqlload.toml").read_text()
+	done = sqlload(project, "contract", "generate", "--write")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert done.stdout.splitlines() == [
+		"Contract comparison",
+		"  OK    table:shop__rows",
+		"        adopt: paste into the table's declaration in sources/shop.py",
+		'          columns={"id": "int", "code": "text", "ok": "bool"}',
+		"",
+		"0 contract difference(s)",
+	], done.stdout
+	assert ((project / "sources" / "shop.py").read_text(), (project / "sqlload.toml").read_text()) == (module, toml)
+
+
 def test_given_an_enforced_contract_without_declared_columns_when_planning_then_the_table_is_blocked(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', contract='enforced')(rows)\n")
 	done = sqlload(project, "plan")

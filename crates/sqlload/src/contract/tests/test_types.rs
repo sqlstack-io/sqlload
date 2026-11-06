@@ -1,4 +1,5 @@
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::loader::models::TableSpec;
 use crate::project::models::Contract;
 
 pub(crate) struct FindingsTestCase {
@@ -13,14 +14,15 @@ pub(crate) struct FindingsTestCase {
 /// One table's adoption from its live columns.
 pub(crate) struct AdoptionTestCase {
     pub(crate) description: &'static str,
-    /// The table's sqlload.toml settings for Postgres table `public.orders` of source `app` (source columns `id`, `Status`, `amount`, `note`), or a Python table's settings as JSON.
+    /// The table's settings: sqlload.toml lines for Postgres table `public.orders` of source `app` (source columns `id`, `Status`, `amount`, `note`), or JSON for Python table `t` declared in `src/s.py`.
     pub(crate) settings: &'static str,
-    pub(crate) python: bool,
+    /// The table's spec from `settings` on a warehouse.
+    pub(crate) spec: fn(&str, Warehouse) -> Result<TableSpec, String>,
     pub(crate) warehouse: Warehouse,
     pub(crate) live: Vec<(&'static str, ColumnType)>,
     pub(crate) overwrite: bool,
-    /// `+ column type`, `~ column type (declared type)`, `- column`, then `paste ...` for Python; empty when nothing changes.
-    pub(crate) expected: &'static [&'static str],
+    /// What `contract generate` prints for the table.
+    pub(crate) expected_lines: &'static [&'static str],
 }
 
 /// sqlload.toml before and after writing the adoptions.
@@ -29,6 +31,6 @@ pub(crate) struct WriteTestCase {
     pub(crate) text: &'static str,
     /// The table's description (its source comment when it has no entry).
     pub(crate) table_description: &'static str,
-    /// The file written (empty when unchanged) and the problems left, or the error.
-    pub(crate) expected: Result<(&'static str, &'static [&'static str]), &'static str>,
+    /// The file written (empty when unchanged), then the problems left; or `error: ...`.
+    pub(crate) expected_lines: &'static [&'static str],
 }

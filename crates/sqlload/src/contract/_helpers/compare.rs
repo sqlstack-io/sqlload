@@ -59,7 +59,7 @@ pub(crate) fn is_own(name: &str) -> bool {
 }
 
 /// Whether `live` has a column named `name`, ignoring case.
-fn is_live(live: &[LiveColumn], name: &str) -> bool {
+pub(crate) fn is_live(live: &[LiveColumn], name: &str) -> bool {
     live.iter()
         .any(|column| column.name.eq_ignore_ascii_case(name))
 }

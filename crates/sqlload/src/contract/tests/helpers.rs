@@ -1,6 +1,7 @@
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::contract::_helpers::adopt::adoption;
 use crate::contract::main::adopt_contracts::adopt_contracts;
+use crate::contract::main::render_contract::render_contract;
 use crate::contract::models::{AdoptedColumn, Adoption, ContractReport, ContractResource};
 use crate::contract::tests::test_types::AdoptionTestCase;
 use crate::loader::_helpers::python::{python_table, python_tables};
@@ -23,66 +24,69 @@ fn text_column(name: &str) -> SourceColumn {
     }
 }
 
-/// Postgres table `public.orders` of source `app` with `settings`, or Python table `t` of source `s` with JSON `settings`.
-fn spec(settings: &str, python: bool, warehouse: Warehouse) -> Result<TableSpec, String> {
-    let (text, sources, source_name) = match python {
-        true => (
-            TARGET.to_owned(),
-            format!(
-                r#"[{{"name": "s", "module": "src/s.py", "settings": {{"tables": {{"t": {settings}}}}}}}]"#
-            ),
-            "s",
-        ),
-        false => (
-            format!(
-                "{TARGET}[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.orders\"]\n[sources.app.tables.\"public.orders\"]\ndescription = \"Orders.\"\n{settings}"
-            ),
-            "[]".to_owned(),
-            "app",
-        ),
-    };
-    let python_sources: Vec<PythonSource> =
-        serde_json::from_str(&sources).map_err(|error| error.to_string())?;
-    let project = parse_python_project(&text, &|_| None, &python_sources)
-        .map_err(|error| error.to_string())?;
-    let source = &project.sources[source_name];
-    let tables = match python {
-        true => python_tables(source),
-        false => vec![SourceTable {
-            schema: "public".to_owned(),
-            name: "orders".to_owned(),
-            columns: ["id", "Status", "amount", "note"].map(text_column).to_vec(),
-            primary_key: Vec::new(),
-            indexed_columns: Vec::new(),
-            estimated_rows: -1,
-            estimated_bytes: -1,
-            comment: None,
-        }],
-    };
-    let resolved = resolve_tables(&project, source_name, &tables);
+/// The first spec of `source_name` among `tables`, on `warehouse`.
+fn first_spec(
+    (text, python): (&str, &str),
+    source_name: &str,
+    tables: fn(&crate::project::models::SourceConfig) -> Vec<SourceTable>,
+    warehouse: Warehouse,
+) -> Result<TableSpec, String> {
+    let python: Vec<PythonSource> =
+        serde_json::from_str(python).map_err(|error| error.to_string())?;
+    let project =
+        parse_python_project(text, &|_| None, &python).map_err(|error| error.to_string())?;
+    let resolved = resolve_tables(
+        &project,
+        source_name,
+        &tables(&project.sources[source_name]),
+    );
     let mut spec = resolved
         .specs
         .into_iter()
         .next()
         .ok_or_else(|| format!("no spec: {:?}", resolved.problems))?;
     spec.warehouse = warehouse;
-    spec.python = python.then(|| python_table("src/s.py", &spec.source_table));
     Ok(spec)
 }
 
-fn column_line(column: &AdoptedColumn) -> String {
-    match &column.declared_type {
-        Some(declared) => format!(
-            "~ {} {} (declared {declared})",
-            column.column, column.physical_type
-        ),
-        None => format!("+ {} {}", column.column, column.physical_type),
-    }
+fn orders(_: &crate::project::models::SourceConfig) -> Vec<SourceTable> {
+    vec![SourceTable {
+        schema: "public".to_owned(),
+        name: "orders".to_owned(),
+        columns: ["id", "Status", "amount", "note"].map(text_column).to_vec(),
+        primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
+        estimated_rows: -1,
+        estimated_bytes: -1,
+        comment: None,
+    }]
 }
 
-/// The case's adoption as lines.
-pub(crate) fn adopted_lines(test_case: &AdoptionTestCase) -> Result<Vec<String>, String> {
-    let spec = spec(test_case.settings, test_case.python, test_case.warehouse)?;
+/// Postgres table `public.orders` of source `app`, with sqlload.toml `settings` under its entry.
+pub(crate) fn postgres_spec(settings: &str, warehouse: Warehouse) -> Result<TableSpec, String> {
+    let text = format!(
+        "{TARGET}[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.orders\"]\n[sources.app.tables.\"public.orders\"]\ndescription = \"Orders.\"\n{settings}"
+    );
+    first_spec((&text, "[]"), "app", orders, warehouse)
+}
+
+/// Python table `t` of source `s`, declared in `src/s.py` with JSON `settings`.
+pub(crate) fn python_spec(settings: &str, warehouse: Warehouse) -> Result<TableSpec, String> {
+    let sources = format!(
+        r#"[{{"name": "s", "module": "src/s.py", "settings": {{"tables": {{"t": {settings}}}}}}}]"#
+    );
+    let mut spec = first_spec((TARGET, &sources), "s", python_tables, warehouse)?;
+    spec.python = Some(python_table("src/s.py", &spec.source_table));
+    Ok(spec)
+}
+
+/// What `contract generate` prints for the case's table, or the error building it.
+pub(crate) fn adoption_output(test_case: &AdoptionTestCase) -> Vec<String> {
+    printed(test_case).unwrap_or_else(|error| vec![format!("error: {error}")])
+}
+
+fn printed(test_case: &AdoptionTestCase) -> Result<Vec<String>, String> {
+    let spec = (test_case.spec)(test_case.settings, test_case.warehouse)?;
     let live: Vec<LiveColumn> = test_case
         .live
         .iter()
@@ -92,23 +96,31 @@ pub(crate) fn adopted_lines(test_case: &AdoptionTestCase) -> Result<Vec<String>,
             fraction_digits: None,
         })
         .collect();
-    let Some(adopted) = adoption(&spec, &live, test_case.overwrite) else {
-        return Ok(Vec::new());
+    let report = ContractReport {
+        resources: vec![ContractResource {
+            findings: Vec::new(),
+            relation: "RAW.t".to_owned(),
+            resource_name: "t".to_owned(),
+            resource_type: "table",
+            adoption: adoption(&spec, &live, test_case.overwrite),
+        }],
+        ..ContractReport::default()
     };
-    let mut lines: Vec<String> = adopted.columns.iter().map(column_line).collect();
-    lines.extend(adopted.removed.iter().map(|name| format!("- {name}")));
-    lines.extend(
-        adopted
-            .paste
-            .iter()
-            .map(|paste| format!("paste {paste} in {}", adopted.location)),
-    );
-    Ok(lines)
+    Ok(render_contract(&report, false).0)
 }
 
-/// `text` after writing an adoption that declares `amount` as `float`, retypes `status` to `text` and removes `gone`, for Postgres table `public.orders` of source `app` described as `description`, and the problems left.
-pub(crate) fn written(text: &str, description: &str) -> Result<(String, Vec<String>), String> {
-    let mut report = ContractReport {
+/// `text` after writing an adoption that declares `amount` as `float`, retypes `status` to `text` and removes `gone`, for Postgres table `public.orders` of source `app` described as `description` (empty when unchanged), then the problems left; or the error.
+pub(crate) fn written(text: &str, description: &str) -> Vec<String> {
+    write(text, description).unwrap_or_else(|error| vec![format!("error: {error}")])
+}
+
+fn write(text: &str, description: &str) -> Result<Vec<String>, String> {
+    let adopted = |column: &str, declared: Option<&str>, physical: &str| AdoptedColumn {
+        column: column.to_owned(),
+        declared_type: declared.map(str::to_owned),
+        physical_type: physical.to_owned(),
+    };
+    let report = ContractReport {
         resources: vec![ContractResource {
             findings: Vec::new(),
             relation: "RAW.app__orders".to_owned(),
@@ -117,16 +129,8 @@ pub(crate) fn written(text: &str, description: &str) -> Result<(String, Vec<Stri
             adoption: Some(Adoption {
                 location: "[sources.app.tables.\"public.orders\"]".to_owned(),
                 columns: vec![
-                    AdoptedColumn {
-                        column: "amount".to_owned(),
-                        declared_type: None,
-                        physical_type: "float".to_owned(),
-                    },
-                    AdoptedColumn {
-                        column: "status".to_owned(),
-                        declared_type: Some("int".to_owned()),
-                        physical_type: "text".to_owned(),
-                    },
+                    adopted("amount", None, "float"),
+                    adopted("status", Some("int"), "text"),
                 ],
                 removed: vec!["gone".to_owned()],
                 paste: None,
@@ -136,6 +140,6 @@ pub(crate) fn written(text: &str, description: &str) -> Result<(String, Vec<Stri
         }],
         ..ContractReport::default()
     };
-    let text = adopt_contracts(text, &mut report)?.unwrap_or_default();
-    Ok((text, report.problems))
+    let (text, report) = adopt_contracts(text, report)?;
+    Ok([vec![text.unwrap_or_default()], report.problems].concat())
 }

@@ -1,5 +1,5 @@
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::contract::tests::helpers::adopted_lines;
+use crate::contract::tests::helpers::{adoption_output, postgres_spec, python_spec};
 use crate::contract::tests::test_types::AdoptionTestCase;
 
 #[test]
@@ -13,7 +13,7 @@ fn given_live_columns_when_adopting_then_undeclared_ones_are_declared_and_overwr
         AdoptionTestCase {
             description: "undeclared columns take the source's spelling; ones the source lacks and SQLLoad's own are left out",
             settings: "",
-            python: false,
+            spec: postgres_spec,
             warehouse: Warehouse::DuckDb,
             live: vec![
                 ("id", ColumnType::Int),
@@ -22,52 +22,92 @@ fn given_live_columns_when_adopting_then_undeclared_ones_are_declared_and_overwr
                 ("_sqlload_load_id", ColumnType::Text),
             ],
             overwrite: false,
-            expected: &["+ id int", "+ Status text"],
+            expected_lines: &[
+                "Contract comparison",
+                "  OK    table:t",
+                "        adopt: columns of [sources.app.tables.\"public.orders\"]",
+                "          + id = \"int\"",
+                "          + Status = \"text\"",
+                "",
+                "Run contract generate --write to update sqlload.toml.",
+                "",
+                "0 contract difference(s)",
+            ],
         },
         AdoptionTestCase {
             description: "without overwrite, declared columns stay as they are even when the live type differs or the column is gone",
             settings: "columns = { amount = \"decimal(12,2)\", note = \"text\" }\n",
-            python: false,
+            spec: postgres_spec,
             warehouse: Warehouse::DuckDb,
             live: vec![("id", ColumnType::Int), ("amount", decimal(4))],
             overwrite: false,
-            expected: &["+ id int"],
+            expected_lines: &[
+                "Contract comparison",
+                "  OK    table:t",
+                "        adopt: columns of [sources.app.tables.\"public.orders\"]",
+                "          + id = \"int\"",
+                "",
+                "Run contract generate --write to update sqlload.toml.",
+                "",
+                "0 contract difference(s)",
+            ],
         },
         AdoptionTestCase {
             description: "overwrite retypes a declared column to its live type and removes one the table lacks",
             settings: "columns = { amount = \"decimal(12,2)\", note = \"text\" }\n",
-            python: false,
+            spec: postgres_spec,
             warehouse: Warehouse::DuckDb,
             live: vec![("id", ColumnType::Int), ("amount", decimal(4))],
             overwrite: true,
-            expected: &[
-                "+ id int",
-                "~ amount decimal(12,4) (declared decimal(12,2))",
-                "- note",
+            expected_lines: &[
+                "Contract comparison",
+                "  OK    table:t",
+                "        adopt: columns of [sources.app.tables.\"public.orders\"]",
+                "          + id = \"int\"",
+                "          ~ amount = \"decimal(12,4)\" (declared decimal(12,2))",
+                "          - note (not in the live table)",
+                "",
+                "Run contract generate --write to update sqlload.toml.",
+                "",
+                "0 contract difference(s)",
             ],
         },
         AdoptionTestCase {
             description: "a declared type the warehouse stores the same way agrees, so nothing changes",
             settings: "columns = { note = \"varchar(50)\" }\n",
-            python: false,
+            spec: postgres_spec,
             warehouse: Warehouse::DuckDb,
             live: vec![("note", ColumnType::Text)],
             overwrite: true,
-            expected: &[],
+            expected_lines: &[
+                "Contract comparison",
+                "  OK    table:t",
+                "",
+                "0 contract difference(s)",
+            ],
         },
         AdoptionTestCase {
             description: "a masked column stays under mask: never declared, retyped or removed",
             settings: "mask = { note = \"hash\" }\n",
-            python: false,
+            spec: postgres_spec,
             warehouse: Warehouse::DuckDb,
             live: vec![("id", ColumnType::Int)],
             overwrite: true,
-            expected: &["+ id int"],
+            expected_lines: &[
+                "Contract comparison",
+                "  OK    table:t",
+                "        adopt: columns of [sources.app.tables.\"public.orders\"]",
+                "          + id = \"int\"",
+                "",
+                "Run contract generate --write to update sqlload.toml.",
+                "",
+                "0 contract difference(s)",
+            ],
         },
         AdoptionTestCase {
             description: "a Python table on Snowflake: names as the function yields them, flattened columns left out, and the whole columns= to paste",
             settings: r#"{"description": "T.", "columns": {"id": "int"}, "flatten": ["meta"]}"#,
-            python: true,
+            spec: python_spec,
             warehouse: Warehouse::Snowflake,
             live: vec![
                 ("ID", ColumnType::Int),
@@ -77,22 +117,20 @@ fn given_live_columns_when_adopting_then_undeclared_ones_are_declared_and_overwr
                 ("_SQLLOAD_LOAD_ID", ColumnType::Text),
             ],
             overwrite: false,
-            expected: &[
-                "+ name text",
-                "+ Mixed bool",
-                r#"paste columns={"id": "int", "name": "text", "Mixed": "bool"} in src/s.py"#,
+            expected_lines: &[
+                "Contract comparison",
+                "  OK    table:t",
+                "        adopt: paste into the table's declaration in src/s.py",
+                r#"          columns={"id": "int", "name": "text", "Mixed": "bool"}"#,
+                "",
+                "0 contract difference(s)",
             ],
         },
     ];
     for test_case in test_cases {
-        let expected: Vec<String> = test_case
-            .expected
-            .iter()
-            .map(|line| (*line).to_owned())
-            .collect();
         assert_eq!(
-            adopted_lines(&test_case),
-            Ok(expected),
+            adoption_output(&test_case),
+            test_case.expected_lines,
             "{}",
             test_case.description
         );

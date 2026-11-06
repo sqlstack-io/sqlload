@@ -151,6 +151,45 @@ def test_given_a_loaded_files_table_when_its_declaration_differs_then_contract_d
 	]
 
 
+def test_given_a_loaded_table_when_generating_its_contract_then_write_declares_the_live_columns_and_overwrite_retypes(tmp_path: Path) -> None:
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	(tmp_path / "data").mkdir()
+	pq.write_table(pa.table({"id": pa.array([1], pa.int64()), "status": ["open"], "amount": [1.5]}), tmp_path / "data" / "p.parquet")
+	config = tmp_path / "sqlload.toml"
+	config.write_text(
+		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
+	)
+	assert run("load", "-c", str(config)).returncode == 0
+	config.write_text(config.read_text() + 'contract = "enforced"\n')
+	before = config.read_text()
+	proposed = run("contract", "generate", "-c", str(config))
+	assert proposed.returncode == 1, proposed.stdout + proposed.stderr
+	assert proposed.stdout.splitlines()[5:] == [
+		"        adopt: columns of [sources.orders.tables.orders]",
+		'          + id = "int"',
+		'          + status = "text"',
+		'          + amount = "float"',
+		"",
+		"Run contract generate --write to update sqlload.toml.",
+		"",
+		"3 contract difference(s)",
+	], proposed.stdout
+	assert config.read_text() == before
+	written = run("contract", "generate", "--write", "-c", str(config))
+	assert (written.returncode, f"Updated repository declarations:\n  {config}" in written.stdout) == (0, True), written.stdout + written.stderr
+	assert config.read_text() == before + '\n[sources.orders.tables.orders.columns]\nid = "int"\nstatus = "text"\namount = "float"\n'
+	assert run("contract", "diff", "-c", str(config)).returncode == 0
+	config.write_text(config.read_text().replace('status = "text"', 'status = "int"'))
+	kept = run("contract", "generate", "--write", "-c", str(config))
+	assert (kept.returncode, "type_mismatch: column 'status' is declared int but physical type is text" in kept.stdout) == (1, True), kept.stdout + kept.stderr
+	retyped = run("contract", "generate", "--write", "--overwrite", "-c", str(config))
+	assert (retyped.returncode, 'status = "text"' in config.read_text()) == (0, True), retyped.stdout + retyped.stderr
+	assert run("contract", "generate", "--overwrite", "-c", str(config)).returncode == 2
+
+
 def test_given_a_table_loaded_into_another_target_when_diffing_from_it_then_its_schema_there_is_read(tmp_path: Path) -> None:
 	import pyarrow as pa
 	import pyarrow.parquet as pq

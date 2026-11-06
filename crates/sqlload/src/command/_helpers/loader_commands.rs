@@ -289,23 +289,25 @@ async fn run_contract(
         from: args.from,
         generate,
     };
-    let mut report = compare_contracts(project, &destinations, &options, &request)
+    let report = compare_contracts(project, &destinations, &options, &request)
         .await
         .map_err(|error| error.to_string())?;
-    if write {
-        write_adoptions(&mut report, file, variables)?;
-    }
+    let report = match write {
+        true => write_adoptions(report, file, variables)?,
+        false => report,
+    };
     Ok(render_contract(&report, args.json))
 }
 
-/// `report`'s adoptions written into the project file, which is left as it was when the edited project would no longer parse.
+/// `report` after writing its adoptions into the project file, which is left as it was when the edited project would no longer parse.
 fn write_adoptions(
-    report: &mut ContractReport,
+    report: ContractReport,
     (config, text): (&Path, &str),
     variables: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    let Some(updated) = adopt_contracts(text, report)? else {
-        return Ok(());
+) -> Result<ContractReport, String> {
+    let (updated, mut report) = adopt_contracts(text, report)?;
+    let Some(updated) = updated else {
+        return Ok(report);
     };
     parse_project(&updated, &|name| variable(variables, name)).map_err(|error| {
         format!(
@@ -318,5 +320,5 @@ fn write_adoptions(
         .and_then(|()| std::fs::rename(&staged, config))
         .map_err(|error| format!("cannot write {}: {error}", config.display()))?;
     report.written_paths.push(config.display().to_string());
-    Ok(())
+    Ok(report)
 }

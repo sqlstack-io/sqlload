@@ -1,9 +1,9 @@
 //! The declarations that adopt a live table, as `sqb contract generate` adopts one.
 
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::ColumnType;
-use crate::contract::_helpers::compare::{agrees, is_own};
+use crate::contract::_helpers::compare::{agrees, is_live, is_own};
 use crate::contract::models::{AdoptedColumn, Adoption};
-use crate::loader::_helpers::python::source_spelling;
 use crate::loader::models::TableSpec;
 use crate::schema_plan::models::LiveColumn;
 
@@ -51,11 +51,7 @@ pub(crate) fn adoption(spec: &TableSpec, live: &[LiveColumn], overwrite: bool) -
         });
     }
     let mut removed: Vec<String> = Vec::new();
-    for (name, declared_type) in declared.iter().filter(|(name, _)| {
-        !live
-            .iter()
-            .any(|column| column.name.eq_ignore_ascii_case(name))
-    }) {
+    for (name, declared_type) in declared.iter().filter(|(name, _)| !is_live(live, name)) {
         match overwrite {
             true => removed.push((*name).clone()),
             false => paste.push(((*name).clone(), declared_type.to_string())),
@@ -94,7 +90,11 @@ fn declarable(spec: &TableSpec, live_name: &str) -> Option<String> {
             .find(|column| column.name.eq_ignore_ascii_case(live_name))
             .map(|column| column.name.clone());
     }
-    let name = source_spelling(live_name, spec);
+    let lowered = live_name.to_lowercase();
+    let name = match sql_adapter(spec.warehouse).stored_name(&lowered) == live_name {
+        true => lowered,
+        false => live_name.to_owned(),
+    };
     let flattened = spec
         .flatten
         .iter()
