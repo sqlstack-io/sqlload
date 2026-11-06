@@ -1,0 +1,23 @@
+---
+title: "Roadmap"
+description: "What is planned for SQLLoad and not in a release yet."
+---
+
+None of this is in a release yet, and there are no dates. Everything else on this site documents
+what SQLLoad ships today; see [Supported systems](/docs/supported-systems/).
+
+## Postgres change data capture (CDC)
+
+A Postgres CDC source. It is expected to land first.
+
+## BigQuery and Databricks
+
+BigQuery and Databricks destinations. Planned.
+
+## Database to database
+
+Eventually, warehouses and databases as sources, with SQL translated between their dialects.
+Translation will cover only what can be expressed equivalently in DuckDB, which serves as the
+common dialect. SQLLoad deliberately won't build a matrix of every dialect into every other, which
+no reasonable budget could test. The aim is fewer routes, each one checked, over more routes that
+aren't.

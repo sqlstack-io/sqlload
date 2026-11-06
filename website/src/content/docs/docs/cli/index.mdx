@@ -1,0 +1,55 @@
+---
+title: "Commands"
+description: "Every sqlload command, the options they share, and exit codes."
+---
+
+```console
+$ sqlload --help
+SQL data loading tooling. Pre-release, under development.
+
+Usage: sqlload [OPTIONS] <COMMAND>
+
+Commands:
+  debug     Validate the configuration and test every connection
+  plan      Show what `apply` and `load` would do (exporter: each topic's table and objects)
+  tables    Print `topic<TAB>table<TAB>stream<TAB>group` per topic (`-` when skipped), without Snowflake
+  apply     Create or change tables (exporter: create missing tables, stages and pipes); never loads data
+  load      Load the selected tables of a loader project
+  run       Export until stopped
+  status    Show per-partition lag and committed offsets
+  state     Inspect or change the run log of `state = "logged"` tables
+  contract  Compare each table's declared columns with its live table, or adopt the live columns into the declarations; exits 1 when they differ
+  copy      Copy one table once, between connections named in sqlload.toml or URIs (sqlload.toml is optional)
+  help      Print this message or the help of the given subcommand(s)
+```
+
+| Command | Page |
+|---------|------|
+| `plan`, `apply`, `load` | [plan, apply and load](/docs/cli/plan-apply-load/) |
+| `copy` | [copy](/docs/cli/copy/) |
+| `contract diff`, `contract generate` | [contract](/docs/cli/contract/) |
+| `debug` | [debug](/docs/cli/debug/) |
+| `run`, `status`, `tables` | [Kafka exporter](/docs/kafka/) |
+
+`sqlload state` is only for Python tables with `state="logged"`; see
+[Logged state](/docs/sources/logged-state/).
+
+## Global options
+
+Every command takes these:
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `-c`, `--config <FILE>` | `sqlload.toml`, or `SQLLOAD_CONFIG` | The configuration file. Python source paths are relative to its folder. |
+| `--log-format <FORMAT>` | `text` | `text` or `json` logs, on standard error. |
+| `--no-color` | off | Print without colour. Also when `NO_COLOR` is set or the output isn't a terminal. |
+| `-h`, `--help` | | Print help. |
+| `-V`, `--version` | | Print the version. |
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Everything selected succeeded, or agreed (`contract diff`, `state verify`). |
+| 1 | A table failed or was left out by a plan error, a contract difference or state disagreement was found, or the configuration is invalid. |
+| 2 | The command line couldn't be parsed. |

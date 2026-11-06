@@ -1,0 +1,133 @@
+---
+title: "Projects"
+description: "How connections, targets and sources fit together in sqlload.toml, and how plan, apply and load use them."
+---
+
+A project is a `sqlload.toml` file with three kinds of entry:
+
+| Entry | Says | Example |
+|-------|------|---------|
+| `[connections.NAME]` | How to reach one system: a database, a warehouse, a bucket, a folder or an HTTP API. | `kind = "postgres"`, host, user, password |
+| `[targets.NAME]` | Where loaded tables go: a warehouse connection and schema, or a files connection and folder layout. | `connection = "warehouse"`, `loader_schema = "raw"` |
+| `[sources.NAME]` | Where data comes from, which tables it has, and how they load. | `kind = "postgres"`, `include = ["public.*"]` |
+
+```toml
+default_target = "local"
+
+[connections.app]
+kind = "postgres"
+host = "localhost"
+user = "postgres"
+password = "${ENV:PGPASSWORD}"
+database = "postgres"
+
+[connections.warehouse]
+kind = "duckdb"
+database = "shop.duckdb"
+
+[targets.local]
+connection = "warehouse"
+loader_schema = "raw"
+
+[sources.app]
+kind = "postgres"
+connection = "app"
+description = "The shop's application database."
+include = ["public.*"]
+write_strategy = "merge"
+```
+
+Python sources are declared in Python instead, in the folders `python_paths` lists. See
+[Python sources](/docs/sources/python/).
+
+Each setting has one home. Connections live in `sqlload.toml`, with secrets from the environment
+through `${ENV:NAME}`. A table's behaviour lives where its source is declared: `sqlload.toml` for
+Postgres and files sources, the decorator for Python ones.
+
+## Plan, apply, load
+
+| Command | Does |
+|---------|------|
+| `sqlload plan` | Reads the sources' and destinations' catalogs and prints what `apply` and `load` would do. Changes nothing. |
+| `sqlload apply` | Creates or changes destination tables, as the plan shows. Never loads data. |
+| `sqlload load` | Loads the selected tables. Creates any table that doesn't exist yet. |
+
+`apply` and `load` plan first and print the plan, so the output always shows what ran and why. One
+broken table doesn't stop the others. A table the plan lists under `Errors` is left out, and a
+table whose load fails gets a `failed` line. Every other table still loads, and the command exits
+1.
+
+Use `plan` in review, `apply` when you want tables in place before data arrives (to grant access,
+say), and `load` on a schedule.
+
+## Selecting tables
+
+`plan`, `apply`, `load` and `contract` take selectors, positionally or with `--select`/`-s`, and
+`--exclude` to leave tables out. A selector is a source name, a destination table name, or a
+source's `schema.table`:
+
+```bash
+sqlload load app                    # every table of source app
+sqlload load app__orders            # one destination table
+sqlload load public.orders          # the same table, by its source name
+sqlload load app --exclude app__customers
+```
+
+With no selector, every table is selected.
+
+## Table names
+
+Destination tables are named from a template with `{source}`, `{schema}` and `{table}`:
+
+| Source | Default name | Example |
+|--------|--------------|---------|
+| Postgres | `{source}__{table}` | `app__orders` |
+| Python | `{source}__{table}` | `shop__orders` |
+| Files | `{source}` (a files source is one table) | `events` |
+
+Set `table_name` on the source, or `name` on one table, to change it. The table goes into the
+source's `schema`, or the target's `loader_schema`.
+
+## Descriptions
+
+Every table SQLLoad writes needs a description, which becomes the destination table's comment.
+`plan` fails for a table without one and says where to add it:
+
+| Table | Description from |
+|-------|------------------|
+| A Postgres table with its own `[sources.app.tables."public.orders"]` entry, or named exactly in `include` | `description = "..."` in that entry |
+| A Postgres table found by an `include` pattern | The source table's comment (`COMMENT ON TABLE`), if any; none is needed |
+| A files source | The source's own `description` |
+| A Python table | `description="..."`, or the function's docstring |
+
+## Columns SQLLoad adds
+
+Every loaded table gets columns that say where each row came from:
+
+| Column | On | Holds |
+|--------|----|-------|
+| `_sqlload_load_id` | every table | The load that wrote the row. |
+| `_sqlload_loaded_at` | every table | When that load ran. |
+| `_sqlload_source_file` | files sources | The file the row came from. |
+| `_sqlload_source_version` | files sources | The file's version when it was loaded. |
+| `_sqlload_source_row` | files sources | The row's number in its file, from 1. |
+
+`plan` lists them as `+ _sqlload_load_id, _loaded_at`. Files sources use `_sqlload_source_file`
+to load each file once under `append`. SQLLoad's own columns never count as differences in
+[`sqlload contract`](/docs/cli/contract/).
+
+## Concurrency
+
+Tables load at the same time, up to `concurrency` in `sqlload.toml` or `--concurrency N`, 4 by
+default. One table's batches always commit one at a time.
+
+## What SQLLoad keeps
+
+Nothing outside your destination. There's no local state folder and no stored copy of the schema:
+
+- **Schema:** read from the live destination table each run, or from the columns you declare. See
+  [Contracts](/docs/concepts/contracts/).
+- **Position:** the destination's maximum of the table's `cursor_column`. See
+  [Cursors](/docs/concepts/cursors/).
+- **Logged state**, only for tables that opt in with `state = "logged"`: an append-only run log in
+  the destination. Deleting it is safe: the next run reads as a stateless one would.
