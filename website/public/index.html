@@ -260,33 +260,6 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 				</div>
 			</section>
 
-			<section>
-				<div class="wrap">
-					<div class="section-head">
-						<h2>Faster than dlt and ingestr</h2>
-						<p>Same machine, same data, every run checked against the source. <a href="/docs/benchmarks/">Method and every figure →</a></p>
-					</div>
-					<div class="grid">
-						<div class="item">
-							<h3>1.89x faster: S3 Parquet into Snowflake</h3>
-							<p>1M rows in 10.3 s, against ingestr's 19.5 s, using 0.17 s of CPU.</p>
-						</div>
-						<div class="item">
-							<h3>1.83x faster: Parquet into DuckDB</h3>
-							<p>10M rows from a local folder in 3.2 s, against ingestr's 5.9 s.</p>
-						</div>
-						<div class="item">
-							<h3>1.21x faster: Postgres into DuckDB</h3>
-							<p>1M rows, 40 columns, in 6.8 s. ingestr took 8.3 s, dlt 27 s or more.</p>
-						</div>
-						<div class="item">
-							<h3>2x faster than dlt into Snowflake</h3>
-							<p>1M Postgres rows in 14.6 s, against 29 s or more for dlt and 16.4 s for ingestr.</p>
-						</div>
-					</div>
-				</div>
-			</section>
-
 			<section id="start">
 				<div class="wrap start">
 					<div>
