@@ -4,6 +4,7 @@ A source is a module-level object tables attach to; a table is a decorated gener
 Both are found by scanning the modules under `python_paths`, so declaring one never runs it.
 """
 
+import inspect
 import json
 from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -110,7 +111,7 @@ class Source:
 			declared = Table(
 				name=name or table_function.__name__,
 				function=table_function,
-				description=description,
+				description=description or _docstring(table_function),
 				source=self,
 				settings=dict(settings),
 			)
@@ -126,6 +127,11 @@ class Source:
 		self.client_factory = factory
 		return factory
 
+
+
+def _docstring(function: TableFunction) -> str | None:
+	"""A plain function's own docstring, the table's description when none is given."""
+	return inspect.getdoc(function) if inspect.isfunction(function) else None
 
 def source(name: str, *, description: str | None = None, **settings: Any) -> Source:
 	"""A source tables attach to with `@<source>.table(...)`; `settings` are its connection,
@@ -161,7 +167,7 @@ def table(
 		return Table(
 			name=name or table_function.__name__,
 			function=table_function,
-			description=description,
+			description=description or _docstring(table_function),
 			settings=dict(settings),
 		)
 

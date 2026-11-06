@@ -95,25 +95,34 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "L1@Leeds/null",
         },
         ScenarioTestCase {
-            description: "new_tables = skip loads only listed tables",
-            setup: "CREATE TABLE public.listed (id int8 PRIMARY KEY); CREATE TABLE public.unlisted (id int8 PRIMARY KEY);",
-            settings: "new_tables = \"skip\"\n[sources.app.tables.\"public.listed\"]\n",
-            runs: &[OK],
+            description: "new_tables = skip: tables present at the first load are approved, and a later one loads only once include names it exactly",
+            setup: "CREATE TABLE public.present (id int8 PRIMARY KEY);",
+            settings: "include = [\"public.*\", \"public.approved\"]\nnew_tables = \"skip\"\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    source_change: "CREATE TABLE public.later (id int8 PRIMARY KEY); CREATE TABLE public.approved (id int8 PRIMARY KEY);",
+                    ..OK
+                },
+            ],
             check_query: "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'raw'",
-            expected_result: "app__listed",
+            expected_result: "app__approved,app__present",
         },
         ScenarioTestCase {
-            description: "new_tables = fail stops the plan and names the table",
-            setup: "CREATE TABLE public.listed (id int8 PRIMARY KEY); CREATE TABLE public.unlisted (id int8 PRIMARY KEY);",
-            settings: "new_tables = \"fail\"\n[sources.app.tables.\"public.listed\"]\n",
-            runs: &[ScenarioRun {
-                source_change: "",
-                destination_change: "",
-                expected_error: "public.unlisted\n    └── reason  new table and new_tables = \"fail\"",
-                ..OK
-            }],
-            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
-            expected_result: "0",
+            description: "new_tables = fail stops the plan and names a table that appears after the first load",
+            setup: "CREATE TABLE public.present (id int8 PRIMARY KEY);",
+            settings: "new_tables = \"fail\"\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    source_change: "CREATE TABLE public.later (id int8 PRIMARY KEY);",
+                    destination_change: "",
+                    expected_error: "public.later\n    └── reason  new table and new_tables = \"fail\"; add it to include or exclude it",
+                    ..OK
+                },
+            ],
+            check_query: "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "app__present",
         },
         ScenarioTestCase {
             description: "--reload rebuilds a table whose source type changed incompatibly",

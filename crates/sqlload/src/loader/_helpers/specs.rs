@@ -6,7 +6,7 @@ use crate::loader::models::{CursorSpec, SettingOrigin, TableSpec};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
-    MaskMethod, SourceConfig, StateMode, TableOverride, TableSettings, WriteStrategy,
+    MaskMethod, SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, WriteStrategy,
 };
 use crate::similar_names::main::nearest_name::nearest_name;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
@@ -146,6 +146,16 @@ pub(crate) fn build_spec(
     {
         problems.push("mask uses \"hmac\" but the source sets no mask_key (for example mask_key = \"${ENV:MASK_KEY}\")".to_owned());
     }
+    let files_description = match context.source.kind {
+        SourceKind::Files => context.source.description.as_deref(),
+        _ => None,
+    };
+    let description = overrides
+        .description
+        .as_deref()
+        .or(files_description)
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -166,6 +176,7 @@ pub(crate) fn build_spec(
             schema: context.target.schema.clone(),
             table: name,
         },
+        description: description.unwrap_or_default().to_owned(),
         warehouse: context.target.warehouse,
         strategy,
         strategy_origin,
@@ -199,7 +210,7 @@ pub(crate) fn build_spec(
             .is_some_and(|(value, _)| value),
         logged: layered(&settings.state, &defaults.state)
             .is_some_and(|(value, _)| value == StateMode::Logged),
-        listed: false,
+        approved: false,
         new_tables: context.source.new_tables,
         files: None,
         destination_path: context.target.path.as_ref().map(|target_path| {
@@ -211,6 +222,26 @@ pub(crate) fn build_spec(
         }),
         python: None,
     })
+}
+
+/// Why a planned table without a description is blocked, with where to give it: a files source's one table takes the source's own `description`.
+pub(crate) fn missing_description(
+    source_name: &str,
+    source: &SourceConfig,
+    table: &SourceTable,
+) -> String {
+    match source.kind {
+        SourceKind::Python => {
+            "no description; add description=\"...\" to its table declaration, or a docstring to its function".to_owned()
+        }
+        SourceKind::Files => {
+            format!("no description; add description = \"...\" under [sources.{source_name}]")
+        }
+        SourceKind::Postgres => format!(
+            "no description; add description = \"...\" under [sources.{source_name}.tables.\"{}\"]",
+            table.qualified_name()
+        ),
+    }
 }
 
 fn glob(pattern: &str) -> Result<Glob, String> {

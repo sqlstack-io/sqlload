@@ -846,7 +846,7 @@ async fn replan(
         _ => return Err(LoaderError::Invalid(problems.join("; "))),
     };
     inferred.python = spec.python.clone();
-    inferred.listed = true;
+    inferred.approved = true;
     let columns = replan_columns(
         &inferred,
         (destination, planned.live.as_deref()),

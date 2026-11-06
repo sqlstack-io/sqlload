@@ -134,6 +134,15 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         create_table(self, table, columns)
     }
 
+    /// `COMMENT ON TABLE`, giving `table` its description.
+    fn render_table_comment(&self, table: &TableName, description: &str) -> String {
+        format!(
+            "COMMENT ON TABLE {} IS {}",
+            self.render_qualified_name(table),
+            self.render_loader_value_literal(description)
+        )
+    }
+
     /// The table kind a load's staging table is created as.
     fn staging_table_kind(&self) -> &'static str {
         "TABLE"

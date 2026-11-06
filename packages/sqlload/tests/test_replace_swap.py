@@ -54,7 +54,7 @@ def tables(root: Path) -> list[str]:
 
 
 REPLACED = """
-@api.table(write_strategy="replace", columns={"meta": "json", "ref": "uuid"})
+@api.table(description="Test table.", write_strategy="replace", columns={"meta": "json", "ref": "uuid"})
 def things(ctx):
     for page in range(3):
         yield [
@@ -100,7 +100,7 @@ def test_given_a_reload_without_yes_off_a_terminal_when_loading_then_it_is_refus
 
 
 FAILING = """
-@api.table(write_strategy="replace")
+@api.table(description="Test table.", write_strategy="replace")
 def things(ctx):
     yield [{"id": RUN * 100 + row} for row in range(3)]
     if RUN == 2:
@@ -120,7 +120,7 @@ def test_given_a_failure_mid_load_when_replacing_then_the_table_is_untouched_and
 
 
 GROWING = """
-@api.table(write_strategy="replace")
+@api.table(description="Test table.", write_strategy="replace")
 def things(ctx):
     yield [{"id": 1}]
     yield [{"id": 2, "added": "x"}]
@@ -155,7 +155,7 @@ def test_given_constraints_and_an_index_added_in_the_destination_when_replacing_
 
 
 STARTING_TO_CARRY = """
-@api.table(write_strategy="replace")
+@api.table(description="Test table.", write_strategy="replace")
 def things(ctx):
     yield [{"id": 1}]
     if RUN == 2:
@@ -196,7 +196,7 @@ def test_given_a_merge_with_a_value_its_declared_type_rejects_when_loading_then_
     root = project(
         tmp_path,
         f"""
-@api.table(write_strategy="merge", unique_key="id", columns={{"v": "{column_type}"}})
+@api.table(description="Test table.", write_strategy="merge", unique_key="id", columns={{"v": "{column_type}"}})
 def things(ctx):
     yield [{{"id": 1, "v": "{value}"}}]
 """,
@@ -222,7 +222,7 @@ def test_given_a_value_its_declared_type_rejects_when_loading_then_the_load_fail
     root = project(
         tmp_path,
         f"""
-@api.table(write_strategy="{strategy}", columns={{"v": "{column_type}"}})
+@api.table(description="Test table.", write_strategy="{strategy}", columns={{"v": "{column_type}"}})
 def things(ctx):
     yield [{{"id": 1, "v": "{value}"}}]
 """,

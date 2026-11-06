@@ -15,9 +15,10 @@ executable without Python is the `sqlload-cli` package.
 
 ## Table data types
 
-A table function's dicts are typed like JSON: numbers, booleans and text keep their types, nested
-dicts and lists become JSON, and other values become text, so `date`, `datetime` and `Decimal`
-values arrive as text (datetimes with a UTC offset become timestamps). Enums give their values,
+A table function's dicts are typed like JSON: numbers, booleans and text keep their types, and
+nested dicts and lists become JSON. `Decimal` becomes `decimal(38,s)`, `date` becomes `date`, a
+naive `datetime` becomes `timestamp_ntz` and one with a UTC offset `timestamp_tz`; other values
+become text. Enums give their values,
 dataclasses become JSON objects, and numpy numbers count as numbers. Arrow input (pyarrow, polars,
 pandas) keeps its own types.
 
@@ -36,6 +37,30 @@ pip uninstall sqlload-cli
 `schema.table`. `--start-cursor`/`--end-cursor` backfill a cursor range, typed from each selected
 table's cursor (an integer, an RFC 3339 timestamp or a date).
 
+## Descriptions
+
+Every table needs a description, which becomes the destination table's comment; `plan` fails
+for a table without one. In `sqlload.toml` it goes under the table
+(`[sources.app.tables."public.orders"]` with `description = "..."`), or under the source itself
+for a files source, which is one table. A Python table takes `description="..."` or its
+function's docstring.
+
+## Schema changes
+
+A column whose type SQLLoad infers (Python tables, JSON and CSV files) does not change type on its
+own: when values outgrow the table's column, the table fails with the fix. With
+`auto_widen = true` on the table or source, it widens along bool → int → decimal and
+timestamp_ntz → timestamp_tz instead, shown in `plan`, and never to float, text or JSON; a change
+that rebuilds the table still needs `--allow-type-change-rebuild`. A type pinned in `columns`
+widens the table as before.
+
+## New tables
+
+With `new_tables = "skip"`, a table that appears after the source's first load loads only once
+`include` names it exactly (`include = ["public.*", "public.refunds"]`); a
+`[sources.*.tables]` entry only sets its options. `new_tables = "fail"` stops the plan instead.
+Tables present at the first load count as approved.
+
 ## Python sources
 
 List the folders holding them in `sqlload.toml` (`python_paths = ["sources"]`); every
@@ -49,6 +74,7 @@ shop = sl.source("shop", connection="shop", write_strategy="merge")
 
 @shop.table(unique_key="order_id", cursor_column="updated_at", lookback="1h")
 def orders(ctx: sl.Context):
+    """Orders from the shop API, one row per order."""
     yield from fetch_orders(ctx.connection["base_url"], updated_after=ctx.cursor_value)
 ```
 
@@ -139,6 +165,7 @@ keeps it in `ctx.state`:
 ```python
 @shop.table(write_strategy="append", state="logged")
 def events(ctx: sl.Context):
+    """Shop events, read page by page with a sync token."""
     page = fetch_events(since=ctx.state)
     yield from page.items
     ctx.state = page.next_token

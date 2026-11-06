@@ -20,10 +20,13 @@ use crate::files_source::models::{
 };
 use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::source_target;
+use crate::loader::_helpers::specs::missing_description;
+use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::constants::{PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    CommitRule, FilesSource, PlanOptions, SourceEnd, SourceReader, TablePlan, TableSpec,
+    CommitRule, FilesSource, PlanOptions, ProjectPlan, SkippedTable, SourceEnd, SourceReader,
+    TablePlan, TableSpec,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
@@ -34,7 +37,7 @@ use crate::postgres_source::models::{
     CopyRequest, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable, WireType,
 };
 use crate::project::models::{
-    BatchStep, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride,
+    BatchStep, ConnectionConfig, NewTables, ProjectConfig, SourceConfig, SourceKind, TableOverride,
     WriteStrategy,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
@@ -698,4 +701,45 @@ pub(crate) fn selected(
     };
     (options.select.is_empty() || options.select.iter().any(picks))
         && !options.exclude.iter().any(picks)
+}
+
+/// `planned`, the selected tables of one source, added to `plan`, which is returned: a table that appeared after the source's first load (none of its tables existed yet) and is not named exactly in `include` is skipped or fails as `new_tables` says, and a table without a description is blocked.
+pub(crate) fn admit_tables(
+    mut plan: ProjectPlan,
+    (source_name, source): (&String, &SourceConfig),
+    planned: Vec<TablePlan>,
+) -> ProjectPlan {
+    let first_load = !planned.iter().any(|table| table.exists);
+    for mut table in planned {
+        let spec = &table.spec;
+        let qualified = spec.source_table.qualified_name();
+        let is_new = !first_load && !table.exists && !spec.approved;
+        let has_settings = source.tables.contains_key(&qualified);
+        match (is_new, spec.new_tables, has_settings) {
+            (true, NewTables::Skip, true) => plan.skipped.push(SkippedTable {
+                source_name: source_name.clone(),
+                source_table: qualified,
+                reason: "new table (new_tables = \"skip\") has settings but is not approved; add it to include".to_owned(),
+            }),
+            (true, NewTables::Skip, false) => plan.skipped.push(SkippedTable {
+                source_name: source_name.clone(),
+                source_table: qualified,
+                reason: "new table (new_tables = \"skip\"); add it to include to sync it".to_owned(),
+            }),
+            (true, NewTables::Fail, _) => plan.problems.push(format!(
+                "{qualified}: new table and new_tables = \"fail\"; add it to include or exclude it"
+            )),
+            _ => {
+                if spec.description.is_empty() {
+                    table.schema = blocked_plan(vec![missing_description(
+                        source_name,
+                        source,
+                        &spec.source_table,
+                    )]);
+                }
+                plan.tables.push(table);
+            }
+        }
+    }
+    plan
 }
