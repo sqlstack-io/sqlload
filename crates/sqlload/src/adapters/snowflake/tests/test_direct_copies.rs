@@ -78,7 +78,7 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             expected_copies: Ok((4, "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\"")),
         },
         DirectCopiesTestCase {
-            description: "files copied unchanged to @~ are read under the batch's folder, and named by it as Snowflake names user-stage files, with @~/ first",
+            description: "files copied unchanged to @~ are read under the batch's folder, and matched by the prefix the load gives them",
             files: vec![("day=2026-11-04/part-0.parquet".to_owned(), "2026-11-04")],
             columns: order_columns(),
             from: INTERNAL,
