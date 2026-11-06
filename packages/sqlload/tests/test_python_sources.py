@@ -304,15 +304,58 @@ def test_given_masked_and_excluded_columns_when_loading_then_values_are_hashed_o
 	assert "secret_note" not in columns
 
 
-def test_given_a_type_the_live_column_cannot_hold_when_loading_then_the_table_fails_with_the_fix(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='append')(rows)\n")
-	give(project, "rows", [{"id": 1, "amount": 1}])
+PRICED_TABLE = """
+import decimal
+
+
+def priced(ctx):
+    for row in rows(ctx):
+        amount = row["amount"]
+        yield {**row, "amount": decimal.Decimal(amount) if isinstance(amount, str) else amount}
+
+
+shop.table(write_strategy='append'{settings})(priced)
+"""
+
+
+@pytest.mark.parametrize(
+	("settings", "amount", "expected_code", "expected_line", "expected_rows"),
+	[
+		(
+			"",
+			"2.50",
+			1,
+			"failed   RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but decimal(38,2) in the source; pin a type the table can hold, for example columns = { amount = \"int\" }; or set auto_widen = true to widen it",
+			[(1, 1)],
+		),
+		(
+			", auto_widen=True",
+			"2.50",
+			0,
+			"altered  RAW.shop__priced  widen  amount int -> decimal(38,2) (DECIMAL(38,2))  in place",
+			[(1, Decimal("1.00")), (2, Decimal("2.50"))],
+		),
+		(
+			", auto_widen=True",
+			2.5,
+			1,
+			"failed   RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but float in the source",
+			[(1, 1)],
+		),
+	],
+	ids=["fails-without-auto-widen", "auto-widen-to-decimal", "never-to-float"],
+)
+def test_given_an_inferred_column_that_outgrows_the_table_when_loading_then_auto_widen_decides(
+	tmp_path: Path, settings: str, amount: Any, expected_code: int, expected_line: str, expected_rows: list[tuple[Any, ...]]
+) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, PRICED_TABLE.replace("{settings}", settings))
+	give(project, "priced", [{"id": 1, "amount": 1}])
 	load(project)
-	give(project, "rows", [{"id": 2, "amount": 2.5}])
+	give(project, "priced", [{"id": 2, "amount": amount}])
 	done = sqlload(project, "load")
-	assert done.returncode == 1
-	assert "failed   RAW.shop__rows  the yielded data does not fit the table" in done.stdout + done.stderr, done.stderr
-	assert query(project, 'SELECT id, amount FROM "RAW"."shop__rows"') == [(1, 1)]
+	assert done.returncode == expected_code, done.stdout + done.stderr
+	assert expected_line in done.stdout, done.stdout + done.stderr
+	assert query(project, 'SELECT id, amount FROM "RAW"."shop__priced" ORDER BY id') == expected_rows
 
 
 CLIENT_MODULE = '''
