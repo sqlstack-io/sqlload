@@ -183,6 +183,28 @@ a run that fails part-way never loses rows; under `append`, the next run may loa
 two pages again.
 Assign `ctx.state` once per page; assigning more than once per page can lose rows after a crash.
 
+For an exact position, yield `sl.checkpoint(...)` after the rows it covers instead:
+
+```python
+@shop.table(write_strategy="append", state="logged")
+def events(ctx: sl.Context):
+    """Shop events, read page by page with a sync token."""
+    token = ctx.state
+    while True:
+        page = fetch_events(since=token)
+        yield from page.items
+        token = page.next_token
+        yield sl.checkpoint(token)
+        if not page.has_more:
+            break
+```
+
+A checkpoint covers exactly the rows yielded before it: commits record the latest checkpoint
+whose rows they hold, so a run that fails part-way resumes from it without loading any row twice,
+and the next run reads it as `ctx.state`. Once a function yields a checkpoint, only checkpoints
+move the logged position during the run; a value it leaves in `ctx.state` when it finishes still
+becomes the final one. `sl.checkpoint` needs `state="logged"` and a JSON value.
+
 Each successful run appends a record to `_sqlload_runs` in the table's schema (or one object under
 `<table folder>/_sqlload/runs/` in a files target), in the same transaction as the data where the
 warehouse allows it, so a failed load never moves the position. A table with a `cursor_column`

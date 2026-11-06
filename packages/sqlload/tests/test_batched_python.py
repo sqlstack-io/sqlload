@@ -53,7 +53,7 @@ def growing(ctx):
 
 #: Pages of 700 rows yielded one row at a time, so the 1,000-row crossings never line up with them.
 #: `before` sets ctx.state to the next page before yielding a page, `after` once it is yielded,
-#: `ended` only at the end; each raises at the page data/fail.json names. `windowed` records each
+#: `ended` only at the end, `checkpointed` and `checkpointed_pages` yield sl.checkpoint after each page; each raises at the page data/fail.json names. `windowed` records each
 #: call's window; `big` yields many rows.
 MODULE = """
 import json
@@ -93,6 +93,24 @@ def after(ctx):
             raise RuntimeError(f"page {page} failed")
         yield from rows(page)
         ctx.state = page + 1
+
+
+@api.table(description="Test table.", write_strategy="append", state="logged")
+def checkpointed(ctx):
+    for page in range(ctx.state or 0, PAGES):
+        if page == fail_at():
+            raise RuntimeError(f"page {page} failed")
+        yield from rows(page)
+        yield sl.checkpoint(page + 1)
+
+
+@api.table(description="Test table.", write_strategy="append", state="logged")
+def checkpointed_pages(ctx):
+    for page in range((ctx.state or {}).get("page", 0), PAGES):
+        if page == fail_at():
+            raise RuntimeError(f"page {page} failed")
+        yield rows(page)
+        yield sl.checkpoint({"page": page + 1})
 
 
 @api.table(description="Test table.", write_strategy="append", state="logged")
@@ -289,13 +307,23 @@ def rows_loaded(project: Path, table: str) -> list[tuple[int, int]]:
 
 @pytest.mark.parametrize(
 	("table", "expected_most_extra_rows"),
-	[("before", 2 * PAGE_ROWS), ("after", 2 * PAGE_ROWS), ("ended", 0), ("mutated_before", 2 * PAGE_ROWS), ("mutated_after", 2 * PAGE_ROWS)],
+	[
+		("before", 2 * PAGE_ROWS),
+		("after", 2 * PAGE_ROWS),
+		("ended", 0),
+		("mutated_before", 2 * PAGE_ROWS),
+		("mutated_after", 2 * PAGE_ROWS),
+		("checkpointed", 0),
+		("checkpointed_pages", 0),
+	],
 	ids=[
 		"state set before each page",
 		"state set after each page",
 		"state set only at the end",
 		"one object mutated and assigned again before each page",
 		"one object mutated and assigned again after each page",
+		"a checkpoint after each page's rows, yielded one at a time",
+		"a checkpoint after each page, yielded as a list",
 	],
 )
 def test_given_a_logged_table_when_a_page_fails_mid_run_then_the_next_run_loses_no_row_and_reloads_at_most_two_pages(
@@ -321,6 +349,27 @@ def test_given_a_logged_table_setting_state_per_page_when_loading_then_each_comm
 	assert len(numbered) > 1
 	assert numbered[-1][1] == "6"
 	assert sorted(rows_loaded(project, "after")) == sorted(EVERY_ROW)
+
+
+@pytest.mark.parametrize(
+	("table", "expected_failed_state", "expected_last_state"),
+	[("checkpointed", "4", "6"), ("checkpointed_pages", '{"page": 4}', '{"page": 6}')],
+	ids=["rows", "pages"],
+)
+def test_given_checkpoints_when_loading_then_commits_record_them_and_a_rerun_reads_nothing_again(
+	project: Path, table: str, expected_failed_state: str, expected_last_state: str
+) -> None:
+	fail(project, 4)
+	sqlload(project, "load", "--batch-bytes", "1", f"api__{table}")
+	committed = records(project, table)
+	assert len(committed) > 1
+	assert committed[-1][1] == expected_failed_state
+	assert set(rows_loaded(project, table)) == {row for row in EVERY_ROW if row[0] < 4}
+	fail(project, -1)
+	done = sqlload(project, "load", "--batch-bytes", "1", f"api__{table}")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert records(project, table)[-1][1] == expected_last_state
+	assert sorted(rows_loaded(project, table)) == sorted(EVERY_ROW)
 
 
 def test_given_batch_windows_when_loading_a_python_table_then_its_function_is_called_once_per_window(project: Path) -> None:
