@@ -29,17 +29,12 @@ where
         }
     };
     init_logging(cli.log_format);
+    let json = matches!(&cli.command, Command::Plan(args) if args.json);
     let text = match std::fs::read_to_string(&cli.config) {
         Ok(text) => text,
         Err(error) => {
             let message = format!("cannot read {}: {error}", cli.config.display());
-            return match &cli.command {
-                Command::Plan(args) if args.json => {
-                    print_lines(vec![json_error("config", &message)], true);
-                    1
-                }
-                _ => fail(&message),
-            };
+            return failed(json, "config", &message);
         }
     };
     let cli_threads = match &cli.command {
@@ -53,7 +48,13 @@ where
     }
     let runtime = match builder.build() {
         Ok(runtime) => runtime,
-        Err(error) => return fail(&format!("cannot start the async runtime: {error}")),
+        Err(error) => {
+            return failed(
+                json,
+                "plan",
+                &format!("cannot start the async runtime: {error}"),
+            );
+        }
     };
     let outcome = runtime.block_on(async {
         if is_project(&text) {
@@ -74,11 +75,17 @@ where
             print_lines(lines, cli.no_color);
             u8::from(!ok)
         }
-        Err(error) => fail(&error),
+        Err(error) => failed(json, "config", &error),
     }
 }
 
-fn fail(message: &str) -> u8 {
-    let _ = writeln!(std::io::stderr(), "error: {message}");
+/// Report a failure and return exit code 1: as one JSON error on stdout under `plan --json`, so its output always parses, else as `error:` on stderr.
+fn failed(json: bool, code: &str, message: &str) -> u8 {
+    match json {
+        true => print_lines(vec![json_error(code, message)], true),
+        false => {
+            let _ = writeln!(std::io::stderr(), "error: {message}");
+        }
+    }
     1
 }

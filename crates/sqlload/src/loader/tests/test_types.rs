@@ -79,3 +79,10 @@ pub(crate) struct ViewLinesTestCase {
     pub(crate) warnings: &'static [ItemSpec],
     pub(crate) expected_output: &'static str,
 }
+
+/// Errors items before merging, and each merged item's name.
+pub(crate) struct MergedErrorsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) errors: &'static [ItemSpec],
+    pub(crate) expected_names: &'static [&'static str],
+}
