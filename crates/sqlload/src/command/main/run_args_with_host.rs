@@ -8,8 +8,9 @@ use clap::Parser;
 
 use crate::command::_helpers::exporter_commands::run_exporter_command;
 use crate::command::_helpers::limits::blocking_threads;
-use crate::command::_helpers::loader_commands::run_loader;
+use crate::command::_helpers::loader_commands::{json_error, run_loader};
 use crate::command::_helpers::logging::init_logging;
+use crate::command::_helpers::output::print_lines;
 use crate::command::models::{Cli, Command, LoaderRequest};
 use crate::project::main::is_project::is_project;
 use crate::python_sources::types::PythonHost;
@@ -28,9 +29,13 @@ where
         }
     };
     init_logging(cli.log_format);
+    let json = matches!(&cli.command, Command::Plan(args) if args.json);
     let text = match std::fs::read_to_string(&cli.config) {
         Ok(text) => text,
-        Err(error) => return fail(&format!("cannot read {}: {error}", cli.config.display())),
+        Err(error) => {
+            let message = format!("cannot read {}: {error}", cli.config.display());
+            return failed(json, "config", &message);
+        }
     };
     let cli_threads = match &cli.command {
         Command::Plan(args) | Command::Apply(args) | Command::Load(args) => args.concurrency,
@@ -43,7 +48,13 @@ where
     }
     let runtime = match builder.build() {
         Ok(runtime) => runtime,
-        Err(error) => return fail(&format!("cannot start the async runtime: {error}")),
+        Err(error) => {
+            return failed(
+                json,
+                "plan",
+                &format!("cannot start the async runtime: {error}"),
+            );
+        }
     };
     let outcome = runtime.block_on(async {
         if is_project(&text) {
@@ -55,22 +66,26 @@ where
             };
             return run_loader(request).await;
         }
-        run_exporter_command(&cli.config, cli.command).await
+        run_exporter_command(&cli.config, cli.command)
+            .await
+            .map(|lines| (lines, true))
     });
     match outcome {
-        Ok(lines) => {
-            let mut stdout = std::io::stdout().lock();
-            for line in lines {
-                let _ = writeln!(stdout, "{line}");
-            }
-            let _ = stdout.flush();
-            0
+        Ok((lines, ok)) => {
+            print_lines(lines, cli.no_color);
+            u8::from(!ok)
         }
-        Err(error) => fail(&error),
+        Err(error) => failed(json, "config", &error),
     }
 }
 
-fn fail(message: &str) -> u8 {
-    let _ = writeln!(std::io::stderr(), "error: {message}");
+/// Report a failure and return exit code 1: as one JSON error on stdout under `plan --json`, so its output always parses, else as `error:` on stderr.
+fn failed(json: bool, code: &str, message: &str) -> u8 {
+    match json {
+        true => print_lines(vec![json_error(code, message)], true),
+        false => {
+            let _ = writeln!(std::io::stderr(), "error: {message}");
+        }
+    }
     1
 }

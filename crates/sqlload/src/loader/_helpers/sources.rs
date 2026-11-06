@@ -399,21 +399,47 @@ pub(crate) fn nanosecond_columns(
                 )
             })
             .filter(|column| !spec.pinned.contains_key(&column.name))
-            .filter(|column| !holds_fewer_digits(live, &column.name))
+            .filter(|column| fewer_digits(live, &column.name).is_none())
             .map(|column| column.name.clone())
             .collect(),
         false => Vec::new(),
     }
 }
 
-/// Whether the live column `name` holds fewer than nanosecond digits, so SQLLoad's reader cuts its values to microseconds.
-fn holds_fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> bool {
-    live.into_iter().flatten().any(|existing| {
-        existing.name.eq_ignore_ascii_case(name)
-            && existing
-                .fraction_digits
-                .is_some_and(|digits| digits < i64::from(NANOSECOND_SCALE))
-    })
+/// A warning for each column the files store at nanoseconds but the live table holds at fewer digits, so the load cuts them; a column whose type is pinned is the user's choice and is not warned about.
+pub(crate) fn truncated_nanoseconds(spec: &TableSpec, live: Option<&[LiveColumn]>) -> Vec<String> {
+    let Some(files) = &spec.files else {
+        return Vec::new();
+    };
+    files
+        .table
+        .columns
+        .iter()
+        .filter(|column| {
+            matches!(
+                column.stored_read,
+                StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
+            ) && !spec.pinned.contains_key(&column.name)
+        })
+        .filter_map(|column| truncated_warning(live, &column.name))
+        .collect()
+}
+
+/// The warning for column `name` when the live column holds fewer than nanosecond digits.
+fn truncated_warning(live: Option<&[LiveColumn]>, name: &str) -> Option<String> {
+    let digits = fewer_digits(live, name)?;
+    Some(format!(
+        "{name}: nanoseconds in the files, but the column holds {digits} digits after the second, so they are truncated.\nRebuild the column at (9) (--reload) to keep them."
+    ))
+}
+
+/// The digits after the second the live column `name` holds, when fewer than nanoseconds, so SQLLoad's reader cuts its values.
+fn fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> Option<i64> {
+    live.into_iter()
+        .flatten()
+        .find(|existing| existing.name.eq_ignore_ascii_case(name))
+        .and_then(|existing| existing.fraction_digits)
+        .filter(|digits| *digits < i64::from(NANOSECOND_SCALE))
 }
 
 /// The files to read, or why the table cannot be loaded.

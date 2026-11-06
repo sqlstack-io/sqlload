@@ -13,6 +13,8 @@ pub mod apply_project;
 pub mod connect_targets;
 pub mod debug_project;
 pub mod load_tables;
+pub mod plan_json;
 pub mod plan_project;
 pub mod render_plan;
+pub mod render_tally;
 pub mod state_command;

@@ -61,6 +61,10 @@ impl SqlAdapter for SnowflakeSql {
         format!("'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
     }
 
+    fn render_read_words(&self) -> (&'static str, &'static str) {
+        ("COPYs", "COPY")
+    }
+
     fn render_display_name(&self, table: &TableName) -> String {
         format!("{}.{}", table.schema, table.table).to_ascii_uppercase()
     }

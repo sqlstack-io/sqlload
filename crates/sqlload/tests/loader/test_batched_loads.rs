@@ -276,8 +276,8 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     },
                 ],
                 expected_outcomes: &[
-                    "ok => 2,3,4,5 | batch   3 cursor windows of 2, read and committed one at a time, up to the source's maximum 5 (read at plan)",
-                    "ok => 2,3,4,5,6,7 | batch   2 cursor windows of 2, read and committed one at a time, up to the source's maximum 7 (read at plan)",
+                    "ok => 2,3,4,5 | batch   3 windows of 2, one commit each, up to the source's maximum 5 (read at plan)",
+                    "ok => 2,3,4,5,6,7 | batch   2 windows of 2, one commit each, up to the source's maximum 7 (read at plan)",
                 ],
             },
             BatchedScenarioTestCase {
@@ -293,9 +293,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     check_query: IDS,
                     show: "batch   ",
                 }],
-                expected_outcomes: &[
-                    "ok => 1,2 | batch   2 cursor windows of 1day, read and committed one at a time",
-                ],
+                expected_outcomes: &["ok => 1,2 | batch   2 windows of 1day, one commit each"],
             },
             BatchedScenarioTestCase {
                 description: "so does one given as RFC 3339; the plan notes the snapshot held open",
@@ -308,10 +306,10 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     destination_change: "",
                     end_cursor: Some("2026-11-03"),
                     check_query: IDS,
-                    show: "note    the windows",
+                    show: "note    windows",
                 }],
                 expected_outcomes: &[
-                    "ok => 3,4 | note    the windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)",
+                    "ok => 3,4 | note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)",
                 ],
             },
             BatchedScenarioTestCase {
@@ -379,7 +377,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     },
                 ],
                 expected_outcomes: &[
-                    "ok => 1,2,3,4,5 | batch   read in at order (an index leads with it, NULLs first), committing about every 1 GB between distinct values, each commit replacing its own cursor range",
+                    "ok => 1,2,3,4,5 | batch   about every 1 GB, in at order (an index leads with it, NULLs first), between distinct values; each commit replaces its own cursor range",
                     "ok => 1,2,3,5",
                     "raw.app__events: DuckDB => 1,2,3,5,6",
                 ],

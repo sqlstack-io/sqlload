@@ -4,7 +4,7 @@ use crate::helpers::{
     integration_and_orders, json_layouts, long_names, long_names_with_text, nanos_in_a_later_batch,
     nanos_newest, no_stage_or_channel, no_stage_or_host, no_user_stage, not_found, not_owned,
     nothing, old_leftovers, run_async, run_debug, run_route, similar_integration, stage_exists,
-    two_batches, two_days, with_text,
+    stage_on_other_integration, two_batches, two_days, with_text,
 };
 use crate::test_types::{
     DebugStageTestCase, MaskMatrixTestCase, RouteFileSet, RouteFiles, RouteTestCase,
@@ -14,7 +14,7 @@ const MANAGED: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\",
 const KEEPS: &str = "{ type = \"external_stage\", url = \"s3://fake-bucket/\", storage_integration = \"LAKE_INT\", region = \"us-east-1\", endpoint = \"FAKE\", keep_staged_files = true }";
 const OWN_STAGE: &str = "COPY INTO \"DB\".\"RAW\".\"ORDERS\"";
 const MANAGED_REF: &str = "FROM @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\"";
-const WRITES_PARQUET: &str = "write Parquet to";
+const WRITES_PARQUET: &str = "Parquet -> ";
 const FILES_STRATEGIES: [&str; 3] = [
     "write_strategy = \"append\"\n",
     "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\n",
@@ -31,9 +31,10 @@ const FORMATS: [(&str, &str, (RouteFileSet, &str)); 5] = [
     ("json", "format = \"json\"\n", (json_layouts, "v")),
     ("csv", "format = \"csv\"\n", (every_csv_type, "s")),
 ];
-const PULLS_ANY: &str = " files from s3://fake-bucket/src/";
+const PULLS_ANY: &str = "COPYs directly from s3://fake-bucket/src/";
 const READS: &str = " into Arrow";
-const PULLS: &str = "destination loads parquet files from s3://fake-bucket/src/";
+const PULLS: &str =
+    "Snowflake COPYs directly from s3://fake-bucket/src/ (nothing through the loader)";
 
 const USER: &str = "{ type = \"internal_user_stage\" }";
 const TABLE: &str = "{ type = \"internal_table_stage\" }";
@@ -67,7 +68,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "@~: one credentials fetch for the plan's probe and one for each of the two batches",
             file_set: two_batches,
-            expected_plan: &["write Parquet to internal stage @~"],
+            expected_plan: &["read parquet into Arrow -> Parquet -> PUT to @~ -> COPY"],
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @~/sqlload/",
@@ -80,14 +81,17 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "files no external stage covers fail the plan with the fix, never going through SQLLoad",
             settings: DIRECT,
-            expected_error: "cannot be read by Snowflake: no external stage covers it. Fix: add a storage integration",
+            expected_error: "cannot be read by Snowflake: no external stage covers it\n    └── fix     add a storage integration that allows this bucket (the fast path)",
             expected_unsent: &["COPY INTO"],
             ..BASE
         },
         RouteTestCase {
             description: "copy_to_internal_stage: the files are uploaded unchanged to @~ and Snowflake loads them there, then they are removed",
             settings: "write_strategy = \"append\"\ncopy_to_internal_stage = true",
-            expected_plan: &["copy_to_internal_stage"],
+            expected_plan: &[
+                "src/ uploaded unchanged to @~ -> COPY",
+                "copy_to_internal_stage: every file is downloaded and uploaded to @~ (much slower than a direct load).",
+            ],
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @~/sqlload/",
@@ -115,7 +119,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "@%table: an append into a table this load creates uses its own table stage",
             stage: TABLE,
-            expected_plan: &["write Parquet to internal stage @%table"],
+            expected_plan: &["Parquet -> PUT to @%table -> COPY"],
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @\"DB\".\"RAW\".%\"ORDERS\"/sqlload/",
@@ -247,6 +251,14 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             stage: KEEPS,
             prepare: old_leftovers,
             expected_staged_left: 2,
+            ..BASE
+        },
+        RouteTestCase {
+            description: "a stage on another integration fails the plan with the reason and the fix, not as a check that could not run",
+            stage: MANAGED,
+            prepare: stage_on_other_integration,
+            expected_error: "cannot be used: stage _SQLLOAD_STAGE uses storage integration OTHER_INT, but the connection names LAKE_INT\n    └── fix     drop the stage so SQLLoad recreates it, or correct storage_integration",
+            expected_unsent: &["COPY INTO"],
             ..BASE
         },
         RouteTestCase {

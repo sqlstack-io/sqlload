@@ -4,6 +4,9 @@ pub const SOURCE_BATCH_ROWS: usize = 65_536;
 /// The column where `plan` details start.
 pub const PLAN_DETAIL_COLUMN: usize = 52;
 
+/// The width of a plan detail's label and the space after it, as `route   `.
+pub const LABEL_WIDTH: usize = 8;
+
 /// The comparison reading a cursor's lower bound itself.
 pub const INCLUSIVE_BOUND: &str = ">=";
 
@@ -48,3 +51,16 @@ pub const PARALLEL_READERS: usize = 2;
 
 /// Tables Postgres estimates below this size (128 MiB) are read over one connection.
 pub const PARALLEL_READ_MIN_BYTES: i64 = 128 * 1024 * 1024;
+
+/// ANSI escapes for coloured output.
+pub const BOLD: &str = "\x1b[1m";
+/// Dimmed text: a heading's command note.
+pub const DIM: &str = "\x1b[2m";
+/// Errors and failures.
+pub const RED: &str = "\x1b[38;5;167m";
+/// A complete plan or load.
+pub const GREEN: &str = "\x1b[32m";
+/// Warnings.
+pub const YELLOW: &str = "\x1b[33m";
+/// Back to plain text.
+pub const RESET: &str = "\x1b[0m";

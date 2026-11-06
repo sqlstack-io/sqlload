@@ -19,6 +19,9 @@ pub struct Cli {
     /// Log output format.
     #[arg(long, global = true, value_enum, default_value_t = LogFormat::Text)]
     pub log_format: LogFormat,
+    /// Print without colour (also when `NO_COLOR` is set or the output is not a terminal).
+    #[arg(long, global = true)]
+    pub no_color: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -125,6 +128,9 @@ pub struct LoaderArgs {
     /// The most tables loading at once (default: the project's `concurrency`, else 4); one table's batches always commit one at a time.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     pub concurrency: Option<u16>,
+    /// `plan` only: print the plan as one JSON document.
+    #[arg(long)]
+    pub json: bool,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (for tests).
     #[arg(long, hide = true, value_parser = clap::value_parser!(u64).range(1..))]
     pub batch_bytes: Option<u64>,

@@ -49,3 +49,40 @@ pub(crate) struct BoundArrayTestCase {
     /// The bound as Arrow displays it.
     pub(crate) expected_value: &'static str,
 }
+
+pub(crate) struct RenderTallyTestCase {
+    pub(crate) description: &'static str,
+    /// The lines `apply` printed.
+    pub(crate) applied: &'static [&'static str],
+    /// Each table, its rows or failure, and its milliseconds.
+    pub(crate) outcomes: &'static [(&'static str, Result<u64, &'static str>, u64)],
+    pub(crate) elapsed_ms: u64,
+    pub(crate) expected_output: &'static str,
+}
+
+/// A plan item: its name, its action, and each detail's label and text.
+pub(crate) type ItemSpec = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+/// A plan view built from items, and the exact text `plan` prints for it.
+pub(crate) struct ViewLinesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) ok: bool,
+    pub(crate) summary: &'static str,
+    pub(crate) selected: usize,
+    pub(crate) objects: &'static [ItemSpec],
+    pub(crate) loads: &'static [ItemSpec],
+    pub(crate) errors: &'static [ItemSpec],
+    pub(crate) warnings: &'static [ItemSpec],
+    pub(crate) expected_output: &'static str,
+}
+
+/// Errors items before merging, and each merged item's name.
+pub(crate) struct MergedErrorsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) errors: &'static [ItemSpec],
+    pub(crate) expected_names: &'static [&'static str],
+}

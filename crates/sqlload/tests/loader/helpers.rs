@@ -376,7 +376,7 @@ pub(crate) async fn run_large_partition(
             WrittenRun {
                 files: first,
                 expected_error: "",
-                expected_plan: "2 batches of whole partitions (up to 1000 files or about 1 GB each); each batch's footers are combined",
+                expected_plan: "2 batches of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined",
             },
             WrittenRun {
                 files: vec![(rewritten.key, parquet_bytes(&rewritten)?)],
@@ -618,6 +618,17 @@ pub(crate) fn no_stage_or_channel(fake: &sqlload_testkit::fake_snowflake::models
 
 pub(crate) fn integration(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
     fake.state.lock().integrations.insert("LAKE_INT".to_owned());
+}
+
+/// The integration, and a `_SQLLOAD_STAGE` on the right URL that uses another one.
+pub(crate) fn stage_on_other_integration(
+    fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake,
+) {
+    integration(fake);
+    fake.state.lock().stages.insert(
+        "_SQLLOAD_STAGE".to_owned(),
+        ("s3://fake-bucket/".to_owned(), "OTHER_INT".to_owned()),
+    );
 }
 
 /// The integration, and a load folder a failed run left long ago.

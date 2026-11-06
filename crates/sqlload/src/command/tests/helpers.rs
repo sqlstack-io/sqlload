@@ -24,6 +24,28 @@ pub(crate) fn debug_without_host(project: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The command line `argv` (after `sqlload`) on `project` without a Python host: its output, or its error, then `exit 0` or `exit 1` on its own line.
+pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
+    let Ok(cli) = Cli::try_parse_from(["sqlload"].iter().chain(argv)) else {
+        return "unparsed".to_owned();
+    };
+    let request = LoaderRequest {
+        text: project,
+        config: Path::new("sqlload.toml"),
+        command: cli.command,
+        host: None,
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())
+        .and_then(|runtime| runtime.block_on(run_loader(request)))
+        .map_or_else(
+            |error| format!("{error}\nexit 1"),
+            |(lines, ok)| format!("{}\nexit {}", lines.join("\n"), u8::from(!ok)),
+        )
+}
+
 /// The selection and cursor options `sqlload load <argv>` plans with, as `select | exclude | start | end`, or the parse error.
 pub(crate) fn load_options(argv: &[&str]) -> Result<String, String> {
     let cli = Cli::try_parse_from(["sqlload", "load"].iter().chain(argv))

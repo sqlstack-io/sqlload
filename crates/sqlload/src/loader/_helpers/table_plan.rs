@@ -24,6 +24,7 @@ use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::FilesPlanRequest;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
+use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
@@ -412,6 +413,9 @@ async fn plan_table_once(
     schema
         .warnings
         .extend(hmac_warnings(spec, stage.as_ref(), destination));
+    schema
+        .warnings
+        .extend(truncated_nanoseconds(spec, live.as_deref()));
     let route = match schema.blocked {
         Some(_) => None,
         None => match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
@@ -422,6 +426,7 @@ async fn plan_table_once(
             }
         },
     };
+    schema.warnings.extend(copy_warning(route.as_ref()));
     let commits = commit_rule(&CommitRequest {
         spec,
         window: read.as_ref(),
@@ -568,6 +573,22 @@ fn hmac_warnings(
             )
         })
         .collect()
+}
+
+/// The warning for files `copy_to_internal_stage` downloads and uploads, which a storage integration would spare.
+fn copy_warning(route: Option<&Route>) -> Option<String> {
+    let [
+        Step::UseFiles(files),
+        Step::CopyFiles(Store::InternalStage(stage)),
+        Step::DestinationPulls(_),
+    ] = route?.steps.as_slice()
+    else {
+        return None;
+    };
+    Some(format!(
+        "copy_to_internal_stage: every file is downloaded and uploaded to {stage} (much slower than a direct load).\nA storage integration for {} avoids this.",
+        files.store
+    ))
 }
 
 /// The route a table's data takes into `destination`; `read` is a files table's planned read.

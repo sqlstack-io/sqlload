@@ -340,7 +340,7 @@ def test_given_a_large_generator_when_loading_then_batches_commit_along_the_way_
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT count(*), count(DISTINCT page) FROM "RAW"."api__big"') == [(200_000, 200)]
 	assert [path.name for path in (project / "tmp").iterdir() if path.name.startswith("sqlload-python-")] == []
-	assert "committing about every 1 GB" in sqlload(project, "plan", "api__big").stdout
+	assert "batch   about every 1 GB" in sqlload(project, "plan", "api__big").stdout
 
 
 def test_given_append_without_a_cursor_when_a_rerun_follows_a_failure_then_no_row_is_duplicated(project: Path) -> None:

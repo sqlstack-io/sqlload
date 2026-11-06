@@ -313,6 +313,7 @@ pub struct SharedRun {
 pub struct TableOutcome {
     pub table: String,
     pub loaded: Result<TableLoaded, String>,
+    pub elapsed: std::time::Duration,
 }
 
 /// What a table's load did: rows written, schema changes made on the way (Python tables), and a remark for the `loaded` line.
@@ -523,4 +524,43 @@ pub struct StateRequest {
     pub append: bool,
     /// The reset position (`--to`); `None` clears it.
     pub to: Option<String>,
+}
+
+/// One entry of a plan section: an object, a table load or a finding, with its labelled details.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PlanItem {
+    pub name: String,
+    /// What happens to it, printed after the name; empty for findings.
+    pub action: String,
+    pub details: Vec<PlanDetail>,
+}
+
+/// One line under a plan item: a short label (empty for a plain line) and its text, which may span lines.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PlanDetail {
+    pub label: String,
+    pub text: String,
+}
+
+/// A plan in sections, as `plan` prints it and `plan --json` writes it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PlanView {
+    /// Whether every selected table can load.
+    pub ok: bool,
+    /// The counts after `Plan ready`, nonzero clauses only.
+    pub summary: String,
+    pub selected: usize,
+    pub objects: Vec<PlanItem>,
+    pub loads: Vec<PlanItem>,
+    pub skipped: Vec<PlanItem>,
+    pub errors: Vec<PlanItem>,
+    pub warnings: Vec<PlanItem>,
+}
+
+/// One line of the tally `apply` and `load` end with: `created`, `altered`, `loaded` or `failed`, the object, and what happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TallyLine {
+    pub verb: &'static str,
+    pub name: String,
+    pub detail: String,
 }

@@ -22,7 +22,7 @@ pub(in crate::adapters) fn stage_problem(
     let folder = |text: &str| format!("{}/", text.trim().trim_end_matches('/'));
     if folder(&found.url) != folder(&url) {
         return Some(format!(
-            "stage {} reads {}, but the connection's stage url is {url}; point the stage at it or change the url",
+            "stage {} reads {}, but the connection's stage url is {url}. Fix: point the stage at it, or correct the url",
             found.name, found.url
         ));
     }
@@ -31,7 +31,7 @@ pub(in crate::adapters) fn stage_problem(
             if !found.storage_integration.eq_ignore_ascii_case(integration) =>
         {
             Some(format!(
-                "stage {} uses storage integration {}, but the connection names {integration}; drop the stage so SQLLoad recreates it, or change storage_integration",
+                "stage {} uses storage integration {}, but the connection names {integration}. Fix: drop the stage so SQLLoad recreates it, or correct storage_integration",
                 found.name, found.storage_integration
             ))
         }

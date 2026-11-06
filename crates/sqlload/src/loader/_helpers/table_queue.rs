@@ -36,14 +36,17 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
         host: shared.host.clone(),
         options: &shared.options,
     };
+    let started = std::time::Instant::now();
     match load_one(&run, &table).await {
         Ok((name, loaded)) => TableOutcome {
             table: name,
             loaded: Ok(loaded),
+            elapsed: started.elapsed(),
         },
         Err(error) => TableOutcome {
             table: sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination),
             loaded: Err(error.to_string()),
+            elapsed: started.elapsed(),
         },
     }
 }
@@ -114,6 +117,7 @@ impl<'a> TableQueue<'a> {
                 table: sql_adapter(table.spec.warehouse)
                     .render_display_name(&table.spec.destination),
                 loaded: Err(reason),
+                elapsed: std::time::Duration::ZERO,
             }),
         ));
     }
