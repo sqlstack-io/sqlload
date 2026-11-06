@@ -28,7 +28,6 @@ pub(crate) fn findings(
             physical_type: None,
         }];
     };
-    let own = |name: &str| name.to_ascii_lowercase().starts_with(SQLLOAD_COLUMN_PREFIX);
     let declared_type = |name: &str| {
         declared
             .iter()
@@ -36,7 +35,7 @@ pub(crate) fn findings(
     };
     let mut found: Vec<ContractFinding> = live
         .iter()
-        .filter(|column| !own(&column.name))
+        .filter(|column| !is_own(&column.name))
         .filter_map(|column| live_finding(column, declared_type(&column.name), contract, warehouse))
         .collect();
     found.extend(
@@ -54,6 +53,11 @@ pub(crate) fn findings(
     found
 }
 
+/// Whether SQLLoad added the column itself (`_sqlload_*`).
+pub(crate) fn is_own(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with(SQLLOAD_COLUMN_PREFIX)
+}
+
 /// Whether `live` has a column named `name`, ignoring case.
 fn is_live(live: &[LiveColumn], name: &str) -> bool {
     live.iter()
@@ -61,7 +65,7 @@ fn is_live(live: &[LiveColumn], name: &str) -> bool {
 }
 
 /// Whether `live` stores what `declared` declares: the same type, or one the warehouse renders the same way.
-fn agrees(warehouse: Warehouse, declared: &ColumnType, live: &ColumnType) -> bool {
+pub(crate) fn agrees(warehouse: Warehouse, declared: &ColumnType, live: &ColumnType) -> bool {
     let sql = |column_type: &ColumnType| {
         sql_adapter(warehouse)
             .render_loader_logical_type(column_type)

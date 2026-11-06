@@ -63,7 +63,7 @@ pub enum Command {
         #[command(subcommand)]
         action: StateAction,
     },
-    /// Compare each table's declared columns with its live table; read-only, exits 1 when they differ.
+    /// Compare each table's declared columns with its live table, or adopt the live columns into the declarations; exits 1 when they differ.
     Contract {
         #[command(subcommand)]
         action: ContractAction,
@@ -77,6 +77,21 @@ pub enum Command {
 pub enum ContractAction {
     /// Report each selected table's declared columns that differ from its live table, and on `contract = "enforced"` tables its undeclared live columns.
     Diff(ContractArgs),
+    /// Propose declared `columns` from each selected table's live table; `--write` writes them into sqlload.toml (Python tables print theirs to paste).
+    Generate(ContractGenerateArgs),
+}
+
+/// `sqlload contract generate`'s selection and what it may change.
+#[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
+pub struct ContractGenerateArgs {
+    #[command(flatten)]
+    pub tables: ContractArgs,
+    /// Write the declarations into sqlload.toml.
+    #[arg(long)]
+    pub write: bool,
+    /// Also retype declared columns whose live type differs, and remove declared columns the live table lacks.
+    #[arg(long, requires = "write")]
+    pub overwrite: bool,
 }
 
 /// Table selection and output for `sqlload contract`.

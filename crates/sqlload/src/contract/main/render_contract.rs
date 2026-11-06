@@ -1,6 +1,6 @@
-//! A contract report as `sqb contract diff` prints it.
+//! A contract report as `sqb contract diff` and `sqb contract generate` print it.
 
-use crate::contract::models::ContractReport;
+use crate::contract::models::{Adoption, ContractReport};
 
 /// The report's lines (one JSON document with `json`), and whether everything agrees: no difference and no problem.
 pub fn render_contract(report: &ContractReport, json: bool) -> (Vec<String>, bool) {
@@ -25,6 +25,7 @@ pub fn render_contract(report: &ContractReport, json: bool) -> (Vec<String>, boo
                 .iter()
                 .map(|finding| format!("        {}: {}", finding.kind, finding.message)),
         );
+        lines.extend(resource.adoption.iter().flat_map(adoption_lines));
     }
     lines.extend(
         report
@@ -32,7 +33,57 @@ pub fn render_contract(report: &ContractReport, json: bool) -> (Vec<String>, boo
             .iter()
             .map(|problem| format!("  ERROR {problem}")),
     );
+    let unwritten = report
+        .resources
+        .iter()
+        .filter_map(|resource| resource.adoption.as_ref())
+        .any(|adoption| adoption.paste.is_none());
+    if unwritten && report.written_paths.is_empty() {
+        lines.push(String::new());
+        lines.push("Run contract generate --write to update sqlload.toml.".to_owned());
+    }
+    if !report.written_paths.is_empty() {
+        lines.push(String::new());
+        lines.push("Updated repository declarations:".to_owned());
+        lines.extend(report.written_paths.iter().map(|path| format!("  {path}")));
+    }
     lines.push(String::new());
     lines.push(format!("{} contract difference(s)", report.differences));
     (lines, agrees)
+}
+
+/// What an adoption declares: one line per column for sqlload.toml, the `columns={...}` to paste for a Python table.
+fn adoption_lines(adoption: &Adoption) -> Vec<String> {
+    if let Some(paste) = &adoption.paste {
+        return vec![
+            format!(
+                "        adopt: paste into the table's declaration in {}",
+                adoption.location
+            ),
+            format!("          {paste}"),
+        ];
+    }
+    let mut lines = vec![format!("        adopt: columns of {}", adoption.location)];
+    lines.extend(
+        adoption
+            .columns
+            .iter()
+            .map(|column| match &column.declared_type {
+                Some(declared) => format!(
+                    "          ~ {} = \"{}\" (declared {declared})",
+                    column.column, column.physical_type
+                ),
+                None => format!(
+                    "          + {} = \"{}\"",
+                    column.column, column.physical_type
+                ),
+            }),
+    );
+    lines.extend(
+        adoption
+            .removed
+            .iter()
+            .map(|name| format!("          - {name} (not in the live table)")),
+    );
+    lines
 }
