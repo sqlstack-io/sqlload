@@ -1,3 +1,5 @@
+#[path = "tests/test_flatten_batch.rs"]
+mod flatten_batch;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_json_rows.rs"]

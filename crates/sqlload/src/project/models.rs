@@ -365,6 +365,9 @@ pub struct TableOverride {
     pub exclude_columns: Vec<String>,
     #[serde(default)]
     pub allow_columns: Vec<String>,
+    /// Top-level objects of a Python table expanded one level into `<object>__<key>` columns; everything else nested stays JSON.
+    #[serde(default)]
+    pub flatten: Vec<String>,
 }
 
 /// How a masked column's values are replaced.
