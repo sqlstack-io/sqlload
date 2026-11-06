@@ -139,8 +139,8 @@ this branch, median of 3:
 
 | Rows | Path | Wall | CPU | Peak RSS |
 |---|---|---|---|---|
-| 10M | SQLLoad, DuckDB reads S3 | 11.3 s | 10.3 s | 1,450 MB |
-| 10M, local files | SQLLoad, DuckDB reads the folder | 2.7 s | 8.0 s | 990 MB |
+| 10M | SQLLoad, DuckDB reads S3 | 10.9 s | 10.4 s | 1,485 MB |
+| 10M, local files | SQLLoad, DuckDB reads the folder | 2.6 s | 9.2 s | 985 MB |
 
 What remains of the gap is SQLLoad's own requests before the load (listing, then footers at plan and
 again for each batch), each about 400 ms across regions here, and `replace` building the table aside
