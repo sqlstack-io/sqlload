@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.12.0](https://github.com/sqlstack-io/sqlload/compare/v0.11.1...v0.12.0) (2026-11-06)
+
+
+### Features
+
+* **cli:** sqlload contract generate proposes and writes declared columns from live tables ([#57](https://github.com/sqlstack-io/sqlload/issues/57)) ([d29f3a5](https://github.com/sqlstack-io/sqlload/commit/d29f3a5b53ac2cbaebe8ca7ad3b3de9185f1b237))
+
+
+### Bug Fixes
+
+* **snowflake:** copy_to_internal_stage matches staged files by their @~/ names ([#56](https://github.com/sqlstack-io/sqlload/issues/56)) ([804de24](https://github.com/sqlstack-io/sqlload/commit/804de2498cc46614badbbcda925169f015a51a2a))
+
+
+### Documentation
+
+* **bench:** publish benchmark results where SQLLoad wins or is at parity ([#53](https://github.com/sqlstack-io/sqlload/issues/53)) ([8a26279](https://github.com/sqlstack-io/sqlload/commit/8a2627981372571a591db25b00af0e4d96db4c38))
+
 ## [0.11.1](https://github.com/sqlstack-io/sqlload/compare/v0.11.0...v0.11.1) (2026-11-06)
 
 
