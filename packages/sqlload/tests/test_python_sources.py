@@ -763,6 +763,18 @@ def test_given_a_partitioned_files_target_when_diffing_then_the_newest_partition
 	assert (broken.returncode, [finding["kind"] for finding in json.loads(broken.stdout)["resources"][0]["findings"]]) == (1, ["inspection_unavailable"]), broken.stdout + broken.stderr
 
 
+def test_given_a_cursor_left_undeclared_after_a_load_when_diffing_a_partitioned_files_target_then_it_reads_partitions_as_plan_does(tmp_path: Path) -> None:
+	toml = FILES_PROJECT.replace('path = "{table}/"', 'path = "{table}/day={cursor:date}/"')
+	project = make_project(tmp_path, toml, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', columns={'day': 'date', 'v': 'text'})(rows)\n")
+	give(project, "rows", [{"id": 1, "v": "a", "day": "2026-01-01"}])
+	load(project)
+	shop = project / "sources" / "shop.py"
+	shop.write_text(shop.read_text().replace("'day': 'date', ", ""))
+	(project / "lake" / "rows" / "stray.parquet").write_bytes(next((project / "lake" / "rows").glob("day=*/*.parquet")).read_bytes())
+	diff = sqlload(project, "contract", "diff")
+	assert (diff.returncode, "stray.parquet is not in a partition folder" in diff.stdout) == (1, True), diff.stdout + diff.stderr
+
+
 def test_given_an_enforced_contract_without_declared_columns_when_planning_then_the_table_is_blocked(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', contract='enforced')(rows)\n")
 	done = sqlload(project, "plan")

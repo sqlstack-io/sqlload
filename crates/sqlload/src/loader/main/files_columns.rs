@@ -9,12 +9,13 @@ use crate::files_source::constants::CONCURRENT_FOOTER_READS;
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
 use crate::loader::_helpers::destination::{live_schema, table_folder};
+use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::table_plan::{check_output, desired_columns, read_columns};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{FileSchema, FilesColumns, TableSpec};
 use crate::schema_plan::models::LiveColumn;
 
-/// `spec`'s folder in `destination` and the newest load's schema in its newest partition, as `plan` reads it (capped by `max_footer_reads`); with `all_files`, uncapped, and every data file's own columns too. Reads footers only.
+/// `spec`'s folder in `destination` and the newest load's schema in its newest partition, as `plan` reads it, again with the live columns for a Python table as `plan` does (capped by `max_footer_reads`); with `all_files`, uncapped, and every data file's own columns too. Reads footers only.
 pub async fn files_columns(
     spec: &TableSpec,
     destination: &FilesDestination,
@@ -43,6 +44,11 @@ pub async fn files_columns(
     match live_schema(&folder, &state.listed, cap).await? {
         Ok(live) => columns.live = live.live,
         Err(problems) => columns.problems.extend(problems),
+    }
+    if cursor_type.is_none()
+        && let Some(augmented) = with_live_columns(spec, columns.live.as_deref())
+    {
+        return Box::pin(files_columns(&augmented, destination, all_files)).await;
     }
     if all_files {
         let every: Vec<StoredFile> = state
