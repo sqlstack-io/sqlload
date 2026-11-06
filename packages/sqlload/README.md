@@ -127,6 +127,18 @@ running it. A password written into a URI never reaches the printed project, pla
 the project refers to it as `${ENV:SQLLOAD_COPY_SOURCE_PASSWORD}` (or `..._DESTINATION_...`) and
 `copy` warns that `${ENV:NAME}` in the URI keeps it out of shell history.
 
+## Checking declarations
+
+`sqlload contract diff [SELECTOR ...]` compares each selected table's declared `columns` with
+its live table, in SQLLoad's portable types, and changes nothing. It reads only the warehouse;
+sources are listed to find their tables but never read. It reports a declared column whose live
+type differs (`type_mismatch`), a declared column the table lacks (`missing_physical_column`), a
+table that does not exist yet (`relation_missing`) and, on `contract = "enforced"` tables, live
+columns nothing declares (`missing_declaration`); SQLLoad's own `_sqlload_*` columns never count.
+It exits 0 when every table agrees and 1 otherwise. `--from TARGET` reads every table from that
+target instead of its own, and `--json` prints the report as one document, in the same shape as
+`sqb contract diff --json`.
+
 ## Descriptions
 
 A table someone writes needs a description, which becomes the destination table's comment;
