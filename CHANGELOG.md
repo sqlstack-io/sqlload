@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/sqlstack-io/sqlload/compare/v0.10.0...v0.11.0) (2026-11-06)
+
+
+### Features
+
+* **duckdb:** DuckDB reads Parquet in S3 or a local folder itself ([#49](https://github.com/sqlstack-io/sqlload/issues/49)) ([07a6510](https://github.com/sqlstack-io/sqlload/commit/07a65104e7d0410f41b1ba0b3b892631e8eab96d))
+
 ## [0.10.0](https://github.com/sqlstack-io/sqlload/compare/v0.9.0...v0.10.0) (2026-11-06)
 
 
