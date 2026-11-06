@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 FENSU := uvx --from 'fensu-cli==0.28.3' --with 'fensu==0.28.3' fensu
 
-.PHONY: check check-ci test test-unit test-containers test-python verify bench-perf bench-wheel bench-compare bench-snowflake bench-e2e test-bench-harness
+.PHONY: check check-ci clean-partial-duckdb-sources test test-unit test-containers test-python verify bench-perf bench-wheel bench-compare bench-snowflake bench-e2e test-bench-harness
 
 # Lints the default build (DuckDB included) and the build without DuckDB, so both keep compiling.
 check:
@@ -20,6 +20,14 @@ check-ci:
 
 test-unit:
 	cargo test --workspace --lib --quiet
+
+# CI's rust-cache can restore DuckDB's unpacked bundled sources without their `.complete` marker;
+# libduckdb-sys then fails to unpack over them ("Directory not empty") whenever its build script
+# reruns, such as after a feature change. Removes only such incomplete trees.
+clean-partial-duckdb-sources:
+	@for dir in target/duckdb-sources/*/; do \
+		[ -d "$$dir" ] && [ ! -e "$$dir.complete" ] && echo "removing incomplete $$dir" && rm -rf "$$dir"; \
+	done; true
 
 # Needs Docker: Redpanda, Postgres and SeaweedFS (S3) containers, a local fake Snowflake, and DuckDB.
 # The AWS variables are the test containers' credentials.

@@ -33,6 +33,7 @@ jobs:
         with:
           shared-key: containers
           save-if: false
+      - run: make clean-partial-duckdb-sources
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.9"

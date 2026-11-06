@@ -7,3 +7,6 @@ pub mod errors;
 #[cfg(feature = "duckdb")]
 pub mod main;
 pub mod models;
+
+#[cfg(all(test, feature = "duckdb"))]
+mod tests;

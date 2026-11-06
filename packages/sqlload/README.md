@@ -267,6 +267,20 @@ those files go through SQLLoad, which `plan` warns is much slower.
 
 Files sources add `_sqlload_source_row`, a row's number in its file from 1.
 
+### How files reach DuckDB
+
+Parquet files in S3 or a local folder load into DuckDB directly: DuckDB reads them with
+`read_parquet`, with the same values SQLLoad's own reader gives. `plan` names the route per table.
+Tables DuckDB cannot load exactly go through SQLLoad's reader instead: other formats, a custom S3
+endpoint (in the connection or `AWS_ENDPOINT`/`AWS_ENDPOINT_URL`), masks, a file column named
+`filename` or `file_row_number`, nanosecond or epoch timestamps and other types DuckDB would not
+read exactly, a column loaded as a type other than the files hold, or glob characters in a path. A
+later batch whose files hold a column differently fails the load, naming the column.
+
+The first S3 load installs DuckDB's `httpfs` extension into `~/.duckdb`, and `aws` too when
+credentials come from the AWS credential chain rather than `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY`. That needs the network once. Local folders need nothing extra.
+
 ### Logged state
 
 A table whose position the data cannot carry (an API sync token, say) sets `state="logged"` and
