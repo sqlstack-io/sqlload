@@ -76,8 +76,8 @@ impl SnowflakeWriter {
                 );
                 CopyPlace {
                     stage: format!("@{USER_STAGE}"),
-                    folder: folder.clone(),
-                    filename_prefix: folder,
+                    filename_prefix: format!("@{USER_STAGE}/{folder}"),
+                    folder,
                     uploaded: true,
                 }
             }

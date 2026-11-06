@@ -162,7 +162,7 @@ pub struct DirectCopy<'a> {
     pub stage: &'a str,
     /// The files' folder below the stage, which `FILES` names them in.
     pub folder: &'a str,
-    /// What `METADATA$FILENAME` starts each file's name with: the folder's bucket-relative key on an external stage, the folder itself on an internal one.
+    /// What `METADATA$FILENAME` starts each file's name with: the folder's bucket-relative key on an external stage, `@~/` and the folder on the user stage.
     pub filename_prefix: &'a str,
     /// The files source's folder.
     pub source: &'a Location,

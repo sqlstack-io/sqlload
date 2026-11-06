@@ -30,7 +30,7 @@ pub(crate) const INTERNAL: CopyFrom = CopyFrom {
     source: "other/",
     stage: "@~",
     folder: "sqlload/L/00001/",
-    filename_prefix: "sqlload/L/00001/",
+    filename_prefix: "@~/sqlload/L/00001/",
 };
 
 /// The `COPY` statements for `files` staged parts of batch 1 of load `load-1`: how many, and the first.
