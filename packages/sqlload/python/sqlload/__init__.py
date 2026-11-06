@@ -18,8 +18,8 @@ def orders(ctx: sl.Context):
 The table loads into `shop__orders` (`{source}__{table}`, or the `table_name` the source or table
 sets).
 
-A table function yields dicts, lists of dicts, `sl.json(...)` / `sl.ndjson(...)` bytes, or Arrow
-data (pyarrow, polars, pandas); SQLLoad detects which.
+A table function yields dicts, lists of dicts, `sl.json(...)` / `sl.ndjson(...)` bytes, Arrow
+data (pyarrow, polars, pandas), or `sl.http(...)` jobs that run in Rust; SQLLoad detects which.
 """
 
 import os
@@ -28,18 +28,31 @@ import sysconfig
 from importlib.metadata import version
 
 from sqlload._data import json, ndjson
+from sqlload._http import Http, Job, api_key, basic, bearer, cursor, http, link_header, next_link, offset, page_number, single
 from sqlload._declare import Context, Source, Table, source, table
 
 __version__: str = version("sqlload")
 
 __all__ = [
 	"Context",
+	"Http",
+	"Job",
 	"Source",
 	"Table",
 	"__version__",
+	"api_key",
+	"basic",
+	"bearer",
+	"cursor",
 	"executable",
+	"http",
 	"json",
+	"link_header",
 	"ndjson",
+	"next_link",
+	"offset",
+	"page_number",
+	"single",
 	"source",
 	"table",
 ]

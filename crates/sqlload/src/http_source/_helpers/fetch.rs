@@ -64,11 +64,10 @@ async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
     };
     let status = response.status().as_u16();
     let after = retry_after(&response);
-    let next_link = response
-        .headers()
-        .get(LINK)
-        .and_then(|link| link.to_str().ok())
-        .and_then(link_header_next);
+    let next_link = match response.headers().get(LINK).map(|link| link.to_str()) {
+        Some(Ok(link)) => link_header_next(link),
+        Some(Err(_)) | None => None,
+    };
     let body = response
         .bytes()
         .await
@@ -102,14 +101,11 @@ async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
 
 /// The wait a `Retry-After` header in seconds asks for, capped.
 fn retry_after(response: &reqwest::Response) -> Option<Duration> {
-    let seconds: u64 = response
-        .headers()
-        .get(RETRY_AFTER)?
-        .to_str()
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
+    let header = response.headers().get(RETRY_AFTER)?;
+    let seconds = match header.to_str().map(|text| text.trim().parse::<u64>()) {
+        Ok(Ok(seconds)) => seconds,
+        Ok(Err(_)) | Err(_) => return None,
+    };
     Some(Duration::from_secs(seconds).min(MAX_RETRY_AFTER))
 }
 

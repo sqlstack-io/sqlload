@@ -24,7 +24,7 @@ pub(crate) async fn paginate(
         let Some(fetched) = fetch(calls, &url).await? else {
             return Ok(());
         };
-        let next = next_url(request, (&first, &url), &fetched, &rows, step)?;
+        let next = next_url(request, (&first, &url), (&fetched, &rows, step))?;
         let page = HttpPage {
             bytes: fetched.bytes,
             path: rows_path.clone(),
@@ -71,9 +71,7 @@ fn start_params(paginator: &Paginator) -> Vec<(String, String)> {
 fn next_url(
     request: &Request,
     (first, current): (&Url, &Url),
-    fetched: &Fetched,
-    rows: &Selector,
-    step: u64,
+    (fetched, rows, step): (&Fetched, &Selector, u64),
 ) -> Result<Option<Url>, String> {
     let document = || -> Result<Value, String> {
         serde_json::from_slice(&fetched.bytes)

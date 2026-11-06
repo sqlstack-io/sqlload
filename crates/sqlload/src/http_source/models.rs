@@ -10,9 +10,9 @@ use serde_json::{Map, Value};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HttpJob {
     /// Every page of one endpoint.
-    Paginate(Request),
+    Paginate(Box<Request>),
     /// Every page of one endpoint per key of `over`, up to `concurrency` endpoints at once.
-    FanOut(FanOut),
+    FanOut(Box<FanOut>),
 }
 
 /// One endpoint and how to page through it.
@@ -49,7 +49,7 @@ pub enum Over {
     /// Scalars (filling the path's one placeholder) or objects (filling placeholders by name).
     Values { values: Vec<Value> },
     /// The values its `select` (`$.items[*].id`) picks from every page, named after the last field.
-    Paginate(Request),
+    Paginate(Box<Request>),
 }
 
 /// The connection a job uses and how it calls it.
@@ -189,5 +189,5 @@ pub struct Fetched {
 #[derive(Debug)]
 pub enum KeyFeed {
     Values(Vec<Value>),
-    Pages(Calls, Request),
+    Pages(Box<(Calls, Request)>),
 }

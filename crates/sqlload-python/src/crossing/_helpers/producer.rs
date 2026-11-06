@@ -16,7 +16,7 @@ use sqlload::row_batches::models::{JsonLayout, JsonRead};
 use crate::bindings::models::JsonData;
 use crate::crossing::_helpers::parser::{panic_if, panicked};
 use crate::crossing::_helpers::walk::walk_rows;
-use crate::crossing::constants::CROSSING_DEFAULT;
+use crate::crossing::constants::{CROSSING_DEFAULT, HTTP_JOB_METHOD};
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{
     Crossed, CrossingOptions, CrossingStats, DictCrossing, Dispatch, PanicSite,
@@ -126,6 +126,10 @@ impl<'py> Producer<'py> {
             };
             let bytes = json.bytes.clone_ref(self.py);
             return Ok(self.flush()? && self.send(Crossed::Json { bytes, read })?);
+        }
+        if item.hasattr(HTTP_JOB_METHOD)? {
+            let definition: String = item.call_method0(HTTP_JOB_METHOD)?.extract()?;
+            return Ok(self.flush()? && self.send(Crossed::Http(definition))?);
         }
         if item.hasattr("__arrow_c_stream__")? {
             let reader = RecordBatchStreamReader::from_pyarrow_bound(item)?;
@@ -248,6 +252,6 @@ fn unsupported(item: &Bound<'_, PyAny>) -> String {
         false => "",
     };
     format!(
-        "a table function yielded a {name}; yield dicts, lists of dicts, sl.json(...) or sl.ndjson(...) bytes, or Arrow data (pyarrow, polars, pandas){hint}"
+        "a table function yielded a {name}; yield dicts, lists of dicts, sl.json(...) or sl.ndjson(...) bytes, Arrow data (pyarrow, polars, pandas), or sl.http(...) jobs{hint}"
     )
 }

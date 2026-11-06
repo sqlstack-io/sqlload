@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlload._declare import Connection, Context, Source, Table
+from sqlload._http import Job
 
 #: Folders under `python_paths` never imported: virtual environments, build output and caches.
 SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-packages", "node_modules"})
@@ -107,7 +108,9 @@ def start_table(request: str) -> Iterator[Any]:
 	)
 	_contexts[table.name] = ctx
 	yielded = table.function(ctx)
-	return iter(()) if yielded is None else iter(yielded)
+	if yielded is None:
+		return iter(())
+	return iter([yielded]) if isinstance(yielded, Job) else iter(yielded)
 
 
 def current_state(table: str) -> str | None:
