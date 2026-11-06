@@ -8,16 +8,22 @@ use crate::copy::models::{Endpoint, Role};
 /// The endpoint `text` names at `role`: `connection:locator` for a connection in `connections` (or a bare name), a URI, or a local folder; every message shows `text` with its password redacted.
 pub(crate) fn endpoint(text: &str, role: Role, connections: &Table) -> Result<Endpoint, String> {
     let shown = redacted_uri(text);
+    let known = |name: &str| connections.contains_key(name);
     match (text.split_once("://"), text.split_once(':')) {
         (Some((scheme, rest)), _) => uri_endpoint(&shown, scheme, rest, role),
-        (None, Some((name, locator))) if connections.contains_key(name) => {
-            named((name, locator), &shown, connections, role)
+        (None, Some((name, locator)))
+            if one_slash_uri(name, locator) && (!known(name) || text.contains('@')) =>
+        {
+            Err(format!(
+                "the {} {shown} looks like a URI with one slash; write {name}://...",
+                role.label()
+            ))
         }
-        (None, Some((name, locator))) if one_slash_uri(name, locator) => Err(format!(
-            "the {} {shown} looks like a URI with one slash; write {name}://...",
+        (None, _) if text.contains('@') => Err(format!(
+            "the {} {shown} has an @ but no scheme; write a URI such as postgresql://user:${{ENV:PGPASSWORD}}@host/db#schema.table, or connection:schema.table",
             role.label()
         )),
-        (None, Some((name, locator))) if names_connection(name, locator) => {
+        (None, Some((name, locator))) if known(name) || names_connection(name, locator) => {
             named((name, locator), &shown, connections, role)
         }
         (None, Some(_) | None) => Ok(folder(text, &shown)),
@@ -27,9 +33,9 @@ pub(crate) fn endpoint(text: &str, role: Role, connections: &Table) -> Result<En
 /// `text` with the password of any `user:password@` redacted, whether or not it parses as a URI.
 pub(crate) fn redacted_uri(text: &str) -> String {
     let start = text
-        .find("://")
-        .map(|index| index + 3)
-        .or_else(|| text.find(":/").map(|index| index + 2))
+        .find(':')
+        .filter(|colon| text[colon + 1..].starts_with('/'))
+        .map(|colon| text.len() - text[colon + 1..].trim_start_matches('/').len())
         .unwrap_or(0);
     let Some(at) = text.rfind('@').filter(|at| *at >= start) else {
         return text.to_owned();
@@ -123,7 +129,9 @@ fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoin
     let at = userinfo_end(rest).ok_or_else(|| problem("it names no user"))?;
     let (userinfo, after) = (&rest[..at], &rest[at + 1..]);
     let (place, locator) = after.split_once('#').unwrap_or((after, ""));
-    let slash = find_outside(place, '/', false).ok_or_else(|| problem("it names no database"))?;
+    let slash = find_outside(place, '/', false)
+        .filter(|_| find_outside(place, '@', false).is_none())
+        .ok_or_else(|| problem("it names no database"))?;
     let (host_port, database) = (&place[..slash], &place[slash + 1..]);
     if database.is_empty() || database.contains(['/', '?']) {
         return Err(problem("it names no database, or has a query"));
@@ -180,7 +188,7 @@ fn host_and_port(text: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// The `@` ending the userinfo: the last one outside `${...}` that a `/database` follows before any `#`, so `#` may appear in the password and `@` in the table.
+/// The `@` ending the userinfo: the last one outside closed `${...}` spans that a `/database` follows before any `#`, so `#` may be in the password and `@` in the table; else the last such `@`.
 fn userinfo_end(rest: &str) -> Option<usize> {
     let ends_userinfo = |at: &usize| {
         let after = &rest[at + 1..];
@@ -188,9 +196,13 @@ fn userinfo_end(rest: &str) -> Option<usize> {
             .find('/')
             .is_some_and(|slash| after.find('#').is_none_or(|hash| slash < hash))
     };
-    let mut candidates: Vec<usize> = rest.match_indices('@').map(|(at, _)| at).collect();
-    candidates.retain(|at| find_outside(&rest[..=*at], '@', true) == Some(*at));
-    candidates.into_iter().rev().find(ends_userinfo)
+    let outside = outside_positions(rest, '@');
+    outside
+        .iter()
+        .rev()
+        .find(|at| ends_userinfo(at))
+        .or(outside.last())
+        .copied()
 }
 
 /// Whether a password is one `${ENV:NAME}` reference rather than literal text.
@@ -210,19 +222,23 @@ fn is_reference(password: &str) -> bool {
 
 /// Where `character` is in `text` outside closed `${...}` spans: its first place, or its last with `last`.
 fn find_outside(text: &str, character: char, last: bool) -> Option<usize> {
+    let positions = outside_positions(text, character);
+    match last {
+        true => positions.last().copied(),
+        false => positions.first().copied(),
+    }
+}
+
+/// Every place `character` is in `text` outside closed `${...}` spans.
+fn outside_positions(text: &str, character: char) -> Vec<usize> {
     let mut depth = 0_usize;
-    let mut found: Option<usize> = None;
+    let mut found: Vec<usize> = Vec::new();
     let mut previous = '\0';
     for (index, current) in text.char_indices() {
         match current {
             '{' if previous == '$' && text[index..].contains('}') => depth += 1,
             '}' if depth > 0 => depth -= 1,
-            _ if current == character && depth == 0 => {
-                found = Some(index);
-                if !last {
-                    return found;
-                }
-            }
+            _ if current == character && depth == 0 => found.push(index),
             _ => {}
         }
         previous = current;
