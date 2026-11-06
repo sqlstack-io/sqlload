@@ -6,6 +6,7 @@ use crate::adapters::dispatch::main::dialect::files_destination::files_destinati
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::models::FilesDestination;
+use crate::column_types::models::ColumnType;
 use crate::contract::_helpers::adopt::adoption;
 use crate::contract::_helpers::compare::findings;
 use crate::contract::_helpers::file_drift::file_drift;
@@ -15,7 +16,7 @@ use crate::contract::models::{ContractFinding, ContractReport, ContractRequest, 
 use crate::loader::errors::LoaderError;
 use crate::loader::main::files_columns::files_columns;
 use crate::loader::main::selected_specs::selected_specs;
-use crate::loader::models::{PlanOptions, TableSpec};
+use crate::loader::models::{FilesColumns, PlanOptions, TableSpec};
 use crate::project::models::ProjectConfig;
 
 /// Each selected table's differences, reading only the destinations (sources are listed for their tables, never read); `request.from` reads every table from that target instead of its own, resolving its database and schema there as if the source loaded into it, and `request.generate` adds each table's adoption, except for tables whose own target is another kind of warehouse than `from`, which are problems. A table on a files target is compared with its newest load's footers, as `plan` reads them, and with `request.all_files` every file's footer is compared with that load too.
@@ -48,7 +49,7 @@ pub async fn compare_contracts(
             false => request.generate,
         };
         let resource = match files_destination(destination) {
-            Some(files) => files_resource(spec, files, (generate, request.all_files)).await?,
+            Some(files) => files_resource(spec, files, (generate, request.all_files)).await,
             None => resource(spec, destination, generate).await,
         };
         report.resources.push(resource);
@@ -99,13 +100,19 @@ async fn resource(
     }
 }
 
-/// One files table's comparison: declared columns against the newest load's footers, `relation_missing` before any file; with `all_files`, also each column on which older files differ from that load. Folder and footer problems are `inspection_unavailable` findings.
+/// One files table's comparison: declared columns against the newest load's footers, `relation_missing` before any file; with `all_files`, also each column on which older files differ from that load. Folder, listing and footer problems (an unreadable file, a store error) are `inspection_unavailable` findings; footer types with no portable type are never adopted, since their type would be the reason, not a type.
 async fn files_resource(
     spec: &TableSpec,
     destination: &FilesDestination,
     (generate, all_files): (Option<bool>, bool),
-) -> Result<ContractResource, LoaderError> {
-    let read = files_columns(spec, destination, all_files).await?;
+) -> ContractResource {
+    let read = match files_columns(spec, destination, all_files).await {
+        Ok(read) => read,
+        Err(error) => FilesColumns {
+            problems: vec![error.to_string()],
+            ..FilesColumns::default()
+        },
+    };
     let relation = match read.folder.is_empty() {
         true => spec.destination.table.clone(),
         false => read.folder.clone(),
@@ -133,16 +140,18 @@ async fn files_resource(
     if let Some(live) = read.live.as_deref().filter(|_| readable) {
         found.extend(file_drift(live, &read.files));
     }
-    let adoption = read
-        .live
-        .filter(|_| readable)
-        .zip(generate)
-        .and_then(|(live, overwrite)| adoption(spec, &live, overwrite));
-    Ok(ContractResource {
+    let adoption = match (read.live.filter(|_| readable), generate) {
+        (Some(mut live), Some(overwrite)) => {
+            live.retain(|column| !matches!(column.column_type, ColumnType::Native(_)));
+            adoption(spec, &live, overwrite)
+        }
+        _ => None,
+    };
+    ContractResource {
         findings: found,
         relation,
         resource_name: spec.destination.table.clone(),
         resource_type: "table",
         adoption,
-    })
+    }
 }

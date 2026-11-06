@@ -582,6 +582,14 @@ pub struct FilesColumns {
     pub live: Option<Vec<LiveColumn>>,
     /// Why the folder or the newest load's schema cannot be read.
     pub problems: Vec<String>,
-    /// Every data file's own columns, by key below the folder, oldest partition first; only when every footer was asked for.
-    pub files: Vec<(String, Vec<LiveColumn>)>,
+    /// Every data file's own columns, oldest partition first; only when every footer was asked for.
+    pub files: Vec<FileSchema>,
+}
+
+/// One data file's columns, from its footer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSchema {
+    /// The key below the table's folder.
+    pub key: String,
+    pub columns: Vec<LiveColumn>,
 }

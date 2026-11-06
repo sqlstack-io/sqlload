@@ -10,8 +10,7 @@ use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{LiveFiles, TableSpec};
-use crate::loader::models::{LoadRun, ProjectPlan, TablePlan};
+use crate::loader::models::{LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec};
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::schema_plan::models::LiveColumn;
 

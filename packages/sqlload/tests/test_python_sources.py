@@ -740,6 +740,29 @@ def test_given_a_files_target_with_an_older_file_of_other_columns_when_diffing_a
 	]
 
 
+def test_given_a_partitioned_files_target_when_diffing_then_the_newest_partition_is_the_baseline_and_a_broken_file_is_one_finding(tmp_path: Path) -> None:
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	toml = FILES_PROJECT.replace('path = "{table}/"', 'path = "{table}/day={cursor:date}/"\nmax_footer_reads = 1')
+	project = make_project(tmp_path, toml, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', columns={'day': 'date', 'v': 'text'})(rows)\n")
+	give(project, "rows", [{"id": 1, "v": "a", "day": "2026-01-01"}, {"id": 2, "v": "b", "day": "2026-01-02"}])
+	load(project)
+	agreed = sqlload(project, "contract", "diff")
+	assert (agreed.returncode, agreed.stdout.splitlines()[1]) == (0, "  OK    table:shop__rows"), agreed.stdout + agreed.stderr
+	old = project / "lake" / "rows" / "day=2025-12-31"
+	old.mkdir()
+	pq.write_table(pa.table({"id": pa.array([0], pa.int64()), "v": pa.array([7], pa.int64())}), old / "old.parquet")
+	drift = sqlload(project, "contract", "diff", "--all-files", "--json")
+	assert [(finding["kind"], finding["column"]) for finding in json.loads(drift.stdout)["resources"][0]["findings"]] == [
+		("files_type_mismatch", "v"),
+		("files_missing_column", "day"),
+	], drift.stdout + drift.stderr
+	(old / "broken.parquet").write_text("not parquet")
+	broken = sqlload(project, "contract", "diff", "--all-files", "--json")
+	assert (broken.returncode, [finding["kind"] for finding in json.loads(broken.stdout)["resources"][0]["findings"]]) == (1, ["inspection_unavailable"]), broken.stdout + broken.stderr
+
+
 def test_given_an_enforced_contract_without_declared_columns_when_planning_then_the_table_is_blocked(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', contract='enforced')(rows)\n")
 	done = sqlload(project, "plan")

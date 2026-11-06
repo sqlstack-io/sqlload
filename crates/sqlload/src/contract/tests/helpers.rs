@@ -8,7 +8,7 @@ use crate::contract::models::{AdoptedColumn, Adoption, ContractReport, ContractR
 use crate::contract::tests::test_types::{AdoptionTestCase, FileDriftTestCase};
 use crate::loader::_helpers::python::{python_table, python_tables};
 use crate::loader::_helpers::resolve::resolve_tables;
-use crate::loader::models::TableSpec;
+use crate::loader::models::{FileSchema, TableSpec};
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::python_sources::models::PythonSource;
@@ -167,10 +167,13 @@ fn live_of(columns: &[(&str, ColumnType)]) -> Vec<LiveColumn> {
 
 /// The case's drift findings as `kind: message`.
 pub(crate) fn drift_messages(test_case: &FileDriftTestCase) -> Vec<String> {
-    let files: Vec<(String, Vec<LiveColumn>)> = test_case
+    let files: Vec<FileSchema> = test_case
         .files
         .iter()
-        .map(|(key, columns)| ((*key).to_owned(), live_of(columns)))
+        .map(|(key, columns)| FileSchema {
+            key: (*key).to_owned(),
+            columns: live_of(columns),
+        })
         .collect();
     file_drift(&live_of(&test_case.live), &files)
         .into_iter()

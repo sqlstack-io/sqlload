@@ -7,20 +7,19 @@ use crate::contract::constants::{
     FILES_EXTRA_COLUMN, FILES_MISSING_COLUMN, FILES_TYPE_MISMATCH, NAMED_FILES,
 };
 use crate::contract::models::ContractFinding;
+use crate::loader::models::FileSchema;
 use crate::schema_plan::models::LiveColumn;
 
 /// One finding per column whose files disagree with the newest load (`live`): per other type the files hold it as, for files lacking it, and for a column only older files hold; names as the files spell them, SQLLoad's own columns left out.
-pub(crate) fn file_drift(
-    live: &[LiveColumn],
-    files: &[(String, Vec<LiveColumn>)],
-) -> Vec<ContractFinding> {
+pub(crate) fn file_drift(live: &[LiveColumn], files: &[FileSchema]) -> Vec<ContractFinding> {
     let mut found: Vec<ContractFinding> = Vec::new();
     for column in live.iter().filter(|column| !is_own(&column.name)) {
         let expected = column.column_type.to_string();
         let mut other_types: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         let mut missing: Vec<&str> = Vec::new();
-        for (key, columns) in files {
-            match columns.iter().find(|held| held.name == column.name) {
+        for file in files {
+            let key = file.key.as_str();
+            match file.columns.iter().find(|held| held.name == column.name) {
                 Some(held) if held.column_type != column.column_type => other_types
                     .entry(held.column_type.to_string())
                     .or_default()
@@ -57,10 +56,11 @@ pub(crate) fn file_drift(
 }
 
 /// Columns some files hold that the newest load lacks, with the type each first appears as.
-fn extra_columns(live: &[LiveColumn], files: &[(String, Vec<LiveColumn>)]) -> Vec<ContractFinding> {
+fn extra_columns(live: &[LiveColumn], files: &[FileSchema]) -> Vec<ContractFinding> {
     let mut extra: BTreeMap<&str, (String, Vec<&str>)> = BTreeMap::new();
-    for (key, columns) in files {
-        for column in columns.iter().filter(|column| is_extra(live, column)) {
+    for file in files {
+        let key = file.key.as_str();
+        for column in file.columns.iter().filter(|column| is_extra(live, column)) {
             extra
                 .entry(&column.name)
                 .or_insert_with(|| (column.column_type.to_string(), Vec::new()))
