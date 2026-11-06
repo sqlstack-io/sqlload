@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/sqlstack-io/sqlload/compare/v0.7.0...v0.8.0) (2026-11-06)
+
+
+### Features
+
+* **python:** flatten listed objects one level into typed columns ([#41](https://github.com/sqlstack-io/sqlload/issues/41)) ([752a452](https://github.com/sqlstack-io/sqlload/commit/752a452f060699bb0037fb8ac3f3e0406105f70c))
+
 ## [0.7.0](https://github.com/sqlstack-io/sqlload/compare/v0.6.0...v0.7.0) (2026-11-06)
 
 
