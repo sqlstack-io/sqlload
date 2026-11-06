@@ -81,8 +81,10 @@ Differences a reader should know:
 
 These are the published figures. A scenario is listed only where SQLLoad's median wall time is the
 lowest of every loader measured in the same run, or within 5% of the lowest, which is labelled
-parity. The `Wall vs SQLLoad` column is relative to the `sqlload` row (the user stage for Snowflake).
-Scenarios where another loader is faster are not listed here; they are tracked as work to do. Every table shows all loaders that ran, with CPU and memory as well as wall time, and SQLLoad
+parity. The `Wall vs SQLLoad` column is relative to the `sqlload` row (the user stage for
+Snowflake; `sqlload (direct)` for `files_snowflake`).
+Scenarios where another loader is faster are not listed here; they are tracked as work to do.
+Every table shows all loaders that ran, with CPU and memory as well as wall time, and SQLLoad
 does not win on every column: it uses more memory than ingestr in some of them.
 
 Common to every table:
