@@ -18,6 +18,14 @@ def source(spec: dict) -> object:
 	if scenario.startswith("pg_"):
 		incremental = dlt.sources.incremental("id") if scenario == "pg_incremental" else None
 		return sql_table(credentials=spec["dsn"], schema="public", table=spec["source"], backend=spec["backend"], incremental=incremental).with_name(table)
+	if scenario == "files_s3_parquet":
+		from dlt.common.configuration.specs import AwsCredentials
+
+		credentials = AwsCredentials(
+			aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"], aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"], region_name=spec["region"]
+		)
+		files = filesystem(bucket_url=spec["s3_url"], credentials=credentials, file_glob="*.parquet")
+		return (files | read_parquet()).with_name(table)
 	if scenario.startswith("files_"):
 		file_format = scenario.removeprefix("files_")
 		reader = {"parquet": read_parquet, "csv": read_csv, "ndjson": read_jsonl}[file_format]()

@@ -21,6 +21,10 @@ from sqlload_bench.report import Result, markdown
 from sqlload_bench.scenarios import SCENARIOS, Scenario
 
 
+#: What the S3 scenario needs from the environment.
+S3_SETTINGS = ("SQLLOAD_BENCH_S3_BUCKET", "SQLLOAD_BENCH_S3_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+
+
 def check(competitor: Competitor, scenario: Scenario, context: Context, run_dir: Path) -> tuple[bool, str]:
 	"""Whether the destination holds exactly the source's rows (count and checksum over key columns)."""
 	expected = context.dataset.expected(scenario.expected)
@@ -167,6 +171,16 @@ def main(argv: list[str] | None = None) -> int:
 			snowflake_settings = snowflake.settings_from_env()
 			if scenario.name == "files_snowflake":
 				print(f"test data: s3://{snowflake_settings.bucket}/{snowflake.upload_parquet(snowflake_settings, dataset)}", flush=True)
+	lake: snowflake.Settings | None = None
+	for scenario in [s for s in scenarios if s.group == "s3"]:
+		missing = [name for name in S3_SETTINGS if not os.environ.get(name)]
+		if not ({scenario.name, scenario.group} & explicit):
+			blocked[scenario.name] = "only runs when selected with --scenarios"
+		elif missing:
+			blocked[scenario.name] = "set " + ", ".join(missing)
+		else:
+			lake = snowflake.Settings("", "", "", "", "", bucket=os.environ["SQLLOAD_BENCH_S3_BUCKET"], region=os.environ["SQLLOAD_BENCH_S3_REGION"])
+			print(f"test data: s3://{lake.bucket}/{snowflake.upload_parquet(lake, dataset)}", flush=True)
 	active_names = {s.name for s in scenarios} - blocked.keys()
 	needs_postgres = any(s.group == "postgres" or s.source for s in scenarios if s.name in active_names)
 	pg = postgres.start() if needs_postgres else None
@@ -176,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
 		if pg is not None:
 			print(f"loading Postgres on port {pg.port}", flush=True)
 			postgres.load(pg, dataset)
-		context = Context(dataset, pg, args.out / "cache", snowflake_settings)
+		context = Context(dataset, pg, args.out / "cache", snowflake_settings, lake)
 		for scenario in scenarios:
 			active: list[tuple[Competitor, Result]] = []
 			for competitor in competitors:

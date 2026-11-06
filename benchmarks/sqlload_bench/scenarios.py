@@ -61,6 +61,7 @@ SCENARIOS: list[Scenario] = [
 	Scenario("files_parquet", "files", "narrow", "files", "Parquet files (10 parts) in a local folder", "narrow"),
 	Scenario("files_csv", "files", "narrow", "files", "CSV files (10 parts, header) in a local folder", "narrow"),
 	Scenario("files_ndjson", "files", "narrow", "files", "NDJSON files (10 parts) in a local folder", "narrow"),
+	Scenario("files_s3_parquet", "s3", "narrow", "files", "Parquet files (10 parts) in S3 into DuckDB", "narrow"),
 	Scenario("py_flat", "python", "flat", "flat", "Python generator: pages of flat 20-field dicts", "flat"),
 	Scenario("py_nested", "python", "nested", "nested", "Python generator: pages of nested API-shaped dicts", "nested"),
 	Scenario(

@@ -24,7 +24,8 @@ SCHEMA = "raw"
 #: `unsupported` returns this for combinations not worth a table row (a dlt backend outside sql_database).
 HIDDEN = "hidden"
 #: Environment variables a Snowflake scenario's loader needs from the caller.
-SNOWFLAKE_ENV = (snowflake.TOKEN_ENV, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_DEFAULT_REGION")
+AWS_ENV = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_DEFAULT_REGION")
+SNOWFLAKE_ENV = (snowflake.TOKEN_ENV, *AWS_ENV)
 
 
 @dataclass
@@ -36,6 +37,8 @@ class Context:
 	cache: Path
 	#: Set only when a Snowflake scenario was selected and its variables are present.
 	warehouse: snowflake.Settings | None = None
+	#: The bucket and region of the S3 scenario (only those fields), set when it was selected with its variables.
+	lake: snowflake.Settings | None = None
 
 
 @dataclass
@@ -132,18 +135,29 @@ class SqlLoad(Competitor):
 
 	def invocation(self, scenario: Scenario, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
 		argv = [str(SQLLOAD), "load", *(["--concurrency", str(self.concurrency)] if self.concurrency else [])]
-		return Invocation(argv, self._project_dir(scenario, context, run_dir), self._env(scenario, run_dir))
+		return Invocation(argv, self._project_dir(scenario, context, run_dir), self._env(scenario, context, run_dir))
 
 	def plan_invocation(self, scenario: Scenario, context: Context, run_dir: Path) -> tuple[Invocation, str] | None:
-		if scenario.name != "files_snowflake":
+		expected = {"files_snowflake": "destination loads parquet files from", "files_parquet": "DuckDB reads directly from", "files_s3_parquet": "DuckDB reads directly from"}
+		if scenario.name not in expected:
 			return None
-		return Invocation([str(SQLLOAD), "plan"], self._project_dir(scenario, context, run_dir), self._env(scenario, run_dir)), "destination loads parquet files from"
+		return Invocation([str(SQLLOAD), "plan"], self._project_dir(scenario, context, run_dir), self._env(scenario, context, run_dir)), expected[scenario.name]
 
-	def _env(self, scenario: Scenario, run_dir: Path) -> dict[str, str]:
+	def _env(self, scenario: Scenario, context: Context, run_dir: Path) -> dict[str, str]:
 		extra = {"PGPASSWORD": pg.PASSWORD}
 		if scenario.group == "snowflake":
 			extra.update(_caller_env(SNOWFLAKE_ENV))
-		return self.env(run_dir, extra)
+		env = self.env(run_dir, extra)
+		if scenario.group == "s3":
+			env.update(_caller_env(AWS_ENV))
+			# DuckDB installs httpfs into ~/.duckdb once; every run's fresh HOME shares that folder,
+			# as a user's machine would after its first S3 load (the warm-up installs it).
+			shared = context.cache / "duckdb-extensions"
+			shared.mkdir(parents=True, exist_ok=True)
+			link = run_dir / "home" / ".duckdb"
+			if not link.exists():
+				link.symlink_to(shared)
+		return env
 
 	def _project_dir(self, scenario: Scenario, context: Context, run_dir: Path) -> Path:
 		project = run_dir / "project"
@@ -172,6 +186,13 @@ class SqlLoad(Competitor):
 		)
 		if scenario.group == "postgres":
 			return text + "\n" + self._postgres(scenario, context)
+		if scenario.group == "s3":
+			assert context.lake is not None
+			return text + (
+				f'\n[connections.lake]\nkind = "s3"\nbucket = "{context.lake.bucket}"\nregion = "{context.lake.region}"\n\n'
+				f'[sources.{scenario.table}]\nkind = "files"\nconnection = "lake"\npath = "{snowflake.files_key(context.dataset)}"\nformat = "parquet"\n'
+				f'description = "{DESCRIPTION}"\n'
+			)
 		if scenario.group == "files":
 			file_format = scenario.name.removeprefix("files_")
 			return text + (
@@ -261,6 +282,10 @@ class Dlt(Competitor):
 				"private_key_path": sf.private_key_file,
 			}
 			env.update(_caller_env((snowflake.TOKEN_ENV,)))
+		if context.lake is not None and scenario.group == "s3":
+			settings["s3_url"] = f"s3://{context.lake.bucket}/{snowflake.files_key(context.dataset)}"
+			settings["region"] = context.lake.region
+			env.update(_caller_env(AWS_ENV))
 		spec = _spec(run_dir, scenario, context, **settings)
 		return Invocation([str(DLT_PYTHON), str(RUNNERS / "dlt_run.py"), spec], run_dir, self.env(run_dir, env))
 
@@ -287,16 +312,17 @@ class Ingestr(Competitor):
 			argv += ["--dest-table", f"{context.warehouse.schema}.{scenario.table}"]
 		else:
 			argv += ["--dest-uri", f"duckdb:///{self.destination(run_dir)}", "--dest-table", f"{SCHEMA}.{scenario.table}"]
-		if scenario.name == "files_snowflake":
-			assert context.warehouse is not None
+		if scenario.name in ("files_snowflake", "files_s3_parquet"):
+			lake = context.warehouse if scenario.name == "files_snowflake" else context.lake
+			assert lake is not None
 			# Its S3 source takes the keys in the URI, so it goes through the environment too.
 			keys = {
 				"access_key_id": os.environ.get("AWS_ACCESS_KEY_ID", ""),
 				"secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
-				"region": context.warehouse.region,
+				"region": lake.region,
 			}
 			env["INGESTR_SOURCE_URI"] = "s3://?" + urlencode(keys)
-			argv += ["--source-table", f"{context.warehouse.bucket}/{snowflake.files_key(context.dataset)}*.parquet"]
+			argv += ["--source-table", f"{lake.bucket}/{snowflake.files_key(context.dataset)}*.parquet"]
 		elif scenario.group == "snowflake" or scenario.group == "postgres":
 			assert context.postgres is not None
 			argv += ["--source-uri", context.postgres.dsn, "--source-table", f"public.{scenario.source or scenario.table}"]
