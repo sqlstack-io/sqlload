@@ -144,7 +144,7 @@ fn given_copy_endpoints_when_building_the_project_then_secrets_stay_out_of_its_t
             destination: "./out",
             project: "",
             expected_lines: &[
-                "the source app:***@db/shop#a.b names connection app, which is not in sqlload.toml (it has: none); name one of those, or give a URI such as postgresql://user@host/db#schema.table",
+                "the source app:***@db/shop#a.b has an @ but no scheme; write a URI such as postgresql://user:${ENV:PGPASSWORD}@host/db#schema.table, or connection:schema.table",
             ],
         },
         CopyProjectTestCase {
@@ -185,6 +185,49 @@ fn given_copy_endpoints_when_building_the_project_then_secrets_stay_out_of_its_t
                 "name = \"orders\"",
                 "path = \"{table}/\"",
                 "printed [connections.copy_orders_2_destination]",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "a password holding :/ is still redacted",
+            source: "app:hunter2:/x@db/shop#a.b",
+            destination: "./out",
+            project: "",
+            expected_lines: &[
+                "the source app:***@db/shop#a.b has an @ but no scheme; write a URI such as postgresql://user:${ENV:PGPASSWORD}@host/db#schema.table, or connection:schema.table",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "a one-slash URI is refused even when sqlload.toml has a connection named like its scheme",
+            source: "postgres:/u:hunter2@db/shop#a.b",
+            destination: "./out",
+            project: "[connections.postgres]\nkind = \"postgres\"\nhost = \"db\"\nuser = \"u\"\ndatabase = \"shop\"\n",
+            expected_lines: &[
+                "the source postgres:/u:***@db/shop#a.b looks like a URI with one slash; write postgres://...",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "a password holding @ and / with no database is refused, not split inside the password",
+            source: "postgresql://u:hunter2@y/z@h#s.t",
+            destination: "./out",
+            project: "",
+            expected_lines: &[
+                "the source postgresql://u:***@h#s.t: it names no database; write it as postgresql://user:${ENV:PGPASSWORD}@host:5432/database#schema.table",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "a known files connection takes an absolute path after it",
+            source: "files:/exports/orders/",
+            destination: "./out",
+            project: "[connections.files]\nkind = \"filesystem\"\nroot = \"/\"\n",
+            expected_lines: &[
+                "root = \"./out\"",
+                "root = \"/\"",
+                "description = \"Copied from files:/exports/orders/.\"",
+                "destination = \"copy_orders\"",
+                "path = \"/exports/orders/\"",
+                "table_name = \"orders\"",
+                "path = \"{table}/\"",
+                "printed [connections.copy_orders_destination]",
             ],
         },
         CopyProjectTestCase {
