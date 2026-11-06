@@ -101,23 +101,16 @@ fn uri_endpoint(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<End
     let (body, locator) = rest.split_once('#').unwrap_or((rest, ""));
     match scheme {
         "postgres" | "postgresql" => postgres(shown, scheme, rest, role),
+        "duckdb" | "s3" | "file" if shown != format!("{scheme}://{rest}") => Err(format!(
+            "the {} {shown} carries credentials, which {scheme}:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
+            role.label()
+        )),
         "duckdb" => Ok(unnamed(
             settings(&[("kind", "duckdb"), ("database", body)]),
             locator,
             shown,
             format!("DuckDB table {locator}"),
         )),
-        "s3" | "file"
-            if body
-                .split('/')
-                .next()
-                .is_some_and(|authority| authority.contains('@')) =>
-        {
-            Err(format!(
-                "the {} {shown} carries credentials; an {scheme}:// URI takes none (S3 credentials come from the environment or a connection in sqlload.toml)",
-                role.label()
-            ))
-        }
         "s3" => s3(shown, body, role),
         "file" => Ok(folder(body, shown)),
         "snowflake" => Err(format!(
@@ -141,6 +134,16 @@ fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoin
     };
     let at = userinfo_end(rest).ok_or_else(|| problem("it names no user"))?;
     let (userinfo, after) = (&rest[..at], &rest[at + 1..]);
+    let (user, password) = match find_outside(userinfo, ':', false) {
+        Some(colon) => (&userinfo[..colon], decoded(&userinfo[colon + 1..])),
+        None => (userinfo, String::new()),
+    };
+    let literal = !password.is_empty() && !is_reference(&password);
+    if literal && outside_positions(rest, '@').last() != Some(&at) {
+        return Err(problem(
+            "it has a literal password and another @, so where the password ends is ambiguous; give the password as ${ENV:NAME}",
+        ));
+    }
     let (place, locator) = after.split_once('#').unwrap_or((after, ""));
     let slash = find_outside(place, '/', false)
         .filter(|_| find_outside(place, '@', false).is_none())
@@ -149,10 +152,6 @@ fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoin
     if database.is_empty() || database.contains(['/', '?']) {
         return Err(problem("it names no database, or has a query"));
     }
-    let (user, password) = match find_outside(userinfo, ':', false) {
-        Some(colon) => (&userinfo[..colon], decoded(&userinfo[colon + 1..])),
-        None => (userinfo, String::new()),
-    };
     let (host, port) = host_and_port(host_port);
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let port = match port {
@@ -162,12 +161,6 @@ fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoin
         ),
         None => Value::Integer(5432),
     };
-    let literal = !password.is_empty() && !is_reference(&password);
-    if literal && outside_positions(rest, '@').last() != Some(&at) {
-        return Err(problem(
-            "it has a literal password and another @, so where the password ends is ambiguous; give the password as ${ENV:NAME}",
-        ));
-    }
     let mut table = settings(&[
         ("kind", "postgres"),
         ("host", host),
