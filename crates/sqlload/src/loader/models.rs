@@ -97,6 +97,8 @@ pub struct TableSpec {
     pub files: Option<FilesSource>,
     /// The table's folder template in a files target; `None` for warehouse targets.
     pub destination_path: Option<String>,
+    /// The top-level objects expanded one level into `<object>__<key>` columns (Python tables only).
+    pub flatten: Vec<String>,
     /// The table function behind a Python table; `None` for declarative sources.
     pub python: Option<PythonTable>,
 }

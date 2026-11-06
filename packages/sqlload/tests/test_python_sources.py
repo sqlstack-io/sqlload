@@ -694,3 +694,57 @@ def test_given_an_enforced_contract_without_declared_columns_when_planning_then_
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
 	assert "contract enforced needs declared columns: the first load would create a table with only metadata columns" in done.stdout + done.stderr
+
+
+@pytest.mark.parametrize(
+	("first", "second", "expected_code", "expected_text", "expected_columns"),
+	[
+		(
+			[{"order_id": 7, "customer": {"country": "GB", "address": {"city": "Leeds"}}, "line_totals": {"sku-14": 12.5}}],
+			[{"order_id": 8, "customer": {"country": "FR", "tier": "gold"}, "line_totals": {"sku-17": 1}}],
+			0,
+			"loaded   RAW.shop__rows  1 rows",
+			[
+				("order_id", "BIGINT"),
+				("customer__country", "VARCHAR"),
+				("customer__address", "JSON"),
+				("line_totals", "JSON"),
+				("_sqlload_load_id", "VARCHAR"),
+				("_sqlload_loaded_at", "TIMESTAMP WITH TIME ZONE"),
+				("customer__tier", "VARCHAR"),
+			],
+		),
+		(
+			[{"order_id": 7, "customer": {"country": "GB"}}],
+			[{"order_id": 8, "customer": "GB"}],
+			1,
+			"flatten customer: row 1 holds a Utf8 value, not an object",
+			[("order_id", "BIGINT"), ("customer__country", "VARCHAR"), ("_sqlload_load_id", "VARCHAR"), ("_sqlload_loaded_at", "TIMESTAMP WITH TIME ZONE")],
+		),
+	],
+	ids=["one-level-and-new-keys", "shape-change-fails"],
+)
+def test_given_flatten_when_loading_then_only_the_listed_object_expands_one_level(
+	tmp_path: Path, first: Any, second: Any, expected_code: int, expected_text: str, expected_columns: list[tuple[str, str]]
+) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', flatten=['customer'])(rows)\n")
+	give(project, "rows", first)
+	planned = sqlload(project, "plan")
+	assert "columns inferred on first load, customer flattened one level" in planned.stdout, planned.stdout
+	load(project)
+	give(project, "rows", second)
+	done = sqlload(project, "load")
+	assert done.returncode == expected_code, done.stdout + done.stderr
+	assert expected_text in done.stdout, done.stdout + done.stderr
+	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
+	assert columns == expected_columns
+
+
+def test_given_flatten_on_a_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:
+	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "ndjson"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
+	project = make_project(tmp_path, toml, "")
+	(project / "lake" / "events").mkdir()
+	(project / "lake" / "events" / "a.ndjson").write_text('{"customer": {"country": "GB"}}\n')
+	done = sqlload(project, "plan")
+	assert done.returncode == 1
+	assert "flatten applies to Python tables; nested values from this source stay JSON" in done.stdout, done.stdout + done.stderr

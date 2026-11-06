@@ -36,5 +36,5 @@ pub(crate) struct FlattenBatchTestCase {
     pub(crate) description: &'static str,
     pub(crate) rows: &'static str,
     pub(crate) flatten: &'static [&'static str],
-    pub(crate) expected: Result<&'static str, &'static str>,
+    pub(crate) expected_batch: Result<&'static str, &'static str>,
 }

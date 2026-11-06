@@ -156,6 +156,11 @@ pub(crate) fn build_spec(
         .or(files_description)
         .map(str::trim)
         .filter(|text| !text.is_empty());
+    if !overrides.flatten.is_empty() && context.source.kind != SourceKind::Python {
+        problems.push(
+            "flatten applies to Python tables; nested values from this source stay JSON".to_owned(),
+        );
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -206,6 +211,7 @@ pub(crate) fn build_spec(
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        flatten: overrides.flatten.clone(),
         allow_empty: layered(&settings.allow_empty, &defaults.allow_empty)
             .is_some_and(|(value, _)| value),
         logged: layered(&settings.state, &defaults.state)

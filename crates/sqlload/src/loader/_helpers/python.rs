@@ -46,6 +46,7 @@ use crate::python_sources::types::BatchStream;
 use crate::python_sources::types::PythonHost;
 use crate::python_sources::types::Streamed;
 use crate::row_batches::main::conform_batch::conform_batch;
+use crate::row_batches::main::flatten_batch::flatten_batch;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::schema_plan::constants::LOAD_ID_COLUMN;
@@ -677,6 +678,8 @@ impl PythonFeed {
         batch: RecordBatch,
         window: Option<&CursorWindow>,
     ) -> Result<(), LoaderError> {
+        let batch =
+            flatten_batch(&batch, &self.table.spec.flatten).map_err(LoaderError::Invalid)?;
         let merged = merge_schema(&self.merged, &batch.schema());
         self.rows += batch.num_rows() as u64;
         if merged != self.merged || self.publisher.is_none() {
