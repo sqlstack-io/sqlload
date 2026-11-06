@@ -211,7 +211,7 @@ fn given_copy_endpoints_when_building_the_project_then_secrets_stay_out_of_its_t
             destination: "./out",
             project: "",
             expected_lines: &[
-                "the source postgresql://u:***@h#s.t: it names no database; write it as postgresql://user:${ENV:PGPASSWORD}@host:5432/database#schema.table",
+                "the source postgresql://u:***@h#s.t: it has a literal password and another @, so where the password ends is ambiguous; give the password as ${ENV:NAME}; write it as postgresql://user:${ENV:PGPASSWORD}@host:5432/database#schema.table",
             ],
         },
         CopyProjectTestCase {
@@ -247,7 +247,34 @@ fn given_copy_endpoints_when_building_the_project_then_secrets_stay_out_of_its_t
             destination: "./out",
             project: "",
             expected_lines: &[
-                "the source s3://key:***@bucket/raw/ carries credentials; an s3:// URI takes none (S3 credentials come from the environment or a connection in sqlload.toml)",
+                "the source s3://key:***@bucket/raw/ carries credentials, which s3:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "a password that looks like a bad port is refused as ambiguous before the port is read",
+            source: "postgresql://u:x@y:hunter2/db#q@h#s.t",
+            destination: "./out",
+            project: "",
+            expected_lines: &[
+                "the source postgresql://u:***@h#s.t: it has a literal password and another @, so where the password ends is ambiguous; give the password as ${ENV:NAME}; write it as postgresql://user:${ENV:PGPASSWORD}@host:5432/database#schema.table",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "credentials in a duckdb, s3 or file URI are refused, even after a /",
+            source: "s3://key:sec/hunter2@bucket/p",
+            destination: "duckdb://u:hunter2@h/x.duckdb#a.b",
+            project: "",
+            expected_lines: &[
+                "the source s3://key:***@bucket/p carries credentials, which s3:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "credentials in an s3 endpoint are refused",
+            source: "./in",
+            destination: "s3://b/p?endpoint=https://k:hunter2@minio",
+            project: "",
+            expected_lines: &[
+                "the destination s3://b/p?endpoint=https:***@minio carries credentials, which s3:// URIs do not take (S3 credentials come from the environment or a connection in sqlload.toml)",
             ],
         },
         CopyProjectTestCase {
