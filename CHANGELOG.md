@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/sqlstack-io/sqlload/compare/v0.12.0...v0.13.0) (2026-11-06)
+
+
+### Features
+
+* **contract:** compare files targets and report drift with --all-files ([#58](https://github.com/sqlstack-io/sqlload/issues/58)) ([6ff9802](https://github.com/sqlstack-io/sqlload/commit/6ff98029c3aaa0c9256ce6222866b9051d347573))
+
 ## [0.12.0](https://github.com/sqlstack-io/sqlload/compare/v0.11.1...v0.12.0) (2026-11-06)
 
 
