@@ -8,17 +8,6 @@
 		]
 	},
 	{
-		"label": "Concepts",
-		"items": [
-			"docs/concepts/projects",
-			"docs/concepts/targets",
-			"docs/concepts/load-methods",
-			"docs/concepts/write-strategies",
-			"docs/concepts/cursors",
-			"docs/concepts/contracts"
-		]
-	},
-	{
 		"label": "Sources",
 		"items": [
 			{
@@ -32,14 +21,45 @@
 		]
 	},
 	{
+		"label": "Targets",
+		"items": [
+			{
+				"label": "Overview",
+				"slug": "docs/targets"
+			},
+			"docs/targets/snowflake",
+			"docs/targets/duckdb",
+			"docs/targets/files"
+		]
+	},
+	{
+		"label": "Loading",
+		"items": [
+			"docs/concepts/projects",
+			"docs/concepts/write-strategies",
+			"docs/concepts/cursors",
+			"docs/concepts/contracts"
+		]
+	},
+	{
+		"label": "Kafka exporter",
+		"items": [
+			{
+				"label": "Overview",
+				"slug": "docs/kafka"
+			},
+			"docs/kafka/configuration",
+			"docs/kafka/naming"
+		]
+	},
+	{
 		"label": "CLI Reference",
 		"items": [
 			"docs/cli",
 			"docs/cli/plan-apply-load",
 			"docs/cli/copy",
 			"docs/cli/contract",
-			"docs/cli/debug",
-			"docs/cli/exporter"
+			"docs/cli/debug"
 		]
 	},
 	{

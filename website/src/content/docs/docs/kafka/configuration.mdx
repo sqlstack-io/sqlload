@@ -1,0 +1,127 @@
+---
+title: "Configuration"
+description: "Every section and key of the Kafka exporter's sqlload.toml, with defaults."
+---
+
+The exporter reads `sqlload.toml`. `${ENV:NAME}` is replaced from the environment; `$${` is a
+literal `${`. Unknown keys are refused. Sizes are a number of bytes or text such as `32MB` (10⁶) or
+`32MiB` (2²⁰); durations are text such as `500ms`, `60s`, `5m` or `7d`. The repository's
+[`sqlload.example.toml`](https://github.com/sqlstack-io/sqlload/blob/main/sqlload.example.toml) sets
+every section.
+
+## `[source]`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `kind` | required | `kafka`. |
+| `brokers` | required | The bootstrap brokers. |
+| `include` | required | Topic patterns to export. |
+| `exclude` | none | Topic patterns to leave out. |
+| `consumer_group` | `sqlload-{stream}` | The consumer group template; see [Naming topics](/docs/kafka/naming/#naming). |
+| `start_from` | `latest` | Where a group with no committed offset starts: `earliest` or `latest`. |
+| `discovery_interval` | `5m` | How often new topics are looked for. |
+| `shards` | `1` | How many instances split the streams between them. Each runs with its own `--shard`. |
+| `prefetch_budget` | `1GiB` | Kafka prefetch shared by all consumers, at most 64 MiB and at least 1 MiB each. |
+| `startup_batch` | `20` | Streams start this many at a time; `0` starts them all at once. |
+| `startup_interval` | `500ms` | The pause between startup batches. |
+
+`[source.properties]` passes any librdkafka consumer property, such as `security.protocol` or
+`sasl.mechanisms`. `queued.max.messages.kbytes` replaces the prefetch share, and
+`fetch.wait.max.ms` defaults to 2000.
+
+## `[destination]`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `kind` | required | `snowflake`. |
+| `account`, `user` | required | The Snowflake account and user. |
+| `auth` | required | `{ method = "pat", token = "..." }` or `{ method = "key_pair", private_key_file = "..." }`. |
+| `role` | none | The role to use. |
+| `warehouse` | none | Needed for `COPY` loads, `plan` and `apply`; streaming doesn't use it. |
+| `database`, `schema` | required | Where the tables, stages and pipes go. |
+
+## `[staging]`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `kind` | required | `none` (Snowpipe Streaming), `internal` (files on a table stage) or `s3` (files in your bucket). |
+| `load` | `auto` | For staged files: `snowpipe`, `copy`, or `auto`, which picks Snowpipe with a key pair and `COPY` otherwise. |
+| `format` | `json` | Staged files: `json` (gzip NDJSON) or `parquet` (zstd). |
+| `retain` | `7d` | `internal`: how long dated stage folders are kept. |
+| `max_in_flight` | `32` | Uploads, and separately loads, in flight at once across all streams. |
+| `max_pending_files` | `32` | Snowpipe loads: files per stream sent but not committed yet. A full stream pauses its partitions. |
+| `on_load_error` | `halt` | A file Snowpipe reports as failed or partly loaded: `halt` stops the stream without committing it; `skip` logs and counts it, then commits past it. |
+| `pending_check_after` | `5m` | Snowpipe loads: when a file with no report is first checked, in load history and then the stage. |
+| `pending_recheck_every` | `10m` | How often it's checked again. Slow loads are never failed. |
+
+With Snowpipe loads, the loading role needs `OPERATE` on each pipe and `MONITOR` to read its load
+reports. Pipes that `sqlload apply` creates are owned by it.
+
+`[staging.s3]`, for `kind = "s3"`:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `bucket`, `region` | required | The bucket and its region. |
+| `prefix` | `""` | The folder under the bucket. |
+| `stage` | required | The external stage on it: a name in the destination schema, or `DATABASE.SCHEMA.NAME`. |
+| `path` | `{topic}/date={date}/` | Each file's folder under `prefix`, with `{topic}`, `{table}`, `{stream}`, `{date}` (UTC `YYYY-MM-DD`) and `{hour}` (UTC `HH`). |
+| `endpoint`, `path_style` | none, `false` | For S3-compatible stores. |
+| `auto_ingest` | `false` | Load with an auto-ingest pipe on bucket notifications. |
+
+## `[batching]`
+
+A stream's records become one batch when any limit is reached.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `max_bytes` | 32 MiB | Bytes per batch. |
+| `max_rows` | `100000` | Rows per batch. |
+| `max_age` | `60s` | Age of the oldest record in the batch. |
+| `max_total_bytes` | 2 GiB | Across every stream; any stream flushes early when it's reached. |
+| `max_request_bytes` | 3,500,000 bytes | Streaming: compressed bytes per append request, below the service's 4 MiB limit. |
+| `oversized` | `fail` | Streaming: a record larger than one request, `fail` or `skip`. |
+
+## `[[topics]]`
+
+Settings for topics matching a glob in `match`. Later entries win. Each can set `start_from`,
+`max_bytes`, `max_rows`, `max_age` and `oversized`, and `unwrap`: columns filled from a member of
+the JSON value instead, such as `{ VALUE = "value" }`.
+
+```toml
+[[topics]]
+match = "shop.*.events"
+start_from = "earliest"
+max_age = "10s"
+```
+
+## `[naming]`
+
+How topics map to tables, stages and pipes. See [Naming topics](/docs/kafka/naming/).
+
+## `[envelope]`
+
+Every table has the same columns, filled from each record:
+
+| Column | Field | Type |
+|--------|-------|------|
+| `TOPIC` | `topic` | `VARCHAR` |
+| `KAFKA_TIMESTAMP` | `timestamp` | `NUMBER(38,0)` |
+| `KAFKA_TIMESTAMP_TYPE` | `timestamp_type` | `NUMBER(38,0)` |
+| `KAFKA_OFFSET` | `offset` | `NUMBER(38,0)` |
+| `KAFKA_PARTITION` | `partition` | `NUMBER(38,0)` |
+| `KEY` | `key` | `VARCHAR` |
+| `VALUE` | `value` | `VARCHAR` |
+| `EXPORTED_AT` | `exported_at` | `TIMESTAMP_TZ` |
+| `DATE` | `date` | `DATE`, the record's UTC date (its timestamp, else the export time) |
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `columns` | the table above | A list of `{ name, field, type }`. `field` is one of the fields above, `headers` or `null`. |
+| `time_zone` | `UTC` | The IANA zone whose UTC offset `exported_at` values carry, such as `America/Los_Angeles`. |
+| `error_logging` | `true` | Streaming: create tables with Snowflake's `ERROR_LOGGING`. |
+
+## `[metrics]`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `listen` | none | The address of the metrics and health endpoint, such as `0.0.0.0:9898`. |

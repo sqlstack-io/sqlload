@@ -1,0 +1,59 @@
+---
+title: "Targets and load methods"
+description: "Where loaded tables go, and how data gets there: files the warehouse reads itself, stages and bulk COPY."
+---
+
+The fastest load is rarely reading rows and inserting them. It's letting the warehouse bulk-load
+files: straight from your bucket or folder when the data is already in files, or from a stage that
+SQLLoad fills with Parquet. SQLLoad picks that route wherever it loads the data exactly, and `plan`
+names the route for every table.
+
+## How data gets in
+
+| Data | Into DuckDB | Into Snowflake |
+|------|-------------|----------------|
+| Parquet files in S3 or a folder | DuckDB reads them with `read_parquet` | `COPY` from an external stage over the bucket |
+| CSV, JSON, NDJSON files | Read by SQLLoad, appended as Arrow | `COPY` from an external stage over the bucket |
+| Postgres or Python rows | Appended as Arrow | Written as Parquet to the `load_method`'s stage, then `COPY` (or streamed or inserted, if the `load_method` says so) |
+
+There are no silent fallbacks. If the route a table needs can't be used, `plan` fails for that
+table and says how to fix it.
+
+## Targets
+
+A target is where loaded tables go. It names a connection and where tables are placed in it. A
+project can have several targets, for example one per environment; each source loads into its
+`destination`, or the project's `default_target`.
+
+| Connection `kind` | Target writes | Places tables with |
+|-------------------|---------------|--------------------|
+| [`snowflake`](/docs/targets/snowflake/) | Snowflake tables | `loader_schema`, and optionally `database` |
+| [`duckdb`](/docs/targets/duckdb/) | DuckDB tables | `loader_schema` |
+| [`s3`, `filesystem`](/docs/targets/files/) | Parquet files, one folder per table | `path` |
+
+## Warehouse targets
+
+A Snowflake or DuckDB target places tables in a schema:
+
+```toml
+[connections.warehouse]
+kind = "duckdb"
+database = "shop.duckdb"
+
+[targets.local]
+connection = "warehouse"
+loader_schema = "raw"
+```
+
+| Key | Meaning |
+|-----|---------|
+| `connection` | A `snowflake` or `duckdb` connection. |
+| `loader_schema` | The schema for tables whose source sets no `schema`. Required. |
+| `database` | Overrides the connection's database. |
+
+A source's `schema` overrides `loader_schema` for its tables. A DuckDB connection's `database` is
+a file path, or `:memory:`. A Snowflake connection also needs a `load_method`; see
+[Snowflake](/docs/targets/snowflake/).
+
+Each kind has its own page: [Snowflake](/docs/targets/snowflake/), [DuckDB](/docs/targets/duckdb/)
+and [Parquet files](/docs/targets/files/).

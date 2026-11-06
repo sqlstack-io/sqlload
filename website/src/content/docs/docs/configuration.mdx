@@ -10,7 +10,7 @@ or from `-c`/`--config` or `SQLLOAD_CONFIG`. Unknown keys are errors. See
 `${ENV:NAME}` anywhere in the file is replaced with the environment variable `NAME`; an unset
 variable is an error. `$${` is a literal `${`.
 
-The [Kafka exporter](/docs/cli/exporter/) uses a different file format.
+The [Kafka exporter](/docs/kafka/) uses a different file format.
 
 ## Top level
 
@@ -47,7 +47,7 @@ Each connection has a `kind`.
 | `role` | none | |
 | `warehouse` | none | |
 | `database` | required | |
-| `load_method` | required | How data gets into Snowflake. See [Load methods](/docs/concepts/load-methods/#snowflake). |
+| `load_method` | required | How data gets into Snowflake. See [Load methods](/docs/targets/snowflake/). |
 
 ### `duckdb`
 

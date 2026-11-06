@@ -10,7 +10,7 @@ common ones; each message is copied from SQLLoad.
 |---------|-----|
 | `error: environment variable PGPASSWORD is not set` | Set the variable a `${ENV:NAME}` in `sqlload.toml` refers to. |
 | `no description; add description = "..." under [sources.app.tables."public.orders"]` | Every table SQLLoad writes needs a description. Add one where the message says. |
-| `load_method is required: how should data get into Snowflake?` | Add a `load_method` to the Snowflake connection. See [Load methods](/docs/concepts/load-methods/). |
+| `load_method is required: how should data get into Snowflake?` | Add a `load_method` to the Snowflake connection. See [Snowflake](/docs/targets/snowflake/). |
 | `n_free: numeric without a precision has no fixed scale; pin a type such as "decimal(38,10)" or "text"` | Pin the column in `columns`, such as `columns = { amount = "decimal(38,18)" }`. |
 | `columns "total" is not a column of the source table (names are case-sensitive); did you mean "email"?` | Fix the column name, or move the entry to the right table. |
 | `total has type numeric(12,2), which cannot be read as int` | Pin a type the source column can be read as, usually the same or wider. |
@@ -36,7 +36,7 @@ common ones; each message is copied from SQLLoad.
 `plan` shows each table's `route`. `Warnings` name routes that are much slower than the usual one,
 such as `copy_to_internal_stage`, `hmac`-masked files, or `load_method = { type = "insert" }`. For
 files into Snowflake, an external stage over the files' bucket lets Snowflake read them in place.
-See [Load methods](/docs/concepts/load-methods/).
+See [Load methods](/docs/targets/).
 
 ## A large first load
 

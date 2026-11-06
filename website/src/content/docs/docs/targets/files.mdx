@@ -1,43 +1,7 @@
 ---
-title: "Targets"
-description: "Where loaded tables go: a Snowflake or DuckDB schema, or Parquet files in S3 or a folder."
+title: "Parquet files"
+description: "Write each table as zstd Parquet files in S3 or a local folder, partitioned by a template."
 ---
-
-A target is where loaded tables go. It names a connection and where tables are placed in it. A
-project can have several targets, for example one per environment; each source loads into its
-`destination`, or the project's `default_target`.
-
-| Connection `kind` | Target writes | Places tables with |
-|-------------------|---------------|--------------------|
-| `snowflake` | Snowflake tables | `loader_schema`, and optionally `database` |
-| `duckdb` | DuckDB tables | `loader_schema` |
-| `s3`, `filesystem` | Parquet files, one folder per table | `path` |
-
-## Warehouse targets
-
-```toml
-[connections.warehouse]
-kind = "duckdb"
-database = "shop.duckdb"
-
-[targets.local]
-connection = "warehouse"
-loader_schema = "raw"
-```
-
-| Key | Meaning |
-|-----|---------|
-| `connection` | A `snowflake` or `duckdb` connection. |
-| `loader_schema` | The schema for tables whose source sets no `schema`. Required. |
-| `database` | Overrides the connection's database. |
-
-A source's `schema` overrides `loader_schema` for its tables. A DuckDB connection's `database` is
-a file path, or `:memory:`.
-
-Snowflake connections also need a `load_method`, which says how data gets into Snowflake. See
-[Load methods](/docs/concepts/load-methods/).
-
-## Files targets
 
 A files target writes each table as Parquet files in its own folder.
 
@@ -89,7 +53,7 @@ diff --all-files` reads every file's footer to report files whose columns differ
 SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: markers for loads in
 progress, and the run log of `state = "logged"` tables. Run one load at a time per files table.
 
-### Limitations
+## Limitations
 
 - A files source can't load into a files target.
 - `replace` and `delete_insert` write the new files first, then delete the older ones. A reader in
