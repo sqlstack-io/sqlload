@@ -365,6 +365,7 @@ def test_given_a_generator_that_finishes_when_read_then_the_stream_ends_and_stay
 		pytest.param([Decimal("1.5"), 7], "decimal128(20, 1)", [Decimal("1.5"), Decimal("7.0")], id="an int joins a decimal"),
 		pytest.param([Decimal("1." + "1" * 37), Decimal("123")], "string", ["1." + "1" * 37, "123"], id="wider than 38 digits is text"),
 		pytest.param([Decimal("NaN"), Decimal("2")], "decimal128(19, 0)", [None, Decimal("2")], id="NaN is NULL"),
+		pytest.param([Decimal("0.12345678901234567890")], "decimal128(38, 20)", [Decimal("0.12345678901234567890")], id="a large scale keeps 38 digits"),
 	],
 )
 def test_given_decimals_when_crossed_then_the_column_holds_every_value_exactly(crossing: str, values: list[Any], expected_type: str, expected_values: list[Any]) -> None:

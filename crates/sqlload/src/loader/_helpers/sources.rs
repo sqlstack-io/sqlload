@@ -746,7 +746,7 @@ pub(crate) async fn admit_tables(
     Ok(plan)
 }
 
-/// Whether this is the source's first load: none of its tables exists in the destination, whether selected (`planned`) or not (`unselected`, looked up only while none is found), so `--select` cannot make a later table look present at the first load.
+/// Whether this is the source's first load: none of its tables exists in the destination, whether selected (`planned`) or not (`unselected`, looked up only while none is found, a table that cannot be read counting as absent), so `--select` cannot make a later table look present at the first load.
 async fn first_load(
     planned: &[TablePlan],
     unselected: &[TableSpec],
@@ -760,10 +760,12 @@ async fn first_load(
             continue;
         };
         let exists = match files_destination(destination) {
-            Some(_) => plan_table(spec, destination, options).await?.exists,
+            Some(_) => plan_table(spec, destination, options)
+                .await
+                .is_ok_and(|table| table.exists),
             None => live_columns(destination, &spec.destination)
-                .await?
-                .is_some(),
+                .await
+                .is_ok_and(|live| live.is_some()),
         };
         if exists {
             return Ok(false);
