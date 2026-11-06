@@ -215,7 +215,7 @@ def test_given_a_table_loaded_into_another_target_when_diffing_from_it_then_its_
 	unknown = run("contract", "diff", "--from", "staging", "-c", str(config))
 	assert (unknown.returncode, "--from staging is not a target in sqlload.toml (it has: dev, lake, prod)" in unknown.stderr) == (1, True), unknown.stdout + unknown.stderr
 	from_lake = run("contract", "diff", "--from", "lake", "--json", "-c", str(config))
-	assert (from_lake.returncode, json.loads(from_lake.stdout)["problems"]) == (1, ["orders: target lake writes files; contract diff compares warehouse tables (DuckDB, Snowflake) only"]), from_lake.stdout + from_lake.stderr
+	assert (from_lake.returncode, [finding["kind"] for finding in json.loads(from_lake.stdout)["resources"][0]["findings"]]) == (1, ["relation_missing"]), from_lake.stdout + from_lake.stderr
 
 
 def test_given_parquet_in_a_folder_when_loading_into_duckdb_then_duckdb_reads_the_files_itself_with_the_same_rows(tmp_path: Path) -> None:

@@ -59,6 +59,8 @@ pub struct ContractRequest {
     pub from: Option<String>,
     /// `contract generate`: propose declarations from the live tables; `Some(true)` also retypes declared columns and removes ones the table lacks (`--overwrite`).
     pub generate: Option<bool>,
+    /// `--all-files`: on files targets, also read every file's footer and report the files that differ from the newest load.
+    pub all_files: bool,
 }
 
 /// Every selected table's comparison.

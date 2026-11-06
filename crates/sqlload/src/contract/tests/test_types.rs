@@ -41,3 +41,11 @@ pub(crate) struct OtherWarehouseTestCase {
     pub(crate) from: Option<&'static str>,
     pub(crate) expected_sources: &'static [&'static str],
 }
+
+/// Every file's columns against the newest load's.
+pub(crate) struct FileDriftTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) live: Vec<(&'static str, ColumnType)>,
+    pub(crate) files: Vec<(&'static str, Vec<(&'static str, ColumnType)>)>,
+    pub(crate) expected_messages: &'static [&'static str],
+}

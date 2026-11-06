@@ -719,6 +719,27 @@ def test_given_a_loaded_python_table_when_generating_its_contract_then_it_prints
 	assert ((project / "sources" / "shop.py").read_text(), (project / "sqlload.toml").read_text()) == (module, toml)
 
 
+def test_given_a_files_target_with_an_older_file_of_other_columns_when_diffing_all_files_then_the_drift_is_reported(tmp_path: Path) -> None:
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	project = make_project(tmp_path, FILES_PROJECT, "shop.table(description='Test table.', columns={'code': 'text'})(rows)\n")
+	give(project, "rows", [{"id": 1, "code": "x1"}])
+	load(project)
+	agreed = sqlload(project, "contract", "diff", "--all-files")
+	assert (agreed.returncode, agreed.stdout.splitlines()[1]) == (0, "  OK    table:shop__rows"), agreed.stdout + agreed.stderr
+	old = project / "lake" / "rows" / "old.parquet"
+	pq.write_table(pa.table({"id": pa.array([0], pa.int64()), "code": pa.array([7], pa.int64()), "gone": [True]}), old)
+	os.utime(old, (1_000_000, 1_000_000))
+	assert sqlload(project, "contract", "diff").returncode == 0
+	drift = sqlload(project, "contract", "diff", "--all-files", "--json")
+	assert drift.returncode == 1, drift.stdout + drift.stderr
+	assert [(finding["kind"], finding["column"]) for finding in json.loads(drift.stdout)["resources"][0]["findings"]] == [
+		("files_type_mismatch", "code"),
+		("files_extra_column", "gone"),
+	]
+
+
 def test_given_an_enforced_contract_without_declared_columns_when_planning_then_the_table_is_blocked(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', contract='enforced')(rows)\n")
 	done = sqlload(project, "plan")

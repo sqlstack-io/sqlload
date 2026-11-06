@@ -289,6 +289,7 @@ async fn run_contract(
     let request = ContractRequest {
         from: args.from,
         generate,
+        all_files: args.all_files,
     };
     let report = compare_contracts(project, &destinations, &options, &request)
         .await

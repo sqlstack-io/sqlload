@@ -1,10 +1,11 @@
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::contract::_helpers::adopt::adoption;
+use crate::contract::_helpers::file_drift::file_drift;
 use crate::contract::_helpers::read_from::other_warehouse;
 use crate::contract::main::render_contract::render_contract;
 use crate::contract::main::write_contracts::write_contracts;
 use crate::contract::models::{AdoptedColumn, Adoption, ContractReport, ContractResource};
-use crate::contract::tests::test_types::AdoptionTestCase;
+use crate::contract::tests::test_types::{AdoptionTestCase, FileDriftTestCase};
 use crate::loader::_helpers::python::{python_table, python_tables};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::models::TableSpec;
@@ -151,4 +152,28 @@ pub(crate) fn other_warehouse_sources(from: Option<&str>) -> Vec<String> {
     parse_python_project(text, &|_| None, &[])
         .map(|project| other_warehouse(&project, from))
         .unwrap_or_else(|error| vec![format!("error: {error}")])
+}
+
+fn live_of(columns: &[(&str, ColumnType)]) -> Vec<LiveColumn> {
+    columns
+        .iter()
+        .map(|(name, column_type)| LiveColumn {
+            name: (*name).to_owned(),
+            column_type: column_type.clone(),
+            fraction_digits: None,
+        })
+        .collect()
+}
+
+/// The case's drift findings as `kind: message`.
+pub(crate) fn drift_messages(test_case: &FileDriftTestCase) -> Vec<String> {
+    let files: Vec<(String, Vec<LiveColumn>)> = test_case
+        .files
+        .iter()
+        .map(|(key, columns)| ((*key).to_owned(), live_of(columns)))
+        .collect();
+    file_drift(&live_of(&test_case.live), &files)
+        .into_iter()
+        .map(|finding| format!("{}: {}", finding.kind, finding.message))
+        .collect()
 }

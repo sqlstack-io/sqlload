@@ -140,8 +140,12 @@ columns nothing declares (`missing_declaration`); SQLLoad's own `_sqlload_*` col
 It exits 0 when every table agrees and 1 otherwise, including when a source cannot be listed or
 a selector matches nothing. `--from TARGET` reads every table as if its source loaded into that
 target, in that target's database and schema (declared types are read for its warehouse), and `--json` prints the report as one document with
-`sqb contract diff --json`'s field names. Tables on a files target are reported as problems: they
-have no catalog to compare yet.
+`sqb contract diff --json`'s field names. A table on a files target is compared with the schema
+`plan` uses for it: the footers of the newest load in its newest partition. `--all-files` also reads
+every file's footer under the table's folder (whatever `max_footer_reads` allows) and reports each
+column whose files differ from that load: another type (`files_type_mismatch`), absent
+(`files_missing_column`), or held only by older files (`files_extra_column`), naming the files.
+It changes nothing; on warehouse tables it adds nothing.
 
 `sqlload contract generate [SELECTOR ...]` takes the same selection and options and proposes the
 declarations that adopt each live table: every live column nothing declares, with its live type.

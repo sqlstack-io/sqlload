@@ -15,3 +15,15 @@ pub const RELATION_MISSING: &str = "relation_missing";
 
 /// A table whose columns could not be read.
 pub const INSPECTION_UNAVAILABLE: &str = "inspection_unavailable";
+
+/// With `--all-files`: files holding a column under another type than the newest load.
+pub const FILES_TYPE_MISMATCH: &str = "files_type_mismatch";
+
+/// With `--all-files`: files lacking a column the newest load has.
+pub const FILES_MISSING_COLUMN: &str = "files_missing_column";
+
+/// With `--all-files`: a column some files hold that the newest load lacks.
+pub const FILES_EXTRA_COLUMN: &str = "files_extra_column";
+
+/// File keys a files finding names before it only counts the rest.
+pub const NAMED_FILES: usize = 3;
