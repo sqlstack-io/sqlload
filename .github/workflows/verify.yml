@@ -69,6 +69,7 @@ jobs:
           toolchain: 1.95.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - run: make clean-partial-duckdb-sources
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.9"
@@ -99,6 +100,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: containers
+      - run: make clean-partial-duckdb-sources
       - run: |
           docker pull redpandadata/redpanda:v25.1.4
           docker pull postgres:17-alpine
@@ -123,6 +125,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: e2e
+      - run: make clean-partial-duckdb-sources
       - run: docker pull postgres:17
       - uses: astral-sh/setup-uv@v6
         with:
@@ -165,6 +168,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: perf
+      - run: make clean-partial-duckdb-sources
       - uses: gungraun/setup-gungraun@v1
       - name: Benchmark the merge base
         if: github.event_name == 'pull_request'
