@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0](https://github.com/sqlstack-io/sqlload/compare/v0.6.0...v0.7.0) (2026-11-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **loader:** Python tables, files sources, [sources.*.tables] entries and tables named exactly in include need a description (a Python docstring counts), which becomes the table comment; discovered tables take the source's table comment
+* **loader:** with new_tables = "skip" or "fail", a [sources.*.tables] entry no longer approves a new table; name it exactly in include
+* **cli:** load --reload asks for confirmation and is refused off a terminal; scripts add --yes
+* **python:** Python Decimal, date and naive datetime values load as decimal, date and timestamp_ntz instead of text
+* **loader:** an inferred column (Python tables, JSON and CSV files) whose values outgrow the table fails instead of widening; set auto_widen = true to widen along bool -> int -> decimal and timestamp_ntz -> timestamp_tz
+
+### Features
+
+* **cli:** load --reload asks for confirmation and is refused off a terminal; scripts add --yes ([e9865d0](https://github.com/sqlstack-io/sqlload/commit/e9865d027b8421a98c5afbcca862e5340de8a19f))
+* **loader:** an inferred column (Python tables, JSON and CSV files) whose values outgrow the table fails instead of widening; set auto_widen = true to widen along bool -&gt; int -&gt; decimal and timestamp_ntz -&gt; timestamp_tz ([e9865d0](https://github.com/sqlstack-io/sqlload/commit/e9865d027b8421a98c5afbcca862e5340de8a19f))
+* **loader:** Python tables, files sources, [sources.*.tables] entries and tables named exactly in include need a description (a Python docstring counts), which becomes the table comment; discovered tables take the source's table comment ([e9865d0](https://github.com/sqlstack-io/sqlload/commit/e9865d027b8421a98c5afbcca862e5340de8a19f))
+* **loader:** with new_tables = "skip" or "fail", a [sources.*.tables] entry no longer approves a new table; name it exactly in include ([e9865d0](https://github.com/sqlstack-io/sqlload/commit/e9865d027b8421a98c5afbcca862e5340de8a19f))
+* **python:** Python Decimal, date and naive datetime values load as decimal, date and timestamp_ntz instead of text ([e9865d0](https://github.com/sqlstack-io/sqlload/commit/e9865d027b8421a98c5afbcca862e5340de8a19f))
+
 ## [0.6.0](https://github.com/sqlstack-io/sqlload/compare/v0.5.1...v0.6.0) (2026-11-06)
 
 
