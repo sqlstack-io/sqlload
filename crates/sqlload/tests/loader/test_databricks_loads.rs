@@ -211,7 +211,10 @@ fn given_a_live_databricks_workspace_when_loading_with_each_strategy_then_rows_l
     ];
     run_async(async {
         let api = sqlload::databricks_api::models::DatabricksClient::new(
-            reqwest::Client::new(),
+            sqlload::http::main::http_client::build_http_client(
+                &sqlload::http::models::ConnectionCounter::default(),
+            )
+            .map_err(|error| error.to_string())?,
             &live.host,
             &live.warehouse_id,
             (

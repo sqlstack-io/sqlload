@@ -1232,7 +1232,10 @@ pub(crate) async fn run_live_databricks(
     .await
     .map_err(|error| error.to_string())?;
     let api = sqlload::databricks_api::models::DatabricksClient::new(
-        reqwest::Client::new(),
+        sqlload::http::main::http_client::build_http_client(
+            &sqlload::http::models::ConnectionCounter::default(),
+        )
+        .map_err(|error| error.to_string())?,
         host,
         warehouse_id,
         (
