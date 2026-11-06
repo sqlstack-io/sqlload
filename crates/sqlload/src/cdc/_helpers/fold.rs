@@ -6,20 +6,21 @@ use crate::cdc::models::{Change, ChangeOp, Relation, TupleValue};
 
 /// The positions of `key` columns in `relation`, or the column that is missing.
 pub(crate) fn key_positions(relation: &Relation, key: &[String]) -> Result<Vec<usize>, String> {
-    key.iter()
-        .map(|name| {
-            relation
-                .columns
-                .iter()
-                .position(|column| column.name == *name)
-                .ok_or_else(|| {
-                    format!(
-                        "{}.{} has no key column {name} on the stream",
-                        relation.schema, relation.table
-                    )
-                })
-        })
-        .collect()
+    let mut positions: Vec<usize> = Vec::with_capacity(key.len());
+    for name in key {
+        let Some(position) = relation
+            .columns
+            .iter()
+            .position(|column| column.name == *name)
+        else {
+            return Err(format!(
+                "{}.{} has no key column {name} on the stream",
+                relation.schema, relation.table
+            ));
+        };
+        positions.push(position);
+    }
+    Ok(positions)
 }
 
 fn key_of(values: &[TupleValue], positions: &[usize]) -> Vec<TupleValue> {

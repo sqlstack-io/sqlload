@@ -291,6 +291,21 @@ pub struct ProjectPlan {
     pub warnings: Vec<String>,
 }
 
+impl ProjectPlan {
+    /// The plan without its `postgres_cdc` tables, which load together per source rather than one by one.
+    pub fn uncaptured(&self) -> Self {
+        Self {
+            tables: self
+                .tables
+                .iter()
+                .filter(|table| table.spec.cdc.is_none())
+                .cloned()
+                .collect(),
+            ..self.clone()
+        }
+    }
+}
+
 /// Choices for one `plan`, `apply` or `load`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlanOptions {

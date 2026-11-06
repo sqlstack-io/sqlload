@@ -18,6 +18,8 @@ mod test_files_to_duckdb;
 mod test_loader_edge_cases;
 #[path = "loader/test_mixed_cursors.rs"]
 mod test_mixed_cursors;
+#[path = "loader/test_postgres_cdc.rs"]
+mod test_postgres_cdc;
 #[path = "loader/test_postgres_reader.rs"]
 mod test_postgres_reader;
 #[path = "loader/test_postgres_to_duckdb.rs"]

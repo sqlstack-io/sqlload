@@ -100,25 +100,27 @@ impl SnapshotLog<'_> {
             ),
         )
         .await?;
-        let records: Vec<(i64, String)> = rows
-            .iter()
-            .filter_map(|row| {
-                let (lsn, table) = row.split_once(' ').unwrap_or((row.as_str(), ""));
-                Some((lsn.parse::<i64>().ok()?, table.to_owned()))
-            })
-            .collect();
+        let mut records: Vec<(i64, String)> = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let (lsn, table) = row.split_once(' ').unwrap_or((row.as_str(), ""));
+            let lsn = lsn.parse::<i64>().map_err(|_| {
+                LoaderError::Invalid(format!("an unreadable snapshot record: {row:?}"))
+            })?;
+            records.push((lsn, table.to_owned()));
+        }
         let newest = records
             .iter()
             .filter(|(_, table)| table.is_empty())
             .map(|(lsn, _)| *lsn)
             .max();
-        Ok(newest.map(|newest| {
-            let tables = records
-                .into_iter()
-                .filter(|(lsn, table)| *lsn == newest && !table.is_empty())
-                .map(|(_, table)| table)
-                .collect();
-            (newest, tables)
-        }))
+        let Some(newest) = newest else {
+            return Ok(None);
+        };
+        let tables: Vec<String> = records
+            .into_iter()
+            .filter(|(lsn, table)| *lsn == newest && !table.is_empty())
+            .map(|(_, table)| table)
+            .collect();
+        Ok(Some((newest, tables)))
     }
 }

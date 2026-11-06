@@ -51,9 +51,9 @@ fn timestamp_micros(text: &str) -> Result<i64, String> {
 
 /// Postgres `bytea` hex output (`\x0a0b`) as bytes.
 fn bytea(text: &str) -> Result<Vec<u8>, String> {
-    text.strip_prefix("\\x")
-        .and_then(|hex_text| hex::decode(hex_text).ok())
-        .ok_or_else(|| format!("{text:?} is not bytea hex output"))
+    let problem = || format!("{text:?} is not bytea hex output");
+    let hex_text = text.strip_prefix("\\x").ok_or_else(problem)?;
+    hex::decode(hex_text).map_err(|_| problem())
 }
 
 /// `values` (`None` is NULL) as an array of `column_type`, or the first value that does not parse.

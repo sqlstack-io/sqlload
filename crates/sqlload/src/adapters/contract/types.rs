@@ -1,5 +1,6 @@
 //! The warehouse adapter contract, after sqlbuild's `StrictAdapter` and `BaseAdapter`: the shared rendering is the default, and each warehouse overrides what its SQL does differently.
 
+use crate::adapters::contract::_helpers::changes::change_statements;
 use arrow_array::RecordBatch;
 use chrono::NaiveDateTime;
 
@@ -22,7 +23,8 @@ use crate::adapters::contract::_helpers::schema::{
 use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::_helpers::write::write_statements;
 use crate::adapters::contract::models::{
-    CursorQuery, CursorRead, CursorValue, TableName, WriteStatementsRequest, WriteTarget,
+    ChangeWrite, CursorQuery, CursorRead, CursorValue, TableName, WriteStatementsRequest,
+    WriteTarget,
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::loader::errors::LoaderError;
@@ -249,6 +251,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         values: &[String],
     ) -> Vec<String> {
         recreate_statements(self, request, source, values)
+    }
+
+    /// Statements applying a batch of captured changes from `staging`, guarded by `_sqlload_lsn` so a replay changes nothing; in one transaction where the warehouse has them.
+    fn render_changes(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        change: &ChangeWrite,
+        staging: &TableName,
+    ) -> Vec<String> {
+        change_statements(self, request, change, staging)
     }
 
     /// Atomic statements applying `request.mode` from `staging`, which holds every column, the `_sqlload_*` metadata included; the caller drops `staging` and its swap table.

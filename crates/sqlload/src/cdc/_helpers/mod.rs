@@ -1,4 +1,8 @@
+pub(crate) mod batch;
+pub(crate) mod buffer;
 pub(crate) mod fold;
 pub(crate) mod pgoutput;
 pub(crate) mod reader;
+pub(crate) mod snapshot_log;
+pub(crate) mod stream;
 pub(crate) mod text_values;

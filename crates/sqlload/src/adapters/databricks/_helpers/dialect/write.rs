@@ -1,6 +1,5 @@
 //! Databricks' writes: each one statement, since the Statement Execution API runs every statement in its own transaction.
 
-use crate::adapters::contract::_helpers::changes::change_statements as captured_changes;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::databricks::constants::{TIMESTAMP_NTZ, TIMESTAMP_NTZ_FEATURE, TYPE_WIDENING};
@@ -48,7 +47,8 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
         }
         WriteMode::Replace => vec![format!("INSERT OVERWRITE {target} {insert_from}")],
         WriteMode::Append => vec![format!("INSERT INTO {target} {insert_from}")],
-        WriteMode::Changes(change) => captured_changes(adapter, request, change, staging)
+        WriteMode::Changes(change) => adapter
+            .render_changes(request, change, staging)
             .into_iter()
             .filter(|statement| !matches!(statement.as_str(), "BEGIN" | "COMMIT"))
             .collect(),

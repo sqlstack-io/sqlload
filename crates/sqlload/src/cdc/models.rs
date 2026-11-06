@@ -102,3 +102,14 @@ pub struct ChangeBuffer {
     /// The newest committed transaction's end LSN, which the slot may confirm once the batch is written.
     pub end_lsn: Option<u64>,
 }
+
+/// What the stream delivered next.
+#[derive(Debug, Clone, Copy)]
+pub enum StreamStep<'a> {
+    /// A transaction's start: anything left open before it is dropped.
+    Begin,
+    /// One pgoutput message of the open transaction.
+    Message(&'a [u8]),
+    /// The open transaction's commit: its LSN, end LSN and time (microseconds since 2000 UTC).
+    Commit { lsn: u64, end_lsn: u64, time: i64 },
+}

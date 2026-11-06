@@ -2,7 +2,9 @@ use crate::files_source::models::SourceFormat;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
-use crate::project::constants::{FILES_CONNECTION_KINDS, TABLE_PLACEHOLDER};
+use crate::project::constants::{
+    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, TABLE_PLACEHOLDER,
+};
 use crate::project::models::{
     CdcDeletes, CdcMode, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind,
 };
@@ -242,14 +244,14 @@ fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     for (setting, name) in [("slot", &source.slot), ("publication", &source.publication)] {
         let valid = name.as_deref().is_none_or(|name| {
             !name.is_empty()
-                && name.len() <= 63
+                && name.len() <= MAX_POSTGRES_NAME_BYTES
                 && name
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
         });
         if !valid {
             problems.push(format!(
-                "{place} {setting} must be lower-case letters, digits and underscores, at most 63 characters"
+                "{place} {setting} must be lower-case letters, digits and underscores, at most {MAX_POSTGRES_NAME_BYTES} characters"
             ));
         }
     }

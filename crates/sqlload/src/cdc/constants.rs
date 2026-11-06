@@ -14,3 +14,7 @@ pub const STOP_MESSAGE_PREFIX: &str = "sqlload.stop";
 pub const BATCH_CHANGES: usize = 100_000;
 /// Session settings for the replication connection, so values arrive as the snapshot reads them.
 pub const REPLICATION_OPTIONS: &str = "-c TimeZone=UTC -c DateStyle=ISO -c extra_float_digits=3";
+/// Microseconds from 1970-01-01 to 2000-01-01, where Postgres counts commit times from.
+pub const POSTGRES_EPOCH_MICROS: i64 = 946_684_800_000_000;
+/// `pg_replication_slots.wal_status` of a slot that lost WAL it had not confirmed.
+pub const LOST_WAL_STATUS: &str = "lost";

@@ -23,12 +23,12 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    BatchedScenarioTestCase, CursorSource, DatabricksAnswerTestCase, DatabricksLoadTestCase,
-    DatabricksOutcome, DebugStageTestCase, FilesScenario, FilesScenarioTestCase,
-    FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks, LiveDatabricksTestCase,
-    MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome, RouteTestCase,
-    ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase, WrittenPartition,
-    WrittenRow, WrittenRun,
+    BatchedScenarioTestCase, CdcStep, CursorSource, DatabricksAnswerTestCase,
+    DatabricksLoadTestCase, DatabricksOutcome, DebugStageTestCase, FilesScenario,
+    FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks,
+    LiveDatabricksTestCase, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
+    RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase,
+    WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -1694,3 +1694,105 @@ pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result
         .map_err(|error| error.to_string())?;
     Ok(render_plan(&plan).0.join("\n"))
 }
+
+/// A project with two `postgres_cdc` sources on every `public` table of `port`'s database, into the DuckDB file `database`: `app` merges with soft deletes, `log` keeps a changelog.
+pub(crate) fn cdc_project(port: u16, database: &std::path::Path) -> String {
+    format!(
+        r#"
+[connections.pg]
+kind = "postgres"
+host = "127.0.0.1"
+port = {port}
+user = "sqlload"
+password = "sqlload"
+database = "app"
+
+[connections.local]
+kind = "duckdb"
+database = "{}"
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.app]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.*"]
+
+[sources.log]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.*"]
+cdc_mode = "changelog"
+"#,
+        database.display()
+    )
+}
+
+/// Run the `sqlload` executable on `config` with `args`, stopping itself at `crash_at` when set; whether it succeeded, and its output.
+pub(crate) fn run_sqlload(
+    config: &std::path::Path,
+    args: &[&str],
+    crash_at: &str,
+) -> Result<(bool, String), String> {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+        .arg("--config")
+        .arg(config)
+        .arg("--no-color")
+        .args(args)
+        .env("SQLLOAD_TEST_CRASH_AT", crash_at)
+        .output()
+        .map_err(|error| error.to_string())?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok((output.status.success(), text))
+}
+
+/// The single text value `query` returns from the DuckDB file `database`.
+pub(crate) fn duckdb_text(database: &std::path::Path, query: &str) -> Result<String, String> {
+    let connection = duckdb::Connection::open(database).map_err(|error| error.to_string())?;
+    connection
+        .query_row(query, [], |row| row.get::<_, Option<String>>(0))
+        .map(Option::unwrap_or_default)
+        .map_err(|error| format!("{query}: {error}"))
+}
+
+/// One captured-changes run.
+pub(crate) const fn step(
+    source_change: &'static str,
+    args: &'static [&'static str],
+    crash_at: &'static str,
+    (expected_success, expected_output): (bool, &'static str),
+) -> CdcStep {
+    CdcStep {
+        source_change,
+        args,
+        crash_at,
+        expected_success,
+        expected_output,
+    }
+}
+
+/// Snapshot, [`CDC_CHANGES`], then a load that stops itself at `crash_at`, a load that recovers and a re-run that finds nothing.
+pub(crate) const fn crashed_batch(
+    args: &'static [&'static str],
+    crash_at: &'static str,
+) -> [CdcStep; 5] {
+    [
+        step("", args, "", (true, "loaded")),
+        step(CDC_CHANGES, args, crash_at, (false, "")),
+        step("", args, "", (true, "Completed")),
+        step("", args, "", (true, "0 rows")),
+        step("", &["plan", "app", "log"], "", (true, "apply changes")),
+    ]
+}
+
+/// Two transactions: an insert, an update leaving a TOASTed value unchanged and an insert in another table; then a delete and an update.
+pub(crate) const CDC_CHANGES: &str = "
+BEGIN; INSERT INTO public.orders VALUES (4, 4, 'd'); UPDATE public.orders SET qty = 10 WHERE id = 1; INSERT INTO public.items VALUES (3, 'three'); COMMIT;
+BEGIN; DELETE FROM public.orders WHERE id = 2; UPDATE public.items SET name = 'one!' WHERE id = 1; COMMIT;
+";

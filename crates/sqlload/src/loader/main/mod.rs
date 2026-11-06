@@ -2,7 +2,6 @@ pub(in crate::loader) mod _check_source;
 pub(in crate::loader) mod _files_repair;
 pub(in crate::loader) mod _files_schema;
 pub(in crate::loader) mod _files_window;
-pub(in crate::loader) mod _load_cdc;
 pub(in crate::loader) mod _load_python;
 pub(in crate::loader) mod _load_table;
 pub(in crate::loader) mod _logged_plan;

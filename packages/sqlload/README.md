@@ -202,6 +202,45 @@ source's tables exists in the destination, whichever tables are selected; tables
 count as approved. A table that did not load then (blocked by a problem, say) counts as new
 afterwards, so name it in `include`.
 
+## Postgres change data capture
+
+`kind = "postgres_cdc"` streams a Postgres database's changes from a logical replication slot
+into DuckDB, Snowflake or Databricks (not files targets yet). The server needs
+`wal_level = logical`, and the connection's user needs the `REPLICATION` attribute.
+
+```toml
+[sources.app_cdc]
+kind = "postgres_cdc"
+connection = "app_pg"
+include = ["public.*"]
+cdc_mode = "merge"        # merge (default) | changelog
+deletes = "soft"          # soft (default) | hard; merge only
+# slot = "sqlload_app_cdc"         # the default: sqlload_<source>
+# publication = "sqlload_app_cdc"  # created for the selected tables when missing
+```
+
+- The first `sqlload load` creates the slot with an exported snapshot and copies every table
+  under it. Each later load reads the changes committed since the last one, up to the moment it
+  started, then stops.
+- Every row carries `_sqlload_lsn` (its transaction's commit LSN), `_sqlload_op` (`snapshot`,
+  `insert`, `update`, `delete` or `truncate`) and `_sqlload_committed_at`.
+  - `merge` keeps one row per key. A soft delete sets `_sqlload_deleted_at`, and a truncate
+    soft-deletes every older row. A TOASTed value the change left out keeps its current value.
+  - `changelog` appends every change, with `_sqlload_seq` as its position in the transaction
+    and `_sqlload_unchanged` flagging the values the change left out.
+- A batch always holds whole transactions. The slot confirms a batch only after every table it
+  touched has committed, and a change whose `_sqlload_lsn` the table already holds is skipped.
+  A load that stops part-way is safe to run again: nothing is lost or applied twice.
+- Tables are not promised to be consistent with each other at every moment. Each one converges
+  to the source as of the last confirmed position.
+- A captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. `merge`
+  needs a primary key or a `unique_key`.
+- When the slot is lost, or a snapshot stopped part-way, the load stops and names the fix:
+  `sqlload load --resnapshot` drops and recreates the slot and copies every table again. `plan
+  --resnapshot` shows it first.
+- Schema changes while streaming are not handled yet; a table that changes shape stops the load
+  with the same fix.
+
 ## Python sources
 
 List the folders holding them in `sqlload.toml` (`python_paths = ["sources"]`); every

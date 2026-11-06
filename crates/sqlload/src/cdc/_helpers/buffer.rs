@@ -1,28 +1,30 @@
 //! Keep a transaction's messages until it commits, then file its changes by table.
 
 use crate::cdc::_helpers::pgoutput::decode_message;
-use crate::cdc::models::{Change, ChangeBuffer, ChangeOp, PgOutputMessage, TableChanges};
-
-/// Microseconds from 1970-01-01 to 2000-01-01, where Postgres counts commit times from.
-const POSTGRES_EPOCH_MICROS: i64 = 946_684_800_000_000;
-
-/// What the stream delivered next.
-#[derive(Debug, Clone, Copy)]
-pub enum StreamStep<'a> {
-    /// A transaction's start: anything left open before it is dropped.
-    Begin,
-    /// One pgoutput message of the open transaction.
-    Message(&'a [u8]),
-    /// The open transaction's commit: its LSN, end LSN and time (microseconds since 2000 UTC).
-    Commit { lsn: u64, end_lsn: u64, time: i64 },
-}
+use crate::cdc::constants::POSTGRES_EPOCH_MICROS;
+use crate::cdc::models::{
+    Change, ChangeBuffer, ChangeOp, PgOutputMessage, StreamStep, TableChanges,
+};
 
 /// Apply one stream step to `buffer`: messages wait in the open transaction, and its commit files its changes under their tables with the commit LSN, so a batch only ever holds whole transactions. A relation message updates the table's shape at once.
-pub fn buffer_change(buffer: &mut ChangeBuffer, step: StreamStep<'_>) -> Result<(), String> {
+pub(crate) fn buffer_change(
+    mut buffer: ChangeBuffer,
+    step: StreamStep<'_>,
+) -> Result<ChangeBuffer, String> {
     match step {
         StreamStep::Begin => buffer.open.clear(),
         StreamStep::Message(bytes) => match decode_message(bytes)? {
             PgOutputMessage::Relation(relation) => {
+                let reshaped = buffer
+                    .tables
+                    .get(&relation.oid)
+                    .is_some_and(|table| table.relation.columns != relation.columns);
+                if reshaped {
+                    return Err(format!(
+                        "{}.{} changed shape while streaming; schema changes while streaming come in a later release, so re-snapshot with --resnapshot",
+                        relation.schema, relation.table
+                    ));
+                }
                 buffer.relations.insert(relation.oid, relation);
             }
             PgOutputMessage::Other(_) => {}
@@ -79,5 +81,5 @@ pub fn buffer_change(buffer: &mut ChangeBuffer, step: StreamStep<'_>) -> Result<
             buffer.end_lsn = Some(end_lsn);
         }
     }
-    Ok(())
+    Ok(buffer)
 }

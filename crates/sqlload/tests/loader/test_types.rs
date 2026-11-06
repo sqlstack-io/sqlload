@@ -437,3 +437,26 @@ pub(crate) struct DatabricksAnswerTestCase {
     /// The column names `information_schema.columns` returns, in order.
     pub(crate) expected_columns: &'static [&'static str],
 }
+
+/// One `sqlload` run of a captured-changes scenario, as a separate process.
+pub(crate) struct CdcStep {
+    /// SQL run in Postgres before this run.
+    pub(crate) source_change: &'static str,
+    /// The `sqlload` arguments after `--config`.
+    pub(crate) args: &'static [&'static str],
+    /// Where the process stops itself (`SQLLOAD_TEST_CRASH_AT`); empty for nowhere.
+    pub(crate) crash_at: &'static str,
+    pub(crate) expected_success: bool,
+    /// Text the run's output must contain.
+    pub(crate) expected_output: &'static str,
+}
+
+pub(crate) struct CdcScenarioTestCase {
+    pub(crate) description: &'static str,
+    /// The Postgres image tag.
+    pub(crate) tag: &'static str,
+    pub(crate) steps: &'static [CdcStep],
+    /// A query on the DuckDB file after the last step, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}

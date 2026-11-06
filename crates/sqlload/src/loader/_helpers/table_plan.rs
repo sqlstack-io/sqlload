@@ -429,6 +429,14 @@ async fn plan_table_once(
         _ => None,
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
+    schema
+        .warnings
+        .extend(spec.cdc.as_ref().filter(|_| options.resnapshot).map(|cdc| {
+            format!(
+                "--resnapshot drops and recreates slot {}, then copies every table of {} again",
+                cdc.slot, spec.source_name
+            )
+        }));
     let mode = match &spec.cdc {
         Some(cdc) => WriteMode::Changes(ChangeWrite {
             apply: cdc.apply,

@@ -8,21 +8,27 @@ use pgwire_replication::{Lsn, ReplicationClient, ReplicationConfig, TlsConfig};
 use tokio_postgres::Client;
 
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite, WriteMode};
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
-use crate::cdc::constants::{BATCH_CHANGES, REPLICATION_OPTIONS, STOP_MESSAGE_PREFIX};
-use crate::cdc::main::buffer_change::{StreamStep, buffer_change};
-use crate::cdc::main::changes_batch::changes_batch;
+use crate::cdc::_helpers::batch::changes_batch;
+use crate::cdc::_helpers::buffer::buffer_change;
+use crate::cdc::_helpers::snapshot_log::SnapshotLog;
+use crate::cdc::constants::{
+    BATCH_CHANGES, LOST_WAL_STATUS, REPLICATION_OPTIONS, STOP_MESSAGE_PREFIX,
+};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
-use crate::cdc::models::ChangeBuffer;
-use crate::loader::_helpers::cdc_state::SnapshotLog;
-use crate::loader::_helpers::publish::publish_table;
-use crate::loader::_helpers::sources::connect_source;
+use crate::cdc::models::{ChangeBuffer, StreamStep, TableChanges};
+use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    CdcSpec, CommitRule, LoadRun, Publisher, SourceReader, TablePlan, WholeReason,
+    CdcSpec, CommitRule, LoadRun, ProjectPlan, Publisher, TableLoaded, TableOutcome, TablePlan,
+    WholeReason,
 };
+use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::errors::PostgresError;
-use crate::postgres_source::models::ReadColumn;
+use crate::postgres_source::main::connect_postgres::connect_postgres;
+use crate::postgres_source::main::copy_table::copy_table;
+use crate::postgres_source::models::{CopyRequest, PostgresAddress, ReadColumn};
 use crate::project::models::{ConnectionConfig, SourceConfig};
 use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN};
 
@@ -65,8 +71,8 @@ fn quoted(name: &str) -> String {
 }
 
 impl CdcSource<'_> {
-    /// The replication session's settings, starting where the slot confirmed.
-    fn replication_config(&self) -> Result<ReplicationConfig, LoaderError> {
+    /// The source's Postgres connection settings.
+    fn address(&self) -> Result<PostgresAddress<'_>, LoaderError> {
         let Some(ConnectionConfig::Postgres {
             host,
             port,
@@ -80,19 +86,32 @@ impl CdcSource<'_> {
                 self.source.connection
             )));
         };
-        let password = password
-            .as_ref()
-            .map(|secret| secret.expose().to_owned())
-            .unwrap_or_default();
+        Ok(PostgresAddress {
+            host,
+            port: *port,
+            user,
+            password: password.as_ref().map(|secret| secret.expose()),
+            database,
+        })
+    }
+
+    /// A control connection to the source.
+    async fn connect(&self) -> Result<Client, LoaderError> {
+        Ok(connect_postgres(self.address()?).await?)
+    }
+
+    /// The replication session's settings, starting where the slot confirmed.
+    fn replication_config(&self) -> Result<ReplicationConfig, LoaderError> {
+        let address = self.address()?;
         Ok(ReplicationConfig::new(
-            host.clone(),
-            user.clone(),
-            password,
-            database.clone(),
+            address.host,
+            address.user,
+            address.password.unwrap_or_default(),
+            address.database,
             self.cdc.slot.clone(),
             self.cdc.publication.clone(),
         )
-        .with_port(*port)
+        .with_port(address.port)
         .with_tls(TlsConfig::disabled())
         .with_status_interval(STATUS_INTERVAL)
         .with_options(REPLICATION_OPTIONS)
@@ -157,17 +176,18 @@ impl CdcSource<'_> {
             .iter()
             .map(|row| (row.get(0), row.get(1)))
             .collect();
-        let missing: Vec<String> = self
-            .tables
-            .iter()
-            .map(|table| &table.spec.source_table)
-            .filter(|source| {
-                !published
-                    .iter()
-                    .any(|(schema, name)| *schema == source.schema && *name == source.name)
-            })
-            .map(|source| format!("{}.{}", quoted(&source.schema), quoted(&source.name)))
-            .collect();
+        let mut missing: Vec<String> = Vec::new();
+        for table in &self.tables {
+            let source = &table.spec.source_table;
+            let wanted = (source.schema.clone(), source.name.clone());
+            if !published.contains(&wanted) {
+                missing.push(format!(
+                    "{}.{}",
+                    quoted(&source.schema),
+                    quoted(&source.name)
+                ));
+            }
+        }
         match missing.is_empty() {
             true => Ok(()),
             false => Err(LoaderError::Invalid(format!(
@@ -194,7 +214,7 @@ impl CdcSource<'_> {
     /// Why the slot cannot resume, if it cannot: SQLLoad did not create it, or some table has no snapshot from it (a snapshot stopped part-way, or the table joined since).
     async fn resume_problem(&self, wal_status: &str) -> Result<Option<String>, LoaderError> {
         let slot = &self.cdc.slot;
-        if wal_status == "lost" {
+        if wal_status == LOST_WAL_STATUS {
             return Ok(Some(format!(
                 "slot {slot} lost WAL it had not confirmed, so changes are missing; run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
@@ -208,7 +228,7 @@ impl CdcSource<'_> {
             .tables
             .iter()
             .map(|table| table.spec.destination.table.as_str())
-            .filter(|name| !snapshotted.iter().any(|done| done == name))
+            .filter(|name| !snapshotted.contains(&(*name).to_owned()))
             .collect();
         Ok((!unfinished.is_empty()).then(|| {
             format!(
@@ -224,10 +244,9 @@ impl CdcSource<'_> {
 
     /// Load the source: rows written per destination table name.
     pub(crate) async fn load(&self) -> Result<BTreeMap<String, u64>, LoaderError> {
-        let control = connect_source(self.run.project, self.source).await?;
+        let control = self.connect().await?;
         self.ensure_publication(&control).await?;
         self.log()?.ensure().await?;
-        let mut rows: BTreeMap<String, u64> = BTreeMap::new();
         let mut slot = self.slot_state(&control).await?;
         if self.run.options.resnapshot && slot.is_some() {
             control
@@ -236,16 +255,26 @@ impl CdcSource<'_> {
                 .map_err(postgres)?;
             slot = None;
         }
-        let mut stream = match slot {
+        let (mut stream, mut rows) = match slot {
             Some((_, wal_status)) => {
                 if let Some(problem) = self.resume_problem(&wal_status).await? {
                     return Err(LoaderError::Invalid(problem));
                 }
-                ReplicationClient::connect(self.replication_config()?)
+                let session = ReplicationClient::connect(self.replication_config()?)
                     .await
-                    .map_err(replication)?
+                    .map_err(replication)?;
+                (session, BTreeMap::new())
             }
-            None => self.snapshot(&mut rows).await?,
+            None => {
+                let recreated = self.run.options.resnapshot;
+                if !recreated && self.log()?.current().await?.is_some() {
+                    return Err(LoaderError::Invalid(format!(
+                        "slot {} is gone (dropped, or never kept after a failover), so the changes since the last load are lost; run `sqlload load --resnapshot` to recreate it and copy every table again",
+                        self.cdc.slot
+                    )));
+                }
+                self.snapshot().await?
+            }
         };
         let stop: String = control
             .query_one(
@@ -256,10 +285,17 @@ impl CdcSource<'_> {
             .map_err(postgres)?
             .get(0);
         let stop = Lsn::parse(&stop).map_err(replication)?;
-        let streamed = self.stream(&mut stream, stop, &mut rows).await;
+        let streamed = self.stream(&mut stream, stop).await;
         let confirmed = match streamed {
-            Ok(Some(end)) => self.await_confirmed(&control, end).await,
-            Ok(None) => Ok(()),
+            Ok((end, written)) => {
+                for (table, count) in written {
+                    *rows.entry(table).or_default() += count;
+                }
+                match end {
+                    Some(end) => self.await_confirmed(&control, end).await,
+                    None => Ok(()),
+                }
+            }
             Err(error) => Err(error),
         };
         stream.stop();
@@ -268,10 +304,8 @@ impl CdcSource<'_> {
     }
 
     /// Create the slot with an exported snapshot and copy every table under it, each table's rows getting the snapshot's LSN; returns the session, which streams on from the snapshot.
-    async fn snapshot(
-        &self,
-        rows: &mut BTreeMap<String, u64>,
-    ) -> Result<ReplicationClient, LoaderError> {
+    async fn snapshot(&self) -> Result<(ReplicationClient, BTreeMap<String, u64>), LoaderError> {
+        let mut rows: BTreeMap<String, u64> = BTreeMap::new();
         let mut session = ReplicationClient::connect_gated(self.replication_config()?)
             .await
             .map_err(replication)?;
@@ -295,7 +329,7 @@ impl CdcSource<'_> {
         let snapshot_lsn = i64::try_from(consistent.as_u64()).map_err(replication)?;
         let log = self.log()?;
         log.record("", snapshot_lsn).await?;
-        let client = connect_source(self.run.project, self.source).await?;
+        let client = self.connect().await?;
         client
             .batch_execute(&format!(
                 "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '{}'",
@@ -303,7 +337,6 @@ impl CdcSource<'_> {
             ))
             .await
             .map_err(postgres)?;
-        let reader = SourceReader::Postgres(client, Vec::new());
         for (index, table) in self.tables.iter().enumerate() {
             if index == 1 {
                 crash_point("snapshot-after-first-table");
@@ -312,17 +345,43 @@ impl CdcSource<'_> {
             plan.mode = WriteMode::Replace;
             plan.commits = CommitRule::Whole(WholeReason::Chosen);
             plan.read_columns = with_snapshot_columns(&plan.read_columns, self.cdc, snapshot_lsn);
-            let written = publish_table(&reader, &plan, (self.destination, self.run)).await?;
+            let written = self.copy_table(&client, plan).await?;
             log.record(&table.spec.destination.table, snapshot_lsn)
                 .await?;
             rows.insert(table.spec.destination.table.clone(), written);
         }
-        if let SourceReader::Postgres(client, _) = &reader {
-            client.batch_execute("COMMIT").await.map_err(postgres)?;
-        }
+        client.batch_execute("COMMIT").await.map_err(postgres)?;
         session.start().await.map_err(replication)?;
         session.wait_started().await.map_err(replication)?;
-        Ok(session)
+        Ok((session, rows))
+    }
+
+    /// Copy one table under the open snapshot into a build table swapped in when done; returns its rows.
+    async fn copy_table(&self, client: &Client, plan: TablePlan) -> Result<u64, LoaderError> {
+        let request = CopyRequest {
+            table: &plan.spec.source_table,
+            columns: plan.read_columns.clone(),
+            filter: None,
+            order_by: None,
+            batch_rows: SOURCE_BATCH_ROWS,
+            batch_bytes: DEFAULT_BATCH_BYTES,
+            helpers: &[],
+        };
+        let mut publisher =
+            Publisher::open(plan.clone(), (self.destination, self.run.options), None).await?;
+        let copied = async {
+            copy_table(client, request, async |batch| {
+                publisher
+                    .stage(batch, None)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await?;
+            publisher.finish(None).await
+        }
+        .await;
+        publisher.close().await;
+        copied
     }
 
     /// Read changes until the stop message, writing a batch whenever it holds enough changes at a transaction's end, and the rest at the stop; returns the end LSN of the last transaction read, confirmed to the slot, or `None` when there was none.
@@ -330,8 +389,8 @@ impl CdcSource<'_> {
         &self,
         stream: &mut ReplicationClient,
         stop: Lsn,
-        rows: &mut BTreeMap<String, u64>,
-    ) -> Result<Option<u64>, LoaderError> {
+    ) -> Result<(Option<u64>, BTreeMap<String, u64>), LoaderError> {
+        let mut rows: BTreeMap<String, u64> = BTreeMap::new();
         let mut buffer = ChangeBuffer::default();
         let mut confirmed: Option<u64> = None;
         loop {
@@ -353,7 +412,7 @@ impl CdcSource<'_> {
                 _ => None,
             };
             if let Some(step) = step {
-                buffer_change(&mut buffer, step).map_err(LoaderError::Invalid)?;
+                buffer = buffer_change(buffer, step).map_err(LoaderError::Invalid)?;
             }
             let at_stop = matches!(
                 &event,
@@ -362,26 +421,29 @@ impl CdcSource<'_> {
             );
             let full =
                 matches!(event, ReplicationEvent::Commit { .. }) && buffer.count >= BATCH_CHANGES;
-            if (full || at_stop)
-                && let Some(end) = self.flush(&mut buffer, rows).await?
-            {
-                stream.update_applied_lsn(Lsn::from_u64(end));
-                confirmed = Some(end);
+            if full || at_stop {
+                let tables = std::mem::take(&mut buffer.tables);
+                buffer.count = 0;
+                for (table, count) in self.flush(tables).await? {
+                    *rows.entry(table).or_default() += count;
+                }
+                if let Some(end) = buffer.end_lsn {
+                    stream.update_applied_lsn(Lsn::from_u64(end));
+                    confirmed = Some(end);
+                }
             }
             if at_stop {
-                return Ok(confirmed);
+                return Ok((confirmed, rows));
             }
         }
     }
 
-    /// Write the buffered transactions, one commit per touched table, then empty the buffer; returns the end LSN the slot may now confirm.
+    /// Write a batch's transactions, one commit per touched table; returns the rows each table wrote. The slot may confirm the batch once this returns.
     async fn flush(
         &self,
-        buffer: &mut ChangeBuffer,
-        rows: &mut BTreeMap<String, u64>,
-    ) -> Result<Option<u64>, LoaderError> {
-        let tables = std::mem::take(&mut buffer.tables);
-        buffer.count = 0;
+        tables: BTreeMap<u32, TableChanges>,
+    ) -> Result<BTreeMap<String, u64>, LoaderError> {
+        let mut rows: BTreeMap<String, u64> = BTreeMap::new();
         let mut written = 0;
         for changes in tables.values() {
             let relation = &changes.relation;
@@ -419,12 +481,10 @@ impl CdcSource<'_> {
             if written == 1 {
                 crash_point("batch-after-first-table");
             }
-            *rows
-                .entry(table.spec.destination.table.clone())
-                .or_default() += count;
+            rows.insert(table.spec.destination.table.clone(), count);
         }
         crash_point("batch-before-confirm");
-        Ok(buffer.end_lsn)
+        Ok(rows)
     }
 
     /// Wait until the slot shows `end` as confirmed, so the next load starts after it.
@@ -468,4 +528,75 @@ fn with_snapshot_columns(read: &[ReadColumn], cdc: &CdcSpec, snapshot_lsn: i64) 
             .filter(|column| !(merged && column.name == CDC_UNCHANGED_COLUMN)),
     );
     columns
+}
+
+/// The plan's unblocked `postgres_cdc` tables, by source.
+pub(crate) fn captured_sources(plan: &ProjectPlan) -> BTreeMap<&str, Vec<&TablePlan>> {
+    let mut sources: BTreeMap<&str, Vec<&TablePlan>> = BTreeMap::new();
+    let captured = plan
+        .tables
+        .iter()
+        .filter(|table| table.spec.cdc.is_some() && table.schema.blocked.is_none());
+    for table in captured {
+        sources
+            .entry(table.spec.source_name.as_str())
+            .or_default()
+            .push(table);
+    }
+    sources
+}
+
+/// Load source `name` with `tables`: rows written per destination table name, or why it failed.
+pub(crate) async fn load_source(
+    run: &LoadRun<'_>,
+    name: &str,
+    tables: &[&TablePlan],
+) -> Result<BTreeMap<String, u64>, String> {
+    let first = tables.first().map(|table| &table.spec);
+    let (Some(source), Some(cdc), Some(destination)) = (
+        run.project.sources.get(name),
+        first.and_then(|spec| spec.cdc.as_ref()),
+        first.and_then(|spec| run.destinations.get(&spec.target)),
+    ) else {
+        return Err(format!(
+            "source {name} is not a connected postgres_cdc source"
+        ));
+    };
+    let unit = CdcSource {
+        run,
+        name,
+        source,
+        cdc,
+        tables: tables.to_vec(),
+        destination,
+    };
+    unit.load().await.map_err(|error| error.to_string())
+}
+
+/// Each table's outcome from its source's load.
+pub(crate) fn source_outcomes(
+    tables: &[&TablePlan],
+    loaded: &Result<BTreeMap<String, u64>, String>,
+    elapsed: Duration,
+) -> Vec<TableOutcome> {
+    let mut outcomes: Vec<TableOutcome> = Vec::with_capacity(tables.len());
+    for table in tables {
+        let spec = &table.spec;
+        let rows = loaded.as_ref().map(|rows| {
+            rows.get(&spec.destination.table)
+                .copied()
+                .unwrap_or_default()
+        });
+        outcomes.push(TableOutcome {
+            table: sql_adapter(spec.warehouse).render_display_name(&spec.destination),
+            loaded: rows
+                .map(|rows| TableLoaded {
+                    rows,
+                    ..TableLoaded::default()
+                })
+                .map_err(Clone::clone),
+            elapsed,
+        });
+    }
+    outcomes
 }

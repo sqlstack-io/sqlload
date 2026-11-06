@@ -280,11 +280,19 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let source = match (&spec.files, &spec.python) {
         (Some(files), _) => format!("files  {}  {}", files.location, files.encoding),
         (None, Some(python)) => format!("python  {} ({})", python.module, spec.source_name),
-        (None, None) => format!(
-            "postgres  {}  {}",
-            spec.source_name,
-            spec.source_table.qualified_name()
-        ),
+        (None, None) => match &spec.cdc {
+            Some(cdc) => format!(
+                "postgres_cdc  {}  {}  slot {}",
+                spec.source_name,
+                spec.source_table.qualified_name(),
+                cdc.slot
+            ),
+            None => format!(
+                "postgres  {}  {}",
+                spec.source_name,
+                spec.source_table.qualified_name()
+            ),
+        },
     };
     let mut details = vec![detail("source", source)];
     details.extend(
