@@ -11,9 +11,6 @@ SQLLoad. SQLLoad is written in Rust. Python is needed only for Python sources.
 A separate exporter (`sqlload run`) streams Kafka topics into Snowflake. Its configuration is in
 [sqlload.example.toml](sqlload.example.toml).
 
-**Status: pre-release.** It is not yet intended for general use. Commands, configuration and
-behaviour can change between releases, and there is no support or stability guarantee.
-
 ## Copy one table
 
 `sqlload copy` loads one table once and needs no configuration file. Here, a folder of Parquet
