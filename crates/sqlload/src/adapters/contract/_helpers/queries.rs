@@ -65,7 +65,7 @@ pub(crate) fn staging_tables_query<A: SqlAdapter + ?Sized>(
         .database
         .as_deref()
         .or(database)
-        .map(|name| format!("\"{}\".", adapter.stored_name(name).replace('"', "\"\"")))
+        .map(|name| format!("{}.", adapter.render_identifier(name)))
         .unwrap_or_default();
     let schema = adapter.render_loader_value_literal(&adapter.stored_name(&table.schema));
     let chosen = adapter.render_staging_filter(&format!("{STAGING_SUFFIX}_"));
