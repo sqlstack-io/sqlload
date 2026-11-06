@@ -1072,3 +1072,118 @@ footer a {
 		content: '\\\A     ';
 	}
 }
+
+/* Speed strip under the hero: one row per benchmark scenario, bars scaled within the row. */
+.speed {
+	padding: 40px 0 48px;
+}
+
+.speed-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px 24px;
+	margin-bottom: 20px;
+}
+
+.speed-head h2 {
+	margin: 0;
+	font-size: 18px;
+	letter-spacing: -0.01em;
+}
+
+.speed-head a {
+	color: var(--primary);
+	font-size: 14px;
+	text-decoration: none;
+}
+
+.speed-head a:hover {
+	text-decoration: underline;
+}
+
+.speed-rows {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 32px;
+}
+
+.speed-row h3 {
+	margin: 0 0 12px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.speed-row dl {
+	display: grid;
+	gap: 8px;
+	margin: 0;
+}
+
+.speed-row dl > div {
+	display: grid;
+	grid-template-columns: 56px minmax(0, 1fr);
+	align-items: center;
+	gap: 10px;
+}
+
+.speed-row dt {
+	color: var(--muted-foreground);
+	font-family: var(--font-mono);
+	font-size: 12px;
+}
+
+.speed-row dd {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	min-width: 0;
+}
+
+.speed-row .track {
+	flex: 1;
+	min-width: 0;
+}
+
+.speed-row .bar {
+	display: block;
+	height: 10px;
+	border-radius: var(--radius);
+	background: var(--faint);
+	opacity: 0.55;
+}
+
+.speed-row .lead .bar {
+	background: var(--primary);
+	opacity: 1;
+}
+
+.speed-row .lead dt,
+.speed-row .lead .time {
+	color: var(--foreground);
+	font-weight: 600;
+}
+
+.speed-row .time {
+	flex: none;
+	width: 64px;
+	text-align: right;
+	color: var(--muted-foreground);
+	font-family: var(--font-mono);
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+.speed .caption {
+	margin-top: 20px;
+}
+
+@media (max-width: 880px) {
+	.speed-rows {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 24px;
+	}
+}

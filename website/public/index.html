@@ -49,12 +49,12 @@
 			<div class="hero wrap">
 				<div class="hero-text">
 					<p class="eyebrow">Rust-powered · Free and open source · Apache-2.0</p>
-					<h1>Load data into your warehouse.</h1>
+					<h1>Load data into your warehouse. Fast.</h1>
 					<p class="tagline">See exactly how, before anything changes.</p>
 					<p class="lede">
-						SQLLoad loads Postgres tables, files in S3 or a folder, and Python sources into Snowflake,
-						DuckDB or Parquet files. Where the warehouse can bulk-load your files itself, it does, and
-						no row passes through the loader.
+						Where your files are already in a bucket or folder, the warehouse loads them itself, and no
+						row passes through the loader. Everything else is staged as Parquet and bulk-loaded, not
+						inserted row by row.
 					</p>
 					<div class="actions">
 						<div class="install">
@@ -88,6 +88,41 @@ created  raw.orders  9 columns
 loaded   raw.orders  3 rows  0.0s
 <span class="ok">✓ Completed  1 loaded, 3 rows, 0.0s</span></pre>
 			</div>
+
+			<section class="speed" aria-labelledby="speed-title">
+				<div class="wrap">
+					<div class="speed-head">
+						<h2 id="speed-title">Wall time, lower is faster</h2>
+						<a href="/docs/benchmarks/">How we measured →</a>
+					</div>
+					<div class="speed-rows">
+						<div class="speed-row">
+							<h3>S3 Parquet → Snowflake · 1M rows</h3>
+							<dl>
+								<div class="lead"><dt>sqlload</dt><dd><span class="track"><span class="bar" style="width: 52.9%"></span></span><span class="time">10.30 s</span></dd></div>
+								<div><dt>ingestr</dt><dd><span class="track"><span class="bar" style="width: 100.0%"></span></span><span class="time">19.47 s</span></dd></div>
+							</dl>
+						</div>
+						<div class="speed-row">
+							<h3>Postgres → Snowflake · 1M rows</h3>
+							<dl>
+								<div class="lead"><dt>sqlload</dt><dd><span class="track"><span class="bar" style="width: 49.6%"></span></span><span class="time">14.56 s</span></dd></div>
+								<div><dt>ingestr</dt><dd><span class="track"><span class="bar" style="width: 55.8%"></span></span><span class="time">16.38 s</span></dd></div>
+								<div><dt>dlt</dt><dd><span class="track"><span class="bar" style="width: 100.0%"></span></span><span class="time">29.36 s</span></dd></div>
+							</dl>
+						</div>
+						<div class="speed-row">
+							<h3>Parquet → DuckDB · 1M rows</h3>
+							<dl>
+								<div class="lead"><dt>sqlload</dt><dd><span class="track"><span class="bar" style="width: 1.5%"></span></span><span class="time">0.92 s</span></dd></div>
+								<div><dt>ingestr</dt><dd><span class="track"><span class="bar" style="width: 1.5%"></span></span><span class="time">2.12 s</span></dd></div>
+								<div><dt>dlt</dt><dd><span class="track"><span class="bar" style="width: 100.0%"></span></span><span class="time">138.45 s</span></dd></div>
+							</dl>
+						</div>
+					</div>
+					<p class="caption">Median of 5 runs on one 4-vCPU machine, 6 November 2026: sqlload 0.11.1 and 0.11.0, ingestr 1.1.82, dlt 1.32.0 (its connectorx backend for Postgres). dlt was not run in the S3 scenario.</p>
+				</div>
+			</section>
 
 			<section>
 				<div class="wrap">
