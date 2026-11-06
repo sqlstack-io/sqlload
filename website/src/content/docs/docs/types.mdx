@@ -1,6 +1,6 @@
 ---
 title: "Types"
-description: "SQLLoad's portable column types, how each maps to Snowflake, DuckDB and Parquet, and how source types are read."
+description: "SQLLoad's portable column types, how each maps to Snowflake, Databricks, DuckDB and Parquet, and how source types are read."
 ---
 
 SQLLoad reasons about columns in a small set of portable types. You write them in `columns`, `plan`
@@ -15,27 +15,28 @@ columns = { total = "decimal(18,2)", closes_at = "timestamp_tz" }
 
 ## Portable types
 
-| Type | Snowflake | DuckDB | Parquet (Arrow) |
-|------|-----------|--------|-----------------|
-| `bool` | `BOOLEAN` | `BOOLEAN` | `Boolean` |
-| `smallint` | `NUMBER(38,0)` ¹ | `SMALLINT` | `Int16` |
-| `int` (64-bit) | `NUMBER(38,0)` | `BIGINT` | `Int64` |
-| `decimal(p,s)` | `NUMBER(p,s)` | `DECIMAL(p,s)` | `Decimal128(p,s)` |
-| `float` (64-bit) | `FLOAT` | `DOUBLE` | `Float64` |
-| `text` | `VARCHAR` | `VARCHAR` | `Utf8` |
-| `varchar(n)` | `VARCHAR(n)` | `VARCHAR` ¹ | `Utf8` |
-| `date` | `DATE` | `DATE` | `Date32` |
-| `time` | `TIME(9)` | `TIME` | `Time64` |
-| `timestamp_tz` | `TIMESTAMP_TZ(9)` | `TIMESTAMP WITH TIME ZONE` ¹ | `Timestamp(UTC)` |
-| `timestamp_ntz` | `TIMESTAMP_NTZ(9)` | `TIMESTAMP` | `Timestamp` |
-| `json` | `VARIANT` | `JSON` | `Utf8` |
-| `uuid` | `VARCHAR(36)` ¹ | `UUID` | `Utf8` |
-| `binary` | `BINARY` | `BLOB` | `Binary` |
-| `native("...")` | passed through | passed through | not available |
+| Type | Snowflake | Databricks | DuckDB | Parquet (Arrow) |
+|------|-----------|------------|--------|-----------------|
+| `bool` | `BOOLEAN` | `BOOLEAN` | `BOOLEAN` | `Boolean` |
+| `smallint` | `NUMBER(38,0)` ¹ | `SMALLINT` | `SMALLINT` | `Int16` |
+| `int` (64-bit) | `NUMBER(38,0)` | `BIGINT` | `BIGINT` | `Int64` |
+| `decimal(p,s)` | `NUMBER(p,s)` | `DECIMAL(p,s)` | `DECIMAL(p,s)` | `Decimal128(p,s)` |
+| `float` (64-bit) | `FLOAT` | `DOUBLE` | `DOUBLE` | `Float64` |
+| `text` | `VARCHAR` | `STRING` | `VARCHAR` | `Utf8` |
+| `varchar(n)` | `VARCHAR(n)` | `STRING` ¹ | `VARCHAR` ¹ | `Utf8` |
+| `date` | `DATE` | `DATE` | `DATE` | `Date32` |
+| `time` | `TIME(9)` | `STRING` ¹ | `TIME` | `Time64` |
+| `timestamp_tz` | `TIMESTAMP_TZ(9)` | `TIMESTAMP` ¹ | `TIMESTAMP WITH TIME ZONE` ¹ | `Timestamp(UTC)` |
+| `timestamp_ntz` | `TIMESTAMP_NTZ(9)` | `TIMESTAMP_NTZ` | `TIMESTAMP` | `Timestamp` |
+| `json` | `VARIANT` | `VARIANT` | `JSON` | `Utf8` |
+| `uuid` | `VARCHAR(36)` ¹ | `STRING` ¹ | `UUID` | `Utf8` |
+| `binary` | `BINARY` | `BINARY` | `BLOB` | `Binary` |
+| `native("...")` | passed through | passed through | passed through | not available |
 
 ¹ Held with a loss, which `plan` notes: Snowflake stores `smallint` as a 38-digit integer and `uuid`
-as text; DuckDB doesn't enforce `varchar` lengths, and stores `timestamp_tz` as a UTC instant
-without its offset.
+as text; Databricks doesn't enforce `varchar` lengths, stores `time` and `uuid` as text, and keeps
+`timestamp_tz` as an instant without its offset; DuckDB doesn't enforce `varchar` lengths, and
+stores `timestamp_tz` as a UTC instant without its offset.
 
 `native("GEOGRAPHY")` passes a warehouse-only type through unchanged. SQLLoad doesn't widen or
 convert such columns.

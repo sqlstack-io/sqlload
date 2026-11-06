@@ -1,0 +1,112 @@
+---
+title: "Databricks"
+description: "Load into a Databricks SQL warehouse with Unity Catalog: Parquet staged in a volume, then COPY INTO, one statement per write."
+---
+
+A Databricks target loads into a Unity Catalog SQL warehouse. SQLLoad writes each batch as Parquet
+to a Unity Catalog volume and loads it with `COPY INTO`. That is the only route: there is no
+`INSERT` fallback.
+
+## Connection
+
+SQLLoad signs in with a service principal's OAuth machine-to-machine credentials:
+
+```toml
+[connections.lakehouse]
+kind = "databricks"
+host = "${ENV:DATABRICKS_HOST}"
+client_id = "${ENV:DATABRICKS_CLIENT_ID}"
+client_secret = "${ENV:DATABRICKS_CLIENT_SECRET}"
+warehouse_id = "${ENV:DATABRICKS_WAREHOUSE_ID}"
+catalog = "main"
+volume = "main.raw.sqlload_stage"   # catalog.schema.volume
+
+[targets.lakehouse]
+connection = "lakehouse"
+loader_schema = "raw"
+```
+
+| Key | Meaning |
+|-----|---------|
+| `host` | The workspace URL, such as `https://dbc-1234.cloud.databricks.com`. |
+| `client_id`, `client_secret` | The service principal's OAuth credentials. |
+| `warehouse_id` | The SQL warehouse statements run on. |
+| `catalog` | The Unity Catalog catalog tables load into. |
+| `volume` | An existing volume load files are staged in, as `catalog.schema.volume`. Anything else fails `plan`. |
+
+The service principal needs `USE CATALOG`, `USE SCHEMA` and `CREATE TABLE` where it loads
+(`CREATE SCHEMA` too when the schema doesn't exist yet), ownership of or `MANAGE` on the tables it
+replaces or rewrites, and `READ VOLUME` and `WRITE VOLUME` on the volume. `sqlload debug` checks
+that the volume lists.
+
+## How rows arrive
+
+Each batch is written as Parquet to `<volume>/sqlload/<load id>/<batch>/` and loaded with one
+`COPY INTO`. The batch's folder is removed once the `COPY` commits, and also when it fails. The
+next load removes folders a failed run left once they are over a day old; a folder a running load
+is still filling is kept.
+
+Files of a files source pass through SQLLoad on the way to the volume. `copy_to_internal_stage` is
+for Snowflake and is refused here.
+
+## Write strategies
+
+Databricks' Statement Execution API runs every statement in its own transaction, so each write is
+one statement. The run record commits after it.
+
+| Strategy | Statements |
+|----------|------------|
+| `append` | `COPY INTO` the table. A logged table goes through a staging table, then one `INSERT`. |
+| `merge` | `COPY INTO` a staging table, then one `MERGE` on the key. |
+| `delete_insert` | `COPY INTO` a staging table, then one `MERGE` that inserts the batch and deletes the rows it replaces. |
+| `replace` | `COPY INTO` a build table, then `CREATE OR REPLACE TABLE ... AS SELECT` from it. |
+
+`replace` keeps the table's history and grants. Delta has no metadata-only swap, so the rows are
+copied once more by the `CREATE OR REPLACE`; that extra copy is the expected cost of `replace` on
+Databricks.
+
+## Types
+
+| Type | Databricks |
+|------|------------|
+| `bool` | `BOOLEAN` |
+| `smallint` | `SMALLINT` |
+| `int` | `BIGINT` |
+| `decimal(p,s)` | `DECIMAL(p,s)` |
+| `float` | `DOUBLE` |
+| `text` | `STRING` |
+| `varchar(n)` | `STRING` ¹ |
+| `date` | `DATE` |
+| `time` | `STRING` ¹ |
+| `timestamp_tz` | `TIMESTAMP` ¹ |
+| `timestamp_ntz` | `TIMESTAMP_NTZ` |
+| `json` | `VARIANT` |
+| `uuid` | `STRING` ¹ |
+| `binary` | `BINARY` |
+
+¹ Held with a loss, which `plan` notes: the length limit isn't enforced, times and UUIDs are stored
+as text, and `TIMESTAMP` keeps the instant but not the offset.
+
+Added columns use one `ADD COLUMNS`. Widening a type uses Delta's type widening where it applies,
+and rewrites the table where it doesn't, such as an integer becoming a float.
+
+## Tested live
+
+Every pathway `plan` accepts was run against a real Databricks SQL warehouse (2X-Small) before
+Databricks was marked supported. The same project ran five rounds: a first load, a re-run, a re-run
+with an exclusive cursor, source and schema changes, then the contract commands, with row counts and
+values checked against each source after every round.
+
+| Source | `append` | `replace` | `delete_insert` | `merge` |
+|--------|----------|-----------|-----------------|---------|
+| Postgres | live | live | live | live |
+| Local files | live | live | live | refused at `plan` |
+| Files in S3 | live | live | live | refused at `plan` |
+| Python rows | live | live | live | live |
+| Python Arrow data | live | live | live | live |
+| `sl.http` (paginated JSON) | live | live | live | live |
+
+`merge` is refused for files sources on every target. The live rounds also covered incremental
+loads on a cursor, rows with a NULL cursor under `delete_insert`, an added column, widening a
+decimal in place, `contract diff`, `contract diff --source` and `contract generate --write`, and a
+load that failed mid-way, which committed no rows and left the volume's `sqlload/` folder empty.

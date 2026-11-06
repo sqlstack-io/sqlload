@@ -6,8 +6,8 @@ import { join, relative } from 'node:path';
 const website = new URL('..', import.meta.url).pathname;
 const docs = join(website, 'src/content/docs');
 const roadmap = join(docs, 'docs/roadmap.mdx');
-const unshipped = /\b(BigQuery|Databricks|Redshift|ClickHouse|SQL Server|MySQL|CDC|change data capture)\b/gi;
-const planned = new Set(['bigquery', 'databricks', 'cdc', 'change data capture']);
+const unshipped = /\b(BigQuery|Redshift|ClickHouse|SQL Server|MySQL|CDC|change data capture)\b/gi;
+const planned = new Set(['bigquery', 'cdc', 'change data capture']);
 
 const slugs = (items) =>
 	items.flatMap((item) =>
