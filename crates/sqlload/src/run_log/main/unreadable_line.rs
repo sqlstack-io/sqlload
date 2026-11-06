@@ -2,7 +2,7 @@
 
 use crate::run_log::models::UnreadableRecord;
 
-/// `  <time>  <run id>  unreadable: <reason>`, for `sqlload state show`.
+/// `  <time>  <run id>  unreadable: <reason>`, for `sqlload logged-state show`.
 pub fn unreadable_line(record: &UnreadableRecord) -> String {
     format!(
         "  {}  {}  unreadable: {}",

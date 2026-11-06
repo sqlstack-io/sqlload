@@ -113,7 +113,7 @@ pub(crate) fn unreadable_problems(
         })
         .map(|record| {
             format!(
-                "run log record {} cannot be used: {}; sqlload state show lists it, and sqlload state reset (--to VALUE or --clear) --yes starts a new position after it",
+                "run log record {} cannot be used: {}; sqlload logged-state show lists it, and sqlload logged-state reset (--to VALUE or --clear) --yes starts a new position after it",
                 record.run_id.as_deref().unwrap_or("without a run id"),
                 record.reason
             )
@@ -261,7 +261,7 @@ pub(crate) fn reset_record(table: &TablePlan, to: Option<&str>) -> Result<RunRec
             cursor_before: current.and_then(|record| record.cursor_after.clone()),
             cursor_after,
             state,
-            note: "sqlload state reset".to_owned(),
+            note: "sqlload logged-state reset".to_owned(),
             recorded_at: next_stamp(&now_utc_text(), newest_stamp(table)),
         },
     ))

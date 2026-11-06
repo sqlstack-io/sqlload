@@ -1,19 +1,19 @@
 ---
 title: "Logged state"
-description: "The sqlload state command, for Python tables with state=\"logged\": inspect and correct their logged position."
+description: "The sqlload logged-state command, for Python tables with state=\"logged\": inspect and correct their logged position."
 ---
 
 This page is only for [Python tables](/docs/sources/python/#logged-state) with `state="logged"`:
 tables that keep a position the data can't carry, such as an API sync token. Most projects never
 use it, because tables with a `cursor_column` find their position in the loaded data.
 
-`sqlload state` shows and corrects that logged position:
+`sqlload logged-state` shows and corrects that logged position:
 
 ```bash
-sqlload state show      [SELECT ...]
-sqlload state verify    [SELECT ...]
-sqlload state reconcile [SELECT ...] [--yes]
-sqlload state reset     SELECT ... (--to VALUE | --clear) [--yes]
+sqlload logged-state show      [SELECT ...]
+sqlload logged-state verify    [SELECT ...]
+sqlload logged-state reconcile [SELECT ...] [--yes]
+sqlload logged-state reset     SELECT ... (--to VALUE | --clear) [--yes]
 ```
 
 These commands work on Python tables with `state="logged"`, whose position is kept in an
@@ -32,17 +32,17 @@ every logged table is selected; `reset` needs the tables or sources named.
 deleted from the log.
 
 ```console
-$ sqlload state show
+$ sqlload logged-state show
 raw.shop__events  state 4 (run dd3ba5e3-f778-4fe3-9fdd-87e980fc116a at 2026-11-06T19:39:58.007235Z)
   2026-11-06T19:39:57.848181Z  0cd1cb07-1322-4df5-8fe3-a55a862a1cf3  run  - -> -, state 2  6 rows
   2026-11-06T19:39:58.007235Z  dd3ba5e3-f778-4fe3-9fdd-87e980fc116a  run  - -> -, state 4  6 rows
-$ sqlload state verify
+$ sqlload logged-state verify
 raw.shop__events  ok  state 4 (run dd3ba5e3-f778-4fe3-9fdd-87e980fc116a at 2026-11-06T19:39:58.007235Z)
-$ sqlload state reset shop__events --to 0
+$ sqlload logged-state reset shop__events --to 0
 would append  raw.shop__events  reset  - -> -, state 0 (add --yes to append it)
 ```
 
 A record SQLLoad can't read, because it's corrupt or written by a newer version, blocks only its
-own table. `state show` lists it, and a `reset ... --yes` starts a new position after it.
+own table. `logged-state show` lists it, and a `reset ... --yes` starts a new position after it.
 
 `load --reload` also starts a logged table over.

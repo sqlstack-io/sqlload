@@ -213,7 +213,7 @@ pub struct LoggedPlan {
     pub current: Option<RunRecord>,
     /// The data's cursor maximum, when it disagrees with the logged cursor: the data wins and the load appends a reconciliation.
     pub disagreement: Option<String>,
-    /// Records that cannot be used, by `sqlload state show`.
+    /// Records that cannot be used, by `sqlload logged-state show`.
     pub unreadable: Vec<UnreadableRecord>,
     /// The warehouse's `_sqlload_runs` existed at plan, so loading creates nothing.
     pub runs_table: bool,
@@ -531,7 +531,7 @@ pub struct FilesContext {
     pub state: TableState,
 }
 
-/// What `sqlload state` does to the selected logged tables.
+/// What `sqlload logged-state` does to the selected logged tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateKind {
     Show,
@@ -540,7 +540,7 @@ pub enum StateKind {
     Reset,
 }
 
-/// A `sqlload state` command.
+/// A `sqlload logged-state` command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateRequest {
     pub kind: StateKind,

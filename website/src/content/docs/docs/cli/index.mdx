@@ -31,7 +31,7 @@ Commands:
 | `debug` | [debug](/docs/cli/debug/) |
 | `run`, `status`, `tables` | [Kafka exporter](/docs/kafka/) |
 
-`sqlload state` is only for Python tables with `state="logged"`; see
+`sqlload logged-state` is only for Python tables with `state="logged"`; see
 [Logged state](/docs/sources/logged-state/).
 
 ## Global options
@@ -50,6 +50,6 @@ Every command takes these:
 
 | Code | Meaning |
 |------|---------|
-| 0 | Everything selected succeeded, or agreed (`contract diff`, `state verify`). |
+| 0 | Everything selected succeeded, or agreed (`contract diff`, `logged-state verify`). |
 | 1 | A table failed or was left out by a plan error, a contract difference or state disagreement was found, or the configuration is invalid. |
 | 2 | The command line couldn't be parsed. |
