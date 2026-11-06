@@ -1,4 +1,6 @@
-use pyo3::exceptions::PyTypeError;
+use std::collections::{HashMap, HashSet};
+
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::{
     PyAnyMethods, PyBool, PyBoolMethods, PyDict, PyDictMethods, PyFloat, PyFloatMethods, PyInt,
     PyList, PyListMethods, PyString, PyStringMethods, PyTuple, PyType, PyTypeMethods,
@@ -39,10 +41,59 @@ enum Plain<'py> {
     },
 }
 
-/// Read `rows`, a list of dicts, column by column, holding the GIL.
-pub(crate) fn walk_rows(rows: &Bound<'_, PyList>) -> PyResult<RowColumns> {
+/// The columns flattening made in one batch, by the object each came from, and the batch's other columns, so no name comes from two places.
+#[derive(Default)]
+struct FlatNames {
+    plain: HashSet<String>,
+    made: HashMap<String, String>,
+}
+
+impl FlatNames {
+    /// Note a column of the rows themselves; an error when flattening already made it.
+    fn plain(&mut self, name: &str) -> PyResult<()> {
+        if let Some(object) = self.made.get(name) {
+            let key = name.strip_prefix(&format!("{object}__")).unwrap_or(name);
+            return Err(collision(object, key, name, "which the data already has"));
+        }
+        if !self.plain.contains(name) {
+            self.plain.insert(name.to_owned());
+        }
+        Ok(())
+    }
+
+    /// Claim `<object>__<key>` for `object`; an error when a column of the rows or another object already gives it.
+    fn claim(&mut self, object: &str, key: &str) -> PyResult<String> {
+        let name = format!("{object}__{key}");
+        if self.plain.contains(&name) {
+            return Err(collision(object, key, &name, "which the data already has"));
+        }
+        match self.made.get(&name) {
+            Some(other) if other != object => Err(collision(
+                object,
+                key,
+                &name,
+                &format!("which flattening {other} also gives"),
+            )),
+            Some(_) => Ok(name),
+            None => {
+                self.made.insert(name.clone(), object.to_owned());
+                Ok(name)
+            }
+        }
+    }
+}
+
+fn collision(object: &str, key: &str, name: &str, clash: &str) -> PyErr {
+    PyValueError::new_err(format!(
+        "flatten {object}: the key {key} gives column {name}, {clash}; rename one of them or leave {object} unflattened"
+    ))
+}
+
+/// Read `rows`, a list of dicts, column by column, holding the GIL; each key named in `flatten` holding a dict becomes one typed column per key, `<object>__<key>`.
+pub(crate) fn walk_rows(rows: &Bound<'_, PyList>, flatten: &[String]) -> PyResult<RowColumns> {
     let mut walker = Walker::new(rows.py())?;
     let mut columns = RowColumns::new();
+    let mut names = FlatNames::default();
     for (index, row) in rows.iter().enumerate() {
         let row = row.cast::<PyDict>().map_err(|_| {
             PyTypeError::new_err(format!(
@@ -52,10 +103,22 @@ pub(crate) fn walk_rows(rows: &Bound<'_, PyList>) -> PyResult<RowColumns> {
         })?;
         for (key, value) in row.iter() {
             let key = key.cast::<PyString>().map_err(|_| key_error(&key))?;
-            columns.push(key.to_str()?, walker.cell(&value)?);
+            let key = key.to_str()?;
+            match flatten.is_empty() {
+                true => columns.push(key, walker.cell(&value)?),
+                false => walker.flattened_cell(
+                    key,
+                    &value,
+                    (index, flatten),
+                    (&mut columns, &mut names),
+                )?,
+            }
         }
         columns.end_row();
     }
+    let mut made: Vec<String> = names.made.into_keys().collect();
+    made.sort();
+    columns.set_flattened(made);
     Ok(columns)
 }
 
@@ -207,6 +270,40 @@ impl<'py> Walker<'py> {
 }
 
 impl<'py> Walker<'py> {
+    /// Push `value` under `key`, expanding it one level when `flatten` lists `key`: a dict's items as typed cells, nothing for `None`, an error for anything else.
+    fn flattened_cell(
+        &mut self,
+        key: &str,
+        value: &Bound<'py, PyAny>,
+        (row, flatten): (usize, &[String]),
+        (columns, names): (&mut RowColumns, &mut FlatNames),
+    ) -> PyResult<()> {
+        if !flatten.iter().any(|listed| listed == key) {
+            names.plain(key)?;
+            columns.push(key, self.cell(value)?);
+            return Ok(());
+        }
+        let items = match self.plain(value)? {
+            Plain::Null => return Ok(()),
+            Plain::Object(items) => items,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "flatten {key}: row {} of a batch holds {}, not an object; the shape changed, so leave {key} unflattened or fix the source",
+                    row + 1,
+                    shape(&other)
+                )));
+            }
+        };
+        for (item_key, item) in items {
+            let item_key = item_key
+                .cast::<PyString>()
+                .map_err(|_| key_error(&item_key))?;
+            let name = names.claim(key, item_key.to_str()?)?;
+            columns.push(&name, self.cell(&item)?);
+        }
+        Ok(())
+    }
+
     /// A `datetime`: naive as `timestamp_ntz` microseconds on the wall clock, aware as UTC RFC 3339 text.
     fn moment(&self, value: &Bound<'py, PyAny>) -> PyResult<Plain<'py>> {
         let text = iso_text(value)?;
@@ -309,6 +406,26 @@ fn numpy_plain<'py>(value: &Bound<'py, PyAny>) -> PyResult<Plain<'py>> {
         }
         _ => Plain::Text(value.str()?.to_str()?.to_owned()),
     })
+}
+
+/// A value's shape in words, for a listed object that holds something else.
+fn shape(plain: &Plain<'_>) -> &'static str {
+    match plain {
+        Plain::Null | Plain::Object(_) => "an object",
+        Plain::Bool(_) => "a boolean",
+        Plain::Int(_) | Plain::Float(_) => "a number",
+        Plain::Text(_) => "a text value",
+        Plain::Array(_) => "a list",
+        Plain::Typed {
+            cell: Cell::Date(_),
+            ..
+        } => "a date",
+        Plain::Typed {
+            cell: Cell::Decimal(_) | Cell::Null,
+            ..
+        } => "a decimal",
+        Plain::Typed { .. } => "a timestamp",
+    }
 }
 
 fn key_error(key: &Bound<'_, PyAny>) -> PyErr {

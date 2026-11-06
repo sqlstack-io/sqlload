@@ -69,6 +69,7 @@ pub const TABLE_ONLY_KEYS: &[&str] = &[
     "mask",
     "exclude_columns",
     "allow_columns",
+    "flatten",
 ];
 
 /// Top-level keys that mark a file as a loader project rather than an exporter configuration.
