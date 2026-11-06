@@ -1,5 +1,6 @@
 //! The destination check behind `debug`.
 
+use crate::adapters::databricks::main::stage::_check_volume::check_volume;
 use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::snowflake::main::stage::_check_stage::check_stage;
@@ -22,6 +23,15 @@ pub async fn check_destination(destination: Destination) -> Result<String, Loade
                 "{} lists ({entries} entries at the top)",
                 folder.location
             ))
+        }
+        Destination::Databricks(databricks) => {
+            let query = "SELECT current_user() || ' on catalog ' || current_catalog()";
+            let destination = Destination::Databricks(databricks.clone());
+            let answer = single_text(&destination, query.to_owned())
+                .await?
+                .unwrap_or_default();
+            let checked = check_volume(&databricks).await?;
+            Ok(format!("{answer}; {checked}"))
         }
         Destination::Snowflake(snowflake) => {
             let query = "SELECT CURRENT_USER() || ' as ' || CURRENT_ROLE() || ', warehouse ' || COALESCE(CURRENT_WAREHOUSE(), '-')";

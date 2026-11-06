@@ -1,11 +1,11 @@
 //! Why the destination cannot load a files table's files exactly by reading them itself.
 
+use crate::adapters::databricks::constants::NO_INTERNAL_STAGE_COPY;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_direct_problem::direct_problem;
 use crate::adapters::snowflake::main::copy::_direct_check::direct_check;
 use crate::adapters::snowflake::main::copy::_stage_covers::stage_covers;
 use crate::adapters::snowflake::models::StageRoute;
-#[cfg(feature = "duckdb")]
 use crate::column_types::models::Warehouse;
 use crate::files_source::models::FilesRead;
 use crate::loader::models::TableSpec;
@@ -17,6 +17,11 @@ pub fn direct_blocked(
     stage: Option<&StageRoute>,
 ) -> Option<String> {
     let files = spec.files.as_ref()?;
+    if spec.warehouse == Warehouse::Databricks {
+        return files
+            .copy_to_internal_stage
+            .then(|| NO_INTERNAL_STAGE_COPY.to_owned());
+    }
     #[cfg(feature = "duckdb")]
     if spec.warehouse == Warehouse::DuckDb {
         return direct_problem(spec, read);

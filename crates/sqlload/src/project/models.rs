@@ -98,6 +98,19 @@ pub enum ConnectionConfig {
         #[serde(default)]
         load_method: Option<Box<LoadMethod>>,
     },
+    /// A Databricks SQL warehouse with Unity Catalog, reached with OAuth machine-to-machine credentials.
+    Databricks {
+        /// The workspace URL, such as `https://dbc-1234.cloud.databricks.com`.
+        host: String,
+        client_id: String,
+        client_secret: crate::auth::models::Secret,
+        /// The SQL warehouse statements run on.
+        warehouse_id: String,
+        /// The Unity Catalog catalog tables load into.
+        catalog: String,
+        /// The managed volume load files are staged in, `catalog.schema.volume`; it must exist.
+        volume: String,
+    },
     Postgres {
         host: String,
         #[serde(default = "defaults::postgres_port")]
@@ -143,6 +156,7 @@ impl ConnectionConfig {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Snowflake { .. } => "snowflake",
+            Self::Databricks { .. } => "databricks",
             Self::Postgres { .. } => "postgres",
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",

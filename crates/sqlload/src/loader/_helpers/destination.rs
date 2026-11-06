@@ -56,12 +56,14 @@ pub(crate) async fn clean_stages(run: &LoadRun<'_>, plan: &ProjectPlan) {
         .iter()
         .filter(|table| table.schema.blocked.is_none())
     {
-        let (Some(route), Some(destination)) =
-            (&table.stage, run.destinations.get(&table.spec.target))
-        else {
+        let Some(destination) = run.destinations.get(&table.spec.target) else {
             continue;
         };
-        let stage = (table.spec.target.as_str(), route, &table.spec.destination);
+        let stage = (
+            table.spec.target.as_str(),
+            table.stage.as_ref(),
+            &table.spec.destination,
+        );
         let copies_files = table
             .spec
             .files

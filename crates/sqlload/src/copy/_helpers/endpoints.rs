@@ -128,6 +128,10 @@ fn uri_endpoint(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<End
             "the {} {shown}: a Snowflake connection needs auth and a load_method, which a URI does not carry; declare it under [connections] in sqlload.toml and name it, as warehouse:SCHEMA.TABLE",
             role.label()
         )),
+        "databricks" => Err(format!(
+            "the {} {shown}: a Databricks connection needs OAuth credentials, a warehouse and a volume, which a URI does not carry; declare it under [connections] in sqlload.toml and name it, as warehouse:schema.table",
+            role.label()
+        )),
         other => Err(format!(
             "the {} {shown} has the scheme {other}://; use postgresql://, duckdb://, s3://, file:// or a connection named in sqlload.toml",
             role.label()

@@ -1,5 +1,6 @@
 //! Open a table's write session on its destination.
 
+use crate::adapters::databricks::models::DatabricksWriter;
 use crate::adapters::dispatch::models::{Destination, Writer};
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::models::DuckDbWriter;
@@ -36,6 +37,12 @@ pub fn open_table_writer(
                 uploads: tokio::task::JoinSet::new(),
             })))
         }
+        Destination::Databricks(databricks) => Ok(Writer::Databricks(Box::new(DatabricksWriter {
+            destination: (**databricks).clone(),
+            parts: PartWriter::default(),
+            staged: Vec::new(),
+            uploads: tokio::task::JoinSet::new(),
+        }))),
         Destination::Files(_) => Ok(Writer::Files(ParquetFiles)),
     }
 }
