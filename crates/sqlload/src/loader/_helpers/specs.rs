@@ -319,11 +319,15 @@ fn flatten_problems(context: &SourceContext<'_>, overrides: &TableOverride) -> V
         .collect()
 }
 
-/// The first `exclude_columns` pattern matching `name`.
+/// The first `exclude_columns` pattern matching the object `name` but not its `name__<key>` columns, which would stop applying once it is flattened.
 fn excluding_pattern<'a>(name: &str, exclude: &'a [String]) -> Option<&'a String> {
-    exclude
-        .iter()
-        .find(|pattern| glob(pattern).is_ok_and(|glob| glob.compile_matcher().is_match(name)))
+    let keys = format!("{name}__");
+    exclude.iter().find(|pattern| {
+        glob(pattern).is_ok_and(|glob| {
+            let matcher = glob.compile_matcher();
+            matcher.is_match(name) && !matcher.is_match(&keys)
+        })
+    })
 }
 
 /// What the column rules decide for one table.
