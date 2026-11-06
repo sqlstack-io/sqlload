@@ -28,13 +28,12 @@ import shutil
 import sysconfig
 from importlib.metadata import version
 
-from sqlload._data import Checkpoint, checkpoint, json, ndjson
+from sqlload._data import checkpoint, json, ndjson
 from sqlload._declare import Context, Source, Table, source, table
 
 __version__: str = version("sqlload")
 
 __all__ = [
-	"Checkpoint",
 	"Context",
 	"Source",
 	"Table",

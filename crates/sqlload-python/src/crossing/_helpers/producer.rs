@@ -199,7 +199,7 @@ impl<'py> Producer<'py> {
     fn checkpoint(&mut self, item: &Bound<'py, PyAny>) -> PyResult<bool> {
         if self.snapshot.is_none() {
             return Err(PyTypeError::new_err(
-                "sl.checkpoint needs state=\"logged\" on the table",
+                "sl.checkpoint needs state='logged' on the table",
             ));
         }
         let state: String = item.call_method0(CHECKPOINT_METHOD)?.extract()?;

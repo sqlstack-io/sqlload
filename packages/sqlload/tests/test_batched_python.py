@@ -53,8 +53,9 @@ def growing(ctx):
 
 #: Pages of 700 rows yielded one row at a time, so the 1,000-row crossings never line up with them.
 #: `before` sets ctx.state to the next page before yielding a page, `after` once it is yielded,
-#: `ended` only at the end, `checkpointed` and `checkpointed_pages` yield sl.checkpoint after each page; each raises at the page data/fail.json names. `windowed` records each
-#: call's window; `big` yields many rows.
+#: `ended` only at the end, `checkpointed` and `checkpointed_pages` yield sl.checkpoint after each
+#: page; each raises at the page data/fail.json names. `windowed` records each call's window; `big`
+#: yields many rows.
 MODULE = """
 import json
 import time
@@ -352,23 +353,24 @@ def test_given_a_logged_table_setting_state_per_page_when_loading_then_each_comm
 
 
 @pytest.mark.parametrize(
-	("table", "expected_failed_state", "expected_last_state"),
-	[("checkpointed", "4", "6"), ("checkpointed_pages", '{"page": 4}', '{"page": 6}')],
+	("table", "expected_failed_states", "expected_states"),
+	[
+		("checkpointed", ["1", "2", "3", "4"], ["1", "2", "3", "4", "5", "6"]),
+		("checkpointed_pages", [f'{{"page": {n}}}' for n in range(1, 5)], [f'{{"page": {n}}}' for n in range(1, 7)]),
+	],
 	ids=["rows", "pages"],
 )
-def test_given_checkpoints_when_loading_then_commits_record_them_and_a_rerun_reads_nothing_again(
-	project: Path, table: str, expected_failed_state: str, expected_last_state: str
+def test_given_checkpoints_when_loading_then_each_commit_records_one_and_a_rerun_reads_nothing_again(
+	project: Path, table: str, expected_failed_states: list[str], expected_states: list[str]
 ) -> None:
 	fail(project, 4)
 	sqlload(project, "load", "--batch-bytes", "1", f"api__{table}")
-	committed = records(project, table)
-	assert len(committed) > 1
-	assert committed[-1][1] == expected_failed_state
+	assert [state for _, state in records(project, table)] == expected_failed_states
 	assert set(rows_loaded(project, table)) == {row for row in EVERY_ROW if row[0] < 4}
 	fail(project, -1)
 	done = sqlload(project, "load", "--batch-bytes", "1", f"api__{table}")
 	assert done.returncode == 0, done.stdout + done.stderr
-	assert records(project, table)[-1][1] == expected_last_state
+	assert [state for _, state in records(project, table)] == expected_states
 	assert sorted(rows_loaded(project, table)) == sorted(EVERY_ROW)
 
 

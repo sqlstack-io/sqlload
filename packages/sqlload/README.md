@@ -228,9 +228,13 @@ def events(ctx: sl.Context):
 
 A checkpoint covers exactly the rows yielded before it: commits record the latest checkpoint
 whose rows they hold, so a run that fails part-way resumes from it without loading any row twice,
-and the next run reads it as `ctx.state`. Once a function yields a checkpoint, only checkpoints
-move the logged position during the run; a value it leaves in `ctx.state` when it finishes still
-becomes the final one. `sl.checkpoint` needs `state="logged"` and a JSON value.
+and the next run reads it as `ctx.state`. Rows yielded after the last checkpoint are read again by
+the next run unless the function ends with a checkpoint or leaves the final position in
+`ctx.state`. Once a function yields a checkpoint, only checkpoints move the logged position during
+the run; a value it leaves in `ctx.state` when it finishes still becomes the final one.
+`sl.checkpoint(None)` clears the position, so the next run starts from the beginning; an API whose
+last page has no next token should keep the last real one. `sl.checkpoint` needs
+`state="logged"` and a JSON value.
 
 Each successful run appends a record to `_sqlload_runs` in the table's schema (or one object under
 `<table folder>/_sqlload/runs/` in a files target), in the same transaction as the data where the
