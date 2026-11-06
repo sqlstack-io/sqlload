@@ -20,6 +20,13 @@ pub async fn contract_diff(
     options: &PlanOptions,
     from: Option<&str>,
 ) -> Result<ContractReport, LoaderError> {
+    if let Some(target) = from.filter(|target| !destinations.contains_key(*target)) {
+        let known: Vec<&str> = destinations.keys().map(String::as_str).collect();
+        return Err(LoaderError::Invalid(format!(
+            "--from {target} is not a target in sqlload.toml (it has: {})",
+            known.join(", ")
+        )));
+    }
     let mut report = ContractReport {
         from_target: from.map(str::to_owned),
         ..ContractReport::default()
@@ -43,7 +50,7 @@ pub async fn contract_diff(
             }
             let target = from.unwrap_or(&spec.target);
             let destination = destinations.get(target).ok_or_else(|| {
-                LoaderError::Invalid(format!("target {target:?} is not in sqlload.toml"))
+                LoaderError::Invalid(format!("target {target:?} is not connected"))
             })?;
             report.resources.push(resource(&spec, destination).await);
         }
