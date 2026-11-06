@@ -1,0 +1,30 @@
+[
+	{ "label": "Getting Started", "items": ["docs", "docs/install", "docs/quickstart"] },
+	{
+		"label": "Concepts",
+		"items": [
+			"docs/concepts/projects",
+			"docs/concepts/sources",
+			"docs/concepts/targets",
+			"docs/concepts/load-methods",
+			"docs/concepts/write-strategies",
+			"docs/concepts/cursors",
+			"docs/concepts/contracts"
+		]
+	},
+	{ "label": "Python", "items": ["docs/python"] },
+	{
+		"label": "CLI Reference",
+		"items": [
+			"docs/cli",
+			"docs/cli/plan-apply-load",
+			"docs/cli/copy",
+			"docs/cli/contract",
+			"docs/cli/state",
+			"docs/cli/debug",
+			"docs/cli/exporter"
+		]
+	},
+	{ "label": "Reference", "items": ["docs/configuration", "docs/types", "docs/supported-systems"] },
+	{ "label": "About", "items": ["docs/benchmarks", "docs/compared", "docs/troubleshooting"] }
+]

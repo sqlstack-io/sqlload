@@ -1,0 +1,92 @@
+---
+title: "copy"
+description: "Copy one table once, between connections or URIs, with no sqlload.toml."
+---
+
+```bash
+sqlload copy SOURCE DESTINATION [OPTIONS]
+```
+
+`sqlload copy` copies one table once, through the same plan and load as a project. It needs no
+`sqlload.toml`.
+
+```console
+$ sqlload copy orders/ duckdb://shop.duckdb#raw.orders
+Plan ready  1 selected, 1 object to create, 1 to load
+…
+loaded   raw.orders  3 rows  0.0s
+
+✓ Completed  1 loaded, 3 rows, 0.0s
+```
+
+## Endpoints
+
+Each end is a connection named in `sqlload.toml`, or a URI:
+
+| Form | As source | As destination |
+|------|-----------|----------------|
+| `connection:schema.table` | A table of a named Postgres connection | A table of a named Snowflake or DuckDB connection |
+| `postgresql://user:${ENV:PGPASSWORD}@host:5432/db#schema.table` | A Postgres table | |
+| `duckdb://file.duckdb#SCHEMA.TABLE` | | A DuckDB table |
+| `s3://bucket/prefix/?region=eu-west-2` | Files in S3 | Parquet files in S3 |
+| `file:///folder`, or a folder | Files in a folder | Parquet files in a folder |
+
+Snowflake needs `auth` and a `load_method`, which a URI can't carry, so a Snowflake end is always a
+named connection.
+
+## Options
+
+| Option | Meaning |
+|--------|---------|
+| `--write-strategy <STRATEGY>` | `append`, `merge`, `delete_insert` or `replace`. Default as for a project: `replace` without a cursor. |
+| `--unique-key <COLUMN>...` | The key for `merge` and `delete_insert`. A Postgres table's primary key by default. |
+| `--cursor-column <COLUMN>` | The column incremental copies continue from. |
+| `--format <FORMAT>` | A files source's format: `parquet`, `ndjson`, `json` or `csv`. |
+| `--print-toml` | Print the copy as a project entry for `sqlload.toml` instead of running it. |
+
+```console
+$ sqlload copy 'postgresql://postgres:${ENV:PGPASSWORD}@localhost:5432/shop#public.orders' duckdb://shop.duckdb#raw.orders --cursor-column updated_at
+…
+└── orders                                          merge (unique_key: order_id)
+…
+    └── cursor  updated_at first run, everything
+```
+
+Run it again and it continues from the destination's maximum `updated_at`, as a project would.
+
+## Passwords
+
+A password written into a URI never reaches printed projects, plans or errors. `copy` warns that
+`${ENV:NAME}` in the URI keeps it out of shell history; quote the URI so the shell leaves it alone.
+`--print-toml` refers to a literal password as `${ENV:SQLLOAD_COPY_SOURCE_PASSWORD}` (or
+`SQLLOAD_COPY_DESTINATION_PASSWORD`).
+
+## Turning a copy into a project
+
+```console
+$ sqlload copy orders/ duckdb://shop.duckdb#raw.orders --print-toml
+# Written by `sqlload copy --print-toml`; append it to sqlload.toml (it adds a target, a source and any URI connections) to load this table on every run.
+
+[connections.copy_orders_destination]
+database = "shop.duckdb"
+kind = "duckdb"
+
+[connections.copy_orders_source]
+kind = "filesystem"
+root = "orders/"
+
+[sources.copy_orders]
+connection = "copy_orders_source"
+description = "Copied from folder orders/."
+destination = "copy_orders"
+kind = "files"
+path = ""
+schema = "raw"
+table_name = "orders"
+
+[targets.copy_orders]
+connection = "copy_orders_destination"
+loader_schema = "raw"
+```
+
+Names `sqlload.toml` already has get a suffix, so several printed copies can be appended.

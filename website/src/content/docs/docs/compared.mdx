@@ -1,0 +1,106 @@
+---
+title: "Compared with dlt and ingestr"
+description: "How SQLLoad differs from dlt and ingestr: state, schema, types, and loading large data by bulk copy."
+---
+
+dlt and ingestr are both good tools. dlt has a large ecosystem of verified sources and a Python
+API many teams know. ingestr loads from a long list of sources with a single command, and is a fast
+native binary. This page sets out where SQLLoad is different, with each claim about the other tools
+taken from their own docs or source at the versions SQLLoad's benchmarks used: **dlt 1.32.0** and
+**ingestr 1.1.82**.
+
+SQLLoad is for teams who keep rebuilding the same loading framework, and want one that is free,
+fully open source (Apache-2.0), and built to be maintained.
+
+| | SQLLoad | dlt 1.32.0 | ingestr 1.1.82 |
+|---|---|---|---|
+| Schema | Read from the live destination table every run, or from columns you declare | A stored schema, kept locally and in `_dlt_version` at the destination | Taken from the source each run |
+| Incremental position | The destination's maximum of `cursor_column` | Pipeline state, kept locally and in `_dlt_pipeline_state` | Passed by you each run (`--interval-start`, `--interval-end`) |
+| Positions the data can't carry | Opt-in, append-only run log, checked against the data | Pipeline state | Not kept for incremental loads |
+| Local working directory | None | `~/.dlt/pipelines/<pipeline_name>` | None |
+| Preview before changes | `sqlload plan`: every table, column, type mapping, write strategy and route | | |
+| Files already in S3, into Snowflake | Snowflake reads them in place from an external stage | Read and rewritten by dlt, then staged | Read by ingestr, then staged |
+| Parquet files into DuckDB | DuckDB reads them itself | Read by dlt | Read by ingestr |
+| Rows into Snowflake | Parquet staged, then `COPY` | Files staged, then `COPY` | Parquet staged, then `COPY` |
+| [Benchmarks](/docs/benchmarks/) | Fastest in every published scenario | | |
+
+## State you can delete
+
+SQLLoad keeps nothing outside your destination. An incremental table continues from the
+destination's maximum of its `cursor_column`, and the schema is whatever the live table holds. Drop
+a table, truncate it or add a column by hand, and the next run follows it. Only positions the data
+can't carry, such as an API's sync token, go in an opt-in run log, which is append-only, checked
+against the data on every run, and safe to delete.
+
+dlt keeps a working directory per pipeline, by default in `~/.dlt/pipelines/<pipeline_name>`,
+holding "extracted files, load packages, inferred schemas, execution traces, and the pipeline
+state" ([pipeline.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/general-usage/pipeline.md#L68-L72)).
+At the destination it writes `_dlt_version`, holding the schema as JSON, and `_dlt_pipeline_state`,
+holding the state, which includes incremental cursors
+([schema/utils.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/schema/utils.py#L1347-L1510)).
+Its design lets state survive runners whose disks are thrown away, and dlt restores the local copy
+from the destination on a clean start
+([state.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/general-usage/state.md#L63-L82)).
+
+## Schema from the live table
+
+dlt compares its stored schema with the destination's `INFORMATION_SCHEMA` only when the schema's
+version changes, and then adds only missing tables and columns; "Any other changes like data types,
+hints, etc. are ignored"
+([job_client_impl.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/destinations/job_client_impl.py#L685-L699)).
+When a value can't be coerced into a column's type, dlt adds a variant column such as
+`id__v_text`
+([schema.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/general-usage/schema.md#L172-L204)).
+
+SQLLoad reads the live table's columns on every run and diffs them with the source and your
+declarations. A value that doesn't fit an inferred column fails that table with the column, both
+types and the fix; it never creates a second column. `sqlload contract diff` checks declarations
+against live tables in CI. See [Contracts](/docs/concepts/contracts/).
+
+## Types kept exactly
+
+SQLLoad reads Postgres with binary `COPY` and keeps `numeric(p,s)` at its precision and scale,
+`jsonb` as JSON, timestamps with and without time zones apart, and `uuid` and `bytea` as their own
+types. Where a type has no exact form, it asks rather than guesses: `numeric` without a precision
+fails `plan` until you pin a type such as `decimal(38,18)`, and every pinned digit is then kept.
+
+- **dlt** reads databases with SQLAlchemy by default, and offers PyArrow, pandas and ConnectorX
+  backends. Its docs say that with ConnectorX "decimals may be rounded" and Postgres JSON fields
+  "are double-wrapped in strings"
+  ([sql_database configuration](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/dlt-ecosystem/verified-sources/sql_database/configuration.md#L535-L553)).
+- **ingestr** reads Postgres natively, and keeps `numeric(p,s)`, timestamps, `uuid`, JSON and
+  binary exactly. It maps `numeric` without a precision to `DECIMAL(38,9)`
+  ([mapper.go](https://github.com/bruin-data/ingestr/blob/4af269b2948c919b50da19e26f7db053578163d5/pkg/source/postgres/mapper.go#L58-L59)),
+  so a value with more than 9 decimal places is cut to 9: in our test, `3.141592653589793238` loaded
+  as `3.141592653`.
+
+## Large data: let the warehouse bulk-load
+
+The fastest load is rarely reading rows and inserting them. It's letting the warehouse copy files
+in bulk: straight from your bucket or folder when the data is already in files, or from a stage
+filled with Parquet. SQLLoad takes that route wherever it loads the data exactly, and `plan` names
+it for every table.
+
+- **Files already in S3 into Snowflake:** SQLLoad has Snowflake run `COPY` from an external stage
+  over the files' bucket. No row passes through SQLLoad. dlt's filesystem source "reads the files'
+  content and yields the records", and its Snowflake destination stages its own load files
+  ([filesystem](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/dlt-ecosystem/verified-sources/filesystem/index.md#L35),
+  [snowflake.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/dlt-ecosystem/destinations/snowflake.md#L244)).
+  ingestr writes Parquet and uploads it to the table's stage
+  ([snowflake.md](https://github.com/bruin-data/ingestr/blob/4af269b2948c919b50da19e26f7db053578163d5/docs/supported-sources/snowflake.md#L94)).
+  In the benchmark, SQLLoad loaded 1M rows of S3 Parquet in 10.30 s against ingestr's 19.47 s,
+  using 0.17 s of CPU.
+- **Parquet into DuckDB:** DuckDB reads the files itself with `read_parquet`. 10M rows from a local
+  folder loaded in 3.20 s against ingestr's 5.85 s.
+- **Rows into Snowflake:** SQLLoad stages Parquet on an external or internal stage and runs `COPY`,
+  committing large loads along the way so a failure keeps what committed.
+
+A route that can't be used fails at `plan` with the fix; SQLLoad never quietly falls back to a
+slower one. See [Load methods](/docs/concepts/load-methods/).
+
+## Speed
+
+SQLLoad was fastest in every published scenario, into DuckDB and Snowflake, from Postgres, local
+Parquet and S3. See [Benchmarks](/docs/benchmarks/) for every figure, the versions, hardware and
+method.
+

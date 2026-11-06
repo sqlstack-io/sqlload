@@ -1,0 +1,143 @@
+---
+title: "Benchmarks"
+description: "SQLLoad, dlt and ingestr loading the same data into DuckDB and Snowflake: wall time and CPU, with the method and versions."
+---
+
+SQLLoad, dlt and ingestr loaded the same data on the same machine, one after another, with every
+run's result checked against the source. These are the published scenarios, all from the
+repository's [benchmarks README](https://github.com/sqlstack-io/sqlload/blob/main/benchmarks/README.md),
+which also has peak memory for every run and the commands to reproduce them.
+
+| Scenario | SQLLoad | Next fastest | SQLLoad's lead |
+|----------|---------|--------------|----------------|
+| Parquet folder into DuckDB, 10M rows | 3.20 s | ingestr 5.85 s | 1.83x |
+| Parquet folder into DuckDB, 1M rows | 0.92 s | ingestr 2.12 s | 2.32x |
+| Parquet in S3 into DuckDB, 10M rows | 8.92 s | ingestr 10.01 s | 1.12x |
+| Postgres, 40 columns, into DuckDB, 1M rows | 6.84 s | ingestr 8.29 s | 1.21x |
+| The same table without a primary key | 6.75 s | ingestr 8.75 s | 1.30x |
+| Postgres into Snowflake, 1M rows | 14.56 s | ingestr 16.38 s | 1.12x |
+| Postgres, 40 columns, into Snowflake, 100,000 rows (external stage) | 11.60 s | ingestr 14.42 s | 1.24x |
+| The same table without a primary key (external stage) | 12.25 s | ingestr 14.61 s | 1.19x |
+| Parquet in S3 into Snowflake, 1M rows | 10.30 s | ingestr 19.47 s | 1.89x |
+
+Wall time is the median of 5 runs. dlt was slower than both in every scenario it ran.
+
+## Basis
+
+- **Date:** 6 November 2026.
+- **Hardware:** a shared cloud VM with 4 vCPUs (Intel Xeon @ 2.60 GHz) and 8 GB of RAM, Linux 6.1.
+- **Versions:** dlt 1.32.0 (writing with DuckDB 1.5.6), ingestr 1.1.82, Postgres `postgres:17`,
+  Python 3.12.14. SQLLoad is the release wheel built from commit `07a6510` (released as 0.11.0) or
+  `5ab2b9e` (0.11.1), as each table names.
+- **Method:** one warm-up, then the median of 5 runs, rotating which loader starts each round. Each
+  run gets a fresh destination, `HOME` and XDG folders. Wall time, and user plus system CPU of the
+  loader's process tree. Every run's row count and checksum matched the source. No loader is tuned.
+- **Data:** seed 42. Narrow rows have 6 columns; the wide table has 40, including 2 `jsonb`. Parquet
+  scenarios load the narrow rows as 10 part files.
+- **S3:** the bucket was in eu-west-2 and the machine in us-west-2, so every request crossed
+  regions.
+- **Snowflake:** an X-Small warehouse in AWS eu-west-2. Wall time includes Snowflake's own `COPY`.
+
+## Parquet files into DuckDB
+
+DuckDB reads the files itself on SQLLoad's route, so no row passes through the loader.
+
+`files_parquet`, local folder, 10,000,000 rows, commit `07a6510`
+
+| Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
+|--------|-----:|---------------:|----------------:|
+| sqlload | 3.20 s | 10.58 s | 1.00x |
+| ingestr | 5.85 s | 17.55 s | 1.83x |
+
+`files_parquet`, local folder, 1,000,000 rows, commit `07a6510`
+
+| Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
+|--------|-----:|---------------:|----------------:|
+| sqlload | 0.92 s | 1.69 s | 1.00x |
+| dlt | 138.45 s | 139.65 s | 150.96x |
+| ingestr | 2.12 s | 3.36 s | 2.32x |
+
+`files_s3_parquet`, 10,000,000 rows, commit `5ab2b9e`
+
+| Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
+|--------|-----:|---------------:|----------------:|
+| sqlload | 8.92 s | 11.18 s | 1.00x |
+| ingestr | 10.01 s | 19.53 s | 1.12x |
+
+dlt isn't in the 10M-row tables: one 10M-row run from a local folder took over 20 minutes.
+
+## Postgres into DuckDB
+
+1M rows, 40 columns including 2 `jsonb`, `replace`; commit `07a6510`.
+
+`pg_wide`
+
+| Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
+|--------|-----:|---------------:|----------------:|
+| sqlload | 6.84 s | 10.10 s | 1.00x |
+| dlt (pyarrow) | 47.82 s | 49.92 s | 6.99x |
+| dlt (connectorx) | 27.24 s | 44.84 s | 3.98x |
+| ingestr | 8.29 s | 12.09 s | 1.21x |
+
+`pg_wide_nokey`, the same table without a primary key
+
+| Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
+|--------|-----:|---------------:|----------------:|
+| sqlload | 6.75 s | 9.72 s | 1.00x |
+| dlt (pyarrow) | 47.29 s | 49.71 s | 7.00x |
+| dlt (connectorx) | 26.89 s | 44.26 s | 3.98x |
+| ingestr | 8.75 s | 12.88 s | 1.30x |
+
+## Into Snowflake
+
+Commit `5ab2b9e`. `sqlload` stages Postgres rows as Parquet on the user stage `@~`;
+`sqlload (external stage)` stages them in S3; `sqlload (direct)` lets Snowflake read the Parquet
+files in S3 itself.
+
+`pg_snowflake`, 1,000,000 rows
+
+| Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
+|--------|-----:|---------------:|----------------:|
+| sqlload | 14.56 s | 1.01 s | 1.00x |
+| sqlload (external stage) | 15.57 s | 1.06 s | 1.07x |
+| dlt (pyarrow) | 31.02 s | 5.56 s | 2.13x |
+| dlt (connectorx) | 29.36 s | 3.77 s | 2.02x |
+| ingestr | 16.38 s | 3.99 s | 1.12x |
+
+`pg_wide_snowflake`, 100,000 rows
+
+| Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
+|--------|-----:|---------------:|----------------:|
+| sqlload | 13.86 s | 0.90 s | 1.00x |
+| sqlload (external stage) | 11.60 s | 0.86 s | 0.84x |
+| dlt (pyarrow) | 31.48 s | 6.58 s | 2.27x |
+| dlt (connectorx) | 28.76 s | 3.50 s | 2.07x |
+| ingestr | 14.42 s | 4.07 s | 1.04x |
+
+`pg_wide_nokey_snowflake`, 100,000 rows
+
+| Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
+|--------|-----:|---------------:|----------------:|
+| sqlload | 12.66 s | 0.87 s | 1.00x |
+| sqlload (external stage) | 12.25 s | 0.85 s | 0.97x |
+| dlt (pyarrow) | 31.47 s | 6.46 s | 2.49x |
+| dlt (connectorx) | 30.12 s | 3.36 s | 2.38x |
+| ingestr | 14.61 s | 4.06 s | 1.15x |
+
+`files_snowflake`, 1,000,000 rows of Parquet in S3
+
+| Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
+|--------|-----:|---------------:|----------------:|
+| sqlload (direct) | 10.30 s | 0.17 s | 1.00x |
+| ingestr | 19.47 s | 4.41 s | 1.89x |
+
+## Running them yourself
+
+The suite needs Docker, uv and the Rust toolchain, and runs from a clone of the repository:
+
+```bash
+make bench-compare BENCH_ARGS='--size reduced'
+```
+
+The [benchmarks README](https://github.com/sqlstack-io/sqlload/blob/main/benchmarks/README.md)
+lists every scenario, the Snowflake settings, and what each run touches.

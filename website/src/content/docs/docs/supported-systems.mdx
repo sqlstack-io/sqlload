@@ -1,0 +1,52 @@
+---
+title: "Supported systems"
+description: "What SQLLoad reads and writes, by which route, and how each is tested."
+---
+
+## Sources
+
+| Source | Formats | Read by |
+|--------|---------|---------|
+| Postgres | Tables, by `include` patterns | Binary `COPY` into Arrow |
+| Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
+| Files in a local folder | As for S3 | As for S3 |
+| Python | Dicts, Arrow data (pyarrow, polars, pandas), JSON and NDJSON bytes | The `sqlload` package, in process |
+| HTTP APIs | JSON, through `sl.http` in a Python source | Rust |
+| Kafka | Topics, through the separate [exporter](/docs/cli/exporter/) | Rust |
+
+## Destinations
+
+| Destination | Write strategies | How data arrives |
+|-------------|------------------|------------------|
+| Snowflake | `append`, `merge`, `delete_insert`, `replace` | Parquet staged on an external, user, table or named stage, then `COPY`; or Snowpipe Streaming, or `INSERT`, by `load_method`. Files under an external stage load with `COPY` directly. |
+| DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
+| Parquet files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed. |
+| Parquet files in a local folder | As for S3 | As for S3 |
+
+## Source and destination combinations
+
+| From \ Into | Snowflake | DuckDB | Parquet files |
+|-------------|-----------|--------|---------------|
+| Postgres | Yes | Yes | Yes |
+| Files | Yes, read by Snowflake from an external stage | Yes; Parquet read by DuckDB | No |
+| Python | Yes | Yes | Yes |
+
+A files source into a files target is refused at `plan`. `merge` isn't available for files
+sources or files targets.
+
+## Testing
+
+| System | How it's tested |
+|--------|-----------------|
+| Postgres | Real Postgres in containers. |
+| DuckDB | Real, in process. |
+| S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
+| Local files | Real files in temporary folders. |
+| Kafka | Redpanda in containers. |
+| Snowflake | A local fake for protocol and failure tests, plus live tests on a real Snowflake account. |
+
+## Platforms
+
+The `sqlload` and `sqlload-cli` packages are released for Linux (x86_64 and aarch64, glibc 2.28 or
+newer) and macOS 11 or newer (arm64). The `sqlload` package needs CPython 3.10 or newer. See
+[Install](/docs/install/).

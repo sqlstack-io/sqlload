@@ -1,0 +1,221 @@
+---
+title: "Sources"
+description: "Postgres tables, files in S3 or a folder, and Python sources: what each reads and how its tables are chosen."
+---
+
+A source is where data comes from. SQLLoad has three kinds:
+
+| `kind` | Reads | Tables | Declared in |
+|--------|-------|--------|-------------|
+| `postgres` | Tables of a Postgres database, with binary `COPY` | One per matching source table | `sqlload.toml` |
+| `files` | Parquet, CSV, JSON or NDJSON files in S3 or a local folder | One per source | `sqlload.toml` |
+| Python | Whatever a Python function yields: dicts, Arrow data, JSON bytes, HTTP jobs | One per decorated function | Python, under `python_paths` |
+
+Every source loads into a target: its `destination`, or the project's `default_target`. Settings
+that shape tables (`write_strategy`, `unique_key`, `cursor_column` and the rest) can be set on the
+source as defaults for all its tables, and per table. See
+[`sqlload.toml`](/docs/configuration/#table-settings) for the full list.
+
+## Postgres
+
+```toml
+[connections.app]
+kind = "postgres"
+host = "db.example.com"
+port = 5432
+user = "loader"
+password = "${ENV:APP_DB_PASSWORD}"
+database = "shop"
+
+[sources.app]
+kind = "postgres"
+connection = "app"
+description = "The shop's application database."
+include = ["public.*"]
+exclude = ["public.audit_*"]
+write_strategy = "merge"
+
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+cursor_column = "updated_at"
+```
+
+### Choosing tables
+
+`include` and `exclude` are `schema.table` patterns (`*` matches any text). A table must match an
+`include` pattern and no `exclude` pattern. A `[sources.app.tables."schema.table"]` entry sets
+options for one table; on its own, it doesn't add the table.
+
+`new_tables` says what happens when a table that matches `include` appears after the source's
+first load:
+
+| `new_tables` | A new table |
+|--------------|-------------|
+| `sync` (default) | Loads like the others. |
+| `skip` | Is left out until `include` names it exactly, such as `include = ["public.*", "public.refunds"]`. |
+| `fail` | Stops the plan. |
+
+The first load is the one before any of the source's tables exists in the destination, whichever
+tables are selected. Tables present then count as approved.
+
+### Choosing columns
+
+| Setting | Effect |
+|---------|--------|
+| `exclude_columns` | Column patterns to leave out. |
+| `allow_columns` | Column patterns kept even when `exclude_columns` matches them. |
+| `skip_tables_with_columns` | Leave out any table that has a column matching one of these patterns. |
+| `mask` (per table) | Keep a column but replace its values with `hash` (SHA-256 hex) or `hmac` (HMAC-SHA256 hex, keyed by the source's `mask_key`). |
+
+```console
+$ sqlload plan
+Plan ready  1 selected, 1 object to create, 1 to load, 1 skipped
+
+Objects (1)                                         sqlload apply
+└── raw.app__customers                              create table
+    ├── customer_id int    -> BIGINT
+    ├── email       text   -> VARCHAR
+    ├── country     text   -> VARCHAR
+    ├── + _sqlload_load_id, _loaded_at
+    ├── excluded  created_at (exclude_columns *_at)
+    └── masked  email (hmac)
+
+Loads (1)                                           sqlload load
+└── app__customers                                  replace
+    ├── source  postgres  app  public.customers
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    └── batch   about 1 GB at a time into a new table, swapped in once at the end
+
+Skipped (1)
+└── public.orders
+    └── reason  has column total, which matches skip_tables_with_columns
+
+✓ Plan complete  1 selected, 1 object to create, 1 to load, 1 skipped
+```
+
+That plan comes from this source:
+
+```toml
+[sources.app]
+kind = "postgres"
+connection = "app"
+destination = "local"
+include = ["public.*"]
+exclude_columns = ["*_at"]
+allow_columns = ["updated_at"]
+skip_tables_with_columns = ["total"]
+mask_key = "${ENV:MASK_KEY}"
+
+[sources.app.tables."public.customers"]
+description = "Customers."
+mask = { email = "hmac" }
+```
+
+`hash` is the same everywhere, but anyone can recompute it, so guessable values such as emails can
+be recovered. Use `hmac` for personal data. A masked column can't be the `cursor_column` or part of
+the `unique_key`.
+
+### How Postgres is read
+
+SQLLoad reads each table with binary `COPY` into Arrow. A table whose `cursor_column` leads an
+index is read in cursor order and commits about every 1 GB, between distinct cursor values. Windows
+of a [`batch_size`](/docs/concepts/cursors/#batches) are all read in one `REPEATABLE READ`
+snapshot, so a row moving between windows is read once. That snapshot stays open for the whole
+table load: it counts towards `idle_in_transaction_session_timeout`, and vacuum can't remove rows
+it can still see.
+
+`numeric` without a precision has no fixed scale, so `plan` asks you to pin a type for it, such as
+`columns = { amount = "decimal(38,10)" }`. Postgres arrays load as JSON. See
+[Types](/docs/types/).
+
+## Files
+
+A files source is one table built from every file under a folder.
+
+```toml
+[connections.lake]
+kind = "s3"
+bucket = "example-bucket"
+region = "eu-west-2"
+
+[sources.events]
+kind = "files"
+connection = "lake"
+path = "events/"
+format = "parquet"
+description = "Click events, partitioned by day."
+partition_columns = { dt = "date" }
+write_strategy = "delete_insert"
+cursor_column = "dt"
+```
+
+| Setting | Meaning |
+|---------|---------|
+| `connection` | An `s3` or `filesystem` connection. |
+| `path` | The folder holding the files, relative to the connection. |
+| `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`. |
+| `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
+| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … |
+| `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
+| `copy_to_internal_stage` | Snowflake only: upload files no external stage covers to the user stage. See [Load methods](/docs/concepts/load-methods/#files-into-snowflake). |
+
+### Which files load
+
+| Strategy | Reads |
+|----------|-------|
+| `append` | Only files not loaded yet, by `_sqlload_source_file`. A file rewritten in place since it loaded fails the table, with the fix. |
+| `delete_insert` with a partition `cursor_column` | The newest loaded partition and everything after it, replacing those partitions whole. |
+| `replace` | Every file, swapped in as a new table. |
+
+`merge` isn't supported for files sources: a file would be read again once its rows are updated.
+
+```console
+$ sqlload load
+…
+└── events_log                                      append
+    ├── source  files  lake/events/  parquet
+    ├── files   1 new of 3 listed
+    ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
+…
+loaded   raw.events_log  1 rows  0.0s
+```
+
+Large loads commit at 1,000 files or about 1 GB. Under `delete_insert` a partition is never split
+across commits.
+
+### Columns
+
+Parquet columns come from the files' footers. CSV and JSON columns are inferred from a sample of
+records, unless you pin them with `columns`. Each row also gets `_sqlload_source_file`,
+`_sqlload_source_version` and `_sqlload_source_row` ([Columns SQLLoad
+adds](/docs/concepts/projects/#columns-sqlload-adds)).
+
+### Files the destination reads itself
+
+When the destination can load the files exactly by itself, it does, and no row passes through
+SQLLoad:
+
+- **DuckDB** reads Parquet in S3 or a local folder with `read_parquet`.
+- **Snowflake** runs `COPY` from an external stage over the files' bucket, for Parquet, JSON,
+  NDJSON and CSV.
+
+`plan` names the route for each table. See [Load methods](/docs/concepts/load-methods/).
+
+## Python
+
+Python sources are functions that yield rows, declared with `sqlload.source` and `@source.table`
+in the folders `python_paths` lists:
+
+```python
+import sqlload as sl
+
+shop = sl.source("shop", write_strategy="merge")
+
+
+@shop.table(unique_key="order_id", cursor_column="updated_at")
+def orders(ctx: sl.Context):
+    """Orders from the shop, one row per order."""
+    yield from fetch_orders(updated_after=ctx.cursor_value)
+```
+
+They need the `sqlload` package, not `sqlload-cli`. See [Python sources](/docs/python/).

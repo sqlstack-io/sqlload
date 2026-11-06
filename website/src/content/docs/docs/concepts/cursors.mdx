@@ -1,0 +1,132 @@
+---
+title: "Cursors and state"
+description: "How incremental tables find where to read from, how large loads commit along the way, and logged state for positions the data can't carry."
+---
+
+An incremental table has a `cursor_column`, such as `updated_at` or `id`. Each run reads from the
+destination's maximum of that column. SQLLoad doesn't store the position anywhere else: it reads
+it from the table, so a table you change, truncate or drop by hand is followed on the next run.
+
+```console
+$ sqlload load app__orders
+…
+    └── cursor  updated_at from 2026-10-12 16:00:00.000000+00 (destination maximum)
+```
+
+## Cursor settings
+
+| Setting | Meaning |
+|---------|---------|
+| `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. |
+| `cursor_start` | Where the first run starts, when the table is empty. Without it, the first run reads everything. |
+| `lookback` | Read this far before the maximum, such as `"1h"` or `"2d"`, to pick up late rows. Date and timestamp cursors only; a date cursor moves back by whole days. Not with `append`. |
+| `append_cursor_inclusive` | `true` (default) reads from the maximum itself; `false` reads strictly after it. See [append](/docs/concepts/write-strategies/#append). |
+
+Where the read starts, in order:
+
+1. `--start-cursor`, when given.
+2. The destination's maximum of `cursor_column`, minus `lookback`.
+3. `cursor_start`, when the table is empty.
+4. Otherwise, everything.
+
+`plan` says which one applies, on the table's `cursor` line.
+
+## Backfilling a range
+
+`--start-cursor` and `--end-cursor` read a range instead, from the start up to but not including the
+end. Values are typed from each selected table's cursor: an integer, an RFC 3339 timestamp or a
+date.
+
+```console
+$ sqlload plan app__orders --start-cursor 2026-10-01 --end-cursor 2026-10-08
+…
+    └── cursor  updated_at from 2026-10-01 00:00:00.000000+00 (--start-cursor), below 2026-10-08 00:00:00.000000+00 (--end-cursor)
+```
+
+Every selected table must have the same kind of cursor. Select tables of one cursor type per run.
+
+## Batches
+
+A large load commits along the way instead of all at the end, so a failure keeps what committed
+and the next run carries on from there. `plan` shows how each table commits on its `batch` line.
+
+| Table | Commits |
+|-------|---------|
+| `batch_size = "1d"` (date or timestamp cursor) or `batch_size = 1000` (integer cursor) | One cursor window at a time, up to 100,000 windows. |
+| A Postgres table whose `cursor_column` leads an index, without `batch_size` | About every 1 GB, reading in cursor order (NULLs first), only between distinct cursor values. `batch_size = "none"` opts out. |
+| Other cursor tables, text cursors, and `append` without a cursor or logged state | Once per read, since committing part of an unordered read could skip or duplicate rows. |
+| Files sources | At 1,000 files or about 1 GB; under `delete_insert` a partition is never split. |
+| `replace` and `--reload` | Once, at the end: the new table is swapped in. |
+
+With `batch_size`, the first run needs a start, from `cursor_start` or `--start-cursor`. A Postgres
+integer cursor without `--end-cursor` ends at its maximum when `plan` ran.
+
+```toml
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+cursor_column = "updated_at"
+cursor_start = "2026-09-01"
+batch_size = "7d"
+lookback = "1h"
+```
+
+```console
+$ sqlload load
+…
+    ├── batch   10 windows of 7days, one commit each
+    ├── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
+    └── cursor  updated_at first run, from cursor_start 2026-09-01 00:00:00.000000+00
+…
+loaded   raw.app__orders  1,001 rows  0.1s
+```
+
+A Python table with `batch_size` is called once per window, with `ctx.cursor_value` and
+`ctx.cursor_end` set to it.
+
+## Logged state
+
+Some positions aren't in the data, such as an API's sync token. A Python table with
+`state="logged"` keeps its position in `ctx.state`, and SQLLoad records it in an append-only run log
+with each commit:
+
+```python
+@shop.table(write_strategy="append", state="logged")
+def events(ctx: sl.Context):
+    """Shop events, read page by page with a sync token."""
+    token = ctx.state
+    while True:
+        page = fetch_events(since=token)
+        yield from page.items
+        token = page.next_token or token
+        yield sl.checkpoint(token)
+        if not page.has_more:
+            break
+```
+
+- `ctx.state` is the position the last successful run left: `None` on the first run, after
+  `--reload`, or after `sqlload state reset --clear`.
+- `yield sl.checkpoint(token)` after a page's rows marks exactly what those rows cover. A run that
+  fails part-way resumes from the last committed checkpoint without loading any row twice.
+- Without checkpoints, assign `ctx.state` once per page. A run that fails part-way never loses rows,
+  but under `append` the next run may load up to about two pages again.
+
+The run log is `_sqlload_runs` in the table's schema, or objects under `<table folder>/_sqlload/runs/`
+on a files target. It's written in the same transaction as the data where the warehouse allows it,
+so a failed load never moves the position.
+
+A logged table with a `cursor_column` also logs the data's cursor. When the log and the data
+disagree, the data wins, and the load appends a visible reconciliation. Deleting the log is safe: the
+next run reads as a stateless one would.
+
+### Inspecting and correcting the log
+
+```console
+$ sqlload state show
+raw.shop__events  state 4 (run dd3ba5e3-f778-4fe3-9fdd-87e980fc116a at 2026-11-06T19:39:58.007235Z)
+  2026-11-06T19:39:57.848181Z  0cd1cb07-1322-4df5-8fe3-a55a862a1cf3  run  - -> -, state 2  6 rows
+  2026-11-06T19:39:58.007235Z  dd3ba5e3-f778-4fe3-9fdd-87e980fc116a  run  - -> -, state 4  6 rows
+```
+
+`state verify` compares the logged cursor with the data. `state reconcile --yes` adopts the data's
+position where they disagree. `state reset --to VALUE --yes` sets the next position, and
+`--clear` forgets it. See [`sqlload state`](/docs/cli/state/).

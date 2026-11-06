@@ -1,0 +1,243 @@
+---
+title: "Quickstart"
+description: "Copy a folder of Parquet files into DuckDB, then load a Postgres database with a project."
+---
+
+This page copies one folder into DuckDB with no configuration, then sets up a project that loads a
+Postgres database into DuckDB and keeps it up to date. It needs SQLLoad
+([Install](/docs/install/)) and, for the second part, Docker.
+
+## Copy one table
+
+`sqlload copy` loads one table once and needs no configuration file. Here, a folder of Parquet
+files, `orders/`, is loaded into a DuckDB table:
+
+```console
+$ sqlload copy orders/ duckdb://shop.duckdb#raw.orders
+Plan ready  1 selected, 1 object to create, 1 to load
+
+Objects (1)                                         sqlload apply
+└── raw.orders                                      create table
+    ├── order_id   int            -> BIGINT
+    ├── customer   text           -> VARCHAR
+    ├── total      float          -> DOUBLE
+    ├── ordered_at timestamp_tz   -> TIMESTAMP WITH TIME ZONE
+    └── + _sqlload_source_file, _source_version, _source_row, _load_id, _loaded_at
+
+Loads (1)                                           sqlload load
+└── orders                                          replace
+    ├── source  files  orders/  parquet
+    ├── files   1 to read of 1 listed
+    ├── route   DuckDB reads directly from orders/ (nothing through the loader)
+    └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined, so later batches may add columns
+
+✓ Plan complete  1 selected, 1 object to create, 1 to load
+created  raw.orders  9 columns
+loaded   raw.orders  3 rows  0.0s
+
+✓ Completed  1 loaded, 3 rows, 0.0s
+```
+
+The plan comes first: the table it creates, how each column's type maps to DuckDB, the write
+strategy (`replace`) and the route. DuckDB reads the Parquet files itself, so the rows never pass
+through SQLLoad. The `_sqlload_*` columns record which file and row each row came from, and when
+it loaded.
+
+Add `--print-toml` to print the same copy as a `sqlload.toml` project instead of running it. See
+[`sqlload copy`](/docs/cli/copy/).
+
+## Load a database with a project
+
+A project is a `sqlload.toml` file that names connections, targets and sources. `plan`, `apply`
+and `load` then work on every table in it.
+
+### 1. Start Postgres with some data
+
+Save this as `seed.sql`:
+
+```sql
+CREATE TABLE customers (
+    customer_id bigint PRIMARY KEY,
+    email text NOT NULL,
+    country text,
+    created_at timestamptz NOT NULL
+);
+CREATE TABLE orders (
+    order_id bigint PRIMARY KEY,
+    customer_id bigint NOT NULL REFERENCES customers,
+    status text NOT NULL,
+    total numeric(12,2) NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE INDEX ON orders (updated_at);
+
+INSERT INTO customers
+SELECT i, 'customer' || i || '@example.com', (ARRAY['GB', 'FR', 'DE', 'US'])[1 + i % 4],
+       timestamptz '2026-01-01' + i * interval '1 day'
+FROM generate_series(1, 50) AS i;
+
+INSERT INTO orders
+SELECT i, 1 + i % 50, (ARRAY['placed', 'paid', 'shipped'])[1 + i % 3],
+       round(10 + i * 1.37, 2), timestamptz '2026-09-01' + i * interval '1 hour'
+FROM generate_series(1, 1000) AS i;
+```
+
+Then start Postgres and load it:
+
+```bash
+docker run -d --name shop-db -e POSTGRES_PASSWORD=secret -p 5432:5432 postgres:17
+docker exec -i shop-db psql -q -U postgres < seed.sql
+```
+
+### 2. Write `sqlload.toml`
+
+```toml
+default_target = "local"
+
+[connections.app]
+kind = "postgres"
+host = "localhost"
+user = "postgres"
+password = "${ENV:PGPASSWORD}"
+database = "postgres"
+
+[connections.warehouse]
+kind = "duckdb"
+database = "shop.duckdb"
+
+[targets.local]
+connection = "warehouse"
+loader_schema = "raw"
+
+[sources.app]
+kind = "postgres"
+connection = "app"
+description = "The shop's application database."
+include = ["public.*"]
+write_strategy = "merge"
+
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+cursor_column = "updated_at"
+
+[sources.app.tables."public.customers"]
+description = "Customers, one row per customer."
+```
+
+- `[connections]` say how to reach each system. `${ENV:PGPASSWORD}` reads the password from the
+  environment, so it stays out of the file.
+- `[targets.local]` loads into the DuckDB file, in schema `raw`.
+- `[sources.app]` syncs every table in `public`. `merge` upserts on each table's primary key.
+- `orders` is incremental: each run continues from the highest `updated_at` already loaded.
+- Each table SQLLoad writes needs a description, which becomes the table's comment.
+
+### 3. Check, plan, apply and load
+
+```bash
+export PGPASSWORD=secret
+```
+
+`sqlload debug` validates the file and tests each connection:
+
+```console
+$ sqlload debug
+ok    config  2 connections, 1 targets, 1 sources
+ok    target local  DuckDB v2.0.0
+ok    source app  postgres@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2)
+```
+
+`sqlload plan` shows what `apply` and `load` would do, and changes nothing:
+
+```console
+$ sqlload plan
+Plan ready  2 selected, 2 objects to create, 2 to load
+
+Objects (2)                                         sqlload apply
+├── raw.app__customers                              create table
+│   ├── customer_id int            -> BIGINT
+│   ├── email       text           -> VARCHAR
+│   ├── country     text           -> VARCHAR
+│   ├── created_at  timestamp_tz   -> TIMESTAMP WITH TIME ZONE
+│   └── + _sqlload_load_id, _loaded_at
+└── raw.app__orders                                 create table
+    ├── order_id    int             -> BIGINT
+    ├── customer_id int             -> BIGINT
+    ├── status      text            -> VARCHAR
+    ├── total       decimal(12,2)   -> DECIMAL(12,2)
+    ├── updated_at  timestamp_tz    -> TIMESTAMP WITH TIME ZONE
+    └── + _sqlload_load_id, _loaded_at
+
+Loads (2)                                           sqlload load
+├── app__customers                                  merge (unique_key: customer_id)
+│   ├── source  postgres  app  public.customers
+│   ├── route   read as Arrow -> DuckDB takes Arrow
+│   └── batch   about every 1 GB
+└── app__orders                                     merge (unique_key: order_id)
+    ├── source  postgres  app  public.orders
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
+    └── cursor  updated_at first run, everything
+
+✓ Plan complete  2 selected, 2 objects to create, 2 to load
+```
+
+Tables are named `{source}__{table}` unless you set `table_name`. The `unique_key` comes from each
+table's primary key. Because an index leads with `updated_at`, `orders` is read in cursor order and
+can commit along the way.
+
+`sqlload apply` creates the tables, and `sqlload load` fills them. Both print the plan first;
+here it is cut to the last lines:
+
+```console
+$ sqlload apply
+…
+created  raw.app__customers  6 columns
+created  raw.app__orders     7 columns
+
+✓ Completed  0.0s
+$ sqlload load
+…
+loaded   raw.app__customers  50 rows  0.0s
+loaded   raw.app__orders     1,000 rows  0.0s
+
+✓ Completed  2 loaded, 1,050 rows, 0.1s
+```
+
+### 4. Load again
+
+Change one order and add another:
+
+```bash
+docker exec -i shop-db psql -q -U postgres -c "UPDATE orders SET status = 'refunded', updated_at = now() WHERE order_id = 42; INSERT INTO orders VALUES (1001, 7, 'placed', 99.90, now());"
+```
+
+Load only `app__orders`. The plan shows where the read starts: the destination's maximum
+`updated_at`, read from the table itself.
+
+```console
+$ sqlload load app__orders
+Plan ready  1 selected, 1 to load
+
+Loads (1)                                           sqlload load
+└── app__orders                                     merge (unique_key: order_id)
+    ├── source  postgres  app  public.orders
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
+    └── cursor  updated_at from 2026-10-12 16:00:00.000000+00 (destination maximum)
+
+✓ Plan complete  1 selected, 1 to load
+loaded   raw.app__orders  3 rows  0.0s
+
+✓ Completed  1 loaded, 3 rows, 0.1s
+```
+
+Three rows: the two changed ones, and the row at the previous maximum, which the cursor includes.
+`merge` updates order 42 in place. SQLLoad keeps no state file for this. Delete the DuckDB file,
+and the next run loads everything again.
+
+## Next
+
+- [Projects](/docs/concepts/projects/): how connections, targets and sources fit together.
+- [Python sources](/docs/python/): tables defined in Python, including HTTP APIs.
+- [Snowflake load methods](/docs/concepts/load-methods/): how rows and files get into Snowflake.
+- [`sqlload.toml` reference](/docs/configuration/): every key.

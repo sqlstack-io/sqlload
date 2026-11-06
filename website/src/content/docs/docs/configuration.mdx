@@ -1,0 +1,153 @@
+---
+title: "sqlload.toml"
+description: "Every key of a loader project's sqlload.toml: connections, targets, sources and table settings."
+---
+
+`sqlload.toml` is a loader project's configuration. `sqlload` reads it from the working directory,
+or from `-c`/`--config` or `SQLLOAD_CONFIG`. Unknown keys are errors. See
+[Projects](/docs/concepts/projects/) for how the parts fit together.
+
+`${ENV:NAME}` anywhere in the file is replaced with the environment variable `NAME`; an unset
+variable is an error. `$${` is a literal `${`.
+
+The [Kafka exporter](/docs/cli/exporter/) uses a different file format.
+
+## Top level
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `python_paths` | none | Folders, relative to the file, scanned for Python sources. |
+| `default_target` | none | The target for sources that name no `destination`. Not needed with one target. |
+| `concurrency` | 4 | The most tables loading at once. `--concurrency` overrides it. |
+| `[connections.NAME]` | | How to reach a system. |
+| `[targets.NAME]` | | Where loaded tables go. |
+| `[sources.NAME]` | | Where data comes from. |
+
+## Connections
+
+Each connection has a `kind`.
+
+### `postgres`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `host` | required | |
+| `port` | 5432 | |
+| `user` | required | |
+| `password` | none | Use `${ENV:NAME}`. |
+| `database` | required | |
+
+### `snowflake`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `account` | required | The account identifier, such as `myorg-myaccount`. |
+| `user` | required | |
+| `auth` | required | `{ method = "key_pair", private_key_file = "..." }` or `{ method = "pat", token = "${ENV:...}" }`. |
+| `role` | none | |
+| `warehouse` | none | |
+| `database` | required | |
+| `load_method` | required | How data gets into Snowflake. See [Load methods](/docs/concepts/load-methods/#snowflake). |
+
+### `duckdb`
+
+| Key | Meaning |
+|-----|---------|
+| `database` | The database file, or `:memory:`. |
+
+### `s3`
+
+| Key | Meaning |
+|-----|---------|
+| `bucket` | The bucket. |
+| `region` | The bucket's region. |
+| `endpoint` | A custom S3-compatible endpoint. |
+
+Credentials come from `AWS_*` environment variables, web identity, or the instance or container
+role. AWS profiles and SSO aren't read.
+
+### `filesystem`
+
+| Key | Meaning |
+|-----|---------|
+| `root` | A folder on the machine SQLLoad runs on. |
+
+### `http`
+
+For [Python HTTP sources](/docs/python/#http-apis); its settings reach table functions as
+`ctx.connection`.
+
+| Key | Meaning |
+|-----|---------|
+| `base_url` | The API's base URL. |
+| `token` | For `sl.bearer()` and `sl.api_key(...)`. |
+| `username`, `password` | For `sl.basic()`. |
+| `headers` | Headers sent with every request. |
+
+## Targets
+
+| Key | Applies to | Meaning |
+|-----|------------|---------|
+| `connection` | all | A `snowflake`, `duckdb`, `s3` or `filesystem` connection. |
+| `loader_schema` | warehouses, required | The schema for tables whose source sets no `schema`. |
+| `database` | warehouses | Overrides the connection's database. |
+| `path` | files | Each table's folder template, with `{source}`, `{schema}`, `{table}`, `{cursor}` and `{cursor:date}`. Default `{source}/{table}/`. |
+| `format` | files | `parquet`, the default and only format. |
+| `max_footer_reads` | files | The most Parquet footers `plan` reads for one table's schema. Default 100. |
+
+## Sources
+
+| Key | Applies to | Meaning |
+|-----|------------|---------|
+| `kind` | all | `postgres` or `files`. Python sources are declared in Python. |
+| `connection` | all | The connection the source reads. |
+| `description` | all | The source's description; a files source's table description. |
+| `destination` | all | The target; `default_target` when omitted. |
+| `schema` | warehouse targets | The destination schema; the target's `loader_schema` when omitted. |
+| `table_name` | all | The destination name template, with `{source}`, `{schema}` and `{table}`. Default `{source}__{table}`, or `{source}` for files. |
+| `destination_path` | files targets | The folder template for this source's tables, overriding the target's `path`. |
+| `include`, `exclude` | postgres | `schema.table` patterns to sync and to leave out. |
+| `new_tables` | postgres | `sync` (default), `skip` or `fail`. See [Sources](/docs/concepts/sources/#choosing-tables). |
+| `exclude_columns`, `allow_columns` | all | Column patterns to leave out, and to keep anyway. |
+| `skip_tables_with_columns` | postgres | Leave out tables with a column matching one of these patterns. |
+| `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
+| `path` | files | The folder holding the files, relative to the connection. |
+| `format` | files | `parquet` (default), `ndjson`, `json` or `csv`. |
+| `compression` | files | `auto` (default), `none`, `gzip` or `zstd`. |
+| `csv` | files | `{ delimiter, header, quote, null_values }`; defaults `","`, `true`, `'"'`, `[""]`. |
+| `partition_columns` | files | Hive `key=value` folders as typed columns, such as `{ dt = "date" }`. |
+| `copy_to_internal_stage` | files into Snowflake | Upload files no external stage covers to `@~`. Much slower. |
+| `[sources.NAME.tables."schema.table"]` | all | Per-table settings. A files source's table is named after the source. |
+
+A source can also set any [table setting](#table-settings), as the default for its tables.
+
+## Table settings
+
+Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"]` entry for one.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `write_strategy` | from the cursor and key | `append`, `merge`, `delete_insert` or `replace`. See [Write strategies](/docs/concepts/write-strategies/). |
+| `unique_key` | the primary key | A column or list of columns, for `merge`. |
+| `cursor_column` | none | The column runs continue from. See [Cursors](/docs/concepts/cursors/). |
+| `cursor_start` | none | Where the first run starts. |
+| `lookback` | none | Read this far before the maximum, such as `"2h"`. |
+| `append_cursor_inclusive` | `true` | Whether `append` reads from the maximum itself. |
+| `batch_size` | none | Commit one cursor window at a time: a duration (`"1d"`) or an integer step, or `"none"`. |
+| `contract` | `none` | `none` or `enforced`. See [Contracts](/docs/concepts/contracts/). |
+| `on_schema_change` | `append_new_columns` | `append_new_columns`, `ignore` or `fail`. |
+| `auto_widen` | `false` | Widen inferred columns along `bool` → `int` → `decimal`, `timestamp_ntz` → `timestamp_tz`. |
+| `type_change_rebuild` | `require_confirmation` | `allow`, `require_confirmation` or `deny`. |
+
+Only in a table entry:
+
+| Key | Meaning |
+|-----|---------|
+| `description` | The table's description, which becomes its comment. |
+| `name` | The destination table name, overriding `table_name`. |
+| `columns` | Pinned column types, such as `{ total = "decimal(18,2)" }`. See [Types](/docs/types/). |
+| `mask` | Masked columns: `{ email = "hmac" }` or `"hash"`. |
+| `exclude_columns`, `allow_columns`, `destination_path` | As on the source, for this table. |
+
+Python tables take the same settings as decorator arguments, plus `allow_empty`, `state` and
+`flatten`. See [Python sources](/docs/python/#settings).

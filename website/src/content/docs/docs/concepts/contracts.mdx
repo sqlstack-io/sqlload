@@ -1,0 +1,119 @@
+---
+title: "Contracts and schema changes"
+description: "Where a table's columns come from, what happens when the source changes, and how declared columns are checked against live tables."
+---
+
+SQLLoad keeps no stored copy of your schema. Each run reads the destination table's columns from
+the warehouse and compares them with what the source holds, or with the columns you declare. When
+they differ, `plan` shows the change before anything runs.
+
+## Two modes
+
+| `contract` | Source of truth | Behaviour |
+|------------|-----------------|-----------|
+| `none` (default) | The live table | The first load creates the table from the source's types. Later runs read the table's columns and follow it, including changes made by hand. |
+| `enforced` | Columns declared in `columns` | Source columns not declared aren't loaded, and `plan` warns about them. |
+
+Most tables mix both: pin a few `columns`, and let the rest follow the source.
+
+```toml
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+cursor_column = "updated_at"
+columns = { total = "decimal(18,2)" }
+```
+
+Column types use SQLLoad's portable names, such as `int`, `decimal(18,2)` or `timestamp_tz`, mapped
+to each warehouse. See [Types](/docs/types/).
+
+## When the source changes
+
+### New columns
+
+`on_schema_change` decides what a new source column does:
+
+| `on_schema_change` | A new column |
+|--------------------|--------------|
+| `append_new_columns` (default) | Is added to the table. |
+| `ignore` | Is left out. |
+| `fail` | Stops the table. |
+
+```console
+$ sqlload plan app__orders
+Plan ready  1 selected, 1 to alter, 1 to load
+
+Objects (1)                                         sqlload apply
+└── raw.app__orders                                 alter table
+    └── add column  coupon text -> VARCHAR
+```
+
+SQLLoad never drops columns from a destination table.
+
+### Wider types
+
+A pinned type wider than the live column widens it:
+
+```console
+$ sqlload plan app__orders
+Plan ready  1 selected, 1 to alter, 1 to load
+
+Objects (1)                                         sqlload apply
+└── raw.app__orders                                 alter table
+    └── widen  total decimal(12,2) -> decimal(18,2) (DECIMAL(18,2))  in place
+```
+
+Narrowing, or a type the source can't be read as, fails `plan` for that table:
+
+```console
+$ sqlload plan app__orders
+…
+Errors (1)
+└── app__orders
+    └── reason  total has type numeric(12,2), which cannot be read as int
+```
+
+### Inferred types
+
+A column whose type SQLLoad infers (Python tables, CSV and JSON files) doesn't change type on its
+own. When values outgrow the column, the table fails with the column, both types, and the fix. With
+`auto_widen = true` on the table or source, it widens instead along `bool` → `int` → `decimal`
+and `timestamp_ntz` → `timestamp_tz`, as `plan` shows. It never widens to `float`, `text` or
+`json` by itself: pin those.
+
+### Changes that rebuild a table
+
+Some warehouses can't change a type in place. Snowflake, for example, can't turn `NUMBER(38,0)`
+into `NUMBER(18,2)`. Such a change rebuilds the table and swaps it in, keeping grants.
+`type_change_rebuild` decides whether that may run:
+
+| `type_change_rebuild` | A rebuild |
+|-----------------------|-----------|
+| `require_confirmation` (default) | Needs `--allow-type-change-rebuild`. |
+| `allow` | Runs. |
+| `deny` | Stops the table. |
+
+Only the affected table stops; the others load.
+
+## Checking declarations
+
+`sqlload contract diff` compares each table's declared `columns` with its live table, and changes
+nothing:
+
+```console
+$ sqlload contract diff
+Contract comparison
+  OK    table:app__customers
+  DIFF  table:app__orders
+        type_mismatch: column 'total' is declared decimal(18,2) but physical type is decimal(12,2)
+
+1 contract difference(s)
+```
+
+It exits 1 when anything differs, so it fits in CI. On `contract = "enforced"` tables it also
+reports live columns nothing declares.
+
+`sqlload contract generate` proposes the declarations that adopt each live table, and `--write`
+writes them into `sqlload.toml`, keeping the rest of the file as it was. Use it to adopt an existing
+table, or to move a table to `contract = "enforced"`.
+
+See [`sqlload contract`](/docs/cli/contract/) for every finding and flag.

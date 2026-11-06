@@ -1,0 +1,97 @@
+---
+title: "Write strategies"
+description: "append, merge, delete_insert and replace: how each writes rows, what it needs, and its default."
+---
+
+`write_strategy` says how a load writes rows into the destination table. Set it on a source, for
+all its tables, or per table.
+
+| Strategy | Writes | Needs |
+|----------|--------|-------|
+| `append` | Inserts the rows read. | Nothing. |
+| `merge` | Updates rows whose `unique_key` matches, inserts the rest. | A `unique_key`; a Postgres table's primary key is used when none is set. |
+| `delete_insert` | Deletes the cursor range it read, then inserts the rows. | A `cursor_column`. No key. |
+| `replace` | Builds a new table from the whole source, and swaps it in at the end. | No `cursor_column`. |
+
+Without `write_strategy`, a table takes:
+
+| Table has | Default |
+|-----------|---------|
+| No `cursor_column` | `replace` |
+| A `cursor_column` and a key | `merge` |
+| A `cursor_column` and no key | `delete_insert` |
+
+`plan` shows each table's strategy next to its name, with its key or cursor, such as
+`merge (unique_key: order_id)` or `delete_insert (cursor: dt)`.
+
+## append
+
+Each run inserts what it reads. With a `cursor_column`, it reads from the destination's maximum.
+That read includes the maximum itself, so rows sharing the last value aren't missed, but the row at
+the maximum is inserted again. When cursor values are unique and only grow, such as an `id`, set
+`append_cursor_inclusive = false` to read strictly after the maximum:
+
+```toml
+[sources.app.tables."public.events"]
+description = "Events, one row per event."
+write_strategy = "append"
+cursor_column = "event_id"
+append_cursor_inclusive = false
+```
+
+`append` takes no `lookback`, which would insert the window again on every run. Use `merge` or
+`delete_insert` for that.
+
+A files source under `append` loads each file once, by `_sqlload_source_file`.
+
+## merge
+
+`merge` upserts on `unique_key`, a column or a list of columns:
+
+```toml
+unique_key = ["order_id", "line_no"]
+```
+
+A Postgres table's primary key is the default key. With a `cursor_column`, `merge` reads from the
+destination's maximum (minus any `lookback`); without one, it reads the whole table each run.
+
+`merge` isn't available for files sources or files targets.
+
+## delete_insert
+
+`delete_insert` replaces a cursor range: it deletes rows in the range it read, `[start, end)`, then
+inserts the rows. It needs a `cursor_column` and no key, so it suits tables without one, and
+`lookback` windows that re-read recent data:
+
+```toml
+[sources.app.tables."public.page_views"]
+description = "Page views, one row per view."
+write_strategy = "delete_insert"
+cursor_column = "viewed_at"
+lookback = "2h"
+```
+
+On a files source partitioned by the cursor, it replaces whole partitions, and never splits one
+across commits.
+
+## replace
+
+`replace` rebuilds the table from the whole source on every run. It writes a new table, about 1 GB
+at a time, and swaps it in once at the end, so readers see the old table until then.
+
+- A Python table that yields no rows into a table that has rows fails rather than emptying it. Set
+  `allow_empty=True` on the table or source when an empty result is real.
+- On a files target, the new files are written first and the older ones deleted after.
+
+## Reloading a table
+
+`--reload` rebuilds the selected tables from the whole source, with their current columns and
+types, whatever their strategy. On a terminal `load --reload` shows the plan and asks first;
+elsewhere it needs `--yes`:
+
+```console
+$ sqlload load --reload app__customers
+error: --reload rebuilds app__customers from the whole source, replacing what they hold; confirm it in a terminal, or add --yes
+```
+
+See [Cursors](/docs/concepts/cursors/) for how a run decides what to read.

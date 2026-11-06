@@ -1,0 +1,79 @@
+---
+title: "Introduction"
+description: "SQLLoad loads data into your warehouse, and shows you how before it changes anything."
+---
+
+import Card from '../../../components/docs/Card.astro';
+import CardGroup from '../../../components/docs/CardGroup.astro';
+
+SQLLoad loads data into your warehouse, and shows you how before it changes anything.
+
+It reads Postgres tables, files (Parquet, CSV, JSON and NDJSON) in S3 or a local folder, and Python
+sources, including HTTP APIs. It writes to Snowflake, DuckDB, or Parquet files in S3 or a folder.
+`sqlload plan` shows each table's columns, write strategy and route before `apply` and `load` run.
+Where Snowflake or DuckDB can load files exactly by itself, the files never pass through SQLLoad.
+SQLLoad is written in Rust. Python is needed only for Python sources.
+
+```console
+$ sqlload copy orders/ duckdb://shop.duckdb#raw.orders
+Plan ready  1 selected, 1 object to create, 1 to load
+
+Objects (1)                                         sqlload apply
+└── raw.orders                                      create table
+    ├── order_id   int            -> BIGINT
+    ├── customer   text           -> VARCHAR
+    ├── total      float          -> DOUBLE
+    ├── ordered_at timestamp_tz   -> TIMESTAMP WITH TIME ZONE
+    └── + _sqlload_source_file, _source_version, _source_row, _load_id, _loaded_at
+
+Loads (1)                                           sqlload load
+└── orders                                          replace
+    ├── source  files  orders/  parquet
+    ├── files   1 to read of 1 listed
+    ├── route   DuckDB reads directly from orders/ (nothing through the loader)
+    └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined, so later batches may add columns
+
+✓ Plan complete  1 selected, 1 object to create, 1 to load
+created  raw.orders  9 columns
+loaded   raw.orders  3 rows  0.0s
+
+✓ Completed  1 loaded, 3 rows, 0.0s
+```
+
+## What it does
+
+| Step | Command | Result |
+|------|---------|--------|
+| Check a project | `sqlload debug` | Validates `sqlload.toml` and tests every connection. |
+| Preview | `sqlload plan` | Every table, column, type mapping, write strategy, route and cursor. Changes nothing. |
+| Create tables | `sqlload apply` | Creates or changes destination tables. Never loads data. |
+| Load | `sqlload load` | Loads the selected tables, committing large loads along the way. |
+| Copy one table | `sqlload copy` | One table, once, between two connections or URIs. No `sqlload.toml` needed. |
+| Check declarations | `sqlload contract` | Compares declared columns with live tables, or adopts live columns. |
+| Logged positions | `sqlload state` | Inspects or corrects the run log of `state = "logged"` tables. |
+
+## How it stays honest
+
+- **The live table is the schema.** SQLLoad stores no copy of your schema. Each run reads the
+  destination table's columns, or the columns you declare, and diffs them. See
+  [Contracts and schema changes](/docs/concepts/contracts/).
+- **Cursors come from the data.** An incremental table continues from the destination's maximum
+  of its `cursor_column`. Only positions the data can't carry, such as an API sync token, go in an
+  opt-in, append-only run log. See [Cursors and state](/docs/concepts/cursors/).
+- **No silent fallbacks.** A load method that can't be used, or files a warehouse can't load
+  exactly, fail at `plan` with the fix, instead of quietly taking a slower route.
+
+<CardGroup cols={2}>
+	<Card title="Install" icon="rocket" href="/docs/install/">
+		Install the `sqlload` command with uv or pip.
+	</Card>
+	<Card title="Quickstart" icon="terminal" href="/docs/quickstart/">
+		Copy a folder into DuckDB, then load a Postgres database with a project.
+	</Card>
+	<Card title="Concepts" icon="layer-group" href="/docs/concepts/projects/">
+		Sources, targets, load methods, write strategies, cursors and contracts.
+	</Card>
+	<Card title="Supported systems" icon="list" href="/docs/supported-systems/">
+		What SQLLoad reads and writes, and by which route.
+	</Card>
+</CardGroup>

@@ -1,0 +1,96 @@
+---
+title: "Targets"
+description: "Where loaded tables go: a Snowflake or DuckDB schema, or Parquet files in S3 or a folder."
+---
+
+A target is where loaded tables go. It names a connection and where tables are placed in it. A
+project can have several targets, for example one per environment; each source loads into its
+`destination`, or the project's `default_target`.
+
+| Connection `kind` | Target writes | Places tables with |
+|-------------------|---------------|--------------------|
+| `snowflake` | Snowflake tables | `loader_schema`, and optionally `database` |
+| `duckdb` | DuckDB tables | `loader_schema` |
+| `s3`, `filesystem` | Parquet files, one folder per table | `path` |
+
+## Warehouse targets
+
+```toml
+[connections.warehouse]
+kind = "duckdb"
+database = "shop.duckdb"
+
+[targets.local]
+connection = "warehouse"
+loader_schema = "raw"
+```
+
+| Key | Meaning |
+|-----|---------|
+| `connection` | A `snowflake` or `duckdb` connection. |
+| `loader_schema` | The schema for tables whose source sets no `schema`. Required. |
+| `database` | Overrides the connection's database. |
+
+A source's `schema` overrides `loader_schema` for its tables. A DuckDB connection's `database` is
+a file path, or `:memory:`.
+
+Snowflake connections also need a `load_method`, which says how data gets into Snowflake. See
+[Load methods](/docs/concepts/load-methods/).
+
+## Files targets
+
+A files target writes each table as Parquet files in its own folder.
+
+```toml
+[connections.out]
+kind = "filesystem"
+root = "out"
+
+[targets.files]
+connection = "out"
+path = "{source}/{table}/dt={cursor:date}/"
+```
+
+| Key | Meaning |
+|-----|---------|
+| `connection` | An `s3` or `filesystem` connection. |
+| `path` | Each table's folder: a template with `{source}`, `{schema}`, `{table}`, and `{cursor}` or `{cursor:date}` to partition by the cursor. Default `{source}/{table}/`. |
+| `format` | `parquet`, the only format and the default. |
+| `max_footer_reads` | The most Parquet footers `plan` reads for one table's schema. Default 100. |
+
+A source's `destination_path`, or one table's, overrides the target's `path`.
+
+```console
+$ sqlload load
+Plan ready  1 selected, 1 to load
+
+Loads (1)                                           sqlload load
+└── app__orders                                     delete_insert (cursor: updated_at)
+    ├── source  postgres  app  public.orders
+    ├── files   out/app/orders/  parquet (zstd)  partitions dt={cursor:date}/
+    ├── schema  first files, 7 columns
+    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values; each commit replaces its own cursor range
+    ├── cursor  updated_at first run, everything
+    └── note    each partition written or in the window gets its new files first, then its older files are deleted; not atomic, so a reader in between sees both
+
+✓ Plan complete  1 selected, 1 to load
+loaded   out/app/orders/  1,001 rows  0.0s
+
+✓ Completed  1 loaded, 1,001 rows, 0.0s
+```
+
+Files targets take `append`, `replace` and `delete_insert`. `merge` needs a table format that
+updates rows in place, so `plan` refuses it on a files target.
+
+The table's schema is the footers of the newest load in its newest partition. `sqlload contract
+diff --all-files` reads every file's footer to report files whose columns differ. See
+[`sqlload contract`](/docs/cli/contract/).
+
+SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: markers for loads in
+progress, and the run log of `state = "logged"` tables. Run one load at a time per files table.
+
+### Limitations
+
+- A files source can't load into a files target.
+- `replace` and `delete_insert` write the new files first, then delete the older ones. A reader in
+  between sees both, as the plan's `note` says.
