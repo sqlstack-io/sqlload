@@ -25,6 +25,8 @@ pub struct SourceTable {
     /// The planner's row estimate (`pg_class.reltuples`); negative when never analysed.
     pub estimated_rows: i64,
     pub estimated_bytes: i64,
+    /// The table's own comment in the source (`COMMENT ON TABLE`), the description of a discovered table.
+    pub comment: Option<String>,
 }
 
 impl SourceTable {

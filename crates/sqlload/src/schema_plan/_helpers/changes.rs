@@ -67,12 +67,13 @@ pub(crate) fn existing_column(
     let adapter = sql_adapter(rules.warehouse);
     let fit = adapter.type_fit(&column.column_type, &live.column_type);
     let widens = matches!(fit, TypeFit::WidenInPlace(_) | TypeFit::NeedsRebuild(_));
-    if widens && column.origin == ColumnOrigin::Inferred {
+    if widens && column.origin == ColumnOrigin::Inferred && adapter.runs_sql() {
+        let wider = format!(
+            "{} is {} in the table but {} in the source; pin the wider type to widen it, for example columns = {{ {} = \"{}\" }}",
+            live.name, live.column_type, column.column_type, column.name, column.column_type
+        );
         let refusal = match (rules.auto_widen, &column.column_type) {
-            (false, _) => Some(format!(
-                "{}; or set auto_widen = true to widen it",
-                mismatch(column, live)
-            )),
+            (false, _) => Some(format!("{wider}, or set auto_widen = true")),
             (
                 true,
                 ColumnType::SmallInt
@@ -81,8 +82,7 @@ pub(crate) fn existing_column(
                 | ColumnType::TimestampTz,
             ) => None,
             (true, _) => Some(format!(
-                "{}; auto_widen never widens to {}",
-                mismatch(column, live),
+                "{wider}; auto_widen never widens to {}",
                 column.column_type
             )),
         };

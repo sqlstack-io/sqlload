@@ -41,7 +41,7 @@ SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), t.
        information_schema._pg_numeric_scale(a.atttypid, a.atttypmod),
        information_schema._pg_char_max_length(a.atttypid, a.atttypmod),
        t.typcategory::text, NOT a.attnotnull,
-       c.reltuples::bigint, pg_total_relation_size(c.oid)
+       c.reltuples::bigint, pg_total_relation_size(c.oid), obj_description(c.oid, 'pg_class')
 FROM pg_catalog.pg_attribute a
 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
