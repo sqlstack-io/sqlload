@@ -8,13 +8,15 @@ use crate::adapters::files::main::folder_conflict::folder_conflict;
 use crate::adapters::files::models::FolderClaim;
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::resolve_tables;
-use crate::loader::_helpers::sources::{selected, source_ends, source_tables, unmatched_selectors};
+use crate::loader::_helpers::sources::{
+    admit_tables, selected, source_ends, source_tables, unmatched_selectors,
+};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
 use crate::loader::main::_table_folder::table_folder;
-use crate::loader::models::{PlanOptions, ProjectPlan, SkippedTable, TableSpec};
-use crate::project::models::{NewTables, ProjectConfig};
+use crate::loader::models::{PlanOptions, ProjectPlan, TablePlan, TableSpec};
+use crate::project::models::ProjectConfig;
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
 pub async fn plan_project(
@@ -46,30 +48,28 @@ pub async fn plan_project(
             )
         }));
         let specs = source_ends(project, (source_name, source), resolved.specs, options).await?;
+        let mut planned: Vec<TablePlan> = Vec::new();
+        let mut unselected: Vec<TableSpec> = Vec::new();
         for mut spec in specs {
             spec.files = files.clone();
             spec.python = module.map(|module| python_table(module, &spec.source_table));
             let qualified = spec.source_table.qualified_name();
             if !selected(options, (source_name, &spec.destination.table, &qualified)) {
+                unselected.push(spec);
                 continue;
             }
             let destination = destinations.get(&spec.target).ok_or_else(|| {
                 LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
             })?;
-            let table = plan_table(&spec, destination, options).await?;
-            let is_new = !table.exists && !spec.listed;
-            match (is_new, spec.new_tables) {
-                (true, NewTables::Skip) => plan.skipped.push(SkippedTable {
-                    source_name: source_name.clone(),
-                    source_table: qualified,
-                    reason: "new table (new_tables = \"skip\"); add it under [sources.*.tables] to sync it".to_owned(),
-                }),
-                (true, NewTables::Fail) => plan.problems.push(format!(
-                    "{qualified}: new table and new_tables = \"fail\"; add it under [sources.{source_name}.tables] or exclude it"
-                )),
-                _ => plan.tables.push(table),
-            }
+            planned.push(plan_table(&spec, destination, options).await?);
         }
+        plan = admit_tables(
+            plan,
+            (source_name, source),
+            (planned, &unselected),
+            (destinations, options),
+        )
+        .await?;
     }
     plan.warnings
         .extend(unmatched_selectors(project, options, &names));

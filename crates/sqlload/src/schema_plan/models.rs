@@ -37,6 +37,8 @@ pub struct SchemaRules {
     pub warehouse: Warehouse,
     pub contract: Contract,
     pub on_schema_change: OnSchemaChange,
+    /// Inferred columns widen along the ladder (bool -> int -> decimal, timestamp_ntz -> timestamp_tz) instead of failing.
+    pub auto_widen: bool,
     pub type_change_rebuild: Policy,
     /// `--allow-type-change-rebuild` was given.
     pub rebuild_allowed: bool,

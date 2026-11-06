@@ -56,8 +56,14 @@ pub(crate) fn column_values(batches: &[RecordBatch], column: &str) -> Result<Vec
     Ok(values)
 }
 
-/// A loader project reading `public.*` from the test Postgres into an in-memory DuckDB, plus `extra` TOML.
+/// A loader project reading `public.*` (or the `include` line `extra` starts with) from the test Postgres into an in-memory DuckDB, plus `extra` TOML.
 pub(crate) fn duckdb_project(port: u16, extra: &str) -> String {
+    let include = extra
+        .lines()
+        .next()
+        .filter(|line| line.starts_with("include = "))
+        .unwrap_or("include = [\"public.*\"]");
+    let extra = extra.strip_prefix(include).unwrap_or(extra);
     format!(
         r#"
 [connections.app_pg]
@@ -79,11 +85,26 @@ loader_schema = "raw"
 [sources.app]
 kind = "postgres"
 connection = "app_pg"
-include = ["public.*"]
+{include}
 exclude_columns = ["*email*"]
 {extra}
 "#
     )
+}
+
+/// `text` parsed, with a description for every `[sources.*.tables]` entry that gives none, as plan requires one for a table someone wrote; an entry giving `description = ""` keeps it, so the plan fails.
+pub(crate) async fn described_project(text: &str) -> Result<ProjectConfig, String> {
+    let mut project = parse_project(text, &|_| None).map_err(|error| error.to_string())?;
+    for entry in project
+        .sources
+        .values_mut()
+        .flat_map(|source| source.tables.values_mut())
+    {
+        entry
+            .description
+            .get_or_insert_with(|| "Test table.".to_owned());
+    }
+    Ok(project)
 }
 
 /// Plan, apply and load once; the error text when any step fails.
@@ -92,7 +113,7 @@ async fn run_once(
     destinations: &BTreeMap<String, Destination>,
     options: &PlanOptions,
 ) -> Result<(), String> {
-    let project = parse_project(project_text, &|_| None).map_err(|error| error.to_string())?;
+    let project = described_project(project_text).await?;
     let plan = plan_project(&project, destinations, options)
         .await
         .map_err(|error| error.to_string())?;
@@ -157,7 +178,7 @@ pub(crate) async fn run_batched(
         .await
         .map_err(|error| error.to_string())?;
     let text = duckdb_project(port, test_case.settings);
-    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
@@ -219,7 +240,7 @@ async fn plan_text(
     project_text: &str,
     destinations: &BTreeMap<String, Destination>,
 ) -> Result<String, String> {
-    let project = parse_project(project_text, &|_| None).map_err(|error| error.to_string())?;
+    let project = described_project(project_text).await?;
     let plan = plan_project(&project, destinations, &PlanOptions::default())
         .await
         .map_err(|error| error.to_string())?;
@@ -241,7 +262,7 @@ pub(crate) async fn run_scenario(
         .await
         .map_err(|error| error.to_string())?;
     let text = duckdb_project(port, test_case.settings);
-    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
@@ -265,9 +286,11 @@ pub(crate) async fn run_scenario(
             reload: run.reload,
             start_cursor: run.window.0.map(str::to_owned),
             end_cursor: run.window.1.map(str::to_owned),
+            select: run.select.iter().map(|name| (*name).to_owned()).collect(),
             ..PlanOptions::default()
         };
-        let error = run_once(&text, &destinations, &options)
+        let run_text = format!("{text}{}", run.settings);
+        let error = run_once(&run_text, &destinations, &options)
             .await
             .err()
             .unwrap_or_default();
@@ -492,11 +515,11 @@ async fn run_written_files(
     let (store, connection) = (scenario.store)(endpoint, directory);
     let prefix = format!("scores-{}/", uuid::Uuid::new_v4());
     let text = format!(
-        "[connections.files]\n{}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"{prefix}\"\n{}\n",
+        "[connections.files]\n{}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"{prefix}\"\n{}\n",
         connection, scenario.settings
     );
     let folder = open_folder(&Location { store, prefix }).map_err(|error| error.to_string())?;
-    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
@@ -802,7 +825,7 @@ pub(crate) async fn run_debug(
         "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\nload_method = {}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
         stage.replace("FAKE", &base)
     );
-    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
     let (lines, _) = sqlload::loader::main::debug_project::debug_project(&project, true).await;
     let sent = fake.state.lock().statements.clone();
     Ok((lines, sent))
@@ -820,13 +843,12 @@ pub(crate) async fn run_source_row_upgrade(
     })
     .map_err(|error| error.to_string())?;
     let text = format!(
-        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
+        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
         test_case.settings
     );
-    let project_destinations =
-        connect_targets(&parse_project(&text, &|_| None).map_err(|error| error.to_string())?)
-            .await
-            .map_err(|error| error.to_string())?;
+    let project_destinations = connect_targets(&described_project(&text).await?)
+        .await
+        .map_err(|error| error.to_string())?;
     let Some(duckdb @ Destination::DuckDb(_)) = project_destinations.get("dev") else {
         return Err("no DuckDB destination".to_owned());
     };
@@ -1026,10 +1048,10 @@ pub(crate) async fn run_route(
     ][usize::from(test_case.stage.is_empty())]
     .clone();
     let text = format!(
-        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\n{stage}\n[connections.lake]\n{lake}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
+        "[connections.wh]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"DB\"\nbase_url = \"{base}\"\n{stage}\n[connections.lake]\n{lake}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
         test_case.settings
     );
-    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
@@ -1248,7 +1270,7 @@ pub(crate) async fn run_files_target_scenario(
         settings = run.settings.unwrap_or(settings);
         let text = files_target_project(port, &connection, test_case.target_settings, settings)
             .replace("PREFIX", &prefix);
-        let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+        let project = described_project(&text).await?;
         let destinations = connect_targets(&project)
             .await
             .map_err(|error| error.to_string())?;
@@ -1340,12 +1362,10 @@ pub(crate) async fn run_metadata_round_trip(
     let target_text = files_target_project(port, &connection, "", "write_strategy = \"replace\"")
         .replace("PREFIX", &prefix);
     let source_text = format!(
-        "[connections.lake]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"{prefix}/app/orders/\"\nwrite_strategy = \"replace\"\n"
+        "[connections.lake]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"{prefix}/app/orders/\"\nwrite_strategy = \"replace\"\n"
     );
-    let target_project =
-        parse_project(&target_text, &|_| None).map_err(|error| error.to_string())?;
-    let source_project =
-        parse_project(&source_text, &|_| None).map_err(|error| error.to_string())?;
+    let target_project = described_project(&target_text).await?;
+    let source_project = described_project(&source_text).await?;
     let targets = connect_targets(&target_project)
         .await
         .map_err(|error| error.to_string())?;
@@ -1433,10 +1453,10 @@ pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result
         std::fs::write(folder.join("a.ndjson"), "{\"id\":1}\n")
             .map_err(|error| error.to_string())?;
         text.push_str(&format!(
-            "\n[sources.{source}]\nkind = \"files\"\nconnection = \"files\"\npath = \"{source}/\"\nformat = \"ndjson\"\npartition_columns = {{ {column} = \"{column_type}\" }}\nwrite_strategy = \"append\"\n{settings}\n"
+            "\n[sources.{source}]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"{source}/\"\nformat = \"ndjson\"\npartition_columns = {{ {column} = \"{column_type}\" }}\nwrite_strategy = \"append\"\n{settings}\n"
         ));
     }
-    let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;

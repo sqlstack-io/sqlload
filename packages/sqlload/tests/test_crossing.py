@@ -248,7 +248,10 @@ def test_given_orjson_typed_values_when_walked_or_serialised_then_the_tables_are
 	assert walked.column("f32").to_pylist()[0] == 0.1
 	assert walked.column("colour").to_pylist()[0] == "red"
 	assert walked.column("point").to_pylist()[0] == '{"x":0,"label":{"code":7}}'
-	assert walked.column("price").to_pylist()[0] == "1.10"
+	assert walked.column("price").to_pylist()[0] == Decimal("1.10")
+	assert types["price"] == "decimal128(21, 2)" and types["day"] == "date32[day]" and types["naive"] == "timestamp[us]"
+	assert walked.column("day").to_pylist()[0] == date(2026, 1, 2)
+	assert walked.column("naive").to_pylist()[0] == datetime(2026, 1, 2, 3, 4, 5)
 	assert walked.column("nested").to_pylist()[0] == '{"n":0,"c":"red","d":"2026-01-02","p":"2.50","a":[1.5,2.0]}'
 
 
@@ -352,3 +355,20 @@ def test_given_a_generator_that_finishes_when_read_then_the_stream_ends_and_stay
 	stream = _native.cross(iter([{"a": 1}]))
 	assert [batch.num_rows for batch in stream] == [1]
 	assert list(stream) == []
+
+
+@pytest.mark.parametrize("crossing", CROSSINGS)
+@pytest.mark.parametrize(
+	("values", "expected_type", "expected_values"),
+	[
+		pytest.param([Decimal("12.50"), Decimal("-3.125")], "decimal128(22, 3)", [Decimal("12.500"), Decimal("-3.125")], id="the larger scale"),
+		pytest.param([Decimal("1.5"), 7], "decimal128(20, 1)", [Decimal("1.5"), Decimal("7.0")], id="an int joins a decimal"),
+		pytest.param([Decimal("1." + "1" * 37), Decimal("123")], "string", ["1." + "1" * 37, "123"], id="wider than 38 digits is text"),
+		pytest.param([Decimal("NaN"), Decimal("2")], "decimal128(19, 0)", [None, Decimal("2")], id="NaN is NULL"),
+		pytest.param([Decimal("0.12345678901234567890")], "decimal128(38, 20)", [Decimal("0.12345678901234567890")], id="a large scale keeps 38 digits"),
+	],
+)
+def test_given_decimals_when_crossed_then_the_column_holds_every_value_exactly(crossing: str, values: list[Any], expected_type: str, expected_values: list[Any]) -> None:
+	table = read(iter([{"v": value} for value in values]), crossing=crossing)
+	assert str(table.schema.field("v").type) == expected_type
+	assert table.column("v").to_pylist() == expected_values

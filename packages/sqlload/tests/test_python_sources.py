@@ -156,7 +156,7 @@ def seen(project: Path, table: str) -> dict[str, Any]:
 def test_given_a_python_table_when_loaded_twice_into_duckdb_then_its_strategy_applies(
 	tmp_path: Path, settings: str, first: list[dict[str, Any]], second: list[dict[str, Any]], expected: list[tuple[Any, ...]]
 ) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table({settings})(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
 	give(project, "rows", first)
 	load(project)
 	give(project, "rows", second)
@@ -166,7 +166,7 @@ def test_given_a_python_table_when_loaded_twice_into_duckdb_then_its_strategy_ap
 
 
 def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_fit_the_live_types(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='append')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
 	give(project, "rows", [{"id": 1, "code": "x1", "meta": {"k": 1}}])
 	load(project)
 	give(project, "rows", [{"id": 2, "code": 7, "meta": {"k": 2}, "extra": True}])
@@ -181,7 +181,7 @@ def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_f
 
 
 def test_given_an_incremental_table_when_loading_then_ctx_carries_the_cursor_window(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='merge', unique_key='id', cursor_column='at', lookback='1h')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', cursor_column='at', lookback='1h')(rows)\n")
 	give(project, "rows", [{"id": 1, "at": "2026-01-01T10:00:00Z"}, {"id": 2, "at": "2026-01-02T10:00:00Z"}])
 	load(project)
 	assert seen(project, "rows")["cursor_value"] == "None"
@@ -197,7 +197,7 @@ def test_given_an_incremental_table_when_loading_then_ctx_carries_the_cursor_win
 
 
 def test_given_a_generator_that_raises_when_loading_then_only_its_table_fails_and_nothing_is_left_behind(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(name='good')(rows)\nshop.table(name='bad')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', name='good')(rows)\nshop.table(description='Test table.', name='bad')(rows)\n")
 	give(project, "good", [{"id": 1}])
 	give(project, "bad", {"rows": [{"id": 1}], "raise": "the API returned 503"})
 	done = sqlload(project, "load")
@@ -209,7 +209,7 @@ def test_given_a_generator_that_raises_when_loading_then_only_its_table_fails_an
 
 
 def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come_from(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(name='orders', columns={'total': 'decimal(18,2)'})(rows)\nshop.table(name='stores')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', name='orders', columns={'total': 'decimal(18,2)'})(rows)\nshop.table(description='Test table.', name='stores')(rows)\n")
 	done = sqlload(project, "plan")
 	assert done.returncode == 0, done.stderr
 	for line in [
@@ -230,12 +230,16 @@ def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come
 	("module", "message"),
 	[
 		("import sqlload as sl\nraise ValueError('broken module')\n", "cannot import sources/shop.py: ValueError: broken module"),
-		("import sqlload as sl\n@sl.table(uniq_key='id')\ndef t(ctx):\n    yield {}\n", "unknown table setting(s): uniq_key"),
-		("import sqlload as sl\n@sl.table(write_strategy='upsert')\ndef t(ctx):\n    yield {}\n", "unknown variant `upsert`"),
-		("import sqlload as sl\na = sl.source('a')\nb = sl.source('b')\na.table(name='t')(lambda ctx: [])\nb.table(name='t')(lambda ctx: [])\n", "Python table t is declared twice"),
+		("import sqlload as sl\n@sl.table(description='Test table.', uniq_key='id')\ndef t(ctx):\n    yield {}\n", "unknown table setting(s): uniq_key"),
+		("import sqlload as sl\n@sl.table(description='Test table.', write_strategy='upsert')\ndef t(ctx):\n    yield {}\n", "unknown variant `upsert`"),
+		("import sqlload as sl\na = sl.source('a')\nb = sl.source('b')\na.table(description='Test table.', name='t')(lambda ctx: [])\nb.table(description='Test table.', name='t')(lambda ctx: [])\n", "Python table t is declared twice"),
 		("import sqlload as sl\nshop = sl.source('shop', connection='nope')\n", "Python source shop (sources/shop.py) connection \"nope\" is not a [connections] entry"),
+		(
+			"import sqlload as sl\n@sl.table\ndef t(ctx):\n    yield {}\n",
+			"t\n    └── reason  no description; add description=\"...\" to its table declaration, or a docstring to its function",
+		),
 	],
-	ids=["import error", "unknown setting", "bad value", "duplicate table", "unknown connection"],
+	ids=["import error", "unknown setting", "bad value", "duplicate table", "unknown connection", "no description"],
 )
 def test_given_bad_python_sources_when_planning_then_the_project_fails_closed(tmp_path: Path, module: str, message: str) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
@@ -252,7 +256,7 @@ def test_given_a_toml_python_source_when_parsing_then_it_is_rejected(tmp_path: P
 
 
 def test_given_a_selector_when_loading_then_only_the_named_python_table_loads(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(name='a')(rows)\nshop.table(name='b')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', name='a')(rows)\nshop.table(description='Test table.', name='b')(rows)\n")
 	give(project, "a", [{"id": 1}])
 	give(project, "b", [{"id": 1}])
 	done = load(project, "a")
@@ -275,7 +279,7 @@ def files_rows(project: Path, table: str) -> list[tuple[Any, ...]]:
 def test_given_a_files_target_when_loading_a_python_table_then_parquet_files_follow_the_strategy(
 	tmp_path: Path, settings: str, second: list[dict[str, Any]], expected: list[tuple[Any, ...]]
 ) -> None:
-	project = make_project(tmp_path, FILES_PROJECT, f"shop.table({settings})(rows)\n")
+	project = make_project(tmp_path, FILES_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
 	give(project, "rows", [{"id": 1, "v": "a"}, {"id": 2, "v": "b"}])
 	load(project)
 	give(project, "rows", second)
@@ -285,7 +289,7 @@ def test_given_a_files_target_when_loading_a_python_table_then_parquet_files_fol
 
 def test_given_a_files_target_with_day_partitions_when_delete_insert_reloads_a_day_then_it_is_replaced(tmp_path: Path) -> None:
 	toml = FILES_PROJECT.replace('path = "{table}/"', 'path = "{table}/day={cursor:date}/"')
-	project = make_project(tmp_path, toml, "shop.table(write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'})(rows)\n")
+	project = make_project(tmp_path, toml, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'})(rows)\n")
 	give(project, "rows", [{"id": 1, "v": "a", "day": "2026-01-01"}, {"id": 2, "v": "b", "day": "2026-01-02"}])
 	load(project)
 	give(project, "rows", [{"id": 1, "v": "stale", "day": "2026-01-01"}, {"id": 2, "v": "B", "day": "2026-01-02"}, {"id": 3, "v": "c", "day": "2026-01-03"}])
@@ -295,7 +299,7 @@ def test_given_a_files_target_with_day_partitions_when_delete_insert_reloads_a_d
 
 
 def test_given_masked_and_excluded_columns_when_loading_then_values_are_hashed_or_dropped(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(mask={'email': 'hash'}, exclude_columns=['secret*'])(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', mask={'email': 'hash'}, exclude_columns=['secret*'])(rows)\n")
 	give(project, "rows", [{"id": 1, "email": "a@example.com", "secret_note": "x"}])
 	load(project)
 	(email,) = query(project, 'SELECT email FROM "RAW"."shop__rows"')[0]
@@ -304,15 +308,69 @@ def test_given_masked_and_excluded_columns_when_loading_then_values_are_hashed_o
 	assert "secret_note" not in columns
 
 
-def test_given_a_type_the_live_column_cannot_hold_when_loading_then_the_table_fails_with_the_fix(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='append')(rows)\n")
-	give(project, "rows", [{"id": 1, "amount": 1}])
+PRICED_TABLE = """
+import decimal
+
+
+def priced(ctx):
+    for row in rows(ctx):
+        amount = row["amount"]
+        yield {**row, "amount": decimal.Decimal(amount) if isinstance(amount, str) else amount}
+
+
+shop.table(description='Test table.', write_strategy='append'{settings})(priced)
+"""
+
+
+@pytest.mark.parametrize(
+	("settings", "first", "amount", "expected_code", "expected_line", "expected_rows"),
+	[
+		(
+			"",
+			1,
+			"2.50",
+			1,
+			"failed   RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but decimal(21,2) in the source; pin the wider type to widen it, for example columns = { amount = \"decimal(21,2)\" }, or set auto_widen = true",
+			[(1, 1)],
+		),
+		(
+			", auto_widen=True",
+			1,
+			"2.50",
+			0,
+			"altered  RAW.shop__priced  widen  amount int -> decimal(21,2) (DECIMAL(21,2))  in place",
+			[(1, Decimal("1.00")), (2, Decimal("2.50"))],
+		),
+		(
+			", auto_widen=True",
+			"10",
+			"10.5",
+			0,
+			"altered  RAW.shop__priced  widen  amount decimal(19,0) -> decimal(20,1) (DECIMAL(20,1))  in place",
+			[(1, Decimal("10.0")), (2, Decimal("10.5"))],
+		),
+		(
+			", auto_widen=True",
+			1,
+			2.5,
+			1,
+			"failed   RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but float in the source",
+			[(1, 1)],
+		),
+	],
+	ids=["fails-without-auto-widen", "auto-widen-to-decimal", "auto-widen-decimal-scale", "never-to-float"],
+)
+def test_given_an_inferred_column_that_outgrows_the_table_when_loading_then_auto_widen_decides(
+	tmp_path: Path, settings: str, first: Any, amount: Any, expected_code: int, expected_line: str, expected_rows: list[tuple[Any, ...]]
+) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, PRICED_TABLE.replace("{settings}", settings))
+	give(project, "priced", [{"id": 1, "amount": first}])
 	load(project)
-	give(project, "rows", [{"id": 2, "amount": 2.5}])
+	give(project, "priced", [{"id": 2, "amount": amount}])
 	done = sqlload(project, "load")
-	assert done.returncode == 1
-	assert "failed   RAW.shop__rows  the yielded data does not fit the table" in done.stdout + done.stderr, done.stderr
-	assert query(project, 'SELECT id, amount FROM "RAW"."shop__rows"') == [(1, 1)]
+	assert done.returncode == expected_code, done.stdout + done.stderr
+	assert expected_line in done.stdout, done.stdout + done.stderr
+	assert query(project, 'SELECT id, amount FROM "RAW"."shop__priced" ORDER BY id') == expected_rows
 
 
 CLIENT_MODULE = '''
@@ -340,12 +398,12 @@ def client(ctx):
     return Client(ctx.connection["base_url"])
 
 
-@shop.table(name="a")
+@shop.table(description="Test table.", name="a")
 def a(ctx):
     yield {"url": ctx.client.base_url}
 
 
-@shop.table(name="b")
+@shop.table(description="Test table.", name="b")
 def b(ctx):
     yield {"url": ctx.client.base_url, "first": ctx.cursor_value}
 '''
@@ -360,7 +418,7 @@ def test_given_a_source_client_when_its_tables_load_then_it_is_built_once_and_cl
 
 def test_given_a_live_table_with_upper_case_columns_when_loading_again_then_columns_match_and_the_live_cursor_type_is_used(tmp_path: Path) -> None:
 	project = make_project(
-		tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='merge', unique_key='seq', cursor_column='updated_at', lookback='1h')(rows)\n"
+		tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='seq', cursor_column='updated_at', lookback='1h')(rows)\n"
 	)
 	with duckdb.connect(str(project / "wh.duckdb")) as connection:
 		connection.execute('CREATE SCHEMA "RAW"')
@@ -375,7 +433,7 @@ def test_given_a_live_table_with_upper_case_columns_when_loading_again_then_colu
 
 
 def test_given_a_column_that_is_null_in_every_row_when_loading_again_then_it_takes_the_live_type(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='append')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
 	give(project, "rows", [{"id": 1, "n": 5}])
 	load(project)
 	give(project, "rows", [{"id": 2, "n": None}])
@@ -393,7 +451,7 @@ def test_given_a_column_that_is_null_in_every_row_when_loading_again_then_it_tak
 	ids=["fail", "ignore", "append with a cursor"],
 )
 def test_given_declared_columns_when_applying_then_the_first_load_creates_the_whole_table(tmp_path: Path, settings: str) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table({settings})(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
 	applied = sqlload(project, "apply")
 	assert applied.returncode == 0, applied.stderr
 	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
@@ -404,7 +462,7 @@ def test_given_declared_columns_when_applying_then_the_first_load_creates_the_wh
 
 
 def test_given_new_fields_when_a_python_table_loads_then_the_changes_are_listed(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='append')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
 	give(project, "rows", [{"id": 1}])
 	load(project)
 	give(project, "rows", [{"id": 2, "extra": "x"}])
@@ -426,7 +484,7 @@ def test_given_a_declared_key_the_data_does_not_have_when_loading_then_the_table
 	tmp_path: Path, settings: str, rows: list[dict[str, Any]], message: str
 ) -> None:
 	toml = DUCKDB_PROJECT.replace('[targets.dev]', '[connections.keys]\nkind = "http"\nbase_url = "x"\n\n[targets.dev]')
-	project = make_project(tmp_path, toml, f"shop.table({settings})(rows)\n")
+	project = make_project(tmp_path, toml, f"shop.table(description='Test table.', {settings})(rows)\n")
 	give(project, "rows", rows)
 	done = sqlload(project, "load")
 	assert done.returncode == 1
@@ -445,7 +503,7 @@ def test_given_a_declared_key_the_data_does_not_have_when_loading_then_the_table
 def test_given_a_generator_that_yields_nothing_on_its_first_load_then_the_load_succeeds(
 	tmp_path: Path, settings: str, expected_line: str, expected_tables: list[tuple[str, str]]
 ) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table({settings})(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
 	give(project, "rows", [])
 	done = load(project)
 	assert expected_line in done.stdout, done.stdout
@@ -458,7 +516,7 @@ def test_given_a_generator_that_yields_nothing_on_its_first_load_then_the_load_s
 
 def test_given_a_files_target_and_an_undeclared_cursor_when_planning_then_it_asks_to_declare_the_cursor(tmp_path: Path) -> None:
 	toml = FILES_PROJECT.replace('path = "{table}/"', 'path = "{table}/day={cursor:date}/"')
-	project = make_project(tmp_path, toml, "shop.table(write_strategy='delete_insert', cursor_column='day')(rows)\n")
+	project = make_project(tmp_path, toml, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='day')(rows)\n")
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
 	assert 'files targets need its type before the first load: declare it, for example columns={"day": "date"}' in done.stdout + done.stderr, done.stderr
@@ -475,7 +533,7 @@ def test_given_a_files_target_and_an_undeclared_cursor_when_planning_then_it_ask
 def test_given_a_decimal_or_smallint_cursor_when_appending_again_then_only_new_rows_load(
 	tmp_path: Path, column_type: str, first: list[Any], second: list[Any], expected: list[Any]
 ) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(write_strategy='append', cursor_column='v', append_cursor_inclusive=False, columns={{'v': '{column_type}'}})(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', write_strategy='append', cursor_column='v', append_cursor_inclusive=False, columns={{'v': '{column_type}'}})(rows)\n")
 	give(project, "rows", [{"v": value} for value in first])
 	load(project)
 	give(project, "rows", [{"v": value} for value in second])
@@ -484,7 +542,7 @@ def test_given_a_decimal_or_smallint_cursor_when_appending_again_then_only_new_r
 
 
 def test_given_cursor_start_when_the_cursor_type_is_not_known_yet_then_ctx_gets_the_same_type_on_every_run(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(write_strategy='append', cursor_column='at', cursor_start='2026-01-01T00:00:00Z')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', cursor_column='at', cursor_start='2026-01-01T00:00:00Z')(rows)\n")
 	give(project, "rows", [])
 	load(project)
 	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)"
@@ -496,7 +554,7 @@ def test_given_cursor_start_when_the_cursor_type_is_not_known_yet_then_ctx_gets_
 
 
 def test_given_a_target_connection_when_a_table_function_asks_for_it_then_it_is_withheld(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table()(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.')(rows)\n")
 	give(project, "rows", [{"id": 1}])
 	load(project)
 	assert seen(project, "rows")["other"]["base_url"] == "https://api.shop.example"
@@ -509,18 +567,19 @@ import sqlload as sl
 shop = sl.source("shop", table_name="api_{table}")
 
 
-@shop.table(name="orders")
+@shop.table(description="Test table.", name="orders")
 def orders(ctx):
     yield {"id": 1}
 
 
-@shop.table(name="stores", table_name="{source}_stores_v2")
+@shop.table(description="Test table.", name="stores", table_name="{source}_stores_v2")
 def stores(ctx):
     yield {"id": 1}
 
 
 @sl.table
 def standalone(ctx):
+    '''A table described by its docstring.'''
     yield {"id": 1}
 """
 
@@ -530,6 +589,8 @@ def test_given_table_name_settings_when_loading_then_tables_are_named_from_them(
 	load(project)
 	tables = query(project, "SELECT table_name FROM information_schema.tables ORDER BY table_name")
 	assert tables == [("api_orders",), ("shop_stores_v2",), ("standalone",)]
+	comments = query(project, "SELECT table_name, comment FROM duckdb_tables() ORDER BY table_name")
+	assert comments == [("api_orders", "Test table."), ("shop_stores_v2", "Test table."), ("standalone", "A table described by its docstring.")]
 
 
 @pytest.mark.parametrize("entry", [".", "..", "sources/../.."], ids=["root", "parent", "escape"])
@@ -554,7 +615,7 @@ def test_given_environments_and_build_folders_under_python_paths_when_discoverin
 	("settings", "args", "fails", "expected_rows"),
 	[
 		("write_strategy='replace'", (), True, [(1,)]),
-		("write_strategy='append'", ("--reload",), True, [(1,)]),
+		("write_strategy='append'", ("--reload", "--yes"), True, [(1,)]),
 		("write_strategy='replace', allow_empty=True", (), False, []),
 		("write_strategy='append'", (), False, [(1,)]),
 		("write_strategy='merge', unique_key='id'", (), False, [(1,)]),
@@ -564,7 +625,7 @@ def test_given_environments_and_build_folders_under_python_paths_when_discoverin
 def test_given_no_rows_when_loading_into_a_table_with_rows_then_only_an_allowed_replace_empties_it(
 	tmp_path: Path, settings: str, args: tuple[str, ...], fails: bool, expected_rows: list[tuple[Any, ...]]
 ) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table({settings})(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
 	give(project, "rows", [{"id": 1}])
 	load(project)
 	give(project, "rows", [])
@@ -586,7 +647,7 @@ def test_given_no_rows_when_loading_into_a_table_with_rows_then_only_an_allowed_
 def test_given_no_rows_when_loading_into_files_with_rows_then_only_an_allowed_replace_empties_them(
 	tmp_path: Path, settings: str, fails: bool, expected_rows: list[tuple[Any, ...]]
 ) -> None:
-	project = make_project(tmp_path, FILES_PROJECT, f"shop.table({settings})(rows)\n")
+	project = make_project(tmp_path, FILES_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
 	give(project, "rows", [{"id": 1, "v": "a"}])
 	load(project)
 	give(project, "rows", [])
@@ -597,7 +658,7 @@ def test_given_no_rows_when_loading_into_files_with_rows_then_only_an_allowed_re
 
 
 def test_given_allow_empty_on_a_source_with_a_bad_value_when_planning_then_the_setting_is_validated(tmp_path: Path) -> None:
-	module = "import sqlload as sl\nshop = sl.source('shop', allow_empty='yes')\nshop.table(name='t')(lambda ctx: [])\n"
+	module = "import sqlload as sl\nshop = sl.source('shop', allow_empty='yes')\nshop.table(description='Test table.', name='t')(lambda ctx: [])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
@@ -613,7 +674,7 @@ def test_given_allow_empty_in_sqlload_toml_when_parsing_then_it_is_an_unknown_ke
 
 
 def test_given_a_python_source_on_a_warehouse_targets_connection_when_planning_then_the_project_is_refused(tmp_path: Path) -> None:
-	module = "import sqlload as sl\nshop = sl.source('shop', connection='wh')\nshop.table(name='t')(lambda ctx: [])\n"
+	module = "import sqlload as sl\nshop = sl.source('shop', connection='wh')\nshop.table(description='Test table.', name='t')(lambda ctx: [])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
@@ -626,7 +687,7 @@ import sqlload as sl
 lake = sl.source("lake_files", connection="lake")
 
 
-@lake.table(name="listing")
+@lake.table(description="Test table.", name="listing")
 def listing(ctx):
     yield {"root": ctx.connection["root"]}
 """
@@ -640,7 +701,7 @@ def test_given_a_python_source_on_a_files_targets_connection_when_loading_then_i
 
 
 def test_given_an_enforced_contract_without_declared_columns_when_planning_then_the_table_is_blocked(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(contract='enforced')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', contract='enforced')(rows)\n")
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
 	assert "contract enforced needs declared columns: the first load would create a table with only metadata columns" in done.stdout + done.stderr

@@ -4,6 +4,7 @@ A source is a module-level object tables attach to; a table is a decorated gener
 Both are found by scanning the modules under `python_paths`, so declaring one never runs it.
 """
 
+import inspect
 import json
 from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -103,14 +104,15 @@ class Source:
 		description: str | None = None,
 		**settings: Any,
 	) -> Table | Callable[[TableFunction], Table]:
-		"""Attach a table to this source: `@shop.table` or `@shop.table(unique_key="id", ...)`."""
+		"""Attach a table to this source: `@shop.table` or `@shop.table(unique_key="id", ...)`; its
+		description, which `plan` requires, is `description` or else the function's docstring."""
 		_check_settings(settings, TABLE_SETTINGS | TABLE_ONLY_SETTINGS, "table")
 
 		def attach(table_function: TableFunction) -> Table:
 			declared = Table(
 				name=name or table_function.__name__,
 				function=table_function,
-				description=description,
+				description=description or _docstring(table_function),
 				source=self,
 				settings=dict(settings),
 			)
@@ -125,6 +127,11 @@ class Source:
 			raise ValueError(f"source {self.name} already has a client")
 		self.client_factory = factory
 		return factory
+
+
+def _docstring(function: TableFunction) -> str | None:
+	"""A plain function's own docstring, the table's description when none is given."""
+	return inspect.getdoc(function) if inspect.isfunction(function) else None
 
 
 def source(name: str, *, description: str | None = None, **settings: Any) -> Source:
@@ -154,14 +161,15 @@ def table(
 	description: str | None = None,
 	**settings: Any,
 ) -> Table | Callable[[TableFunction], Table]:
-	"""A standalone table, with the target's defaults: `@sl.table` or `@sl.table(...)`."""
+	"""A standalone table, with the target's defaults: `@sl.table` or `@sl.table(...)`; its
+	description, which `plan` requires, is `description` or else the function's docstring."""
 	_check_settings(settings, TABLE_SETTINGS | TABLE_ONLY_SETTINGS, "table")
 
 	def declare(table_function: TableFunction) -> Table:
 		return Table(
 			name=name or table_function.__name__,
 			function=table_function,
-			description=description,
+			description=description or _docstring(table_function),
 			settings=dict(settings),
 		)
 

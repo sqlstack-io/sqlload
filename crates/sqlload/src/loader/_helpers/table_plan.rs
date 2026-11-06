@@ -57,6 +57,7 @@ use crate::routing::models::Store;
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
+use crate::schema_plan::models::ColumnChange;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
@@ -77,8 +78,21 @@ pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {
     table
 }
 
-/// The columns the table should have: the read columns (pinned or from the source), then the metadata columns.
+/// The columns the table should have: the read columns (pinned, typed by the source, or inferred from sampled values for Python tables and JSON, NDJSON and CSV files, whose partition columns are declared), then the metadata columns.
 pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<DesiredColumn> {
+    let sampled = spec.python.is_some()
+        || spec
+            .files
+            .as_ref()
+            .is_some_and(|files| files.encoding.format != SourceFormat::Parquet);
+    let partition = |name: &str| {
+        spec.files.as_ref().is_some_and(|files| {
+            files
+                .partition_types
+                .iter()
+                .any(|(column, _)| column == name)
+        })
+    };
     let mut desired: Vec<DesiredColumn> = read
         .iter()
         .map(|column| DesiredColumn {
@@ -90,6 +104,7 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             ) {
                 (true, _) => ColumnOrigin::Metadata,
                 (false, true) => ColumnOrigin::Pinned,
+                (false, false) if sampled && !partition(&column.name) => ColumnOrigin::Inferred,
                 (false, false) => ColumnOrigin::Source,
             },
         })
@@ -198,6 +213,7 @@ pub(crate) async fn replan_columns(
                 warehouse: spec.warehouse,
                 contract: spec.contract,
                 on_schema_change: spec.on_schema_change,
+                auto_widen: spec.auto_widen,
                 type_change_rebuild: spec.type_change_rebuild,
                 rebuild_allowed: options.rebuild_allowed,
             };
@@ -283,6 +299,7 @@ async fn plan_table_once(
         warehouse: spec.warehouse,
         contract: spec.contract,
         on_schema_change: spec.on_schema_change,
+        auto_widen: spec.auto_widen,
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
     };
@@ -464,7 +481,7 @@ async fn plan_table_once(
     })
 }
 
-/// The statements that bring the table's schema in line with its plan; `None` when there is nothing to run: unchanged, rebuilt by the load itself, or a files target.
+/// The statements that bring the table's schema in line with its plan, a created or rebuilt table getting its description as its comment; `None` when there is nothing to run: unchanged, rebuilt by the load itself, or a files target.
 pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     let spec = &table.spec;
     let warehouse = spec.warehouse;
@@ -473,14 +490,27 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     }
     match &table.schema.action {
         TableAction::Unchanged | TableAction::Recreate => None,
-        TableAction::Create => Some(vec![
-            sql_adapter(warehouse).render_create_schema(&spec.destination),
-            sql_adapter(warehouse)
-                .render_create_table(&spec.destination, &table.schema.write_columns),
-        ]),
+        TableAction::Create => {
+            let adapter = sql_adapter(warehouse);
+            let mut statements = vec![
+                adapter.render_create_schema(&spec.destination),
+                adapter.render_create_table(&spec.destination, &table.schema.write_columns),
+            ];
+            statements.extend(adapter.render_table_comment(&spec.destination, &spec.description));
+            Some(statements)
+        }
         TableAction::Alter(changes) => {
             let live = table.live.as_deref().unwrap_or_default();
-            Some(sql_adapter(warehouse).render_change_columns(&spec.destination, changes, live))
+            let adapter = sql_adapter(warehouse);
+            let mut statements = adapter.render_change_columns(&spec.destination, changes, live);
+            if changes
+                .iter()
+                .any(|change| matches!(change, ColumnChange::Rebuild { .. }))
+            {
+                statements
+                    .extend(adapter.render_table_comment(&spec.destination, &spec.description));
+            }
+            Some(statements)
         }
     }
 }

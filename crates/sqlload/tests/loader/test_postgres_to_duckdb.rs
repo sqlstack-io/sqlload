@@ -5,11 +5,10 @@ use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
 use sqlload::loader::models::PlanOptions;
-use sqlload::project::main::parse_project::parse_project;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
-use crate::helpers::{duckdb_project, load_all, run_async};
+use crate::helpers::{described_project, duckdb_project, load_all, run_async};
 use crate::test_types::LoadRunTestCase;
 
 const SETUP: &str = "
@@ -47,7 +46,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
             .await
             .map_err(|error| error.to_string())?;
         let text = duckdb_project(postgres.port, TABLES);
-        let project = parse_project(&text, &|_| None).map_err(|error| error.to_string())?;
+        let project = described_project(&text).await?;
         let destinations = connect_targets(&project)
             .await
             .map_err(|error| error.to_string())?;

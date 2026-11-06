@@ -14,6 +14,7 @@ pub(crate) fn debug_without_host(project: &str) -> String {
             no_connection: true,
         },
         host: None,
+        no_color: true,
     };
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -34,6 +35,7 @@ pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
         config: Path::new("sqlload.toml"),
         command: cli.command,
         host: None,
+        no_color: true,
     };
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

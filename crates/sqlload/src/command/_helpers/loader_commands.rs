@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::collections::BTreeMap;
 
 use crate::adapters::dispatch::models::Destination;
+use crate::command::_helpers::output::confirm_reload;
+use crate::command::constants::RELOAD_DECLINED;
 use crate::command::models::{Command, LoaderArgs, LoaderRequest, StateAction};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
@@ -80,7 +82,13 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String
         Ok(project) => project,
         Err(error) => return config_failure(&request.command, error),
     };
-    let outcome = run_command(&project, request.command, request.host.clone()).await;
+    let outcome = run_command(
+        &project,
+        request.command,
+        request.host.clone(),
+        request.no_color,
+    )
+    .await;
     if let Some(host) = request.host {
         let _ = tokio::task::spawn_blocking(move || host.finish()).await;
     }
@@ -134,6 +142,7 @@ async fn run_command(
     project: &ProjectConfig,
     command: Command,
     host: Option<Arc<dyn PythonHost>>,
+    no_color: bool,
 ) -> Result<(Vec<String>, bool), String> {
     if let Command::Debug { no_connection } = command {
         let (lines, ok) = debug_project(project, !no_connection).await;
@@ -161,7 +170,7 @@ async fn run_command(
             );
         }
     };
-    let json = args.json;
+    let (json, yes) = (args.json, args.yes);
     let started = std::time::Instant::now();
     let options = options(args)?;
     let plan = plan_project(project, &destinations, &options)
@@ -174,6 +183,18 @@ async fn run_command(
     let (mut lines, planned) = render_plan(&plan);
     if !applies {
         return Ok((lines, planned));
+    }
+    let rebuilt: Vec<&str> = plan
+        .tables
+        .iter()
+        .filter(|table| loads && options.reload && !yes && table.schema.blocked.is_none())
+        .map(|table| table.spec.destination.table.as_str())
+        .collect();
+    if !rebuilt.is_empty() {
+        match confirm_reload(&lines, &rebuilt, no_color)? {
+            true => lines.clear(),
+            false => return Ok((vec![RELOAD_DECLINED.to_owned()], false)),
+        }
     }
     let applied = apply_project(&plan, &destinations)
         .await

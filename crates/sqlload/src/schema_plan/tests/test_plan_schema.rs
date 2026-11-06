@@ -2,7 +2,7 @@ use crate::column_types::models::{ColumnType, Warehouse};
 use crate::project::models::{Contract, OnSchemaChange, Policy};
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::SchemaRules;
-use crate::schema_plan::tests::helpers::{live, pinned, snowflake_rules, source};
+use crate::schema_plan::tests::helpers::{inferred, live, pinned, snowflake_rules, source};
 use crate::schema_plan::tests::test_types::PlanSchemaTestCase;
 
 const DECIMAL: ColumnType = ColumnType::Decimal {
@@ -162,6 +162,78 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             expected_action: &["unchanged"],
             expected_written: &[],
             expected_blocked: "CODE is int in the table but text in the source; pin a type the table can hold, for example columns = { code = \"int\" }",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "an inferred column that outgrows the table fails without auto_widen",
+            desired: vec![inferred("amount", DECIMAL)],
+            live: Some(vec![live("AMOUNT", ColumnType::Int)]),
+            rules: SchemaRules {
+                rebuild_allowed: true,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "AMOUNT is int in the table but decimal(18,2) in the source; pin the wider type to widen it, for example columns = { amount = \"decimal(18,2)\" }, or set auto_widen = true",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "auto_widen widens an inferred int to decimal and shows it",
+            desired: vec![inferred("amount", DECIMAL)],
+            live: Some(vec![live("AMOUNT", ColumnType::Int)]),
+            rules: SchemaRules {
+                auto_widen: true,
+                rebuild_allowed: true,
+                ..snowflake_rules()
+            },
+            expected_action: &["rebuild  AMOUNT int -> decimal(18,2) (NUMBER(21,2))"],
+            expected_written: &["amount"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "auto_widen still waits for rebuild confirmation",
+            desired: vec![inferred("amount", DECIMAL)],
+            live: Some(vec![live("AMOUNT", ColumnType::Int)]),
+            rules: SchemaRules {
+                auto_widen: true,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "needs a table rebuild (type_change_rebuild = \"require_confirmation\")",
+            expected_fix_flag: Some("--allow-type-change-rebuild"),
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "auto_widen widens an inferred timestamp_ntz to timestamp_tz",
+            desired: vec![inferred("seen_at", ColumnType::TimestampTz)],
+            live: Some(vec![live("SEEN_AT", ColumnType::TimestampNtz)]),
+            rules: SchemaRules {
+                auto_widen: true,
+                rebuild_allowed: true,
+                ..snowflake_rules()
+            },
+            expected_action: &["rebuild  SEEN_AT timestamp_ntz -> timestamp_tz (TIMESTAMP_TZ(9))"],
+            expected_written: &["seen_at"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "auto_widen never widens to text",
+            desired: vec![inferred("name", ColumnType::Varchar(128))],
+            live: Some(vec![live("NAME", ColumnType::Varchar(64))]),
+            rules: SchemaRules {
+                auto_widen: true,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "auto_widen never widens to varchar(128)",
             expected_fix_flag: None,
             expected_warnings: 0,
         },

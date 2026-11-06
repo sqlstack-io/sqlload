@@ -6,7 +6,7 @@ use crate::loader::models::{CursorSpec, SettingOrigin, TableSpec};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
-    MaskMethod, SourceConfig, StateMode, TableOverride, TableSettings, WriteStrategy,
+    MaskMethod, SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, WriteStrategy,
 };
 use crate::similar_names::main::nearest_name::nearest_name;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
@@ -146,6 +146,17 @@ pub(crate) fn build_spec(
     {
         problems.push("mask uses \"hmac\" but the source sets no mask_key (for example mask_key = \"${ENV:MASK_KEY}\")".to_owned());
     }
+    let files_description = match context.source.kind {
+        SourceKind::Files => context.source.description.as_deref(),
+        _ => None,
+    };
+    let description = overrides
+        .description
+        .as_deref()
+        .or(files_description)
+        .or(table.comment.as_deref())
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -166,6 +177,7 @@ pub(crate) fn build_spec(
             schema: context.target.schema.clone(),
             table: name,
         },
+        description: description.unwrap_or_default().to_owned(),
         warehouse: context.target.warehouse,
         strategy,
         strategy_origin,
@@ -190,6 +202,8 @@ pub(crate) fn build_spec(
         on_schema_change: layered(&settings.on_schema_change, &defaults.on_schema_change)
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        auto_widen: layered(&settings.auto_widen, &defaults.auto_widen)
+            .is_some_and(|(value, _)| value),
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
@@ -197,7 +211,7 @@ pub(crate) fn build_spec(
             .is_some_and(|(value, _)| value),
         logged: layered(&settings.state, &defaults.state)
             .is_some_and(|(value, _)| value == StateMode::Logged),
-        listed: false,
+        approved: false,
         new_tables: context.source.new_tables,
         files: None,
         destination_path: context.target.path.as_ref().map(|target_path| {
@@ -209,6 +223,41 @@ pub(crate) fn build_spec(
         }),
         python: None,
     })
+}
+
+/// Why a table someone wrote is blocked without a description they wrote, with where to give it; `None` when it has one, or when it was discovered (matched by an `include` pattern, not named), which takes the source's own table comment or none (D203). Python tables, files sources (described by the source's own `description`), `[sources.*.tables]` entries and tables named exactly in `include` are written.
+pub(crate) fn missing_description(
+    source_name: &str,
+    source: &SourceConfig,
+    table: &SourceTable,
+) -> Option<String> {
+    let qualified = table.qualified_name();
+    let entry = source.tables.get(&qualified);
+    let written = source.kind != SourceKind::Postgres
+        || entry.is_some()
+        || source.include.contains(&qualified);
+    let described = [
+        entry.and_then(|entry| entry.description.as_deref()),
+        source
+            .description
+            .as_deref()
+            .filter(|_| source.kind == SourceKind::Files),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|text| !text.trim().is_empty());
+    let fix = match source.kind {
+        SourceKind::Python => {
+            "no description; add description=\"...\" to its table declaration, or a docstring to its function".to_owned()
+        }
+        SourceKind::Files => {
+            format!("no description; add description = \"...\" under [sources.{source_name}]")
+        }
+        SourceKind::Postgres => format!(
+            "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
+        ),
+    };
+    (written && !described).then_some(fix)
 }
 
 fn glob(pattern: &str) -> Result<Glob, String> {

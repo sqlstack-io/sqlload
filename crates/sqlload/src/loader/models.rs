@@ -63,6 +63,8 @@ pub struct TableSpec {
     /// The target the table loads into.
     pub target: String,
     pub destination: TableName,
+    /// The table's required description, given to the destination table as its comment.
+    pub description: String,
     pub warehouse: Warehouse,
     pub strategy: WriteStrategy,
     pub strategy_origin: SettingOrigin,
@@ -81,13 +83,15 @@ pub struct TableSpec {
     pub masked: MaskRules,
     pub contract: Contract,
     pub on_schema_change: OnSchemaChange,
+    /// `auto_widen = true`: an inferred column whose values outgrow it widens along the ladder instead of failing.
+    pub auto_widen: bool,
     pub type_change_rebuild: Policy,
     /// Whether a Python table's `replace` may empty the table when its function yields no rows.
     pub allow_empty: bool,
     /// Whether the table's position is kept in the run log (`state = "logged"`).
     pub logged: bool,
-    /// Listed under `[sources.*.tables]`, so never treated as a new table.
-    pub listed: bool,
+    /// Approved for loading as soon as it appears: named exactly in `include`, or declared (files and Python tables); a `[sources.*.tables]` entry alone never approves.
+    pub approved: bool,
     pub new_tables: NewTables,
     /// The files behind a files source; `None` for database tables.
     pub files: Option<FilesSource>,

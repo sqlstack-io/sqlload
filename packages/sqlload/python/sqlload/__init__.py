@@ -11,6 +11,7 @@ shop = sl.source("shop", connection="shop", destination="prod", write_strategy="
 
 @shop.table(unique_key="order_id")
 def orders(ctx: sl.Context):
+    '''Orders from the shop API, one row per order.'''
     yield from ctx.client.get("/orders").json()["items"]
 ```
 

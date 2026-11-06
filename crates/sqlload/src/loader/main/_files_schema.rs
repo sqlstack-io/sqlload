@@ -19,6 +19,7 @@ pub(in crate::loader) fn files_schema(
         warehouse: spec.warehouse,
         contract: spec.contract,
         on_schema_change: spec.on_schema_change,
+        auto_widen: spec.auto_widen,
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
     };

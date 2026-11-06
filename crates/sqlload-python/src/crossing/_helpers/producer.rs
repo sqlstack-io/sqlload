@@ -8,7 +8,7 @@ use arrow_pyarrow::FromPyArrow;
 use pyo3::exceptions::{PyImportError, PyTypeError};
 use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{
-    PyAnyMethods, PyBytes, PyDict, PyDictMethods, PyList, PyListMethods, PyString, PyTypeMethods,
+    PyAnyMethods, PyBytes, PyDict, PyDictMethods, PyList, PyListMethods, PyTypeMethods,
 };
 use pyo3::{Bound, Py, PyAny, PyResult, Python};
 use sqlload::row_batches::models::{JsonLayout, JsonRead};
@@ -16,10 +16,12 @@ use sqlload::row_batches::models::{JsonLayout, JsonRead};
 use crate::bindings::models::JsonData;
 use crate::crossing::_helpers::parser::{panic_if, panicked};
 use crate::crossing::_helpers::walk::walk_rows;
+use crate::crossing::constants::CROSSING_DEFAULT;
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{
     Crossed, CrossingOptions, CrossingStats, DictCrossing, Dispatch, PanicSite,
 };
+use crate::host::constants::RUNTIME_MODULE;
 
 /// Where the generator's items go: dict yields gather in `pending` until a batch is full.
 struct Producer<'py> {
@@ -198,7 +200,7 @@ impl<'py> Producer<'py> {
     }
 }
 
-/// orjson's `dumps` and its options (numpy values as numbers, `str()` for unknown types) when dicts cross serialised and orjson is installed; without it they are walked.
+/// orjson's `dumps` and its options (numpy values as numbers, `str()` for unknown types, and a `Decimal`, `date` or `datetime` refused so its batch is walked and keeps its type) when dicts cross serialised and orjson is installed; without it they are walked.
 fn orjson_dumps(
     py: Python<'_>,
     crossing: DictCrossing,
@@ -212,8 +214,13 @@ fn orjson_dumps(
         },
     };
     let options = PyDict::new(py);
-    options.set_item("default", py.get_type::<PyString>())?;
-    options.set_item("option", orjson.getattr("OPT_SERIALIZE_NUMPY")?)?;
+    options.set_item(
+        "default",
+        py.import(RUNTIME_MODULE)?.getattr(CROSSING_DEFAULT)?,
+    )?;
+    let numpy = orjson.getattr("OPT_SERIALIZE_NUMPY")?;
+    let passthrough = orjson.getattr("OPT_PASSTHROUGH_DATETIME")?;
+    options.set_item("option", numpy.bitor(passthrough)?)?;
     Ok(Some((orjson.getattr("dumps")?, options)))
 }
 

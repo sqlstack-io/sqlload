@@ -52,7 +52,7 @@ def remember(ctx, **seen):
     (HERE / "seen" / f"{ctx.table}.json").write_text(json.dumps({"state": ctx.state, "is_reload": ctx.is_reload, **seen}))
 
 
-@api.table(write_strategy="append", state="logged")
+@api.table(description="Test table.", write_strategy="append", state="logged")
 def pages(ctx):
     remember(ctx)
     data = json.loads((HERE / "data" / "pages.json").read_text())
@@ -63,13 +63,13 @@ def pages(ctx):
     ctx.state = page
 
 
-@api.table(write_strategy="append", cursor_column="at", state="logged")
+@api.table(description="Test table.", write_strategy="append", cursor_column="at", state="logged")
 def events(ctx):
     remember(ctx, cursor_value=repr(ctx.cursor_value))
     yield from json.loads((HERE / "data" / "events.json").read_text())
 
 
-@api.table(write_strategy="append", state="logged")
+@api.table(description="Test table.", write_strategy="append", state="logged")
 def counts(ctx):
     remember(ctx)
     if ctx.state is None:
@@ -78,14 +78,14 @@ def counts(ctx):
     yield {"n": ctx.state["count"]}
 
 
-@api.table(write_strategy="append", cursor_column="at", state="logged")
+@api.table(description="Test table.", write_strategy="append", cursor_column="at", state="logged")
 def ticks(ctx):
     remember(ctx)
     ctx.state = (ctx.state or 0) + 1
     yield from json.loads((HERE / "data" / "ticks.json").read_text())
 
 
-@api.table(write_strategy="append", state="logged")
+@api.table(description="Test table.", write_strategy="append", state="logged")
 def empty(ctx):
     remember(ctx)
     ctx.state = "token-1"
@@ -122,7 +122,7 @@ HERE = Path(__file__).resolve().parent.parent
 def pages_of(name):
     source = sl.source(name, destination=name, table_name="pages")
 
-    @source.table(name=f"{name}_pages", write_strategy="append", state="logged")
+    @source.table(description="Test table.", name=f"{name}_pages", write_strategy="append", state="logged")
     def pages(ctx):
         (HERE / "seen").mkdir(exist_ok=True)
         (HERE / "seen" / f"{name}.json").write_text(json.dumps({"state": ctx.state}))
@@ -260,7 +260,7 @@ def test_given_reload_when_loading_a_logged_table_then_it_reads_from_the_start_a
 	project = make_project(tmp_path, DUCKDB_PROJECT)
 	give(project, "pages", [[{"n": 1}], [{"n": 2}]])
 	ok(project, "load", "api__pages")
-	ok(project, "load", "--reload", "api__pages")
+	ok(project, "load", "--reload", "--yes", "api__pages")
 	assert seen(project, "pages") == {"state": None, "is_reload": True}
 	assert query(project, 'SELECT n FROM "RAW"."api__pages" ORDER BY n') == [(1,), (2,)]
 	assert runs(project, "api__pages")[-1] == ("run", "2", None, "2")
@@ -372,12 +372,12 @@ def test_given_a_files_target_when_resetting_then_the_reset_is_an_object_and_the
 @pytest.mark.parametrize(
 	("module", "message"),
 	[
-		("import sqlload as sl\n@sl.table(state='kept')\ndef t(ctx):\n    yield {}\n", "unknown variant `kept`"),
+		("import sqlload as sl\n@sl.table(description='Test table.', state='kept')\ndef t(ctx):\n    yield {}\n", "unknown variant `kept`"),
 		(
-			"import sqlload as sl\n@sl.table\ndef t(ctx):\n    ctx.state = 1\n    yield {'n': 1}\n",
+			"import sqlload as sl\n@sl.table(description='Test table.')\ndef t(ctx):\n    ctx.state = 1\n    yield {'n': 1}\n",
 			"ctx.state needs state='logged' on table t",
 		),
-		("import sqlload as sl\n@sl.table(state='logged')\ndef t(ctx):\n    ctx.state = object()\n    yield {'n': 1}\n", "ctx.state of table t is not JSON"),
+		("import sqlload as sl\n@sl.table(description='Test table.', state='logged')\ndef t(ctx):\n    ctx.state = object()\n    yield {'n': 1}\n", "ctx.state of table t is not JSON"),
 	],
 	ids=["bad value", "state without logged", "state not json"],
 )
@@ -391,7 +391,7 @@ def test_given_bad_logged_state_use_when_loading_then_it_fails_clearly(tmp_path:
 
 def test_given_no_logged_tables_when_showing_state_then_it_says_so(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT)
-	(project / "sources" / "api.py").write_text("import sqlload as sl\n@sl.table\ndef t(ctx):\n    yield {'n': 1}\n")
+	(project / "sources" / "api.py").write_text("import sqlload as sl\n@sl.table(description='Test table.')\ndef t(ctx):\n    yield {'n': 1}\n")
 	assert 'no selected table has state = "logged"' in ok(project, "state", "show")
 
 

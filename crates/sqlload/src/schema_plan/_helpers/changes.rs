@@ -1,5 +1,5 @@
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
-use crate::column_types::models::TypeFit;
+use crate::column_types::models::{ColumnType, TypeFit};
 use crate::project::models::{OnSchemaChange, Policy};
 use crate::schema_plan::constants::ALLOW_REBUILD_FLAG;
 use crate::schema_plan::models::{
@@ -65,10 +65,35 @@ pub(crate) fn existing_column(
         ..ColumnDecision::default()
     };
     let adapter = sql_adapter(rules.warehouse);
-    match (
-        adapter.type_fit(&column.column_type, &live.column_type),
-        adapter.runs_sql(),
-    ) {
+    let fit = adapter.type_fit(&column.column_type, &live.column_type);
+    let widens = matches!(fit, TypeFit::WidenInPlace(_) | TypeFit::NeedsRebuild(_));
+    if widens && column.origin == ColumnOrigin::Inferred && adapter.runs_sql() {
+        let wider = format!(
+            "{} is {} in the table but {} in the source; pin the wider type to widen it, for example columns = {{ {} = \"{}\" }}",
+            live.name, live.column_type, column.column_type, column.name, column.column_type
+        );
+        let refusal = match (rules.auto_widen, &column.column_type) {
+            (false, _) => Some(format!("{wider}, or set auto_widen = true")),
+            (
+                true,
+                ColumnType::SmallInt
+                | ColumnType::Int
+                | ColumnType::Decimal { .. }
+                | ColumnType::TimestampTz,
+            ) => None,
+            (true, _) => Some(format!(
+                "{wider}; auto_widen never widens to {}",
+                column.column_type
+            )),
+        };
+        if let Some(problem) = refusal {
+            return ColumnDecision {
+                problem: Some(problem),
+                ..ColumnDecision::default()
+            };
+        }
+    }
+    match (fit, adapter.runs_sql()) {
         (TypeFit::Fits, _) => written,
         (_, false) => ColumnDecision {
             problem: Some(format!(

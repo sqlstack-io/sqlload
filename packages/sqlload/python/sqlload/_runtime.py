@@ -11,7 +11,7 @@ import sys
 import threading
 import traceback
 from collections.abc import Iterator
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -70,6 +70,15 @@ def discover(root: str, python_paths: list[str]) -> str:
 	for table, _ in standalone.values():
 		_remember(table)
 	return json.dumps(declared)
+
+
+def crossing_default(value: Any) -> Any:
+	"""orjson's `default` for yielded rows: `str()`, a `time` as ISO text; a `Decimal`, `date` or `datetime` refuses, so the batch is walked and keeps its type."""
+	if isinstance(value, Decimal) or type(value) in (date, datetime):
+		raise TypeError("typed value")
+	if type(value) is time:
+		return value.isoformat()
+	return str(value)
 
 
 def start_table(request: str) -> Iterator[Any]:

@@ -1,5 +1,6 @@
-use std::io::{IsTerminal, Write};
+use std::io::{BufRead, IsTerminal, Write};
 
+use crate::command::constants::RELOAD_YES;
 use crate::loader::constants::{BOLD, DIM, GREEN, RED, RESET, YELLOW};
 
 /// The colour a line of `plan`, `apply` or `load` output is printed in, if any: bold headings, red errors and failures, yellow warnings, green completions.
@@ -47,4 +48,28 @@ pub(crate) fn print_lines(lines: Vec<String>, no_color: bool) {
         let _ = writeln!(stdout, "{line}");
     }
     let _ = stdout.flush();
+}
+
+/// Whether to go on with a `--reload` that rebuilds `tables`: on a terminal, the plan `lines` are printed and the answer read; otherwise it is refused with the fix, before anything changes.
+pub(crate) fn confirm_reload(
+    lines: &[String],
+    tables: &[&str],
+    no_color: bool,
+) -> Result<bool, String> {
+    let names = tables.join(", ");
+    if !std::io::stdin().is_terminal() {
+        return Err(format!(
+            "--reload rebuilds {names} from the whole source, replacing what they hold; confirm it in a terminal, or add --yes"
+        ));
+    }
+    print_lines(lines.to_vec(), no_color);
+    let mut stderr = std::io::stderr();
+    let _ = write!(stderr, "Rebuild {names} from the whole source? [y/N] ");
+    let _ = stderr.flush();
+    let mut answer = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|error| format!("cannot read the answer: {error}"))?;
+    Ok(RELOAD_YES.contains(&answer.trim()))
 }

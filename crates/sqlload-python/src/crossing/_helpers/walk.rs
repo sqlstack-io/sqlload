@@ -6,14 +6,18 @@ use pyo3::types::{
 use pyo3::{Bound, PyAny, PyErr, PyResult, Python};
 use sqlload::row_batches::models::{Cell, JsonWriter, RowColumns};
 
-use crate::crossing::constants::{NUMPY_ARRAY, NUMPY_MODULE};
+use crate::crossing::constants::{
+    EPOCH_ORDINAL, MICROS_PER_DAY, MICROS_PER_SECOND, NUMPY_ARRAY, NUMPY_MODULE,
+};
 
-/// Reads Python values by orjson's rules (`OPT_SERIALIZE_NUMPY`, `default=str`), so walked and serialised rows type alike.
+/// Reads Python values by orjson's rules (`OPT_SERIALIZE_NUMPY`, `default=str`), except that a top-level `Decimal`, `date` or `datetime` keeps its type.
 struct Walker<'py> {
     writer: JsonWriter,
     datetime: Bound<'py, PyType>,
     date: Bound<'py, PyType>,
     time: Bound<'py, PyType>,
+    decimal: Bound<'py, PyType>,
+    utc: Bound<'py, PyAny>,
     enumeration: Bound<'py, PyType>,
 }
 
@@ -28,6 +32,11 @@ enum Plain<'py> {
     Object(Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>),
     /// A list, tuple or numeric numpy array.
     Array(Bound<'py, PyAny>),
+    /// A `Decimal`, `date` or `datetime`: its typed cell at the top of a row, and its text (as orjson writes it) inside a nested value.
+    Typed {
+        cell: Cell,
+        text: String,
+    },
 }
 
 /// Read `rows`, a list of dicts, column by column, holding the GIL.
@@ -58,11 +67,13 @@ impl<'py> Walker<'py> {
             datetime: datetime.getattr("datetime")?.cast_into()?,
             date: datetime.getattr("date")?.cast_into()?,
             time: datetime.getattr("time")?.cast_into()?,
+            decimal: py.import("decimal")?.getattr("Decimal")?.cast_into()?,
+            utc: datetime.getattr("timezone")?.getattr("utc")?,
             enumeration: py.import("enum")?.getattr("Enum")?.cast_into()?,
         })
     }
 
-    /// The cell for one Python value: as orjson would write it, then read back (NaN is NULL; dates are ISO text; unknown types are `str()`).
+    /// The cell for one Python value: a `Decimal` as a decimal, a `date` as a date, a naive `datetime` as `timestamp_ntz` and an aware one as UTC RFC 3339 text (`timestamp_tz`); anything else as orjson would write it, then read back (NaN is NULL; times are ISO text; unknown types are `str()`).
     fn cell(&mut self, value: &Bound<'py, PyAny>) -> PyResult<Cell> {
         Ok(match self.plain(value)? {
             Plain::Null => Cell::Null,
@@ -76,6 +87,7 @@ impl<'py> Walker<'py> {
                 false => Cell::Null,
             },
             Plain::Text(text) => Cell::Text(text),
+            Plain::Typed { cell, .. } => cell,
             nested @ (Plain::Object(_) | Plain::Array(_)) => {
                 self.write(nested)?;
                 Cell::Json(self.writer.take())
@@ -98,7 +110,7 @@ impl<'py> Walker<'py> {
                 Err(_) => self.writer.raw(number.str()?.to_str()?),
             },
             Plain::Float(number) => self.writer.float(number),
-            Plain::Text(text) => self.writer.string(&text),
+            Plain::Text(text) | Plain::Typed { text, .. } => self.writer.string(&text),
             Plain::Object(items) => {
                 self.writer.raw("{");
                 for (position, (key, item)) in items.iter().enumerate() {
@@ -150,10 +162,36 @@ impl<'py> Walker<'py> {
             return Ok(Plain::Array(value.clone()));
         }
         let kind = value.get_type();
-        if kind.is(&self.datetime) || kind.is(&self.date) || kind.is(&self.time) {
-            return Ok(Plain::Text(
-                value.call_method0("isoformat")?.str()?.to_str()?.to_owned(),
-            ));
+        if kind.is(&self.datetime) {
+            return self.moment(value);
+        }
+        if kind.is(&self.date) {
+            return Ok(Plain::Typed {
+                cell: Cell::Date(i32::try_from(epoch_days(value)?).unwrap_or(i32::MAX)),
+                text: iso_text(value)?,
+            });
+        }
+        if kind.is(&self.time) {
+            return Ok(Plain::Text(iso_text(value)?));
+        }
+        if value.is_instance(&self.decimal)? {
+            let text = value.str()?.to_str()?.to_owned();
+            return Ok(match value.call_method0("is_finite")?.is_truthy()? {
+                true => Plain::Typed {
+                    cell: Cell::Decimal(
+                        value
+                            .call_method1("__format__", ("f",))?
+                            .str()?
+                            .to_str()?
+                            .to_owned(),
+                    ),
+                    text,
+                },
+                false => Plain::Typed {
+                    cell: Cell::Null,
+                    text,
+                },
+            });
         }
         if value.is_instance(&self.enumeration)? {
             return self.plain(&value.getattr("value")?);
@@ -166,6 +204,39 @@ impl<'py> Walker<'py> {
         }
         Ok(Plain::Text(value.str()?.to_str()?.to_owned()))
     }
+}
+
+impl<'py> Walker<'py> {
+    /// A `datetime`: naive as `timestamp_ntz` microseconds on the wall clock, aware as UTC RFC 3339 text.
+    fn moment(&self, value: &Bound<'py, PyAny>) -> PyResult<Plain<'py>> {
+        let text = iso_text(value)?;
+        if !value.call_method0("utcoffset")?.is_none() {
+            let utc = value.call_method1("astimezone", (&self.utc,))?;
+            return Ok(Plain::Typed {
+                cell: Cell::Text(iso_text(&utc)?),
+                text,
+            });
+        }
+        let field = |name: &str| -> PyResult<i64> { value.getattr(name)?.extract::<i64>() };
+        let seconds = field("hour")? * 3_600 + field("minute")? * 60 + field("second")?;
+        let micros = epoch_days(value)? * MICROS_PER_DAY
+            + seconds * MICROS_PER_SECOND
+            + field("microsecond")?;
+        Ok(Plain::Typed {
+            cell: Cell::TimestampNtz(micros),
+            text,
+        })
+    }
+}
+
+/// Days from 1970-01-01 to the date of `value`, a `date` or `datetime`.
+fn epoch_days(value: &Bound<'_, PyAny>) -> PyResult<i64> {
+    Ok(value.call_method0("toordinal")?.extract::<i64>()? - EPOCH_ORDINAL)
+}
+
+/// `value.isoformat()`.
+fn iso_text(value: &Bound<'_, PyAny>) -> PyResult<String> {
+    Ok(value.call_method0("isoformat")?.str()?.to_str()?.to_owned())
 }
 
 /// A dataclass's attributes as orjson writes them: `__dict__`, or the fields of a slotted one, without names starting `_`.
