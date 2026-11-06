@@ -14,6 +14,12 @@ pub enum Cell {
     Text(String),
     /// A nested object or list, as compact JSON text.
     Json(String),
+    /// A Python `date`, as days since 1970-01-01.
+    Date(i32),
+    /// A naive Python `datetime`, as microseconds since 1970-01-01 00:00 on the wall clock.
+    TimestampNtz(i64),
+    /// A finite Python `Decimal`, as fixed-point text (`-12.50`).
+    Decimal(String),
 }
 
 /// Yielded rows gathered column by column: column names in first-seen order and one cell per row in each.
@@ -59,8 +65,16 @@ impl RowColumns {
             .map(|cell| {
                 std::mem::size_of::<Cell>()
                     + match cell {
-                        Cell::Number(text) | Cell::Text(text) | Cell::Json(text) => text.len(),
-                        Cell::Null | Cell::Bool(_) | Cell::Int(_) | Cell::Float(_) => 0,
+                        Cell::Number(text)
+                        | Cell::Text(text)
+                        | Cell::Json(text)
+                        | Cell::Decimal(text) => text.len(),
+                        Cell::Null
+                        | Cell::Bool(_)
+                        | Cell::Int(_)
+                        | Cell::Float(_)
+                        | Cell::Date(_)
+                        | Cell::TimestampNtz(_) => 0,
                     }
             })
             .sum()
