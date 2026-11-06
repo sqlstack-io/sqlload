@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use crate::column_types::models::ColumnType;
-use crate::schema_plan::models::DesiredColumn;
+use crate::file_store::models::OpenFolder;
+use crate::files_source::models::{BatchFooters, DataFile, FilesRead};
+use crate::loader::models::TableSpec;
+use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 
 /// A destination table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,4 +100,34 @@ pub struct WriteTarget<'a> {
     pub direct: bool,
     /// The batches land in a build table in their final types.
     pub builds: bool,
+}
+
+/// What a direct batch's load did (the destination reading the files itself), with the rows it loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectLoaded {
+    /// Committed with the load.
+    Committed(u64),
+    /// In the staging table, waiting for the commit.
+    Staged(u64),
+}
+
+/// One files batch the destination may load straight from the source's own files.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectBatch<'a> {
+    pub spec: &'a TableSpec,
+    /// The files table's planned read.
+    pub read: &'a FilesRead,
+    /// The table's columns as the load writes them.
+    pub write_columns: &'a [DesiredColumn],
+    pub target: WriteTarget<'a>,
+    /// The load time as an ISO 8601 UTC timestamp, written to every row.
+    pub loaded_at: &'a str,
+    pub files: &'a [DataFile],
+    pub footers: &'a BatchFooters,
+    /// The write mode of the batch's commit.
+    pub mode: &'a WriteMode,
+    /// The live table's columns as plan read them.
+    pub live: Option<&'a [LiveColumn]>,
+    /// The files' own folder, which `copy_to_internal_stage` uploads them from.
+    pub source_folder: Option<&'a OpenFolder>,
 }

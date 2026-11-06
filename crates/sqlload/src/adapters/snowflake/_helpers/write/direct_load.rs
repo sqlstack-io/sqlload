@@ -2,6 +2,7 @@
 
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::adapters::contract::main::staging_id::staging_id;
+use crate::adapters::contract::models::{DirectBatch, DirectLoaded};
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::snowflake::_helpers::write::copy_columns::copy_columns;
@@ -17,8 +18,8 @@ use crate::adapters::snowflake::main::stage::_remove_staged::remove_staged;
 use crate::adapters::snowflake::main::stage::_stage_parquet::stage_parquet;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::{
-    CopyColumn, CopyPlace, CopyValue, DirectBatch, DirectCopy, DirectLoaded, HashedScript,
-    SnowflakeSql, SnowflakeWriter, StageRoute, StagedFile,
+    CopyColumn, CopyPlace, CopyValue, DirectCopy, HashedScript, SnowflakeSql, SnowflakeWriter,
+    StageRoute, StagedFile,
 };
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::read_file::read_file;

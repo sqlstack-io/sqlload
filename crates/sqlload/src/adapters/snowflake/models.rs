@@ -1,16 +1,13 @@
-use crate::adapters::contract::models::{TableName, WriteMode, WriteTarget};
+use crate::adapters::contract::models::TableName;
 use crate::auth::models::Authenticator;
 use crate::column_types::models::ColumnType;
 use crate::config::models::{AuthConfig, DestinationConfig};
 use crate::file_store::models::OpenFolder;
-use crate::files_source::models::{
-    BatchFooters, DataFile, FilesEncoding, FilesRead, SourceFormat, StoredRead,
-};
+use crate::files_source::models::{DataFile, FilesEncoding, SourceFormat, StoredRead};
 use crate::loader::errors::LoaderError;
-use crate::loader::models::TableSpec;
 use crate::parquet_parts::models::PartWriter;
 use crate::project::models::MaskMethod;
-use crate::schema_plan::models::{DesiredColumn, LiveColumn};
+use crate::schema_plan::models::DesiredColumn;
 use crate::sql_api::models::SqlClient;
 use crate::stage_api::models::DriverSession;
 use crate::stage_api::models::StageInfo;
@@ -287,36 +284,6 @@ pub struct CopyPlace {
     pub filename_prefix: String,
     /// The files were uploaded to an internal stage for this batch, and are removed after it.
     pub uploaded: bool,
-}
-
-/// What a direct batch's `COPY` did, with the rows it loaded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DirectLoaded {
-    /// Committed with the `COPY`.
-    Committed(u64),
-    /// In the staging table, waiting for the commit.
-    Staged(u64),
-}
-
-/// One files batch Snowflake may `COPY` straight from the source's own files.
-#[derive(Debug, Clone, Copy)]
-pub struct DirectBatch<'a> {
-    pub spec: &'a TableSpec,
-    /// The files table's planned read.
-    pub read: &'a FilesRead,
-    /// The table's columns as the load writes them.
-    pub write_columns: &'a [DesiredColumn],
-    pub target: WriteTarget<'a>,
-    /// The load time as an ISO 8601 UTC timestamp, written to every row.
-    pub loaded_at: &'a str,
-    pub files: &'a [DataFile],
-    pub footers: &'a BatchFooters,
-    /// The write mode of the batch's commit.
-    pub mode: &'a WriteMode,
-    /// The live table's columns as plan read them.
-    pub live: Option<&'a [LiveColumn]>,
-    /// The files' own folder, which `copy_to_internal_stage` uploads them from.
-    pub source_folder: Option<&'a OpenFolder>,
 }
 
 /// A batch's statements through a temporary table, which hashes masked columns: sent in one request, or split over several through a delta table whose masked columns are already hashed.
