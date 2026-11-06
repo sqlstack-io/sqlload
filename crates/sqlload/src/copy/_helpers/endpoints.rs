@@ -9,7 +9,10 @@ use crate::copy::models::{Endpoint, Role};
 pub(crate) fn endpoint(text: &str, role: Role, connections: &Table) -> Result<Endpoint, String> {
     let shown = redacted_uri(text);
     let known = |name: &str| connections.contains_key(name);
-    match (text.split_once("://"), text.split_once(':')) {
+    let uri = text
+        .split_once("://")
+        .filter(|(scheme, _)| bare_name(scheme));
+    match (uri, text.split_once(':')) {
         (Some((scheme, rest)), _) => uri_endpoint(&shown, scheme, rest, role),
         (None, Some((name, locator)))
             if one_slash_uri(name, locator) && (!known(name) || text.contains('@')) =>
@@ -30,13 +33,12 @@ pub(crate) fn endpoint(text: &str, role: Role, connections: &Table) -> Result<En
     }
 }
 
-/// `text` with the password of any `user:password@` redacted, whether or not it parses as a URI.
+/// `text` with the password of any `user:password@` redacted, whether or not it parses as a URI: everything from the first `:` after a `scheme://` (or from the start) up to the last `@`.
 pub(crate) fn redacted_uri(text: &str) -> String {
     let start = text
-        .find(':')
-        .filter(|colon| text[colon + 1..].starts_with('/'))
-        .map(|colon| text.len() - text[colon + 1..].trim_start_matches('/').len())
-        .unwrap_or(0);
+        .split_once("://")
+        .filter(|(scheme, _)| bare_name(scheme))
+        .map_or(0, |(scheme, _)| scheme.len() + 3);
     let Some(at) = text.rfind('@').filter(|at| *at >= start) else {
         return text.to_owned();
     };
@@ -105,6 +107,17 @@ fn uri_endpoint(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<End
             shown,
             format!("DuckDB table {locator}"),
         )),
+        "s3" | "file"
+            if body
+                .split('/')
+                .next()
+                .is_some_and(|authority| authority.contains('@')) =>
+        {
+            Err(format!(
+                "the {} {shown} carries credentials; an {scheme}:// URI takes none (S3 credentials come from the environment or a connection in sqlload.toml)",
+                role.label()
+            ))
+        }
         "s3" => s3(shown, body, role),
         "file" => Ok(folder(body, shown)),
         "snowflake" => Err(format!(
@@ -150,6 +163,11 @@ fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoin
         None => Value::Integer(5432),
     };
     let literal = !password.is_empty() && !is_reference(&password);
+    if literal && outside_positions(rest, '@').last() != Some(&at) {
+        return Err(problem(
+            "it has a literal password and another @, so where the password ends is ambiguous; give the password as ${ENV:NAME}",
+        ));
+    }
     let mut table = settings(&[
         ("kind", "postgres"),
         ("host", host),

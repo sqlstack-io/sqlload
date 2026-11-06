@@ -135,7 +135,7 @@ fn given_copy_endpoints_when_building_the_project_then_secrets_stay_out_of_its_t
             destination: "./out",
             project: "",
             expected_lines: &[
-                "the source postgresql:/app:***@db/shop#public.a looks like a URI with one slash; write postgresql://...",
+                "the source postgresql:***@db/shop#public.a looks like a URI with one slash; write postgresql://...",
             ],
         },
         CopyProjectTestCase {
@@ -202,7 +202,7 @@ fn given_copy_endpoints_when_building_the_project_then_secrets_stay_out_of_its_t
             destination: "./out",
             project: "[connections.postgres]\nkind = \"postgres\"\nhost = \"db\"\nuser = \"u\"\ndatabase = \"shop\"\n",
             expected_lines: &[
-                "the source postgres:/u:***@db/shop#a.b looks like a URI with one slash; write postgres://...",
+                "the source postgres:***@db/shop#a.b looks like a URI with one slash; write postgres://...",
             ],
         },
         CopyProjectTestCase {
@@ -212,6 +212,42 @@ fn given_copy_endpoints_when_building_the_project_then_secrets_stay_out_of_its_t
             project: "",
             expected_lines: &[
                 "the source postgresql://u:***@h#s.t: it names no database; write it as postgresql://user:${ENV:PGPASSWORD}@host:5432/database#schema.table",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "a password holding :// is redacted, not read as a scheme",
+            source: "app:hunter2://x@db/shop#a.b",
+            destination: "./out",
+            project: "",
+            expected_lines: &[
+                "the source app:***@db/shop#a.b has an @ but no scheme; write a URI such as postgresql://user:${ENV:PGPASSWORD}@host/db#schema.table, or connection:schema.table",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "a password starting with / is redacted",
+            source: "ab:/hunter2@h/db#s.t",
+            destination: "./out",
+            project: "",
+            expected_lines: &[
+                "the source ab:***@h/db#s.t looks like a URI with one slash; write ab://...",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "a literal password holding @, / and # is refused, not split inside the password",
+            source: "postgresql://u:x@y/z#hunter2@h#s.t",
+            destination: "./out",
+            project: "",
+            expected_lines: &[
+                "the source postgresql://u:***@h#s.t: it has a literal password and another @, so where the password ends is ambiguous; give the password as ${ENV:NAME}; write it as postgresql://user:${ENV:PGPASSWORD}@host:5432/database#schema.table",
+            ],
+        },
+        CopyProjectTestCase {
+            description: "an s3 URI with credentials is refused without echoing them",
+            source: "s3://key:hunter2@bucket/raw/",
+            destination: "./out",
+            project: "",
+            expected_lines: &[
+                "the source s3://key:***@bucket/raw/ carries credentials; an s3:// URI takes none (S3 credentials come from the environment or a connection in sqlload.toml)",
             ],
         },
         CopyProjectTestCase {
