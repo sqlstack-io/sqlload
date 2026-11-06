@@ -73,3 +73,12 @@ pub(crate) fn confirm_reload(
         .map_err(|error| format!("cannot read the answer: {error}"))?;
     Ok(RELOAD_YES.contains(&answer.trim()))
 }
+
+/// The configuration file's text; `sqlload copy` runs without one, as if it were empty.
+pub(crate) fn config_text(path: &std::path::Path, copies: bool) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(error) if copies && error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+    }
+}
