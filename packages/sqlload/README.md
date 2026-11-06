@@ -130,14 +130,18 @@ the project refers to it as `${ENV:SQLLOAD_COPY_SOURCE_PASSWORD}` (or `..._DESTI
 ## Checking declarations
 
 `sqlload contract diff [SELECTOR ...]` compares each selected table's declared `columns` with
-its live table, in SQLLoad's portable types, and changes nothing. It reads only the warehouse;
-sources are listed to find their tables but never read. It reports a declared column whose live
+its live table, in SQLLoad's portable types, and changes nothing. It reads the warehouse's
+catalog and lists sources to find their tables (CSV and JSON files are sampled for their columns,
+as `plan` does); no rows are loaded. A type agrees when the warehouse stores it the same way, so
+`varchar(50)` matches DuckDB's `VARCHAR`; a wider live type is a difference. It reports a declared column whose live
 type differs (`type_mismatch`), a declared column the table lacks (`missing_physical_column`), a
 table that does not exist yet (`relation_missing`) and, on `contract = "enforced"` tables, live
 columns nothing declares (`missing_declaration`); SQLLoad's own `_sqlload_*` columns never count.
-It exits 0 when every table agrees and 1 otherwise. `--from TARGET` reads every table from that
-target instead of its own, and `--json` prints the report as one document, in the same shape as
-`sqb contract diff --json`.
+It exits 0 when every table agrees and 1 otherwise, including when a source cannot be listed or
+a selector matches nothing. `--from TARGET` reads every table as if its source loaded into that
+target, in that target's database and schema, and `--json` prints the report as one document with
+`sqb contract diff --json`'s field names. Tables on a files target are reported as problems: they
+have no catalog to compare yet.
 
 ## Descriptions
 
