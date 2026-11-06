@@ -206,3 +206,23 @@ def test_given_parquet_in_a_folder_when_loading_into_duckdb_then_duckdb_reads_th
 		(2, None, None, "2026-01-01", f"{tmp_path}/data/day=2026-01-01/a.parquet", 2),
 		(3, None, 2.5, "2026-01-02", f"{tmp_path}/data/day=2026-01-02/b.parquet", 1),
 	]
+
+
+def test_given_a_column_pinned_to_another_type_when_loading_parquet_into_duckdb_then_sqlload_reads_the_files_and_converts_it(tmp_path: Path) -> None:
+	import duckdb
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	(tmp_path / "data").mkdir()
+	pq.write_table(pa.table({"id": pa.array([1], pa.int64()), "score": [2.5]}), tmp_path / "data" / "a.parquet")
+	config = tmp_path / "sqlload.toml"
+	config.write_text(
+		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\n'
+		'description = "Orders."\n\n[sources.orders.tables.orders]\ncolumns = { score = "text" }\n'
+	)
+	planned = run("plan", "-c", str(config)).stdout
+	assert "DuckDB reads directly" not in planned and "read parquet into Arrow" in planned, planned
+	assert run("load", "-c", str(config)).returncode == 0
+	with duckdb.connect(str(tmp_path / "wh.duckdb"), read_only=True) as connection:
+		assert connection.execute('SELECT id, score FROM "RAW"."orders"').fetchall() == [(1, "2.5")]

@@ -26,7 +26,7 @@ fn given_parquet_files_when_duckdb_reads_them_itself_then_each_column_comes_from
                 constants: vec![("day".to_owned(), None)],
             },
         ],
-        expected_sql: "INSERT INTO \"RAW\".\"orders\" (\"id\", \"day\", \"note\", \"_sqlload_source_row\", \"_sqlload_load_id\") SELECT CAST(f.\"id\" AS BIGINT), CAST(m.\"day\" AS DATE), NULL, CAST(f.file_row_number + 1 AS BIGINT), CAST('L1' AS VARCHAR) FROM read_parquet(['s3://b/x/a.parquet', 's3://b/x/it''s.parquet'], union_by_name = true, filename = true, file_row_number = true) AS f JOIN (VALUES ('s3://b/x/a.parquet', '2026-01-01'), ('s3://b/x/it''s.parquet', NULL)) AS m(\"_sqlload_url\", \"day\") ON f.filename = m.\"_sqlload_url\"",
+        expected_sql: "INSERT INTO \"RAW\".\"orders\" (\"id\", \"day\", \"note\", \"_sqlload_source_row\", \"_sqlload_load_id\") SELECT CAST(f.\"id\" AS BIGINT), CAST(m.\"day\" AS DATE), NULL, CAST(f.file_row_number + 1 AS BIGINT), CAST('L1' AS VARCHAR) FROM read_parquet(['s3://b/x/a.parquet', 's3://b/x/it''s.parquet'], union_by_name = true, filename = true, file_row_number = true, hive_partitioning = false) AS f JOIN (VALUES ('s3://b/x/a.parquet', '2026-01-01'), ('s3://b/x/it''s.parquet', NULL)) AS m(\"_sqlload_url\", \"day\") ON f.filename = m.\"_sqlload_url\"",
     }];
     let table = TableName {
         database: None,

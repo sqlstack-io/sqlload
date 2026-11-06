@@ -25,11 +25,22 @@ impl DuckDbWriter {
             return Ok(None);
         };
         let refused = batch_refusals(batch.footers, batch.files, &source.table.columns);
-        if let Some(problem) = direct_problem(batch.spec, batch.read).or_else(|| {
-            refused
-                .first()
-                .map(|(column, held)| format!("column {column} is held as {held}"))
-        }) {
+        let read = |name: &str| batch.read.columns.iter().any(|column| column.name == name);
+        let problem = direct_problem(batch.spec, batch.read)
+            .or_else(|| {
+                refused
+                    .iter()
+                    .find(|(column, _)| read(column))
+                    .map(|(column, held)| format!("column {column} is held as {held}"))
+            })
+            .or_else(|| {
+                batch
+                    .read
+                    .columns
+                    .iter()
+                    .find_map(|column| disagreeing(batch.footers, &column.name))
+            });
+        if let Some(problem) = problem {
             return Err(LoaderError::Invalid(format!(
                 "DuckDB cannot load this batch's files exactly by reading them itself, and they never go through SQLLoad instead: {problem}"
             )));
@@ -63,6 +74,12 @@ impl DuckDbWriter {
             self.open_transaction = true;
         }
         let rows = pull_files(&self.destination, &source.location.store, insert).await?;
+        let expected = footer_rows(batch.footers);
+        if rows != expected {
+            return Err(LoaderError::Invalid(format!(
+                "DuckDB loaded {rows} rows from this batch's files, but their footers hold {expected}; the batch is not committed"
+            )));
+        }
         if transaction {
             execute_statements(&self.destination, vec![COMMIT_STATEMENT.to_owned()]).await?;
             self.open_transaction = false;
@@ -118,4 +135,31 @@ fn in_any_footer(footers: &BatchFooters, name: &str) -> bool {
         fields.iter().any(|field| field.name() == name)
     };
     footers.parquet.values().any(has)
+}
+
+/// Why the batch's footers disagree on `name`'s type: DuckDB would promote it to one type for every file, where SQLLoad casts each file exactly.
+fn disagreeing(footers: &BatchFooters, name: &str) -> Option<String> {
+    let typed = |footer: &ArrowReaderMetadata| {
+        let schema = footer.schema().clone();
+        schema
+            .fields()
+            .iter()
+            .find(|field| field.name() == name)
+            .map(|field| field.data_type().clone())
+    };
+    let types: Vec<arrow_schema::DataType> = footers.parquet.values().filter_map(typed).collect();
+    let first = types.first()?;
+    types
+        .iter()
+        .find(|other| *other != first)
+        .map(|other| format!("column {name} is {first} in some files and {other} in others"))
+}
+
+/// The rows the batch's footers record.
+fn footer_rows(footers: &BatchFooters) -> u64 {
+    footers
+        .parquet
+        .values()
+        .map(|footer| u64::try_from(footer.metadata().file_metadata().num_rows()).unwrap_or(0))
+        .sum()
 }

@@ -1,6 +1,8 @@
 #[cfg(feature = "duckdb")]
 pub(crate) mod blocking;
 #[cfg(feature = "duckdb")]
+pub(crate) mod direct_checks;
+#[cfg(feature = "duckdb")]
 pub(crate) mod direct_load;
 #[cfg(feature = "duckdb")]
 pub(crate) mod pull_sql;
