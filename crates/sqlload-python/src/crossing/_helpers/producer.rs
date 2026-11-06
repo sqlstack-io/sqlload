@@ -16,7 +16,7 @@ use sqlload::row_batches::models::{JsonLayout, JsonRead};
 use crate::bindings::models::JsonData;
 use crate::crossing::_helpers::parser::{panic_if, panicked};
 use crate::crossing::_helpers::walk::walk_rows;
-use crate::crossing::constants::{CROSSING_DEFAULT, HTTP_JOB_METHOD};
+use crate::crossing::constants::{CHECKPOINT_METHOD, CROSSING_DEFAULT, HTTP_JOB_METHOD};
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{
     Crossed, CrossingOptions, CrossingStats, DictCrossing, Dispatch, PanicSite,
@@ -34,6 +34,8 @@ struct Producer<'py> {
     dumps: Option<(Bound<'py, PyAny>, Bound<'py, PyDict>)>,
     /// Returns `ctx.state` as JSON, for a logged table; called as each piece crosses.
     snapshot: Option<Bound<'py, PyAny>>,
+    /// Whether the generator has yielded an `sl.checkpoint`: from then on only checkpoints carry state.
+    checkpointed: bool,
 }
 
 /// Iterate `source` with the GIL held, dispatching each crossed batch with the GIL released, then close it; an error or a panic ends the read.
@@ -53,6 +55,7 @@ pub(crate) fn produce(
             pending: PyList::empty(py),
             dumps: None,
             snapshot: snapshot.map(|snapshot| snapshot.into_bound(py)),
+            checkpointed: false,
         };
         let mut iterator = None;
         let read = catch_unwind(AssertUnwindSafe(|| {
@@ -131,6 +134,9 @@ impl<'py> Producer<'py> {
             let definition: String = item.call_method0(HTTP_JOB_METHOD)?.extract()?;
             return Ok(self.flush()? && self.send(Crossed::Http(definition))?);
         }
+        if item.hasattr(CHECKPOINT_METHOD)? {
+            return self.checkpoint(item);
+        }
         if item.hasattr("__arrow_c_stream__")? {
             let reader = RecordBatchStreamReader::from_pyarrow_bound(item)?;
             return Ok(self.flush()? && self.send(Crossed::ArrowStream(reader))?);
@@ -193,11 +199,29 @@ impl<'py> Producer<'py> {
         self.send(crossed)
     }
 
+    /// Cross the rows gathered so far, then the checkpoint's state, committed once every row yielded before it has; `false` once the consumer has gone.
+    fn checkpoint(&mut self, item: &Bound<'py, PyAny>) -> PyResult<bool> {
+        if self.snapshot.is_none() {
+            return Err(PyTypeError::new_err(
+                "sl.checkpoint needs state='logged' on the table",
+            ));
+        }
+        let state: String = item.call_method0(CHECKPOINT_METHOD)?.extract()?;
+        self.checkpointed = true;
+        if !self.flush()? {
+            return Ok(false);
+        }
+        let dispatch = &self.dispatch;
+        Ok(self
+            .py
+            .detach(|| dispatch.send(Crossed::Checkpoint, Some(state))))
+    }
+
     /// Dispatch `crossed` with `ctx.state` as it is now (logged tables), with the GIL released, waiting while the queue is full; `false` once the consumer has gone.
     fn send(&self, crossed: Crossed) -> PyResult<bool> {
-        let state: Option<String> = match &self.snapshot {
-            Some(snapshot) => snapshot.call0()?.extract()?,
-            None => None,
+        let state: Option<String> = match (&self.snapshot, self.checkpointed) {
+            (Some(snapshot), false) => snapshot.call0()?.extract()?,
+            (Some(_), true) | (None, _) => None,
         };
         let dispatch = &self.dispatch;
         Ok(self.py.detach(|| dispatch.send(crossed, state)))
@@ -252,6 +276,6 @@ fn unsupported(item: &Bound<'_, PyAny>) -> String {
         false => "",
     };
     format!(
-        "a table function yielded a {name}; yield dicts, lists of dicts, sl.json(...) or sl.ndjson(...) bytes, Arrow data (pyarrow, polars, pandas), or sl.http(...) jobs{hint}"
+        "a table function yielded a {name}; yield dicts, lists of dicts, sl.json(...) or sl.ndjson(...) bytes, Arrow data (pyarrow, polars, pandas), sl.http(...) jobs, or sl.checkpoint(...){hint}"
     )
 }

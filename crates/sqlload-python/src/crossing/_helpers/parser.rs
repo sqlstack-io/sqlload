@@ -223,6 +223,7 @@ impl Output {
                 open = self.send(batch, started);
             }
             Crossed::Http(definition) => open = self.http(&definition)?,
+            Crossed::Checkpoint => {}
             Crossed::Failed(error) => return Err(error),
         }
         Ok(open)
