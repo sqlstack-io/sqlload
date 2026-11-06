@@ -86,7 +86,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
         RouteTestCase {
-            description: "copy_to_internal_stage: the files are uploaded unchanged to @~ and Snowflake loads them there, then they are removed",
+            description: "copy_to_internal_stage: the files are uploaded unchanged to @~ and Snowflake loads them there, matching them by their @~/ names, then they are removed",
             settings: "write_strategy = \"append\"\ncopy_to_internal_stage = true",
             expected_plan: &[
                 "src/ uploaded unchanged to @~ -> COPY",
@@ -95,7 +95,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             expected_sent: &[
                 OWN_STAGE,
                 "FROM @~/sqlload/",
-                "METADATA$FILENAME",
+                "METADATA$FILENAME = '@~/sqlload/",
                 "REMOVE @~/sqlload/",
             ],
             expected_unplanned: &[WRITES_PARQUET],

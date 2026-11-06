@@ -78,13 +78,13 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             expected_copies: Ok((4, "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\"")),
         },
         DirectCopiesTestCase {
-            description: "files copied unchanged to @~ are read under the batch's folder, and named by it",
+            description: "files copied unchanged to @~ are read under the batch's folder, and matched by the prefix the load gives them",
             files: vec![("day=2026-11-04/part-0.parquet".to_owned(), "2026-11-04")],
             columns: order_columns(),
             from: INTERNAL,
             expected_copies: Ok((
                 1,
-                "WHEN METADATA$FILENAME = 'sqlload/L/00001/day=2026-11-04/part-0.parquet' THEN 's3://lake/other/day=2026-11-04/part-0.parquet' ELSE TO_VARCHAR(TO_NUMBER('sqlload: unexpected staged file ' || METADATA$FILENAME)) END",
+                "WHEN METADATA$FILENAME = '@~/sqlload/L/00001/day=2026-11-04/part-0.parquet' THEN 's3://lake/other/day=2026-11-04/part-0.parquet' ELSE TO_VARCHAR(TO_NUMBER('sqlload: unexpected staged file ' || METADATA$FILENAME)) END",
             )),
         },
         DirectCopiesTestCase {
