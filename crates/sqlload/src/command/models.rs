@@ -112,6 +112,9 @@ pub struct ContractArgs {
     /// Print the report as one JSON document.
     #[arg(long)]
     pub json: bool,
+    /// On files targets, also read every file's footer and report the files whose columns differ from the newest load's.
+    #[arg(long)]
+    pub all_files: bool,
 }
 
 /// `sqlload copy`'s endpoints and write settings.

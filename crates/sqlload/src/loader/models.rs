@@ -572,3 +572,24 @@ pub struct TallyLine {
     pub name: String,
     pub detail: String,
 }
+
+/// A files table's columns as its files hold them, for `contract diff`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilesColumns {
+    /// The table's folder.
+    pub folder: String,
+    /// The newest load's merged schema, as `plan` reads it; `None` before any file exists.
+    pub live: Option<Vec<LiveColumn>>,
+    /// Why the folder or the newest load's schema cannot be read.
+    pub problems: Vec<String>,
+    /// Every data file's own columns, oldest partition first; only when every footer was asked for.
+    pub files: Vec<FileSchema>,
+}
+
+/// One data file's columns, from its footer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSchema {
+    /// The key below the table's folder.
+    pub key: String,
+    pub columns: Vec<LiveColumn>,
+}

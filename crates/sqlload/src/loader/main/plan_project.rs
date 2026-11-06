@@ -6,6 +6,7 @@ use crate::adapters::dispatch::main::dialect::files_destination::files_destinati
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::folder_conflict::folder_conflict;
 use crate::adapters::files::models::FolderClaim;
+use crate::loader::_helpers::destination::table_folder;
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::sources::{
@@ -14,7 +15,6 @@ use crate::loader::_helpers::sources::{
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
-use crate::loader::main::_table_folder::table_folder;
 use crate::loader::models::{PlanOptions, ProjectPlan, TablePlan, TableSpec};
 use crate::project::models::ProjectConfig;
 
