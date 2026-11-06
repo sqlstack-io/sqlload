@@ -37,6 +37,13 @@ pub struct CrossingOptions {
     pub max_queued_bytes: usize,
 }
 
+/// What the parser threads need from the table besides its data: the top-level objects to expand one level, and the connections its `sl.http` jobs may use.
+#[derive(Debug, Clone, Default)]
+pub struct ReadContext {
+    pub flatten: Vec<String>,
+    pub connections: serde_json::Map<String, serde_json::Value>,
+}
+
 /// A crossing thread that can be made to panic for tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanicSite {
@@ -71,6 +78,8 @@ pub(crate) struct Dispatch {
     pub(crate) jobs: Sender<ParseJob>,
     /// Holds the byte budget the generator waits on.
     pub(crate) stats: Arc<CrossingStats>,
+    /// Top-level objects expanded one level into `<object>__<key>` columns.
+    pub(crate) flatten: Arc<Vec<String>>,
 }
 
 /// One piece of yielded data, crossed into Rust and waiting to be parsed.

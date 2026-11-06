@@ -25,6 +25,7 @@ pub(in crate::loader) async fn load_python(
         changes: Vec::new(),
         state,
         reconciled,
+        flattened: std::collections::BTreeMap::new(),
     };
     let loaded = feed.load(load).await;
     if let Some(publisher) = &mut feed.publisher {

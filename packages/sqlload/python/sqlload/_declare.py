@@ -36,7 +36,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 
 #: Settings only a table takes.
 TABLE_ONLY_SETTINGS: frozenset[str] = frozenset(
-	{"allow_columns", "columns", "destination_path", "exclude_columns", "mask", "table_name"}
+	{"allow_columns", "columns", "destination_path", "exclude_columns", "flatten", "mask", "table_name"}
 )
 
 #: Settings only a source takes.
