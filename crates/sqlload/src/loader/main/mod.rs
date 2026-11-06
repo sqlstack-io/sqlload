@@ -1,5 +1,4 @@
 pub(in crate::loader) mod _check_source;
-pub(in crate::loader) mod _files_context;
 pub(in crate::loader) mod _files_repair;
 pub(in crate::loader) mod _files_schema;
 pub(in crate::loader) mod _files_window;
@@ -17,4 +16,5 @@ pub mod plan_json;
 pub mod plan_project;
 pub mod render_plan;
 pub mod render_tally;
+pub mod selected_specs;
 pub mod state_command;

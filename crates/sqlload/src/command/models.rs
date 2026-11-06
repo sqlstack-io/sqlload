@@ -63,8 +63,40 @@ pub enum Command {
         #[command(subcommand)]
         action: StateAction,
     },
+    /// Compare each table's declared columns with its live table; read-only, exits 1 when they differ.
+    Contract {
+        #[command(subcommand)]
+        action: ContractAction,
+    },
     /// Copy one table once, between connections named in sqlload.toml or URIs (sqlload.toml is optional).
     Copy(CopyArgs),
+}
+
+/// What `sqlload contract` does.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum ContractAction {
+    /// Report each selected table's declared columns that differ from its live table, and on `contract = "enforced"` tables its undeclared live columns.
+    Diff(ContractArgs),
+}
+
+/// Table selection and output for `sqlload contract`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
+pub struct ContractArgs {
+    /// Sources or tables to compare, as for `plan`; all when neither this nor --select is given.
+    #[arg(value_name = "SELECTOR")]
+    pub positional_select: Vec<String>,
+    /// Sources or tables to compare, combined with any given positionally.
+    #[arg(long, short = 's', num_args = 1.., value_name = "SELECTOR")]
+    pub select: Vec<String>,
+    /// Sources or tables to leave out; wins over --select.
+    #[arg(long, num_args = 1.., value_name = "SELECTOR")]
+    pub exclude: Vec<String>,
+    /// Read every table as if its source loaded into this target, in that target's database and schema.
+    #[arg(long, value_name = "TARGET")]
+    pub from: Option<String>,
+    /// Print the report as one JSON document.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// `sqlload copy`'s endpoints and write settings.

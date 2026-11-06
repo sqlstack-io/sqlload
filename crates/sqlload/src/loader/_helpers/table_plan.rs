@@ -12,6 +12,8 @@ use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::models::Destination;
+use crate::adapters::files::main::output_problems::output_problems;
+use crate::adapters::files::models::{OutputCheck, TablePath};
 use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
@@ -937,4 +939,24 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
 /// `name` as Postgres quotes an identifier.
 fn quoted(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// The cursor's type, and why the table's strategy and cursor do not suit its path.
+pub(crate) fn check_output(
+    spec: &TableSpec,
+    path: &TablePath,
+    desired: &[DesiredColumn],
+) -> (Option<ColumnType>, Vec<String>) {
+    let cursor_name = spec.cursor.as_ref().map(|cursor| cursor.column.as_str());
+    let cursor_type = desired
+        .iter()
+        .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
+        .map(|column| column.column_type.clone());
+    let problems = output_problems(&OutputCheck {
+        strategy: spec.strategy,
+        cursor_column: cursor_name,
+        cursor_type: cursor_type.as_ref(),
+        partition: path.partition.as_ref(),
+    });
+    (cursor_type, problems)
 }

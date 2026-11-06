@@ -6,7 +6,11 @@ use std::collections::BTreeMap;
 use crate::adapters::dispatch::models::Destination;
 use crate::command::_helpers::output::confirm_reload;
 use crate::command::constants::RELOAD_DECLINED;
-use crate::command::models::{Command, LoaderArgs, LoaderRequest, StateAction};
+use crate::command::models::{
+    Command, ContractAction, ContractArgs, LoaderArgs, LoaderRequest, StateAction,
+};
+use crate::contract::main::contract_diff::contract_diff;
+use crate::contract::main::render_contract::render_contract;
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
@@ -164,6 +168,12 @@ async fn run_command(
             .await
             .map(|lines| (lines, true));
     }
+    if let Command::Contract {
+        action: ContractAction::Diff(args),
+    } = command
+    {
+        return run_contract(project, &destinations, args).await;
+    }
     let (args, applies, loads) = match command {
         Command::Plan(args) => (args, false, false),
         Command::Apply(args) => (args, true, false),
@@ -258,4 +268,21 @@ async fn run_state(
         true => Ok(lines),
         false => Err(lines.join("\n")),
     }
+}
+
+/// `sqlload contract diff`: the report, and whether every selected table agrees.
+async fn run_contract(
+    project: &ProjectConfig,
+    destinations: &BTreeMap<String, Destination>,
+    args: ContractArgs,
+) -> Result<(Vec<String>, bool), String> {
+    let options = PlanOptions {
+        select: [args.positional_select, args.select].concat(),
+        exclude: args.exclude,
+        ..PlanOptions::default()
+    };
+    let report = contract_diff(project, destinations, &options, args.from.as_deref())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(render_contract(&report, args.json))
 }

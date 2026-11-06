@@ -11,6 +11,7 @@ pub mod column_types;
 #[cfg(feature = "cli")]
 pub mod command;
 pub mod config;
+pub mod contract;
 pub mod copy;
 pub mod delivery;
 pub mod envelope;
