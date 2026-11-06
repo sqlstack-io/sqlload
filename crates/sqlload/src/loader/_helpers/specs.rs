@@ -299,9 +299,7 @@ fn flatten_problems(context: &SourceContext<'_>, overrides: &TableOverride) -> V
         .flatten
         .iter()
         .filter_map(|object| {
-            let excluded = exclude.iter().find(|pattern| {
-                glob(pattern).is_ok_and(|glob| glob.compile_matcher().is_match(object))
-            });
+            let excluded = excluding_pattern(object, &exclude);
             let setting = match (excluded, overrides.mask.contains_key(object), overrides.columns.contains_key(object)) {
                 _ if object.contains('.') => {
                     return Some(format!(
@@ -319,6 +317,13 @@ fn flatten_problems(context: &SourceContext<'_>, overrides: &TableOverride) -> V
             ))
         })
         .collect()
+}
+
+/// The first `exclude_columns` pattern matching `name`.
+fn excluding_pattern<'a>(name: &str, exclude: &'a [String]) -> Option<&'a String> {
+    exclude
+        .iter()
+        .find(|pattern| glob(pattern).is_ok_and(|glob| glob.compile_matcher().is_match(name)))
 }
 
 /// What the column rules decide for one table.
