@@ -7,7 +7,7 @@ use crate::loader::_helpers::specs::{
 };
 use crate::loader::models::{ResolvedTables, SkippedTable, TableSpec};
 use crate::postgres_source::models::SourceTable;
-use crate::project::models::{ProjectConfig, SourceConfig, SourceKind, TableOverride};
+use crate::project::models::{ProjectConfig, SourceConfig, TableOverride};
 
 /// The specs for `discovered` tables of source `source_name`, with problems and skipped tables.
 pub(crate) fn resolve_tables(
@@ -41,8 +41,7 @@ pub(crate) fn resolve_tables(
         };
         match resolve_table(&context, table, &overrides) {
             Ok(Ok(mut spec)) => {
-                spec.approved =
-                    source.kind != SourceKind::Postgres || source.include.contains(&qualified);
+                spec.approved = !source.reads_postgres() || source.include.contains(&qualified);
                 resolved.specs.push(spec);
             }
             Ok(Err(reason)) => resolved.skipped.push(SkippedTable {

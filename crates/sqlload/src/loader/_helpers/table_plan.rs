@@ -2,6 +2,7 @@ use crate::adapters::contract::main::cursor_bound::cursor_bound;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::CursorQuery;
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
@@ -18,6 +19,7 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
+use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
@@ -56,6 +58,7 @@ use crate::routing::models::Route;
 use crate::routing::models::RouteOverrides;
 use crate::routing::models::Step;
 use crate::routing::models::Store;
+use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
@@ -111,6 +114,17 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             },
         })
         .collect();
+    let merged = spec
+        .cdc
+        .as_ref()
+        .is_some_and(|cdc| cdc.apply != ChangeApply::Changelog);
+    desired.retain(|column| !(merged && column.name == CDC_UNCHANGED_COLUMN));
+    for column in desired
+        .iter_mut()
+        .filter(|column| column.name.starts_with(CDC_PREFIX))
+    {
+        column.origin = ColumnOrigin::Metadata;
+    }
     desired.extend(metadata_columns());
     desired
 }
@@ -249,7 +263,13 @@ pub(crate) async fn replan_columns(
 pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     match (&spec.files, &spec.python) {
         (Some(_), _) | (_, Some(_)) => files_read_columns(spec),
-        (None, None) => plan_read(&selected_columns(spec), &spec.pinned),
+        (None, None) => {
+            let mut read = plan_read(&selected_columns(spec), &spec.pinned)?;
+            if let Some(cdc) = &spec.cdc {
+                read.extend(metadata_read_columns(cdc.apply, 0));
+            }
+            Ok(read)
+        }
     }
 }
 
@@ -409,6 +429,14 @@ async fn plan_table_once(
         _ => None,
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
+    let mode = match &spec.cdc {
+        Some(cdc) => WriteMode::Changes(ChangeWrite {
+            apply: cdc.apply,
+            unique_key: spec.unique_key.clone(),
+            truncated: None,
+        }),
+        None => mode,
+    };
     let exists = live.is_some();
     let chosen = match &schema.blocked {
         None => {

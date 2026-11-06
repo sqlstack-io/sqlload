@@ -1,6 +1,6 @@
 //! Work out which existing files a write replaces, before anything is written.
 
-use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::{ChangeApply, WriteMode};
 use crate::adapters::files::main::_partition_in_window::partition_in_window;
 use crate::adapters::files::main::check_window::check_window;
 use crate::adapters::files::models::{ReplaceRequest, ReplacedFiles};
@@ -9,6 +9,12 @@ use crate::adapters::files::models::{ReplaceRequest, ReplacedFiles};
 pub fn plan_replaced_files(request: &ReplaceRequest<'_>) -> Result<ReplacedFiles, String> {
     let (from, to) = match request.mode {
         WriteMode::Append => return Ok(ReplacedFiles::default()),
+        WriteMode::Changes(change) if change.apply == ChangeApply::Changelog => {
+            return Ok(ReplacedFiles::default());
+        }
+        WriteMode::Changes(_) => {
+            return Err("captured changes reach a files target only as a changelog (cdc_mode = \"changelog\")".to_owned());
+        }
         WriteMode::Replace | WriteMode::Recreate => {
             return Ok(ReplacedFiles {
                 always: request.listed.keys(),

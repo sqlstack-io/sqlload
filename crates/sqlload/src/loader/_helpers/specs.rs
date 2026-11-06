@@ -1,12 +1,13 @@
-use crate::adapters::contract::models::TableName;
+use crate::adapters::contract::models::{ChangeApply, TableName};
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
-use crate::loader::models::{CursorSpec, SettingOrigin, TableSpec};
+use crate::loader::models::{CdcSpec, CursorSpec, SettingOrigin, TableSpec};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
-    MaskMethod, SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, WriteStrategy,
+    CdcDeletes, CdcMode, MaskMethod, SourceConfig, SourceKind, StateMode, TableOverride,
+    TableSettings, WriteStrategy,
 };
 use crate::similar_names::main::nearest_name::nearest_name;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
@@ -127,7 +128,17 @@ pub(crate) fn build_spec(
                 SettingOrigin::Default,
             )
         });
-    let mut problems = strategy_problems(strategy, &unique_key, cursor.as_ref());
+    let cdc = cdc_spec(context);
+    let (strategy, mut problems) = match &cdc {
+        Some(cdc) => (
+            WriteStrategy::Append,
+            cdc_key_problems(cdc, table, &unique_key),
+        ),
+        None => (
+            strategy,
+            strategy_problems(strategy, &unique_key, cursor.as_ref()),
+        ),
+    };
     problems.extend(column_reference_problems(table, overrides));
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
@@ -229,7 +240,36 @@ pub(crate) fn build_spec(
                 .unwrap_or_else(|| target_path.clone())
         }),
         python: None,
+        cdc,
     })
+}
+
+/// A `postgres_cdc` source's stream settings, with the default slot and publication names.
+fn cdc_spec(context: &SourceContext<'_>) -> Option<CdcSpec> {
+    let source = context.source;
+    (source.kind == SourceKind::PostgresCdc).then(|| {
+        let default_name = format!("sqlload_{}", context.name.to_lowercase());
+        CdcSpec {
+            apply: match (source.cdc_mode, source.deletes) {
+                (CdcMode::Changelog, _) => ChangeApply::Changelog,
+                (CdcMode::Merge, CdcDeletes::Soft) => ChangeApply::SoftDeletes,
+                (CdcMode::Merge, CdcDeletes::Hard) => ChangeApply::HardDeletes,
+            },
+            slot: source.slot.clone().unwrap_or_else(|| default_name.clone()),
+            publication: source.publication.clone().unwrap_or(default_name),
+        }
+    })
+}
+
+/// Why a captured table cannot be merged: merge matches rows on a key, which the table must have.
+fn cdc_key_problems(cdc: &CdcSpec, table: &SourceTable, unique_key: &[String]) -> Vec<String> {
+    match (cdc.apply, unique_key.is_empty()) {
+        (ChangeApply::Changelog, _) | (_, false) => Vec::new(),
+        (_, true) => vec![format!(
+            "{} has no primary key, so cdc_mode = \"merge\" cannot match its changes to rows; give it a primary key, set unique_key, or use cdc_mode = \"changelog\"",
+            table.qualified_name()
+        )],
+    }
 }
 
 /// Why a table someone wrote is blocked without a description they wrote, with where to give it; `None` when it has one, or when it was discovered (matched by an `include` pattern, not named), which takes the source's own table comment or none (D203). Python tables, files sources (described by the source's own `description`), `[sources.*.tables]` entries and tables named exactly in `include` are written.
@@ -240,9 +280,8 @@ pub(crate) fn missing_description(
 ) -> Option<String> {
     let qualified = table.qualified_name();
     let entry = source.tables.get(&qualified);
-    let written = source.kind != SourceKind::Postgres
-        || entry.is_some()
-        || source.include.contains(&qualified);
+    let written =
+        !source.reads_postgres() || entry.is_some() || source.include.contains(&qualified);
     let described = [
         entry.and_then(|entry| entry.description.as_deref()),
         source
@@ -260,7 +299,7 @@ pub(crate) fn missing_description(
         SourceKind::Files => {
             format!("no description; add description = \"...\" under [sources.{source_name}]")
         }
-        SourceKind::Postgres => format!(
+        SourceKind::Postgres | SourceKind::PostgresCdc => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
         ),
     };

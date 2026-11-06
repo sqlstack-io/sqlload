@@ -367,6 +367,7 @@ impl Publisher {
             || (self.waiting_range.is_some() && self.files.is_none())
             || self.at_end
             || empty_range
+            || matches!(&self.table.mode, WriteMode::Changes(change) if change.truncated.is_some())
             || self.leftover_deletes();
         match (self.direct, pending, &self.run) {
             (false, true, _) => self.commit(true).await?,

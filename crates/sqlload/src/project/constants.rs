@@ -38,6 +38,10 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "allow_columns",
     "mask_key",
     "tables",
+    "publication",
+    "slot",
+    "cdc_mode",
+    "deletes",
 ];
 
 /// Keys a Python source may set (`kind` is added by discovery), besides the table settings.

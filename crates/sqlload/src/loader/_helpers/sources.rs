@@ -122,7 +122,7 @@ pub(crate) async fn open_source(
     readers: usize,
 ) -> Result<SourceReader, LoaderError> {
     match source.kind {
-        SourceKind::Postgres => {
+        SourceKind::Postgres | SourceKind::PostgresCdc => {
             let client = connect_source(project, source).await?;
             let mut helpers = Vec::with_capacity(readers.saturating_sub(1));
             for _ in 1..readers {
@@ -149,7 +149,7 @@ pub(crate) async fn source_tables(
     source: &SourceConfig,
 ) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>), String>, LoaderError> {
     match source.kind {
-        SourceKind::Postgres => {
+        SourceKind::Postgres | SourceKind::PostgresCdc => {
             let client = connect_source(project, source).await?;
             let discovered = read_catalog(&client, &source.include, &source.exclude).await?;
             Ok(Ok((discovered, None)))

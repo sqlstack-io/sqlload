@@ -73,6 +73,7 @@ sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
+pgwire-replication.workspace = true
 tokio-postgres.workspace = true
 tokio-util = { workspace = true, features = ["io"] }
 toml.workspace = true

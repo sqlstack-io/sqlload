@@ -201,6 +201,9 @@ pub struct LoaderArgs {
     /// Rebuild with --reload without asking.
     #[arg(long)]
     pub yes: bool,
+    /// postgres_cdc sources: drop and recreate the replication slot, then copy every table again (after a snapshot stopped part-way, or a lost slot).
+    #[arg(long)]
+    pub resnapshot: bool,
     /// Backfill from this cursor value instead of the destination's maximum, typed from each selected table's cursor (an integer, or RFC 3339 or a date).
     #[arg(long, value_name = "VALUE")]
     pub start_cursor: Option<String>,

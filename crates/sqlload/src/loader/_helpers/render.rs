@@ -1,4 +1,4 @@
-use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::{ChangeApply, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
 use crate::adapters::files::models::{PendingLoad, PendingPhase};
@@ -265,6 +265,17 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         },
         WriteMode::Replace => "replace".to_owned(),
         WriteMode::Recreate => "recreate from the whole source (--reload)".to_owned(),
+        WriteMode::Changes(change) => match change.apply {
+            ChangeApply::SoftDeletes => format!(
+                "apply changes, soft deletes (key: {})",
+                change.unique_key.join(", ")
+            ),
+            ChangeApply::HardDeletes => format!(
+                "apply changes, hard deletes (key: {})",
+                change.unique_key.join(", ")
+            ),
+            ChangeApply::Changelog => "append changes (changelog)".to_owned(),
+        },
     };
     let source = match (&spec.files, &spec.python) {
         (Some(files), _) => format!("files  {}  {}", files.location, files.encoding),
