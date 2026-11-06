@@ -1,15 +1,19 @@
 //! Paging through one endpoint with its named paginator.
 
+use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use reqwest::Url;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::Sender;
 
 use crate::http_source::_helpers::fetch::fetch;
-use crate::http_source::_helpers::selector::{pointer_text, selected_rows, selector};
+use crate::http_source::_helpers::selector::{pointer_text, selected_node, selector};
 use crate::http_source::_helpers::urls::{redacted, request_url};
 use crate::http_source::models::{Calls, Fetched, HttpPage, Paginator, Request, Selector};
 
-/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; stops quietly once `pages` closes.
+/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is missing or null has no rows and is not sent. Stops quietly once `pages` closes; a page read twice, or a response repeating the previous one, is an error rather than a loop.
 pub(crate) async fn paginate(
     calls: &Calls,
     request: &Request,
@@ -20,32 +24,69 @@ pub(crate) async fn paginate(
     let rows_path = Some(rows.rows.join(".")).filter(|path| !path.is_empty());
     let first = request_url(&calls.endpoint.base_url, path)?;
     let mut url = with_params(&first, &request.params, &start_params(&request.paginator));
+    let mut seen: HashSet<Url> = HashSet::new();
+    let mut previous: Option<u64> = None;
     for step in 1_u64.. {
+        let shown = redacted(&format!("GET {url}"), &calls.endpoint.secrets);
+        if !seen.insert(url.clone()) {
+            return Err(format!(
+                "{shown}: the paginator came back to a page it already read; check its pointer or parameter"
+            ));
+        }
         let Some(fetched) = fetch(calls, &url).await? else {
             return Ok(());
         };
-        let next = next_url(request, (&first, &url), (&fetched, &rows, step))?;
+        let digest = digest(&fetched.bytes);
+        if previous == Some(digest) {
+            return Err(format!(
+                "{shown}: the response repeats the previous page; the API may ignore the paginator's parameter"
+            ));
+        }
+        previous = Some(digest);
+        let document = parsed(request, &rows, &fetched.bytes)
+            .map_err(|error| format!("{shown}: the response is not JSON: {error}"))?;
+        let next = next_url(request, (&first, &url), (&fetched, document.as_ref(), step))
+            .map_err(|error| format!("{shown}: {error}"))?;
+        let has_rows = document.as_ref().is_none_or(|document| {
+            selected_node(document, &rows).is_some_and(|node| !node.is_null())
+        });
         let page = HttpPage {
             bytes: fetched.bytes,
             path: rows_path.clone(),
+            source: shown,
         };
-        if pages.send(page).await.is_err() {
+        if has_rows && pages.send(page).await.is_err() {
             return Ok(());
         }
         match next {
-            Some(next) if next == url => {
-                return Err(redacted(
-                    &format!(
-                        "GET {url}: the paginator points at the same page again; check its pointer or parameter"
-                    ),
-                    &calls.endpoint.secrets,
-                ));
-            }
             Some(next) => url = next,
             None => return Ok(()),
         }
     }
     Ok(())
+}
+
+/// The response as JSON when the selector or the paginator reads it, else `None`.
+fn parsed(request: &Request, rows: &Selector, bytes: &[u8]) -> Result<Option<Value>, String> {
+    let reads_body = match &request.paginator {
+        Paginator::Single | Paginator::LinkHeader => !rows.rows.is_empty(),
+        Paginator::NextLink { .. }
+        | Paginator::Cursor { .. }
+        | Paginator::Offset { .. }
+        | Paginator::PageNumber { .. } => true,
+    };
+    match reads_body {
+        true => serde_json::from_slice(bytes)
+            .map(Some)
+            .map_err(|error| error.to_string()),
+        false => Ok(None),
+    }
+}
+
+fn digest(bytes: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The paginator's parameters on the first request.
@@ -67,31 +108,28 @@ fn start_params(paginator: &Paginator) -> Vec<(String, String)> {
     }
 }
 
-/// The page after `fetched` (the `step`th), or `None` at the end.
+/// The page after `fetched` (the `step`th), or `None` at the end; `document` is the parsed response whenever the paginator reads the body.
 fn next_url(
     request: &Request,
     (first, current): (&Url, &Url),
-    (fetched, rows, step): (&Fetched, &Selector, u64),
+    (fetched, document, step): (&Fetched, Option<&Value>, u64),
 ) -> Result<Option<Url>, String> {
-    let document = || -> Result<Value, String> {
-        serde_json::from_slice(&fetched.bytes)
-            .map_err(|error| format!("GET {current}: the response is not JSON: {error}"))
-    };
+    let body = || document.ok_or_else(|| "the paginator needs a JSON response".to_owned());
     let joined = |link: String| {
         current
             .join(&link)
             .map(Some)
-            .map_err(|error| format!("GET {current}: next page {link} is not a URL: {error}"))
+            .map_err(|error| format!("next page {link} is not a URL: {error}"))
     };
     let params = &request.params;
     match &request.paginator {
         Paginator::Single => Ok(None),
         Paginator::LinkHeader => fetched.next_link.clone().map_or(Ok(None), joined),
         Paginator::NextLink { pointer } => {
-            pointer_text(&document()?, &selector(Some(pointer))?).map_or(Ok(None), joined)
+            pointer_text(body()?, &selector(Some(pointer))?).map_or(Ok(None), joined)
         }
         Paginator::Cursor { pointer, param } => {
-            Ok(pointer_text(&document()?, &selector(Some(pointer))?)
+            Ok(pointer_text(body()?, &selector(Some(pointer))?)
                 .map(|token| with_params(first, params, &[(param.clone(), token)])))
         }
         Paginator::Offset {
@@ -99,7 +137,7 @@ fn next_url(
             limit_param,
             limit,
         } => {
-            let full = selected_rows(&document()?, rows).len() as u64 >= *limit;
+            let full = page_rows(body()?, request)? >= *limit;
             Ok(full.then(|| {
                 with_params(
                     first,
@@ -112,8 +150,8 @@ fn next_url(
             }))
         }
         Paginator::PageNumber { param, start } => {
-            let empty = selected_rows(&document()?, rows).is_empty();
-            Ok((!empty).then(|| {
+            let more = page_rows(body()?, request)? > 0;
+            Ok(more.then(|| {
                 with_params(
                     first,
                     params,
@@ -121,6 +159,18 @@ fn next_url(
                 )
             }))
         }
+    }
+}
+
+/// How many rows a page holds for offset and page-number paging: its selected list's length, 0 when missing or null; anything else is an error, since a counted object would never end the paging.
+fn page_rows(document: &Value, request: &Request) -> Result<u64, String> {
+    match selected_node(document, &selector(request.select.as_deref())?) {
+        Some(Value::Array(items)) => Ok(items.len() as u64),
+        Some(Value::Null) | None => Ok(0),
+        Some(_) => Err(format!(
+            "offset and page-number paging count the rows in a list, but select {:?} is not one; point select at the page's list of rows",
+            request.select.clone().unwrap_or_else(|| "$".to_owned())
+        )),
     }
 }
 

@@ -12,9 +12,12 @@ use crate::http_source::_helpers::endpoint::{endpoint, interval, shared_limiter}
 use crate::http_source::_helpers::pages::paginate;
 use crate::http_source::_helpers::selector::{selected_rows, selector};
 use crate::http_source::_helpers::urls::{filled_path, placeholders};
-use crate::http_source::constants::{JOB_THREADS, PAGES_AHEAD};
+use std::time::Duration;
+
+use crate::http::main::install_tls_provider::install_tls_provider;
+use crate::http_source::constants::{JOB_THREADS, MAX_REDIRECTS, PAGES_AHEAD};
 use crate::http_source::models::{
-    Calls, FanOut, HttpJob, HttpPage, KeyFeed, Over, Request, Selector, StatusAction,
+    Calls, FanOut, HttpJob, HttpPage, KeyFeed, Over, Paginator, Request, Selector, StatusAction,
 };
 
 /// Every problem the job's definition has, found before any request.
@@ -22,6 +25,14 @@ pub(crate) fn job_problems(job: &HttpJob) -> Vec<String> {
     match job {
         HttpJob::Paginate(request) => {
             let mut problems = request_problems(request);
+            let field = match selector(request.select.as_deref()) {
+                Ok(selected) => selected.field,
+                Err(_) => None,
+            };
+            problems.extend(
+                field
+                    .map(|field| format!("select {:?} names a key field ({field}); that form is for fan_out's over, so select the rows instead", request.select.clone().unwrap_or_default())),
+            );
             problems.extend(placeholders(&request.path).first().map(|name| {
                 format!(
                     "paginate path {} has the placeholder {{{name}}}; use fan_out to fill it",
@@ -37,6 +48,14 @@ pub(crate) fn job_problems(job: &HttpJob) -> Vec<String> {
 fn request_problems(request: &Request) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     problems.extend(selector(request.select.as_deref()).err());
+    problems.extend(paginator_problem(&request.paginator));
+    problems.extend(
+        request
+            .client
+            .headers
+            .iter()
+            .filter_map(|(name, value)| header_problem(name, value)),
+    );
     problems.extend(
         request
             .client
@@ -56,6 +75,38 @@ fn request_problems(request: &Request) -> Vec<String> {
     problems
 }
 
+/// Why the paginator cannot work, if it cannot: a pointer that is not a plain path, or an offset limit of 0.
+fn paginator_problem(paginator: &Paginator) -> Option<String> {
+    match paginator {
+        Paginator::NextLink { pointer } | Paginator::Cursor { pointer, .. } => {
+            match selector(Some(pointer)) {
+                Ok(parsed) if parsed.field.is_none() && !parsed.rows.is_empty() => None,
+                Ok(_) | Err(_) => Some(format!(
+                    "paginator pointer {pointer:?} is not a path such as \"$.next\" or \"$.meta.next_cursor\""
+                )),
+            }
+        }
+        Paginator::Offset { limit: 0, .. } => Some("sl.offset limit must be at least 1".to_owned()),
+        Paginator::Offset { .. }
+        | Paginator::Single
+        | Paginator::LinkHeader
+        | Paginator::PageNumber { .. } => None,
+    }
+}
+
+/// Why a header cannot be sent, if it cannot.
+fn header_problem(name: &str, value: &str) -> Option<String> {
+    match (
+        reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+        reqwest::header::HeaderValue::from_str(value),
+    ) {
+        (Ok(_), Ok(_)) => None,
+        (Err(_), _) | (_, Err(_)) => Some(format!(
+            "header {name:?} is not a valid HTTP header name and value"
+        )),
+    }
+}
+
 fn fan_out_problems(fan_out: &FanOut) -> Vec<String> {
     let path = &fan_out.request.path;
     let wanted = placeholders(path);
@@ -66,6 +117,9 @@ fn fan_out_problems(fan_out: &FanOut) -> Vec<String> {
     match &fan_out.over {
         Over::Paginate(over) => {
             problems.extend(request_problems(over));
+            problems.extend(placeholders(&over.path).first().map(|name| {
+                format!("fan_out over path {} has the placeholder {{{name}}}; over must be a plain paginate", over.path)
+            }));
             let field = match selector(over.select.as_deref()) {
                 Ok(selected) => selected.field,
                 Err(_) => None,
@@ -83,6 +137,9 @@ fn fan_out_problems(fan_out: &FanOut) -> Vec<String> {
                 )),
             }
         }
+        Over::Values { .. } if wanted.is_empty() => problems.push(format!(
+            "fan-out path {path} has no placeholder, so every key would request the same URL; add one such as {{id}}"
+        )),
         Over::Values { values } => problems.extend(
             values
                 .iter()
@@ -145,14 +202,37 @@ async fn run_job(
     connections: Map<String, Value>,
     pages: Sender<HttpPage>,
 ) -> Result<(), String> {
-    let http = crate::http::main::http_client::build_http_client(&Default::default())
-        .map_err(|error| format!("cannot start the HTTP client: {error}"))?;
+    let http = job_client()?;
     match job {
         HttpJob::Paginate(request) => {
             let calls = request_calls(&request, &connections, &http)?;
             paginate(&calls, &request, &request.path, &pages).await
         }
         HttpJob::FanOut(fan_out) => run_fan_out(*fan_out, &connections, &http, pages).await,
+    }
+}
+
+/// A pooled client that follows redirects only within the first request's origin, so connection headers and credentials never reach another host.
+fn job_client() -> Result<reqwest::Client, String> {
+    install_tls_provider();
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::custom(same_origin_redirect))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(300))
+        .user_agent(concat!("sqlload/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| format!("cannot start the HTTP client: {error}"))
+}
+
+fn same_origin_redirect(attempt: reqwest::redirect::Attempt<'_>) -> reqwest::redirect::Action {
+    let crossed = attempt
+        .previous()
+        .first()
+        .is_some_and(|first| first.origin() != attempt.url().origin());
+    match crossed || attempt.previous().len() > MAX_REDIRECTS {
+        true => attempt.stop(),
+        false => attempt.follow(),
     }
 }
 

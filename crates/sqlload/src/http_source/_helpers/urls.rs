@@ -2,7 +2,7 @@
 
 use reqwest::Url;
 
-use crate::http_source::constants::NEXT_RELATION;
+use crate::http_source::constants::{DOT_SEGMENTS, NEXT_RELATION, RELATION_PARAMETER};
 use serde_json::{Map, Value};
 
 /// `path` under `base` (`https://h/v1` + `/orders` is `https://h/v1/orders`), or `path` itself when it is a full URL.
@@ -51,7 +51,11 @@ pub(crate) fn filled_path(path: &str, key: &Map<String, Value>) -> Result<String
         })
 }
 
-fn encoded(text: &str) -> String {
+/// `text` percent-encoded except for unreserved characters; `.` and `..` are encoded whole so a key never climbs the path.
+pub(crate) fn encoded(text: &str) -> String {
+    if DOT_SEGMENTS.contains(&text) {
+        return text.replace('.', "%2E");
+    }
     text.bytes()
         .map(|byte| match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
@@ -64,24 +68,27 @@ fn encoded(text: &str) -> String {
 
 /// The `rel="next"` URL of a `Link` header.
 pub(crate) fn link_header_next(header: &str) -> Option<String> {
-    header.split(',').find_map(next_target)
+    header.split('<').skip(1).find_map(next_target)
 }
 
-/// The target of one `Link` entry when its relation is `next`.
+/// The target of one `Link` entry (`target>; rel="next"`, the `<` already removed) when one of its relations is `next`.
 fn next_target(link: &str) -> Option<String> {
-    let (target, parameters) = link.split_once(';')?;
-    let next = parameters.split(';').any(is_next_relation);
-    next.then(|| {
-        target
-            .trim()
-            .trim_start_matches('<')
-            .trim_end_matches('>')
-            .to_owned()
-    })
+    let (target, parameters) = link.split_once('>')?;
+    let next = parameters.split([';', ',']).any(is_next_relation);
+    next.then(|| target.trim().to_owned())
 }
 
+/// Whether a `Link` parameter is `rel` with `next` among its space-separated relations, quoted or not.
 fn is_next_relation(parameter: &str) -> bool {
-    parameter.trim().replace(' ', "") == NEXT_RELATION
+    let relations = parameter
+        .split_once('=')
+        .filter(|(key, _)| key.trim().eq_ignore_ascii_case(RELATION_PARAMETER))
+        .map(|(_, value)| value.trim().trim_matches('"'));
+    relations.is_some_and(|relations| {
+        relations
+            .split_whitespace()
+            .any(|relation| relation.eq_ignore_ascii_case(NEXT_RELATION))
+    })
 }
 
 /// `text` with every secret replaced by `***`.

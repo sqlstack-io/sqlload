@@ -122,6 +122,8 @@ pub struct HttpPage {
     pub bytes: Vec<u8>,
     /// The dotted path to the rows, as `sl.json(..., path=...)` takes it.
     pub path: Option<String>,
+    /// The request, secrets hidden, for errors about the page.
+    pub source: String,
 }
 
 /// A parsed `select`: the fields down to the rows and, for keys, the field of each row.

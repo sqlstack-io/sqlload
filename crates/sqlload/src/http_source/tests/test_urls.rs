@@ -52,6 +52,43 @@ fn given_paths_links_and_secrets_when_building_requests_then_urls_and_errors_are
             expected_value: "https://h/p?page=3",
         },
         UrlsTestCase {
+            description: "a comma inside the URL and an unquoted relation",
+            value: || {
+                link_header_next("<https://h/p?fields=a,b&page=2>; rel=next").unwrap_or_default()
+            },
+            expected_value: "https://h/p?fields=a,b&page=2",
+        },
+        UrlsTestCase {
+            description: "next among several relations, with spaces around =",
+            value: || {
+                link_header_next(
+                    "<https://h/last>; rel=\"last\", <https://h/2>; rel = \"next last\"",
+                )
+                .unwrap_or_default()
+            },
+            expected_value: "https://h/2",
+        },
+        UrlsTestCase {
+            description: "no next relation ends the paging",
+            value: || {
+                link_header_next("<https://h/1>; rel=\"prev\"; title=\"next\"")
+                    .unwrap_or_else(|| "none".to_owned())
+            },
+            expected_value: "none",
+        },
+        UrlsTestCase {
+            description: "a key of dots cannot climb the path",
+            value: || {
+                let key = serde_json::json!({"id": ".."});
+                filled_path(
+                    "/o/{id}/items",
+                    key.as_object().unwrap_or(&serde_json::Map::new()),
+                )
+                .unwrap_or_default()
+            },
+            expected_value: "/o/%2E%2E/items",
+        },
+        UrlsTestCase {
             description: "secrets in error text are hidden",
             value: || {
                 redacted(

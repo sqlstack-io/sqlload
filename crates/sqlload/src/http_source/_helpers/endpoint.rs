@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde_json::{Map, Value};
 
+use crate::http_source::_helpers::urls::encoded;
 use crate::http_source::models::{Auth, ClientSpec, Credential, Endpoint, Limiter};
 
 /// The endpoint of `client`'s connection: its `base_url`, headers and the credential its `auth` names.
@@ -68,16 +69,32 @@ pub(crate) fn endpoint(
         .map(text_headers)
         .unwrap_or_default();
     headers.extend(client.headers.clone());
-    let secrets: Vec<String> = ["token", "password"]
-        .iter()
-        .filter_map(|key| text(key))
-        .collect();
+    let secrets = secret_texts(&credential, &headers, [text("token"), text("password")]);
     Ok(Endpoint {
         base_url,
         headers,
         credential,
         secrets,
     })
+}
+
+/// Every text an error must never show: the token and password as they are and percent-encoded, the credential as sent (`Bearer ...`, `Basic ...` and its base64), and every header value.
+fn secret_texts(
+    credential: &Credential,
+    headers: &BTreeMap<String, String>,
+    raw: [Option<String>; 2],
+) -> Vec<String> {
+    let mut secrets: Vec<String> = raw.into_iter().flatten().collect();
+    let encoded: Vec<String> = secrets.iter().map(|secret| encoded(secret)).collect();
+    secrets.extend(encoded);
+    if let Credential::Header { value, .. } | Credential::Query { value, .. } = credential {
+        secrets.push(value.clone());
+        secrets.extend(value.split_once(' ').map(|(_, rest)| rest.to_owned()));
+    }
+    secrets.extend(headers.values().cloned());
+    secrets.retain(|secret| !secret.is_empty());
+    secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+    secrets
 }
 
 /// The connection's `headers` that are text.

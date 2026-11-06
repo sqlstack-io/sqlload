@@ -18,5 +18,14 @@ pub const PAGES_AHEAD: usize = 4;
 /// Threads of the runtime one job's requests run on.
 pub const JOB_THREADS: usize = 2;
 
-/// The `Link` header parameter of the next page, spaces removed.
-pub const NEXT_RELATION: &str = "rel=\"next\"";
+/// The `Link` header parameter naming relations.
+pub const RELATION_PARAMETER: &str = "rel";
+
+/// Redirects followed within the connection's origin before a request fails.
+pub const MAX_REDIRECTS: usize = 10;
+
+/// The `Link` relation of the next page.
+pub const NEXT_RELATION: &str = "next";
+
+/// Path segments that would climb the URL's path if a fan-out key filled one unencoded.
+pub const DOT_SEGMENTS: &[&str] = &[".", ".."];

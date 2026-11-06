@@ -235,7 +235,7 @@ impl Output {
         run_http_job(definition, &self.connections, |page| {
             let read = JsonRead {
                 layout: JsonLayout::Document,
-                path: page.path,
+                path: page.path.clone(),
                 batch_rows: usize::MAX,
             };
             let parsed = json_rows(&page.bytes, &read, &mut |columns| {
@@ -247,7 +247,7 @@ impl Output {
                 }
             });
             if let (Err(reason), true) = (parsed, open) {
-                failed = Some(reason);
+                failed = Some(format!("{}: {reason}", page.source));
             }
             open && failed.is_none()
         })

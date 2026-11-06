@@ -48,6 +48,33 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
                 "fan-out path /{region}/orders/{id} needs {id}, which the key {\"region\":\"uk\"} lacks",
             ],
         },
+        JobProblemsTestCase {
+            description: "a pointer that is not a path, a zero limit and a bad header",
+            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0,"headers":{"X Bad":"1"}},"path":"/o","paginator":{"kind":"next_link","pointer":"next"}}"#,
+            expected_problems: &[
+                "paginator pointer \"next\" is not a path such as \"$.next\" or \"$.meta.next_cursor\"",
+                "header \"X Bad\" is not a valid HTTP header name and value",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "an offset limit of zero",
+            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"offset","param":"offset","limit_param":"limit","limit":0}}"#,
+            expected_problems: &["sl.offset limit must be at least 1"],
+        },
+        JobProblemsTestCase {
+            description: "a paginate selecting a key field",
+            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].id"}"#,
+            expected_problems: &[
+                "select \"$.items[*].id\" names a key field (id); that form is for fan_out's over, so select the rows instead",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "listed values over a path without a placeholder",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"values","values":[1,2]}}"#,
+            expected_problems: &[
+                "fan-out path /orders has no placeholder, so every key would request the same URL; add one such as {id}",
+            ],
+        },
     ];
     for test_case in test_cases {
         let job: HttpJob = serde_json::from_str(test_case.job).expect(test_case.description);

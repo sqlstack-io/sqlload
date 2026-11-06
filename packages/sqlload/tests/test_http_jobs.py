@@ -30,7 +30,7 @@ class Api(BaseHTTPRequestHandler):
 		url = urlparse(self.path)
 		query = {key: values[0] for key, values in parse_qs(url.query).items()}
 		self.server.log.append((url.path, query, self.headers.get("Authorization")))  # type: ignore[attr-defined]
-		if self.headers.get("Authorization") != f"Bearer {TOKEN}" and query.get("key") != TOKEN:
+		if TOKEN not in (self.headers.get("Authorization", "").removeprefix("Bearer "), query.get("key"), self.headers.get("X-Api-Key")):
 			return self.reply(401, {"message": f"bad token {self.headers.get('Authorization')}"})
 		route = {
 			"/v1/next": self.next_link,
@@ -40,6 +40,13 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/link": self.link,
 			"/v1/flaky": self.flaky,
 			"/v1/broken": lambda query: self.reply(500, {"message": f"down, token {TOKEN}"}),
+			"/v1/long": lambda query: self.reply(400, {"message": "x" * 280 + f" token {TOKEN} and {TOKEN}"}),
+			"/v1/redir": lambda query: self.reply(302, {}, {"Location": f"{self.server.other}/steal"}),  # type: ignore[attr-defined]
+			"/v1/away": lambda query: self.reply(200, {"items": ORDERS[:1], "next": f"{self.server.other}/steal"}),  # type: ignore[attr-defined]
+			"/v1/cycle": lambda query: self.reply(200, {"items": [], "next": "B" if query.get("c") == "A" else "A"}),
+			"/v1/wrapped": lambda query: self.reply(200, {"items": ORDERS[:2]}),
+			"/v1/gap": lambda query: self.reply(200, {"items": ORDERS[:3]} if query["p"] == "1" else {}),
+			"/v1/comma": self.comma,
 		}.get(url.path)
 		if route is not None:
 			return route(query)
@@ -84,6 +91,11 @@ class Api(BaseHTTPRequestHandler):
 		headers = {"Link": f'<{self.server_url()}/v1/link?page=1>; rel="next"'} if more else {}
 		self.reply(200, ORDERS[page * 4 : page * 4 + 4], headers)
 
+	def comma(self, query: dict[str, str]) -> None:
+		page = int(query.get("page", "0"))
+		headers = {"Link": f'<{self.server_url()}/v1/comma?fields=a,b&page=1>; rel=next'} if page == 0 else {}
+		self.reply(200, ORDERS[page * 4 : page * 4 + 4], headers)
+
 	def flaky(self, query: dict[str, str]) -> None:
 		self.server.flaky += 1  # type: ignore[attr-defined]
 		if self.server.flaky <= 2:  # type: ignore[attr-defined]
@@ -95,13 +107,42 @@ class Api(BaseHTTPRequestHandler):
 		return f"http://{host}:{port}"
 
 
+class Elsewhere(BaseHTTPRequestHandler):
+	"""Another host; records the headers every request brought."""
+
+	def log_message(self, *args: Any) -> None:
+		pass
+
+	def do_GET(self) -> None:
+		self.server.seen.append(dict(self.headers))  # type: ignore[attr-defined]
+		data = json.dumps([{"order_id": 99, "status": "stolen"}]).encode()
+		self.send_response(200)
+		self.send_header("Content-Length", str(len(data)))
+		self.end_headers()
+		self.wfile.write(data)
+
+
+def serve(handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
+	server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+	threading.Thread(target=server.serve_forever, daemon=True).start()
+	return server
+
+
 @pytest.fixture
-def api() -> Iterator[ThreadingHTTPServer]:
-	server = ThreadingHTTPServer(("127.0.0.1", 0), Api)
+def elsewhere() -> Iterator[ThreadingHTTPServer]:
+	server = serve(Elsewhere)
+	server.seen = []  # type: ignore[attr-defined]
+	yield server
+	server.shutdown()
+
+
+@pytest.fixture
+def api(elsewhere: ThreadingHTTPServer) -> Iterator[ThreadingHTTPServer]:
+	server = serve(Api)
 	server.log = []  # type: ignore[attr-defined]
 	server.flaky = 0  # type: ignore[attr-defined]
-	thread = threading.Thread(target=server.serve_forever, daemon=True)
-	thread.start()
+	host, port = elsewhere.server_address[:2]
+	server.other = f"http://localhost:{port}"  # type: ignore[attr-defined]
 	yield server
 	server.shutdown()
 
@@ -158,8 +199,10 @@ ALL_ORDERS = [(row["order_id"], row["status"]) for row in ORDERS]
 		("api.paginate('/cursor', paginator=sl.cursor('$.meta.next', 'after'), select='$.items')", ALL_ORDERS),
 		("api.paginate('/link', paginator=sl.link_header())", ALL_ORDERS),
 		("api.paginate('/flaky', paginator=sl.single())", ALL_ORDERS[:2]),
+		("api.paginate('/comma', paginator=sl.link_header())", ALL_ORDERS),
+		("api.paginate('/gap', paginator=sl.page_number('p'), select='$.items')", ALL_ORDERS[:3]),
 	],
-	ids=["next-link", "offset", "page-number", "cursor", "link-header", "retries-429-and-503"],
+	ids=["next-link", "offset", "page-number", "cursor", "link-header", "retries-429-and-503", "link-with-comma-unquoted-rel", "page-without-the-selected-key-ends"],
 )
 def test_given_a_paginated_endpoint_when_a_table_returns_its_job_then_every_page_loads(
 	tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_rows: list[tuple[Any, ...]]
@@ -208,8 +251,28 @@ def test_given_a_fan_out_when_loading_then_each_key_is_requested_and_a_skipped_s
 			"@shop.table(description='T.')\ndef t(ctx):\n    for order in api.paginate('/next', paginator=sl.next_link('$.next')):\n        if order['status'] == 'open':\n            yield order\n",
 			"rows of an sl.http job stay in Rust and are never handed to Python one at a time (rule python_row_loop)",
 		),
+		(
+			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/cycle', paginator=sl.cursor('$.next', 'c'), select='$.items')\n",
+			"the paginator came back to a page it already read",
+		),
+		(
+			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/wrapped', paginator=sl.page_number('p'))\n",
+			"offset and page-number paging count the rows in a list, but select \"$\" is not one",
+		),
+		(
+			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/long', paginator=sl.single())\n",
+			"HTTP 400",
+		),
 	],
-	ids=["server-error-retried-and-redacted", "unlisted-status-fails", "bad-definition-fails-before-requests", "python-row-loop"],
+	ids=[
+		"server-error-retried-and-redacted",
+		"unlisted-status-fails",
+		"bad-definition-fails-before-requests",
+		"python-row-loop",
+		"pagination-cycle",
+		"page-number-over-an-object",
+		"token-at-the-excerpt-cut",
+	],
 )
 def test_given_a_failing_job_when_loading_then_the_error_names_the_request_and_hides_secrets(
 	tmp_path: Path, api: ThreadingHTTPServer, tables: str, expected_text: str
@@ -218,7 +281,7 @@ def test_given_a_failing_job_when_loading_then_the_error_names_the_request_and_h
 	done = sqlload(project, "load")
 	assert done.returncode == 1
 	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr
-	assert TOKEN not in done.stdout + done.stderr
+	assert TOKEN[:4] not in done.stdout + done.stderr
 
 
 def test_given_a_bad_definition_when_loading_then_no_request_is_sent(tmp_path: Path, api: ThreadingHTTPServer) -> None:
@@ -233,3 +296,30 @@ def test_given_an_api_key_in_the_query_when_loading_then_it_is_sent_only_to_the_
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert [(path, query.get("key"), auth) for path, query, auth in api.log] == [("/v1/offset", TOKEN, None)]  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+	("path", "paginator", "expected_text"),
+	[
+		("/redir", "sl.single()", "HTTP 302: a redirect to another host is not followed"),
+		("/away", "sl.next_link('$.next')", ""),
+	],
+	ids=["redirect", "next-link-to-another-host"],
+)
+def test_given_a_response_pointing_at_another_host_when_loading_then_no_credential_or_header_goes_there(
+	tmp_path: Path, api: ThreadingHTTPServer, elsewhere: ThreadingHTTPServer, path: str, paginator: str, expected_text: str
+) -> None:
+	tables = f"keyed = sl.http(shop, auth=sl.api_key(header='X-Api-Key'), headers={{'X-Team': 'blue'}})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return keyed.paginate('{path}', paginator={paginator}, select='$.items')\n"
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load")
+	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr
+	sent = {name.lower() for headers in elsewhere.seen for name in headers}  # type: ignore[attr-defined]
+	assert not sent & {"x-api-key", "x-team", "authorization"}
+
+
+def test_given_a_datetime_param_when_loading_then_it_is_sent_as_iso_text(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	tables = "import datetime\n\n@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/offset', paginator=sl.offset(limit=10), params={'since': datetime.datetime(2024, 1, 2, 3, 4)})\n"
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert [query.get("since") for _, query, _ in api.log] == ["2024-01-02T03:04:00"]  # type: ignore[attr-defined]
