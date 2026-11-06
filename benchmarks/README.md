@@ -103,6 +103,36 @@ What it touches: test data goes only under `s3://<bucket>/sqlload/bench/`, and t
 run, and leaves them after the last. Objects the loaders make themselves stay (`_SQLLOAD_*`; dlt's
 `_DLT_*` tables and its staging schema). Remove those by hand if the schema is shared.
 
+## S3 into DuckDB
+
+`python -m sqlload_bench.s3_duckdb` decides how S3 Parquet should reach DuckDB. It loads the narrow
+rows, as 10 Parquet parts under `s3://<bucket>/sqlload/s3bench/`, into a new DuckDB file in two
+ways: `sqlload load`, where SQLLoad reads the files and appends Arrow, and DuckDB's own
+`read_parquet` over httpfs. Runs alternate between the two, and both must match the same checksum.
+It needs AWS credentials in the environment:
+
+```sh
+uv run python -m sqlload_bench.s3_duckdb --sqlload "$(which sqlload)" --bucket B --region R --rows 10000000
+```
+
+Results from 6 November 2026: sqlload 0.9.0 release binary and DuckDB 2.0.0 on both sides. The
+machine was in us-west-2 and the bucket in eu-west-2, so every request crossed regions (about
+400 ms to first byte). Each figure is the median of 3 runs.
+
+| Rows | Path | Wall | CPU | Peak RSS |
+|---|---|---|---|---|
+| 1M | SQLLoad reads S3 | 8.4 s | 1.9 s | 295 MB |
+| 1M | DuckDB reads S3 (httpfs) | 4.0 s | 1.3 s | 240 MB |
+| 10M | SQLLoad reads S3 | 31.5 s | 16.7 s | 555 MB |
+| 10M | DuckDB reads S3 (httpfs) | 5.7 s | 7.0 s | 715 MB |
+| 10M, local files | SQLLoad reads the folder | 9.2 s | 15.3 s | 630 MB |
+| 10M, local files | DuckDB `read_parquet` | 1.7 s | 5.7 s | 450 MB |
+
+The local rows separate the two costs. Even without S3, converting to Arrow and appending costs
+SQLLoad about 7.5 s more than DuckDB reading the files itself. With S3, SQLLoad reads the parts one
+after another, so request latency adds about 22 s more, where DuckDB adds about 4 s by reading in
+parallel. In-region the latency share would be smaller, but the conversion cost would not change.
+
 ## CI performance gate
 
 `crates/sqlload-benches` measures the hot paths in Callgrind instruction counts with
