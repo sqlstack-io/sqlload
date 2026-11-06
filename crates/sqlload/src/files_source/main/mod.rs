@@ -8,3 +8,4 @@ pub mod key_columns;
 pub mod read_files;
 pub mod read_footers;
 pub mod select_files;
+pub mod stored_read_of;

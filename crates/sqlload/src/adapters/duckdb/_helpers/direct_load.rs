@@ -7,9 +7,14 @@ use crate::adapters::duckdb::main::_direct_problem::direct_problem;
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
 use crate::adapters::duckdb::main::_pull_files::pull_files;
 use crate::adapters::duckdb::models::DuckDbWriter;
-use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
+use crate::column_types::main::portable_type::portable_type;
+use crate::column_types::models::ColumnType;
+use crate::files_source::constants::{
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+};
 use crate::files_source::main::batch_refusals::batch_refusals;
-use crate::files_source::models::{BatchFooters, DataFile};
+use crate::files_source::main::stored_read_of::stored_read_of;
+use crate::files_source::models::{BatchFooters, DataFile, StoredRead};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::FilesSource;
 use crate::store_paths::models::{Location, StoreKind};
@@ -38,6 +43,7 @@ impl DuckDbWriter {
                     .read
                     .columns
                     .iter()
+                    .filter(|column| !constant(source, &column.name))
                     .find_map(|column| disagreeing(batch.footers, &column.name))
             });
         if let Some(problem) = problem {
@@ -137,7 +143,7 @@ fn in_any_footer(footers: &BatchFooters, name: &str) -> bool {
     footers.parquet.values().any(has)
 }
 
-/// Why the batch's footers disagree on `name`'s type: DuckDB would promote it to one type for every file, where SQLLoad casts each file exactly.
+/// Why the batch's footers disagree on `name`: a different portable type, or a different way of holding it (nanoseconds, epoch integers), where DuckDB would promote every file to one type and SQLLoad would read each exactly. Arrow-only differences (Int32 and Int64, Utf8 and LargeUtf8, dictionary strings) DuckDB promotes exactly.
 fn disagreeing(footers: &BatchFooters, name: &str) -> Option<String> {
     let typed = |footer: &ArrowReaderMetadata| {
         let schema = footer.schema().clone();
@@ -145,14 +151,19 @@ fn disagreeing(footers: &BatchFooters, name: &str) -> Option<String> {
             .fields()
             .iter()
             .find(|field| field.name() == name)
-            .map(|field| field.data_type().clone())
+            .map(|field| {
+                (
+                    portable_type(field).map_err(|_| field.data_type().to_string()),
+                    stored_read_of(field.data_type()),
+                )
+            })
     };
-    let types: Vec<arrow_schema::DataType> = footers.parquet.values().filter_map(typed).collect();
-    let first = types.first()?;
-    types
-        .iter()
+    let held: Vec<(Result<ColumnType, String>, StoredRead)> =
+        footers.parquet.values().filter_map(typed).collect();
+    let first = held.first()?;
+    held.iter()
         .find(|other| *other != first)
-        .map(|other| format!("column {name} is {first} in some files and {other} in others"))
+        .map(|_| format!("column {name} is held in different ways by this batch's files"))
 }
 
 /// The rows the batch's footers record.
@@ -162,4 +173,13 @@ fn footer_rows(footers: &BatchFooters) -> u64 {
         .values()
         .map(|footer| u64::try_from(footer.metadata().file_metadata().num_rows()).unwrap_or(0))
         .sum()
+}
+
+/// Whether `name` is a value SQLLoad gives each file (its name, version, row number or a partition), which DuckDB never reads from the files.
+fn constant(source: &FilesSource, name: &str) -> bool {
+    [SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN].contains(&name)
+        || source
+            .partition_types
+            .iter()
+            .any(|(partition, _)| partition == name)
 }

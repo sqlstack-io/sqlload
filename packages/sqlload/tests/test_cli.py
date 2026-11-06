@@ -187,7 +187,7 @@ def test_given_parquet_in_a_folder_when_loading_into_duckdb_then_duckdb_reads_th
 	(tmp_path / "data" / "day=2026-01-01").mkdir(parents=True)
 	(tmp_path / "data" / "day=2026-01-02").mkdir()
 	pq.write_table(pa.table({"id": pa.array([1, 2], pa.int64()), "status": ["open", None]}), tmp_path / "data" / "day=2026-01-01" / "a.parquet")
-	pq.write_table(pa.table({"id": pa.array([3], pa.int64()), "amount": [2.5]}), tmp_path / "data" / "day=2026-01-02" / "b.parquet")
+	pq.write_table(pa.table({"id": pa.array([3], pa.int32()), "amount": [2.5]}), tmp_path / "data" / "day=2026-01-02" / "b.parquet")
 	config = tmp_path / "sqlload.toml"
 	config.write_text(
 		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
