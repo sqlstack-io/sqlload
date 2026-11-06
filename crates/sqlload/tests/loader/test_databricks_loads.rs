@@ -1,11 +1,21 @@
+use sqlload::databricks_api::main::execute_statement::execute_statement;
+
 use crate::helpers::{
-    copy_fails, expired_token, found, not_found, nothing_in_databricks, run_async, run_databricks,
-    stale_and_running_loads, two_batches, two_days,
+    copy_fails, expired_token, found, live_databricks, not_found, nothing_in_databricks, run_async,
+    run_databricks, run_live_databricks, stale_and_running_loads, two_batches, two_days,
 };
-use crate::test_types::DatabricksLoadTestCase;
+use crate::test_types::{DatabricksLoadTestCase, LiveDatabricksTestCase};
 
 const STAGED: &str = "/Volumes/main/raw/stage/sqlload/";
 const COPY_ORDERS: &str = "COPY INTO `main`.`raw`.`orders` FROM (SELECT ";
+
+const LIVE_APPEND: LiveDatabricksTestCase = LiveDatabricksTestCase {
+    description: "",
+    source: "orders_append",
+    settings: "write_strategy = \"append\"",
+    file_set: two_days,
+    expected_rows: "6",
+};
 
 const BASE: DatabricksLoadTestCase = DatabricksLoadTestCase {
     description: "",
@@ -153,6 +163,85 @@ fn given_a_databricks_target_when_loading_files_then_each_batch_is_staged_copied
                 test_case.description
             );
         }
+        Ok(())
+    })
+}
+
+/// Skipped unless `SQLLOAD_DATABRICKS_SCHEMA` names a `sqlload_` schema, which it drops first, loads into, and drops at the end; a failed run leaves it for the next run to drop.
+#[test]
+fn given_a_live_databricks_workspace_when_loading_with_each_strategy_then_rows_land_and_nothing_stays_staged()
+-> Result<(), String> {
+    let Some(live) = live_databricks()? else {
+        return Ok(());
+    };
+    let test_cases = [
+        LiveDatabricksTestCase {
+            description: "append",
+            ..LIVE_APPEND
+        },
+        LiveDatabricksTestCase {
+            description: "append again: the files are loaded, so nothing new",
+            ..LIVE_APPEND
+        },
+        LiveDatabricksTestCase {
+            description: "append over two batches: two COPYs",
+            source: "orders_batches",
+            file_set: two_batches,
+            expected_rows: "2002",
+            ..LIVE_APPEND
+        },
+        LiveDatabricksTestCase {
+            description: "replace",
+            source: "orders_replace",
+            settings: "write_strategy = \"replace\"",
+            ..LIVE_APPEND
+        },
+        LiveDatabricksTestCase {
+            description: "replace again: the same rows, not twice",
+            source: "orders_replace",
+            settings: "write_strategy = \"replace\"",
+            ..LIVE_APPEND
+        },
+        LiveDatabricksTestCase {
+            description: "delete_insert on the day partition",
+            source: "orders_days",
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"",
+            ..LIVE_APPEND
+        },
+    ];
+    run_async(async {
+        let api = sqlload::databricks_api::models::DatabricksClient::new(
+            reqwest::Client::new(),
+            &live.host,
+            &live.warehouse_id,
+            (
+                &live.client_id,
+                sqlload::auth::models::Secret(live.client_secret.clone()),
+            ),
+        );
+        let schema = format!("`{}`.`{}`", live.catalog, live.schema);
+        for statement in [
+            format!("DROP SCHEMA IF EXISTS {schema} CASCADE"),
+            format!("CREATE SCHEMA {schema}"),
+            format!("CREATE VOLUME IF NOT EXISTS {schema}.`sqlload_stage`"),
+        ] {
+            execute_statement(&api, &statement)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        for test_case in &test_cases {
+            let outcome = run_live_databricks(directory.path(), &live, test_case).await?;
+            assert_eq!(
+                outcome,
+                (String::new(), Some(test_case.expected_rows.to_owned()), 0),
+                "{}: the error, the rows and the load folders left in the volume",
+                test_case.description
+            );
+        }
+        let dropped =
+            execute_statement(&api, &format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).await;
+        dropped.map_err(|error| error.to_string())?;
         Ok(())
     })
 }

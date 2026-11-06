@@ -288,6 +288,45 @@ those files go through SQLLoad, which `plan` warns is much slower.
 
 Files sources add `_sqlload_source_row`, a row's number in its file from 1.
 
+### How rows reach Databricks
+
+A Databricks target loads into a Unity Catalog SQL warehouse through a volume it stages files in.
+It signs in with a service principal's OAuth machine-to-machine credentials:
+
+```toml
+[connections.lakehouse]
+kind = "databricks"
+host = "${ENV:DATABRICKS_HOST}"
+client_id = "${ENV:DATABRICKS_CLIENT_ID}"
+client_secret = "${ENV:DATABRICKS_CLIENT_SECRET}"
+warehouse_id = "${ENV:DATABRICKS_WAREHOUSE_ID}"
+catalog = "main"
+volume = "main.raw.sqlload_stage"   # catalog.schema.volume
+```
+
+The service principal needs `USE CATALOG`, `USE SCHEMA` and `CREATE TABLE` where it loads, and
+`READ VOLUME` and `WRITE VOLUME` on the volume. `debug` checks that the volume lists.
+
+Each batch is written as Parquet to `<volume>/sqlload/<load id>/<batch>/` and loaded with one
+`COPY INTO`. The batch's folder is removed once the `COPY` commits, and when it fails; the next load
+removes folders failed runs left after a day. This is the only route: there is no `INSERT`
+fallback. Files of a files source pass through SQLLoad on the way to the volume.
+
+The Statement Execution API runs every statement in its own transaction, so each write is one
+statement: `append` is the `COPY` into the table, `delete_insert` is one `MERGE` that inserts the
+batch and deletes the rows it replaces, and `merge` is one `MERGE` on the key. The run record
+commits after it.
+
+`replace` loads into a build table, which then replaces the table with
+`CREATE OR REPLACE TABLE ... AS SELECT`. That keeps the table's history and grants, but Delta has no
+metadata-only swap, so the rows are copied once more. That copy is the expected cost of `replace`
+on Databricks.
+
+Types without an exact Databricks equivalent are lossy, and `plan` says so: times and UUIDs are
+stored as text, and `TIMESTAMP` keeps the instant but not the offset. JSON loads as `VARIANT`.
+Added columns use one `ADD COLUMNS`. Widening a type uses Delta's type widening where it applies
+and rewrites the table where it does not, such as an integer becoming a float.
+
 ### How files reach DuckDB
 
 Parquet files in S3 or a local folder load into DuckDB directly: DuckDB reads them with

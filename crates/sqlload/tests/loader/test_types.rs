@@ -403,3 +403,23 @@ pub(crate) struct DatabricksOutcome {
     pub(crate) copies: usize,
     pub(crate) left: Vec<String>,
 }
+
+/// A real Databricks workspace the live test may load into: only its `sqlload_` schema.
+pub(crate) struct LiveDatabricks {
+    pub(crate) host: String,
+    pub(crate) client_id: String,
+    pub(crate) client_secret: String,
+    pub(crate) warehouse_id: String,
+    pub(crate) catalog: String,
+    pub(crate) schema: String,
+}
+
+/// One live load: the source's name (its table's too), its settings and its files.
+pub(crate) struct LiveDatabricksTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) source: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: RouteFileSet,
+    /// Rows in the table afterwards.
+    pub(crate) expected_rows: &'static str,
+}

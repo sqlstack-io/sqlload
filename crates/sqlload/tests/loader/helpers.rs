@@ -25,9 +25,9 @@ use tokio_postgres::Client;
 use crate::test_types::{
     BatchedScenarioTestCase, CursorSource, DatabricksLoadTestCase, DatabricksOutcome,
     DebugStageTestCase, FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase,
-    LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
-    RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase,
-    WrittenPartition, WrittenRow, WrittenRun,
+    LargePartitionTestCase, LiveDatabricks, LiveDatabricksTestCase, MetadataRoundTripTestCase,
+    ParquetFile, RouteFiles, RouteOutcome, RouteTestCase, ScenarioTestCase,
+    SourceRowUpgradeTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -1162,6 +1162,93 @@ pub(crate) async fn run_databricks(
         copies: state.copied.len(),
         left,
     })
+}
+
+/// The workspace the live Databricks test loads into; `Ok(None)` when `SQLLOAD_DATABRICKS_SCHEMA` is unset, which skips the test.
+pub(crate) fn live_databricks() -> Result<Option<LiveDatabricks>, String> {
+    let Ok(schema) = std::env::var("SQLLOAD_DATABRICKS_SCHEMA") else {
+        return Ok(None);
+    };
+    schema.starts_with("sqlload_").then_some(()).ok_or_else(|| format!(
+        "SQLLOAD_DATABRICKS_SCHEMA must start with sqlload_, the only schemas this test may create and drop, not {schema:?}"
+    ))?;
+    let required = |name: &str| std::env::var(name).map_err(|_| format!("{name} is not set"));
+    Ok(Some(LiveDatabricks {
+        host: required("DATABRICKS_HOST")?,
+        client_id: required("DATABRICKS_CLIENT_ID")?,
+        client_secret: required("DATABRICKS_CLIENT_SECRET")?,
+        warehouse_id: required("DATABRICKS_WAREHOUSE_ID")?,
+        catalog: std::env::var("SQLLOAD_DATABRICKS_CATALOG")
+            .unwrap_or_else(|_| "workspace".to_owned()),
+        schema,
+    }))
+}
+
+/// Load `load`'s files (written once, so a second load of the same source finds them unchanged) into the live workspace; the load's error (empty when it succeeded), the table's row count, and the load folders left in the staging volume.
+pub(crate) async fn run_live_databricks(
+    directory: &std::path::Path,
+    live: &LiveDatabricks,
+    load: &LiveDatabricksTestCase,
+) -> Result<(String, Option<String>, usize), String> {
+    let root = directory.display().to_string();
+    let source = open_folder(&Location {
+        store: StoreKind::Filesystem { root: root.clone() },
+        prefix: format!("{}/", load.source),
+    })
+    .map_err(|error| error.to_string())?;
+    let written = directory.join(load.source).exists();
+    for (key, body) in (load.file_set)()?.into_iter().filter(|_| !written) {
+        write_file(&source, &key, body)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let LiveDatabricks {
+        host,
+        client_id,
+        client_secret,
+        warehouse_id,
+        catalog,
+        schema,
+    } = live;
+    let text = format!(
+        "[connections.dbx]\nkind = \"databricks\"\nhost = \"{host}\"\nclient_id = \"{client_id}\"\nclient_secret = \"{client_secret}\"\nwarehouse_id = \"{warehouse_id}\"\ncatalog = \"{catalog}\"\nvolume = \"{catalog}.{schema}.sqlload_stage\"\n\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[targets.dev]\nconnection = \"dbx\"\nloader_schema = \"{schema}\"\n\n[sources.{}]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"{}/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
+        load.source, load.source, load.settings
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (_, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev target".to_owned())?;
+    let rows = single_text(
+        destination,
+        format!(
+            "SELECT CAST(COUNT(*) AS STRING) FROM `{catalog}`.`{schema}`.`{}`",
+            load.source
+        ),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let api = sqlload::databricks_api::models::DatabricksClient::new(
+        reqwest::Client::new(),
+        host,
+        warehouse_id,
+        (
+            client_id,
+            sqlload::auth::models::Secret(client_secret.clone()),
+        ),
+    );
+    let folders = sqlload::databricks_api::main::list_directory::list_directory(
+        &api,
+        &format!("/Volumes/{catalog}/{schema}/sqlload_stage/sqlload"),
+    )
+    .await
+    .map_err(|error| error.to_string())?
+    .unwrap_or_default()
+    .len();
+    Ok((outcome.err().unwrap_or_default(), rows, folders))
 }
 
 /// Which of `wanted` no text of `texts` contains.
