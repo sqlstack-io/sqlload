@@ -1,4 +1,4 @@
-"""`state = "logged"` end to end: the run log in DuckDB and in a files target, and `sqlload state`."""
+"""`state = "logged"` end to end: the run log in DuckDB and in a files target, and `sqlload logged-state`."""
 
 import json
 import os
@@ -270,14 +270,14 @@ def test_given_a_reset_when_confirmed_then_the_next_run_reads_from_it(tmp_path: 
 	project = make_project(tmp_path, DUCKDB_PROJECT)
 	give(project, "pages", [[{"n": 1}], [{"n": 2}], [{"n": 3}]])
 	ok(project, "load", "api__pages")
-	shown = ok(project, "state", "reset", "--to", "1", "api__pages")
+	shown = ok(project, "logged-state", "reset", "--to", "1", "api__pages")
 	assert "would append  RAW.api__pages  reset" in shown and "add --yes" in shown
 	assert len(runs(project, "api__pages")) == 1
-	assert "appended  RAW.api__pages  reset" in ok(project, "state", "reset", "--to", "1", "--yes", "api__pages")
+	assert "appended  RAW.api__pages  reset" in ok(project, "logged-state", "reset", "--to", "1", "--yes", "api__pages")
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 1
 	assert [event for event, *_ in runs(project, "api__pages")] == ["run", "reset", "run"]
-	ok(project, "state", "reset", "--clear", "--yes", "api__pages")
+	ok(project, "logged-state", "reset", "--clear", "--yes", "api__pages")
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] is None
 
@@ -298,12 +298,12 @@ def test_given_a_log_ahead_of_the_data_when_verifying_and_reconciling_then_the_d
 	ok(project, "load", "api__events")
 	execute(project, 'DELETE FROM "RAW"."api__events" WHERE id = 2')
 	assert "the run log has at 2026-01-02 00:00:00.000000+00 but the data's maximum is 2026-01-01" in ok(project, "plan", "api__events")
-	verified = sqlload(project, "state", "verify", "api__events")
+	verified = sqlload(project, "logged-state", "verify", "api__events")
 	assert verified.returncode == 1
 	assert "disagrees: the log has 2026-01-02 00:00:00.000000+00 but the data's maximum is 2026-01-01 00:00:00.000000+00" in verified.stderr
-	assert "would append  RAW.api__events  reconcile" in ok(project, "state", "reconcile", "api__events")
-	ok(project, "state", "reconcile", "--yes", "api__events")
-	assert "ok" in ok(project, "state", "verify", "api__events")
+	assert "would append  RAW.api__events  reconcile" in ok(project, "logged-state", "reconcile", "api__events")
+	ok(project, "logged-state", "reconcile", "--yes", "api__events")
+	assert "ok" in ok(project, "logged-state", "verify", "api__events")
 	assert runs(project, "api__events")[-1] == ("reconcile", None, "2026-01-01 00:00:00.000000+00", "0")
 
 
@@ -363,7 +363,7 @@ def test_given_a_files_target_when_resetting_then_the_reset_is_an_object_and_the
 	project = make_project(tmp_path, FILES_PROJECT)
 	give(project, "pages", [[{"n": 1}], [{"n": 2}]])
 	ok(project, "load", "api__pages")
-	ok(project, "state", "reset", "--to", "1", "--yes", "api__pages")
+	ok(project, "logged-state", "reset", "--to", "1", "--yes", "api__pages")
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 1
 	assert [record["event"] for record in file_runs(project, "pages")] == ["run", "reset", "run"]
@@ -397,7 +397,7 @@ def test_given_bad_logged_state_use_when_loading_then_it_fails_clearly(tmp_path:
 def test_given_no_logged_tables_when_showing_state_then_it_says_so(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT)
 	(project / "sources" / "api.py").write_text("import sqlload as sl\n@sl.table(description='Test table.')\ndef t(ctx):\n    yield {'n': 1}\n")
-	assert 'no selected table has state = "logged"' in ok(project, "state", "show")
+	assert 'no selected table has state = "logged"' in ok(project, "logged-state", "show")
 
 
 def test_given_a_first_run_into_a_new_schema_that_yields_nothing_when_loading_again_then_its_state_was_kept(tmp_path: Path) -> None:
@@ -448,9 +448,9 @@ def test_given_an_unreadable_record_when_planning_then_only_that_table_is_blocke
 	assert "run log record broken-run cannot be used: does not parse" in planned.stdout + planned.stderr
 	assert "run log record future-run cannot be used: written by a newer sqlload (format_version 99" in planned.stdout + planned.stderr
 	ok(project, "load", "api__counts")
-	shown = ok(project, "state", "show", "api__pages")
+	shown = ok(project, "logged-state", "show", "api__pages")
 	assert "broken-run  unreadable: does not parse" in shown and "future-run  unreadable: written by a newer sqlload" in shown
-	ok(project, "state", "reset", "--to", "1", "--yes", "api__pages")
+	ok(project, "logged-state", "reset", "--to", "1", "--yes", "api__pages")
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 1
 
@@ -460,7 +460,7 @@ def test_given_a_log_stamped_in_the_future_when_resetting_then_the_reset_becomes
 	give(project, "pages", [[{"n": 1}], [{"n": 2}], [{"n": 3}]])
 	ok(project, "load", "api__pages")
 	execute(project, """UPDATE "RAW"."_sqlload_runs" SET record_json = replace(record_json, '"recorded_at":"2026', '"recorded_at":"2099'), recorded_at = replace(recorded_at, '2026', '2099')""")
-	ok(project, "state", "reset", "--to", "1", "--yes", "api__pages")
+	ok(project, "logged-state", "reset", "--to", "1", "--yes", "api__pages")
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 1
 	assert [event for event, *_ in runs(project, "api__pages")] == ["run", "reset", "run"]
@@ -470,7 +470,7 @@ def test_given_a_pending_reset_when_an_end_cursor_backfill_runs_then_the_reset_i
 	project = make_project(tmp_path, DUCKDB_PROJECT)
 	give(project, "events", [{"id": 1, "at": "2026-01-01T00:00:00Z"}, {"id": 2, "at": "2026-01-05T00:00:00Z"}])
 	ok(project, "load", "api__events")
-	ok(project, "state", "reset", "--to", "2026-01-02T00:00:00Z", "--yes", "api__events")
+	ok(project, "logged-state", "reset", "--to", "2026-01-02T00:00:00Z", "--yes", "api__events")
 	give(project, "events", [])
 	ok(project, "load", "--end-cursor", "2026-01-06T00:00:00Z", "api__events")
 	assert [event for event, *_ in runs(project, "api__events")] == ["run", "reset", "backfill"]
@@ -479,7 +479,7 @@ def test_given_a_pending_reset_when_an_end_cursor_backfill_runs_then_the_reset_i
 
 def test_given_no_selection_when_resetting_state_then_it_is_refused(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT)
-	done = sqlload(project, "state", "reset", "--clear", "--yes")
+	done = sqlload(project, "logged-state", "reset", "--clear", "--yes")
 	assert done.returncode == 1
 	assert "name the sources or tables to reset" in done.stderr, done.stderr
 
@@ -511,6 +511,6 @@ def test_given_a_record_whose_time_is_not_rfc_3339_when_resetting_then_the_table
 	planned = sqlload(project, "plan", "api__pages")
 	assert planned.returncode == 1
 	assert 'run log record undated-run cannot be used: recorded_at "zzzz" is not an RFC 3339 time' in planned.stdout + planned.stderr
-	ok(project, "state", "reset", "--to", "1", "--yes", "api__pages")
+	ok(project, "logged-state", "reset", "--to", "1", "--yes", "api__pages")
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 1

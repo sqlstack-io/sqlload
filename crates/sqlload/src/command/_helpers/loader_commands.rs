@@ -166,7 +166,7 @@ async fn run_command(
     let destinations = connect_targets(project)
         .await
         .map_err(|error| error.to_string())?;
-    if let Command::State { action } = command {
+    if let Command::LoggedState { action } = command {
         return run_state(project, &destinations, action)
             .await
             .map(|lines| (lines, true));
@@ -228,7 +228,7 @@ async fn run_command(
     Ok((lines, planned && completed))
 }
 
-/// `sqlload state`: plan the selected tables (which reads their run logs), then show, verify, reconcile or reset them.
+/// `sqlload logged-state`: plan the selected tables (which reads their run logs), then show, verify, reconcile or reset them.
 async fn run_state(
     project: &ProjectConfig,
     destinations: &BTreeMap<String, Destination>,
@@ -242,7 +242,7 @@ async fn run_state(
     };
     if kind == StateKind::Reset && args.select.is_empty() {
         return Err(
-            "state reset changes where tables read from next; name the sources or tables to reset"
+            "logged-state reset changes where tables read from next; name the sources or tables to reset"
                 .to_owned(),
         );
     }
