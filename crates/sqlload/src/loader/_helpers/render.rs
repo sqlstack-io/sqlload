@@ -663,9 +663,15 @@ fn python_columns_line(table: &TablePlan, python: &PythonTable) -> String {
         0 => String::new(),
         count => format!(", {count} declared"),
     };
+    let flattened = match table.spec.flatten.is_empty() {
+        true => String::new(),
+        false => format!(", {} flattened one level", table.spec.flatten.join(", ")),
+    };
     match table.exists {
-        true => format!("columns inferred at load and checked against the live table{declared}"),
-        false => format!("columns inferred on first load{declared}"),
+        true => format!(
+            "columns inferred at load and checked against the live table{declared}{flattened}"
+        ),
+        false => format!("columns inferred on first load{declared}{flattened}"),
     }
 }
 
