@@ -17,3 +17,6 @@ pub const PAGES_AHEAD: usize = 4;
 
 /// Threads of the runtime one job's requests run on.
 pub const JOB_THREADS: usize = 2;
+
+/// The `Link` header parameter of the next page, spaces removed.
+pub const NEXT_RELATION: &str = "rel=\"next\"";

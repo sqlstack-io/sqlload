@@ -1,6 +1,8 @@
 //! Request URLs: paths under the base URL, fan-out placeholders, `Link` headers and redaction.
 
 use reqwest::Url;
+
+use crate::http_source::constants::NEXT_RELATION;
 use serde_json::{Map, Value};
 
 /// `path` under `base` (`https://h/v1` + `/orders` is `https://h/v1/orders`), or `path` itself when it is a full URL.
@@ -25,7 +27,8 @@ pub(crate) fn same_origin(base: &Url, url: &Url) -> bool {
 pub(crate) fn placeholders(path: &str) -> Vec<String> {
     path.split('{')
         .skip(1)
-        .filter_map(|part| part.split_once('}').map(|(name, _)| name.to_owned()))
+        .filter_map(|part| part.split_once('}'))
+        .map(|(name, _)| name.to_owned())
         .collect()
 }
 
@@ -61,19 +64,24 @@ fn encoded(text: &str) -> String {
 
 /// The `rel="next"` URL of a `Link` header.
 pub(crate) fn link_header_next(header: &str) -> Option<String> {
-    header.split(',').find_map(|link| {
-        let (target, parameters) = link.split_once(';')?;
-        let next = parameters
-            .split(';')
-            .any(|parameter| parameter.trim().replace(' ', "") == "rel=\"next\"");
-        next.then(|| {
-            target
-                .trim()
-                .trim_start_matches('<')
-                .trim_end_matches('>')
-                .to_owned()
-        })
+    header.split(',').find_map(next_target)
+}
+
+/// The target of one `Link` entry when its relation is `next`.
+fn next_target(link: &str) -> Option<String> {
+    let (target, parameters) = link.split_once(';')?;
+    let next = parameters.split(';').any(is_next_relation);
+    next.then(|| {
+        target
+            .trim()
+            .trim_start_matches('<')
+            .trim_end_matches('>')
+            .to_owned()
     })
+}
+
+fn is_next_relation(parameter: &str) -> bool {
+    parameter.trim().replace(' ', "") == NEXT_RELATION
 }
 
 /// `text` with every secret replaced by `***`.

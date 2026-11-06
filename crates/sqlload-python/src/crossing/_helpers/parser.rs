@@ -6,9 +6,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use arrow_array::RecordBatch;
+use sqlload::http_source::main::run_http_job::run_http_job;
 use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
 use sqlload::row_batches::main::normalise_batch::normalise_batch;
+use sqlload::row_batches::models::{JsonLayout, JsonRead};
 
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{
@@ -19,6 +21,8 @@ use crate::crossing::models::{
 struct Output {
     sender: SyncSender<Parsed>,
     stats: Arc<CrossingStats>,
+    /// The connections an `sl.http` job may use.
+    connections: Arc<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Start parser threads and one passing their batches to `sender` in yield order; each channel holds one batch and `max_queued + parse_threads - 2` pieces wait behind the one being passed on, so at most `max_queued + parse_threads` batches are in flight.
@@ -26,7 +30,9 @@ pub(crate) fn start_parsers(
     options: CrossingOptions,
     sender: SyncSender<Parsed>,
     stats: &Arc<CrossingStats>,
+    connections: serde_json::Map<String, serde_json::Value>,
 ) -> Dispatch {
+    let connections = Arc::new(connections);
     let workers = options.parse_threads.max(1);
     let waiting = (options.max_queued.max(1) + workers).saturating_sub(2);
     let (order_sender, order_receiver) = sync_channel(waiting);
@@ -36,7 +42,8 @@ pub(crate) fn start_parsers(
         let jobs = jobs.clone();
         let stats = stats.clone();
         let panic_at = options.panic_at;
-        std::thread::spawn(move || work(&jobs, &stats, panic_at));
+        let connections = connections.clone();
+        std::thread::spawn(move || work(&jobs, (&stats, &connections), panic_at));
     }
     std::thread::spawn(move || {
         let fallback = sender.clone();
@@ -92,7 +99,14 @@ pub(crate) fn panic_if(panic_at: Option<PanicSite>, site: PanicSite) {
 }
 
 /// Parse jobs until the dispatcher stops; a panic fails the piece, not the thread.
-fn work(jobs: &Mutex<Receiver<ParseJob>>, stats: &Arc<CrossingStats>, panic_at: Option<PanicSite>) {
+fn work(
+    jobs: &Mutex<Receiver<ParseJob>>,
+    (stats, connections): (
+        &Arc<CrossingStats>,
+        &Arc<serde_json::Map<String, serde_json::Value>>,
+    ),
+    panic_at: Option<PanicSite>,
+) {
     loop {
         let job = match jobs.lock() {
             Ok(jobs) => jobs.recv(),
@@ -104,6 +118,7 @@ fn work(jobs: &Mutex<Receiver<ParseJob>>, stats: &Arc<CrossingStats>, panic_at: 
         let output = Output {
             sender,
             stats: stats.clone(),
+            connections: connections.clone(),
         };
         let bytes = crossed.queued_bytes();
         let parsed = catch_unwind(AssertUnwindSafe(|| {
@@ -207,9 +222,40 @@ impl Output {
                 let batch = normalise_batch(&batch).map_err(CrossError::Data)?;
                 open = self.send(batch, started);
             }
+            Crossed::Http(definition) => open = self.http(&definition)?,
             Crossed::Failed(error) => return Err(error),
         }
         Ok(open)
+    }
+
+    /// Run an `sl.http` job, parsing each page into batches as it arrives; `Ok(false)` once the consumer has gone, which cancels the requests in flight.
+    fn http(&self, definition: &str) -> Result<bool, CrossError> {
+        let mut open = true;
+        let mut failed: Option<String> = None;
+        run_http_job(definition, &self.connections, |page| {
+            let read = JsonRead {
+                layout: JsonLayout::Document,
+                path: page.path,
+                batch_rows: usize::MAX,
+            };
+            let parsed = json_rows(&page.bytes, &read, &mut |columns| {
+                let batch = columns_batch(columns)?;
+                open = open && self.send(batch, Instant::now());
+                match open {
+                    true => Ok(()),
+                    false => Err("the consumer stopped reading".to_owned()),
+                }
+            });
+            if let (Err(reason), true) = (parsed, open) {
+                failed = Some(reason);
+            }
+            open && failed.is_none()
+        })
+        .map_err(CrossError::Data)?;
+        match failed {
+            Some(reason) => Err(CrossError::Data(reason)),
+            None => Ok(open),
+        }
     }
 
     /// Count `batch`, parsed since `started`, and pass it on; `false` once the consumer has gone.

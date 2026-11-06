@@ -12,7 +12,7 @@ use crate::http_source::_helpers::endpoint::{endpoint, interval, shared_limiter}
 use crate::http_source::_helpers::pages::paginate;
 use crate::http_source::_helpers::selector::{selected_rows, selector};
 use crate::http_source::_helpers::urls::{filled_path, placeholders};
-use crate::http_source::constants::PAGES_AHEAD;
+use crate::http_source::constants::{JOB_THREADS, PAGES_AHEAD};
 use crate::http_source::models::{
     Calls, FanOut, HttpJob, HttpPage, KeyFeed, Over, Request, Selector, StatusAction,
 };
@@ -66,7 +66,10 @@ fn fan_out_problems(fan_out: &FanOut) -> Vec<String> {
     match &fan_out.over {
         Over::Paginate(over) => {
             problems.extend(request_problems(over));
-            let field = selector(over.select.as_deref()).ok().and_then(|selected| selected.field);
+            let field = match selector(over.select.as_deref()) {
+                Ok(selected) => selected.field,
+                Err(_) => None,
+            };
             match field {
                 Some(field) => problems.extend(
                     wanted
@@ -80,23 +83,64 @@ fn fan_out_problems(fan_out: &FanOut) -> Vec<String> {
                 )),
             }
         }
-        Over::Values { values } => problems.extend(values.iter().find_map(|value| match value {
-            Value::Object(key) => wanted
+        Over::Values { values } => problems.extend(
+            values
                 .iter()
-                .find(|name| !key.contains_key(name.as_str()))
-                .map(|name| format!("fan-out path {path} needs {{{name}}}, which the key {value} lacks")),
-            _ if wanted.len() == 1 => None,
-            _ => Some(format!(
-                "fan-out path {path} has {} placeholders, so over needs objects naming each, not {value}",
-                wanted.len()
-            )),
-        })),
+                .find_map(|value| key_problem(path, &wanted, value)),
+        ),
     }
     problems
 }
 
+/// Why the listed key `value` cannot fill the placeholders `wanted` of `path`, if it cannot.
+fn key_problem(path: &str, wanted: &[String], value: &Value) -> Option<String> {
+    let missing = |key: &Map<String, Value>| {
+        wanted
+            .iter()
+            .find(|name| !key.contains_key(name.as_str()))
+            .cloned()
+    };
+    match value {
+        Value::Object(key) => missing(key).map(|name| {
+            format!("fan-out path {path} needs {{{name}}}, which the key {value} lacks")
+        }),
+        _ if wanted.len() == 1 => None,
+        _ => Some(format!(
+            "fan-out path {path} has {} placeholders, so over needs objects naming each, not {value}",
+            wanted.len()
+        )),
+    }
+}
+
+/// Run `job` on a runtime of its own, handing each page to `deliver` in arrival order; `deliver` returning `false` cancels the requests in flight.
+pub(crate) fn drive_job(
+    job: HttpJob,
+    connections: &Map<String, Value>,
+    mut deliver: impl FnMut(HttpPage) -> bool,
+) -> Result<(), String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(JOB_THREADS)
+        .enable_all()
+        .build()
+        .map_err(|error| format!("cannot start the sl.http runtime: {error}"))?;
+    let (sender, mut receiver) = channel(PAGES_AHEAD);
+    let task = runtime.spawn(run_job(job, connections.clone(), sender));
+    while let Some(page) = receiver.blocking_recv() {
+        if !deliver(page) {
+            task.abort();
+            break;
+        }
+    }
+    drop(receiver);
+    match runtime.block_on(task) {
+        Ok(result) => result,
+        Err(error) if error.is_cancelled() => Ok(()),
+        Err(error) => Err(format!("the sl.http job stopped: {error}")),
+    }
+}
+
 /// Run `job`, sending every page to `pages`.
-pub(crate) async fn run_job(
+async fn run_job(
     job: HttpJob,
     connections: Map<String, Value>,
     pages: Sender<HttpPage>,
@@ -108,7 +152,7 @@ pub(crate) async fn run_job(
             let calls = request_calls(&request, &connections, &http)?;
             paginate(&calls, &request, &request.path, &pages).await
         }
-        HttpJob::FanOut(fan_out) => run_fan_out(fan_out, &connections, &http, pages).await,
+        HttpJob::FanOut(fan_out) => run_fan_out(*fan_out, &connections, &http, pages).await,
     }
 }
 
@@ -124,11 +168,16 @@ fn request_calls(
         .as_deref()
         .map(|rate| shared_limiter(&client.connection, rate))
         .transpose()?;
-    let on_status: BTreeMap<u16, StatusAction> = request
+    let on_status = request
         .on_status
         .iter()
-        .filter_map(|(status, action)| Some((status.parse().ok()?, *action)))
-        .collect();
+        .map(|(status, action)| {
+            let code = status
+                .parse::<u16>()
+                .map_err(|_| format!("on_status {status} is not an HTTP status"))?;
+            Ok((code, *action))
+        })
+        .collect::<Result<BTreeMap<u16, StatusAction>, String>>()?;
     Ok(Calls {
         http: http.clone(),
         endpoint: endpoint(client, connections)?,
@@ -151,7 +200,9 @@ async fn run_fan_out(
     let mut tasks: JoinSet<Result<(), String>> = JoinSet::new();
     let feed = match fan_out.over.clone() {
         Over::Values { values } => KeyFeed::Values(values),
-        Over::Paginate(over) => KeyFeed::Pages(request_calls(&over, connections, http)?, over),
+        Over::Paginate(over) => {
+            KeyFeed::Pages(Box::new((request_calls(&over, connections, http)?, *over)))
+        }
     };
     let wanted = placeholders(&fan_out.request.path);
     tasks.spawn(feed_keys(feed, wanted, key_sender));
@@ -199,7 +250,8 @@ async fn feed_keys(
             }
             Ok(())
         }
-        KeyFeed::Pages(calls, over) => {
+        KeyFeed::Pages(pages) => {
+            let (calls, over) = *pages;
             let selected = selector(over.select.as_deref())?;
             let field = selected.field.clone().unwrap_or_default();
             let (page_sender, page_receiver) = channel::<HttpPage>(PAGES_AHEAD);

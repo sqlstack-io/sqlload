@@ -1,10 +1,7 @@
 use crate::http_source::_helpers::endpoint::interval;
 use crate::http_source::_helpers::urls::{filled_path, link_header_next, redacted, request_url};
+use crate::http_source::tests::helpers::base;
 use crate::http_source::tests::test_types::UrlsTestCase;
-
-fn base() -> reqwest::Url {
-    reqwest::Url::parse("https://api.shop.example/v1/").unwrap_or_else(|_| unreachable!())
-}
 
 #[test]
 fn given_paths_links_and_secrets_when_building_requests_then_urls_and_errors_are_right() {
@@ -41,7 +38,7 @@ fn given_paths_links_and_secrets_when_building_requests_then_urls_and_errors_are
         },
         UrlsTestCase {
             description: "a missing key names the placeholder",
-            value: || filled_path("/o/{id}", &serde_json::Map::new()).unwrap_err(),
+            value: || filled_path("/o/{id}", &serde_json::Map::new()).unwrap_or_else(|error| error),
             expected_value: "fan-out path /o/{id} needs id, which the key {} lacks",
         },
         UrlsTestCase {

@@ -62,18 +62,13 @@ pub(crate) fn endpoint(
             }
         }
     };
-    let mut headers: BTreeMap<String, String> = settings
+    let mut headers = settings
         .get("headers")
         .and_then(Value::as_object)
-        .map(|headers| {
-            headers
-                .iter()
-                .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
-                .collect()
-        })
+        .map(text_headers)
         .unwrap_or_default();
     headers.extend(client.headers.clone());
-    let secrets = ["token", "password"]
+    let secrets: Vec<String> = ["token", "password"]
         .iter()
         .filter_map(|key| text(key))
         .collect();
@@ -83,6 +78,14 @@ pub(crate) fn endpoint(
         credential,
         secrets,
     })
+}
+
+/// The connection's `headers` that are text.
+fn text_headers(headers: &Map<String, Value>) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+        .collect()
 }
 
 /// The limiter every job of `connection` with the limit `rate` (`10/s`, `600/m`, `1000/h`) shares in this process.
@@ -116,7 +119,7 @@ pub(crate) fn interval(rate: &str) -> Result<Duration, String> {
         "h" => 3_600.0,
         _ => return Err(invalid()),
     };
-    match count > 0.0 && count.is_finite() {
+    match count.is_normal() && count.is_sign_positive() {
         true => Ok(Duration::from_secs_f64(seconds / count)),
         false => Err(invalid()),
     }
