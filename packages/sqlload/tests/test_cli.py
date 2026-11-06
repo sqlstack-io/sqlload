@@ -177,3 +177,32 @@ def test_given_a_table_loaded_into_another_target_when_diffing_from_it_then_its_
 	assert (unknown.returncode, "--from staging is not a target in sqlload.toml (it has: dev, lake, prod)" in unknown.stderr) == (1, True), unknown.stdout + unknown.stderr
 	from_lake = run("contract", "diff", "--from", "lake", "--json", "-c", str(config))
 	assert (from_lake.returncode, json.loads(from_lake.stdout)["problems"]) == (1, ["orders: target lake writes files; contract diff compares warehouse tables (DuckDB, Snowflake) only"]), from_lake.stdout + from_lake.stderr
+
+
+def test_given_parquet_in_a_folder_when_loading_into_duckdb_then_duckdb_reads_the_files_itself_with_the_same_rows(tmp_path: Path) -> None:
+	import duckdb
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	(tmp_path / "data" / "day=2026-01-01").mkdir(parents=True)
+	(tmp_path / "data" / "day=2026-01-02").mkdir()
+	pq.write_table(pa.table({"id": pa.array([1, 2], pa.int64()), "status": ["open", None]}), tmp_path / "data" / "day=2026-01-01" / "a.parquet")
+	pq.write_table(pa.table({"id": pa.array([3], pa.int64()), "amount": [2.5]}), tmp_path / "data" / "day=2026-01-02" / "b.parquet")
+	config = tmp_path / "sqlload.toml"
+	config.write_text(
+		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\n'
+		'description = "Orders."\npartition_columns = { day = "date" }\n'
+	)
+	assert f"DuckDB reads directly from {tmp_path}/data/" in run("plan", "-c", str(config)).stdout
+	loaded = run("load", "-c", str(config))
+	assert loaded.returncode == 0, loaded.stdout + loaded.stderr
+	with duckdb.connect(str(tmp_path / "wh.duckdb"), read_only=True) as connection:
+		rows = connection.execute(
+			'SELECT id, status, amount, day::VARCHAR, _sqlload_source_file, _sqlload_source_row FROM "RAW"."orders" ORDER BY id'
+		).fetchall()
+	assert rows == [
+		(1, "open", None, "2026-01-01", f"{tmp_path}/data/day=2026-01-01/a.parquet", 1),
+		(2, None, None, "2026-01-01", f"{tmp_path}/data/day=2026-01-01/a.parquet", 2),
+		(3, None, 2.5, "2026-01-02", f"{tmp_path}/data/day=2026-01-02/b.parquet", 1),
+	]

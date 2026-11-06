@@ -133,6 +133,19 @@ SQLLoad about 7.5 s more than DuckDB reading the files itself. With S3, SQLLoad 
 after another, so request latency adds about 22 s more, where DuckDB adds about 4 s by reading in
 parallel. In-region the latency share would be smaller, but the conversion cost would not change.
 
+Since then, Parquet into DuckDB takes the destination-pulls route: DuckDB reads the files itself
+with one `INSERT ... SELECT FROM read_parquet` per batch. Same machine and data, release build of
+this branch, median of 3:
+
+| Rows | Path | Wall | CPU | Peak RSS |
+|---|---|---|---|---|
+| 10M | SQLLoad, DuckDB reads S3 | 11.3 s | 10.3 s | 1,450 MB |
+| 10M, local files | SQLLoad, DuckDB reads the folder | 2.7 s | 8.0 s | 990 MB |
+
+What remains of the gap is SQLLoad's own requests before the load (listing, then footers at plan and
+again for each batch), each about 400 ms across regions here, and `replace` building the table aside
+before swapping it in.
+
 ## CI performance gate
 
 `crates/sqlload-benches` measures the hot paths in Callgrind instruction counts with

@@ -23,15 +23,7 @@ pub(crate) fn pull_insert(
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
-    let constant_names: Vec<&str> = files
-        .first()
-        .map(|file| {
-            file.constants
-                .iter()
-                .map(|(name, _)| name.as_str())
-                .collect()
-        })
-        .unwrap_or_default();
+    let constant_names: Vec<&str> = files.first().map_or_else(Vec::new, constant_names);
     let cast = |value: String, column: &DesiredColumn| {
         format!(
             "CAST({value} AS {})",
@@ -49,26 +41,14 @@ pub(crate) fn pull_insert(
             name if constant_names.contains(&name) => {
                 cast(format!("m.{}", identifier(name)), column)
             }
-            name if in_files.iter().any(|found| found == name) => {
+            name if in_files.contains(&name.to_owned()) => {
                 cast(format!("f.{}", identifier(name)), column)
             }
             _ => "NULL".to_owned(),
         })
         .collect();
     let urls: Vec<String> = files.iter().map(|file| literal(&file.url)).collect();
-    let rows: Vec<String> = files
-        .iter()
-        .map(|file| {
-            let row: Vec<String> = std::iter::once(literal(&file.url))
-                .chain(
-                    file.constants
-                        .iter()
-                        .map(|(_, value)| value.as_deref().map_or("NULL".to_owned(), literal)),
-                )
-                .collect();
-            format!("({})", row.join(", "))
-        })
-        .collect();
+    let rows: Vec<String> = files.iter().map(values_row).collect();
     let names: Vec<String> = std::iter::once(identifier("_sqlload_url"))
         .chain(constant_names.iter().map(|name| identifier(name)))
         .collect();
@@ -86,4 +66,24 @@ pub(crate) fn pull_insert(
         names.join(", "),
         identifier("_sqlload_url")
     )
+}
+
+/// The names of `file`'s constant columns, in order.
+fn constant_names(file: &PulledFile) -> Vec<&str> {
+    file.constants
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect()
+}
+
+/// `file`'s row of the per-file values: its URL, then each constant as a literal (NULL when absent).
+fn values_row(file: &PulledFile) -> String {
+    let mut row = vec![DuckDbSql.render_loader_value_literal(&file.url)];
+    for (_, value) in &file.constants {
+        row.push(value.as_deref().map_or_else(
+            || "NULL".to_owned(),
+            |value| DuckDbSql.render_loader_value_literal(value),
+        ));
+    }
+    format!("({})", row.join(", "))
 }
