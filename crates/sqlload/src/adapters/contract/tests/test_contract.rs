@@ -89,8 +89,12 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
                 .filter(|statement| !statement.starts_with("DELETE"))
                 .filter(|statement| sources.iter().any(|source| statement.contains(source)))
                 .count();
+            let rewrites = usize::from(
+                warehouse == crate::column_types::models::Warehouse::Databricks && test_case.built,
+            );
             assert_eq!(
-                copies, test_case.expected_copies,
+                copies,
+                test_case.expected_copies + rewrites,
                 "{warehouse:?}: {}: {statements:#?}",
                 test_case.description
             );

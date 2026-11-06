@@ -53,6 +53,7 @@ pub enum Warehouse {
     DuckDb,
     /// Parquet files in an object store or directory: no SQL dialect, columns are Arrow types.
     Parquet,
+    Databricks,
 }
 
 impl std::fmt::Display for Warehouse {
@@ -61,6 +62,7 @@ impl std::fmt::Display for Warehouse {
             Self::Snowflake => "Snowflake",
             Self::DuckDb => "DuckDB",
             Self::Parquet => "Parquet files",
+            Self::Databricks => "Databricks",
         })
     }
 }
