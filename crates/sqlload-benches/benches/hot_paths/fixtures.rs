@@ -473,7 +473,9 @@ pub(crate) fn flat_ndjson(rows: u64) -> Vec<u8> {
                     Cell::Bool(value) => value.to_string(),
                     Cell::Int(value) => value.to_string(),
                     Cell::Float(value) => format!("{value:?}"),
-                    Cell::Number(text) | Cell::Json(text) => text.clone(),
+                    Cell::Number(text) | Cell::Json(text) | Cell::Decimal(text) => text.clone(),
+                    Cell::Date(value) => value.to_string(),
+                    Cell::TimestampNtz(value) => value.to_string(),
                     Cell::Text(text) => format!("\"{text}\""),
                 };
                 format!("\"{name}\":{value}")
