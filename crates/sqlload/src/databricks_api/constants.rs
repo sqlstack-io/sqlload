@@ -24,3 +24,6 @@ pub const UNAUTHORIZED: u16 = 401;
 
 /// The HTTP status of a missing file or directory.
 pub const NOT_FOUND: u16 = 404;
+
+/// The HTTP status of a directory that still holds entries.
+pub const CONFLICT: u16 = 409;

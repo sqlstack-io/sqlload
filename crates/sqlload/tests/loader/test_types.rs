@@ -423,8 +423,6 @@ pub(crate) struct LiveDatabricksTestCase {
     pub(crate) source: &'static str,
     pub(crate) settings: &'static str,
     pub(crate) file_set: RouteFileSet,
-    /// Plan and load with `--reload`, reading every file again.
-    pub(crate) reload: bool,
     /// Rows in the table afterwards.
     pub(crate) expected_rows: &'static str,
 }

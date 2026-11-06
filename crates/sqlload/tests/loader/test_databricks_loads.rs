@@ -15,7 +15,6 @@ const LIVE_APPEND: LiveDatabricksTestCase = LiveDatabricksTestCase {
     source: "orders_append",
     settings: "write_strategy = \"append\"",
     file_set: two_days,
-    reload: false,
     expected_rows: "6",
 };
 
@@ -242,10 +241,9 @@ fn given_a_live_databricks_workspace_when_loading_with_each_strategy_then_rows_l
             ..LIVE_APPEND
         },
         LiveDatabricksTestCase {
-            description: "delete_insert again: the MERGE deletes the window it reinserts, so the rows are not doubled",
+            description: "delete_insert again: the last day is read again and its MERGE deletes the rows it reinserts, so they are not doubled",
             source: "orders_days",
             settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"",
-            reload: true,
             ..LIVE_APPEND
         },
     ];

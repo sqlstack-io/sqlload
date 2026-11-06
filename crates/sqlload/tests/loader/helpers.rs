@@ -1279,11 +1279,7 @@ pub(crate) async fn run_live_databricks(
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
-    let options = PlanOptions {
-        reload: load.reload,
-        ..PlanOptions::default()
-    };
-    let (_, outcome) = plan_apply_load(&project, &destinations, &options).await;
+    let (_, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
     let destination = destinations
         .get("dev")
         .ok_or_else(|| "no dev target".to_owned())?;

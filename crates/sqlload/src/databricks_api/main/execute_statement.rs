@@ -53,7 +53,7 @@ pub async fn execute_statement(
     }
 }
 
-/// Cancel a statement this client stopped waiting for, so it does not commit after the caller has failed; a cancel that fails only warns.
+/// Ask the warehouse to cancel a statement this client stopped waiting for, so it does not keep running after the caller has failed; a statement that finished meanwhile is not undone, and a cancel that fails only warns.
 async fn cancel(client: &DatabricksClient, url: &str, id: &str) {
     let cancel = format!("{url}/{id}/cancel");
     if let Err(error) = send(client, |http| http.post(&cancel)).await {
