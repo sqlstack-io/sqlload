@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/sqlstack-io/sqlload/compare/v0.5.1...v0.6.0) (2026-11-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** plan, apply and load print a new text layout, and a failed plan or failed table is printed on stdout (exit code 1) instead of as `error: ...` on stderr; scripts should use `plan --json` or the exit code
+
+### Features
+
+* **cli:** plan, apply and load output in the sqb plan layout, plan --json, colour and a load tally ([61f5636](https://github.com/sqlstack-io/sqlload/commit/61f56360785384b72709a535ec6a972053fb9358))
+
 ## [0.5.1](https://github.com/sqlstack-io/sqlload/compare/v0.5.0...v0.5.1) (2026-11-05)
 
 
