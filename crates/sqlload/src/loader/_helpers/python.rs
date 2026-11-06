@@ -46,6 +46,7 @@ use crate::python_sources::types::BatchStream;
 use crate::python_sources::types::PythonHost;
 use crate::python_sources::types::Streamed;
 use crate::row_batches::main::conform_batch::conform_batch;
+use crate::row_batches::main::flattened_columns::flattened_columns;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::schema_plan::constants::LOAD_ID_COLUMN;
@@ -671,6 +672,25 @@ impl PythonFeed {
         }
     }
 
+    /// Refuse a column that one batch has as a field and another made by flattening a listed object.
+    fn check_flattened(&mut self, batch: &RecordBatch) -> Result<(), LoaderError> {
+        let made = flattened_columns(&batch.schema());
+        for field in batch.schema().fields() {
+            let flattened = made.contains(field.name());
+            let seen = *self
+                .flattened
+                .entry(field.name().clone())
+                .or_insert(flattened);
+            if seen != flattened {
+                return Err(LoaderError::Invalid(format!(
+                    "flatten: column {} comes both from a field of the rows and from flattening a listed object; rename the field or leave the object unflattened",
+                    field.name()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Stage one batch: when it changes the merged schema, plan the table for the data so far first (one read of the live columns, the schema changes applied once).
     async fn batch(
         &mut self,
@@ -678,6 +698,7 @@ impl PythonFeed {
         batch: RecordBatch,
         window: Option<&CursorWindow>,
     ) -> Result<(), LoaderError> {
+        self.check_flattened(&batch)?;
         let merged = merge_schema(&self.merged, &batch.schema());
         self.rows += batch.num_rows() as u64;
         if merged != self.merged || self.publisher.is_none() {
@@ -906,5 +927,6 @@ fn table_read(
         logged: table.logged.is_some(),
         state: feed.state.clone(),
         is_reload: load.options.reload,
+        flatten: spec.flatten.clone(),
     }
 }

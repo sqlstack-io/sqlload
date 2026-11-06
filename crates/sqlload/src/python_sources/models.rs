@@ -28,6 +28,8 @@ pub struct TableRead {
     /// A logged table's position from its run log (`ctx.state`), as JSON text.
     pub state: Option<String>,
     pub is_reload: bool,
+    /// Top-level objects the crossing expands one level into `<object>__<key>` columns.
+    pub flatten: Vec<String>,
 }
 
 /// The cursor window a table function may use to read only new data.

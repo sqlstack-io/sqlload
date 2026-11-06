@@ -157,6 +157,12 @@ pub(crate) fn build_spec(
         .or(table.comment.as_deref())
         .map(str::trim)
         .filter(|text| !text.is_empty());
+    if !overrides.flatten.is_empty() && context.source.kind != SourceKind::Python {
+        problems.push(
+            "flatten applies to Python tables; nested values from this source stay JSON".to_owned(),
+        );
+    }
+    problems.extend(flatten_problems(context, overrides));
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -207,6 +213,7 @@ pub(crate) fn build_spec(
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        flatten: overrides.flatten.clone(),
         allow_empty: layered(&settings.allow_empty, &defaults.allow_empty)
             .is_some_and(|(value, _)| value),
         logged: layered(&settings.state, &defaults.state)
@@ -279,6 +286,48 @@ pub(crate) struct ColumnRules {
     pub(crate) exclude: Vec<String>,
     pub(crate) allow: Vec<String>,
     pub(crate) skip_tables_with: Vec<String>,
+}
+
+/// Listed objects that are paths rather than top-level names, or that another column setting names: after flattening, no column carries the object's own name, so an exclusion, mask or pin on it would silently stop applying.
+fn flatten_problems(context: &SourceContext<'_>, overrides: &TableOverride) -> Vec<String> {
+    let exclude: Vec<String> = [
+        context.source.exclude_columns.clone(),
+        overrides.exclude_columns.clone(),
+    ]
+    .concat();
+    overrides
+        .flatten
+        .iter()
+        .filter_map(|object| {
+            let excluded = excluding_pattern(object, &exclude);
+            let setting = match (excluded, overrides.mask.contains_key(object), overrides.columns.contains_key(object)) {
+                _ if object.contains('.') => {
+                    return Some(format!(
+                        "flatten {object}: flatten names top-level objects, not paths; list {} instead (its nested values stay JSON)",
+                        object.split('.').next().unwrap_or_default()
+                    ));
+                }
+                (Some(pattern), _, _) => format!("exclude_columns {pattern}"),
+                (None, true, _) => "mask".to_owned(),
+                (None, false, true) => "columns".to_owned(),
+                (None, false, false) => return None,
+            };
+            Some(format!(
+                "flatten {object}: {setting} also names {object}, which flattening replaces with {object}__<key> columns; name those columns instead, or leave {object} unflattened"
+            ))
+        })
+        .collect()
+}
+
+/// The first `exclude_columns` pattern matching the object `name` but not its `name__<key>` columns, which would stop applying once it is flattened.
+fn excluding_pattern<'a>(name: &str, exclude: &'a [String]) -> Option<&'a String> {
+    let keys = format!("{name}__");
+    exclude.iter().find(|pattern| {
+        glob(pattern).is_ok_and(|glob| {
+            let matcher = glob.compile_matcher();
+            matcher.is_match(name) && !matcher.is_match(&keys)
+        })
+    })
 }
 
 /// What the column rules decide for one table.

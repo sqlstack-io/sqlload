@@ -43,7 +43,7 @@ uses DuckDB 2.0.0 and reads every loader's output. Each loader therefore writes 
 | `py_flat`, `py_nested` | a generator of pages of dicts, 1M rows each | sqlload, dlt |
 | `py_bytes` | the flat rows as 4 MiB chunks of NDJSON | sqlload (`sl.ndjson`), dlt |
 | `py_arrow` | the flat rows as one pyarrow table | sqlload, dlt |
-| `py_nested_flatten` | skipped until sqlload has `flatten` | |
+| `py_nested_flatten` | the nested rows with `flatten=["customer"]` | sqlload (dlt flattens by default, see `py_nested`) |
 | `http_json` | skipped until sqlload's HTTP helpers land; then a local stub API, also measuring requests | |
 | `pg_snowflake`, `files_snowflake` | see [Snowflake](#snowflake) | |
 

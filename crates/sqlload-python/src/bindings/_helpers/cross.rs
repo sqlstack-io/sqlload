@@ -55,6 +55,6 @@ pub(crate) fn cross(
         max_queued_bytes,
     };
     Ok(BatchStream {
-        inner: Mutex::new(table_batches(source, None, options)),
+        inner: Mutex::new(table_batches(source, None, options, Vec::new())),
     })
 }
