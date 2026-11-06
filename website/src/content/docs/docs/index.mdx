@@ -9,7 +9,7 @@ import CardGroup from '../../../components/docs/CardGroup.astro';
 SQLLoad loads data into your warehouse, and shows you how before it changes anything.
 
 It reads Postgres tables, files (Parquet, CSV, JSON and NDJSON) in S3 or a local folder, and Python
-sources, including HTTP APIs. It writes to Snowflake, DuckDB, or Parquet files in S3 or a folder.
+sources, including HTTP APIs. It writes to Snowflake, Databricks, DuckDB, or Parquet files in S3 or a folder.
 `sqlload plan` shows each table's columns, write strategy and route before `apply` and `load` run.
 Where Snowflake or DuckDB can load files exactly by itself, the files never pass through SQLLoad.
 SQLLoad is written in Rust. Python is needed only for Python sources.

@@ -19,17 +19,18 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Destination | Write strategies | How data arrives |
 |-------------|------------------|------------------|
 | Snowflake | `append`, `merge`, `delete_insert`, `replace` | Parquet staged on an external, user, table or named stage, then `COPY`; or Snowpipe Streaming, or `INSERT`, by `load_method`. Files under an external stage load with `COPY` directly. |
+| Databricks | `append`, `merge`, `delete_insert`, `replace` | Parquet staged in a Unity Catalog volume, then `COPY INTO`; one statement per write. Files of a files source pass through SQLLoad. |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
 | Parquet files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed. |
 | Parquet files in a local folder | As for S3 | As for S3 |
 
 ## Source and destination combinations
 
-| From \ Into | Snowflake | DuckDB | Parquet files |
-|-------------|-----------|--------|---------------|
-| Postgres | Yes | Yes | Yes |
-| Files | Yes, read by Snowflake from an external stage | Yes; Parquet read by DuckDB | No |
-| Python | Yes | Yes | Yes |
+| From \ Into | Snowflake | Databricks | DuckDB | Parquet files |
+|-------------|-----------|------------|--------|---------------|
+| Postgres | Yes | Yes | Yes | Yes |
+| Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes; Parquet read by DuckDB | No |
+| Python | Yes | Yes | Yes | Yes |
 
 A files source into a files target is refused at `plan`. `merge` isn't available for files
 sources or files targets.
@@ -46,6 +47,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 | Local files | Real files in temporary folders. |
 | Kafka | Redpanda in containers. |
 | Snowflake | A local fake for protocol and failure tests, plus live tests on a real Snowflake account. |
+| Databricks | A local fake workspace (OAuth, statements, the volume) for protocol and failure tests, plus live tests of every pathway on a real SQL warehouse. See [Databricks](/docs/targets/databricks/#tested-live). |
 
 ## Platforms
 

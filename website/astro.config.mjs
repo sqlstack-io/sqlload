@@ -40,7 +40,7 @@ export default defineConfig({
 		starlight({
 			title: 'SQLLoad',
 			description:
-				'SQLLoad loads Postgres tables, files and Python sources into Snowflake, DuckDB or Parquet files, and shows you how before it changes anything.',
+				'SQLLoad loads Postgres tables, files and Python sources into Snowflake, Databricks, DuckDB or Parquet files, and shows you how before it changes anything.',
 			logo: {
 				light: './src/assets/logo-light.png',
 				dark: './src/assets/logo-dark.png',
@@ -97,7 +97,7 @@ export default defineConfig({
 				starlightLlmsTxt({
 					projectName: 'SQLLoad',
 					description:
-						'SQLLoad loads Postgres tables, files (Parquet, CSV, JSON, NDJSON) and Python sources into Snowflake, DuckDB or Parquet files. `sqlload plan` shows every table, column, write strategy and route before `apply` and `load` change anything.',
+						'SQLLoad loads Postgres tables, files (Parquet, CSV, JSON, NDJSON) and Python sources into Snowflake, Databricks, DuckDB or Parquet files. `sqlload plan` shows every table, column, write strategy and route before `apply` and `load` change anything.',
 				}),
 				]
 				: [],
