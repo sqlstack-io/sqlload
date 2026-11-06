@@ -5,7 +5,6 @@ use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use sqlload::adapters::dispatch::main::session::execute::execute;
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::adapters::dispatch::models::Destination;
-use sqlload::auth::models::Secret;
 use sqlload::file_store::main::list_files::list_files;
 use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::read_file::read_file;
@@ -17,10 +16,8 @@ use sqlload::loader::main::load_tables::load_tables;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
 use sqlload::loader::models::{LoadRun, PlanOptions, ProjectPlan};
-use sqlload::postgres_source::main::connect_postgres::connect_postgres;
-use sqlload::postgres_source::models::PostgresAddress;
 use sqlload::project::main::parse_project::parse_project;
-use sqlload::project::models::{ConnectionConfig, ProjectConfig, SourceKind};
+use sqlload::project::models::ProjectConfig;
 use sqlload::store_paths::models::{Location, StoreKind};
 use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
@@ -95,66 +92,19 @@ exclude_columns = ["*email*"]
     )
 }
 
-/// `text` parsed, with a description for every Postgres table its sources include that exists now, as plan requires one; a source whose database cannot be reached is left as it is.
+/// `text` parsed, with a description for every `[sources.*.tables]` entry that gives none, as plan requires one for a table someone wrote; an entry giving `description = ""` keeps it, so the plan fails.
 pub(crate) async fn described_project(text: &str) -> Result<ProjectConfig, String> {
     let mut project = parse_project(text, &|_| None).map_err(|error| error.to_string())?;
-    let connections = project.connections.clone();
-    for source in project
+    for entry in project
         .sources
         .values_mut()
-        .filter(|source| source.kind == SourceKind::Postgres)
+        .flat_map(|source| source.tables.values_mut())
     {
-        let Some(ConnectionConfig::Postgres {
-            host,
-            port,
-            user,
-            password,
-            database,
-        }) = connections.get(&source.connection)
-        else {
-            continue;
-        };
-        let address = PostgresAddress {
-            host,
-            port: *port,
-            user,
-            password: password.as_ref().map(Secret::expose),
-            database,
-        };
-        let Ok(client) = connect_postgres(address).await else {
-            continue;
-        };
-        let rows = client
-            .query(
-                "SELECT table_schema || '.' || table_name FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')",
-                &[],
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        let include = globs(&source.include)?;
-        let exclude = globs(&source.exclude)?;
-        let names = rows
-            .iter()
-            .map(|row| row.get::<_, String>(0))
-            .filter(|name| include.is_match(name) && !exclude.is_match(name));
-        for name in names {
-            source
-                .tables
-                .entry(name)
-                .or_default()
-                .description
-                .get_or_insert_with(|| "Test table.".to_owned());
-        }
+        entry
+            .description
+            .get_or_insert_with(|| "Test table.".to_owned());
     }
     Ok(project)
-}
-
-fn globs(patterns: &[String]) -> Result<globset::GlobSet, String> {
-    let mut builder = globset::GlobSetBuilder::new();
-    for pattern in patterns {
-        builder.add(globset::Glob::new(pattern).map_err(|error| error.to_string())?);
-    }
-    builder.build().map_err(|error| error.to_string())
 }
 
 /// Plan, apply and load once; the error text when any step fails.
@@ -336,9 +286,11 @@ pub(crate) async fn run_scenario(
             reload: run.reload,
             start_cursor: run.window.0.map(str::to_owned),
             end_cursor: run.window.1.map(str::to_owned),
+            select: run.select.iter().map(|name| (*name).to_owned()).collect(),
             ..PlanOptions::default()
         };
-        let error = run_once(&text, &destinations, &options)
+        let run_text = format!("{text}{}", run.settings);
+        let error = run_once(&run_text, &destinations, &options)
             .await
             .err()
             .unwrap_or_default();

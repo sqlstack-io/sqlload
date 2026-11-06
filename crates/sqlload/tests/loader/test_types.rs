@@ -41,6 +41,10 @@ pub(crate) struct ScenarioRun {
     pub(crate) reload: bool,
     /// `--start-cursor-*` and `--end-cursor-*`.
     pub(crate) window: (Option<&'static str>, Option<&'static str>),
+    /// TOML added after the case's settings for this run only.
+    pub(crate) settings: &'static str,
+    /// `--select`: the tables this run plans; empty plans every table.
+    pub(crate) select: &'static [&'static str],
 }
 
 pub(crate) struct ScenarioTestCase {

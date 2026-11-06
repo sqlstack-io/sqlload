@@ -490,12 +490,15 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     }
     match &table.schema.action {
         TableAction::Unchanged | TableAction::Recreate => None,
-        TableAction::Create => Some(vec![
-            sql_adapter(warehouse).render_create_schema(&spec.destination),
-            sql_adapter(warehouse)
-                .render_create_table(&spec.destination, &table.schema.write_columns),
-            sql_adapter(warehouse).render_table_comment(&spec.destination, &spec.description),
-        ]),
+        TableAction::Create => {
+            let adapter = sql_adapter(warehouse);
+            let mut statements = vec![
+                adapter.render_create_schema(&spec.destination),
+                adapter.render_create_table(&spec.destination, &table.schema.write_columns),
+            ];
+            statements.extend(adapter.render_table_comment(&spec.destination, &spec.description));
+            Some(statements)
+        }
         TableAction::Alter(changes) => {
             let live = table.live.as_deref().unwrap_or_default();
             let adapter = sql_adapter(warehouse);
@@ -504,7 +507,8 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
                 .iter()
                 .any(|change| matches!(change, ColumnChange::Rebuild { .. }))
             {
-                statements.push(adapter.render_table_comment(&spec.destination, &spec.description));
+                statements
+                    .extend(adapter.render_table_comment(&spec.destination, &spec.description));
             }
             Some(statements)
         }
