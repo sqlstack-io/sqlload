@@ -45,6 +45,10 @@ impl SqlAdapter for DatabricksSql {
         format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
     }
 
+    fn render_read_words(&self) -> (&'static str, &'static str) {
+        ("COPYs", "COPY INTO")
+    }
+
     fn render_display_name(&self, table: &TableName) -> String {
         format!("{}.{}", table.schema, table.table).to_ascii_lowercase()
     }

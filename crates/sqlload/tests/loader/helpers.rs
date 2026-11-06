@@ -23,11 +23,11 @@ use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
 use crate::test_types::{
-    BatchedScenarioTestCase, CursorSource, DebugStageTestCase, FilesScenario,
-    FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase,
-    MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome, RouteTestCase,
-    ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase, WrittenPartition,
-    WrittenRow, WrittenRun,
+    BatchedScenarioTestCase, CursorSource, DatabricksLoadTestCase, DatabricksOutcome,
+    DebugStageTestCase, FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase,
+    LargePartitionTestCase, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
+    RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase,
+    WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -1088,6 +1088,79 @@ pub(crate) async fn run_route(
             .filter(|key| key.starts_with("fake-bucket/_sqlload/"))
             .count(),
         sequence_ids_rise: ids.windows(2).all(|pair| pair[0] < pair[1]),
+    })
+}
+
+pub(crate) fn nothing_in_databricks(_: &sqlload_testkit::fake_databricks::models::FakeDatabricks) {}
+
+pub(crate) fn copy_fails(fake: &sqlload_testkit::fake_databricks::models::FakeDatabricks) {
+    fake.state
+        .lock()
+        .copy_failures
+        .push_back("[COPY_INTO_SOURCE_SCHEMA_MISMATCH] staged file refused".to_owned());
+}
+
+pub(crate) fn expired_token(fake: &sqlload_testkit::fake_databricks::models::FakeDatabricks) {
+    fake.state.lock().refuse_requests = 1;
+}
+
+/// A failed run's folder two days old, and a folder another load is still filling.
+pub(crate) fn stale_and_running_loads(
+    fake: &sqlload_testkit::fake_databricks::models::FakeDatabricks,
+) {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    fake.place_file(
+        "/Volumes/main/raw/stage/sqlload/old-load/00001/part-00001.parquet",
+        b"PAR1",
+        now_ms - 2 * 86_400_000,
+    );
+    fake.place_file(
+        "/Volumes/main/raw/stage/sqlload/running-load/00001/part-00001.parquet",
+        b"PAR1",
+        now_ms,
+    );
+}
+
+/// Load the case's files into a fresh fake Databricks workspace; what was planned and sent, and what the volume still holds.
+pub(crate) async fn run_databricks(
+    directory: &std::path::Path,
+    test_case: &DatabricksLoadTestCase,
+) -> Result<DatabricksOutcome, String> {
+    use sqlload_testkit::fake_databricks::constants::{FAKE_CATALOG, FAKE_VOLUME};
+    let fake =
+        sqlload_testkit::fake_databricks::main::start_fake_databricks::start_fake_databricks()
+            .await?;
+    (test_case.prepare)(&fake);
+    let root = directory.display().to_string();
+    let source = open_folder(&Location {
+        store: StoreKind::Filesystem { root: root.clone() },
+        prefix: "src/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    for (key, body) in (test_case.file_set)()? {
+        write_file(&source, &key, body)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let text = format!(
+        "[connections.dbx]\nkind = \"databricks\"\nhost = \"{}\"\nclient_id = \"id\"\nclient_secret = \"secret\"\nwarehouse_id = \"wh\"\ncatalog = \"{FAKE_CATALOG}\"\nvolume = \"{FAKE_VOLUME}\"\n\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[targets.dev]\nconnection = \"dbx\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
+        fake.base_url, test_case.settings
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (plan, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let left = fake.volume_leftovers();
+    let rows = fake.rows("raw.orders").len();
+    let state = fake.state.lock();
+    Ok(DatabricksOutcome {
+        error: outcome.err().unwrap_or_default(),
+        plan,
+        sent: state.statements.clone(),
+        rows,
+        copies: state.copied.len(),
+        left,
     })
 }
 

@@ -369,3 +369,37 @@ pub(crate) struct MixedCursorTestCase {
     /// Text the plan must not contain.
     pub(crate) expected_absent: &'static str,
 }
+
+/// One load of files into a fresh fake Databricks workspace.
+pub(crate) struct DatabricksLoadTestCase {
+    pub(crate) description: &'static str,
+    /// TOML added to `[sources.orders]`.
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: RouteFileSet,
+    /// What the fake fails or holds before the load.
+    pub(crate) prepare: fn(&sqlload_testkit::fake_databricks::models::FakeDatabricks),
+    /// Text the plan or load error must contain; empty when the run must succeed.
+    pub(crate) expected_error: &'static str,
+    /// Text the rendered plan must contain.
+    pub(crate) expected_plan: &'static [&'static str],
+    /// Text some statement sent must contain.
+    pub(crate) expected_sent: &'static [&'static str],
+    /// Text no statement sent may contain.
+    pub(crate) expected_unsent: &'static [&'static str],
+    /// Rows in `raw.orders` afterwards; `None` when the fake cannot apply the write.
+    pub(crate) expected_rows: Option<usize>,
+    /// How many `COPY INTO`s read staged files.
+    pub(crate) expected_copies: usize,
+    /// Files and folders left under the volume's `sqlload/` folder.
+    pub(crate) expected_left: &'static [&'static str],
+}
+
+/// What one Databricks load planned, sent and left behind.
+pub(crate) struct DatabricksOutcome {
+    pub(crate) error: String,
+    pub(crate) plan: String,
+    pub(crate) sent: Vec<String>,
+    pub(crate) rows: usize,
+    pub(crate) copies: usize,
+    pub(crate) left: Vec<String>,
+}
