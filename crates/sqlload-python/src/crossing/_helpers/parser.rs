@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use sqlload::row_batches::main::columns_batch::columns_batch;
+use sqlload::row_batches::main::flatten_batch::flatten_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
 use sqlload::row_batches::main::normalise_batch::normalise_batch;
 
@@ -19,6 +20,7 @@ use crate::crossing::models::{
 struct Output {
     sender: SyncSender<Parsed>,
     stats: Arc<CrossingStats>,
+    flatten: Arc<Vec<String>>,
 }
 
 /// Start parser threads and one passing their batches to `sender` in yield order; each channel holds one batch and `max_queued + parse_threads - 2` pieces wait behind the one being passed on, so at most `max_queued + parse_threads` batches are in flight.
@@ -26,7 +28,9 @@ pub(crate) fn start_parsers(
     options: CrossingOptions,
     sender: SyncSender<Parsed>,
     stats: &Arc<CrossingStats>,
+    flatten: Vec<String>,
 ) -> Dispatch {
+    let flatten = Arc::new(flatten);
     let workers = options.parse_threads.max(1);
     let waiting = (options.max_queued.max(1) + workers).saturating_sub(2);
     let (order_sender, order_receiver) = sync_channel(waiting);
@@ -36,7 +40,8 @@ pub(crate) fn start_parsers(
         let jobs = jobs.clone();
         let stats = stats.clone();
         let panic_at = options.panic_at;
-        std::thread::spawn(move || work(&jobs, &stats, panic_at));
+        let flatten = flatten.clone();
+        std::thread::spawn(move || work(&jobs, (&stats, &flatten), panic_at));
     }
     std::thread::spawn(move || {
         let fallback = sender.clone();
@@ -48,6 +53,7 @@ pub(crate) fn start_parsers(
         order: order_sender,
         jobs: job_sender,
         stats: stats.clone(),
+        flatten,
     }
 }
 
@@ -92,7 +98,11 @@ pub(crate) fn panic_if(panic_at: Option<PanicSite>, site: PanicSite) {
 }
 
 /// Parse jobs until the dispatcher stops; a panic fails the piece, not the thread.
-fn work(jobs: &Mutex<Receiver<ParseJob>>, stats: &Arc<CrossingStats>, panic_at: Option<PanicSite>) {
+fn work(
+    jobs: &Mutex<Receiver<ParseJob>>,
+    (stats, flatten): (&Arc<CrossingStats>, &Arc<Vec<String>>),
+    panic_at: Option<PanicSite>,
+) {
     loop {
         let job = match jobs.lock() {
             Ok(jobs) => jobs.recv(),
@@ -104,6 +114,7 @@ fn work(jobs: &Mutex<Receiver<ParseJob>>, stats: &Arc<CrossingStats>, panic_at: 
         let output = Output {
             sender,
             stats: stats.clone(),
+            flatten: flatten.clone(),
         };
         let bytes = crossed.queued_bytes();
         let parsed = catch_unwind(AssertUnwindSafe(|| {
@@ -178,7 +189,7 @@ impl Output {
             Crossed::Json { bytes, read } => {
                 let mut started = started;
                 json_rows(&bytes, &read, &mut |columns| {
-                    let batch = columns_batch(columns)?;
+                    let batch = flatten_batch(&columns_batch(columns)?, &self.flatten)?;
                     open = open && self.send(batch, started);
                     started = Instant::now();
                     match open {
@@ -195,7 +206,7 @@ impl Output {
                 let mut started = started;
                 for batch in reader {
                     let batch = batch.map_err(|error| CrossError::Data(error.to_string()))?;
-                    let batch = normalise_batch(&batch).map_err(CrossError::Data)?;
+                    let batch = self.arrow(&batch)?;
                     open = self.send(batch, started);
                     if !open {
                         break;
@@ -204,13 +215,19 @@ impl Output {
                 }
             }
             Crossed::ArrowBatch(batch) => {
-                let batch = normalise_batch(&batch).map_err(CrossError::Data)?;
+                let batch = self.arrow(&batch)?;
                 open = self.send(batch, started);
             }
             Crossed::Checkpoint => {}
             Crossed::Failed(error) => return Err(error),
         }
         Ok(open)
+    }
+
+    /// A yielded Arrow batch with its listed struct columns flattened, then in the loader's types.
+    fn arrow(&self, batch: &RecordBatch) -> Result<RecordBatch, CrossError> {
+        let flattened = flatten_batch(batch, &self.flatten).map_err(CrossError::Data)?;
+        normalise_batch(&flattened).map_err(CrossError::Data)
     }
 
     /// Count `batch`, parsed since `started`, and pass it on; `false` once the consumer has gone.

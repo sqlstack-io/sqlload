@@ -1,3 +1,6 @@
+/// Joins a flattened object's name and its key: `customer` and `country` give `customer__country`.
+pub const FLATTEN_SEPARATOR: &str = "__";
+
 /// The UTF-8 byte order mark some JSON bytes start with.
 pub const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
 
@@ -12,3 +15,9 @@ pub const INT_DIGITS: u8 = 19;
 
 /// Seconds in a day, for dates held as days since 1970-01-01.
 pub const SECONDS_PER_DAY: i64 = 86_400;
+
+/// The schema metadata key listing the columns flattening made in a batch, joined by `FLATTENED_SEPARATOR`.
+pub const FLATTENED_METADATA_KEY: &str = "sqlload.flattened";
+
+/// Separates the names under `FLATTENED_METADATA_KEY`.
+pub const FLATTENED_SEPARATOR: &str = "\u{0}";

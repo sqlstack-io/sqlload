@@ -97,6 +97,8 @@ pub struct TableSpec {
     pub files: Option<FilesSource>,
     /// The table's folder template in a files target; `None` for warehouse targets.
     pub destination_path: Option<String>,
+    /// The top-level objects expanded one level into `<object>__<key>` columns (Python tables only).
+    pub flatten: Vec<String>,
     /// The table function behind a Python table; `None` for declarative sources.
     pub python: Option<PythonTable>,
 }
@@ -356,6 +358,8 @@ pub struct PythonFeed {
     pub state: Option<String>,
     /// The time of the reconciliation this load appended, which its records follow.
     pub reconciled: Option<String>,
+    /// Each column seen so far, and whether flattening a listed object made it, so no column comes from both.
+    pub flattened: std::collections::BTreeMap<String, bool>,
 }
 
 /// A Postgres table's integer cursor as plan found it, ending its `batch_size` windows.
