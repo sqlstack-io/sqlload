@@ -51,7 +51,7 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/landed/": lambda query: self.reply(200, {"items": ORDERS[:3], "next": "more"}),
 			"/v1/landed/more": lambda query: self.reply(200, {"items": ORDERS[3:], "next": None}),
 			"/v1/sparse": self.sparse,
-			"/v1/echo": lambda query: self.reply(400, {"message": f"version {self.headers.get('X-Version')} session {self.headers.get('X-Session-Id')}"}),
+			"/v1/echo": lambda query: self.reply(400, {"message": f"version {self.headers.get('X-Version')} session {self.headers.get('X-Session-Id')} credential {self.headers.get('X-Credential')}"}),
 		}.get(url.path)
 		if route is not None:
 			return route(query)
@@ -291,8 +291,8 @@ def test_given_a_fan_out_when_loading_then_each_key_is_requested_and_a_skipped_s
 			"the response repeats the previous page",
 		),
 		(
-			"versioned = sl.http(shop, auth=sl.bearer(), headers={'X-Version': '1', 'X-Session-Id': 'abcdef12'})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return versioned.paginate('/echo', paginator=sl.single())\n",
-			"version 1 session ***",
+			"versioned = sl.http(shop, auth=sl.bearer(), headers={'X-Version': '1', 'X-Session-Id': 'abcdef12', 'X-Credential': 'abc123secret'})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return versioned.paginate('/echo', paginator=sl.single())\n",
+			"version 1 session *** credential ***",
 		),
 	],
 	ids=[
@@ -356,3 +356,12 @@ def test_given_a_datetime_param_when_loading_then_it_is_sent_as_iso_text(tmp_pat
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert [query.get("since") for _, query, _ in api.log] == ["2024-01-02T03:04:00"]  # type: ignore[attr-defined]
+
+
+def test_given_a_redirect_listed_in_on_status_when_loading_then_it_is_skipped_and_not_followed(
+	tmp_path: Path, api: ThreadingHTTPServer, elsewhere: ThreadingHTTPServer
+) -> None:
+	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/redir', paginator=sl.single(), on_status={302: 'skip'})\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert elsewhere.seen == []  # type: ignore[attr-defined]
