@@ -37,6 +37,13 @@ pub struct CrossingOptions {
     pub max_queued_bytes: usize,
 }
 
+/// What the parser threads need from the table besides its data: the top-level objects to expand one level, and the connections its `sl.http` jobs may use.
+#[derive(Debug, Clone, Default)]
+pub struct ReadContext {
+    pub flatten: Vec<String>,
+    pub connections: serde_json::Map<String, serde_json::Value>,
+}
+
 /// A crossing thread that can be made to panic for tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanicSite {
@@ -85,6 +92,10 @@ pub(crate) enum Crossed {
     },
     ArrowStream(RecordBatchStreamReader),
     ArrowBatch(RecordBatch),
+    /// An `sl.http` job's definition, run in Rust; its pages are parsed like JSON bytes.
+    Http(String),
+    /// An `sl.checkpoint(...)`: no rows; its state is committed after every piece yielded before it.
+    Checkpoint,
     Failed(CrossError),
 }
 
@@ -95,7 +106,7 @@ impl Crossed {
             Self::Columns(columns) => columns.approximate_bytes(),
             Self::Json { bytes, .. } => bytes.len(),
             Self::ArrowBatch(batch) => batch.get_array_memory_size(),
-            Self::ArrowStream(_) | Self::Failed(_) => 0,
+            Self::ArrowStream(_) | Self::Http(_) | Self::Checkpoint | Self::Failed(_) => 0,
         }
     }
 }

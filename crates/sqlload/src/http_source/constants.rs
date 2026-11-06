@@ -1,0 +1,46 @@
+use std::time::Duration;
+
+/// The delay before the first retry; each later one doubles it.
+pub const FIRST_RETRY_DELAY: Duration = Duration::from_millis(500);
+
+/// The longest backoff between retries.
+pub const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// The longest wait a `Retry-After` header is obeyed for.
+pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
+
+/// Characters of a failed response's body shown in its error.
+pub const ERROR_EXCERPT_CHARS: usize = 300;
+
+/// Pages fetched ahead of the parser before a job waits.
+pub const PAGES_AHEAD: usize = 4;
+
+/// Threads of the runtime one job's requests run on.
+pub const JOB_THREADS: usize = 2;
+
+/// The `Link` header parameter naming relations.
+pub const RELATION_PARAMETER: &str = "rel";
+
+/// Redirects followed within the connection's origin before a request fails.
+pub const MAX_REDIRECTS: usize = 10;
+
+/// The `Link` relation of the next page.
+pub const NEXT_RELATION: &str = "next";
+
+/// Path segments that would climb the URL's path if a fan-out key filled one unencoded.
+pub const DOT_SEGMENTS: &[&str] = &[".", ".."];
+
+/// Words in a header's name that mark its value as a secret to redact from errors.
+pub const SECRET_HEADER_WORDS: &[&str] = &[
+    "auth",
+    "token",
+    "key",
+    "secret",
+    "cookie",
+    "session",
+    "signature",
+    "pass",
+    "credential",
+    "jwt",
+    "bearer",
+];

@@ -51,6 +51,48 @@ own name, so name the `<object>__<key>` columns instead. Turning `flatten` on fo
 already has the object as a JSON column leaves that column NULL from then on, next to the new key
 columns.
 
+## HTTP APIs
+
+`sl.http` builds HTTP jobs that run entirely in Rust: requests, pages, fan-out, retries and parsing.
+A table function returns or yields the job; Python's part ends once it is built.
+
+```python
+shop = sl.source("shop", connection="shop")
+api = sl.http(shop, auth=sl.bearer(), rate_limit="10/s", retries=5)
+
+
+@shop.table(description="Orders, one row per order.", unique_key="order_id")
+def orders(ctx):
+    return api.paginate("/orders", params={"updated_after": ctx.cursor_value},
+                        paginator=sl.next_link("$.next"), select="$.items")
+
+
+@shop.table(description="Order lines.", unique_key=["order_id", "line_no"])
+def order_items(ctx):
+    order_ids = api.paginate("/orders", paginator=sl.next_link("$.next"), select="$.items[*].order_id")
+    return api.fan_out("/orders/{order_id}/items", over=order_ids, concurrency=8,
+                       select="$.items", on_status={404: "skip"})
+```
+
+- The connection is `kind = "http"` with `base_url`, and `token` (for `sl.bearer()` and
+  `sl.api_key(header=...)` or `sl.api_key(query=...)`) or `username` and `password` (for
+  `sl.basic()`), plus optional `headers`. Credentials go only to the connection's own scheme,
+  host and port, never to a next-page link elsewhere.
+- Every `paginate` names its paginator: `sl.single()`, `sl.next_link(pointer)`,
+  `sl.link_header()`, `sl.offset(param, limit=...)`, `sl.page_number(param, start=1)` or
+  `sl.cursor(pointer, param)`. Nothing is guessed.
+- `select` is `$`, a dotted path such as `$.data.items`, or, for fan-out keys, `$.items[*].id`.
+- `fan_out` requests its path once per key, up to `concurrency` at a time, while the keys still
+  arrive: keys from a paginate fill the placeholder named after their field; listed values fill
+  the path's one placeholder, and dicts fill placeholders by name.
+- `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with
+  the same limit. Transport errors, 429 and 5xx are retried with backoff and jitter, honouring
+  `Retry-After`; another status fails unless `on_status` skips it.
+- The definition is checked before any request. Errors name the request, the status and the start
+  of the body, with the connection's secrets replaced by `***`.
+- A job's rows never come back into Python: iterating a job hands the job itself to Rust, and
+  reading a row from it fails (rule `python_row_loop`). Filter rows downstream.
+
 ## Upgrading from 0.4
 
 Both this package and `sqlload-cli` install a `sqlload` command. Remove the old one first:
@@ -228,6 +270,31 @@ before its current one, so whether a function sets the state before or after the
 a run that fails part-way never loses rows; under `append`, the next run may load up to about
 two pages again.
 Assign `ctx.state` once per page; assigning more than once per page can lose rows after a crash.
+
+For an exact position, yield `sl.checkpoint(...)` after the rows it covers instead:
+
+```python
+@shop.table(write_strategy="append", state="logged")
+def events(ctx: sl.Context):
+    """Shop events, read page by page with a sync token."""
+    token = ctx.state
+    while True:
+        page = fetch_events(since=token)
+        yield from page.items
+        token = page.next_token or token
+        yield sl.checkpoint(token)
+        if not page.has_more:
+            break
+```
+
+A checkpoint covers exactly the rows yielded before it: commits record the latest checkpoint
+whose rows they hold, so a run that fails part-way resumes from it without loading any row twice,
+and the next run reads it as `ctx.state`. Rows yielded after the last checkpoint are loaded again by
+the next run unless the function leaves the final position in `ctx.state`. Once a function yields a checkpoint, only checkpoints move the logged position during
+the run; a value it leaves in `ctx.state` when it finishes still becomes the final one.
+`sl.checkpoint(None)` clears the position, so the next run starts from the beginning; an API whose
+last page has no next token should keep the last real one. `sl.checkpoint` needs
+`state="logged"` and a JSON value.
 
 Each successful run appends a record to `_sqlload_runs` in the table's schema (or one object under
 `<table folder>/_sqlload/runs/` in a files target), in the same transaction as the data where the

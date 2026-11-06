@@ -12,7 +12,7 @@ use crate::bindings::constants::{
 use crate::crossing::errors::CrossError;
 use crate::crossing::main::default_parse_threads::default_parse_threads;
 use crate::crossing::main::table_batches::table_batches;
-use crate::crossing::models::{CrossingOptions, Polled, TableBatches};
+use crate::crossing::models::{CrossingOptions, Polled, ReadContext, TableBatches};
 use crate::host::_helpers::python_errors::error_text;
 use crate::host::constants::RUNTIME_MODULE;
 
@@ -61,7 +61,10 @@ impl PythonHost for ExtensionHost {
                 &iterator,
                 snapshot.as_ref(),
                 options,
-                request.flatten.clone(),
+                ReadContext {
+                    flatten: request.flatten.clone(),
+                    connections: request.connections.clone(),
+                },
             ))
         })
         .map(|batches| Box::new(PythonBatches(batches)) as Box<dyn BatchStream>)

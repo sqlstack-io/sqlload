@@ -128,6 +128,11 @@ pub enum ConnectionConfig {
         base_url: String,
         #[serde(default)]
         token: Option<crate::auth::models::Secret>,
+        /// For `sl.basic()`.
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<crate::auth::models::Secret>,
         #[serde(default)]
         headers: BTreeMap<String, String>,
     },
