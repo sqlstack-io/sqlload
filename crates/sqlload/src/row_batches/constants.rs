@@ -1,3 +1,6 @@
+/// Joins a flattened object's name and its key: `customer` and `country` give `customer__country`.
+pub const FLATTEN_SEPARATOR: &str = "__";
+
 /// The UTF-8 byte order mark some JSON bytes start with.
 pub const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
 
