@@ -1,5 +1,9 @@
 #[cfg(feature = "duckdb")]
 pub(crate) mod blocking;
+#[cfg(feature = "duckdb")]
+pub(crate) mod direct_load;
+#[cfg(feature = "duckdb")]
+pub(crate) mod pull_sql;
 pub(crate) mod sql_adapter;
 #[cfg(feature = "duckdb")]
 pub(crate) mod table_writer;

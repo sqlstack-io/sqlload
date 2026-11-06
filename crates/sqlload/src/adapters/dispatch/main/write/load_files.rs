@@ -11,6 +11,8 @@ pub async fn load_files(
 ) -> Result<Option<DirectLoaded>, LoaderError> {
     match writer {
         Writer::Snowflake(snowflake) => snowflake.copy_files(batch).await,
+        #[cfg(feature = "duckdb")]
+        Writer::DuckDb(duckdb) => duckdb.copy_files(batch).await,
         _ => Ok(None),
     }
 }
