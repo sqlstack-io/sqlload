@@ -9,10 +9,13 @@ use arrow_schema::{DataType, Field, Schema};
 
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::models::ColumnType;
-use crate::row_batches::constants::{FLATTEN_SEPARATOR, FLATTENED_METADATA_KEY};
+use crate::row_batches::constants::{
+    FLATTEN_SEPARATOR, FLATTENED_METADATA_KEY, FLATTENED_SEPARATOR,
+};
 use crate::row_batches::main::columns_batch::columns_batch;
 use crate::row_batches::main::json_rows::json_rows;
 use crate::row_batches::models::{JsonLayout, JsonRead};
+use crate::row_batches::types::NamedColumn;
 
 /// `columns` as a batch of `rows` rows whose schema lists `flattened`, the columns flattening made.
 pub(crate) fn rebuilt(
@@ -35,7 +38,7 @@ pub(crate) fn marked(schema: Schema, flattened: &[String]) -> Schema {
             let mut metadata = schema.metadata().clone();
             metadata.insert(
                 FLATTENED_METADATA_KEY.to_owned(),
-                serde_json::to_string(flattened).unwrap_or_default(),
+                flattened.join(FLATTENED_SEPARATOR),
             );
             schema.with_metadata(metadata)
         }
@@ -47,7 +50,12 @@ pub(crate) fn flattened_names(schema: &Schema) -> Vec<String> {
     schema
         .metadata()
         .get(FLATTENED_METADATA_KEY)
-        .and_then(|names| serde_json::from_str(names).ok())
+        .map(|names| {
+            names
+                .split(FLATTENED_SEPARATOR)
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -82,6 +90,29 @@ impl Names<'_> {
             }
         }
     }
+}
+
+/// `batch`'s columns with each listed one replaced by its key columns, and every column flattening has made in it (sorted).
+pub(crate) fn expanded_columns(
+    batch: &RecordBatch,
+    flatten: &[String],
+) -> Result<(Vec<NamedColumn>, Vec<String>), String> {
+    let schema = batch.schema();
+    let mut names = Names {
+        plain: &schema,
+        made: HashMap::new(),
+    };
+    let mut columns: Vec<(Arc<Field>, ArrayRef)> = Vec::with_capacity(schema.fields().len());
+    for (field, array) in schema.fields().iter().zip(batch.columns()) {
+        match flatten.contains(field.name()) {
+            false => columns.push((field.clone(), array.clone())),
+            true => columns.extend(key_columns(field, array, &mut names)?),
+        }
+    }
+    let mut flattened = flattened_names(&schema);
+    flattened.extend(names.made.into_keys());
+    flattened.sort();
+    Ok((columns, flattened))
 }
 
 /// The listed column's objects as one column per key, named by `names`: a struct's children as they are, JSON objects typed by inference; nothing for a column of NULLs.

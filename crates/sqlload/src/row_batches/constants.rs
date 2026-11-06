@@ -16,5 +16,8 @@ pub const INT_DIGITS: u8 = 19;
 /// Seconds in a day, for dates held as days since 1970-01-01.
 pub const SECONDS_PER_DAY: i64 = 86_400;
 
-/// The schema metadata key listing, as a JSON array, the columns flattening made in a batch.
+/// The schema metadata key listing the columns flattening made in a batch, joined by `FLATTENED_SEPARATOR`.
 pub const FLATTENED_METADATA_KEY: &str = "sqlload.flattened";
+
+/// Separates the names under `FLATTENED_METADATA_KEY`.
+pub const FLATTENED_SEPARATOR: &str = "\u{0}";
