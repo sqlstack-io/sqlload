@@ -81,6 +81,8 @@ pub struct TableSpec {
     pub masked: MaskRules,
     pub contract: Contract,
     pub on_schema_change: OnSchemaChange,
+    /// `auto_widen = true`: an inferred column whose values outgrow it widens along the ladder instead of failing.
+    pub auto_widen: bool,
     pub type_change_rebuild: Policy,
     /// Whether a Python table's `replace` may empty the table when its function yields no rows.
     pub allow_empty: bool,

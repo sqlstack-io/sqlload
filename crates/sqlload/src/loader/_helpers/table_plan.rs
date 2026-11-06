@@ -77,8 +77,21 @@ pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {
     table
 }
 
-/// The columns the table should have: the read columns (pinned or from the source), then the metadata columns.
+/// The columns the table should have: the read columns (pinned, typed by the source, or inferred from sampled values for Python tables and JSON, NDJSON and CSV files, whose partition columns are declared), then the metadata columns.
 pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<DesiredColumn> {
+    let sampled = spec.python.is_some()
+        || spec
+            .files
+            .as_ref()
+            .is_some_and(|files| files.encoding.format != SourceFormat::Parquet);
+    let partition = |name: &str| {
+        spec.files.as_ref().is_some_and(|files| {
+            files
+                .partition_types
+                .iter()
+                .any(|(column, _)| column == name)
+        })
+    };
     let mut desired: Vec<DesiredColumn> = read
         .iter()
         .map(|column| DesiredColumn {
@@ -90,6 +103,7 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             ) {
                 (true, _) => ColumnOrigin::Metadata,
                 (false, true) => ColumnOrigin::Pinned,
+                (false, false) if sampled && !partition(&column.name) => ColumnOrigin::Inferred,
                 (false, false) => ColumnOrigin::Source,
             },
         })
@@ -198,6 +212,7 @@ pub(crate) async fn replan_columns(
                 warehouse: spec.warehouse,
                 contract: spec.contract,
                 on_schema_change: spec.on_schema_change,
+                auto_widen: spec.auto_widen,
                 type_change_rebuild: spec.type_change_rebuild,
                 rebuild_allowed: options.rebuild_allowed,
             };
@@ -283,6 +298,7 @@ async fn plan_table_once(
         warehouse: spec.warehouse,
         contract: spec.contract,
         on_schema_change: spec.on_schema_change,
+        auto_widen: spec.auto_widen,
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
     };

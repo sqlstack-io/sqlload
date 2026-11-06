@@ -18,6 +18,14 @@ pub(crate) fn pinned(name: &str, column_type: ColumnType) -> DesiredColumn {
     }
 }
 
+pub(crate) fn inferred(name: &str, column_type: ColumnType) -> DesiredColumn {
+    DesiredColumn {
+        name: name.to_owned(),
+        column_type,
+        origin: ColumnOrigin::Inferred,
+    }
+}
+
 pub(crate) fn live(name: &str, column_type: ColumnType) -> LiveColumn {
     LiveColumn {
         name: name.to_owned(),
@@ -34,5 +42,6 @@ pub(crate) fn snowflake_rules() -> SchemaRules {
         on_schema_change: OnSchemaChange::AppendNewColumns,
         type_change_rebuild: Policy::RequireConfirmation,
         rebuild_allowed: false,
+        auto_widen: false,
     }
 }

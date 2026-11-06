@@ -190,6 +190,8 @@ pub(crate) fn build_spec(
         on_schema_change: layered(&settings.on_schema_change, &defaults.on_schema_change)
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        auto_widen: layered(&settings.auto_widen, &defaults.auto_widen)
+            .is_some_and(|(value, _)| value),
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
