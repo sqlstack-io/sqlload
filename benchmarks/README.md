@@ -58,8 +58,8 @@ Differences a reader should know:
 - `pg_incremental`: sqlload and dlt use `id` as the cursor and find their own position. ingestr
   keeps no position, so it is given `--interval-start` on `created_at`.
 - `files_parquet` and `files_s3_parquet`: sqlload's plan must name DuckDB's direct route (DuckDB
-  reads the files itself), or the run is invalid. DuckDB's `httpfs` extension is installed once per
-  suite run and shared by later runs, as on a machine that has loaded from S3 before.
+  reads the files itself), or the run is invalid. DuckDB's `httpfs` extension is installed once into
+  the output folder's cache and shared by later runs, as on a machine that has loaded from S3 before.
 - Defaults otherwise: no loader is tuned.
 
 ### Method
@@ -81,7 +81,7 @@ Differences a reader should know:
 
 These are the published figures. A scenario is listed only where SQLLoad's median wall time is the
 lowest of every loader measured in the same run, or within 5% of the lowest, which is labelled
-parity. The `Wall vs SQLLoad` column is relative to SQLLoad's default route in that table.
+parity. The `Wall vs SQLLoad` column is relative to the `sqlload` row (the user stage for Snowflake).
 Scenarios where another loader is faster are not listed here; they are tracked as work to do. Every table shows all loaders that ran, with CPU and memory as well as wall time, and SQLLoad
 does not win on every column: it uses more memory than ingestr in some of them.
 
@@ -117,6 +117,8 @@ Local folder, commit `07a6510`:
 | sqlload | 3.20 s | 10.58 s | 1,072 MiB | 1.00x |
 | ingestr | 5.85 s | 17.55 s | 864 MiB | 1.83x |
 
+At 10M rows SQLLoad's peak memory is about 24% above ingestr's.
+
 `files_parquet`, 1,000,000 rows
 
 | Loader | Wall | CPU (user+sys) | Peak RSS | Wall vs SQLLoad |
@@ -134,7 +136,8 @@ S3, commit `5ab2b9e` (reads the schema sample's footers concurrently):
 | sqlload | 8.92 s | 11.18 s | 1,582 MiB | 1.00x |
 | ingestr | 10.01 s | 19.53 s | 824 MiB | 1.12x |
 
-SQLLoad's peak memory here is about twice ingestr's.
+SQLLoad's peak memory here is about twice ingestr's. At 1M rows from S3 ingestr is faster
+(4.33 s against 5.58 s), so that size is not listed.
 
 ### Postgres wide table into DuckDB
 
@@ -216,7 +219,7 @@ These scenarios run only when selected, with these variables set. None runs in C
 | `SQLLOAD_BENCH_SF_ACCOUNT`, `_USER`, `_WAREHOUSE`, `_DATABASE`, `_SCHEMA` | all; `_SCHEMA` is where tables load |
 | `SQLLOAD_BENCH_SF_TOKEN` or `SQLLOAD_BENCH_SF_PRIVATE_KEY_FILE` | all; a PAT, or a key-pair file |
 | `SQLLOAD_BENCH_SF_ROLE` | optional |
-| `SQLLOAD_BENCH_S3_BUCKET`, `SQLLOAD_BENCH_S3_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `files_snowflake` |
+| `SQLLOAD_BENCH_S3_BUCKET`, `SQLLOAD_BENCH_S3_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `files_snowflake` (and `files_s3_parquet`, which needs no Snowflake) |
 | `SQLLOAD_BENCH_SF_STORAGE_INTEGRATION` or `SQLLOAD_BENCH_SF_STAGE_NAME` | `files_snowflake`; an integration SQLLoad creates its stage with, or an existing stage on `s3://<bucket>/sqlload/` |
 
 ```sh
