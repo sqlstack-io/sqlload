@@ -10,15 +10,15 @@ which also has peak memory for every run and the commands to reproduce them.
 
 | Scenario | SQLLoad | Next fastest | SQLLoad's lead |
 |----------|---------|--------------|----------------|
-| Parquet folder into DuckDB, 10M rows | 3.20 s | ingestr 5.85 s | 1.83x |
-| Parquet folder into DuckDB, 1M rows | 0.92 s | ingestr 2.12 s | 2.32x |
-| Parquet in S3 into DuckDB, 10M rows | 8.92 s | ingestr 10.01 s | 1.12x |
-| Postgres, 40 columns, into DuckDB, 1M rows | 6.84 s | ingestr 8.29 s | 1.21x |
-| The same table without a primary key | 6.75 s | ingestr 8.75 s | 1.30x |
-| Postgres into Snowflake, 1M rows | 14.56 s | ingestr 16.38 s | 1.12x |
-| Postgres, 40 columns, into Snowflake, 100,000 rows (external stage) | 11.60 s | ingestr 14.42 s | 1.24x |
-| The same table without a primary key (external stage) | 12.25 s | ingestr 14.61 s | 1.19x |
-| Parquet in S3 into Snowflake, 1M rows | 10.30 s | ingestr 19.47 s | 1.89x |
+| Parquet folder into DuckDB, 10M rows | 3.20&nbsp;s | ingestr 5.85&nbsp;s | 1.83x |
+| Parquet folder into DuckDB, 1M rows | 0.92&nbsp;s | ingestr 2.12&nbsp;s | 2.32x |
+| Parquet in S3 into DuckDB, 10M rows | 8.92&nbsp;s | ingestr 10.01&nbsp;s | 1.12x |
+| Postgres, 40 columns, into DuckDB, 1M rows | 6.84&nbsp;s | ingestr 8.29&nbsp;s | 1.21x |
+| The same table without a primary key | 6.75&nbsp;s | ingestr 8.75&nbsp;s | 1.30x |
+| Postgres into Snowflake, 1M rows | 14.56&nbsp;s | ingestr 16.38&nbsp;s | 1.12x |
+| Postgres, 40 columns, into Snowflake, 100,000 rows (external stage) | 11.60&nbsp;s | ingestr 14.42&nbsp;s | 1.24x |
+| The same table without a primary key (external stage) | 12.25&nbsp;s | ingestr 14.61&nbsp;s | 1.19x |
+| Parquet in S3 into Snowflake, 1M rows | 10.30&nbsp;s | ingestr 19.47&nbsp;s | 1.89x |
 
 Wall time is the median of 5 runs. dlt was slower than both in every scenario it ran.
 
@@ -46,23 +46,23 @@ DuckDB reads the files itself on SQLLoad's route, so no row passes through the l
 
 | Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
 |--------|-----:|---------------:|----------------:|
-| sqlload | 3.20 s | 10.58 s | 1.00x |
-| ingestr | 5.85 s | 17.55 s | 1.83x |
+| sqlload | 3.20&nbsp;s | 10.58&nbsp;s | 1.00x |
+| ingestr | 5.85&nbsp;s | 17.55&nbsp;s | 1.83x |
 
 `files_parquet`, local folder, 1,000,000 rows, commit `07a6510`
 
 | Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
 |--------|-----:|---------------:|----------------:|
-| sqlload | 0.92 s | 1.69 s | 1.00x |
-| dlt | 138.45 s | 139.65 s | 150.96x |
-| ingestr | 2.12 s | 3.36 s | 2.32x |
+| sqlload | 0.92&nbsp;s | 1.69&nbsp;s | 1.00x |
+| dlt | 138.45&nbsp;s | 139.65&nbsp;s | 150.96x |
+| ingestr | 2.12&nbsp;s | 3.36&nbsp;s | 2.32x |
 
 `files_s3_parquet`, 10,000,000 rows, commit `5ab2b9e`
 
 | Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
 |--------|-----:|---------------:|----------------:|
-| sqlload | 8.92 s | 11.18 s | 1.00x |
-| ingestr | 10.01 s | 19.53 s | 1.12x |
+| sqlload | 8.92&nbsp;s | 11.18&nbsp;s | 1.00x |
+| ingestr | 10.01&nbsp;s | 19.53&nbsp;s | 1.12x |
 
 dlt isn't in the 10M-row tables: one 10M-row run from a local folder took over 20 minutes.
 
@@ -74,19 +74,19 @@ dlt isn't in the 10M-row tables: one 10M-row run from a local folder took over 2
 
 | Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
 |--------|-----:|---------------:|----------------:|
-| sqlload | 6.84 s | 10.10 s | 1.00x |
-| dlt (pyarrow) | 47.82 s | 49.92 s | 6.99x |
-| dlt (connectorx) | 27.24 s | 44.84 s | 3.98x |
-| ingestr | 8.29 s | 12.09 s | 1.21x |
+| sqlload | 6.84&nbsp;s | 10.10&nbsp;s | 1.00x |
+| dlt (pyarrow) | 47.82&nbsp;s | 49.92&nbsp;s | 6.99x |
+| dlt (connectorx) | 27.24&nbsp;s | 44.84&nbsp;s | 3.98x |
+| ingestr | 8.29&nbsp;s | 12.09&nbsp;s | 1.21x |
 
 `pg_wide_nokey`, the same table without a primary key
 
 | Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
 |--------|-----:|---------------:|----------------:|
-| sqlload | 6.75 s | 9.72 s | 1.00x |
-| dlt (pyarrow) | 47.29 s | 49.71 s | 7.00x |
-| dlt (connectorx) | 26.89 s | 44.26 s | 3.98x |
-| ingestr | 8.75 s | 12.88 s | 1.30x |
+| sqlload | 6.75&nbsp;s | 9.72&nbsp;s | 1.00x |
+| dlt (pyarrow) | 47.29&nbsp;s | 49.71&nbsp;s | 7.00x |
+| dlt (connectorx) | 26.89&nbsp;s | 44.26&nbsp;s | 3.98x |
+| ingestr | 8.75&nbsp;s | 12.88&nbsp;s | 1.30x |
 
 ## Into Snowflake
 
@@ -98,38 +98,38 @@ files in S3 itself.
 
 | Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
 |--------|-----:|---------------:|----------------:|
-| sqlload | 14.56 s | 1.01 s | 1.00x |
-| sqlload (external stage) | 15.57 s | 1.06 s | 1.07x |
-| dlt (pyarrow) | 31.02 s | 5.56 s | 2.13x |
-| dlt (connectorx) | 29.36 s | 3.77 s | 2.02x |
-| ingestr | 16.38 s | 3.99 s | 1.12x |
+| sqlload | 14.56&nbsp;s | 1.01&nbsp;s | 1.00x |
+| sqlload (external stage) | 15.57&nbsp;s | 1.06&nbsp;s | 1.07x |
+| dlt (pyarrow) | 31.02&nbsp;s | 5.56&nbsp;s | 2.13x |
+| dlt (connectorx) | 29.36&nbsp;s | 3.77&nbsp;s | 2.02x |
+| ingestr | 16.38&nbsp;s | 3.99&nbsp;s | 1.12x |
 
 `pg_wide_snowflake`, 100,000 rows
 
 | Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
 |--------|-----:|---------------:|----------------:|
-| sqlload | 13.86 s | 0.90 s | 1.00x |
-| sqlload (external stage) | 11.60 s | 0.86 s | 0.84x |
-| dlt (pyarrow) | 31.48 s | 6.58 s | 2.27x |
-| dlt (connectorx) | 28.76 s | 3.50 s | 2.07x |
-| ingestr | 14.42 s | 4.07 s | 1.04x |
+| sqlload | 13.86&nbsp;s | 0.90&nbsp;s | 1.00x |
+| sqlload (external stage) | 11.60&nbsp;s | 0.86&nbsp;s | 0.84x |
+| dlt (pyarrow) | 31.48&nbsp;s | 6.58&nbsp;s | 2.27x |
+| dlt (connectorx) | 28.76&nbsp;s | 3.50&nbsp;s | 2.07x |
+| ingestr | 14.42&nbsp;s | 4.07&nbsp;s | 1.04x |
 
 `pg_wide_nokey_snowflake`, 100,000 rows
 
 | Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
 |--------|-----:|---------------:|----------------:|
-| sqlload | 12.66 s | 0.87 s | 1.00x |
-| sqlload (external stage) | 12.25 s | 0.85 s | 0.97x |
-| dlt (pyarrow) | 31.47 s | 6.46 s | 2.49x |
-| dlt (connectorx) | 30.12 s | 3.36 s | 2.38x |
-| ingestr | 14.61 s | 4.06 s | 1.15x |
+| sqlload | 12.66&nbsp;s | 0.87&nbsp;s | 1.00x |
+| sqlload (external stage) | 12.25&nbsp;s | 0.85&nbsp;s | 0.97x |
+| dlt (pyarrow) | 31.47&nbsp;s | 6.46&nbsp;s | 2.49x |
+| dlt (connectorx) | 30.12&nbsp;s | 3.36&nbsp;s | 2.38x |
+| ingestr | 14.61&nbsp;s | 4.06&nbsp;s | 1.15x |
 
 `files_snowflake`, 1,000,000 rows of Parquet in S3
 
 | Loader | Wall | CPU (user+sys) | Wall vs SQLLoad |
 |--------|-----:|---------------:|----------------:|
-| sqlload (direct) | 10.30 s | 0.17 s | 1.00x |
-| ingestr | 19.47 s | 4.41 s | 1.89x |
+| sqlload (direct) | 10.30&nbsp;s | 0.17&nbsp;s | 1.00x |
+| ingestr | 19.47&nbsp;s | 4.41&nbsp;s | 1.89x |
 
 ## Running them yourself
 
