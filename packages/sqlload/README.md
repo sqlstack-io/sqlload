@@ -106,7 +106,9 @@ pip uninstall sqlload-cli
 `plan`, `apply` and `load` take selectors positionally or with `--select`/`-s`, and
 `--exclude` to leave tables out: each is a source name, a destination table name or a source's
 `schema.table`. `--start-cursor`/`--end-cursor` backfill a cursor range, typed from each selected
-table's cursor (an integer, an RFC 3339 timestamp or a date).
+table's cursor (an integer, an RFC 3339 timestamp or a date). A source's problems (its settings
+are refused, or it cannot list its tables) fail only a command that selects something from it; a
+source that cannot list its tables also fails one selecting a table by name, which could be its.
 
 ## Copying one table
 
