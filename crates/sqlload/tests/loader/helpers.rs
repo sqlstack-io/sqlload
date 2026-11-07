@@ -1695,7 +1695,7 @@ pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result
     Ok(render_plan(&plan).0.join("\n"))
 }
 
-/// A project with two `postgres_cdc` sources on every `public` table of `port`'s database, into the DuckDB file `database`: `app` merges with soft deletes, `log` keeps a changelog.
+/// A project with two `postgres_cdc` sources on every `public` table of `port`'s database, into the DuckDB file `database`: `app` merges with soft deletes, `log` keeps a changelog; `orders.tags`, an array, is pinned to text, as captured arrays must be.
 pub(crate) fn cdc_project(port: u16, database: &std::path::Path) -> String {
     format!(
         r#"
@@ -1725,6 +1725,14 @@ kind = "postgres_cdc"
 connection = "pg"
 include = ["public.*"]
 cdc_mode = "changelog"
+
+[sources.app.tables."public.orders"]
+description = "Orders, captured."
+columns = {{ tags = "text" }}
+
+[sources.log.tables."public.orders"]
+description = "Orders, captured."
+columns = {{ tags = "text" }}
 "#,
         database.display()
     )
@@ -1793,6 +1801,6 @@ pub(crate) const fn crashed_batch(
 
 /// Two transactions: an insert, an update leaving a TOASTed value unchanged and an insert in another table; then a delete and an update.
 pub(crate) const CDC_CHANGES: &str = "
-BEGIN; INSERT INTO public.orders VALUES (4, 4, 'd'); UPDATE public.orders SET qty = 10 WHERE id = 1; INSERT INTO public.items VALUES (3, 'three'); COMMIT;
+BEGIN; INSERT INTO public.orders VALUES (4, 4, 'd', '{\"x y\",z}'); UPDATE public.orders SET qty = 10 WHERE id = 1; INSERT INTO public.items VALUES (3, 'three'); COMMIT;
 BEGIN; DELETE FROM public.orders WHERE id = 2; UPDATE public.items SET name = 'one!' WHERE id = 1; COMMIT;
 ";

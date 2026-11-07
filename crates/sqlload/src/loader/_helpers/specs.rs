@@ -132,7 +132,10 @@ pub(crate) fn build_spec(
     let (strategy, mut problems) = match &cdc {
         Some(_) if context.target.path.is_some() => (
             WriteStrategy::Append,
-            vec!["kind = \"postgres_cdc\" loads into SQL targets in this release, not files targets".to_owned()],
+            vec![
+                "kind = \"postgres_cdc\" loads into SQL targets in this release, not files targets"
+                    .to_owned(),
+            ],
         ),
         Some(cdc) => (
             WriteStrategy::Append,

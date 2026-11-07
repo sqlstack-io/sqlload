@@ -44,8 +44,8 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
 use crate::loader::models::WholeReason;
 use crate::postgres_source::main::plan_read::plan_read;
-use crate::postgres_source::models::ReadColumn;
 use crate::postgres_source::models::SourceTable;
+use crate::postgres_source::models::{PgType, ReadColumn};
 use crate::project::models::BatchStep;
 use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
@@ -264,13 +264,35 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
     match (&spec.files, &spec.python) {
         (Some(_), _) | (_, Some(_)) => files_read_columns(spec),
         (None, None) => {
-            let mut read = plan_read(&selected_columns(spec), &spec.pinned)?;
+            let selected = selected_columns(spec);
+            let mut read = plan_read(&selected, &spec.pinned)?;
             if let Some(cdc) = &spec.cdc {
+                let problems = streamed_array_problems(&selected, &read);
+                if !problems.is_empty() {
+                    return Err(problems);
+                }
                 read.extend(metadata_read_columns(cdc.apply, 0));
             }
             Ok(read)
         }
     }
+}
+
+/// Array columns of a captured table read as JSON: the stream sends Postgres array text (`{a,b}`), which would neither load as JSON nor match the snapshot's rows, so they must be pinned to text.
+fn streamed_array_problems(table: &SourceTable, read: &[ReadColumn]) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    for column in &table.columns {
+        let as_json = read
+            .iter()
+            .any(|read| read.name == column.name && read.output == ColumnType::Json);
+        if column.pg_type == PgType::Array && as_json {
+            problems.push(format!(
+                "{}: kind = \"postgres_cdc\" streams arrays as Postgres array text, not JSON; pin it with columns = {{ {} = \"text\" }}, or exclude it",
+                column.name, column.name
+            ));
+        }
+    }
+    problems
 }
 
 /// The read window for a load that filters its own rows, from the window chosen.

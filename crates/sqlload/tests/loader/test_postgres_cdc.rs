@@ -7,18 +7,18 @@ use crate::helpers::{
 use crate::test_types::{CdcScenarioTestCase, CdcStep};
 
 const SETUP: &str = "
-CREATE TABLE public.orders (id int8 PRIMARY KEY, qty int4, big text);
+CREATE TABLE public.orders (id int8 PRIMARY KEY, qty int4, big text, tags text[]);
 CREATE TABLE public.items (id int8 PRIMARY KEY, name text);
 INSERT INTO public.orders VALUES
-  (1, 1, (SELECT string_agg(md5(g::text), '') FROM generate_series(1, 300) g)),
-  (2, 2, 'b'), (3, 3, 'c');
+  (1, 1, (SELECT string_agg(md5(g::text), '') FROM generate_series(1, 300) g), '{a,b}'),
+  (2, 2, 'b', '{c}'), (3, 3, 'c', NULL);
 INSERT INTO public.items VALUES (1, 'one'), (2, 'two');
 ";
 
 const CHANGES: &str = CDC_CHANGES;
 
-const MERGED_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || qty || ':' || length(big) || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders) || ' | ' || (SELECT string_agg(id || ':' || name || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__items)";
-const MERGED_RESULT: &str = "1:10:9600:update:false,2:2:1:delete:true,3:3:1:snapshot:false,4:4:1:insert:false | 1:one!:update,2:two:snapshot,3:three:insert";
+const MERGED_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders) || ' | ' || (SELECT string_agg(id || ':' || name || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__items)";
+const MERGED_RESULT: &str = "1:10:9600:{a,b}:update:false,2:2:1:{c}:delete:true,3:3:1:-:snapshot:false,4:4:1:{\"x y\",z}:insert:false | 1:one!:update,2:two:snapshot,3:three:insert";
 
 const CHANGELOG_QUERY: &str = "SELECT (SELECT string_agg(_sqlload_seq || ':' || _sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM raw.log__orders) || ' | ' || (SELECT string_agg(_sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM raw.log__items)";
 const CHANGELOG_RESULT: &str = "0:snapshot:1,0:snapshot:2,0:snapshot:3,1:insert:4,2:update:1,1:delete:2 | snapshot:1,snapshot:2,insert:3,update:1";
