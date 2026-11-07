@@ -70,6 +70,39 @@ const SNAPSHOT_CRASH: [CdcStep; 8] = [
 
 const UNPUBLISHED_WRITES: &str = "INSERT INTO other.audit SELECT g FROM generate_series(1, 1000) g";
 
+const LARGE_TRANSACTION: &str = "
+BEGIN;
+INSERT INTO public.orders SELECT g, g, 'x', NULL FROM generate_series(10, 40009) g;
+UPDATE public.orders SET qty = qty + 1 WHERE id % 2 = 0;
+DELETE FROM public.orders WHERE id % 5 = 0;
+UPDATE public.orders SET id = id + 100000 WHERE id BETWEEN 10 AND 29;
+COMMIT;
+";
+
+const SPILLED_LARGE: [CdcStep; 3] = [
+    step("", BOTH, "", (true, "loaded")),
+    step(
+        LARGE_TRANSACTION,
+        BOTH,
+        "",
+        (true, "spilling it to local disk"),
+    ),
+    step("", BOTH, "", (true, "0 rows")),
+];
+
+const SPILLED_CHANGES: [CdcStep; 3] = [
+    step("", BOTH, "", (true, "loaded")),
+    step(
+        CHANGES,
+        BOTH,
+        "",
+        (true, "spilling its changes to local disk"),
+    ),
+    step("", BOTH, "", (true, "0 rows")),
+];
+
+const SPILLED_LIVE_QUERY: &str = "SELECT (SELECT count(*) || ':' || sum(qty) || ':' || sum(id) FROM raw.app__orders WHERE _sqlload_deleted_at IS NULL) || ' | ' || (SELECT count(DISTINCT (_sqlload_lsn, _sqlload_seq)) || '/' || count(*) || ':' || max(_sqlload_seq) FROM raw.log__orders WHERE _sqlload_op <> 'snapshot')";
+
 const SLOT_ADVANCED: &str = "SELECT confirmed_flush_lsn >= $1::text::pg_lsn FROM pg_replication_slots WHERE slot_name = 'sqlload_app'";
 
 const RESNAPSHOT: &[&str] = &["load", "app", "--resnapshot", "--yes"];
@@ -328,6 +361,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "Postgres 15: snapshot, both transactions, then a re-run of nothing",
             tag: "15-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &CAUGHT_UP,
             check_query: MERGED_QUERY,
@@ -336,6 +370,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "Postgres 16: the changelog holds every change once",
             tag: "16-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &CAUGHT_UP,
             check_query: CHANGELOG_QUERY,
@@ -344,6 +379,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "Postgres 17: merge keeps the unchanged TOASTed value",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &CAUGHT_UP,
             check_query: MERGED_QUERY,
@@ -352,6 +388,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "merge: stopped during a batch, before any table commits",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &APP_BEFORE_COMMIT,
             check_query: MERGED_QUERY,
@@ -360,6 +397,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "merge: stopped after the first table committed",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &APP_AFTER_FIRST,
             check_query: MERGED_QUERY,
@@ -368,6 +406,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "merge: stopped after every table committed, before the slot confirmed",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &APP_BEFORE_CONFIRM,
             check_query: MERGED_QUERY,
@@ -376,6 +415,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "changelog: stopped during a batch, before any table commits",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &LOG_BEFORE_COMMIT,
             check_query: CHANGELOG_QUERY,
@@ -384,6 +424,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "changelog: stopped after the first table committed, whose replay is skipped",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &LOG_AFTER_FIRST,
             check_query: CHANGELOG_QUERY,
@@ -392,6 +433,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "changelog: stopped before the slot confirmed, whose replay is skipped",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &LOG_BEFORE_CONFIRM,
             check_query: CHANGELOG_QUERY,
@@ -400,6 +442,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a snapshot stopped part-way, and a dropped slot, both need --resnapshot",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &SNAPSHOT_CRASH,
             check_query: "SELECT string_agg(id || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__orders",
@@ -408,6 +451,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "snapshot rows sit below the slot's consistent point, so a commit at exactly that point still applies",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &CAUGHT_UP,
             check_query: "SELECT CAST((SELECT max(_sqlload_lsn) FROM raw.app__orders WHERE _sqlload_op = 'snapshot') < (SELECT max(snapshot_lsn) FROM raw._sqlload_cdc_snapshots) AS VARCHAR)",
@@ -416,6 +460,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "soft deletes: a truncate then a reinsert in one transaction keeps the reinserted row",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &TRUNCATE_REINSERT,
             check_query: "SELECT string_agg(id || ':' || qty || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders",
@@ -424,6 +469,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "hard deletes remove rows, and a key change under REPLICA IDENTITY FULL keeps its TOASTed value",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: HARD_SOURCE,
             steps: &HARD_KEY_CHANGE,
             check_query: "SELECT string_agg(id || ':' || length(big) || ':' || _sqlload_op, ',' ORDER BY id) || ':' || (SELECT count(*) FROM information_schema.columns WHERE table_name = 'hard__orders' AND column_name = '_sqlload_deleted_at') FROM raw.hard__orders",
@@ -432,6 +478,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a key change that leaves a TOASTed value out stops the load instead of writing NULL",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &KEY_CHANGE_WITHOUT_OLD_ROW,
             check_query: "SELECT string_agg(id || ':' || length(big), ',' ORDER BY id) FROM raw.app__orders",
@@ -440,14 +487,70 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a load of part of the source, or with a table blocked, is refused, and the left-out changes still arrive",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &PARTIAL_LOADS,
             check_query: MERGED_QUERY,
             expected_result: MERGED_RESULT,
         },
         CdcScenarioTestCase {
+            description: "a transaction larger than memory spills to disk: merge matches Postgres, and the changelog, staged in several chunks, holds every change once at its position",
+            tag: "17-alpine",
+            spill_bytes: "100000",
+            extra_config: "",
+            steps: &SPILLED_LARGE,
+            check_query: SPILLED_LIVE_QUERY,
+            expected_result: "32003:640336007:641920006 | 68017/68017:68017",
+        },
+        CdcScenarioTestCase {
+            description: "spilled merge: the TOASTed value, the delete and the second table come out as in memory",
+            tag: "15-alpine",
+            spill_bytes: "1",
+            extra_config: "",
+            steps: &SPILLED_CHANGES,
+            check_query: MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        CdcScenarioTestCase {
+            description: "spilled changelog: every change once, in order, with its unchanged flags",
+            tag: "16-alpine",
+            spill_bytes: "1",
+            extra_config: "",
+            steps: &SPILLED_CHANGES,
+            check_query: CHANGELOG_QUERY,
+            expected_result: CHANGELOG_RESULT,
+        },
+        CdcScenarioTestCase {
+            description: "spilled: a truncate then a reinsert in one transaction keeps the reinserted row",
+            tag: "17-alpine",
+            spill_bytes: "1",
+            extra_config: "",
+            steps: &TRUNCATE_REINSERT,
+            check_query: "SELECT string_agg(id || ':' || qty || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders",
+            expected_result: "1:7:insert:false,2:2:truncate:true,3:3:truncate:true",
+        },
+        CdcScenarioTestCase {
+            description: "spilled: a key change deletes the old key in its own partition and keeps its TOASTed value",
+            tag: "17-alpine",
+            spill_bytes: "1",
+            extra_config: HARD_SOURCE,
+            steps: &HARD_KEY_CHANGE,
+            check_query: "SELECT string_agg(id || ':' || length(big) || ':' || _sqlload_op, ',' ORDER BY id) || ':' || (SELECT count(*) FROM information_schema.columns WHERE table_name = 'hard__orders' AND column_name = '_sqlload_deleted_at') FROM raw.hard__orders",
+            expected_result: "3:1:snapshot,5:9600:update:0",
+        },
+        CdcScenarioTestCase {
+            description: "spilled: stopped after the first table committed, the replay converges",
+            tag: "17-alpine",
+            spill_bytes: "1",
+            extra_config: "",
+            steps: &APP_AFTER_FIRST,
+            check_query: MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        CdcScenarioTestCase {
             description: "a first load of part of the source is refused before it makes the slot, so the whole source snapshots after",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &FIRST_LOAD_PARTIAL,
             check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM raw.app__items",
@@ -456,6 +559,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a column added between loads stops the load instead of leaving old rows without its default",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &SCHEMA_CHANGE,
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__items",
@@ -464,6 +568,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a table without a primary key is refused before any publication is made",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: NOKEY_SOURCE,
             steps: &NO_PRIMARY_KEY,
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'nokey__audit'",
@@ -472,6 +577,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a unique_key outside the primary key is refused before the snapshot, instead of losing deletes",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: UNIQUE_SOURCE,
             steps: &KEY_OUTSIDE_IDENTITY,
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'uniq__items'",
@@ -480,6 +586,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a table with REPLICA IDENTITY NOTHING is refused before it is published",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &IDENTITY_NOTHING,
             check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM raw.app__items",
@@ -488,6 +595,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a publication with tables the source does not load is refused, and SQLLoad's own follows the source again on --resnapshot",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: SHARED_SOURCE,
             steps: &EXTRA_PUBLISHED,
             check_query: MERGED_QUERY,
@@ -496,6 +604,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a json column must be pinned to text, since the stream keeps the source's spelling",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: JSON_SOURCE,
             steps: &UNPINNED_JSON,
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'pages__pages'",
@@ -504,6 +613,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a real value streams as the snapshot reads it",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: "",
             steps: &FLOAT4,
             check_query: "SELECT count(DISTINCT w) || ':' || count(w) FROM raw.app__items",
@@ -512,6 +622,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         CdcScenarioTestCase {
             description: "a column the enforced contract leaves out does not shift which values count as unchanged",
             tag: "17-alpine",
+            spill_bytes: "",
             extra_config: STRICT_SOURCE,
             steps: &DROPPED_COLUMN_TOAST,
             check_query: "SELECT string_agg(id || ':' || length(big) || ':' || tags, ',' ORDER BY id) FROM raw.strict__orders WHERE id = 1",
@@ -536,7 +647,8 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
                     .batch_execute(step.source_change)
                     .await
                     .map_err(|error| error.to_string())?;
-                let (success, output) = run_sqlload(&config, step.args, step.crash_at)?;
+                let (success, output) =
+                    run_sqlload(&config, step.args, (step.crash_at, test_case.spill_bytes))?;
                 assert_eq!(
                     success, step.expected_success,
                     "{}: step {index} {:?}\n{output}",
@@ -593,7 +705,7 @@ fn given_a_quiet_postgres_cdc_source_when_other_tables_write_then_a_load_advance
                 cdc_project(postgres.port, &folder.path().join("out.duckdb")),
             )
             .map_err(|error| error.to_string())?;
-            run_sqlload(&config, APP, "")?;
+            run_sqlload(&config, APP, ("", ""))?;
             client
                 .batch_execute(UNPUBLISHED_WRITES)
                 .await
@@ -603,7 +715,7 @@ fn given_a_quiet_postgres_cdc_source_when_other_tables_write_then_a_load_advance
                 .await
                 .map_err(|error| error.to_string())?
                 .get(0);
-            let (success, output) = run_sqlload(&config, APP, "")?;
+            let (success, output) = run_sqlload(&config, APP, ("", ""))?;
             let advanced: bool = client
                 .query_one(SLOT_ADVANCED, &[&written])
                 .await

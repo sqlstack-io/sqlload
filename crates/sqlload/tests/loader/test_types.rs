@@ -456,6 +456,8 @@ pub(crate) struct CdcScenarioTestCase {
     /// The Postgres image tag.
     pub(crate) tag: &'static str,
     pub(crate) steps: &'static [CdcStep],
+    /// The most bytes of changes a load keeps in memory before spilling them to disk; empty for the default.
+    pub(crate) spill_bytes: &'static str,
     /// More `sqlload.toml` text appended to [`cdc_project`](crate::helpers::cdc_project)'s, such as another source.
     pub(crate) extra_config: &'static str,
     /// A query on the DuckDB file after the last step, and its expected single text result.

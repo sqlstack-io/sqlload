@@ -20,7 +20,7 @@ pub struct Relation {
 }
 
 /// One column value of a changed row.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TupleValue {
     Null,
     /// A TOASTed value the change did not touch: pgoutput leaves it out.
@@ -88,16 +88,24 @@ pub struct TableChanges {
     pub changes: Vec<Change>,
 }
 
-/// Whole transactions read from the stream and not yet written: each table's changes, the shapes seen, and the transaction in progress.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Whole transactions read from the stream and not yet written: each table's changes, the shapes seen, and the transaction in progress. Past `spill_bytes` in memory, the open transaction's messages and the tables' changes move to local files, so a batch can outgrow memory.
+#[derive(Debug, Default)]
 pub struct ChangeBuffer {
     /// The relations sent so far, by oid; they stay known across batches.
     pub relations: std::collections::BTreeMap<u32, Relation>,
-    /// Committed changes per relation oid.
+    /// Committed changes per relation oid still in memory (a table's spilled ones come before them).
     pub tables: std::collections::BTreeMap<u32, TableChanges>,
-    /// The open transaction's messages, kept until its commit.
-    pub open: Vec<PgOutputMessage>,
-    /// Changes committed into `tables`.
+    /// Committed changes per relation oid moved to local disk.
+    pub(crate) spilled: std::collections::BTreeMap<u32, crate::cdc::_helpers::spill::SpillFile>,
+    /// The open transaction's raw messages in memory, kept until its commit.
+    pub open: Vec<Vec<u8>>,
+    /// The open transaction's raw messages on local disk, once they outgrew memory.
+    pub(crate) open_spill: Option<crate::cdc::_helpers::spill::SpillFile>,
+    /// About how many bytes `open` and `tables` hold.
+    pub bytes: usize,
+    /// How many bytes the buffer keeps in memory before spilling.
+    pub spill_bytes: usize,
+    /// Changes committed into the batch.
     pub count: usize,
     /// The newest committed transaction's end LSN, which the slot may confirm once the batch is written.
     pub end_lsn: Option<u64>,

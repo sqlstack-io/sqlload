@@ -35,7 +35,8 @@ pub(crate) fn key_positions(relation: &Relation, key: &[String]) -> Result<Vec<u
     Ok(positions)
 }
 
-fn key_of(values: &[TupleValue], positions: &[usize]) -> Vec<TupleValue> {
+/// The values of the key columns at `positions`.
+pub(crate) fn key_of(values: &[TupleValue], positions: &[usize]) -> Vec<TupleValue> {
     positions
         .iter()
         .map(|position| values.get(*position).cloned().unwrap_or(TupleValue::Null))
@@ -44,23 +45,39 @@ fn key_of(values: &[TupleValue], positions: &[usize]) -> Vec<TupleValue> {
 
 /// Each key's last change in stream order, keys in first-seen order: an update's unchanged TOAST values are taken from the key's earlier change in the batch where it had them, and an update that moves a row to a new key deletes the old key first. The moved row is new to the table, so a value it left out must come from its old row (replica identity full sends it); otherwise the batch fails rather than write NULL.
 pub(crate) fn fold_changes(changes: &[Change], positions: &[usize]) -> Result<Vec<Change>, String> {
-    let mut order: Vec<Vec<TupleValue>> = Vec::new();
-    let mut last: Folded = BTreeMap::new();
+    let mut folder = Folder::default();
     for change in changes {
+        folder.push(change.clone(), positions)?;
+    }
+    Ok(folder.finish())
+}
+
+/// A fold in progress: each key's last change so far, so changes can be folded as they are read without holding them all.
+#[derive(Debug, Default)]
+pub(crate) struct Folder {
+    order: Vec<Vec<TupleValue>>,
+    last: Folded,
+}
+
+impl Folder {
+    /// Fold in the next change in stream order, as [`fold_changes`] does.
+    pub(crate) fn push(&mut self, mut change: Change, positions: &[usize]) -> Result<(), String> {
         let key = key_of(&change.values, positions);
         let moved = change
             .old_key
-            .as_ref()
+            .take()
             .filter(|old| key_of(old, positions) != key);
-        if let Some(old) = moved {
-            let mut deleted = change.clone();
-            deleted.op = ChangeOp::Delete;
-            deleted.values = old.clone();
-            deleted.old_key = None;
-            put((&mut order, &mut last), key_of(old, positions), deleted);
+        if let Some(old) = &moved {
+            let deleted = Change {
+                op: ChangeOp::Delete,
+                values: old.clone(),
+                old_key: None,
+                ..change.clone()
+            };
+            self.put(key_of(old, positions), deleted);
         }
-        let mut change = change.clone();
-        if let Some(earlier) = last
+        if let Some(earlier) = self
+            .last
             .get(&key)
             .filter(|earlier| earlier.op != ChangeOp::Delete)
         {
@@ -70,15 +87,29 @@ pub(crate) fn fold_changes(changes: &[Change], positions: &[usize]) -> Result<Ve
                 }
             }
         }
-        if let Some(old) = moved {
+        if let Some(old) = &moved {
             fill_from_old(&mut change.values, old)?;
         }
-        put((&mut order, &mut last), key, change);
+        self.put(key, change);
+        Ok(())
     }
-    Ok(order
-        .into_iter()
-        .filter_map(|key| last.remove(&key))
-        .collect())
+
+    /// Each key's last change, keys in first-seen order.
+    pub(crate) fn finish(mut self) -> Vec<Change> {
+        let order = std::mem::take(&mut self.order);
+        order
+            .into_iter()
+            .filter_map(|key| self.last.remove(&key))
+            .collect()
+    }
+
+    /// Record `change` as `key`'s last, noting a key seen for the first time.
+    fn put(&mut self, key: Vec<TupleValue>, change: Change) {
+        if !self.last.contains_key(&key) {
+            self.order.push(key.clone());
+        }
+        self.last.insert(key, change);
+    }
 }
 
 /// A moved row's values left out as unchanged, taken from its old row; an error when the old row lacks them.
@@ -95,15 +126,3 @@ fn fill_from_old(values: &mut [TupleValue], old: &[TupleValue]) -> Result<(), St
 }
 
 type Folded = BTreeMap<Vec<TupleValue>, Change>;
-
-/// Record `change` as `key`'s last, noting a key seen for the first time.
-fn put(
-    (order, last): (&mut Vec<Vec<TupleValue>>, &mut Folded),
-    key: Vec<TupleValue>,
-    change: Change,
-) {
-    if !last.contains_key(&key) {
-        order.push(key.clone());
-    }
-    last.insert(key, change);
-}
