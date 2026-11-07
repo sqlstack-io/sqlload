@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/sqlstack-io/sqlload/compare/v0.15.0...v0.16.0) (2026-11-07)
+
+
+### Features
+
+* **cdc:** Postgres change data capture into DuckDB and Snowflake (slice 1) ([#68](https://github.com/sqlstack-io/sqlload/issues/68)) ([efaede4](https://github.com/sqlstack-io/sqlload/commit/efaede4e335a12b581b41ebfc199cb413d7a3ca3))
+
 ## [0.15.0](https://github.com/sqlstack-io/sqlload/compare/v0.14.0...v0.15.0) (2026-11-07)
 
 
