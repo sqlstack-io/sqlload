@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/sqlstack-io/sqlload/compare/v0.16.0...v0.17.0) (2026-11-07)
+
+
+### Features
+
+* **cdc:** spill large transactions and batches to local disk ([#70](https://github.com/sqlstack-io/sqlload/issues/70)) ([04dbe02](https://github.com/sqlstack-io/sqlload/commit/04dbe02835267a55497a015b5e2d796cbd343dee))
+
+
+### Bug Fixes
+
+* **cdc:** apply a relation message at its place in the transaction ([#72](https://github.com/sqlstack-io/sqlload/issues/72)) ([c4d1f71](https://github.com/sqlstack-io/sqlload/commit/c4d1f71abb0c00b74851f71cdca41fdfab335650))
+
 ## [0.16.0](https://github.com/sqlstack-io/sqlload/compare/v0.15.0...v0.16.0) (2026-11-07)
 
 
