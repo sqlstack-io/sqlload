@@ -1,3 +1,5 @@
+#[path = "tests/test_buffer_change.rs"]
+mod buffer_change;
 #[path = "tests/test_change_parts.rs"]
 mod change_parts;
 #[path = "tests/test_decode_message.rs"]

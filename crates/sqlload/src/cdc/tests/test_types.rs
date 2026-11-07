@@ -13,3 +13,10 @@ pub(crate) struct ChangePartsTestCase {
     pub(crate) spilled: usize,
     pub(crate) expected_rows: (Vec<&'static str>, Option<i64>),
 }
+
+/// A transaction's stream messages, and the `_sqlload_seq` of each change it buffers, or the error its commit ends with.
+pub(crate) struct BufferTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) messages: Vec<Vec<u8>>,
+    pub(crate) expected_seqs: Result<Vec<i64>, &'static str>,
+}

@@ -129,3 +129,76 @@ fn row_text(change: &Change) -> String {
         shown(change.values.get(1))
     )
 }
+
+/// A pgoutput Relation message for table 7 `public.t` with text `columns`, the first its key.
+pub(crate) fn relation_message(columns: &[&str]) -> Vec<u8> {
+    let count = i16::try_from(columns.len()).unwrap_or(i16::MAX);
+    let mut bytes = [
+        vec![b'R'],
+        7_u32.to_be_bytes().to_vec(),
+        cstring("public"),
+        cstring("t"),
+        vec![b'd'],
+        count.to_be_bytes().to_vec(),
+    ]
+    .concat();
+    for (index, name) in columns.iter().enumerate() {
+        bytes.push(u8::from(index == 0));
+        bytes.extend(cstring(name));
+        bytes.extend(25_u32.to_be_bytes());
+        bytes.extend((-1_i32).to_be_bytes());
+    }
+    bytes
+}
+
+/// A pgoutput Insert into table 7 of text `values`.
+pub(crate) fn insert_message(values: &[&str]) -> Vec<u8> {
+    let parts: Vec<Vec<u8>> = values.iter().map(|value| text_part(value)).collect();
+    let parts: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
+    [
+        vec![b'I'],
+        7_u32.to_be_bytes().to_vec(),
+        vec![b'N'],
+        tuple(&parts),
+    ]
+    .concat()
+}
+
+/// Buffer one transaction of `messages`, keeping at most `spill_bytes` in memory, and commit it: the `_sqlload_seq` of each change filed, disk before memory, or the error.
+pub(crate) fn buffered_seqs(messages: &[Vec<u8>], spill_bytes: usize) -> Result<Vec<i64>, String> {
+    let start = crate::cdc::_helpers::buffer::buffer_change(
+        crate::cdc::models::ChangeBuffer {
+            spill_bytes,
+            ..crate::cdc::models::ChangeBuffer::default()
+        },
+        crate::cdc::models::StreamStep::Begin,
+    )?;
+    let held = messages.iter().try_fold(start, |buffer, message| {
+        crate::cdc::_helpers::buffer::buffer_change(
+            buffer,
+            crate::cdc::models::StreamStep::Message(message),
+        )
+    })?;
+    let mut buffer = crate::cdc::_helpers::buffer::buffer_change(
+        held,
+        crate::cdc::models::StreamStep::Commit {
+            lsn: 100,
+            end_lsn: 101,
+            time: 0,
+        },
+    )?;
+    let mut seqs: Vec<i64> = Vec::new();
+    for file in buffer.spilled.values_mut() {
+        let mut reader = file.read()?;
+        let spilled: Vec<Change> = std::iter::from_fn(|| reader.next_change().transpose())
+            .collect::<Result<_, String>>()?;
+        seqs.extend(spilled.iter().map(|change| change.seq));
+    }
+    seqs.extend(
+        buffer
+            .tables
+            .values()
+            .flat_map(|table| table.changes.iter().map(|change| change.seq)),
+    );
+    Ok(seqs)
+}

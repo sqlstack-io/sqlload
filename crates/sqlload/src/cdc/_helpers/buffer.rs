@@ -7,7 +7,7 @@ use crate::cdc::models::{
     Change, ChangeBuffer, ChangeOp, PgOutputMessage, StreamStep, TableChanges, TupleValue,
 };
 
-/// Apply one stream step to `buffer`: messages wait in the open transaction, and its commit files its changes under their tables with the commit LSN, so a batch only ever holds whole transactions. A relation message updates the table's shape at once.
+/// Apply one stream step to `buffer`: messages wait in the open transaction, and its commit files its changes under their tables with the commit LSN, so a batch only ever holds whole transactions. A relation message takes effect at its place in the transaction, so changes before a DDL are read with the shape they were written in.
 pub(crate) fn buffer_change(
     mut buffer: ChangeBuffer,
     step: StreamStep<'_>,
@@ -19,19 +19,6 @@ pub(crate) fn buffer_change(
             buffer.open_spill = None;
         }
         StreamStep::Message(bytes) => match decode_message(bytes)? {
-            PgOutputMessage::Relation(relation) => {
-                let reshaped = buffer
-                    .tables
-                    .get(&relation.oid)
-                    .is_some_and(|table| table.relation.columns != relation.columns);
-                if reshaped {
-                    return Err(format!(
-                        "{}.{} changed shape while streaming; schema changes while streaming come in a later release, so re-snapshot with --resnapshot",
-                        relation.schema, relation.table
-                    ));
-                }
-                buffer.relations.insert(relation.oid, relation);
-            }
             PgOutputMessage::Other(_) => {}
             _ => buffer = hold_message(buffer, bytes)?,
         },
@@ -46,13 +33,15 @@ pub(crate) fn buffer_change(
             if let Some(mut spilled) = buffer.open_spill.take() {
                 let mut reader = spilled.read()?;
                 while let Some(message) = reader.next_bytes()? {
-                    index += 1;
-                    buffer = file_message(buffer, &decode_message(&message)?, (commit, index))?;
+                    let message = decode_message(&message)?;
+                    index += usize::from(!matches!(message, PgOutputMessage::Relation(_)));
+                    buffer = file_message(buffer, &message, (commit, index))?;
                 }
             }
             for message in held {
-                index += 1;
-                buffer = file_message(buffer, &decode_message(&message)?, (commit, index))?;
+                let message = decode_message(&message)?;
+                index += usize::from(!matches!(message, PgOutputMessage::Relation(_)));
+                buffer = file_message(buffer, &message, (commit, index))?;
             }
             buffer.end_lsn = Some(end_lsn);
         }
@@ -125,7 +114,21 @@ fn file_message(
             .iter()
             .map(|relation| (*relation, change(ChangeOp::Truncate, &[], &None)))
             .collect(),
-        PgOutputMessage::Relation(_) | PgOutputMessage::Other(_) => Vec::new(),
+        PgOutputMessage::Relation(relation) => {
+            let reshaped = buffer
+                .tables
+                .get(&relation.oid)
+                .is_some_and(|table| table.relation.columns != relation.columns);
+            if reshaped {
+                return Err(format!(
+                    "{}.{} changed shape while streaming; schema changes while streaming come in a later release, so re-snapshot with --resnapshot",
+                    relation.schema, relation.table
+                ));
+            }
+            buffer.relations.insert(relation.oid, relation.clone());
+            Vec::new()
+        }
+        PgOutputMessage::Other(_) => Vec::new(),
     };
     for (oid, change) in filed {
         let Some(relation) = buffer.relations.get(&oid) else {
