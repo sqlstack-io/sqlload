@@ -12,7 +12,8 @@ Use sqlload 0.17.0 or later for `postgres_cdc`. In 0.16.0, a transaction that ch
 columns after writing to it could put values in the wrong columns. Schema changes while streaming
 load from 0.18.0; in 0.17.0, any change to a table's columns stops the load until you re-snapshot.
 From 0.19.0, a table that joins the source is copied on its own, and a first snapshot that
-stopped part-way resumes; in 0.18.0, both needed `--resnapshot`.
+stopped part-way resumes; in 0.18.0, both needed `--resnapshot`. `load --follow`, which keeps
+streaming, is in 0.20.0 and later.
 
 ## Requirements
 
@@ -194,7 +195,65 @@ In `raw.app__orders`, the deleted order is kept and marked:
 | 1001 | placed | `{app}` | insert | no |
 
 Run `sqlload load` on a schedule to keep the tables up to date. Each run stops once it has read
-the changes committed before it started.
+the changes committed before it started. To load changes as they arrive instead, keep one load
+running with [`--follow`](#keep-streaming).
+
+## Keep streaming
+
+From sqlload 0.20.0, `sqlload load SOURCE --follow` keeps streaming after it catches up. It holds
+one replication session open and writes a batch every `batch_interval` (default `10s`), at 100,000
+changes, or when it stops. A transaction still open on the server stays buffered until it
+commits. It runs until `--max-duration` passes or it gets Ctrl-C or SIGTERM:
+
+```bash
+sqlload load app --follow                    # until Ctrl-C or SIGTERM
+sqlload load app --follow --max-duration 10m
+```
+
+It logs each batch it writes, with how far it is behind the server. Here an order is inserted and
+then updated while it follows, then Ctrl-C stops it:
+
+```console
+$ sqlload load app --follow
+…
+2026-11-07T11:24:53.505015Z  INFO sqlload::cdc::main::follow_cdc: following
+2026-11-07T11:25:03.555267Z  INFO sqlload::cdc::_helpers::stream: batch written source="app" changes=2 tables=1 lsn=0/15B3720 behind_bytes=0 behind_secs=6
+2026-11-07T11:25:11.518577Z  INFO sqlload::command::_helpers::loader_commands: stopping once the batch or copy under way is written; press Ctrl-C again to stop now
+2026-11-07T11:25:11.520357Z  INFO sqlload::cdc::main::follow_cdc: stopped following rows=1
+loaded   raw.app__customers  0 rows  18.0s
+loaded   raw.app__orders     1 rows  18.0s
+
+✓ Completed  2 loaded, 1 rows, 18.1s
+```
+
+`behind_bytes` is how far the batch is behind the server's WAL position, and `behind_secs` how
+long ago its newest change committed. The two changes to one order load as one row under `merge`.
+
+- **Stopping.** `--max-duration`, or a first Ctrl-C or SIGTERM, writes and confirms what it has
+  read, then exits 0. A snapshot or copy under way finishes first. A second signal stops at once
+  (exit code 130), which is safe: the next load skips what was already written.
+- **While idle** it writes nothing and confirms the server's position, so the slot keeps no WAL for
+  writes to tables it doesn't publish. It sends Snowflake no queries, so the warehouse can suspend;
+  each batch written resumes it, and a longer `batch_interval` writes fewer, larger batches.
+- **A column added** while it follows is planned again and added to the destination, and the stream
+  carries on from where it was confirmed:
+
+  ```console
+  2026-11-07T11:25:34.841575Z  INFO sqlload::cdc::_helpers::stream: planning again reason=public.customers gained column vip during this load; run it again, and the next load plans for it
+  2026-11-07T11:25:34.865618Z  INFO sqlload::cdc::_helpers::stream: applied line=altered  raw.app__customers  add column  vip bool -> BOOLEAN
+  2026-11-07T11:25:34.865667Z  INFO sqlload::cdc::main::follow_cdc: following
+  ```
+
+  The same column gained again, with nothing written in between, stops it.
+- **Every other error**, including a re-plan that blocks a table, exits 1 without confirming
+  anything unwritten. Run it under a supervisor that restarts it; the restarted load carries on
+  from the last confirmed position.
+- **A table that joins `include`** while it follows is copied at its next re-plan or restart (see
+  [Adding tables](#adding-tables)).
+- **One source per process.** It follows one `postgres_cdc` source and nothing else, so select
+  that source. A selection with other tables or several `postgres_cdc` sources, `plan --follow`,
+  `apply --follow`, `--reload`, the cursor options, and `--max-duration` without `--follow` are
+  refused. `--resnapshot` applies once, at the start.
 
 ## Settings
 
@@ -207,6 +266,7 @@ the changes committed before it started.
 | `deletes` | `soft` | `merge` only: `soft` marks a deleted row with `_sqlload_deleted_at`; `hard` removes it. |
 | `slot` | `sqlload_<source>` | The replication slot. |
 | `publication` | `sqlload_<source>` | The publication. SQLLoad creates `sqlload_<source>` when it's missing. |
+| `batch_interval` | `10s` | With [`load --follow`](#keep-streaming): how often it writes what it has read. At least `1s`. |
 
 Column settings (`columns`, `exclude_columns`, `mask` and the rest) work as for other sources. A
 captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. `merge`
@@ -325,6 +385,7 @@ failed   raw.app__customers  column tier of app__customers was added with a defa
 ```
 
 A column added while a load runs stops that load before anything is written; run it again.
+Under [`--follow`](#keep-streaming), it plans again and carries on.
 
 A generated column, or one left out of the publication's column list, never streams, so a table
 that loads one is refused. Add it to `exclude_columns`.
@@ -332,7 +393,8 @@ that loads one is refused. Add it to `exclude_columns`.
 ## Adding tables
 
 From sqlload 0.19.0, a table that joins a source after its first load, because `include` now
-matches it or was widened, is copied on its own at the start of the next load. The other tables
+matches it or was widened, is copied on its own at the start of the next load (under `--follow`,
+at its next re-plan or restart). The other tables
 keep streaming, with their history and soft deletes; they aren't copied again. The copy reads
 under a temporary slot, so one slot under `max_replication_slots` must be free when it starts.
 The table's changes from before its copy are skipped, and from then on it streams with the

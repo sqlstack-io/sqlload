@@ -111,6 +111,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `cdc_mode` | postgres_cdc | `merge` (default) or `changelog`. See [Postgres changes](/docs/sources/postgres-cdc/#settings). |
 | `deletes` | postgres_cdc | `soft` (default) or `hard`; `merge` only. |
 | `slot`, `publication` | postgres_cdc | The replication slot and publication. Default `sqlload_<source>` for both. |
+| `batch_interval` | postgres_cdc | With `load --follow`: how often it writes what it has read. Default `10s`, at least `1s`. |
 | `exclude_columns`, `allow_columns` | all | Column patterns to leave out, and to keep anyway. |
 | `skip_tables_with_columns` | postgres | Leave out tables with a column matching one of these patterns. |
 | `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
