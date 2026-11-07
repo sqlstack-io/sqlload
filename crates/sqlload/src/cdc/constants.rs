@@ -52,3 +52,9 @@ pub const SLOT_NAME_BYTES: usize = 63;
 
 /// What Postgres says when a slot cannot be made because every one under `max_replication_slots` is taken.
 pub const SLOTS_FULL_ERROR: &str = "all replication slots are in use";
+
+/// How often `load --follow` writes the changes it has read, when the source sets no `batch_interval`.
+pub const BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Microseconds in a second, for how far behind a followed batch's newest commit is.
+pub const MICROS_PER_SECOND: i64 = 1_000_000;

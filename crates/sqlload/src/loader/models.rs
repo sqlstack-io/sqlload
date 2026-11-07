@@ -112,6 +112,8 @@ pub struct CdcSpec {
     pub apply: ChangeApply,
     pub slot: String,
     pub publication: String,
+    /// How often `load --follow` writes the changes it has read.
+    pub batch_interval: std::time::Duration,
 }
 
 /// A table declared in Python: its columns are inferred from what the function yields at load.

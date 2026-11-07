@@ -216,6 +216,12 @@ pub struct LoaderArgs {
     /// `plan` only: print the plan as one JSON document.
     #[arg(long)]
     pub json: bool,
+    /// `load` of one postgres_cdc source only: keep streaming after catching up, writing a batch every `batch_interval`, until --max-duration passes or Ctrl-C/SIGTERM (a second one stops at once).
+    #[arg(long, conflicts_with_all = ["reload", "start_cursor", "end_cursor"])]
+    pub follow: bool,
+    /// With --follow: stop after this long, e.g. `10m`, once the buffered changes are written.
+    #[arg(long, requires = "follow", value_parser = humantime::parse_duration)]
+    pub max_duration: Option<Duration>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (for tests).
     #[arg(long, hide = true, value_parser = clap::value_parser!(u64).range(1..))]
     pub batch_bytes: Option<u64>,

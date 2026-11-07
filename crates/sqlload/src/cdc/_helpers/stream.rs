@@ -6,6 +6,7 @@ use std::time::Duration;
 use pgwire_replication::client::ReplicationEvent;
 use pgwire_replication::{Lsn, ReplicationClient, ReplicationConfig, TlsConfig};
 use tokio_postgres::Client;
+use tokio_util::sync::CancellationToken;
 
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
@@ -17,18 +18,21 @@ use crate::cdc::_helpers::snapshot_log::SnapshotLog;
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{
     BACKFILL_SLOT_SUFFIX, BATCH_CHANGES, COLUMN_LISTS_VERSION, GENERATED_COLUMNS_VERSION,
-    LOST_WAL_STATUS, REPLICATION_OPTIONS, SLOT_NAME_BYTES, SLOTS_FULL_ERROR, SNAPSHOT_SETTINGS,
-    SPILL_BYTES, STOP_MESSAGE_PREFIX,
+    LOST_WAL_STATUS, MICROS_PER_SECOND, POSTGRES_EPOCH_MICROS, REPLICATION_OPTIONS,
+    SLOT_NAME_BYTES, SLOTS_FULL_ERROR, SNAPSHOT_SETTINGS, SPILL_BYTES, STOP_MESSAGE_PREFIX,
 };
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::cdc::models::{
-    CatalogColumn, ChangeBuffer, PlannedShape, SnapshotRecord, StreamStep, TableChanges,
+    CatalogColumn, ChangeBuffer, FollowStep, PlannedShape, SnapshotRecord, StreamStep, Streamed,
+    TableChanges,
 };
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
+use crate::loader::main::apply_project::apply_project;
+use crate::loader::main::plan_project::plan_project;
 use crate::loader::models::{
-    CdcSpec, CommitRule, LoadRun, ProjectPlan, Publisher, TableLoaded, TableOutcome, TablePlan,
-    WholeReason,
+    CdcSpec, CommitRule, LoadRun, PlanOptions, ProjectPlan, Publisher, TableLoaded, TableOutcome,
+    TablePlan, WholeReason,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::errors::PostgresError;
@@ -51,6 +55,8 @@ pub(crate) struct CdcSource<'a> {
     pub(crate) cdc: &'a CdcSpec,
     pub(crate) tables: Vec<&'a TablePlan>,
     pub(crate) destination: &'a Destination,
+    /// Under `load --follow`: keep streaming, writing a batch every `batch_interval`, until this is cancelled.
+    pub(crate) follow: Option<&'a CancellationToken>,
 }
 
 /// Stop the process at `point` when a crash test asks for it there (`SQLLOAD_TEST_CRASH_AT`); compiled into test builds only.
@@ -455,8 +461,10 @@ impl CdcSource<'_> {
         Ok(Ok(unrecorded))
     }
 
-    /// Load the source: rows written per destination table name.
-    pub(crate) async fn load(&self) -> Result<BTreeMap<String, u64>, LoaderError> {
+    /// Load the source: rows written per destination table name, and, when following, why it stopped to re-plan, if it did.
+    pub(crate) async fn load(
+        &self,
+    ) -> Result<(BTreeMap<String, u64>, Option<String>), LoaderError> {
         let control = self.connect().await?;
         let missing = self.ensure_publication(&control).await?;
         self.refuse_unstreamed(&control).await?;
@@ -497,6 +505,31 @@ impl CdcSource<'_> {
                 self.snapshot().await?
             }
         };
+        let stop = match self.follow {
+            Some(_) => None,
+            None => Some(self.emit_stop(&control).await?),
+        };
+        let streamed = self.stream(&control, &mut stream, stop).await;
+        let confirmed = match streamed {
+            Ok(streamed) => {
+                for (table, count) in streamed.rows {
+                    *rows.entry(table).or_default() += count;
+                }
+                match streamed.end {
+                    Some(end) => self.await_confirmed(&control, end).await,
+                    None => Ok(()),
+                }
+                .map(|()| streamed.replan)
+            }
+            Err(error) => Err(error),
+        };
+        stream.stop();
+        let _ = stream.shutdown().await;
+        confirmed.map(|replan| (rows, replan))
+    }
+
+    /// Mark the WAL position a catch-up load stops at with a logical message; its LSN.
+    async fn emit_stop(&self, control: &Client) -> Result<Lsn, LoaderError> {
         let stop: String = control
             .query_one(
                 "SELECT pg_logical_emit_message(false, $1, '')::text",
@@ -505,23 +538,7 @@ impl CdcSource<'_> {
             .await
             .map_err(postgres)?
             .get(0);
-        let stop = Lsn::parse(&stop).map_err(replication)?;
-        let streamed = self.stream(&control, &mut stream, stop).await;
-        let confirmed = match streamed {
-            Ok((end, written)) => {
-                for (table, count) in written {
-                    *rows.entry(table).or_default() += count;
-                }
-                match end {
-                    Some(end) => self.await_confirmed(&control, end).await,
-                    None => Ok(()),
-                }
-            }
-            Err(error) => Err(error),
-        };
-        stream.stop();
-        let _ = stream.shutdown().await;
-        confirmed.map(|()| rows)
+        Lsn::parse(&stop).map_err(replication)
     }
 
     /// Add `tables` to SQLLoad's own publication, so the slot captures their changes from here on.
@@ -745,23 +762,60 @@ impl CdcSource<'_> {
         copied
     }
 
-    /// Read changes until the stop message, writing a batch whenever it holds enough changes at a transaction's end, and the rest at the stop; returns the end LSN of the last transaction read, confirmed to the slot, or `None` when there was none.
+    /// Read changes until the stop message at `stop`, writing a batch whenever it holds enough changes at a transaction's end, and the rest at the stop. With no `stop` (following), keep reading until cancelled, also writing what is committed every `batch_interval` and, while nothing is buffered, confirming the server's position from its keepalives; a table that gains a column ends it for a re-plan, with nothing of that batch written. Returns what it confirmed, wrote and, following, why it stopped to re-plan.
     async fn stream(
         &self,
         control: &Client,
         stream: &mut ReplicationClient,
-        stop: Lsn,
-    ) -> Result<(Option<u64>, BTreeMap<String, u64>), LoaderError> {
-        let mut rows: BTreeMap<String, u64> = BTreeMap::new();
+        stop: Option<Lsn>,
+    ) -> Result<Streamed, LoaderError> {
+        let mut streamed = Streamed::default();
         let mut buffer = ChangeBuffer {
             spill_bytes: spill_bytes(),
             floors: self.copy_points().await?,
             ..ChangeBuffer::default()
         };
-        let mut confirmed: Option<u64> = None;
+        let interval = self.cdc.batch_interval;
+        let mut deadline = tokio::time::Instant::now() + interval;
+        let mut open = false;
+        let mut server_end: u64 = 0;
+        let mut newest_commit: Option<i64> = None;
         loop {
-            let Some(event) = stream.recv().await.map_err(replication)? else {
-                return Err(replication("the stream ended before the load caught up"));
+            let next = match (stop, self.follow) {
+                (None, Some(follow)) => tokio::select! {
+                    biased;
+                    () = follow.cancelled() => FollowStep::Stop,
+                    () = tokio::time::sleep_until(deadline) => FollowStep::Tick,
+                    event = stream.recv() => FollowStep::Event(event.map_err(replication)?),
+                },
+                _ => FollowStep::Event(stream.recv().await.map_err(replication)?),
+            };
+            let event = match next {
+                FollowStep::Event(Some(event)) => event,
+                FollowStep::Event(None) => {
+                    return Err(replication(match stop {
+                        Some(_) => "the stream ended before the load caught up",
+                        None => "the stream ended while following",
+                    }));
+                }
+                FollowStep::Tick | FollowStep::Stop => {
+                    deadline = tokio::time::Instant::now() + interval;
+                    let cut = self
+                        .cut(control, stream, (buffer, server_end, newest_commit))
+                        .await;
+                    let (next_buffer, written) = match replanned(cut, true)? {
+                        Ok(cut) => cut,
+                        Err(reason) => {
+                            streamed.replan = Some(reason);
+                            return Ok(streamed);
+                        }
+                    };
+                    (buffer, streamed) = (next_buffer, merged(streamed, written));
+                    if matches!(next, FollowStep::Stop) {
+                        return Ok(streamed);
+                    }
+                    continue;
+                }
             };
             let step = match &event {
                 ReplicationEvent::Begin { .. } => Some(StreamStep::Begin),
@@ -777,34 +831,101 @@ impl CdcSource<'_> {
                 }),
                 _ => None,
             };
+            open = match &event {
+                ReplicationEvent::Begin { .. } => true,
+                ReplicationEvent::Commit { .. } => false,
+                _ => open,
+            };
+            if let ReplicationEvent::Commit {
+                commit_time_micros, ..
+            } = &event
+            {
+                newest_commit = Some(*commit_time_micros);
+            }
+            if let ReplicationEvent::KeepAlive { wal_end, .. }
+            | ReplicationEvent::XLogData { wal_end, .. } = &event
+            {
+                server_end = server_end.max(wal_end.as_u64());
+            }
             if let Some(step) = step {
                 buffer = buffer_change(buffer, step).map_err(LoaderError::Invalid)?;
             }
+            let idle = !open && buffer.tables.is_empty() && buffer.spilled.is_empty();
+            if let (None, true, ReplicationEvent::KeepAlive { wal_end, .. }) = (stop, idle, &event)
+            {
+                let quiet = wal_end.as_u64().max(buffer.end_lsn.unwrap_or_default());
+                stream.update_applied_lsn(Lsn::from_u64(quiet));
+                streamed.end = Some(quiet).max(streamed.end);
+            }
             let at_stop = matches!(
-                &event,
-                ReplicationEvent::Message { prefix, lsn, .. }
+                (&event, stop),
+                (ReplicationEvent::Message { prefix, lsn, .. }, Some(stop))
                     if prefix == STOP_MESSAGE_PREFIX && *lsn >= stop
             );
             let full =
                 matches!(event, ReplicationEvent::Commit { .. }) && buffer.count >= BATCH_CHANGES;
             if full || at_stop {
-                let tables = std::mem::take(&mut buffer.tables);
-                let spilled = std::mem::take(&mut buffer.spilled);
-                buffer.count = 0;
-                buffer.bytes = 0;
-                for (table, count) in self.flush(control, tables, spilled).await? {
-                    *rows.entry(table).or_default() += count;
-                }
-                if let Some(end) = buffer.end_lsn {
-                    stream.update_applied_lsn(Lsn::from_u64(end));
-                    confirmed = Some(end);
-                }
+                let cut = self
+                    .cut(control, stream, (buffer, server_end, newest_commit))
+                    .await;
+                let (next_buffer, written) = match replanned(cut, stop.is_none())? {
+                    Ok(cut) => cut,
+                    Err(reason) => {
+                        streamed.replan = Some(reason);
+                        return Ok(streamed);
+                    }
+                };
+                (buffer, streamed) = (next_buffer, merged(streamed, written));
+                deadline = tokio::time::Instant::now() + interval;
             }
-            if at_stop {
+            if let (true, Some(stop)) = (at_stop, stop) {
                 stream.update_applied_lsn(stop);
-                return Ok((Some(stop.as_u64()).max(confirmed), rows));
+                streamed.end = Some(stop.as_u64()).max(streamed.end);
+                return Ok(streamed);
             }
         }
+    }
+
+    /// Write the buffer's committed transactions as one batch and confirm them to the slot: the emptied buffer, and the rows each table wrote with the end LSN confirmed; a buffer holding none only confirms. Following, a written batch is logged with how far it is behind the server's position `server_end` and the newest commit's time.
+    async fn cut(
+        &self,
+        control: &Client,
+        stream: &mut ReplicationClient,
+        (mut buffer, server_end, newest_commit): (ChangeBuffer, u64, Option<i64>),
+    ) -> Result<(ChangeBuffer, Streamed), LoaderError> {
+        let mut written = Streamed::default();
+        let tables = std::mem::take(&mut buffer.tables);
+        let spilled = std::mem::take(&mut buffer.spilled);
+        let changes = buffer.count;
+        buffer.count = 0;
+        buffer.bytes = 0;
+        let touched = tables.len()
+            + spilled
+                .keys()
+                .filter(|oid| !tables.contains_key(oid))
+                .count();
+        if touched > 0 {
+            written.rows = self.flush(control, tables, spilled).await?;
+        }
+        let Some(end) = buffer.end_lsn else {
+            return Ok((buffer, written));
+        };
+        stream.update_applied_lsn(Lsn::from_u64(end));
+        written.end = Some(end);
+        if let (Some(_), true) = (self.follow, touched > 0) {
+            let behind_secs = newest_commit
+                .map(|micros| (postgres_now_micros() - micros).max(0) / MICROS_PER_SECOND);
+            tracing::info!(
+                source = self.name,
+                changes,
+                tables = touched,
+                lsn = %Lsn::from_u64(end),
+                behind_bytes = server_end.saturating_sub(end),
+                behind_secs,
+                "batch written"
+            );
+        }
+        Ok((buffer, written))
     }
 
     /// Each loaded table's copy point by its source `(schema, table)`, from its snapshot record.
@@ -936,7 +1057,7 @@ impl CdcSource<'_> {
         };
         match gained.is_empty() {
             true => Ok(gone),
-            false => Err(LoaderError::Invalid(format!(
+            false => Err(LoaderError::Replan(format!(
                 "{}.{} gained {} {} during this load; run it again, and the next load plans for {}",
                 changes.relation.schema,
                 changes.relation.table,
@@ -980,6 +1101,39 @@ impl CdcSource<'_> {
     }
 }
 
+/// A batch's outcome as the stream goes on: what it wrote, or why to re-plan when following and a table gained a column (stopping first at the `follow-before-replan` crash point); else its error.
+fn replanned<T>(
+    cut: Result<T, LoaderError>,
+    following: bool,
+) -> Result<Result<T, String>, LoaderError> {
+    match (cut, following) {
+        (Ok(cut), _) => Ok(Ok(cut)),
+        (Err(LoaderError::Replan(reason)), true) => {
+            crash_point("follow-before-replan");
+            Ok(Err(reason))
+        }
+        (Err(error), _) => Err(error),
+    }
+}
+
+/// `streamed` with one batch's rows added and its confirmed end LSN, when later.
+fn merged(mut streamed: Streamed, batch: Streamed) -> Streamed {
+    for (table, count) in batch.rows {
+        *streamed.rows.entry(table).or_default() += count;
+    }
+    streamed.end = streamed.end.max(batch.end);
+    streamed
+}
+
+/// Now, in microseconds since 2000-01-01 UTC, the epoch Postgres times commits from.
+fn postgres_now_micros() -> i64 {
+    let unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| i64::try_from(elapsed.as_micros()).unwrap_or(i64::MAX))
+        .unwrap_or_default();
+    unix.saturating_sub(POSTGRES_EPOCH_MICROS)
+}
+
 /// The read columns with the change columns read as the snapshot's constants, the columns the table has (a merged table keeps no unchanged-value flags).
 fn with_snapshot_columns(read: &[ReadColumn], cdc: &CdcSpec, snapshot_lsn: i64) -> Vec<ReadColumn> {
     let mut columns: Vec<ReadColumn> = read
@@ -1012,12 +1166,12 @@ pub(crate) fn captured_sources(plan: &ProjectPlan) -> BTreeMap<&str, CapturedTab
 /// One source's unblocked tables, and its blocked tables' names.
 pub(crate) type CapturedTables<'a> = (Vec<&'a TablePlan>, Vec<String>);
 
-/// Load source `name` with `tables`: rows written per destination table name, or why it failed.
+/// Load source `name` with `tables`, following until `follow` is cancelled when given: rows written per destination table name and, following, why it stopped to re-plan, or why it failed.
 pub(crate) async fn load_source(
     run: &LoadRun<'_>,
     name: &str,
-    tables: &[&TablePlan],
-) -> Result<BTreeMap<String, u64>, String> {
+    (tables, follow): (&[&TablePlan], Option<&CancellationToken>),
+) -> Result<(BTreeMap<String, u64>, Option<String>), String> {
     let first = tables.first().map(|table| &table.spec);
     let (Some(source), Some(cdc), Some(destination)) = (
         run.project.sources.get(name),
@@ -1035,6 +1189,7 @@ pub(crate) async fn load_source(
         cdc,
         tables: tables.to_vec(),
         destination,
+        follow,
     };
     unit.load().await.map_err(|error| error.to_string())
 }
@@ -1108,4 +1263,75 @@ async fn catalog_columns(
             has_default: row.get(3),
         })
         .collect())
+}
+
+/// One follow of `plan`'s source until `stop`, or until a table gains a column: its unblocked tables, the rows each wrote and why to re-plan, or why it failed. A source with a blocked table does not follow, since its slot would skip that table's changes.
+pub(crate) async fn follow_round<'a>(
+    run: &LoadRun<'_>,
+    plan: &'a ProjectPlan,
+    stop: &CancellationToken,
+) -> (
+    Vec<&'a TablePlan>,
+    Result<(BTreeMap<String, u64>, Option<String>), String>,
+) {
+    let Some((name, (tables, blocked))) = captured_sources(plan).into_iter().next() else {
+        return (
+            Vec::new(),
+            Err("load --follow needs a postgres_cdc source".to_owned()),
+        );
+    };
+    if !blocked.is_empty() {
+        let error = format!(
+            "source {name} does not follow while {} {} blocked: its tables share one slot, so following the rest would skip the blocked tables' changes",
+            blocked.join(", "),
+            match blocked.len() {
+                1 => "is",
+                _ => "are",
+            }
+        );
+        return (tables, Err(error));
+    }
+    let followed = load_source(run, name, (&tables, Some(stop))).await;
+    (tables, followed)
+}
+
+/// Plan the project again with `options` because of `reason`, and apply it: the new plan and the lines its apply printed.
+pub(crate) async fn replan(
+    run: &LoadRun<'_>,
+    options: &PlanOptions,
+    reason: &str,
+) -> Result<(ProjectPlan, Vec<String>), String> {
+    tracing::info!(%reason, "planning again");
+    let plan = plan_project(run.project, run.destinations, options)
+        .await
+        .map_err(|error| error.to_string())?;
+    let lines = apply_project(&plan, run.destinations)
+        .await
+        .map_err(|error| error.to_string())?;
+    for line in &lines {
+        tracing::info!(%line, "applied");
+    }
+    Ok((plan, lines))
+}
+
+/// `rows` with each table's `written` rows added.
+pub(crate) fn added(
+    mut rows: BTreeMap<String, u64>,
+    written: BTreeMap<String, u64>,
+) -> BTreeMap<String, u64> {
+    for (table, count) in written {
+        *rows.entry(table).or_default() += count;
+    }
+    rows
+}
+
+/// `outcomes` with the re-plans' `applied` lines on the first, so the tally prints them.
+pub(crate) fn with_changes(
+    mut outcomes: Vec<TableOutcome>,
+    applied: Vec<String>,
+) -> Vec<TableOutcome> {
+    if let Some(Ok(loaded)) = outcomes.first_mut().map(|outcome| &mut outcome.loaded) {
+        loaded.changes.extend(applied);
+    }
+    outcomes
 }

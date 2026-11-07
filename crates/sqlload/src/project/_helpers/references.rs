@@ -3,7 +3,7 @@ use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, TABLE_PLACEHOLDER,
+    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
     CdcDeletes, CdcMode, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind,
@@ -136,10 +136,11 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     let cdc_only = source.publication.is_some()
         || source.slot.is_some()
         || source.cdc_mode != CdcMode::Merge
-        || source.deletes != CdcDeletes::Soft;
+        || source.deletes != CdcDeletes::Soft
+        || source.batch_interval.is_some();
     if cdc_only && source.kind != SourceKind::PostgresCdc {
         problems.push(format!(
-            "{place} publication, slot, cdc_mode and deletes are for kind = \"postgres_cdc\""
+            "{place} publication, slot, cdc_mode, deletes and batch_interval are for kind = \"postgres_cdc\""
         ));
     }
     if source.kind == SourceKind::PostgresCdc {
@@ -238,6 +239,14 @@ fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             ));
             break;
         }
+    }
+    if source
+        .batch_interval
+        .is_some_and(|interval| interval < MIN_BATCH_INTERVAL)
+    {
+        problems.push(format!(
+            "{place} batch_interval must be at least 1s, or `load --follow` would write a batch for almost every change"
+        ));
     }
     if source.deletes == CdcDeletes::Hard && source.cdc_mode == CdcMode::Changelog {
         problems.push(format!(

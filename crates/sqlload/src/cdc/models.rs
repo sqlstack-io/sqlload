@@ -155,3 +155,22 @@ pub struct PlannedShape<'a> {
     pub merge: bool,
     pub known: &'a [String],
 }
+
+/// What a following stream waits on next.
+#[derive(Debug)]
+pub enum FollowStep {
+    /// The stream's next event; `None` once it ended.
+    Event(Option<pgwire_replication::client::ReplicationEvent>),
+    /// The batch interval passed.
+    Tick,
+    /// Following was asked to stop.
+    Stop,
+}
+
+/// What a stream read: the end LSN it confirmed last (`None` when it confirmed none), the rows each table wrote, and why it stopped to re-plan, when a table gained a column while following.
+#[derive(Debug, Default)]
+pub struct Streamed {
+    pub end: Option<u64>,
+    pub rows: std::collections::BTreeMap<String, u64>,
+    pub replan: Option<String>,
+}

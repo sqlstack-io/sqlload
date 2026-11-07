@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use crate::adapters::dispatch::models::Destination;
 use crate::command::_helpers::output::confirm_reload;
 use crate::command::_helpers::project_file::replace_file;
-use crate::command::constants::RELOAD_DECLINED;
+use crate::command::_helpers::signals::wait_for_signal;
+use crate::command::constants::{FORCED_STOP_EXIT, RELOAD_DECLINED};
 use crate::command::models::{Command, ContractAction, LoaderArgs, LoaderRequest, StateAction};
 use crate::contract::main::compare_contracts::compare_contracts;
 use crate::contract::main::render_contract::render_contract;
@@ -27,6 +28,7 @@ use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::project::models::ProjectConfig;
 use crate::python_sources::types::PythonHost;
+use tokio_util::sync::CancellationToken;
 
 fn environment_variable(name: &str) -> Option<String> {
     match std::env::var(name) {
@@ -85,6 +87,9 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
 /// Run a loader command against the project in `request.text`: the lines to print, and whether it succeeded. Under `plan --json` every failure is a JSON error document.
 pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String>, bool), String> {
     let json = match &request.command {
+        Command::Plan(args) | Command::Apply(args) if args.follow => {
+            return Err("--follow and --max-duration apply to load only".to_owned());
+        }
         Command::Plan(args) => args.json,
         Command::Apply(args) | Command::Load(args) if args.json => {
             return Err("--json applies to plan only".to_owned());
@@ -183,7 +188,11 @@ async fn run_command(
             );
         }
     };
-    let (json, yes) = (args.json, args.yes);
+    let (json, yes, follow) = (
+        args.json,
+        args.yes,
+        args.follow.then_some(args.max_duration),
+    );
     let started = std::time::Instant::now();
     let options = options(args)?;
     let plan = plan_project(project, &destinations, &options)
@@ -196,6 +205,9 @@ async fn run_command(
     let (mut lines, planned) = render_plan(&plan);
     if !applies {
         return Ok((lines, planned));
+    }
+    if let Some(problem) = follow.and_then(|_| follow_problem(&plan)) {
+        return Err(problem);
     }
     let flag = match (options.reload, options.resnapshot) {
         (true, true) => "--reload and --resnapshot",
@@ -222,21 +234,75 @@ async fn run_command(
     let applied = apply_project(&plan, &destinations)
         .await
         .map_err(|error| error.to_string())?;
+    let run = LoadRun {
+        project,
+        destinations: &destinations,
+        host,
+        options: &options,
+    };
+    let stop = follow.map(follow_stop);
     let outcomes = match loads {
-        true => {
-            let run = LoadRun {
-                project,
-                destinations: &destinations,
-                host,
-                options: &options,
-            };
-            load_tables(&run, &plan).await
-        }
+        true => load_tables(&run, &plan, stop.as_ref()).await,
         false => Vec::new(),
     };
     let (tallied, completed) = render_tally(&applied, &outcomes, started.elapsed());
     lines.extend(tallied);
     Ok((lines, planned && completed))
+}
+
+/// Why `load --follow` cannot follow `plan`: it follows exactly one `postgres_cdc` source, and nothing else, since it never finishes to load other tables after.
+fn follow_problem(plan: &ProjectPlan) -> Option<String> {
+    let others: Vec<&str> = plan
+        .tables
+        .iter()
+        .filter(|table| table.spec.cdc.is_none())
+        .map(|table| table.spec.destination.table.as_str())
+        .collect();
+    if !others.is_empty() {
+        return Some(format!(
+            "load --follow follows one postgres_cdc source and nothing else; {} {} not captured, so load them without --follow",
+            others.join(", "),
+            match others.len() {
+                1 => "is",
+                _ => "are",
+            }
+        ));
+    }
+    let sources: std::collections::BTreeSet<&str> = plan
+        .tables
+        .iter()
+        .map(|table| table.spec.source_name.as_str())
+        .collect();
+    match sources.len() {
+        0 => Some("load --follow needs a postgres_cdc source, and selects none".to_owned()),
+        1 => None,
+        _ => Some(format!(
+            "load --follow follows one postgres_cdc source per process; select one of {}",
+            sources.into_iter().collect::<Vec<&str>>().join(", ")
+        )),
+    }
+}
+
+/// What stops a follow: `max_duration` passing, or Ctrl-C/SIGTERM; a second signal exits at once with 130, confirming nothing more (a restart skips what was written).
+fn follow_stop(max_duration: Option<std::time::Duration>) -> CancellationToken {
+    let stop = CancellationToken::new();
+    if let Some(limit) = max_duration {
+        let timer = stop.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(limit).await;
+            tracing::info!("--max-duration passed; stopping after the current batch");
+            timer.cancel();
+        });
+    }
+    let signalled = stop.clone();
+    tokio::spawn(async move {
+        wait_for_signal().await;
+        tracing::info!("stopping after the current batch; press Ctrl-C again to stop now");
+        signalled.cancel();
+        wait_for_signal().await;
+        std::process::exit(FORCED_STOP_EXIT);
+    });
+    stop
 }
 
 /// `sqlload logged-state`: plan the selected tables (which reads their run logs), then show, verify, reconcile or reset them.

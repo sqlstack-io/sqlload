@@ -148,7 +148,7 @@ async fn load_with(
         host: None,
         options,
     };
-    let failures: Vec<String> = load_tables(&run, plan)
+    let failures: Vec<String> = load_tables(&run, plan, None)
         .await
         .into_iter()
         .filter_map(|outcome| {

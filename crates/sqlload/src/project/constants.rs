@@ -42,6 +42,7 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "slot",
     "cdc_mode",
     "deletes",
+    "batch_interval",
 ];
 
 /// Keys a Python source may set (`kind` is added by discovery), besides the table settings.
@@ -111,3 +112,6 @@ pub const STAGE_NAME_PARTS: usize = 3;
 
 /// The longest Postgres identifier, in bytes: a `postgres_cdc` slot or publication name.
 pub const MAX_POSTGRES_NAME_BYTES: usize = 63;
+
+/// The shortest `batch_interval` a `postgres_cdc` source takes.
+pub const MIN_BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
