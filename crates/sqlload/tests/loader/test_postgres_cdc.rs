@@ -1730,6 +1730,11 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
                 test_case.description,
                 test_case.expected_follow.1
             );
+            assert!(
+                !output.contains("run it again"),
+                "{}: a follow, which plans again by itself, says to run it again\n{output}",
+                test_case.description
+            );
             let (_, after) = run_sqlload(&config, APP, ("", ""))?;
             assert!(
                 after.contains(test_case.expected_after),

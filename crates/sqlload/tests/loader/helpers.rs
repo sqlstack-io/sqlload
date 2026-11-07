@@ -1912,7 +1912,7 @@ pub(crate) fn run_sqlload(
     Ok((output.status.success(), text))
 }
 
-/// Start the `sqlload` executable on `config` with `args` in the background, stopping itself at `crash_at` (see [`run_sqlload`]).
+/// Start the `sqlload` executable on `config` with `args` in the background, stopping itself at `crash_at` (see [`run_sqlload`]), its logs uncoloured so their fields read as written.
 pub(crate) fn spawn_sqlload(
     config: &std::path::Path,
     args: &[&str],
@@ -1924,6 +1924,7 @@ pub(crate) fn spawn_sqlload(
         .arg("--no-color")
         .args(args)
         .env("SQLLOAD_TEST_CRASH_AT", crash_at)
+        .env("NO_COLOR", "1")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
