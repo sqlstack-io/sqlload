@@ -261,7 +261,8 @@ deletes = "soft"          # soft (default) | hard; merge only
   needs a primary key and a replica identity other than `NOTHING`; `merge` matches rows on that
   key, and a `unique_key` must lie within it. Load the whole source at once: `--select` or
   `--exclude` of some of its tables is refused, since they share one slot. `--reload` is
-  refused too: `--resnapshot` copies a captured table again.
+  refused too, even with `--resnapshot`, which is what copies a captured table again; to reload a
+  project's other tables, `--exclude` the source.
 - Array and `json` columns stream as Postgres writes them, so pin them to text
   (`columns = { tags = "text" }`); `jsonb` needs nothing.
 - The publication must publish exactly the source's tables; one with other tables is refused.
