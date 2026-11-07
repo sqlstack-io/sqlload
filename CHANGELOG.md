@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.23.0](https://github.com/sqlstack-io/sqlload/compare/v0.22.0...v0.23.0) (2026-11-07)
+
+
+### Features
+
+* **cdc:** apply Postgres changes to Databricks targets ([#96](https://github.com/sqlstack-io/sqlload/issues/96)) ([1b46ef7](https://github.com/sqlstack-io/sqlload/commit/1b46ef77492796f4e0fc5a0356ab855790352e62))
+
+
+### Documentation
+
+* document --reload refusing Postgres CDC tables in 0.22.0 ([#94](https://github.com/sqlstack-io/sqlload/issues/94)) ([4eaf794](https://github.com/sqlstack-io/sqlload/commit/4eaf7941eabc4c5038c65b9e1bf5b84a1dc122de))
+
 ## [0.22.0](https://github.com/sqlstack-io/sqlload/compare/v0.21.0...v0.22.0) (2026-11-07)
 
 
