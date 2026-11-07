@@ -278,6 +278,46 @@ const COLUMN_READDED: [CdcStep; 3] = [
     ),
 ];
 
+const UNSTREAMED_SOURCES: &str = r#"
+[sources.gen]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["gen.*"]
+
+[sources.gen.tables."gen.t"]
+description = "A table with a generated column."
+
+[sources.cols]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["cols.*"]
+publication = "cols_pub"
+
+[sources.cols.tables."cols.t"]
+description = "A table published with a column list."
+"#;
+
+const UNSTREAMED: [CdcStep; 2] = [
+    step(
+        "CREATE SCHEMA gen; CREATE TABLE gen.t (id int8 PRIMARY KEY, n int4, d int4 GENERATED ALWAYS AS (n * 2) STORED); INSERT INTO gen.t (id, n) VALUES (1, 1);",
+        &["load", "gen"],
+        "",
+        (
+            false,
+            "gen.t loads d, which logical replication does not send",
+        ),
+    ),
+    step(
+        "CREATE SCHEMA cols; CREATE TABLE cols.t (id int8 PRIMARY KEY, a text, b text); CREATE PUBLICATION cols_pub FOR TABLE cols.t (id, a);",
+        &["load", "cols"],
+        "",
+        (
+            false,
+            "cols.t loads b, which logical replication does not send",
+        ),
+    ),
+];
+
 const COLUMN_DROPPED_INSIDE: [CdcStep; 3] = [
     step("", BOTH, "", (true, "loaded")),
     step(
@@ -728,6 +768,15 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             steps: &COLUMN_READDED,
             check_query: "SELECT string_agg(id || ':' || name, ',' ORDER BY id) FROM raw.app__items",
             expected_result: "1:one,2:two",
+        },
+        CdcScenarioTestCase {
+            description: "a generated column, and one outside the publication's column list, are refused before any snapshot, instead of never changing",
+            tag: "15-alpine",
+            spill_bytes: "",
+            extra_config: UNSTREAMED_SOURCES,
+            steps: &UNSTREAMED,
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.gen__t",
+            expected_result: "0",
         },
         CdcScenarioTestCase {
             description: "a middle column dropped inside a transaction keeps each change's values in their columns",

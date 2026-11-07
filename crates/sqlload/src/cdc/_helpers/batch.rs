@@ -20,14 +20,13 @@ use crate::schema_plan::constants::{
     CDC_UNCHANGED_COLUMN,
 };
 
-/// The rows `changes` of `relation` write, with the columns `read` (data columns, then the change columns) in that order: a truncate is a row without values. A read column the stream never showed in this batch is left out of every change. `gone` names stream columns the source no longer has: an insert or update holding one of them while leaving a read column out is refused, since a rename looks like that and its values would be lost.
+/// The rows `changes` of `relation` write, with the columns `read` (data columns, then the change columns) in that order: a truncate is a row without values. A read column the stream never showed in this batch is left out of every change.
 pub(crate) fn rows_batch(
     changes: &[Change],
     relation: &Relation,
-    (read, gone): (&[ReadColumn], &[String]),
+    read: &[ReadColumn],
 ) -> Result<RecordBatch, String> {
     let positions = column_positions(relation, read);
-    refuse_renamed(changes, relation, &positions, gone)?;
     let data_positions: Vec<(&str, usize)> = read
         .iter()
         .zip(&positions)
@@ -269,13 +268,13 @@ fn column_positions(relation: &Relation, read: &[ReadColumn]) -> Vec<Option<usiz
         .collect()
 }
 
-/// Refuse an insert or update that holds a value of a `gone` column but leaves a read column out: the column was renamed (or replaced) while its changes were unloaded, so its values have nowhere to go.
-fn refuse_renamed(
-    changes: &[Change],
-    relation: &Relation,
-    positions: &[Option<usize>],
-    gone: &[String],
+/// Refuse `table`'s batch when an insert or update holds a value of a `gone` column (one the source no longer has) but leaves a `read` column out: the column was renamed (or replaced) while its changes were unloaded, so its values have nowhere to go. Every change is checked, those `spilled` to disk included, before `merge` folds them, since folding fills a left-out value from the key's earlier change and would hide the rename.
+pub(crate) fn refuse_renamed(
+    table: &TableChanges,
+    spilled: Option<&mut SpillFile>,
+    (read, gone): (&[ReadColumn], &[String]),
 ) -> Result<(), String> {
+    let relation = &table.relation;
     let gone_positions: Vec<usize> = relation
         .columns
         .iter()
@@ -286,12 +285,22 @@ fn refuse_renamed(
     if gone_positions.is_empty() {
         return Ok(());
     }
-    let read_positions: Vec<usize> = positions.iter().flatten().copied().collect();
-    let renamed = changes.iter().any(|change| {
+    let read_positions: Vec<usize> = column_positions(relation, read)
+        .into_iter()
+        .flatten()
+        .collect();
+    let misplaced = |change: &Change| {
         matches!(change.op, ChangeOp::Insert | ChangeOp::Update)
             && !all_left_out(change, &gone_positions)
             && any_left_out(change, &read_positions)
-    });
+    };
+    let mut renamed = table.changes.iter().any(misplaced);
+    if let Some(file) = spilled {
+        let mut reader = file.read()?;
+        while let Some(change) = reader.next_change()? {
+            renamed = renamed || misplaced(&change);
+        }
+    }
     match renamed {
         true => Err(format!(
             "{}.{} renamed or replaced column {} while changes to it were not yet loaded, so their values cannot be placed; run `sqlload load --resnapshot` to copy every table again",

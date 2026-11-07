@@ -156,6 +156,27 @@ fn given_a_shape_change_in_a_batch_when_it_stages_then_each_change_keeps_its_own
             ),
         },
         StagedShapesTestCase {
+            description: "a rename whose later change leaves the TOASTed value unchanged is refused under merge too, where folding would hide it",
+            transactions: vec![
+                vec![
+                    relation_message(&["id", "a", "c"]),
+                    update_message(&["1", "x", "big"]),
+                ],
+                vec![
+                    relation_message(&["id", "a", "d"]),
+                    update_message(&["1", "y", "~"]),
+                ],
+            ],
+            gone: vec!["c"],
+            columns: vec!["id", "a", "d"],
+            expected_merge: Err(
+                "public.t renamed or replaced column c while changes to it were not yet loaded, so their values cannot be placed; run `sqlload load --resnapshot` to copy every table again",
+            ),
+            expected_changelog: Err(
+                "public.t renamed or replaced column c while changes to it were not yet loaded, so their values cannot be placed; run `sqlload load --resnapshot` to copy every table again",
+            ),
+        },
+        StagedShapesTestCase {
             description: "a column dropped since, with every planned column present, loads",
             transactions: vec![
                 vec![

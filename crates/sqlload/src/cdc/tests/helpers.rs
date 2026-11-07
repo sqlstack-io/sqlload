@@ -1,5 +1,5 @@
 use crate::adapters::contract::models::ChangeApply;
-use crate::cdc::_helpers::batch::{change_parts, rows_batch};
+use crate::cdc::_helpers::batch::{change_parts, refuse_renamed, rows_batch};
 use crate::cdc::_helpers::buffer::buffer_change;
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::models::{
@@ -178,9 +178,9 @@ pub(crate) fn buffered_shape(transactions: &[Vec<Vec<u8>>]) -> Result<(char, Vec
     ))
 }
 
-/// A pgoutput Insert into table 7 of text `values`.
+/// A pgoutput Insert into table 7 of text `values`, `~` for an unchanged TOAST value.
 pub(crate) fn insert_message(values: &[&str]) -> Vec<u8> {
-    let parts: Vec<Vec<u8>> = values.iter().map(|value| text_part(value)).collect();
+    let parts: Vec<Vec<u8>> = values.iter().map(|value| message_part(value)).collect();
     let parts: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
     [
         vec![b'I'],
@@ -249,11 +249,6 @@ pub(crate) fn staged_texts(
     let mut buffer = committed(transactions, spill_bytes)?;
     let table = buffer.tables.remove(&7).ok_or("table 7 has no changes")?;
     let key = ["id".to_owned()];
-    let (mut parts, _) = change_parts(
-        &table,
-        (buffer.spilled.remove(&7), spill_bytes),
-        (apply, &key),
-    )?;
     let read: Vec<ReadColumn> = columns
         .iter()
         .copied()
@@ -265,11 +260,14 @@ pub(crate) fn staged_texts(
             output: ColumnType::Text,
         })
         .collect();
+    let mut spilled = buffer.spilled.remove(&7);
+    refuse_renamed(&table, spilled.as_mut(), (&read, &gone))?;
+    let (mut parts, _) = change_parts(&table, (spilled, spill_bytes), (apply, &key))?;
     let staged: Vec<Vec<Change>> =
         std::iter::from_fn(|| parts.next_changes().transpose()).collect::<Result<_, String>>()?;
     let mut rows: Vec<String> = Vec::new();
     for part in staged {
-        let batch = rows_batch(&part, &table.relation, (&read, &gone))?;
+        let batch = rows_batch(&part, &table.relation, &read)?;
         let texts: Vec<Vec<String>> = batch
             .columns()
             .iter()
@@ -326,4 +324,11 @@ pub(crate) fn catalog_column(
         dropped,
         has_default,
     }
+}
+
+/// The encoded part of a message value: `~` for an unchanged TOAST value, else text.
+fn message_part(value: &str) -> Vec<u8> {
+    Some(value)
+        .filter(|value| *value == "~")
+        .map_or_else(|| text_part(value), |_| UNCHANGED_PART.to_vec())
 }

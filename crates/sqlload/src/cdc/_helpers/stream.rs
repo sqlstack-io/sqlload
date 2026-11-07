@@ -10,14 +10,14 @@ use tokio_postgres::Client;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
-use crate::cdc::_helpers::batch::{change_parts, rows_batch, unplanned_columns};
+use crate::cdc::_helpers::batch::{change_parts, refuse_renamed, rows_batch, unplanned_columns};
 use crate::cdc::_helpers::buffer::buffer_change;
 use crate::cdc::_helpers::reshape::reshape_problem;
 use crate::cdc::_helpers::snapshot_log::SnapshotLog;
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{
-    BATCH_CHANGES, LOST_WAL_STATUS, REPLICATION_OPTIONS, SNAPSHOT_SETTINGS, SPILL_BYTES,
-    STOP_MESSAGE_PREFIX,
+    BATCH_CHANGES, COLUMN_LISTS_VERSION, GENERATED_COLUMNS_VERSION, LOST_WAL_STATUS,
+    REPLICATION_OPTIONS, SNAPSHOT_SETTINGS, SPILL_BYTES, STOP_MESSAGE_PREFIX,
 };
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::cdc::models::{
@@ -229,6 +229,71 @@ impl CdcSource<'_> {
         }
     }
 
+    /// Refuse a table that loads a column the stream never sends: a generated column (before Postgres 18, which can publish them), or one left out of the publication's column list (Postgres 15 and later). Its changes would leave the column out, so it would keep its snapshot value forever.
+    async fn refuse_unstreamed(&self, control: &Client) -> Result<(), LoaderError> {
+        let version: i32 = control
+            .query_one("SELECT current_setting('server_version_num')::int", &[])
+            .await
+            .map_err(postgres)?
+            .get(0);
+        let mut problems: Vec<String> = Vec::new();
+        for table in &self.tables {
+            let source = &table.spec.source_table;
+            let read: Vec<String> = table
+                .read_columns
+                .iter()
+                .filter(|column| !column.name.starts_with(CDC_PREFIX))
+                .map(|column| column.name.clone())
+                .collect();
+            let mut unstreamed: Vec<String> = control
+                .query(
+                    "SELECT a.attname::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated <> '' AND a.attname = ANY($3) AND $4::bool ORDER BY a.attnum",
+                    &[
+                        &source.schema,
+                        &source.name,
+                        &read,
+                        &(version < GENERATED_COLUMNS_VERSION),
+                    ],
+                )
+                .await
+                .map_err(postgres)?
+                .iter()
+                .map(|row| row.get(0))
+                .collect();
+            if version >= COLUMN_LISTS_VERSION {
+                let listed: Option<Vec<String>> = control
+                    .query_opt(
+                        "SELECT attnames::text[] FROM pg_catalog.pg_publication_tables WHERE pubname = $1 AND schemaname = $2 AND tablename = $3",
+                        &[&self.cdc.publication, &source.schema, &source.name],
+                    )
+                    .await
+                    .map_err(postgres)?
+                    .and_then(|row| row.get(0));
+                if let Some(listed) = listed {
+                    let unlisted: Vec<String> = read
+                        .iter()
+                        .filter(|name| !listed.contains(name) && !unstreamed.contains(name))
+                        .cloned()
+                        .collect();
+                    unstreamed.extend(unlisted);
+                }
+            }
+            if !unstreamed.is_empty() {
+                problems.push(format!(
+                    "{}.{} loads {}, which logical replication does not send (a generated column, or one outside publication {}'s column list), so its changes would never reach the destination; add it to exclude_columns",
+                    source.schema,
+                    source.name,
+                    unstreamed.join(", "),
+                    self.cdc.publication
+                ));
+            }
+        }
+        match problems.is_empty() {
+            true => Ok(()),
+            false => Err(LoaderError::Invalid(problems.join("; "))),
+        }
+    }
+
     /// Refuse tables whose replica identity is `NOTHING`: once published, Postgres refuses their updates and deletes from the application itself.
     async fn refuse_unpublishable(
         &self,
@@ -364,6 +429,7 @@ impl CdcSource<'_> {
     pub(crate) async fn load(&self) -> Result<BTreeMap<String, u64>, LoaderError> {
         let control = self.connect().await?;
         self.ensure_publication(&control).await?;
+        self.refuse_unstreamed(&control).await?;
         self.log()?.ensure().await?;
         let mut slot = self.slot_state(&control).await?;
         if self.run.options.resnapshot && slot.is_some() {
@@ -610,9 +676,12 @@ impl CdcSource<'_> {
                 continue;
             };
             let relation = &changes.relation;
+            let mut spill = spilled.remove(&oid);
+            refuse_renamed(changes, spill.as_mut(), (&table.read_columns, &gone))
+                .map_err(LoaderError::Invalid)?;
             let (mut parts, truncated) = change_parts(
                 changes,
-                (spilled.remove(&oid), spill_bytes()),
+                (spill, spill_bytes()),
                 (self.cdc.apply, &table.spec.unique_key),
             )
             .map_err(LoaderError::Invalid)?;
@@ -626,7 +695,7 @@ impl CdcSource<'_> {
                 Publisher::open(plan, (self.destination, self.run.options), None).await?;
             let result = async {
                 while let Some(part) = parts.next_changes().map_err(LoaderError::Invalid)? {
-                    let batch = rows_batch(&part, relation, (&table.read_columns, &gone))
+                    let batch = rows_batch(&part, relation, &table.read_columns)
                         .map_err(LoaderError::Invalid)?;
                     publisher.stage(batch, None).await?;
                 }
