@@ -1,4 +1,4 @@
-//! One table's buffered changes as the batch its load stages.
+//! One table's buffered changes as the parts its load stages.
 
 use std::sync::Arc;
 
@@ -6,9 +6,12 @@ use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, TimestampMicro
 use arrow_schema::{Field, Schema};
 
 use crate::adapters::contract::models::{ChangeApply, Truncation};
-use crate::cdc::_helpers::fold::{fold_changes, key_positions};
+use crate::cdc::_helpers::fold::{fold_changes, key_of, key_positions};
+use crate::cdc::_helpers::spill::{SpillFile, SpillReader};
 use crate::cdc::_helpers::text_values::{arrow_type, micros_text, text_array};
-use crate::cdc::constants::{DELETE_OP, INSERT_OP, TRUNCATE_OP, UPDATE_OP};
+use crate::cdc::constants::{
+    DELETE_OP, INSERT_OP, SPILL_CHUNK_CHANGES, SPILL_PARTITIONS, TRUNCATE_OP, UPDATE_OP,
+};
 use crate::cdc::models::{Change, ChangeOp, Relation, TableChanges, TupleValue};
 use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::constants::{
@@ -16,14 +19,13 @@ use crate::schema_plan::constants::{
     CDC_UNCHANGED_COLUMN,
 };
 
-/// The rows `table`'s changes write, with the columns `read` (data columns, then the change columns) in that order, and for `merge` the newest truncate, which applies before them: a changelog keeps every change, a truncate as a row without values; `merge` keeps each key's last change after the newest truncate.
-pub(crate) fn changes_batch(
-    table: &TableChanges,
+/// The rows `changes` of `relation` write, with the columns `read` (data columns, then the change columns) in that order: a truncate is a row without values.
+pub(crate) fn rows_batch(
+    changes: &[Change],
+    relation: &Relation,
     read: &[ReadColumn],
-    (apply, unique_key): (ChangeApply, &[String]),
-) -> Result<(RecordBatch, Option<Truncation>), String> {
-    let (changes, truncated) = applied_changes(table, apply, unique_key)?;
-    let positions = column_positions(&table.relation, read)?;
+) -> Result<RecordBatch, String> {
+    let positions = column_positions(relation, read)?;
     let data_positions: Vec<(&str, usize)> = read
         .iter()
         .zip(&positions)
@@ -33,18 +35,163 @@ pub(crate) fn changes_batch(
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(read.len());
     for (column, position) in read.iter().zip(&positions) {
         let array = match position {
-            Some(position) => data_array(&changes, *position, column)?,
-            None => metadata_array(&changes, column, &data_positions)?,
+            Some(position) => data_array(changes, *position, column)?,
+            None => metadata_array(changes, column, &data_positions)?,
         };
         fields.push(Field::new(&column.name, array.data_type().clone(), true));
         arrays.push(array);
     }
-    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)
-        .map_err(|error| error.to_string())?;
-    Ok((batch, truncated))
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|error| error.to_string())
 }
 
-/// The changes a batch writes and, for `merge`, its newest truncate.
+/// The changes one table's batch stages, part by part: a changelog keeps every change, in chunks once spilled; `merge` keeps each key's last change after the newest truncate, folded per key partition once spilled, so no key is in two parts.
+#[derive(Debug)]
+pub(crate) enum ChangeParts {
+    /// Changes in memory, already applied, staged as one part.
+    Ready(Option<Vec<Change>>),
+    /// A spilled changelog: the file, then the changes still in memory.
+    Log {
+        reader: SpillReader,
+        memory: std::vec::IntoIter<Change>,
+    },
+    /// A spilled `merge` table: one file per key partition, and the key's positions.
+    Partitions {
+        files: std::collections::btree_map::IntoIter<u64, SpillFile>,
+        positions: Vec<usize>,
+    },
+}
+
+impl ChangeParts {
+    /// The next part's changes, or `None` when every part is staged.
+    pub(crate) fn next_changes(&mut self) -> Result<Option<Vec<Change>>, String> {
+        match self {
+            Self::Ready(changes) => Ok(changes.take()),
+            Self::Log { reader, memory } => {
+                let mut part: Vec<Change> = Vec::new();
+                while part.len() < SPILL_CHUNK_CHANGES {
+                    match reader.next_change()? {
+                        Some(change) => part.push(change),
+                        None => break,
+                    }
+                }
+                part.extend(memory.take(SPILL_CHUNK_CHANGES - part.len()));
+                Ok((!part.is_empty()).then_some(part))
+            }
+            Self::Partitions { files, positions } => {
+                let Some((partition, mut file)) = files.next() else {
+                    return Ok(None);
+                };
+                let mut reader = file.read()?;
+                let mut changes: Vec<Change> = Vec::with_capacity(file.count);
+                while let Some(change) = reader.next_change()? {
+                    changes.push(change);
+                }
+                let mut folded = fold_changes(&changes, positions)?;
+                folded.retain(|change| {
+                    key_partition(&key_of(&change.values, positions)) == partition
+                });
+                Ok(Some(folded))
+            }
+        }
+    }
+}
+
+/// `table`'s batch as parts, with the changes `spilled` to disk before those in memory, and for `merge` the newest truncate, which applies before them.
+pub(crate) fn change_parts(
+    table: &TableChanges,
+    spilled: Option<SpillFile>,
+    (apply, unique_key): (ChangeApply, &[String]),
+) -> Result<(ChangeParts, Option<Truncation>), String> {
+    let Some(mut spilled) = spilled else {
+        let (changes, truncated) = applied_changes(table, apply, unique_key)?;
+        return Ok((ChangeParts::Ready(Some(changes)), truncated));
+    };
+    let memory = table.changes.clone().into_iter();
+    if apply == ChangeApply::Changelog {
+        let reader = spilled.read()?;
+        return Ok((ChangeParts::Log { reader, memory }, None));
+    }
+    let mut last: Option<Change> = None;
+    let mut reader = spilled.read()?;
+    while let Some(change) = reader.next_change()? {
+        if change.op == ChangeOp::Truncate {
+            last = Some(change);
+        }
+    }
+    if let Some(change) = table
+        .changes
+        .iter()
+        .rev()
+        .find(|change| change.op == ChangeOp::Truncate)
+    {
+        last = Some(change.clone());
+    }
+    let after = last.as_ref().map(|change| (change.lsn, change.seq));
+    let positions = key_positions(&table.relation, unique_key)?;
+    let mut files = PartitionFiles::default();
+    let mut reader = spilled.read()?;
+    let mut memory = memory;
+    loop {
+        let change = match reader.next_change()? {
+            Some(change) => change,
+            None => match memory.next() {
+                Some(change) => change,
+                None => break,
+            },
+        };
+        if after.is_some_and(|after| (change.lsn, change.seq) <= after) {
+            continue;
+        }
+        let key = key_of(&change.values, &positions);
+        if let Some(old) = change
+            .old_key
+            .as_ref()
+            .filter(|old| key_of(old, &positions) != key)
+        {
+            let deleted = Change {
+                op: ChangeOp::Delete,
+                values: old.clone(),
+                old_key: None,
+                ..change.clone()
+            };
+            files.push(key_partition(&key_of(old, &positions)), &deleted)?;
+        }
+        files.push(key_partition(&key), &change)?;
+    }
+    let truncated = last.map(|change| Truncation {
+        lsn: change.lsn,
+        committed_at: micros_text(change.committed_at),
+    });
+    let parts = ChangeParts::Partitions {
+        files: files.0.into_iter(),
+        positions,
+    };
+    Ok((parts, truncated))
+}
+
+/// The partition a key's changes are folded in.
+fn key_partition(key: &[TupleValue]) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    std::hash::Hash::hash(key, &mut hasher);
+    std::hash::Hasher::finish(&hasher) % SPILL_PARTITIONS
+}
+
+/// A spilled `merge` table's changes, filed by key partition.
+#[derive(Debug, Default)]
+struct PartitionFiles(std::collections::BTreeMap<u64, SpillFile>);
+
+impl PartitionFiles {
+    /// Append `change` to `partition`'s file, made on first use.
+    fn push(&mut self, partition: u64, change: &Change) -> Result<(), String> {
+        let file = match self.0.entry(partition) {
+            std::collections::btree_map::Entry::Occupied(file) => file.into_mut(),
+            std::collections::btree_map::Entry::Vacant(slot) => slot.insert(SpillFile::new()?),
+        };
+        file.push_change(change)
+    }
+}
+
+/// The changes a batch in memory writes and, for `merge`, its newest truncate.
 fn applied_changes(
     table: &TableChanges,
     apply: ChangeApply,

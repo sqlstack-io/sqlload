@@ -35,7 +35,8 @@ pub(crate) fn key_positions(relation: &Relation, key: &[String]) -> Result<Vec<u
     Ok(positions)
 }
 
-fn key_of(values: &[TupleValue], positions: &[usize]) -> Vec<TupleValue> {
+/// The values of the key columns at `positions`.
+pub(crate) fn key_of(values: &[TupleValue], positions: &[usize]) -> Vec<TupleValue> {
     positions
         .iter()
         .map(|position| values.get(*position).cloned().unwrap_or(TupleValue::Null))

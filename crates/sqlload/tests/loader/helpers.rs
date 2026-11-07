@@ -1738,11 +1738,11 @@ columns = {{ tags = "text" }}
     )
 }
 
-/// Run the `sqlload` executable on `config` with `args`, stopping itself at `crash_at` when set; whether it succeeded, and its output.
+/// Run the `sqlload` executable on `config` with `args`, stopping itself at `crash_at` and keeping at most `spill_bytes` of changes in memory when set; whether it succeeded, and its output.
 pub(crate) fn run_sqlload(
     config: &std::path::Path,
     args: &[&str],
-    crash_at: &str,
+    (crash_at, spill_bytes): (&str, &str),
 ) -> Result<(bool, String), String> {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
         .arg("--config")
@@ -1750,6 +1750,7 @@ pub(crate) fn run_sqlload(
         .arg("--no-color")
         .args(args)
         .env("SQLLOAD_TEST_CRASH_AT", crash_at)
+        .env("SQLLOAD_TEST_SPILL_BYTES", spill_bytes)
         .output()
         .map_err(|error| error.to_string())?;
     let text = format!(

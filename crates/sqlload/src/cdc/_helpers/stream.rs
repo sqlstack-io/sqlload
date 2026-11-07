@@ -10,11 +10,13 @@ use tokio_postgres::Client;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
-use crate::cdc::_helpers::batch::changes_batch;
+use crate::cdc::_helpers::batch::{change_parts, rows_batch};
 use crate::cdc::_helpers::buffer::buffer_change;
 use crate::cdc::_helpers::snapshot_log::SnapshotLog;
+use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{
-    BATCH_CHANGES, LOST_WAL_STATUS, REPLICATION_OPTIONS, SNAPSHOT_SETTINGS, STOP_MESSAGE_PREFIX,
+    BATCH_CHANGES, LOST_WAL_STATUS, REPLICATION_OPTIONS, SNAPSHOT_SETTINGS, SPILL_BYTES,
+    STOP_MESSAGE_PREFIX,
 };
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::cdc::models::{ChangeBuffer, StreamStep, TableChanges};
@@ -55,6 +57,18 @@ fn crash_point(point: &str) {
     }
     #[cfg(not(feature = "container-tests"))]
     let _ = point;
+}
+
+/// How many bytes of changes a load keeps in memory before spilling them to local disk; tests set it lower.
+fn spill_bytes() -> usize {
+    #[cfg(feature = "container-tests")]
+    if let Ok(bytes) = std::env::var("SQLLOAD_TEST_SPILL_BYTES")
+        .unwrap_or_default()
+        .parse::<usize>()
+    {
+        return bytes;
+    }
+    SPILL_BYTES
 }
 
 fn postgres(error: tokio_postgres::Error) -> LoaderError {
@@ -468,7 +482,10 @@ impl CdcSource<'_> {
         stop: Lsn,
     ) -> Result<(Option<u64>, BTreeMap<String, u64>), LoaderError> {
         let mut rows: BTreeMap<String, u64> = BTreeMap::new();
-        let mut buffer = ChangeBuffer::default();
+        let mut buffer = ChangeBuffer {
+            spill_bytes: spill_bytes(),
+            ..ChangeBuffer::default()
+        };
         let mut confirmed: Option<u64> = None;
         loop {
             let Some(event) = stream.recv().await.map_err(replication)? else {
@@ -500,8 +517,10 @@ impl CdcSource<'_> {
                 matches!(event, ReplicationEvent::Commit { .. }) && buffer.count >= BATCH_CHANGES;
             if full || at_stop {
                 let tables = std::mem::take(&mut buffer.tables);
+                let spilled = std::mem::take(&mut buffer.spilled);
                 buffer.count = 0;
-                for (table, count) in self.flush(tables).await? {
+                buffer.bytes = 0;
+                for (table, count) in self.flush(tables, spilled).await? {
                     *rows.entry(table).or_default() += count;
                 }
                 if let Some(end) = buffer.end_lsn {
@@ -520,10 +539,11 @@ impl CdcSource<'_> {
     async fn flush(
         &self,
         tables: BTreeMap<u32, TableChanges>,
+        mut spilled: BTreeMap<u32, SpillFile>,
     ) -> Result<BTreeMap<String, u64>, LoaderError> {
         let mut rows: BTreeMap<String, u64> = BTreeMap::new();
         let mut written = 0;
-        for changes in tables.values() {
+        for (oid, changes) in &tables {
             let relation = &changes.relation;
             let Some(table) = self.tables.iter().find(|table| {
                 let source = &table.spec.source_table;
@@ -534,9 +554,9 @@ impl CdcSource<'_> {
                     self.cdc.publication, relation.schema, relation.table, self.name
                 )));
             };
-            let (batch, truncated) = changes_batch(
+            let (mut parts, truncated) = change_parts(
                 changes,
-                &table.read_columns,
+                spilled.remove(oid),
                 (self.cdc.apply, &table.spec.unique_key),
             )
             .map_err(LoaderError::Invalid)?;
@@ -549,7 +569,11 @@ impl CdcSource<'_> {
             let mut publisher =
                 Publisher::open(plan, (self.destination, self.run.options), None).await?;
             let result = async {
-                publisher.stage(batch, None).await?;
+                while let Some(part) = parts.next_changes().map_err(LoaderError::Invalid)? {
+                    let batch = rows_batch(&part, relation, &table.read_columns)
+                        .map_err(LoaderError::Invalid)?;
+                    publisher.stage(batch, None).await?;
+                }
                 if written == 0 {
                     crash_point("batch-before-commit");
                 }
