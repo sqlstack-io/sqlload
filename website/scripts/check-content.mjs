@@ -1,13 +1,17 @@
 // Fail the build when a docs page is missing from the sidebar, or the site names a system SQLLoad
-// does not ship. Only the roadmap page may name the planned systems. Runs before every build.
+// does not ship. Only the roadmap page may name the planned systems, and only the Postgres CDC page
+// (and links to it) may name CDC. Runs before every build.
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const website = new URL('..', import.meta.url).pathname;
 const docs = join(website, 'src/content/docs');
-const roadmap = join(docs, 'docs/roadmap.mdx');
+const cdcPage = '/docs/sources/postgres-cdc/';
 const unshipped = /\b(BigQuery|Redshift|ClickHouse|SQL Server|MySQL|CDC|change data capture)\b/gi;
-const planned = new Set(['bigquery', 'cdc', 'change data capture']);
+const allowed = new Map([
+	[join(docs, 'docs/roadmap.mdx'), new Set(['bigquery', 'cdc', 'change data capture'])],
+	[join(docs, 'docs/sources/postgres-cdc.mdx'), new Set(['cdc', 'change data capture'])],
+]);
 
 const slugs = (items) =>
 	items.flatMap((item) =>
@@ -28,8 +32,8 @@ for (const path of [...pages, join(website, 'public/index.html')]) {
 	readFileSync(path, 'utf8')
 		.split('\n')
 		.forEach((line, index) => {
-			for (const [name] of line.matchAll(unshipped)) {
-				if (path === roadmap && planned.has(name.toLowerCase())) continue;
+			for (const [name] of line.replaceAll(cdcPage, '').matchAll(unshipped)) {
+				if (allowed.get(path)?.has(name.toLowerCase())) continue;
 				problems.push(`${relative(website, path)}:${index + 1}: names ${name}, which SQLLoad does not ship`);
 			}
 		});
