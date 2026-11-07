@@ -1586,7 +1586,7 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
             signal: "-0",
             expected_advanced: true,
             expected_batches: 1,
-            expected_follow: (true, "planning again"),
+            expected_follow: (true, "re-planning gained=public.items gained column c\n"),
             expected_after: "0 rows",
             check_query: ITEMS_WITH_C,
             expected_result: "1:one!:-,2:two:8,3:three:7",
@@ -1609,7 +1609,7 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
             signal: "-0",
             expected_advanced: true,
             expected_batches: 1,
-            expected_follow: (true, "planning again"),
+            expected_follow: (true, "re-planning gained=public.items gained column c\n"),
             expected_after: "0 rows",
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_cdc_snapshots WHERE table_name = ''",
             expected_result: "2",
@@ -1729,6 +1729,11 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
                 "{}: output lacks {:?}\n{output}",
                 test_case.description,
                 test_case.expected_follow.1
+            );
+            assert!(
+                !output.contains("run it again"),
+                "{}: a follow, which plans again by itself, says to run it again\n{output}",
+                test_case.description
             );
             let (_, after) = run_sqlload(&config, APP, ("", ""))?;
             assert!(

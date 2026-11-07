@@ -1355,13 +1355,14 @@ pub(crate) async fn follow_round<'a>(
     (tables, followed)
 }
 
-/// Plan the project again with `options` because of `reason`, and apply it: the new plan and the lines its apply printed.
+/// Plan the project again with `options` because of `reason`, and apply it: the new plan and the lines its apply printed. Its log names what was gained without the catch-up load's advice to run it again, since following plans again by itself.
 pub(crate) async fn replan(
     run: &LoadRun<'_>,
     options: &PlanOptions,
     reason: &str,
 ) -> Result<(ProjectPlan, Vec<String>), String> {
-    tracing::info!(%reason, "planning again");
+    let gained = reason.split(REPLAN_ADVICE).next().unwrap_or_default();
+    tracing::info!(%gained, "re-planning");
     let plan = plan_project(run.project, run.destinations, options)
         .await
         .map_err(|error| error.to_string())?;
