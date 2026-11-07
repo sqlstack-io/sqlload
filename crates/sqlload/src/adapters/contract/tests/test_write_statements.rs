@@ -9,6 +9,8 @@ const DUCK_INSERT: &str = "INSERT INTO \"raw\".\"app__accounts\" (\"id\", \"prof
 
 const SF_SWAP_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1_SWAP\" (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
 
+const BQ_INSERT: &str = "INSERT INTO `raw`.`app__accounts` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, PARSE_JSON(`profile`), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`";
+
 const DB_INSERT: &str = "INSERT INTO `raw`.`app__accounts` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, parse_json(`profile`), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`";
 
 #[test]
@@ -148,6 +150,33 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             mode: WriteMode::Replace,
             expected_statements: &[
                 "INSERT OVERWRITE `raw`.`app__accounts` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, parse_json(`profile`), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "append on BigQuery is one INSERT, parsing JSON from its staged text",
+            warehouse: Warehouse::BigQuery,
+            mode: WriteMode::Append,
+            expected_statements: &[BQ_INSERT],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert on BigQuery is one MERGE inserting every staged row and deleting the window",
+            warehouse: Warehouse::BigQuery,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "updated_at".to_owned(),
+                from: Some("2026-11-04T09:00:00Z".to_owned()),
+                to: Some("2026-11-05T09:00:00Z".to_owned()),
+                values: Vec::new(),
+            },
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, PARSE_JSON(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`updated_at` >= CAST('2026-11-04T09:00:00Z' AS TIMESTAMP) AND __target.`updated_at` < CAST('2026-11-05T09:00:00Z' AS TIMESTAMP) THEN DELETE",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "replace from text rows on BigQuery, which has no INSERT OVERWRITE, is one MERGE deleting every row it does not insert",
+            warehouse: Warehouse::BigQuery,
+            mode: WriteMode::Replace,
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, PARSE_JSON(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE THEN DELETE",
             ],
         },
     ];

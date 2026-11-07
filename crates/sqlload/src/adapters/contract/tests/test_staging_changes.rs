@@ -36,6 +36,14 @@ fn given_a_wider_plan_mid_load_when_changing_the_staging_table_then_it_holds_the
                 "ALTER TABLE \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\" ADD COLUMN \"NOTE\" VARCHAR",
             ],
         },
+        StagingChangesTestCase {
+            description: "BigQuery changes a staging column's type in place with SET DATA TYPE, keeping the table's name",
+            warehouse: Warehouse::BigQuery,
+            new_types: &[ColumnType::Int, ColumnType::Float],
+            expected_statements: &[
+                "ALTER TABLE `raw`.`app__accounts__sqlload_staging_load1` ALTER COLUMN `score` SET DATA TYPE FLOAT64",
+            ],
+        },
     ];
     for test_case in test_cases {
         assert_eq!(

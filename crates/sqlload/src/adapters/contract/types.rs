@@ -202,6 +202,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         format!("CREATE OR REPLACE TABLE {target} COPY GRANTS AS SELECT {select} FROM {target}")
     }
 
+    /// The statement emptying staging table `staging` for the next batches.
+    fn render_empty_staging(&self, staging: &TableName) -> String {
+        format!("DELETE FROM {}", self.render_qualified_name(staging))
+    }
+
     /// Whether a staging table's changed types are cast by rewriting it rather than altered in place.
     fn widens_staging_by_rebuild(&self) -> bool {
         false

@@ -202,9 +202,10 @@ pub(crate) fn staging_changes<A: SqlAdapter + ?Sized>(
             statements.insert(0, rebuild_statement(adapter, &target, (&live, &casts)));
         }
         (false, false) => statements.extend(rebuilt.iter().map(|(name, sql_type)| {
-            format!(
-                "ALTER TABLE {target} ALTER COLUMN {} TYPE {sql_type}",
-                adapter.render_exact_identifier(name)
+            adapter.render_alter_column_type(
+                &target,
+                &adapter.render_exact_identifier(name),
+                sql_type,
             )
         })),
     }
