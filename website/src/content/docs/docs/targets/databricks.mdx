@@ -60,6 +60,7 @@ one statement. The run record commits after it.
 | `merge` | `COPY INTO` a staging table, then one `MERGE` on the key. |
 | `delete_insert` | `COPY INTO` a staging table, then one `MERGE` that inserts the batch and deletes the rows it replaces. |
 | `replace` | `COPY INTO` a build table, then `CREATE OR REPLACE TABLE ... AS SELECT` from it. |
+| `postgres_cdc` | One `MERGE` per table (a truncate in the batch is its `WHEN NOT MATCHED BY SOURCE` clause), or one `INSERT` for a changelog. See [Postgres CDC](/docs/sources/postgres-cdc/#into-databricks). |
 
 `replace` keeps the table's history and grants. Delta has no metadata-only swap, so the rows are
 copied once more by the `CREATE OR REPLACE`; that extra copy is the expected cost of `replace` on

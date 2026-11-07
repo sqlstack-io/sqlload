@@ -30,7 +30,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | From \ Into | Snowflake | Databricks | DuckDB | Parquet files |
 |-------------|-----------|------------|--------|---------------|
 | Postgres | Yes | Yes | Yes | Yes |
-| Postgres changes (`postgres_cdc`) | Yes | No | Yes | Yes, as a changelog |
+| Postgres changes (`postgres_cdc`) | Yes | Yes | Yes | Yes, as a changelog |
 | Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes; Parquet read by DuckDB | No |
 | Python | Yes | Yes | Yes | Yes |
 
@@ -43,7 +43,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 
 | System | How it's tested |
 |--------|-----------------|
-| Postgres | Real Postgres in containers. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB and Snowflake. |
+| Postgres | Real Postgres in containers. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB, Snowflake and Databricks. |
 | DuckDB | Real, in process. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |
