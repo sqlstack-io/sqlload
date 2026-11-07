@@ -630,7 +630,10 @@ const FOLLOW_REFUSED: [CdcStep; 4] = [
 /// Waits up to 15 seconds for slot `sqlload_app` to stream.
 const AWAIT_STREAMING: &str = "DO $$ BEGIN FOR attempt IN 1..150 LOOP EXIT WHEN EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'sqlload_app' AND active); PERFORM pg_sleep(0.1); END LOOP; END $$;";
 
-const FOLLOW_SHORT: &[&str] = &["load", "app", "--follow", "--max-duration", "8s"];
+/// Waits up to 6 seconds for slot `sqlload_app` to confirm the position that replaces `{lsn}`.
+const AWAIT_ADVANCED: &str = "DO $$ BEGIN FOR attempt IN 1..60 LOOP EXIT WHEN (SELECT confirmed_flush_lsn >= '{lsn}'::pg_lsn FROM pg_replication_slots WHERE slot_name = 'sqlload_app'); PERFORM pg_sleep(0.1); END LOOP; END $$;";
+
+const FOLLOW_SHORT: &[&str] = &["load", "app", "--follow", "--max-duration", "15s"];
 
 const FIRST_CHANGES: &str = "BEGIN; INSERT INTO public.orders VALUES (4, 4, 'd', '{\"x y\",z}'); UPDATE public.orders SET qty = 10 WHERE id = 1; INSERT INTO public.items VALUES (3, 'three'); COMMIT;";
 
@@ -1446,7 +1449,7 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
                 "app",
                 "--follow",
                 "--max-duration",
-                "10s",
+                "15s",
                 "--resnapshot",
                 "--yes",
             ],
@@ -1545,7 +1548,10 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
                 .await
                 .map_err(|error| error.to_string())?
                 .get(0);
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            client
+                .batch_execute(&AWAIT_ADVANCED.replace("{lsn}", &written))
+                .await
+                .map_err(|error| error.to_string())?;
             let advanced: bool = client
                 .query_one(SLOT_ADVANCED, &[&written])
                 .await
