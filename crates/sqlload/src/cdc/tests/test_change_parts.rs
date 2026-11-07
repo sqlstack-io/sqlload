@@ -57,6 +57,17 @@ fn given_a_batch_when_it_spills_then_merge_stages_the_same_rows_as_in_memory() -
             expected_rows: (vec!["insert:3:c"], Some(3)),
         },
         ChangePartsTestCase {
+            description: "a truncate still in memory overrides an older one on disk",
+            changes: vec![
+                change(Truncate, (1, 1), ["-", "-"], None),
+                change(Insert, (1, 2), ["1", "a"], None),
+                change(Truncate, (2, 1), ["-", "-"], None),
+                change(Insert, (2, 2), ["2", "b"], None),
+            ],
+            spilled: 2,
+            expected_rows: (vec!["insert:2:b"], Some(2)),
+        },
+        ChangePartsTestCase {
             description: "an unchanged TOAST value carries from the disk side to the memory side",
             changes: vec![
                 change(Insert, (1, 1), ["1", "big"], None),
