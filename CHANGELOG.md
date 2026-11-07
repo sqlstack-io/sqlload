@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0](https://github.com/sqlstack-io/sqlload/compare/v0.18.0...v0.19.0) (2026-11-07)
+
+
+### Features
+
+* **cdc:** copy tables that join a streaming source alone ([#77](https://github.com/sqlstack-io/sqlload/issues/77)) ([3956117](https://github.com/sqlstack-io/sqlload/commit/395611710401c1661b316999633769d793e25835))
+
+
+### Documentation
+
+* **site:** document Postgres CDC schema changes in 0.18.0 ([#78](https://github.com/sqlstack-io/sqlload/issues/78)) ([ae3ea81](https://github.com/sqlstack-io/sqlload/commit/ae3ea8118a76590cf12c8e0d85589638d9ca55eb))
+
 ## [0.18.0](https://github.com/sqlstack-io/sqlload/compare/v0.17.0...v0.18.0) (2026-11-07)
 
 
