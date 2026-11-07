@@ -22,14 +22,14 @@ use crate::files_source::models::{
     SourceFormat, StoredRead, TextChecks,
 };
 use crate::loader::_helpers::python::python_tables;
-use crate::loader::_helpers::resolve::source_target;
-use crate::loader::_helpers::specs::missing_description;
+use crate::loader::_helpers::resolve::{resolve_tables, source_target};
+use crate::loader::_helpers::specs::{missing_description, table_name};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    CommitRule, FilesSource, PlanOptions, ProjectPlan, SkippedTable, SourceEnd, SourceReader,
-    TablePlan, TableSpec,
+    CommitRule, FilesSource, PlanOptions, ProjectPlan, ResolvedTables, SkippedTable, SourceEnd,
+    SourceReader, TablePlan, TableSpec,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
@@ -142,7 +142,7 @@ pub(crate) async fn open_source(
     }
 }
 
-/// A source's tables, and its files for a files source; `Ok(Err(problem))` when they cannot be found.
+/// A source's tables, and its files for a files source; `Ok(Err(problem))` when they cannot be found, including when a Postgres source cannot be reached or its `include`/`exclude` patterns are invalid.
 pub(crate) async fn source_tables(
     project: &ProjectConfig,
     source_name: &str,
@@ -150,9 +150,16 @@ pub(crate) async fn source_tables(
 ) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>), String>, LoaderError> {
     match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => {
-            let client = connect_source(project, source).await?;
-            let discovered = read_catalog(&client, &source.include, &source.exclude).await?;
-            Ok(Ok((discovered, None)))
+            let client = match connect_source(project, source).await {
+                Ok(client) => client,
+                Err(error) => return Ok(Err(error.to_string())),
+            };
+            Ok(
+                match read_catalog(&client, &source.include, &source.exclude).await {
+                    Ok(discovered) => Ok((discovered, None)),
+                    Err(error) => Err(LoaderError::from(error).to_string()),
+                },
+            )
         }
         SourceKind::Files => {
             let warehouse = match source_target(project, source) {
@@ -707,14 +714,35 @@ pub(crate) fn selected(
         && !options.exclude.iter().any(picks)
 }
 
-/// Whether the selection in `options` takes anything from source `source_name`: a table it `listed` (its tables, and the settings they resolved to) by source name or destination name, or the source itself; a source that could not list its tables (`None`) also counts when a `--select` selector names no source, since that table may be its own. Only then do the source's problems count, so one source's bad settings do not fail a load of another.
+/// Source `source_name`'s tables resolved to their settings, with its files for a files source, or `Err` with its problem when it cannot list them; its problems count only when the selection in `options` takes something from it (see [`source_in_scope`]), and are dropped otherwise.
+pub(crate) async fn scoped_tables(
+    (project, options): (&ProjectConfig, &PlanOptions),
+    (source_name, source): (&str, &SourceConfig),
+) -> Result<Result<(ResolvedTables, Option<FilesSource>), Vec<String>>, LoaderError> {
+    let (discovered, files) = match source_tables(project, source_name, source).await? {
+        Ok(found) => found,
+        Err(problem) => {
+            let in_scope = source_in_scope((project, options), (source_name, source), None);
+            return Ok(Err(in_scope
+                .then(|| format!("[sources.{source_name}]: {problem}"))
+                .into_iter()
+                .collect()));
+        }
+    };
+    let mut resolved = resolve_tables(project, source_name, &discovered);
+    if !source_in_scope((project, options), (source_name, source), Some(&discovered)) {
+        resolved.problems.clear();
+    }
+    Ok(Ok((resolved, files)))
+}
+
+/// Whether the selection in `options` takes anything from source `source_name`: a table it `listed`, or one named under its `tables`, by destination name or `schema.table`, or the source itself when it holds no table. A source that could not list its tables (`None`) counts when selected by name, or for any `--select` selector naming no source, since that table could be its. Only then do the source's problems count, so one source's bad settings do not fail a command run on another.
 pub(crate) fn source_in_scope(
-    project: &ProjectConfig,
-    options: &PlanOptions,
-    source_name: &str,
-    listed: Option<(&[SourceTable], &[TableSpec])>,
+    (project, options): (&ProjectConfig, &PlanOptions),
+    (source_name, source): (&str, &SourceConfig),
+    listed: Option<&[SourceTable]>,
 ) -> bool {
-    let Some((discovered, specs)) = listed else {
+    let Some(discovered) = listed else {
         return selected(options, (source_name, "", ""))
             || (!options
                 .exclude
@@ -725,19 +753,30 @@ pub(crate) fn source_in_scope(
                     .iter()
                     .any(|selector| !project.sources.contains_key(selector)));
     };
-    selected(options, (source_name, "", ""))
-        || discovered
-            .iter()
-            .any(|table| selected(options, (source_name, "", &table.qualified_name())))
-        || specs.iter().any(|spec| {
-            selected(
-                options,
-                (
-                    source_name,
-                    &spec.destination.table,
-                    &spec.source_table.qualified_name(),
-                ),
+    let named = source.tables.iter().map(|(qualified, overrides)| {
+        let destination = match overrides.name.as_deref() {
+            Some(name) if !name.contains('{') => name,
+            _ => "",
+        };
+        (destination.to_owned(), qualified.clone())
+    });
+    let tables: Vec<(String, String)> = discovered
+        .iter()
+        .map(|table| {
+            let name = source
+                .tables
+                .get(&table.qualified_name())
+                .and_then(|overrides| overrides.name.as_deref());
+            (
+                table_name((source_name, source), name, table),
+                table.qualified_name(),
             )
+        })
+        .chain(named)
+        .collect();
+    (tables.is_empty() && selected(options, (source_name, "", "")))
+        || tables.iter().any(|(destination, qualified)| {
+            selected(options, (source_name, destination, qualified))
         })
 }
 

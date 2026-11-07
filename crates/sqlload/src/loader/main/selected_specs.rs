@@ -1,16 +1,13 @@
 //! The settings of every selected table, without reading any destination.
 
 use crate::loader::_helpers::python::python_table;
-use crate::loader::_helpers::resolve::resolve_tables;
-use crate::loader::_helpers::sources::{
-    selected, source_in_scope, source_tables, unmatched_selectors,
-};
+use crate::loader::_helpers::sources::{scoped_tables, selected, unmatched_selectors};
 use crate::loader::_helpers::table_plan::{desired_columns, read_columns};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{PlanOptions, SelectedTable, SelectedTables};
 use crate::project::models::ProjectConfig;
 
-/// Each source's tables resolved to their settings (with their files, or the module declaring a Python table) and narrowed to the selection in `options`, each with the columns its source would load (read from what was listed, nothing more); a source that cannot list its tables, a table with bad settings and a selector that matches nothing are problems, not errors; a source's problems count only when the selection takes something from it (see [`source_in_scope`]).
+/// Each source's tables resolved to their settings (with their files, or the module declaring a Python table) and narrowed to the selection in `options`, each with the columns its source would load (read from what was listed, nothing more); a source that cannot list its tables, a table with bad settings and a selector that matches nothing are problems, not errors; a source's problems count only when the selection takes something from it (see [`scoped_tables`]).
 pub async fn selected_specs(
     project: &ProjectConfig,
     options: &PlanOptions,
@@ -18,27 +15,16 @@ pub async fn selected_specs(
     let mut chosen = SelectedTables::default();
     let mut names: Vec<(String, String)> = Vec::new();
     for (source_name, source) in &project.sources {
-        let (discovered, files) = match source_tables(project, source_name, source).await? {
-            Ok(found) => found,
-            Err(problem) => {
-                if source_in_scope(project, options, source_name, None) {
-                    chosen
-                        .problems
-                        .push(format!("[sources.{source_name}]: {problem}"));
+        let (resolved, files) =
+            match scoped_tables((project, options), (source_name, source)).await? {
+                Ok(found) => found,
+                Err(problems) => {
+                    chosen.problems.extend(problems);
+                    continue;
                 }
-                continue;
-            }
-        };
+            };
         let module = project.python_modules.get(source_name);
-        let resolved = resolve_tables(project, source_name, &discovered);
-        if source_in_scope(
-            project,
-            options,
-            source_name,
-            Some((&discovered, &resolved.specs)),
-        ) {
-            chosen.problems.extend(resolved.problems);
-        }
+        chosen.problems.extend(resolved.problems);
         for mut spec in resolved.specs {
             spec.files = files.clone();
             spec.python = module.map(|module| python_table(module, &spec.source_table));

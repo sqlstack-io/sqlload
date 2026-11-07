@@ -8,9 +8,8 @@ use crate::adapters::files::main::folder_conflict::folder_conflict;
 use crate::adapters::files::models::FolderClaim;
 use crate::loader::_helpers::destination::table_folder;
 use crate::loader::_helpers::python::python_table;
-use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::sources::{
-    admit_tables, selected, source_ends, source_in_scope, source_tables, unmatched_selectors,
+    admit_tables, scoped_tables, selected, source_ends, unmatched_selectors,
 };
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
@@ -28,26 +27,16 @@ pub async fn plan_project(
     let mut claims: Vec<FolderClaim> = Vec::new();
     let mut names: Vec<(String, String)> = Vec::new();
     for (source_name, source) in &project.sources {
-        let (discovered, files) = match source_tables(project, source_name, source).await? {
-            Ok(found) => found,
-            Err(problem) => {
-                if source_in_scope(project, options, source_name, None) {
-                    plan.problems
-                        .push(format!("[sources.{source_name}]: {problem}"));
+        let (resolved, files) =
+            match scoped_tables((project, options), (source_name, source)).await? {
+                Ok(found) => found,
+                Err(problems) => {
+                    plan.problems.extend(problems);
+                    continue;
                 }
-                continue;
-            }
-        };
+            };
         let module = project.python_modules.get(source_name);
-        let resolved = resolve_tables(project, source_name, &discovered);
-        if source_in_scope(
-            project,
-            options,
-            source_name,
-            Some((&discovered, &resolved.specs)),
-        ) {
-            plan.problems.extend(resolved.problems);
-        }
+        plan.problems.extend(resolved.problems);
         plan.skipped.extend(resolved.skipped);
         claims.extend(folder_claims(&resolved.specs, destinations));
         names.extend(resolved.specs.iter().map(|spec| {
