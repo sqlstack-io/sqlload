@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.21.0](https://github.com/sqlstack-io/sqlload/compare/v0.20.0...v0.21.0) (2026-11-07)
+
+
+### Features
+
+* **cdc:** load a Postgres CDC changelog into files targets ([#88](https://github.com/sqlstack-io/sqlload/issues/88)) ([f283bcb](https://github.com/sqlstack-io/sqlload/commit/f283bcbaccc0e08de7fde684aec93737856b40c8))
+
+
+### Bug Fixes
+
+* **cdc:** say re-planning, not run it again, when --follow plans again ([#89](https://github.com/sqlstack-io/sqlload/issues/89)) ([adff9f4](https://github.com/sqlstack-io/sqlload/commit/adff9f458edabf7ef6f29c4b5efb205833222989))
+
+
+### Documentation
+
+* document load --follow for Postgres CDC in 0.20.0 ([#86](https://github.com/sqlstack-io/sqlload/issues/86)) ([e1b5b25](https://github.com/sqlstack-io/sqlload/commit/e1b5b253ef27a0d7f7a8e703ffc0a176550bda19))
+
 ## [0.20.0](https://github.com/sqlstack-io/sqlload/compare/v0.19.0...v0.20.0) (2026-11-07)
 
 
