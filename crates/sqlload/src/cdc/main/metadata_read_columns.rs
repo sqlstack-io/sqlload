@@ -38,20 +38,22 @@ pub fn metadata_read_columns(apply: ChangeApply, snapshot_lsn: i64) -> Vec<ReadC
             ColumnType::TimestampTz,
         ),
     ];
-    columns.push(match apply {
-        ChangeApply::Changelog => column(
+    let fourth = match apply {
+        ChangeApply::Changelog => Some(column(
             CDC_SEQ_COLUMN,
             "0::int8".to_owned(),
             WireType::Int8,
             ColumnType::Int,
-        ),
-        _ => column(
+        )),
+        ChangeApply::SoftDeletes => Some(column(
             CDC_DELETED_AT_COLUMN,
             null_timestamp(),
             WireType::Timestamp,
             ColumnType::TimestampTz,
-        ),
-    });
+        )),
+        ChangeApply::HardDeletes => None,
+    };
+    columns.extend(fourth);
     columns.push(column(
         CDC_UNCHANGED_COLUMN,
         "NULL::text".to_owned(),

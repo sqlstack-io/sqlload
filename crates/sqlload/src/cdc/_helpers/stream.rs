@@ -14,7 +14,7 @@ use crate::cdc::_helpers::batch::changes_batch;
 use crate::cdc::_helpers::buffer::buffer_change;
 use crate::cdc::_helpers::snapshot_log::SnapshotLog;
 use crate::cdc::constants::{
-    BATCH_CHANGES, LOST_WAL_STATUS, REPLICATION_OPTIONS, STOP_MESSAGE_PREFIX,
+    BATCH_CHANGES, LOST_WAL_STATUS, REPLICATION_OPTIONS, SNAPSHOT_SETTINGS, STOP_MESSAGE_PREFIX,
 };
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::cdc::models::{ChangeBuffer, StreamStep, TableChanges};
@@ -211,7 +211,7 @@ impl CdcSource<'_> {
             .map(|row| (row.get::<_, Option<String>>(0).unwrap_or_default(), row.get(1))))
     }
 
-    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it, or some table has no snapshot from it (a snapshot stopped part-way, or the table joined since).
+    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it; the load leaves out a table the slot captured (its changes would be confirmed unwritten); some table has no snapshot from it (a snapshot stopped part-way, or the table joined since); or a table's columns changed since its snapshot.
     async fn resume_problem(&self, wal_status: &str) -> Result<Option<String>, LoaderError> {
         let slot = &self.cdc.slot;
         if wal_status == LOST_WAL_STATUS {
@@ -224,11 +224,43 @@ impl CdcSource<'_> {
                 "slot {slot} exists but SQLLoad has no record of creating it, so it cannot tell which changes the tables already hold; drop it, or run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
         };
-        let unfinished: Vec<&str> = self
+        let loading: Vec<&str> = self
             .tables
             .iter()
             .map(|table| table.spec.destination.table.as_str())
-            .filter(|name| !snapshotted.contains(&(*name).to_owned()))
+            .collect();
+        let left_out: Vec<&str> = snapshotted
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .filter(|name| !loading.contains(name))
+            .collect();
+        if !left_out.is_empty() {
+            return Ok(Some(format!(
+                "this load leaves out {} of source {}, whose tables share slot {slot}; load the whole source (no --select or --exclude of its tables, and none blocked), or their changes would be skipped",
+                left_out.join(", "),
+                self.name
+            )));
+        }
+        let reshaped: Vec<&str> = self
+            .tables
+            .iter()
+            .filter(|table| {
+                snapshotted.iter().any(|(name, columns)| {
+                    *name == table.spec.destination.table
+                        && *columns != data_columns(&table.read_columns)
+                })
+            })
+            .map(|table| table.spec.destination.table.as_str())
+            .collect();
+        if !reshaped.is_empty() {
+            return Ok(Some(format!(
+                "the columns of {} changed since their snapshot from slot {slot}; schema changes come in a later release, so run `sqlload load --resnapshot` to copy every table again",
+                reshaped.join(", ")
+            )));
+        }
+        let unfinished: Vec<&str> = loading
+            .into_iter()
+            .filter(|name| !snapshotted.iter().any(|(done, _)| done == name))
             .collect();
         Ok((!unfinished.is_empty()).then(|| {
             format!(
@@ -328,11 +360,11 @@ impl CdcSource<'_> {
         let snapshot_name = field(2)?;
         let snapshot_lsn = i64::try_from(consistent.as_u64()).map_err(replication)?;
         let log = self.log()?;
-        log.record("", snapshot_lsn).await?;
+        log.record("", snapshot_lsn, "").await?;
         let client = self.connect().await?;
         client
             .batch_execute(&format!(
-                "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '{}'",
+                "{SNAPSHOT_SETTINGS}; BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '{}'",
                 snapshot_name.replace('\'', "''")
             ))
             .await
@@ -344,10 +376,15 @@ impl CdcSource<'_> {
             let mut plan = (*table).clone();
             plan.mode = WriteMode::Replace;
             plan.commits = CommitRule::Whole(WholeReason::Chosen);
-            plan.read_columns = with_snapshot_columns(&plan.read_columns, self.cdc, snapshot_lsn);
+            plan.read_columns =
+                with_snapshot_columns(&plan.read_columns, self.cdc, snapshot_lsn - 1);
             let written = self.copy_table(&client, plan).await?;
-            log.record(&table.spec.destination.table, snapshot_lsn)
-                .await?;
+            log.record(
+                &table.spec.destination.table,
+                snapshot_lsn,
+                &data_columns(&table.read_columns),
+            )
+            .await?;
             rows.insert(table.spec.destination.table.clone(), written);
         }
         client.batch_execute("COMMIT").await.map_err(postgres)?;
@@ -433,7 +470,8 @@ impl CdcSource<'_> {
                 }
             }
             if at_stop {
-                return Ok((confirmed, rows));
+                stream.update_applied_lsn(stop);
+                return Ok((Some(stop.as_u64()).max(confirmed), rows));
             }
         }
     }
@@ -451,7 +489,10 @@ impl CdcSource<'_> {
                 let source = &table.spec.source_table;
                 source.schema == relation.schema && source.name == relation.table
             }) else {
-                continue;
+                return Err(LoaderError::Invalid(format!(
+                    "publication {} sends changes of {}.{}, which source {} does not load; its changes would be skipped, so add the table to include or drop it from the publication",
+                    self.cdc.publication, relation.schema, relation.table, self.name
+                )));
             };
             let (batch, truncated) = changes_batch(
                 changes,
@@ -599,4 +640,17 @@ pub(crate) fn source_outcomes(
         });
     }
     outcomes
+}
+
+/// The data columns of a table's read, as `,a,b,`, the shape its snapshot was copied with.
+fn data_columns(read: &[ReadColumn]) -> String {
+    let mut columns = String::from(",");
+    for column in read
+        .iter()
+        .filter(|column| !column.name.starts_with(CDC_PREFIX))
+    {
+        columns.push_str(&column.name);
+        columns.push(',');
+    }
+    columns
 }

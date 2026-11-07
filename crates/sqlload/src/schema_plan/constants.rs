@@ -25,5 +25,5 @@ pub const CDC_DELETED_AT_COLUMN: &str = "_sqlload_deleted_at";
 /// Captured changes in a changelog: the change's position within its transaction.
 pub const CDC_SEQ_COLUMN: &str = "_sqlload_seq";
 
-/// Captured changes: one `0` or `1` per data column, `1` where the source left an unchanged TOAST value out (NULL when none was).
+/// Captured changes: the data columns whose unchanged TOAST value the source left out, as `,a,b,` (NULL when none was).
 pub const CDC_UNCHANGED_COLUMN: &str = "_sqlload_unchanged";

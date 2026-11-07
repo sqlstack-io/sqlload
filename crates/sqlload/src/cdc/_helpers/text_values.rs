@@ -11,6 +11,7 @@ use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, NaiveDateTime};
 
 use crate::column_types::models::ColumnType;
+use crate::postgres_source::models::{ReadColumn, WireType};
 
 /// The Arrow type a column of `column_type` is staged as, the same as the snapshot's `COPY` reader produces.
 pub(crate) fn arrow_type(column_type: &ColumnType) -> Result<DataType, String> {
@@ -56,12 +57,19 @@ fn bytea(text: &str) -> Result<Vec<u8>, String> {
     hex::decode(hex_text).map_err(|_| problem())
 }
 
-/// `values` (`None` is NULL) as an array of `column_type`, or the first value that does not parse.
-pub(crate) fn text_array(
-    values: &[Option<&str>],
-    column_type: &ColumnType,
-) -> Result<ArrayRef, String> {
-    let data_type = arrow_type(column_type)?;
+/// `text` as a number; `single` (a `real` column) parses it as the 32-bit value the snapshot reads, then widens it the same way.
+fn parse_float(text: &str, single: bool) -> Result<f64, String> {
+    let problem = |_| format!("{text:?} is not a number");
+    match single {
+        true => text.parse::<f32>().map(f64::from).map_err(problem),
+        false => text.parse::<f64>().map_err(problem),
+    }
+}
+
+/// `values` (`None` is NULL) as an array of `column`'s type, or the first value that does not parse.
+pub(crate) fn text_array(values: &[Option<&str>], column: &ReadColumn) -> Result<ArrayRef, String> {
+    let data_type = arrow_type(&column.output)?;
+    let single = column.wire == WireType::Float4;
     Ok(match &data_type {
         DataType::Boolean => {
             let mut builder = BooleanBuilder::with_capacity(values.len());
@@ -78,14 +86,7 @@ pub(crate) fn text_array(
         DataType::Float64 => {
             let mut builder = Float64Builder::with_capacity(values.len());
             for value in values {
-                builder.append_option(
-                    value
-                        .map(|text| {
-                            text.parse::<f64>()
-                                .map_err(|_| format!("{text:?} is not a number"))
-                        })
-                        .transpose()?,
-                );
+                builder.append_option(value.map(|text| parse_float(text, single)).transpose()?);
             }
             Arc::new(builder.finish())
         }

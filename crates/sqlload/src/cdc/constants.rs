@@ -13,8 +13,12 @@ pub const STOP_MESSAGE_PREFIX: &str = "sqlload.stop";
 /// The most changes a batch holds before it commits at the next transaction end.
 pub const BATCH_CHANGES: usize = 100_000;
 /// Session settings for the replication connection, so values arrive as the snapshot reads them.
-pub const REPLICATION_OPTIONS: &str = "-c TimeZone=UTC -c DateStyle=ISO -c extra_float_digits=3";
+pub const REPLICATION_OPTIONS: &str = "-c TimeZone=UTC -c DateStyle=ISO -c IntervalStyle=postgres -c extra_float_digits=3 -c bytea_output=hex";
+/// The same settings for the snapshot's session, so a value it reads as text matches the streamed one.
+pub const SNAPSHOT_SETTINGS: &str = "SET TimeZone = 'UTC'; SET DateStyle = 'ISO'; SET IntervalStyle = 'postgres'; SET extra_float_digits = 3; SET bytea_output = 'hex'";
 /// Microseconds from 1970-01-01 to 2000-01-01, where Postgres counts commit times from.
 pub const POSTGRES_EPOCH_MICROS: i64 = 946_684_800_000_000;
 /// `pg_replication_slots.wal_status` of a slot that lost WAL it had not confirmed.
 pub const LOST_WAL_STATUS: &str = "lost";
+/// `relreplident` of a table whose changes carry the whole old row.
+pub const FULL_IDENTITY: char = 'f';

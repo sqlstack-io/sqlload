@@ -24,7 +24,11 @@ pub(crate) fn changes_batch(
 ) -> Result<(RecordBatch, Option<Truncation>), String> {
     let (changes, truncated) = applied_changes(table, apply, unique_key)?;
     let positions = column_positions(&table.relation, read)?;
-    let data_positions: Vec<usize> = positions.iter().flatten().copied().collect();
+    let data_positions: Vec<(&str, usize)> = read
+        .iter()
+        .zip(&positions)
+        .filter_map(|(column, position)| Some((column.name.as_str(), (*position)?)))
+        .collect();
     let mut fields: Vec<Field> = Vec::with_capacity(read.len());
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(read.len());
     for (column, position) in read.iter().zip(&positions) {
@@ -62,7 +66,7 @@ fn applied_changes(
     let after = last_truncate.map_or(0, |index| index + 1);
     let positions = key_positions(&table.relation, unique_key)?;
     let kept = table.changes.get(after..).unwrap_or_default();
-    Ok((fold_changes(kept, &positions), truncated))
+    Ok((fold_changes(kept, &positions)?, truncated))
 }
 
 /// Each read column's position on the stream; `None` for the change columns.
@@ -104,14 +108,14 @@ fn data_array(
             _ => None,
         });
     }
-    text_array(&values, &column.output).map_err(|problem| format!("{}: {problem}", column.name))
+    text_array(&values, column).map_err(|problem| format!("{}: {problem}", column.name))
 }
 
 /// One change column: the commit LSN, position, operation and time; `_sqlload_unchanged` flags; NULL for the rest (`_sqlload_deleted_at`, which the write sets).
 fn metadata_array(
     changes: &[Change],
     column: &ReadColumn,
-    data_positions: &[usize],
+    data_positions: &[(&str, usize)],
 ) -> Result<ArrayRef, String> {
     Ok(match column.name.as_str() {
         CDC_LSN_COLUMN => Arc::new(Int64Array::from_iter_values(
@@ -148,14 +152,14 @@ fn op_name(op: ChangeOp) -> &'static str {
     }
 }
 
-/// One `0` or `1` per data column, `1` where the change left an unchanged TOAST value out; `None` when it left none out.
-fn unchanged_flags(change: &Change, data_positions: &[usize]) -> Option<String> {
-    let mut flags = String::with_capacity(data_positions.len());
-    let mut any = false;
-    for position in data_positions {
-        let unchanged = change.values.get(*position) == Some(&TupleValue::Unchanged);
-        any |= unchanged;
-        flags.push(if unchanged { '1' } else { '0' });
+/// The data columns whose unchanged TOAST value the change left out, as `,a,b,`; `None` when it left none out.
+fn unchanged_flags(change: &Change, data_positions: &[(&str, usize)]) -> Option<String> {
+    let mut names = String::new();
+    for (name, position) in data_positions {
+        if change.values.get(*position) == Some(&TupleValue::Unchanged) {
+            names.push(',');
+            names.push_str(name);
+        }
     }
-    any.then_some(flags)
+    (!names.is_empty()).then(|| format!("{names},"))
 }

@@ -13,7 +13,7 @@ const DELETE_OP: &str = "delete";
 /// The `_sqlload_op` a truncate leaves on soft-deleted rows.
 const TRUNCATE_OP: &str = "truncate";
 
-/// Statements applying a batch of captured changes from `staging` in one transaction, each guarded by `_sqlload_lsn` so a replay changes nothing: a changelog inserts the rows newer than the table's newest; `merge` applies the batch's truncate to older rows, then merges each key's newest change where it is newer than the row's, keeping the live value of every column the source left out as unchanged TOAST.
+/// Statements applying a batch of captured changes from `staging` in one transaction, each guarded by `_sqlload_lsn` so a replay changes nothing: a changelog inserts the rows newer than the table's newest; `merge` applies the batch's truncate to older rows (soft deletes keep their `_sqlload_lsn`, so a row the same transaction inserts again still merges), then merges each key's newest change where it is newer than the row's, keeping the live value of every column `_sqlload_unchanged` (`,a,b,`) names.
 pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
@@ -23,7 +23,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
     let target = adapter.render_qualified_name(request.table);
     let source = adapter.render_qualified_name(staging);
     let id = |name: &str| adapter.render_identifier(name);
-    let written: Vec<(String, String, bool)> = request
+    let written: Vec<(String, String, bool, &str)> = request
         .columns
         .iter()
         .filter(|column| {
@@ -34,6 +34,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
                 id(&column.name),
                 adapter.render_source_expression_cast(&column.name, &column.column_type),
                 !column.name.starts_with(CDC_PREFIX),
+                column.name.as_str(),
             )
         })
         .collect();
@@ -68,11 +69,10 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
                 format!("DELETE FROM {target} WHERE {lsn} < {}", truncation.lsn)
             }
             _ => format!(
-                "UPDATE {target} SET {} = {at}, {} = {}, {lsn} = {} WHERE {lsn} < {} AND {} IS NULL",
+                "UPDATE {target} SET {} = {at}, {} = {} WHERE {lsn} < {} AND {} IS NULL",
                 id(CDC_DELETED_AT_COLUMN),
                 id(CDC_OP_COLUMN),
                 text(TRUNCATE_OP),
-                truncation.lsn,
                 truncation.lsn,
                 id(CDC_DELETED_AT_COLUMN),
             ),
@@ -96,21 +96,17 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
     let is_delete = format!("__source.{} = {}", id(CDC_OP_COLUMN), text(DELETE_OP));
     let metadata: Vec<String> = written
         .iter()
-        .filter(|(name, _, data)| !data && *name != id(CDC_DELETED_AT_COLUMN))
+        .filter(|(name, _, data, _)| !data && *name != id(CDC_DELETED_AT_COLUMN))
         .map(|(name, ..)| format!("{name} = __source.{name}"))
         .collect();
-    let mut data_index = 0;
     let mut updates: Vec<String> = Vec::new();
-    for (name, _, data) in &written {
-        if !data {
+    for (name, _, data, raw) in &written {
+        if !data || keys.contains(name) {
             continue;
         }
-        data_index += 1;
-        if keys.contains(name) {
-            continue;
-        }
+        let listed = text(&format!(",{raw},"));
         updates.push(format!(
-            "{name} = CASE WHEN SUBSTR(__source.{unchanged}, {data_index}, 1) = '1' THEN __target.{name} ELSE __source.{name} END"
+            "{name} = CASE WHEN POSITION({listed} IN __source.{unchanged}) > 0 THEN __target.{name} ELSE __source.{name} END"
         ));
     }
     let soft = change.apply == ChangeApply::SoftDeletes;

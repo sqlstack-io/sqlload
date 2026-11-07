@@ -83,6 +83,9 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         )),
     }
     problems.extend(kind_problems(&place, source));
+    if source.kind == SourceKind::PostgresCdc {
+        problems.extend(cdc_name_problems(&place, name, source));
+    }
     problems
 }
 
@@ -241,17 +244,23 @@ fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             "{place} deletes = \"hard\" applies to cdc_mode = \"merge\"; a changelog keeps every delete as a row"
         ));
     }
-    for (setting, name) in [("slot", &source.slot), ("publication", &source.publication)] {
-        let valid = name.as_deref().is_none_or(|name| {
-            !name.is_empty()
-                && name.len() <= MAX_POSTGRES_NAME_BYTES
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-        });
+    problems
+}
+
+/// A `postgres_cdc` source's slot and publication names, as set or by default (`sqlload_<source>`), must be plain Postgres names.
+fn cdc_name_problems(place: &str, name: &str, source: &SourceConfig) -> Vec<String> {
+    let default_name = format!("sqlload_{}", name.to_lowercase());
+    let mut problems: Vec<String> = Vec::new();
+    for (setting, chosen) in [("slot", &source.slot), ("publication", &source.publication)] {
+        let effective = chosen.as_deref().unwrap_or(&default_name);
+        let valid = !effective.is_empty()
+            && effective.len() <= MAX_POSTGRES_NAME_BYTES
+            && effective
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
         if !valid {
             problems.push(format!(
-                "{place} {setting} must be lower-case letters, digits and underscores, at most {MAX_POSTGRES_NAME_BYTES} characters"
+                "{place} {setting} {effective:?} must be lower-case letters, digits and underscores, at most {MAX_POSTGRES_NAME_BYTES} characters; set {setting} = \"...\""
             ));
         }
     }

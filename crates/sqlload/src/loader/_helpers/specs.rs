@@ -130,17 +130,14 @@ pub(crate) fn build_spec(
         });
     let cdc = cdc_spec(context);
     let (strategy, mut problems) = match &cdc {
-        Some(_) if context.target.path.is_some() => (
+        Some(_) if context.target.path.is_some() || context.target.warehouse == Warehouse::Databricks => (
             WriteStrategy::Append,
             vec![
-                "kind = \"postgres_cdc\" loads into SQL targets in this release, not files targets"
+                "kind = \"postgres_cdc\" loads into DuckDB and Snowflake targets in this release, not Databricks or files targets"
                     .to_owned(),
             ],
         ),
-        Some(cdc) => (
-            WriteStrategy::Append,
-            cdc_key_problems(cdc, table, &unique_key),
-        ),
+        Some(_) => (WriteStrategy::Append, cdc_key_problems(table)),
         None => (
             strategy,
             strategy_problems(strategy, &unique_key, cursor.as_ref()),
@@ -268,12 +265,12 @@ fn cdc_spec(context: &SourceContext<'_>) -> Option<CdcSpec> {
     })
 }
 
-/// Why a captured table cannot be merged: merge matches rows on a key, which the table must have.
-fn cdc_key_problems(cdc: &CdcSpec, table: &SourceTable, unique_key: &[String]) -> Vec<String> {
-    match (cdc.apply, unique_key.is_empty()) {
-        (ChangeApply::Changelog, _) | (_, false) => Vec::new(),
-        (_, true) => vec![format!(
-            "{} has no primary key, so cdc_mode = \"merge\" cannot match its changes to rows; give it a primary key, set unique_key, or use cdc_mode = \"changelog\"",
+/// Why a table cannot be captured: it needs a primary key, which merge matches rows on, and without which publishing it would make Postgres refuse the application's own updates and deletes on it.
+fn cdc_key_problems(table: &SourceTable) -> Vec<String> {
+    match table.primary_key.is_empty() {
+        false => Vec::new(),
+        true => vec![format!(
+            "{} has no primary key; kind = \"postgres_cdc\" captures tables with one in this release (publishing a table without a replica identity makes Postgres refuse its updates and deletes); add a primary key, or exclude it",
             table.qualified_name()
         )],
     }
