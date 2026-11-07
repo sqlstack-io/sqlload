@@ -89,7 +89,7 @@ fn fill_from_old(values: &mut [TupleValue], old: &[TupleValue]) -> Result<(), St
         }
     }
     match values.contains(&TupleValue::Unchanged) {
-        true => Err("an update changed a row's key and left a large (TOASTed) value out, which the new row needs; set REPLICA IDENTITY FULL on the table so the old row comes with it".to_owned()),
+        true => Err("an update changed a row's key and left a large (TOASTed) value out, which the new row needs; set REPLICA IDENTITY FULL on the table so the old row comes with it, then run `sqlload load --resnapshot`, since the changes already written lack it".to_owned()),
         false => Ok(()),
     }
 }

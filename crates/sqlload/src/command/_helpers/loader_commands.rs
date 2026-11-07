@@ -197,9 +197,10 @@ async fn run_command(
     if !applies {
         return Ok((lines, planned));
     }
-    let flag = match options.reload {
-        true => "--reload",
-        false => "--resnapshot",
+    let flag = match (options.reload, options.resnapshot) {
+        (true, true) => "--reload and --resnapshot",
+        (true, false) => "--reload",
+        (false, _) => "--resnapshot",
     };
     let rebuilt: Vec<&str> = plan
         .tables

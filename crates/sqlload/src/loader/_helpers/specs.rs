@@ -138,7 +138,7 @@ pub(crate) fn build_spec(
                     .to_owned(),
             ],
         ),
-        Some(_) => (WriteStrategy::Append, cdc_key_problems(table)),
+        Some(_) => (WriteStrategy::Append, cdc_key_problems(table, &unique_key)),
         None => (
             strategy,
             strategy_problems(strategy, &unique_key, cursor.as_ref()),
@@ -266,13 +266,24 @@ fn cdc_spec(context: &SourceContext<'_>) -> Option<CdcSpec> {
     })
 }
 
-/// Why a table cannot be captured: it needs a primary key, which merge matches rows on, and without which publishing it would make Postgres refuse the application's own updates and deletes on it.
-fn cdc_key_problems(table: &SourceTable) -> Vec<String> {
-    match table.primary_key.is_empty() {
-        false => Vec::new(),
-        true => vec![format!(
-            "{} has no primary key; kind = \"postgres_cdc\" captures tables with one in this release (publishing a table without a replica identity makes Postgres refuse its updates and deletes); add a primary key, or exclude it",
-            table.qualified_name()
+/// Why a table cannot be captured: it needs a primary key, which merge matches rows on, and without which publishing it would make Postgres refuse the application's own updates and deletes on it; and its `unique_key` must be within that key, the only columns Postgres sends with a delete by default.
+fn cdc_key_problems(table: &SourceTable, unique_key: &[String]) -> Vec<String> {
+    let qualified = table.qualified_name();
+    if table.primary_key.is_empty() {
+        return vec![format!(
+            "{qualified} has no primary key; kind = \"postgres_cdc\" captures tables with one in this release (publishing a table without a replica identity makes Postgres refuse its updates and deletes); add a primary key, or exclude it"
+        )];
+    }
+    let outside: Vec<&str> = unique_key
+        .iter()
+        .filter(|column| !table.primary_key.contains(column))
+        .map(String::as_str)
+        .collect();
+    match outside.is_empty() {
+        true => Vec::new(),
+        false => vec![format!(
+            "{qualified}: unique_key column {} is not in the primary key, and Postgres sends only the primary key with a delete, so deletes could not find their rows; kind = \"postgres_cdc\" merges on the primary key in this release, so drop unique_key",
+            outside.join(", ")
         )],
     }
 }

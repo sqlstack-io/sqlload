@@ -65,6 +65,15 @@ fn replication(error: impl std::fmt::Display) -> LoaderError {
     LoaderError::Invalid(format!("logical replication: {error}"))
 }
 
+/// `names`, comma-separated.
+fn list(names: &[&String]) -> String {
+    names
+        .iter()
+        .map(|name| name.as_str())
+        .collect::<Vec<&str>>()
+        .join(", ")
+}
+
 /// A Postgres identifier, quoted.
 fn quoted(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
@@ -139,14 +148,6 @@ impl CdcSource<'_> {
     /// Create the publication for the selected tables when it is missing; when it exists, every selected table must be in it.
     async fn ensure_publication(&self, control: &Client) -> Result<(), LoaderError> {
         let publication = &self.cdc.publication;
-        let exists = control
-            .query_opt(
-                "SELECT 1 FROM pg_publication WHERE pubname = $1",
-                &[publication],
-            )
-            .await
-            .map_err(postgres)?
-            .is_some();
         let names: Vec<String> = self
             .tables
             .iter()
@@ -155,46 +156,87 @@ impl CdcSource<'_> {
                 format!("{}.{}", quoted(&source.schema), quoted(&source.name))
             })
             .collect();
-        if !exists {
-            control
-                .batch_execute(&format!(
-                    "CREATE PUBLICATION {} FOR TABLE {}",
-                    quoted(publication),
-                    names.join(", ")
-                ))
-                .await
-                .map_err(postgres)?;
+        self.refuse_unpublishable(control, &names).await?;
+        let exists = control
+            .query_opt(
+                "SELECT 1 FROM pg_publication WHERE pubname = $1",
+                &[publication],
+            )
+            .await
+            .map_err(postgres)?
+            .is_some();
+        let made_here = *publication == format!("sqlload_{}", self.name.to_lowercase());
+        let (name, tables) = (quoted(publication), names.join(", "));
+        let statement = match (exists, made_here && self.run.options.resnapshot) {
+            (false, _) => Some(format!("CREATE PUBLICATION {name} FOR TABLE {tables}")),
+            (true, true) => Some(format!("ALTER PUBLICATION {name} SET TABLE {tables}")),
+            (true, false) => None,
+        };
+        if let Some(statement) = statement {
+            control.batch_execute(&statement).await.map_err(postgres)?;
             return Ok(());
         }
-        let published: Vec<(String, String)> = control
+        let published: Vec<String> = control
             .query(
-                "SELECT schemaname::text, tablename::text FROM pg_publication_tables WHERE pubname = $1",
+                "SELECT '\"' || replace(schemaname, '\"', '\"\"') || '\".\"' || replace(tablename, '\"', '\"\"') || '\"' FROM pg_publication_tables WHERE pubname = $1",
                 &[publication],
             )
             .await
             .map_err(postgres)?
             .iter()
-            .map(|row| (row.get(0), row.get(1)))
+            .map(|row| row.get(0))
             .collect();
-        let mut missing: Vec<String> = Vec::new();
-        for table in &self.tables {
-            let source = &table.spec.source_table;
-            let wanted = (source.schema.clone(), source.name.clone());
-            if !published.contains(&wanted) {
-                missing.push(format!(
-                    "{}.{}",
-                    quoted(&source.schema),
-                    quoted(&source.name)
-                ));
-            }
+        let missing: Vec<&String> = names
+            .iter()
+            .filter(|name| !published.contains(name))
+            .collect();
+        let extra: Vec<&String> = published
+            .iter()
+            .filter(|name| !names.contains(name))
+            .collect();
+        match (missing.is_empty(), extra.is_empty()) {
+            (true, true) => Ok(()),
+            (false, _) => Err(LoaderError::Invalid(format!(
+                "publication {publication} does not publish {}; add them with ALTER PUBLICATION {} ADD TABLE {}",
+                list(&missing),
+                quoted(publication),
+                list(&missing)
+            ))),
+            (true, false) => Err(LoaderError::Invalid(format!(
+                "publication {publication} also publishes {}, which source {} does not load, so the slot would stop at their first change; publish only the source's tables (ALTER PUBLICATION {} DROP TABLE {}), then run `sqlload load --resnapshot`",
+                list(&extra),
+                self.name,
+                quoted(publication),
+                list(&extra)
+            ))),
         }
-        match missing.is_empty() {
+    }
+
+    /// Refuse tables whose replica identity is `NOTHING`: once published, Postgres refuses their updates and deletes from the application itself.
+    async fn refuse_unpublishable(
+        &self,
+        control: &Client,
+        names: &[String],
+    ) -> Result<(), LoaderError> {
+        let nothing: Vec<String> = control
+            .query(
+                "SELECT name FROM (SELECT '\"' || replace(n.nspname, '\"', '\"\"') || '\".\"' || replace(c.relname, '\"', '\"\"') || '\"' AS name, c.relreplident FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace) AS tables WHERE relreplident = 'n' AND name = ANY($1)",
+                &[&names],
+            )
+            .await
+            .map_err(postgres)?
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        match nothing.is_empty() {
             true => Ok(()),
             false => Err(LoaderError::Invalid(format!(
-                "publication {publication} does not publish {}; add them with ALTER PUBLICATION {} ADD TABLE {}",
-                missing.join(", "),
-                quoted(publication),
-                missing.join(", ")
+                "{} {} REPLICA IDENTITY NOTHING, so publishing it would make Postgres refuse its updates and deletes; set REPLICA IDENTITY DEFAULT, or exclude it",
+                nothing.join(", "),
+                match nothing.len() {
+                    1 => "has",
+                    _ => "have",
+                }
             ))),
         }
     }

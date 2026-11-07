@@ -205,7 +205,7 @@ afterwards, so name it in `include`.
 ## Postgres change data capture
 
 `kind = "postgres_cdc"` streams a Postgres database's changes from a logical replication slot
-into a DuckDB target (not files targets yet). The server needs
+into a DuckDB or Snowflake target (not Databricks or files targets yet). The server needs
 `wal_level = logical`, and the connection's user needs the `REPLICATION` attribute.
 
 ```toml
@@ -233,8 +233,14 @@ deletes = "soft"          # soft (default) | hard; merge only
   A load that stops part-way is safe to run again: nothing is lost or applied twice.
 - Tables are not promised to be consistent with each other at every moment. Each one converges
   to the source as of the last confirmed position.
-- A captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. `merge`
-  needs a primary key or a `unique_key`.
+- A captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. It
+  needs a primary key and a replica identity other than `NOTHING`; `merge` matches rows on that
+  key, and a `unique_key` must lie within it. Load the whole source at once: `--select` or
+  `--exclude` of some of its tables is refused, since they share one slot.
+- Array and `json` columns stream as Postgres writes them, so pin them to text
+  (`columns = { tags = "text" }`); `jsonb` needs nothing.
+- The publication must publish exactly the source's tables. SQLLoad's own (`sqlload_<source>`)
+  follows `include` again on `--resnapshot`; a publication with other tables is refused.
 - When the slot is lost, or a snapshot stopped part-way, the load stops and names the fix:
   `sqlload load --resnapshot` drops and recreates the slot and copies every table again,
   replacing what they hold: a `changelog` table loses its history and a `merge` table its

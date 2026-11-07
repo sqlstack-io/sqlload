@@ -715,11 +715,12 @@ pub(crate) async fn admit_tables(
     found: (&BTreeMap<String, Destination>, &PlanOptions),
 ) -> Result<ProjectPlan, LoaderError> {
     let first_load = first_load(&planned, unselected, found).await?;
-    plan.problems.extend(partial_capture(
-        source_name,
-        source.kind,
-        (&planned, unselected),
-    ));
+    let mut planned = planned;
+    if let Some(problem) = partial_capture(source_name, source.kind, (&planned, unselected)) {
+        for table in &mut planned {
+            table.schema = blocked_plan(vec![problem.clone()]);
+        }
+    }
     for mut table in planned {
         let spec = &table.spec;
         let qualified = spec.source_table.qualified_name();
@@ -751,7 +752,7 @@ pub(crate) async fn admit_tables(
     Ok(plan)
 }
 
-/// Why the selection cannot load `postgres_cdc` source `name`: it picks some of its tables (`planned`) but not all (`unselected`), and the slot they share would confirm the left-out tables' changes unwritten.
+/// Why the selection cannot load `postgres_cdc` source `name`, which blocks every table it picks: it picks some of its tables (`planned`) but not all (`unselected`), and the slot they share would confirm the left-out tables' changes unwritten. A plan problem alone would not stop the picked tables loading.
 fn partial_capture(
     name: &str,
     kind: SourceKind,
@@ -764,7 +765,7 @@ fn partial_capture(
             .map(|spec| spec.source_table.qualified_name())
             .collect();
         format!(
-            "[sources.{name}]: this selection leaves out {}, whose changes share the source's one slot and would be skipped; select the whole source, or move those tables to another postgres_cdc source",
+            "this selection leaves out {} of source {name}, whose changes share its one slot and would be skipped; select the whole source, or move those tables to another postgres_cdc source",
             left_out.join(", ")
         )
     })

@@ -134,13 +134,19 @@ const PARTIAL_LOADS: [CdcStep; 5] = [
         CHANGES,
         &["load", "--select", "app__orders"],
         "",
-        (false, "this selection leaves out public.items"),
+        (
+            false,
+            "this selection leaves out public.items of source app",
+        ),
     ),
     step(
         "",
         &["load", "app", "--exclude", "app__items"],
         "",
-        (false, "this selection leaves out public.items"),
+        (
+            false,
+            "this selection leaves out public.items of source app",
+        ),
     ),
     step(
         "ALTER TABLE public.items ALTER COLUMN w TYPE text",
@@ -154,6 +160,19 @@ const PARTIAL_LOADS: [CdcStep; 5] = [
         "",
         (true, "Completed"),
     ),
+];
+
+const FIRST_LOAD_PARTIAL: [CdcStep; 2] = [
+    step(
+        "",
+        &["load", "--select", "app__orders"],
+        "",
+        (
+            false,
+            "this selection leaves out public.items of source app",
+        ),
+    ),
+    step("", APP, "", (true, "loaded")),
 ];
 
 const SCHEMA_CHANGE: [CdcStep; 2] = [
@@ -205,17 +224,62 @@ description = "Items, keyed by name."
 unique_key = ["name"]
 "#;
 
-const KEY_OUTSIDE_IDENTITY: [CdcStep; 2] = [
-    step("", &["load", "uniq"], "", (true, "loaded")),
+const KEY_OUTSIDE_IDENTITY: [CdcStep; 1] = [step(
+    "",
+    &["load", "uniq"],
+    "",
+    (false, "unique_key column name is not in the primary key"),
+)];
+
+const IDENTITY_NOTHING: [CdcStep; 2] = [
     step(
-        CHANGES,
-        &["load", "uniq"],
+        "ALTER TABLE public.items REPLICA IDENTITY NOTHING",
+        APP,
+        "",
+        (false, "\"public\".\"items\" has REPLICA IDENTITY NOTHING"),
+    ),
+    step(
+        "ALTER TABLE public.items REPLICA IDENTITY DEFAULT",
+        APP,
+        "",
+        (true, "loaded"),
+    ),
+];
+
+const SHARED_SOURCE: &str = r#"
+[sources.narrow]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.orders"]
+publication = "shared_pub"
+
+[sources.narrow.tables."public.orders"]
+description = "Orders, captured through a shared publication."
+columns = { tags = "text" }
+"#;
+
+const EXTRA_PUBLISHED: [CdcStep; 5] = [
+    step(
+        "CREATE PUBLICATION shared_pub FOR TABLE public.orders, public.items",
+        &["load", "narrow"],
         "",
         (
             false,
-            "unique_key column name is not in the table's replica identity",
+            "publication shared_pub also publishes \"public\".\"items\"",
         ),
     ),
+    step("", APP, "", (true, "loaded")),
+    step(
+        "ALTER PUBLICATION sqlload_app ADD TABLE other.audit",
+        APP,
+        "",
+        (
+            false,
+            "publication sqlload_app also publishes \"other\".\"audit\"",
+        ),
+    ),
+    step("", RESNAPSHOT, "", (true, "loaded")),
+    step(CHANGES, APP, "", (true, "Completed")),
 ];
 
 const JSON_SOURCE: &str = r#"
@@ -382,6 +446,14 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: MERGED_RESULT,
         },
         CdcScenarioTestCase {
+            description: "a first load of part of the source is refused before it makes the slot, so the whole source snapshots after",
+            tag: "17-alpine",
+            extra_config: "",
+            steps: &FIRST_LOAD_PARTIAL,
+            check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM raw.app__items",
+            expected_result: "1,2",
+        },
+        CdcScenarioTestCase {
             description: "a column added between loads stops the load instead of leaving old rows without its default",
             tag: "17-alpine",
             extra_config: "",
@@ -398,12 +470,28 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: "0",
         },
         CdcScenarioTestCase {
-            description: "a unique_key outside the replica identity stops the load instead of losing deletes",
+            description: "a unique_key outside the primary key is refused before the snapshot, instead of losing deletes",
             tag: "17-alpine",
             extra_config: UNIQUE_SOURCE,
             steps: &KEY_OUTSIDE_IDENTITY,
-            check_query: "SELECT string_agg(name || ':' || _sqlload_op, ',' ORDER BY name) FROM raw.uniq__items",
-            expected_result: "one:snapshot,two:snapshot",
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'uniq__items'",
+            expected_result: "0",
+        },
+        CdcScenarioTestCase {
+            description: "a table with REPLICA IDENTITY NOTHING is refused before it is published",
+            tag: "17-alpine",
+            extra_config: "",
+            steps: &IDENTITY_NOTHING,
+            check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM raw.app__items",
+            expected_result: "1,2",
+        },
+        CdcScenarioTestCase {
+            description: "a publication with tables the source does not load is refused, and SQLLoad's own follows the source again on --resnapshot",
+            tag: "17-alpine",
+            extra_config: SHARED_SOURCE,
+            steps: &EXTRA_PUBLISHED,
+            check_query: MERGED_QUERY,
+            expected_result: MERGED_RESULT,
         },
         CdcScenarioTestCase {
             description: "a json column must be pinned to text, since the stream keeps the source's spelling",
