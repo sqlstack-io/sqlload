@@ -19,7 +19,7 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
-use crate::cdc::constants::PLAIN_JSON_TYPE;
+use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
@@ -280,7 +280,7 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
 }
 
 /// A captured table's read columns: the data columns it writes (its snapshot stages them, its stream is matched to them by name and its snapshot record lists them), and every change column.
-fn captured_read(read: Vec<ReadColumn>, schema: &SchemaPlan) -> Vec<ReadColumn> {
+pub(crate) fn captured_read(read: Vec<ReadColumn>, schema: &SchemaPlan) -> Vec<ReadColumn> {
     let written: Vec<&str> = schema
         .write_columns
         .iter()
@@ -291,6 +291,28 @@ fn captured_read(read: Vec<ReadColumn>, schema: &SchemaPlan) -> Vec<ReadColumn> 
             column.name.starts_with(CDC_PREFIX) || written.contains(&column.name.as_str())
         })
         .collect()
+}
+
+/// A captured table's write: its changes, applied by its source's `cdc_mode`; any other table keeps `mode`.
+pub(crate) fn captured_mode(spec: &TableSpec, mode: WriteMode) -> WriteMode {
+    match &spec.cdc {
+        Some(cdc) => WriteMode::Changes(ChangeWrite {
+            apply: cdc.apply,
+            unique_key: spec.unique_key.clone(),
+            truncated: None,
+        }),
+        None => mode,
+    }
+}
+
+/// What `--resnapshot` does to a captured table's source, for `plan`.
+pub(crate) fn resnapshot_warning(spec: &TableSpec, options: &PlanOptions) -> Option<String> {
+    spec.cdc.as_ref().filter(|_| options.resnapshot).map(|cdc| {
+        format!(
+            "--resnapshot drops and recreates slot {}, then copies every table of {} again",
+            cdc.slot, spec.source_name
+        )
+    })
 }
 
 /// Array and `json` columns of a captured table read as JSON: the stream sends them as Postgres text (`{a,b}` for an array, the original spacing and duplicate keys for `json`), which would not load as JSON or would differ from the snapshot's jsonb rows, so they must be pinned to text (`jsonb` streams as the snapshot reads it).
@@ -472,22 +494,8 @@ async fn plan_table_once(
         _ => None,
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
-    schema
-        .warnings
-        .extend(spec.cdc.as_ref().filter(|_| options.resnapshot).map(|cdc| {
-            format!(
-                "--resnapshot drops and recreates slot {}, then copies every table of {} again",
-                cdc.slot, spec.source_name
-            )
-        }));
-    let mode = match &spec.cdc {
-        Some(cdc) => WriteMode::Changes(ChangeWrite {
-            apply: cdc.apply,
-            unique_key: spec.unique_key.clone(),
-            truncated: None,
-        }),
-        None => mode,
-    };
+    schema.warnings.extend(resnapshot_warning(spec, options));
+    let mode = captured_mode(spec, mode);
     let exists = live.is_some();
     let chosen = match &schema.blocked {
         None => {
@@ -1020,7 +1028,7 @@ fn quoted(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-/// The cursor's type, and why the table's strategy and cursor do not suit its path.
+/// The cursor's type, and why the table's strategy and cursor do not suit its path; a captured table's path is checked by [`captured_problems`] instead.
 pub(crate) fn check_output(
     spec: &TableSpec,
     path: &TablePath,
@@ -1031,11 +1039,46 @@ pub(crate) fn check_output(
         .iter()
         .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
         .map(|column| column.column_type.clone());
-    let problems = output_problems(&OutputCheck {
-        strategy: spec.strategy,
-        cursor_column: cursor_name,
-        cursor_type: cursor_type.as_ref(),
-        partition: path.partition.as_ref(),
-    });
+    let problems = match spec.cdc {
+        Some(_) => Vec::new(),
+        None => output_problems(&OutputCheck {
+            strategy: spec.strategy,
+            cursor_column: cursor_name,
+            cursor_type: cursor_type.as_ref(),
+            partition: path.partition.as_ref(),
+        }),
+    };
     (cursor_type, problems)
+}
+
+/// Why a captured table cannot load into its files: its changes are one changelog, which partition folders by a cursor would split, and `--reload` would leave as it is (`--resnapshot` copies it again).
+pub(crate) fn captured_problems(
+    spec: &TableSpec,
+    path: &TablePath,
+    options: &PlanOptions,
+) -> Vec<String> {
+    let captured = spec.cdc.is_some();
+    [
+        (captured && path.partition.is_some(), CDC_PARTITION_PROBLEM),
+        (captured && options.reload, CDC_RELOAD_PROBLEM),
+    ]
+    .into_iter()
+    .filter(|(applies, _)| *applies)
+    .map(|(_, problem)| problem.to_owned())
+    .collect()
+}
+
+/// A files table's schema with what `--resnapshot` does among its warnings, and its read columns, cut to those it writes when captured.
+pub(crate) fn captured_columns(
+    spec: &TableSpec,
+    options: &PlanOptions,
+    mut schema: SchemaPlan,
+    read: Vec<ReadColumn>,
+) -> (SchemaPlan, Vec<ReadColumn>) {
+    schema.warnings.extend(resnapshot_warning(spec, options));
+    let read = match spec.cdc {
+        Some(_) => captured_read(read, &schema),
+        None => read,
+    };
+    (schema, read)
 }

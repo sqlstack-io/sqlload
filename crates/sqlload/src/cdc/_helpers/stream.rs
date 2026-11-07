@@ -9,12 +9,19 @@ use tokio_postgres::Client;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite, WriteMode};
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
+use crate::adapters::files::constants::PARQUET_SUFFIX;
+use crate::adapters::files::main::cursor_maximum::cursor_maximum;
+use crate::adapters::files::main::newest_load_files::newest_load_files;
+use crate::adapters::files::main::read_table_state::read_table_state;
+use crate::adapters::files::main::table_path::table_path;
+use crate::adapters::files::models::TablePathRequest;
 use crate::cdc::_helpers::batch::{change_parts, refuse_renamed, rows_batch, unplanned_columns};
 use crate::cdc::_helpers::buffer::buffer_change;
 use crate::cdc::_helpers::reshape::reshape_problem;
-use crate::cdc::_helpers::snapshot_log::SnapshotLog;
+use crate::cdc::_helpers::snapshot_log::{SnapshotLog, snapshot_folder};
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{
     BACKFILL_SLOT_SUFFIX, BATCH_CHANGES, COLUMN_LISTS_VERSION, GENERATED_COLUMNS_VERSION,
@@ -26,6 +33,10 @@ use crate::cdc::models::{
     CatalogColumn, ChangeBuffer, FollowStep, PlannedShape, SnapshotRecord, StreamStep, Streamed,
     TableChanges,
 };
+use crate::column_types::models::ColumnType;
+use crate::file_store::main::open_folder::open_folder;
+use crate::file_store::models::StoredFile;
+use crate::files_source::main::read_footers::read_footers;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::apply_project::apply_project;
@@ -39,8 +50,9 @@ use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::models::{CopyRequest, PostgresAddress, ReadColumn, SourceTable};
-use crate::project::models::{ConnectionConfig, SourceConfig};
-use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN};
+use crate::project::constants::DEFAULT_DESTINATION_PATH;
+use crate::project::models::{ConnectionConfig, SourceConfig, TargetConfig};
+use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_PREFIX, CDC_UNCHANGED_COLUMN};
 
 /// How often the replication session reports the confirmed position.
 const STATUS_INTERVAL: Duration = Duration::from_millis(100);
@@ -151,7 +163,7 @@ impl CdcSource<'_> {
         .with_application_name("sqlload"))
     }
 
-    /// The source's snapshot records, beside its first table.
+    /// The source's snapshot records: beside its first table in a warehouse, in the records folder of its path template in a files target (see [`snapshot_folder`]).
     fn log(&self) -> Result<SnapshotLog<'_>, LoaderError> {
         let first = self
             .tables
@@ -160,7 +172,29 @@ impl CdcSource<'_> {
             .ok_or_else(|| {
                 LoaderError::Invalid(format!("source {} selects no tables", self.name))
             })?;
+        let folder = match files_destination(self.destination) {
+            Some(files) => {
+                let target = self.run.project.targets.get(&first.target);
+                let template = self
+                    .source
+                    .destination_path
+                    .as_deref()
+                    .or_else(|| target.map(TargetConfig::path_template))
+                    .unwrap_or(DEFAULT_DESTINATION_PATH);
+                let request = TablePathRequest {
+                    template: &snapshot_folder(template, self.name, &self.cdc.slot),
+                    connection: &files.connection,
+                    store: &files.store,
+                    source: self.name,
+                    schema: "",
+                    table: "",
+                };
+                Some(table_path(&request).map_err(LoaderError::Invalid)?.folder)
+            }
+            None => None,
+        };
         Ok(SnapshotLog {
+            folder,
             destination: self.destination,
             warehouse: first.warehouse,
             beside: &first.destination,
@@ -348,7 +382,7 @@ impl CdcSource<'_> {
             .map(|row| (row.get::<_, Option<String>>(0).unwrap_or_default(), row.get(1))))
     }
 
-    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it; the load leaves out a table the slot captured (its changes would be confirmed unwritten); a recorded table left the publication (its changes since were not captured); a table to copy alone still holds rows from before the slot was recreated (the copy would replace them unasked); or a table's columns changed since its snapshot in a way the stream does not carry (see [`reshape_problem`]). When it can, the tables whose columns changed in ways it carries are recorded with their new columns first, and the tables without a snapshot from it (joined since, or a snapshot stopped part-way) are returned, to be copied alone before streaming.
+    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it; the load leaves out a table the slot captured (its changes would be confirmed unwritten); a recorded table left the publication (its changes since were not captured); a table to copy alone still holds rows from before the slot was recreated (the copy would replace them unasked); or a table's columns changed since its snapshot in a way the stream does not carry (see [`reshape_problem`]). When it can, the tables whose columns changed in ways it carries are recorded with their new columns first, and the tables without a snapshot from it (joined since, or a snapshot stopped part-way) or without their destination table or folder (dropped or moved since, which streaming alone would leave without its copied rows) are returned, to be copied alone before streaming.
     async fn resume_problem(
         &self,
         control: &Client,
@@ -384,7 +418,7 @@ impl CdcSource<'_> {
         }
         let mut rewrites: Vec<(i64, SnapshotRecord)> = Vec::new();
         let mut problems: Vec<String> = Vec::new();
-        for table in &self.tables {
+        for table in self.tables.iter().filter(|table| holds_rows(table)) {
             let name = table.spec.destination.table.as_str();
             let Some((copied_at, recorded)) =
                 snapshotted.iter().find(|(_, record)| record.table == name)
@@ -437,21 +471,27 @@ impl CdcSource<'_> {
         let unrecorded: Vec<&TablePlan> = self
             .tables
             .iter()
-            .filter(|table| !recorded.contains(&table.spec.destination.table.as_str()))
+            .filter(|table| {
+                !holds_rows(table) || !recorded.contains(&table.spec.destination.table.as_str())
+            })
             .copied()
             .collect();
         let log = self.log()?;
         let mut held: Vec<&str> = Vec::new();
         for table in &unrecorded {
             let destination = &table.spec.destination;
-            let earlier_rows = table.exists
+            let earlier_rows = holds_rows(table)
                 && earlier.contains(&destination.table)
                 && log.holds_before(destination, newest).await?;
             held.extend(earlier_rows.then_some(destination.table.as_str()));
         }
         if !held.is_empty() {
+            let remove = match log.folder {
+                Some(_) => "delete their folders",
+                None => "drop the tables from the destination",
+            };
             return Ok(Err(format!(
-                "rows captured before slot {slot} was recreated are still in {}; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or drop the tables from the destination to copy them alone",
+                "rows captured before slot {slot} was recreated are still in {}; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or {remove} to copy them alone",
                 held.join(", ")
             )));
         }
@@ -576,7 +616,7 @@ impl CdcSource<'_> {
             })
     }
 
-    /// Copy `tables`, which have no snapshot from the slot (joined since, or a snapshot stopped part-way), alone: `missing` ones join SQLLoad's publication first, then a temporary slot exports a snapshot they are copied under, and each is recorded at that slot's consistent point, so the stream drops their changes from before it. The slot and every other table are left as they are; returns the rows each table wrote.
+    /// Copy `tables`, which have no snapshot from the slot (joined since, or a snapshot stopped part-way) or no destination table or files to hold it (dropped or deleted since), alone: `missing` ones join SQLLoad's publication first, then a temporary slot exports a snapshot they are copied under, and each is recorded at that slot's consistent point, so the stream drops their changes from before it. The slot and every other table are left as they are; returns the rows each table wrote.
     async fn backfill(
         &self,
         control: &Client,
@@ -637,7 +677,7 @@ impl CdcSource<'_> {
         drop(session);
         tracing::info!(
             tables = tables.len(),
-            "copying tables that joined the source alone, under their own snapshot"
+            "copying tables that joined the source, or whose destination is gone, alone, under their own snapshot"
         );
         let rows = self
             .copy_snapshot(&client, tables, (copy_lsn, "backfill"))
@@ -928,7 +968,7 @@ impl CdcSource<'_> {
         Ok((buffer, written))
     }
 
-    /// Each loaded table's copy point by its source `(schema, table)`, from its snapshot record.
+    /// Each loaded table's floor by its source `(schema, table)`: the stream drops its changes committed before it. That is its copy point, from its snapshot record; in a files target, past its newest committed change too, which files cannot skip on a replay as a warehouse's changelog insert does.
     async fn copy_points(&self) -> Result<BTreeMap<(String, String), i64>, LoaderError> {
         let mut points: BTreeMap<(String, String), i64> = BTreeMap::new();
         let Some((_, records, _)) = self.log()?.current().await? else {
@@ -941,7 +981,10 @@ impl CdcSource<'_> {
                 .find(|table| table.spec.destination.table == record.table);
             if let Some(table) = table {
                 let source = &table.spec.source_table;
-                points.insert((source.schema.clone(), source.name.clone()), lsn);
+                let floor = newest_change_lsn(table)
+                    .await?
+                    .map_or(lsn, |newest| lsn.max(newest + 1));
+                points.insert((source.schema.clone(), source.name.clone()), floor);
             }
         }
         Ok(points)
@@ -1395,4 +1438,59 @@ pub(crate) fn with_changes(
         loaded.changes.extend(applied);
     }
     outcomes
+}
+
+/// The newest `_sqlload_lsn` in a files table's committed files: the statistics of its newest commit's last part (a transaction's changes to a table go in one commit, each commit's are newer than the last's, and a commit's parts are written in order, one at a time); `None` for a warehouse table or a folder without files. Commits that tie for newest (a store's times are whole seconds) each give their last part. An unfinished load's files do not count, and one footer per newest commit is read however large it is.
+async fn newest_change_lsn(table: &TablePlan) -> Result<Option<i64>, LoaderError> {
+    let Some(output) = &table.output else {
+        return Ok(None);
+    };
+    let folder = open_folder(&output.path.folder)?;
+    let state = read_table_state(&folder, &output.path, None).await?;
+    let mut last_parts: BTreeMap<String, ((usize, String), StoredFile)> = BTreeMap::new();
+    let newest = state
+        .listed
+        .partitions
+        .last()
+        .map(|partition| newest_load_files(&partition.files))
+        .unwrap_or_default();
+    for file in newest {
+        let (load, number) = load_part(&file.relative_key)
+            .unwrap_or_else(|| (file.relative_key.clone(), (0, String::new())));
+        let later = last_parts
+            .get(&load)
+            .is_none_or(|(seen, _)| number >= *seen);
+        if later {
+            last_parts.insert(load, (number, file));
+        }
+    }
+    let newest: Vec<StoredFile> = last_parts.into_values().map(|(_, file)| file).collect();
+    let footers = read_footers(&folder, &newest).await?;
+    let maximum =
+        cursor_maximum(&footers, CDC_LSN_COLUMN, &ColumnType::Int).map_err(LoaderError::Invalid)?;
+    maximum
+        .map(|text| {
+            text.parse::<i64>().map_err(|_| {
+                LoaderError::Invalid(format!(
+                    "{}: unreadable {CDC_LSN_COLUMN} maximum {text:?}",
+                    output.path.folder
+                ))
+            })
+        })
+        .transpose()
+}
+
+/// The load and part number `<n>` of a written file's key (`part-<load id>-<n>.parquet`), the number as its digit count and digits, which order as the number does; `None` for another shape.
+fn load_part(key: &str) -> Option<(String, (usize, String))> {
+    let (load, number) = key.strip_suffix(PARQUET_SUFFIX)?.rsplit_once('-')?;
+    let digits = !number.is_empty() && number.chars().all(|digit| digit.is_ascii_digit());
+    digits.then(|| (load.to_owned(), (number.len(), number.to_owned())))
+}
+
+/// Whether `table`'s destination holds rows: the warehouse table exists, or the files folder holds committed files (an unfinished load's files, which its next write deletes, do not count).
+fn holds_rows(table: &TablePlan) -> bool {
+    table
+        .output
+        .as_ref()
+        .map_or(table.exists, |output| output.listed > 0)
 }

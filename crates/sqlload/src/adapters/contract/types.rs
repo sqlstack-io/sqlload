@@ -23,8 +23,8 @@ use crate::adapters::contract::_helpers::schema::{
 use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::_helpers::write::write_statements;
 use crate::adapters::contract::models::{
-    ChangeWrite, CursorQuery, CursorRead, CursorValue, TableName, WriteStatementsRequest,
-    WriteTarget,
+    ChangeApply, ChangeWrite, CursorQuery, CursorRead, CursorValue, TableName,
+    WriteStatementsRequest, WriteTarget,
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::loader::errors::LoaderError;
@@ -40,9 +40,9 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         true
     }
 
-    /// Whether a `postgres_cdc` source may load into the destination: every SQL warehouse its changes have been applied to live; a files target has no tables to merge into.
-    fn captures_changes(&self) -> bool {
-        self.runs_sql()
+    /// Whether a `postgres_cdc` source applying its changes by `apply` may load into the destination: every SQL warehouse its changes have been applied to live; a files target only as a changelog, having no tables to merge into.
+    fn captures_changes(&self, apply: ChangeApply) -> bool {
+        self.runs_sql() || apply == ChangeApply::Changelog
     }
 
     /// Whether a `--reload` build table starts `LIKE` the table to keep its grants, and so keeps the live columns.

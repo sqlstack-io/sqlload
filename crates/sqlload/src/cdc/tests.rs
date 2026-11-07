@@ -8,5 +8,7 @@ mod decode_message;
 mod helpers;
 #[path = "tests/test_reshape.rs"]
 mod reshape;
+#[path = "tests/test_snapshot_folder.rs"]
+mod snapshot_folder;
 #[path = "tests/test_types.rs"]
 mod test_types;

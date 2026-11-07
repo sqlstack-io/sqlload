@@ -23,7 +23,8 @@ pub(in crate::loader) fn files_schema(
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
     };
-    let compared = live.filter(|_| !options.reload);
+    let recopied = spec.cdc.is_some() && options.resnapshot;
+    let compared = live.filter(|_| !options.reload && !recopied);
     let mut schema = plan_schema(desired, compared, rules);
     schema.write_columns = fit_live_types(schema.write_columns, compared.unwrap_or_default());
     let wanted: BTreeSet<String> = desired
