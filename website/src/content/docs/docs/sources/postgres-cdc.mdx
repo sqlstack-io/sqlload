@@ -1,0 +1,360 @@
+---
+title: "Postgres CDC"
+description: "Stream a Postgres database's inserts, updates and deletes from a logical replication slot into DuckDB or Snowflake."
+---
+
+A `postgres_cdc` source captures a Postgres database's changes. The first `sqlload load` copies
+every table under a snapshot. Each later load reads the inserts, updates and deletes committed
+since the last one from a logical replication slot, applies them, and stops. It loads into
+DuckDB and Snowflake targets.
+
+Use sqlload 0.17.0 or later for `postgres_cdc`. In 0.16.0, a transaction that changed a table's
+columns after writing to it could put values in the wrong columns.
+
+## Requirements
+
+- **The server** runs with `wal_level = logical`. Changing it needs a restart.
+- **The connection's user** has the `REPLICATION` attribute and can `SELECT` the tables.
+- **A publication** of exactly the source's tables; one that also publishes other tables stops
+  the load. When it's missing, SQLLoad creates `sqlload_<source>`, which needs a user that owns the
+  tables and has `CREATE` on the database. Otherwise, create one as the tables' owner and name it
+  with `publication`; SQLLoad then only checks it.
+- **Every table** has a primary key and a replica identity other than `NOTHING`.
+- **The target** is DuckDB or Snowflake. A Databricks or files target is refused at `plan`.
+
+## Set up a source
+
+This example streams a shop database into DuckDB, as a user that doesn't own the tables.
+
+### 1. Prepare Postgres
+
+Save this as `seed.sql`. `orders` has a `text[]` column, `tags`:
+
+```sql
+CREATE TABLE customers (
+    customer_id bigint PRIMARY KEY,
+    email text NOT NULL,
+    country text
+);
+CREATE TABLE orders (
+    order_id bigint PRIMARY KEY,
+    customer_id bigint NOT NULL REFERENCES customers,
+    status text NOT NULL,
+    tags text[],
+    total numeric(12,2) NOT NULL
+);
+INSERT INTO customers
+SELECT i, 'customer' || i || '@example.com', (ARRAY['GB', 'FR', 'DE', 'US'])[1 + i % 4]
+FROM generate_series(1, 50) AS i;
+INSERT INTO orders
+SELECT i, 1 + i % 50, (ARRAY['placed', 'paid', 'shipped'])[1 + i % 3], ARRAY['web'],
+       round(10 + i * 1.37, 2)
+FROM generate_series(1, 1000) AS i;
+```
+
+Start Postgres with logical decoding on, and load the data:
+
+```bash
+docker run -d --name app-db -e POSTGRES_PASSWORD=secret -p 5432:5432 postgres:17 -c wal_level=logical
+docker exec -i app-db psql -q -U postgres < seed.sql
+```
+
+As the tables' owner, create the loader's user and a publication of the tables:
+
+```sql
+CREATE ROLE loader LOGIN REPLICATION PASSWORD 'secret';
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO loader;
+CREATE PUBLICATION app_changes FOR TABLE customers, orders;
+```
+
+### 2. Write `sqlload.toml`
+
+```toml
+default_target = "local"
+
+[connections.app]
+kind = "postgres"
+host = "localhost"
+user = "loader"
+password = "${ENV:PGPASSWORD}"
+database = "postgres"
+
+[connections.warehouse]
+kind = "duckdb"
+database = "shop.duckdb"
+
+[targets.local]
+connection = "warehouse"
+loader_schema = "raw"
+
+[sources.app]
+kind = "postgres_cdc"
+connection = "app"
+description = "The shop's application database, streamed from a replication slot."
+include = ["public.*"]
+publication = "app_changes"
+
+[sources.app.tables."public.customers"]
+description = "Customers, one row per customer."
+
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+columns = { tags = "text" }
+```
+
+The connection is an ordinary [`postgres` connection](/docs/configuration/#postgres). Array and
+`json` columns stream as Postgres writes them, so they must be pinned to text, as `tags` is here.
+`jsonb` needs nothing. Without the pin, `plan` stops:
+
+```console
+Errors (1)
+└── app__orders
+    └── reason  tags: kind = "postgres_cdc" streams text[] values as the source wrote them, which the snapshot normalises as jsonb; pin it with columns = { tags = "text" }, or exclude it
+```
+
+### 3. Plan, apply and load
+
+```bash
+export PGPASSWORD=secret
+```
+
+```console
+$ sqlload plan
+Plan ready  2 selected, 2 objects to create, 2 to load
+
+Objects (2)                                         sqlload apply
+├── raw.app__customers                              create table
+│   ├── customer_id int    -> BIGINT
+│   ├── email       text   -> VARCHAR
+│   ├── country     text   -> VARCHAR
+│   └── + _sqlload_lsn, _op, _committed_at, _deleted_at, _load_id, _loaded_at
+└── raw.app__orders                                 create table
+    ├── order_id    int             -> BIGINT
+    ├── customer_id int             -> BIGINT
+    ├── status      text            -> VARCHAR
+    ├── tags        text            -> VARCHAR
+    ├── total       decimal(12,2)   -> DECIMAL(12,2)
+    └── + _sqlload_lsn, _op, _committed_at, _deleted_at, _load_id, _loaded_at
+
+Loads (2)                                           sqlload load
+├── app__customers                                  apply changes, soft deletes (key: customer_id)
+│   ├── source  postgres_cdc  app  public.customers  slot sqlload_app
+│   ├── route   read as Arrow -> DuckDB takes Arrow
+│   └── batch   about every 1 GB
+└── app__orders                                     apply changes, soft deletes (key: order_id)
+    ├── source  postgres_cdc  app  public.orders  slot sqlload_app
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    └── batch   about every 1 GB
+
+✓ Plan complete  2 selected, 2 objects to create, 2 to load
+```
+
+`sqlload apply` creates the tables. The first `sqlload load` creates the slot, `sqlload_app`, and
+copies every table under its snapshot (the plan is cut here):
+
+```console
+$ sqlload load
+…
+loaded   raw.app__customers  50 rows  0.2s
+loaded   raw.app__orders     1,000 rows  0.2s
+
+✓ Completed  2 loaded, 1,050 rows, 0.3s
+```
+
+### 4. Load the changes
+
+After an insert, an update and a delete in Postgres:
+
+```sql
+INSERT INTO orders VALUES (1001, 7, 'placed', ARRAY['app'], 25.00);
+UPDATE orders SET status = 'shipped' WHERE order_id = 1;
+DELETE FROM orders WHERE order_id = 2;
+```
+
+the next load reads just those three changes:
+
+```console
+$ sqlload load
+…
+loaded   raw.app__customers  0 rows  0.2s
+loaded   raw.app__orders     3 rows  0.2s
+
+✓ Completed  2 loaded, 3 rows, 0.2s
+```
+
+In `raw.app__orders`, the deleted order is kept and marked:
+
+| `order_id` | `status` | `tags` | `_sqlload_op` | `_sqlload_deleted_at` set |
+|------------|----------|--------|---------------|---------------------------|
+| 1 | shipped | `{web}` | update | no |
+| 2 | shipped | `{web}` | delete | yes |
+| 1001 | placed | `{app}` | insert | no |
+
+Run `sqlload load` on a schedule to keep the tables up to date. Each run stops once it has read
+the changes committed before it started.
+
+## Settings
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `kind` | | `postgres_cdc`. |
+| `connection` | | A `postgres` connection. |
+| `include`, `exclude` | | `schema.table` patterns, as for a [Postgres source](/docs/sources/postgres/#choosing-tables). |
+| `cdc_mode` | `merge` | `merge` keeps one row per key; `changelog` appends every change. |
+| `deletes` | `soft` | `merge` only: `soft` marks a deleted row with `_sqlload_deleted_at`; `hard` removes it. |
+| `slot` | `sqlload_<source>` | The replication slot. |
+| `publication` | `sqlload_<source>` | The publication. SQLLoad creates `sqlload_<source>` when it's missing. |
+
+Column settings (`columns`, `exclude_columns`, `mask` and the rest) work as for other sources. A
+captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. `merge`
+matches rows on the primary key, and a `unique_key` must lie within it.
+
+## Merge and changelog
+
+Every row carries `_sqlload_lsn` (its transaction's commit LSN), `_sqlload_op` (`snapshot`,
+`insert`, `update`, `delete` or `truncate`) and `_sqlload_committed_at`.
+
+- **`merge`** keeps one row per key. A soft delete sets `_sqlload_deleted_at`, and a truncate
+  soft-deletes every older row. A TOASTed value the change left out keeps its current value.
+- **`changelog`** appends every change. `_sqlload_seq` is its position in the transaction, and
+  `_sqlload_unchanged` lists the values the change left out.
+
+With `cdc_mode = "changelog"`, two updates to order 5 after the snapshot leave three rows:
+
+| `order_id` | `status` | `_sqlload_op` | `_sqlload_seq` |
+|------------|----------|---------------|----------------|
+| 5 | shipped | snapshot | 0 |
+| 5 | paid | update | 1 |
+| 5 | shipped | update | 1 |
+
+## What a load guarantees
+
+- A batch always holds whole transactions.
+- The slot confirms a batch only after every table it touched has committed. A change whose
+  `_sqlload_lsn` a table already holds is skipped. A load that stops part-way is safe to run
+  again: nothing is lost or applied twice.
+- Each table converges to the source as of the last confirmed position. Tables aren't promised to
+  be consistent with each other at every moment.
+- A transaction or batch holding more than about 256 MiB of changes moves them to the system's
+  temporary folder (`TMPDIR`; point it at a disk, not a memory-backed `tmpfs`). Each table is
+  still committed once.
+
+## The slot and WAL
+
+Postgres keeps WAL for a slot from the slot's last confirmed position, so WAL builds up between
+loads. Every load confirms what it applied, including a load that found no changes in the source's
+tables, so Postgres can then free that WAL.
+
+To see how much each slot holds, run this in Postgres:
+
+```sql
+SELECT slot_name, wal_status,
+       pg_size_pretty(pg_current_wal_lsn() - confirmed_flush_lsn) AS not_loaded,
+       pg_size_pretty(pg_current_wal_lsn() - restart_lsn) AS wal_kept
+FROM pg_replication_slots
+WHERE slot_name LIKE 'sqlload_%';
+```
+
+After 100,000 inserts and before the next load:
+
+```console
+  slot_name  | wal_status | not_loaded | wal_kept
+-------------+------------+------------+----------
+ sqlload_app | reserved   | 15 MB      | 15 MB
+```
+
+After the load, `not_loaded` is `0 bytes`. `wal_kept` shrinks at the first load after Postgres's
+next checkpoint.
+
+If loads stop running, the slot keeps WAL until the disk fills. To cap it, set Postgres's
+`max_slot_wal_keep_size`. A slot past the cap is marked `lost`, and the next load stops:
+
+```console
+failed   raw.app__orders     slot sqlload_app lost WAL it had not confirmed, so changes are missing; run `sqlload load --resnapshot` to drop and recreate it and copy every table again
+```
+
+SQLLoad never drops a slot on its own, except under `--resnapshot`. When you remove a source, drop
+its slot and publication yourself, or they keep holding WAL:
+
+```sql
+SELECT pg_drop_replication_slot('sqlload_app');
+DROP PUBLICATION app_changes;
+```
+
+## Re-snapshot
+
+A load stops and names `--resnapshot` as the fix when the slot is lost or gone, when a snapshot
+stopped part-way, or when a table's columns changed. Schema changes while streaming aren't handled
+in this release: after columns are added or dropped, the load fails until you re-snapshot.
+
+```console
+failed   raw.app__customers  the columns of app__customers changed since their snapshot from slot sqlload_app; schema changes come in a later release, so run `sqlload load --resnapshot` to copy every table again
+```
+
+`sqlload load --resnapshot` drops and recreates the slot and copies every table again, replacing
+what it holds. A `changelog` table loses its history, and a `merge` table its soft-deleted rows.
+SQLLoad's own publication, `sqlload_<source>`, is set to follow `include` again. `plan
+--resnapshot` shows what it would do:
+
+```console
+$ sqlload plan --resnapshot
+…
+Warnings (2)
+├── app__customers
+│   └── --resnapshot drops and recreates slot sqlload_app, then copies every table of app again
+└── app__orders
+    └── --resnapshot drops and recreates slot sqlload_app, then copies every table of app again
+
+✓ Plan complete  2 selected, 2 to load
+```
+
+On a terminal, `load --resnapshot` asks first. Elsewhere it needs `--yes`:
+
+```console
+$ sqlload load --resnapshot
+error: --resnapshot rebuilds app__customers, app__orders from the whole source, replacing what they hold; confirm it in a terminal, or add --yes
+$ sqlload load --resnapshot --yes
+…
+loaded   raw.app__customers  50 rows  0.2s
+loaded   raw.app__orders     1,000 rows  0.2s
+
+✓ Completed  2 loaded, 1,050 rows, 0.3s
+```
+
+## Refused at plan
+
+Every table of a source shares its slot, so a source loads whole. Selecting some of its tables is
+refused:
+
+```console
+$ sqlload load app__orders
+…
+Errors (1)
+└── app__orders
+    └── reason  this selection leaves out public.customers of source app, whose changes share its one slot and would be skipped; select the whole source, or move those tables to another postgres_cdc source
+```
+
+A table without a primary key:
+
+```console
+Errors (1)
+└── public.events
+    └── reason  public.events has no primary key; kind = "postgres_cdc" captures tables with one in this release (publishing a table without a replica identity makes Postgres refuse its updates and deletes); add a primary key, or exclude it
+```
+
+A Databricks or files target:
+
+```console
+Errors (1)
+└── public.customers
+    └── reason  kind = "postgres_cdc" loads into DuckDB and Snowflake targets in this release, not Databricks or files targets
+```
+
+## Tested
+
+The test suite runs `postgres_cdc` against real Postgres 15, 16 and 17 in containers. Before
+release, live rounds loaded into DuckDB and into Snowflake (through an S3 external stage), under
+both `merge` and `changelog`, with every table checked against Postgres afterwards. They covered
+the snapshot, inserts, updates that left a TOASTed value out, deletes, a truncate and reinsert in
+one transaction, a slot advancing past changes to unpublished tables, and a 30,000-change
+transaction spilled to disk (with the spill limit lowered).

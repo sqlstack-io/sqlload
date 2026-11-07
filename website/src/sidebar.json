@@ -15,6 +15,7 @@
 				"slug": "docs/sources"
 			},
 			"docs/sources/postgres",
+			"docs/sources/postgres-cdc",
 			"docs/sources/files",
 			"docs/sources/python",
 			"docs/sources/logged-state"
