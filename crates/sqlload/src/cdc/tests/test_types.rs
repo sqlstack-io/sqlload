@@ -1,4 +1,4 @@
-use crate::cdc::models::{Change, PgOutputMessage};
+use crate::cdc::models::{CatalogColumn, Change, PgOutputMessage, SnapshotRecord};
 
 pub(crate) struct DecodeTestCase {
     pub(crate) description: &'static str,
@@ -28,4 +28,21 @@ pub(crate) struct StagedShapesTestCase {
     pub(crate) columns: Vec<&'static str>,
     pub(crate) expected_merge: Vec<&'static str>,
     pub(crate) expected_changelog: Vec<&'static str>,
+}
+
+/// A table's snapshot record (`,id,a,` with highest column number 3 and key `,id,` unless the case says otherwise), its plan and catalog now, and the record to write or why it must be copied again.
+pub(crate) struct ReshapeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) recorded: SnapshotRecord,
+    pub(crate) planned: (&'static str, &'static str, bool),
+    pub(crate) known: Vec<&'static str>,
+    pub(crate) catalog: Vec<CatalogColumn>,
+    pub(crate) expected_rewrite: Result<Option<SnapshotRecord>, &'static str>,
+}
+
+/// Snapshot records as read back, and the newest snapshot they give, or the error.
+pub(crate) struct SnapshotRecordsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) rows: Vec<&'static str>,
+    pub(crate) expected_snapshot: Result<Option<(i64, Vec<SnapshotRecord>)>, &'static str>,
 }

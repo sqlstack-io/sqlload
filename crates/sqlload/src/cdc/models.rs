@@ -124,3 +124,31 @@ pub enum StreamStep<'a> {
     /// The open transaction's commit: its LSN, end LSN and time (microseconds since 2000 UTC).
     Commit { lsn: u64, end_lsn: u64, time: i64 },
 }
+
+/// A captured table's snapshot record: the data columns it was copied with (`,a,b,`) or last resumed with, the highest column number the table had then (dropped columns included), and its key (`,id,`). Records written before column numbers were kept carry neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotRecord {
+    pub table: String,
+    pub columns: String,
+    pub max_attnum: Option<i16>,
+    pub key: Option<String>,
+}
+
+/// A source table's column in the catalog now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogColumn {
+    pub name: String,
+    pub attnum: i16,
+    pub dropped: bool,
+    /// It has a default (`atthasdef`), or rows written before it was added read a stored value (`atthasmissing`): values the stream never carried.
+    pub has_default: bool,
+}
+
+/// A captured table as this load plans it: its data columns (`,a,b,`), key (`,id,`), how changes apply, and the source columns the plan knew (excluded ones included).
+#[derive(Debug, Clone, Copy)]
+pub struct PlannedShape<'a> {
+    pub columns: &'a str,
+    pub key: &'a str,
+    pub merge: bool,
+    pub known: &'a [String],
+}

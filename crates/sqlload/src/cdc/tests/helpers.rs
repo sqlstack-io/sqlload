@@ -3,7 +3,8 @@ use crate::cdc::_helpers::batch::{change_parts, rows_batch};
 use crate::cdc::_helpers::buffer::buffer_change;
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::models::{
-    Change, ChangeBuffer, ChangeOp, Relation, RelationColumn, StreamStep, TableChanges, TupleValue,
+    CatalogColumn, Change, ChangeBuffer, ChangeOp, Relation, RelationColumn, SnapshotRecord,
+    StreamStep, TableChanges, TupleValue,
 };
 use crate::column_types::models::ColumnType;
 use crate::postgres_source::models::{ReadColumn, WireType};
@@ -279,4 +280,28 @@ fn column_texts(array: &arrow_array::ArrayRef, rows: usize) -> Result<Vec<String
                 .map_err(|error| error.to_string())
         })
         .collect()
+}
+
+/// A snapshot record of table `t`.
+pub(crate) fn record(columns: &str, max_attnum: Option<i16>, key: Option<&str>) -> SnapshotRecord {
+    SnapshotRecord {
+        table: "t".to_owned(),
+        columns: columns.to_owned(),
+        max_attnum,
+        key: key.map(str::to_owned),
+    }
+}
+
+/// A catalog column `name` numbered `attnum`, dropped or with a default as given.
+pub(crate) fn catalog_column(
+    name: &str,
+    attnum: i16,
+    (dropped, has_default): (bool, bool),
+) -> CatalogColumn {
+    CatalogColumn {
+        name: name.to_owned(),
+        attnum,
+        dropped,
+        has_default,
+    }
 }

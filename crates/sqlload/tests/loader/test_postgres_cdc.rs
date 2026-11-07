@@ -214,11 +214,78 @@ const SCHEMA_CHANGE: [CdcStep; 2] = [
         "ALTER TABLE public.items ADD COLUMN c int4 DEFAULT 5",
         APP,
         "",
+        (false, "column c of app__items was added with a default"),
+    ),
+];
+
+const ADD_COLUMN: &str = "UPDATE public.items SET name = 'one!' WHERE id = 1; ALTER TABLE public.items ADD COLUMN c int4; INSERT INTO public.items VALUES (3, 'three', 1.1, 7); UPDATE public.items SET c = 8 WHERE id = 2;";
+
+const COLUMN_ADDED: [CdcStep; 3] = [
+    step("", BOTH, "", (true, "loaded")),
+    step(ADD_COLUMN, BOTH, "", (true, "Completed")),
+    step("", BOTH, "", (true, "0 rows")),
+];
+
+const COLUMN_ADDED_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || name || ':' || COALESCE(CAST(c AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.app__items) || ' | ' || (SELECT string_agg(_sqlload_op || ':' || id || ':' || COALESCE(CAST(c AS VARCHAR), '-') || ':' || COALESCE(_sqlload_unchanged, '-'), ',' ORDER BY _sqlload_lsn, _sqlload_seq) FROM raw.log__items WHERE _sqlload_op <> 'snapshot')";
+
+const COLUMN_ADDED_CRASH: [CdcStep; 4] = [
+    step("", APP, "", (true, "loaded")),
+    step(ADD_COLUMN, APP, "batch-before-commit", (false, "")),
+    step("", APP, "", (true, "Completed")),
+    step("", APP, "", (true, "0 rows")),
+];
+
+const COLUMN_DROPPED_INSIDE: [CdcStep; 3] = [
+    step("", BOTH, "", (true, "loaded")),
+    step(
+        "BEGIN; UPDATE public.items SET w = 2.5 WHERE id = 1; ALTER TABLE public.items DROP COLUMN name; INSERT INTO public.items VALUES (3, 3.5); COMMIT;",
+        BOTH,
+        "",
+        (true, "Completed"),
+    ),
+    step("", BOTH, "", (true, "0 rows")),
+];
+
+const COLUMN_DROPPED_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || COALESCE(name, '-') || ':' || CAST(CAST(w AS DECIMAL(3, 1)) AS VARCHAR), ',' ORDER BY id) FROM raw.app__items) || ' | ' || (SELECT string_agg(_sqlload_op || ':' || id || ':' || CAST(CAST(w AS DECIMAL(3, 1)) AS VARCHAR), ',' ORDER BY _sqlload_lsn, _sqlload_seq) FROM raw.log__items WHERE _sqlload_op <> 'snapshot')";
+
+const COLUMN_RENAMED: [CdcStep; 2] = [
+    step("", APP, "", (true, "loaded")),
+    step(
+        "ALTER TABLE public.items RENAME COLUMN name TO title",
+        APP,
+        "",
         (
             false,
-            "the columns of app__items changed since their snapshot",
+            "app__items now loads column title, which the table already had at its snapshot",
         ),
     ),
+];
+
+const KEY_CHANGED: [CdcStep; 3] = [
+    step("", BOTH, "", (true, "loaded")),
+    step(
+        "ALTER TABLE public.items DROP CONSTRAINT items_pkey; ALTER TABLE public.items ADD PRIMARY KEY (id, name); INSERT INTO public.items VALUES (1, 'uno', 1.1);",
+        LOG,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "",
+        APP,
+        "",
+        (false, "the key of app__items changed since its snapshot"),
+    ),
+];
+
+const TYPE_WIDENED: [CdcStep; 3] = [
+    step("", APP, "", (true, "loaded")),
+    step(
+        "UPDATE public.orders SET qty = 6 WHERE id = 2; ALTER TABLE public.orders ALTER COLUMN qty TYPE int8; UPDATE public.orders SET qty = 5000000000 WHERE id = 3;",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step("", APP, "", (true, "0 rows")),
 ];
 
 const NOKEY_SOURCE: &str = r#"
@@ -564,6 +631,69 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             steps: &SCHEMA_CHANGE,
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__items",
             expected_result: "2",
+        },
+        CdcScenarioTestCase {
+            description: "a column added between changes loads: merge keeps older rows' live value, a changelog writes NULL and flags it",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &COLUMN_ADDED,
+            check_query: COLUMN_ADDED_QUERY,
+            expected_result: "1:one!:-,2:two:8,3:three:7 | update:1:-:,c,,insert:3:7:-,update:2:8:-",
+        },
+        CdcScenarioTestCase {
+            description: "spilled: a column added between changes loads the same",
+            tag: "15-alpine",
+            spill_bytes: "1",
+            extra_config: "",
+            steps: &COLUMN_ADDED,
+            check_query: COLUMN_ADDED_QUERY,
+            expected_result: "1:one!:-,2:two:8,3:three:7 | update:1:-:,c,,insert:3:7:-,update:2:8:-",
+        },
+        CdcScenarioTestCase {
+            description: "stopped after the destination gained the column, before the batch committed, the replay converges",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &COLUMN_ADDED_CRASH,
+            check_query: "SELECT string_agg(id || ':' || name || ':' || COALESCE(CAST(c AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.app__items",
+            expected_result: "1:one!:-,2:two:8,3:three:7",
+        },
+        CdcScenarioTestCase {
+            description: "a middle column dropped inside a transaction keeps each change's values in their columns",
+            tag: "16-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &COLUMN_DROPPED_INSIDE,
+            check_query: COLUMN_DROPPED_QUERY,
+            expected_result: "1:one:2.5,2:two:1.1,3:-:3.5 | update:1:2.5,insert:3:3.5",
+        },
+        CdcScenarioTestCase {
+            description: "a renamed column is refused, since its rows hold values no change carries",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &COLUMN_RENAMED,
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__items",
+            expected_result: "2",
+        },
+        CdcScenarioTestCase {
+            description: "a primary key change loads into a changelog and is refused under merge",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &KEY_CHANGED,
+            check_query: "SELECT string_agg(_sqlload_op || ':' || id || ':' || name, ',' ORDER BY _sqlload_lsn, _sqlload_seq) FROM raw.log__items WHERE _sqlload_op <> 'snapshot'",
+            expected_result: "insert:1:uno",
+        },
+        CdcScenarioTestCase {
+            description: "a column widened between changes loads both sides",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &TYPE_WIDENED,
+            check_query: "SELECT string_agg(id || ':' || qty, ',' ORDER BY id) FROM raw.app__orders",
+            expected_result: "1:1,2:6,3:5000000000",
         },
         CdcScenarioTestCase {
             description: "a table without a primary key is refused before any publication is made",
