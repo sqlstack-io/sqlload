@@ -94,4 +94,7 @@ $ sqlload load --reload app__customers
 error: --reload rebuilds app__customers from the whole source, replacing what they hold; confirm it in a terminal, or add --yes
 ```
 
+A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` refuses it. See
+[Reloading](/docs/sources/postgres-cdc/#reloading).
+
 See [Cursors](/docs/concepts/cursors/) for how a run decides what to read.

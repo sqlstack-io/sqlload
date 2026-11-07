@@ -13,7 +13,9 @@ columns after writing to it could put values in the wrong columns. Schema change
 load from 0.18.0; in 0.17.0, any change to a table's columns stops the load until you re-snapshot.
 From 0.19.0, a table that joins the source is copied on its own, and a first snapshot that
 stopped part-way resumes; in 0.18.0, both needed `--resnapshot`. `load --follow`, which keeps
-streaming, is in 0.20.0 and later, and files targets in 0.21.0 and later.
+streaming, is in 0.20.0 and later, and files targets in 0.21.0 and later. From 0.22.0,
+`--reload` refuses captured tables on every target (see [Reloading](#reloading)); before, a
+warehouse target accepted it but didn't rebuild the tables.
 
 ## Requirements
 
@@ -378,7 +380,8 @@ These are refused at `plan`:
     └── reason  a postgres_cdc table writes one changelog, not partition folders; remove the cursor placeholder from its path
 ```
 
-`--reload` is refused for a captured table too; `--resnapshot` copies it again.
+`--reload` is refused for a captured table too; `--resnapshot` copies it again (see
+[Reloading](#reloading)).
 
 ## What a load guarantees
 
@@ -597,6 +600,36 @@ loaded   raw.app__customers  50 rows  0.2s
 loaded   raw.app__orders     1,000 rows  0.2s
 
 ✓ Completed  2 loaded, 1,050 rows, 0.3s
+```
+
+### Reloading
+
+`--resnapshot`, not `--reload`, copies a captured table again. From sqlload 0.22.0, `--reload`
+refuses captured tables on every target, with or without `--resnapshot`. In a project that also
+has other sources, a bare `load --reload` still rebuilds their tables, but it exits 1. Here `shop`
+is an ordinary `postgres` source next to `app`:
+
+```console
+$ sqlload load --reload --yes
+…
+Errors (1)
+└── app__customers, app__orders
+    └── reason  a postgres_cdc table is copied again with --resnapshot, not --reload
+
+✗ Plan failed with errors  3 selected, 1 object to create, 1 to load
+loaded   raw.shop__products  30 rows  0.0s
+
+✓ Completed  1 loaded, 30 rows, 0.1s
+```
+
+To reload only the other tables, leave the source out:
+
+```console
+$ sqlload load --reload --yes --exclude app
+…
+loaded   raw.shop__products  30 rows  0.0s
+
+✓ Completed  1 loaded, 30 rows, 0.1s
 ```
 
 ## Refused at plan
