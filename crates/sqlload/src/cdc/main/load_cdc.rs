@@ -9,7 +9,9 @@ pub async fn load_cdc(run: &LoadRun<'_>, plan: &ProjectPlan) -> Vec<TableOutcome
     for (name, (tables, blocked)) in captured_sources(plan) {
         let started = std::time::Instant::now();
         let loaded = match blocked.is_empty() {
-            true => load_source(run, name, &tables).await,
+            true => load_source(run, name, (&tables, None))
+                .await
+                .map(|(rows, _)| rows),
             false => Err(format!(
                 "source {name} does not load while {} {} blocked: its tables share one slot, so loading the rest would skip the blocked tables' changes",
                 blocked.join(", "),

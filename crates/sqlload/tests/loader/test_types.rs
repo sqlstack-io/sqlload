@@ -472,3 +472,31 @@ pub(crate) struct QuietSlotTestCase {
     pub(crate) tag: &'static str,
     pub(crate) expected_advanced: (bool, bool),
 }
+
+/// A `load --follow` started in the background while the source changes, then stopped.
+pub(crate) struct FollowTestCase {
+    pub(crate) description: &'static str,
+    /// The Postgres image tag.
+    pub(crate) tag: &'static str,
+    /// The `load --follow` arguments.
+    pub(crate) args: &'static [&'static str],
+    /// Where it stops itself (`SQLLOAD_TEST_CRASH_AT`); empty for nowhere.
+    pub(crate) crash_at: &'static str,
+    /// Source statements run one by one, about every 1.5 seconds, once it streams.
+    pub(crate) writes: &'static [&'static str],
+    /// The source's `batch_interval`.
+    pub(crate) batch_interval: &'static str,
+    /// The signal sent after the writes, as `kill` takes it; `-0` sends none, leaving `--max-duration` to stop it.
+    pub(crate) signal: &'static str,
+    /// Whether, 3 seconds after the last write and before the signal, the slot confirmed the WAL position read after it.
+    pub(crate) expected_advanced: bool,
+    /// The fewest batches its output logs as written.
+    pub(crate) expected_batches: usize,
+    /// Whether the follow succeeds, and text its output holds.
+    pub(crate) expected_follow: (bool, &'static str),
+    /// Text the output of a catch-up load run after it holds.
+    pub(crate) expected_after: &'static str,
+    /// A query on the DuckDB file at the end, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}

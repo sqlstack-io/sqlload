@@ -279,6 +279,9 @@ pub struct SourceConfig {
     /// What a captured delete does to a merged row (`postgres_cdc` with `cdc_mode = "merge"`).
     #[serde(default)]
     pub deletes: CdcDeletes,
+    /// How often `load --follow` writes the changes it has read (`postgres_cdc`); 10 seconds when omitted.
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub batch_interval: Option<Duration>,
 }
 
 /// How a `postgres_cdc` source writes its changes.

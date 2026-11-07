@@ -98,7 +98,7 @@ async fn load_side(text: &str, select: &str) -> Result<(String, Option<String>),
         host: None,
         options: &options,
     };
-    let failure = load_tables(&run, &plan)
+    let failure = load_tables(&run, &plan, None)
         .await
         .into_iter()
         .find_map(|outcome| outcome.loaded.err());

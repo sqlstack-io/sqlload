@@ -295,6 +295,16 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.app] format, compression and csv are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
+            description: "batch_interval is for postgres_cdc sources, never silently ignored",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nbatch_interval = \"1m\"\n",
+            expected_message: "[sources.app] publication, slot, cdc_mode, deletes and batch_interval are for kind = \"postgres_cdc\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a batch_interval just under a second is refused",
+            text: "[sources.app]\nkind = \"postgres_cdc\"\nconnection = \"pg\"\ninclude = [\"*\"]\nbatch_interval = \"999ms\"\n",
+            expected_message: "[sources.app] batch_interval must be at least 1s",
+        },
+        ParseProjectErrorTestCase {
             description: "copy_to_internal_stage is for files sources, never silently ignored",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ncopy_to_internal_stage = true\n",
             expected_message: "[sources.app] path, partition_columns and copy_to_internal_stage are for kind = \"files\"",

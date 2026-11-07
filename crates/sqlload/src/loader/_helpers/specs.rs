@@ -1,5 +1,6 @@
 use crate::adapters::contract::models::{ChangeApply, TableName};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::cdc::constants::BATCH_INTERVAL;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
@@ -262,6 +263,7 @@ fn cdc_spec(context: &SourceContext<'_>) -> Option<CdcSpec> {
             },
             slot: source.slot.clone().unwrap_or_else(|| default_name.clone()),
             publication: source.publication.clone().unwrap_or(default_name),
+            batch_interval: source.batch_interval.unwrap_or(BATCH_INTERVAL),
         }
     })
 }

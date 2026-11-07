@@ -24,4 +24,7 @@ pub enum LoaderError {
     FilesDestination(#[from] FilesDestinationError),
     #[error("{0}")]
     Invalid(String),
+    /// A table gained a column since the load was planned: nothing of the batch was written, and a new plan streams it.
+    #[error("{0}")]
+    Replan(String),
 }

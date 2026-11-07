@@ -218,11 +218,29 @@ cdc_mode = "merge"        # merge (default) | changelog
 deletes = "soft"          # soft (default) | hard; merge only
 # slot = "sqlload_app_cdc"         # the default: sqlload_<source>
 # publication = "sqlload_app_cdc"  # created for the selected tables when missing
+# batch_interval = "10s"           # load --follow: how often it writes what it read
 ```
 
 - The first `sqlload load` creates the slot with an exported snapshot and copies every table
   under it. Each later load reads the changes committed since the last one, up to the moment it
   started, then stops.
+- `sqlload load app_cdc --follow` keeps streaming after it catches up, writing what it read every
+  `batch_interval` (at least `1s`). It stops when `--max-duration` passes (`--max-duration 10m`)
+  or at Ctrl-C or SIGTERM, after writing and confirming what it read (a snapshot or copy under
+  way finishes first); a second Ctrl-C stops at once (exit code 130), which is safe, since the
+  next load skips what was written.
+  - It follows one `postgres_cdc` source per process, and nothing else: select that source.
+    `--resnapshot` applies once, at the start.
+  - A table that gains a column while it follows is planned again, its destination altered, and
+    the stream picks up where it was confirmed. A stop at that moment leaves that batch for the
+    next load, and the same gain again after the re-plan stops it. Every other error, including a
+    re-plan that blocks a table, stops it (exit code 1) without confirming anything unwritten, so
+    run it under a supervisor that restarts it.
+  - Each batch written logs its changes, tables, LSN, and how far it is behind the server
+    (`behind_bytes`, and `behind_secs` since its newest commit). While idle it writes nothing and
+    confirms the server's position, so the slot keeps no WAL for writes it does not publish.
+    An idle follow sends Snowflake no queries, so its warehouse can suspend; each batch written
+    resumes it, and a longer `batch_interval` writes fewer, larger batches.
 - Every row carries `_sqlload_lsn` (its transaction's commit LSN), `_sqlload_op` (`snapshot`,
   `insert`, `update`, `delete` or `truncate`) and `_sqlload_committed_at`.
   - `merge` keeps one row per key. A soft delete sets `_sqlload_deleted_at`, and a truncate
@@ -251,12 +269,13 @@ deletes = "soft"          # soft (default) | hard; merge only
   tables' owner (`CREATE PUBLICATION app_changes FOR TABLE customers, orders;`) and name it with
   `publication = "app_changes"`; SQLLoad then only checks it.
 - A table that joins the source after its first load (a new table `include` matches, or a wider
-  `include`) is copied alone at the start of the next load, which then streams every table's
-  changes as before; the other tables keep their history and soft deletes. SQLLoad adds it to its
-  own publication, which needs the user to own the table; add it to a named one yourself. The
-  copy's snapshot comes from a temporary slot, so one slot under `max_replication_slots` must be
-  free when it starts, and the table's changes from before the copy are skipped. `plan` shows a
-  table not yet in the destination as `snapshot copy, then …`.
+  `include`) is copied alone at the start of the next load (under `--follow`, at its next start
+  or re-plan), which then streams every table's changes as before; the other tables keep their
+  history and soft deletes. SQLLoad adds it to its own publication, which needs the user to own
+  the table; add it to a named one yourself. The copy's snapshot comes from a temporary slot, so
+  one slot under `max_replication_slots` must be free when it starts, and the table's changes from
+  before the copy are skipped. `plan` shows a table not yet in the destination as
+  `snapshot copy, then …`.
   - A table leaving `include` still needs `--resnapshot`, which also sets SQLLoad's own
     publication to `include` again.
   - A table that rejoins after that, while its destination still holds rows captured before,
@@ -285,7 +304,8 @@ deletes = "soft"          # soft (default) | hard; merge only
     primary key change under `merge` (a changelog loads it). It also covers a column dropped and
     another added while changes to the dropped one are unloaded, which the stream cannot tell
     from a rename: load between the two.
-  - A column added while a load runs stops it before anything is written; run it again.
+  - A column added while a load runs stops it before anything is written; run it again. Under
+    `--follow` it plans again and carries on.
 - A generated column, or one left out of the publication's column list, never streams, so a
   table that loads one is refused; add it to `exclude_columns`.
 
