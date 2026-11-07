@@ -38,8 +38,17 @@ const APP: &[&str] = &["load", "app"];
 const LOG: &[&str] = &["load", "log"];
 const BOTH: &[&str] = &["load", "app", "log"];
 
-const CAUGHT_UP: [CdcStep; 3] = [
+const CAUGHT_UP: [CdcStep; 4] = [
     step("", BOTH, "", (true, "loaded")),
+    step(
+        "",
+        &["load", "app", "log", "--reload", "--yes"],
+        "",
+        (
+            false,
+            "a postgres_cdc table is copied again with --resnapshot, not --reload",
+        ),
+    ),
     step(CHANGES, BOTH, "", (true, "Completed")),
     step("", BOTH, "", (true, "0 rows")),
 ];

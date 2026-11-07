@@ -260,7 +260,8 @@ deletes = "soft"          # soft (default) | hard; merge only
 - A captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. It
   needs a primary key and a replica identity other than `NOTHING`; `merge` matches rows on that
   key, and a `unique_key` must lie within it. Load the whole source at once: `--select` or
-  `--exclude` of some of its tables is refused, since they share one slot.
+  `--exclude` of some of its tables is refused, since they share one slot. `--reload` is
+  refused too: `--resnapshot` copies a captured table again.
 - Array and `json` columns stream as Postgres writes them, so pin them to text
   (`columns = { tags = "text" }`); `jsonb` needs nothing.
 - The publication must publish exactly the source's tables; one with other tables is refused.
@@ -301,7 +302,7 @@ deletes = "soft"          # soft (default) | hard; merge only
   - `--resnapshot` writes each table's new snapshot, then deletes its older files: the history
     goes, and a reader in between sees both. A table that rejoins while its folder holds files
     is refused: delete the folder, or run `--resnapshot`.
-  - A path partitioned by `{cursor}` and `--reload` are refused.
+  - A path partitioned by `{cursor}` is refused.
   - Under `--follow`, `batch_interval` defaults to `1m`, since each batch adds a file to every
     table it changed; nothing compacts them yet.
 - Postgres keeps WAL for the slot from its last confirmed position. Every load confirms what it
