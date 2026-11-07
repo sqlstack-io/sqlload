@@ -50,6 +50,9 @@ The table's schema is the footers of the newest load in its newest partition. `s
 diff --all-files` reads every file's footer to report files whose columns differ. See
 [`sqlload contract`](/docs/cli/contract/).
 
+A [`postgres_cdc` source](/docs/sources/postgres-cdc/#into-parquet-files) loads into a files
+target as a changelog, adding files with each load.
+
 SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: markers for loads in
 progress, and the run log of `state = "logged"` tables. Run one load at a time per files table.
 

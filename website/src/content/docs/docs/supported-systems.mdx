@@ -30,7 +30,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | From \ Into | Snowflake | Databricks | DuckDB | Parquet files |
 |-------------|-----------|------------|--------|---------------|
 | Postgres | Yes | Yes | Yes | Yes |
-| Postgres changes (`postgres_cdc`) | Yes | No | Yes | No |
+| Postgres changes (`postgres_cdc`) | Yes | No | Yes | Yes, as a changelog |
 | Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes; Parquet read by DuckDB | No |
 | Python | Yes | Yes | Yes | Yes |
 
