@@ -46,7 +46,7 @@ const LOG_BEFORE_CONFIRM: [CdcStep; 5] = crashed_batch(LOG, "batch-before-confir
 
 const SNAPSHOT_CRASH: [CdcStep; 8] = [
     step("", APP, "snapshot-after-first-table", (false, "")),
-    step("", APP, "", (false, "no snapshot from slot sqlload_app")),
+    step("", APP, "", (true, "Completed")),
     step(
         "",
         &["load", "app", "--resnapshot"],
@@ -371,6 +371,53 @@ const TYPE_WIDENED: [CdcStep; 3] = [
     step("", APP, "", (true, "0 rows")),
 ];
 
+const NEW_TABLES: &str = "
+CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.';
+CREATE TABLE public.extra2 (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra2 IS 'More extra rows.';
+INSERT INTO public.extra VALUES (1, 'a'); INSERT INTO public.extra2 VALUES (1, 'x');
+";
+
+const NO_BACKFILL_SLOT: &str = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'sqlload_app_backfill') THEN RAISE EXCEPTION 'the temporary backfill slot is still there'; END IF; END $$;";
+
+const BACKFILL_MERGE: [CdcStep; 6] = [
+    step("", APP, "", (true, "loaded")),
+    step(CHANGES, APP, "", (true, "Completed")),
+    step(NEW_TABLES, APP, "backfill-after-first-table", (false, "")),
+    step("", APP, "", (true, "Completed")),
+    step(
+        "UPDATE public.extra SET v = 'b' WHERE id = 1; INSERT INTO public.extra2 VALUES (2, 'y');",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(NO_BACKFILL_SLOT, APP, "", (true, "0 rows")),
+];
+
+const BACKFILL_MERGE_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders) || ' | ' || (SELECT string_agg(id || ':' || name || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__items) || ' | ' || (SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra) || ' | ' || (SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra2)";
+
+const BACKFILL_CHANGELOG: [CdcStep; 5] = [
+    step("", LOG, "", (true, "loaded")),
+    step(
+        "CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.';",
+        LOG,
+        "backfill-after-publication",
+        (false, ""),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (1, 'a'), (2, 'b'), (3, 'c'); DELETE FROM public.extra;",
+        LOG,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (9, 'z');",
+        LOG,
+        "",
+        (true, "Completed"),
+    ),
+    step("", LOG, "", (true, "0 rows")),
+];
+
 const NOKEY_SOURCE: &str = r#"
 [sources.nokey]
 kind = "postgres_cdc"
@@ -618,7 +665,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: CHANGELOG_RESULT,
         },
         CdcScenarioTestCase {
-            description: "a snapshot stopped part-way, and a dropped slot, both need --resnapshot",
+            description: "a snapshot stopped part-way resumes by copying the rest alone; a dropped slot needs --resnapshot",
             tag: "17-alpine",
             spill_bytes: "",
             extra_config: "",
@@ -724,6 +771,24 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             steps: &APP_AFTER_FIRST,
             check_query: MERGED_QUERY,
             expected_result: MERGED_RESULT,
+        },
+        CdcScenarioTestCase {
+            description: "tables that join a merge source are copied alone, even after a stop between them, keeping the other tables' history and soft deletes",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_MERGE,
+            check_query: BACKFILL_MERGE_QUERY,
+            expected_result: "1:10:9600:{a,b}:update:false,2:2:1:{c}:delete:true,3:3:1:-:snapshot:false,4:4:1:{\"x y\",z}:insert:false | 1:one!:update,2:two:snapshot,3:three:insert | 1:b:update | 1:x:snapshot,2:y:insert",
+        },
+        CdcScenarioTestCase {
+            description: "a table that joins a changelog source keeps none of its changes from before its copy",
+            tag: "15-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_CHANGELOG,
+            check_query: "SELECT string_agg(_sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq) FROM raw.log__extra",
+            expected_result: "insert:9",
         },
         CdcScenarioTestCase {
             description: "a first load of part of the source is refused before it makes the slot, so the whole source snapshots after",

@@ -6,6 +6,7 @@ use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::cdc::models::SnapshotRecord;
+use crate::cdc::types::CurrentSnapshot;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::errors::LoaderError;
 use crate::time_text::main::now_utc_text::now_utc_text;
@@ -99,9 +100,7 @@ impl SnapshotLog<'_> {
     }
 
     /// The slot's newest snapshot LSN and the tables holding its changes, each with its newest record and the LSN it was copied at (see [`newest_snapshot`]); `None` when SQLLoad never recorded creating the slot.
-    pub(crate) async fn current(
-        &self,
-    ) -> Result<Option<(i64, Vec<(i64, SnapshotRecord)>)>, LoaderError> {
+    pub(crate) async fn current(&self) -> Result<Option<CurrentSnapshot>, LoaderError> {
         let adapter = sql_adapter(self.warehouse);
         let column = |name: &str| adapter.render_identifier(name);
         let text_type = adapter.render_loader_logical_type(&ColumnType::Text).sql;
@@ -179,7 +178,7 @@ pub(crate) fn read_record(row: &str) -> Result<(i64, String, SnapshotRecord), St
 /// The newest slot record's LSN and, of the tables recorded at or after it, each one's newest record with the LSN it was copied at: the slot's own point for its snapshot, or a later one for a table copied alone since (a backfill), whose changes before that point are already in its copy. Records under older slot records belong to a slot since recreated; `None` without a slot record.
 pub(crate) fn newest_snapshot(
     records: Vec<(i64, String, SnapshotRecord)>,
-) -> Option<(i64, Vec<(i64, SnapshotRecord)>)> {
+) -> Option<CurrentSnapshot> {
     let newest = records
         .iter()
         .filter(|(_, _, record)| record.table.is_empty())

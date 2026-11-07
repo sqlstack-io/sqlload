@@ -43,3 +43,9 @@ pub const COLUMN_LISTS_VERSION: i32 = 150_000;
 
 /// The first Postgres version (`server_version_num`) that can publish generated columns.
 pub const GENERATED_COLUMNS_VERSION: i32 = 180_000;
+
+/// The suffix of the temporary slot a load makes to copy tables that joined a source alone.
+pub const BACKFILL_SLOT_SUFFIX: &str = "_backfill";
+
+/// The longest replication slot name Postgres takes (`NAMEDATALEN - 1`).
+pub const SLOT_NAME_BYTES: usize = 63;
