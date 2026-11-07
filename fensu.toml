@@ -145,33 +145,3 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/postgres/main/start_postgres_version.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
-
-[[targets.rust.rule_exceptions]]
-rule = "FPRSL105"
-path = "crates/sqlload/src/bigquery_api/main/append_rows.rs"
-reason = "Storage Write API entry used by the live BigQuery round-trip test, outside the analysed crate tree, until the BigQuery table writer imports it."
-
-[[targets.rust.rule_exceptions]]
-rule = "FPRSL105"
-path = "crates/sqlload/src/bigquery_api/main/arrow_request.rs"
-reason = "Storage Write API entry used by the live BigQuery round-trip test, outside the analysed crate tree, until the BigQuery table writer imports it."
-
-[[targets.rust.rule_exceptions]]
-rule = "FPRSL105"
-path = "crates/sqlload/src/bigquery_api/main/batch_commit_write_streams.rs"
-reason = "Storage Write API entry used by the live BigQuery round-trip test, outside the analysed crate tree, until the BigQuery table writer imports it."
-
-[[targets.rust.rule_exceptions]]
-rule = "FPRSL105"
-path = "crates/sqlload/src/bigquery_api/main/create_write_stream.rs"
-reason = "Storage Write API entry used by the live BigQuery round-trip test, outside the analysed crate tree, until the BigQuery table writer imports it."
-
-[[targets.rust.rule_exceptions]]
-rule = "FPRSL105"
-path = "crates/sqlload/src/bigquery_api/main/finalize_write_stream.rs"
-reason = "Storage Write API entry used by the live BigQuery round-trip test, outside the analysed crate tree, until the BigQuery table writer imports it."
-
-[[targets.rust.rule_exceptions]]
-rule = "FPRSL105"
-path = "crates/sqlload/src/bigquery_api/main/table_path.rs"
-reason = "Storage Write API entry used by the live BigQuery round-trip test, outside the analysed crate tree, until the BigQuery table writer imports it."
