@@ -156,6 +156,12 @@ description = "Orders, captured."
 columns = { tags = "text" }
 "#;
 
+const TRUNCATE_ONLY: [CdcStep; 3] = [
+    step("", APP, "", (true, "loaded")),
+    step("TRUNCATE public.orders", APP, "", (true, "Completed")),
+    step("", APP, "", (true, "0 rows")),
+];
+
 const HARD_TRUNCATE_REINSERT: [CdcStep; 3] = [
     step("", HARD, "", (true, "loaded")),
     step(
@@ -1456,6 +1462,13 @@ fn given_a_live_databricks_schema_when_capturing_postgres_changes_then_the_table
             steps: &TRUNCATE_REINSERT,
             check_query: "SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || qty || ':' || _sqlload_op || ':' || CAST(_sqlload_deleted_at IS NOT NULL AS STRING)))), r -> r.t), ',') FROM {schema}.app__orders",
             expected_result: "1:7:insert:false,2:2:truncate:true,3:3:truncate:true",
+        },
+        LiveCdcTestCase {
+            description: "soft deletes: a truncate alone, whose batch stages no rows, marks every row truncated",
+            extra_config: "",
+            steps: &TRUNCATE_ONLY,
+            check_query: "SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || _sqlload_op || ':' || CAST(_sqlload_deleted_at IS NOT NULL AS STRING)))), r -> r.t), ',') FROM {schema}.app__orders",
+            expected_result: "1:truncate:true,2:truncate:true,3:truncate:true",
         },
         LiveCdcTestCase {
             description: "hard deletes: a truncate and a reinsert in one transaction leave only the new row",

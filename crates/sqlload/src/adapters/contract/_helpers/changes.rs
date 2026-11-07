@@ -13,7 +13,7 @@ const DELETE_OP: &str = "delete";
 /// The `_sqlload_op` a truncate leaves on soft-deleted rows.
 const TRUNCATE_OP: &str = "truncate";
 
-/// Statements applying a batch of captured changes from `staging` in one transaction, each guarded by `_sqlload_lsn` so a replay changes nothing: a changelog inserts the rows newer than the table's newest; `merge` applies the batch's truncate to older rows (in the `MERGE` itself where the warehouse [truncates in it](SqlAdapter::truncates_in_merge)) (soft deletes keep their `_sqlload_lsn`, so a row the same transaction inserts again still merges), then merges each key's newest change where it is newer than the row's, keeping the live value of every column `_sqlload_unchanged` (`,a,b,`) names.
+/// Statements applying a batch of captured changes from `staging` in one transaction, each guarded by `_sqlload_lsn` so a replay changes nothing: a changelog inserts the rows newer than the table's newest; `merge` applies the batch's truncate to older rows (in the `MERGE` itself where the warehouse [truncates in it](SqlAdapter::truncates_in_merge), where with hard deletes a matched row older than the truncate is gone at the source and keeps none of its values) (soft deletes keep their `_sqlload_lsn`, so a row the same transaction inserts again still merges), then merges each key's newest change where it is newer than the row's, keeping the live value of every column `_sqlload_unchanged` (`,a,b,`) names.
 pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
@@ -56,6 +56,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
     }
     let text = |value: &str| adapter.render_loader_value_literal(value);
     let mut truncate_clause = String::new();
+    let mut truncated_guard = String::new();
     if let Some(truncation) = &change.truncated {
         let at = format!(
             "CAST({} AS {})",
@@ -75,6 +76,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
             (true, ChangeApply::HardDeletes) => {
                 truncate_clause =
                     format!(" WHEN NOT MATCHED BY SOURCE AND __target.{lsn} < {older} THEN DELETE");
+                truncated_guard = format!(" AND __target.{lsn} >= {older}");
             }
             (true, _) => {
                 truncate_clause = format!(
@@ -117,7 +119,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
         }
         let listed = text(&format!(",{raw},"));
         updates.push(format!(
-            "{name} = CASE WHEN POSITION({listed} IN __source.{unchanged}) > 0 THEN __target.{name} ELSE __source.{name} END"
+            "{name} = CASE WHEN POSITION({listed} IN __source.{unchanged}) > 0{truncated_guard} THEN __target.{name} ELSE __source.{name} END"
         ));
     }
     let soft = change.apply == ChangeApply::SoftDeletes;
