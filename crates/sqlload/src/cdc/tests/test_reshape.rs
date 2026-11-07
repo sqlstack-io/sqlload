@@ -220,7 +220,7 @@ fn given_snapshot_records_when_reading_them_then_old_and_new_forms_parse_and_the
  {
     let test_cases = [
         SnapshotRecordsTestCase {
-            description: "the newest snapshot's tables, each by its newest record with the LSN it was copied at, in either form; a table copied alone since keeps its later LSN, one under an older slot record is gone",
+            description: "the newest snapshot's tables, each by its newest record with the LSN it was copied at, in either form; a table copied alone since keeps its later LSN, one only under older slot records is listed apart",
             rows: vec![
                 "5\t2026-01-01T00:00:00.000000Z\t\t",
                 "5\t2026-01-01T00:00:01.000000Z\tt\t,id,a,",
@@ -230,6 +230,7 @@ fn given_snapshot_records_when_reading_them_then_old_and_new_forms_parse_and_the
                 "3\t2025-12-01T00:00:01.000000Z\tv\t,x,",
                 "7\t2026-01-03T00:00:00.000000Z\tw\t,id,\t1\t,id,\t,",
                 "4\t2026-01-03T00:00:00.000000Z\tz\t,id,\t1\t,id,\t,",
+                "3\t2025-12-01T00:00:02.000000Z\tw\t,id,",
             ],
             expected_snapshot: Ok(Some((
                 5,
@@ -250,6 +251,7 @@ fn given_snapshot_records_when_reading_them_then_old_and_new_forms_parse_and_the
                         },
                     ),
                 ],
+                vec!["v".to_owned(), "z".to_owned()],
             ))),
         },
         SnapshotRecordsTestCase {

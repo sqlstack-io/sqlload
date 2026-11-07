@@ -252,7 +252,7 @@ pub(crate) fn stage_item(stage: &PlannedStage) -> PlanItem {
     }
 }
 
-/// The plan line for loading a table. A captured table not yet in the destination is copied first, on its source's first load or when it joins a source whose slot already streams.
+/// The plan line for loading a table. A captured table whose destination does not exist yet is shown as copied first, as on its source's first load or when it joins a source whose slot already streams.
 pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let spec = &table.spec;
     let action = match &table.mode {

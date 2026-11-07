@@ -1,7 +1,7 @@
 use crate::adapters::contract::models::ChangeApply;
 use crate::cdc::tests::helpers::{
     buffered_seqs, buffered_shape, floored_lsns, identity_relation_message, insert_message,
-    relation_message, staged_texts, update_message,
+    of_other_table, other_relation_message, relation_message, staged_texts, update_message,
 };
 use crate::cdc::tests::test_types::{
     BufferTestCase, FloorTestCase, StagedShapesTestCase, UnionShapeTestCase,
@@ -299,6 +299,24 @@ fn given_a_table_copied_at_a_point_when_changes_stream_then_only_those_from_the_
             transactions: transactions(),
             floor: 103,
             expected_lsns: vec![],
+        },
+        FloorTestCase {
+            description: "another table's changes in the same transactions are kept, even before the point",
+            transactions: vec![
+                vec![
+                    relation_message(&["id", "a"]),
+                    other_relation_message(&["id", "b"]),
+                    insert_message(&["1", "x"]),
+                    of_other_table(&insert_message(&["1", "p"])),
+                ],
+                vec![update_message(&["1", "y"]), insert_message(&["2", "z"])],
+                vec![
+                    update_message(&["2", "w"]),
+                    of_other_table(&update_message(&["1", "q"])),
+                ],
+            ],
+            floor: 102,
+            expected_lsns: vec![100, 102, 102],
         },
     ];
     for test_case in test_cases {

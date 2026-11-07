@@ -144,12 +144,31 @@ pub(crate) fn relation_message(columns: &[&str]) -> Vec<u8> {
 
 /// A pgoutput Relation message for table 7 `public.t` with text `columns` under replica `identity`: `f` keys every column, others only the first.
 pub(crate) fn identity_relation_message(columns: &[&str], identity: char) -> Vec<u8> {
+    named_relation_message((7, "t"), columns, identity)
+}
+
+/// A pgoutput Relation message for table 8 `public.u` with text `columns`, keyed by the first.
+pub(crate) fn other_relation_message(columns: &[&str]) -> Vec<u8> {
+    named_relation_message((8, "u"), columns, 'd')
+}
+
+/// A change message of table 7 (an Insert or Update) made one of table 8 `public.u`.
+pub(crate) fn of_other_table(message: &[u8]) -> Vec<u8> {
+    [&message[..1], &8_u32.to_be_bytes()[..], &message[5..]].concat()
+}
+
+/// A pgoutput Relation message for table `relation` `public.<table>` with text `columns` under replica `identity` (see [`identity_relation_message`]).
+fn named_relation_message(
+    (relation, table): (u32, &str),
+    columns: &[&str],
+    identity: char,
+) -> Vec<u8> {
     let count = i16::try_from(columns.len()).unwrap_or(i16::MAX);
     let mut bytes = [
         vec![b'R'],
-        7_u32.to_be_bytes().to_vec(),
+        relation.to_be_bytes().to_vec(),
         cstring("public"),
-        cstring("t"),
+        cstring(table),
         vec![u8::try_from(identity).unwrap_or(b'd')],
         count.to_be_bytes().to_vec(),
     ]
@@ -207,7 +226,7 @@ fn committed(transactions: &[Vec<Vec<u8>>], spill_bytes: usize) -> Result<Change
     )
 }
 
-/// The commit LSNs of the changes table 7 (`public.t`) keeps after `transactions` (see [`committed`]), its copy point at `floor`, keeping at most `spill_bytes` in memory; disk before memory.
+/// The commit LSNs, in order, of the changes kept after `transactions` (see [`committed`]) when table 7 (`public.t`) was copied at `floor` and no other table has a copy point, keeping at most `spill_bytes` in memory.
 pub(crate) fn floored_lsns(
     transactions: &[Vec<Vec<u8>>],
     (floor, spill_bytes): (i64, usize),
@@ -231,6 +250,7 @@ pub(crate) fn floored_lsns(
             .values()
             .flat_map(|table| table.changes.iter().map(|change| change.lsn)),
     );
+    lsns.sort_unstable();
     Ok(lsns)
 }
 

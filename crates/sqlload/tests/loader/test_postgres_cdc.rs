@@ -383,7 +383,12 @@ const BACKFILL_MERGE: [CdcStep; 6] = [
     step("", APP, "", (true, "loaded")),
     step(CHANGES, APP, "", (true, "Completed")),
     step(NEW_TABLES, APP, "backfill-after-first-table", (false, "")),
-    step("", APP, "", (true, "Completed")),
+    step(
+        "UPDATE public.orders SET qty = 11 WHERE id = 3; UPDATE public.items SET name = 'two!' WHERE id = 2;",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
     step(
         "UPDATE public.extra SET v = 'b' WHERE id = 1; INSERT INTO public.extra2 VALUES (2, 'y');",
         APP,
@@ -445,7 +450,7 @@ const BACKFILL_RESTARTS: [CdcStep; 6] = [
         "",
         (
             false,
-            "publication sqlload_app no longer publishes app__extra2",
+            "publication sqlload_app no longer publishes \"public\".\"extra2\"",
         ),
     ),
 ];
@@ -493,6 +498,39 @@ const BACKFILL_NAMED: [CdcStep; 5] = [
         (true, "Completed"),
     ),
     step("", NAMED, "", (true, "0 rows")),
+];
+
+const EXTRA_TABLE: &str = "CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.';";
+
+const EXTRA_UNPUBLISHED: &str = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'sqlload_app' AND tablename = 'extra') THEN RAISE EXCEPTION 'the refused load published extra'; END IF; END $$;";
+
+const BACKFILL_REJOIN: [CdcStep; 8] = [
+    step("", APP, "", (true, "loaded")),
+    step(EXTRA_TABLE, APP, "", (true, "Completed")),
+    step(
+        "INSERT INTO public.extra VALUES (1, 'a');",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "DROP TABLE public.extra;",
+        APP,
+        "",
+        (false, "this load leaves out app__extra"),
+    ),
+    step("", RESNAPSHOT, "", (true, "loaded")),
+    step(
+        EXTRA_TABLE,
+        APP,
+        "",
+        (
+            false,
+            "rows captured before slot sqlload_app was recreated are still in app__extra",
+        ),
+    ),
+    step(EXTRA_UNPUBLISHED, &["plan", "app"], "", (true, "")),
+    step("", APP, "", (false, "are still in app__extra")),
 ];
 
 const NOKEY_SOURCE: &str = r#"
@@ -850,13 +888,13 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: MERGED_RESULT,
         },
         CdcScenarioTestCase {
-            description: "tables that join a merge source are copied alone, even after a stop between them, keeping the other tables' history and soft deletes",
+            description: "tables that join a merge source are copied alone, even after a stop between them, while the other tables keep their history and soft deletes and still load their changes from before the copy",
             tag: "17-alpine",
             spill_bytes: "",
             extra_config: "",
             steps: &BACKFILL_MERGE,
             check_query: BACKFILL_MERGE_QUERY,
-            expected_result: "1:10:9600:{a,b}:update:false,2:2:1:{c}:delete:true,3:3:1:-:snapshot:false,4:4:1:{\"x y\",z}:insert:false | 1:one!:update,2:two:snapshot,3:three:insert | 1:b:update | 1:x:snapshot,2:y:insert",
+            expected_result: "1:10:9600:{a,b}:update:false,2:2:1:{c}:delete:true,3:11:1:-:update:false,4:4:1:{\"x y\",z}:insert:false | 1:one!:update,2:two!:update,3:three:insert | 1:b:update | 1:x:snapshot,2:y:insert",
         },
         CdcScenarioTestCase {
             description: "a table that joins a changelog source keeps none of its changes from before its copy",
@@ -877,7 +915,16 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: "1:b:snapshot,2:c:insert | 1:x:snapshot",
         },
         CdcScenarioTestCase {
-            description: "a table added to a named publication by hand is copied alone, without its earlier changes twice",
+            description: "a table that rejoins after --resnapshot left it out is refused before it is published, keeping the rows it held",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_REJOIN,
+            check_query: "SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra",
+            expected_result: "1:a:insert",
+        },
+        CdcScenarioTestCase {
+            description: "a table missing from a named publication is refused with the fix, then copied alone once it is added by hand",
             tag: "17-alpine",
             spill_bytes: "",
             extra_config: NAMED_SOURCE,

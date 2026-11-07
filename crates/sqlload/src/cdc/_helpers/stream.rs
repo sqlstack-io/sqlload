@@ -17,8 +17,8 @@ use crate::cdc::_helpers::snapshot_log::SnapshotLog;
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{
     BACKFILL_SLOT_SUFFIX, BATCH_CHANGES, COLUMN_LISTS_VERSION, GENERATED_COLUMNS_VERSION,
-    LOST_WAL_STATUS, REPLICATION_OPTIONS, SLOT_NAME_BYTES, SNAPSHOT_SETTINGS, SPILL_BYTES,
-    STOP_MESSAGE_PREFIX,
+    LOST_WAL_STATUS, REPLICATION_OPTIONS, SLOT_NAME_BYTES, SLOTS_FULL_ERROR, SNAPSHOT_SETTINGS,
+    SPILL_BYTES, STOP_MESSAGE_PREFIX,
 };
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::cdc::models::{
@@ -342,7 +342,7 @@ impl CdcSource<'_> {
             .map(|row| (row.get::<_, Option<String>>(0).unwrap_or_default(), row.get(1))))
     }
 
-    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it; the load leaves out a table the slot captured (its changes would be confirmed unwritten); a recorded table left the publication (its changes since were not captured); or a table's columns changed since its snapshot in a way the stream does not carry (see [`reshape_problem`]). When it can, the tables whose columns changed in ways it carries are recorded with their new columns first, and the tables without a snapshot from it (joined since, or a snapshot stopped part-way) are returned, to be copied alone before streaming.
+    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it; the load leaves out a table the slot captured (its changes would be confirmed unwritten); a recorded table left the publication (its changes since were not captured); a table to copy alone still holds rows from before the slot was recreated (the copy would replace them unasked); or a table's columns changed since its snapshot in a way the stream does not carry (see [`reshape_problem`]). When it can, the tables whose columns changed in ways it carries are recorded with their new columns first, and the tables without a snapshot from it (joined since, or a snapshot stopped part-way) are returned, to be copied alone before streaming.
     async fn resume_problem(
         &self,
         control: &Client,
@@ -354,7 +354,7 @@ impl CdcSource<'_> {
                 "slot {slot} lost WAL it had not confirmed, so changes are missing; run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
         }
-        let Some((_, snapshotted)) = self.log()?.current().await? else {
+        let Some((_, snapshotted, earlier)) = self.log()?.current().await? else {
             return Ok(Err(format!(
                 "slot {slot} exists but SQLLoad has no record of creating it, so it cannot tell which changes the tables already hold; drop it, or run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
@@ -413,10 +413,13 @@ impl CdcSource<'_> {
             .iter()
             .map(|(_, record)| record.table.as_str())
             .collect();
-        let dropped: Vec<&str> = missing
+        let dropped: Vec<String> = missing
             .iter()
-            .map(|table| table.spec.destination.table.as_str())
-            .filter(|name| recorded.contains(name))
+            .filter(|table| recorded.contains(&table.spec.destination.table.as_str()))
+            .map(|table| {
+                let source = &table.spec.source_table;
+                format!("{}.{}", quoted(&source.schema), quoted(&source.name))
+            })
             .collect();
         if !dropped.is_empty() {
             return Ok(Err(format!(
@@ -431,6 +434,17 @@ impl CdcSource<'_> {
             .filter(|table| !recorded.contains(&table.spec.destination.table.as_str()))
             .copied()
             .collect();
+        let held: Vec<&str> = unrecorded
+            .iter()
+            .filter(|table| table.exists && earlier.contains(&table.spec.destination.table))
+            .map(|table| table.spec.destination.table.as_str())
+            .collect();
+        if !held.is_empty() {
+            return Ok(Err(format!(
+                "rows captured before slot {slot} was recreated are still in {}; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or drop the tables from the destination to copy them alone",
+                held.join(", ")
+            )));
+        }
         let log = self.log()?;
         for (copied_at, record) in &rewrites {
             log.record(record, *copied_at).await?;
@@ -568,8 +582,12 @@ impl CdcSource<'_> {
             ))
             .await
             .map_err(|error| {
+                let hint = match error.to_string().contains(SLOTS_FULL_ERROR) {
+                    true => " (it needs a free slot under max_replication_slots)",
+                    false => "",
+                };
                 replication(format!(
-                    "cannot make temporary slot {name} to copy {} alone (it needs a free slot under max_replication_slots): {error}",
+                    "cannot make temporary slot {name} to copy {} alone{hint}: {error}",
                     tables
                         .iter()
                         .map(|table| table.spec.destination.table.as_str())
@@ -662,7 +680,7 @@ impl CdcSource<'_> {
         Ok((session, rows))
     }
 
-    /// Copy `tables` under the snapshot open on `client`, taken at `snapshot_lsn`, recording each once it is in: its rows get `snapshot_lsn - 1`, so its changes from `snapshot_lsn` on apply after them. `stage` names the crash points (`<stage>-after-first-table`); returns the rows each table wrote.
+    /// Copy `tables` under the snapshot open on `client`, taken at `snapshot_lsn`, recording each once it is in: its rows get `snapshot_lsn - 1`, so its changes from `snapshot_lsn` on apply after them. `stage` names the crash points (`<stage>-after-first-table`, `<stage>-before-record`); returns the rows each table wrote.
     async fn copy_snapshot(
         &self,
         client: &Client,
@@ -789,7 +807,7 @@ impl CdcSource<'_> {
     /// Each loaded table's copy point by its source `(schema, table)`, from its snapshot record.
     async fn copy_points(&self) -> Result<BTreeMap<(String, String), i64>, LoaderError> {
         let mut points: BTreeMap<(String, String), i64> = BTreeMap::new();
-        let Some((_, records)) = self.log()?.current().await? else {
+        let Some((_, records, _)) = self.log()?.current().await? else {
             return Ok(points);
         };
         for (lsn, record) in records {

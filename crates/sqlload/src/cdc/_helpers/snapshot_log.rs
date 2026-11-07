@@ -99,7 +99,7 @@ impl SnapshotLog<'_> {
         .await
     }
 
-    /// The slot's newest snapshot LSN and the tables holding its changes, each with its newest record and the LSN it was copied at (see [`newest_snapshot`]); `None` when SQLLoad never recorded creating the slot.
+    /// The slot's newest snapshot LSN, the tables holding its changes, each with its newest record and the LSN it was copied at, and the tables captured only before the slot was recreated (see [`newest_snapshot`]); `None` when SQLLoad never recorded creating the slot.
     pub(crate) async fn current(&self) -> Result<Option<CurrentSnapshot>, LoaderError> {
         let adapter = sql_adapter(self.warehouse);
         let column = |name: &str| adapter.render_identifier(name);
@@ -175,7 +175,7 @@ pub(crate) fn read_record(row: &str) -> Result<(i64, String, SnapshotRecord), St
     ))
 }
 
-/// The newest slot record's LSN and, of the tables recorded at or after it, each one's newest record with the LSN it was copied at: the slot's own point for its snapshot, or a later one for a table copied alone since (a backfill), whose changes before that point are already in its copy. Records under older slot records belong to a slot since recreated; `None` without a slot record.
+/// The newest slot record's LSN and, of the tables recorded at or after it, each one's newest record with the LSN it was copied at: the slot's own point for its snapshot, or a later one for a table copied alone since (a backfill), whose changes before that point are already in its copy. Records under older slot records belong to a slot since recreated: their tables are returned last, by name, unless recorded under the newest too. `None` without a slot record.
 pub(crate) fn newest_snapshot(
     records: Vec<(i64, String, SnapshotRecord)>,
 ) -> Option<CurrentSnapshot> {
@@ -186,8 +186,13 @@ pub(crate) fn newest_snapshot(
         .max()?;
     let mut tables: std::collections::BTreeMap<String, (String, i64, SnapshotRecord)> =
         std::collections::BTreeMap::new();
+    let mut earlier: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (lsn, recorded_at, record) in records {
-        if lsn < newest || record.table.is_empty() {
+        if record.table.is_empty() {
+            continue;
+        }
+        if lsn < newest {
+            earlier.insert(record.table);
             continue;
         }
         let newer = tables
@@ -197,11 +202,16 @@ pub(crate) fn newest_snapshot(
             tables.insert(record.table.clone(), (recorded_at, lsn, record));
         }
     }
+    let earlier: Vec<String> = earlier
+        .into_iter()
+        .filter(|table| !tables.contains_key(table))
+        .collect();
     Some((
         newest,
         tables
             .into_values()
             .map(|(_, lsn, record)| (lsn, record))
             .collect(),
+        earlier,
     ))
 }

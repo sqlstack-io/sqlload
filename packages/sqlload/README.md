@@ -251,13 +251,17 @@ deletes = "soft"          # soft (default) | hard; merge only
   tables' owner (`CREATE PUBLICATION app_changes FOR TABLE customers, orders;`) and name it with
   `publication = "app_changes"`; SQLLoad then only checks it.
 - A table that joins the source after its first load (a new table `include` matches, or a wider
-  `include`) is copied alone on the next load, and the other tables keep streaming. SQLLoad adds
-  it to its own publication, which needs the user to own the table; add it to a named one
-  yourself. The copy runs under a temporary slot, so it needs one free slot under
-  `max_replication_slots` while it runs, and the table's changes from before the copy are
-  skipped. `plan` shows a table not yet in the destination as `snapshot copy, then …`. A table
-  leaving `include` still needs `--resnapshot`, which also sets SQLLoad's own publication to
-  `include` again.
+  `include`) is copied alone at the start of the next load, which then streams every table's
+  changes as before; the other tables keep their history and soft deletes. SQLLoad adds it to its
+  own publication, which needs the user to own the table; add it to a named one yourself. The
+  copy's snapshot comes from a temporary slot, so one slot under `max_replication_slots` must be
+  free when it starts, and the table's changes from before the copy are skipped. `plan` shows a
+  table not yet in the destination as `snapshot copy, then …`.
+  - A table leaving `include` still needs `--resnapshot`, which also sets SQLLoad's own
+    publication to `include` again.
+  - A table that rejoins after that, while its destination still holds the rows captured
+    before, is refused rather than replaced unasked: run `--resnapshot` (which asks first), or
+    drop the destination table to copy it alone.
 - Postgres keeps WAL for the slot from its last confirmed position. Every load confirms what it
   applied, even one that found no changes, but the WAL kept shrinks only at the first load after
   Postgres's next checkpoint.

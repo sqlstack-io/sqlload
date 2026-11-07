@@ -49,3 +49,6 @@ pub const BACKFILL_SLOT_SUFFIX: &str = "_backfill";
 
 /// The longest replication slot name Postgres takes (`NAMEDATALEN - 1`).
 pub const SLOT_NAME_BYTES: usize = 63;
+
+/// What Postgres says when a slot cannot be made because every one under `max_replication_slots` is taken.
+pub const SLOTS_FULL_ERROR: &str = "all replication slots are in use";
