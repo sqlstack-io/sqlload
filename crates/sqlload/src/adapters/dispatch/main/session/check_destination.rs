@@ -33,6 +33,15 @@ pub async fn check_destination(destination: Destination) -> Result<String, Loade
             let checked = check_volume(&databricks).await?;
             Ok(format!("{answer}; {checked}"))
         }
+        Destination::BigQuery(bigquery) => {
+            let query = "SELECT SESSION_USER() || ' in project ' || @@project_id";
+            let location = bigquery.api.location().to_owned();
+            let destination = Destination::BigQuery(bigquery);
+            let answer = single_text(&destination, query.to_owned())
+                .await?
+                .unwrap_or_default();
+            Ok(format!("{answer}, jobs in {location}"))
+        }
         Destination::Snowflake(snowflake) => {
             let query = "SELECT CURRENT_USER() || ' as ' || CURRENT_ROLE() || ', warehouse ' || COALESCE(CURRENT_WAREHOUSE(), '-')";
             let destination = Destination::Snowflake(snowflake.clone());

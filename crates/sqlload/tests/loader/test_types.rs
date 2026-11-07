@@ -538,3 +538,37 @@ pub(crate) struct CdcFilesTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// A real BigQuery project the live tests may load into: only its `sqlload_` dataset.
+pub(crate) struct LiveBigQuery {
+    /// The service-account key file's JSON text.
+    pub(crate) key: String,
+    pub(crate) project: String,
+    pub(crate) location: String,
+    pub(crate) dataset: String,
+}
+
+/// Rows streamed through one pending Storage Write API stream into a new table.
+pub(crate) struct LiveWriteApiTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) table: &'static str,
+    /// The ids of each append request's rows.
+    pub(crate) batches: &'static [&'static [i64]],
+    /// The row offset the first request claims; a new stream is at 0.
+    pub(crate) first_offset: i64,
+    pub(crate) finalize: bool,
+    pub(crate) expected: WriteApiOutcome,
+}
+
+/// What one streamed table shows.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct WriteApiOutcome {
+    /// The first refusal, empty when none.
+    pub(crate) error: String,
+    /// What finalizing counted.
+    pub(crate) finalized_rows: i64,
+    /// The rows a query saw after the appends, before the commit.
+    pub(crate) visible_before_commit: String,
+    /// The rows after the commit.
+    pub(crate) rows: String,
+}

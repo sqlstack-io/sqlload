@@ -43,6 +43,9 @@ pub fn open_table_writer(
             staged: Vec::new(),
             uploads: tokio::task::JoinSet::new(),
         }))),
+        Destination::BigQuery(_) => Err(LoaderError::Invalid(
+            "loading into BigQuery is not available yet: its Storage Write API writer is still being built".to_owned(),
+        )),
         Destination::Files(_) => Ok(Writer::Files(ParquetFiles)),
     }
 }

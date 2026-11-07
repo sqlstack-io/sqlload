@@ -18,6 +18,7 @@ pub async fn drop_stale_staging(
     let database = match destination {
         Destination::Snowflake(snowflake) => Some(snowflake.database.as_str()),
         Destination::Databricks(databricks) => Some(databricks.catalog.as_str()),
+        Destination::BigQuery(bigquery) => Some(bigquery.project.as_str()),
         _ => None,
     };
     let adapter = sql_adapter(warehouse);

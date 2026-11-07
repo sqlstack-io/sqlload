@@ -21,3 +21,24 @@ pub const UNAUTHORIZED: u16 = 401;
 
 /// The HTTP status of a missing table or dataset.
 pub const NOT_FOUND: u16 = 404;
+
+/// The Storage Write API's root.
+pub const STORAGE_URL: &str = "https://bigquerystorage.googleapis.com";
+
+/// The Storage Write API's methods, as gRPC paths.
+pub const CREATE_WRITE_STREAM: &str =
+    "/google.cloud.bigquery.storage.v1.BigQueryWrite/CreateWriteStream";
+pub const APPEND_ROWS: &str = "/google.cloud.bigquery.storage.v1.BigQueryWrite/AppendRows";
+pub const FINALIZE_WRITE_STREAM: &str =
+    "/google.cloud.bigquery.storage.v1.BigQueryWrite/FinalizeWriteStream";
+pub const BATCH_COMMIT_WRITE_STREAMS: &str =
+    "/google.cloud.bigquery.storage.v1.BigQueryWrite/BatchCommitWriteStreams";
+
+/// The metadata Google's front end routes a Storage Write API call by.
+pub const REQUEST_PARAMS: &str = "x-goog-request-params";
+
+/// `WriteStream.Type.PENDING`: rows stay invisible until the stream is committed.
+pub const PENDING_STREAM: i32 = 2;
+
+/// How many append requests one stream holds before its sender waits for BigQuery to take them.
+pub const APPENDS_IN_FLIGHT: usize = 2;

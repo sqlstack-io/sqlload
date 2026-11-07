@@ -3986,6 +3986,7 @@ dependencies = [
  "parquet",
  "pgwire-replication",
  "prometheus-client",
+ "prost",
  "rdkafka",
  "regex",
  "reqwest",
@@ -4003,6 +4004,8 @@ dependencies = [
  "tokio-util",
  "toml",
  "toml_edit",
+ "tonic",
+ "tonic-prost",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -4507,12 +4510,14 @@ dependencies = [
  "socket2",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",
  "tracing",
+ "webpki-roots",
 ]
 
 [[package]]

@@ -1,5 +1,6 @@
 //! A destination table's live columns.
 
+use crate::adapters::bigquery::main::session::_describe_table::describe_table as describe_bigquery;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::databricks::main::session::_describe_table::describe_table as describe_databricks;
 use crate::adapters::dispatch::_helpers::no_sql::no_sql;
@@ -21,6 +22,7 @@ pub async fn live_columns(
         Destination::DuckDb(duckdb) => Ok(describe_duckdb(duckdb, table).await?),
         Destination::Snowflake(snowflake) => Ok(describe_snowflake(snowflake, table).await?),
         Destination::Databricks(databricks) => Ok(describe_databricks(databricks, table).await?),
+        Destination::BigQuery(bigquery) => Ok(describe_bigquery(bigquery, table).await?),
         Destination::Files(_) => Err(no_sql()),
     }
 }

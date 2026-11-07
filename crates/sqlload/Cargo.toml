@@ -74,8 +74,11 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 pgwire-replication.workspace = true
+prost.workspace = true
 tokio-postgres.workspace = true
 tokio-util = { workspace = true, features = ["io"] }
+tonic.workspace = true
+tonic-prost.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 tower-layer.workspace = true

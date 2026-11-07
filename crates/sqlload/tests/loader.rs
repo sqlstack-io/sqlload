@@ -1,11 +1,15 @@
 //! Docker-backed loader tests against real systems.
 
+#[path = "loader/bigquery/helpers.rs"]
+mod bigquery_helpers;
 #[path = "loader/databricks/helpers.rs"]
 mod databricks_helpers;
 #[path = "loader/helpers.rs"]
 mod helpers;
 #[path = "loader/test_batched_loads.rs"]
 mod test_batched_loads;
+#[path = "loader/test_bigquery_loads.rs"]
+mod test_bigquery_loads;
 #[path = "loader/test_databricks_loads.rs"]
 mod test_databricks_loads;
 #[path = "loader/test_debug_project.rs"]
