@@ -3,9 +3,9 @@
 SQLLoad loads data into your warehouse, and shows you how before it changes anything.
 
 It reads Postgres tables, files (Parquet, CSV, JSON and NDJSON) in S3 or a local folder, and Python
-sources, including HTTP APIs. It writes to Snowflake, DuckDB, or Parquet files in S3 or a folder.
-`sqlload plan` shows each table's columns, write strategy and route before `apply` and `load`
-run. Where Snowflake or DuckDB can load files exactly by itself, the files never pass through
+sources, including HTTP APIs. It writes to Snowflake, Databricks, DuckDB, or Parquet files in S3 or
+a folder. `sqlload plan` shows each table's columns, write strategy and route before `apply` and
+`load` run. Where Snowflake or DuckDB can load files exactly by itself, the files never pass through
 SQLLoad. SQLLoad is written in Rust. Python is needed only for Python sources.
 
 A separate exporter (`sqlload run`) streams Kafka topics into Snowflake. Its configuration is in
@@ -39,7 +39,7 @@ Loads (1)                                           sqlload load
 created  raw.orders  9 columns
 loaded   raw.orders  3 rows  0.0s
 
-✓ Completed  1 loaded, 3 rows, 0.0s
+✓ Completed  1 loaded, 3 rows, 0.1s
 ```
 
 Add `--print-toml` to print the same copy as a `sqlload.toml` project. A project loads its tables
@@ -54,16 +54,17 @@ uv tool install sqlload
 The `sqlload` package is a native Python extension for CPython 3.10 or newer, and runs Python
 sources in the same process as the loader. `sqlload-cli` is the same command as a standalone
 executable, without Python and without Python sources. Install only one of them, because both
-provide a `sqlload` command. Both are released for Linux (x86_64 and aarch64) and macOS (arm64).
+provide a `sqlload` command. Both are released for Linux (x86_64 and aarch64, glibc 2.28 or newer)
+and macOS 11 or newer (arm64).
 
 ## Learn more
 
+- [Documentation](https://sqlload.io/docs/): install, quickstart, concepts, the CLI and Python
+  references, configuration and supported systems.
 - [The `sqlload` package README](packages/sqlload/README.md): Python and HTTP sources, batches,
-  logged state, and how rows reach Snowflake and DuckDB.
-- [Benchmarks](benchmarks/README.md): SQLLoad compared with dlt and ingestr, loading into DuckDB and
-  Snowflake, with the method and figures. The published results list only the scenarios where
-  SQLLoad is fastest or at parity (within 5%). Scenarios where another loader is faster are tracked
-  as work to do.
+  logged state, and how rows reach Snowflake, Databricks and DuckDB.
+- [Benchmarks](benchmarks/README.md): SQLLoad, dlt and ingestr loading the same data into DuckDB
+  and Snowflake, with the method, versions and figures.
 - [Changelog](CHANGELOG.md).
 
 ## Development
