@@ -245,10 +245,10 @@ deletes = "soft"          # soft (default) | hard; merge only
 - Array and `json` columns stream as Postgres writes them, so pin them to text
   (`columns = { tags = "text" }`); `jsonb` needs nothing.
 - The publication must publish exactly the source's tables; one with other tables is refused.
-  When it is missing, SQLLoad creates `sqlload_<source>`, which needs a user that owns the tables
-  and has `CREATE` on the database: a `REPLICATION` user with only `SELECT` cannot, since Postgres
-  lets only a table's owner publish it. Otherwise create one as the tables' owner
-  (`CREATE PUBLICATION app_changes FOR TABLE customers, orders;`) and name it with
+  When it is missing, SQLLoad creates it (by default `sqlload_<source>`), which needs a user that
+  owns the tables and has `CREATE` on the database: a `REPLICATION` user with only `SELECT`
+  cannot, since Postgres lets only a table's owner publish it. Otherwise create one as the
+  tables' owner (`CREATE PUBLICATION app_changes FOR TABLE customers, orders;`) and name it with
   `publication = "app_changes"`; SQLLoad then only checks it. SQLLoad's own follows `include`
   again on `--resnapshot`.
 - Postgres keeps WAL for the slot from its last confirmed position. Every load confirms what it

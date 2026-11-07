@@ -2,6 +2,7 @@
 
 use tokio_postgres::{Client, Config, NoTls};
 
+use crate::postgres_source::_helpers::server_reason::server_reason;
 use crate::postgres_source::constants::SESSION_OPTIONS;
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::PostgresAddress;
@@ -29,7 +30,10 @@ pub async fn connect_postgres(address: PostgresAddress<'_>) -> Result<Client, Po
             })?;
     tokio::spawn(async move {
         if let Err(error) = connection.await {
-            tracing::warn!(%error, "Postgres connection closed with an error");
+            tracing::warn!(
+                reason = %server_reason(&error),
+                "Postgres connection closed with an error"
+            );
         }
     });
     Ok(client)
