@@ -6,7 +6,7 @@ use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, TimestampMicro
 use arrow_schema::{Field, Schema};
 
 use crate::adapters::contract::models::{ChangeApply, Truncation};
-use crate::cdc::_helpers::fold::{fold_changes, key_of, key_positions};
+use crate::cdc::_helpers::fold::{Folder, fold_changes, key_of, key_positions};
 use crate::cdc::_helpers::spill::{SpillFile, SpillReader};
 use crate::cdc::_helpers::text_values::{arrow_type, micros_text, text_array};
 use crate::cdc::constants::{
@@ -54,10 +54,12 @@ pub(crate) enum ChangeParts {
         reader: SpillReader,
         memory: std::vec::IntoIter<Change>,
     },
-    /// A spilled `merge` table: one file per key partition, and the key's positions.
+    /// A spilled `merge` table: one file per key partition, each folded as it is read, so a part holds one change per key.
     Partitions {
         files: std::collections::btree_map::IntoIter<u64, SpillFile>,
         positions: Vec<usize>,
+        /// How many partitions the keys are hashed into.
+        partitions: u64,
     },
 }
 
@@ -77,18 +79,22 @@ impl ChangeParts {
                 part.extend(memory.take(SPILL_CHUNK_CHANGES - part.len()));
                 Ok((!part.is_empty()).then_some(part))
             }
-            Self::Partitions { files, positions } => {
+            Self::Partitions {
+                files,
+                positions,
+                partitions,
+            } => {
                 let Some((partition, mut file)) = files.next() else {
                     return Ok(None);
                 };
                 let mut reader = file.read()?;
-                let mut changes: Vec<Change> = Vec::with_capacity(file.count);
+                let mut folder = Folder::default();
                 while let Some(change) = reader.next_change()? {
-                    changes.push(change);
+                    folder.push(change, positions)?;
                 }
-                let mut folded = fold_changes(&changes, positions)?;
+                let mut folded = folder.finish();
                 folded.retain(|change| {
-                    key_partition(&key_of(&change.values, positions)) == partition
+                    key_partition(&key_of(&change.values, positions), *partitions) == partition
                 });
                 Ok(Some(folded))
             }
@@ -96,10 +102,10 @@ impl ChangeParts {
     }
 }
 
-/// `table`'s batch as parts, with the changes `spilled` to disk before those in memory, and for `merge` the newest truncate, which applies before them.
+/// `table`'s batch as parts, with the changes `spilled` to disk before those in memory, and for `merge` the newest truncate, which applies before them; a spilled `merge` table is split into enough key partitions that each holds about a quarter of `spill_bytes`, at most [`SPILL_PARTITIONS`].
 pub(crate) fn change_parts(
     table: &TableChanges,
-    spilled: Option<SpillFile>,
+    (spilled, spill_bytes): (Option<SpillFile>, usize),
     (apply, unique_key): (ChangeApply, &[String]),
 ) -> Result<(ChangeParts, Option<Truncation>), String> {
     let Some(mut spilled) = spilled else {
@@ -128,6 +134,12 @@ pub(crate) fn change_parts(
     }
     let after = last.as_ref().map(|change| (change.lsn, change.seq));
     let positions = key_positions(&table.relation, unique_key)?;
+    let spilled_bytes = u64::try_from(spilled.bytes).unwrap_or(u64::MAX);
+    let limit = u64::try_from(spill_bytes.max(1)).unwrap_or(u64::MAX);
+    let partitions = spilled_bytes
+        .saturating_mul(4)
+        .div_ceil(limit)
+        .clamp(1, SPILL_PARTITIONS);
     let mut files = PartitionFiles::default();
     let mut reader = spilled.read()?;
     let mut memory = memory;
@@ -154,9 +166,12 @@ pub(crate) fn change_parts(
                 old_key: None,
                 ..change.clone()
             };
-            files.push(key_partition(&key_of(old, &positions)), &deleted)?;
+            files.push(
+                key_partition(&key_of(old, &positions), partitions),
+                &deleted,
+            )?;
         }
-        files.push(key_partition(&key), &change)?;
+        files.push(key_partition(&key, partitions), &change)?;
     }
     let truncated = last.map(|change| Truncation {
         lsn: change.lsn,
@@ -165,15 +180,16 @@ pub(crate) fn change_parts(
     let parts = ChangeParts::Partitions {
         files: files.0.into_iter(),
         positions,
+        partitions,
     };
     Ok((parts, truncated))
 }
 
-/// The partition a key's changes are folded in.
-fn key_partition(key: &[TupleValue]) -> u64 {
+/// The partition, of `partitions`, a key's changes are folded in.
+fn key_partition(key: &[TupleValue], partitions: u64) -> u64 {
     let mut hasher = std::hash::DefaultHasher::new();
     std::hash::Hash::hash(key, &mut hasher);
-    std::hash::Hasher::finish(&hasher) % SPILL_PARTITIONS
+    std::hash::Hasher::finish(&hasher) % partitions
 }
 
 /// A spilled `merge` table's changes, filed by key partition.

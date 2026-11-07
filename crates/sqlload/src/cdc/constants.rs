@@ -26,9 +26,11 @@ pub const FULL_IDENTITY: char = 'f';
 pub const PLAIN_JSON_TYPE: &str = "json";
 /// How many bytes of changes a load keeps in memory before it moves them to local disk.
 pub const SPILL_BYTES: usize = 256 * 1024 * 1024;
-/// About how many bytes a change or value takes in memory beyond its text.
-pub const CHANGE_OVERHEAD_BYTES: usize = 24;
-/// How many parts a spilled `merge` table's changes are split into by key, each folded on its own.
-pub const SPILL_PARTITIONS: u64 = 32;
+/// About how many bytes a change takes in memory beyond its values.
+pub const CHANGE_OVERHEAD_BYTES: usize = 96;
+/// About how many bytes a value takes in memory beyond its text.
+pub const VALUE_OVERHEAD_BYTES: usize = 32;
+/// The most parts a spilled `merge` table's changes are split into by key, each folded on its own (each part is a file open at once).
+pub const SPILL_PARTITIONS: u64 = 256;
 /// The most spilled changelog changes staged at once.
 pub const SPILL_CHUNK_CHANGES: usize = 50_000;

@@ -556,7 +556,7 @@ impl CdcSource<'_> {
             };
             let (mut parts, truncated) = change_parts(
                 changes,
-                spilled.remove(oid),
+                (spilled.remove(oid), spill_bytes()),
                 (self.cdc.apply, &table.spec.unique_key),
             )
             .map_err(LoaderError::Invalid)?;

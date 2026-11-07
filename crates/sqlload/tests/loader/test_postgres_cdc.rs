@@ -72,7 +72,7 @@ const UNPUBLISHED_WRITES: &str = "INSERT INTO other.audit SELECT g FROM generate
 
 const LARGE_TRANSACTION: &str = "
 BEGIN;
-INSERT INTO public.orders SELECT g, g, 'x', NULL FROM generate_series(10, 20009) g;
+INSERT INTO public.orders SELECT g, g, 'x', NULL FROM generate_series(10, 40009) g;
 UPDATE public.orders SET qty = qty + 1 WHERE id % 2 = 0;
 DELETE FROM public.orders WHERE id % 5 = 0;
 UPDATE public.orders SET id = id + 100000 WHERE id BETWEEN 10 AND 29;
@@ -101,7 +101,7 @@ const SPILLED_CHANGES: [CdcStep; 3] = [
     step("", BOTH, "", (true, "0 rows")),
 ];
 
-const SPILLED_LIVE_QUERY: &str = "SELECT (SELECT count(*) || ':' || sum(qty) || ':' || sum(id) FROM raw.app__orders WHERE _sqlload_deleted_at IS NULL) || ' | ' || (SELECT count(*) FROM raw.log__orders)";
+const SPILLED_LIVE_QUERY: &str = "SELECT (SELECT count(*) || ':' || sum(qty) || ':' || sum(id) FROM raw.app__orders WHERE _sqlload_deleted_at IS NULL) || ' | ' || (SELECT count(DISTINCT (_sqlload_lsn, _sqlload_seq)) || '/' || count(*) || ':' || max(_sqlload_seq) FROM raw.log__orders WHERE _sqlload_op <> 'snapshot')";
 
 const SLOT_ADVANCED: &str = "SELECT confirmed_flush_lsn >= $1::text::pg_lsn FROM pg_replication_slots WHERE slot_name = 'sqlload_app'";
 
@@ -494,13 +494,13 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: MERGED_RESULT,
         },
         CdcScenarioTestCase {
-            description: "a transaction larger than memory spills to disk, and merge and changelog match Postgres",
+            description: "a transaction larger than memory spills to disk: merge matches Postgres, and the changelog, staged in several chunks, holds every change once at its position",
             tag: "17-alpine",
             spill_bytes: "100000",
             extra_config: "",
             steps: &SPILLED_LARGE,
             check_query: SPILLED_LIVE_QUERY,
-            expected_result: "16003:160168007:161760006 | 34020",
+            expected_result: "32003:640336007:641920006 | 68017/68017:68017",
         },
         CdcScenarioTestCase {
             description: "spilled merge: the TOASTed value, the delete and the second table come out as in memory",

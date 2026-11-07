@@ -2,7 +2,7 @@
 
 use crate::cdc::_helpers::pgoutput::decode_message;
 use crate::cdc::_helpers::spill::SpillFile;
-use crate::cdc::constants::{CHANGE_OVERHEAD_BYTES, POSTGRES_EPOCH_MICROS};
+use crate::cdc::constants::{CHANGE_OVERHEAD_BYTES, POSTGRES_EPOCH_MICROS, VALUE_OVERHEAD_BYTES};
 use crate::cdc::models::{
     Change, ChangeBuffer, ChangeOp, PgOutputMessage, StreamStep, TableChanges, TupleValue,
 };
@@ -91,6 +91,7 @@ fn hold_message(mut buffer: ChangeBuffer, bytes: &[u8]) -> Result<ChangeBuffer, 
     Ok(buffer)
 }
 
+/// The bytes of the open transaction's messages in memory.
 fn open_bytes(open: &[Vec<u8>]) -> usize {
     open.iter().map(Vec::len).sum()
 }
@@ -156,8 +157,8 @@ fn change_bytes(change: &Change) -> usize {
         values
             .iter()
             .map(|value| match value {
-                TupleValue::Text(text) => text.len() + CHANGE_OVERHEAD_BYTES,
-                _ => CHANGE_OVERHEAD_BYTES,
+                TupleValue::Text(text) => text.len() + VALUE_OVERHEAD_BYTES,
+                _ => VALUE_OVERHEAD_BYTES,
             })
             .sum()
     };

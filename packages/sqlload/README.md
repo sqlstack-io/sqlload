@@ -231,9 +231,10 @@ deletes = "soft"          # soft (default) | hard; merge only
 - A batch always holds whole transactions. The slot confirms a batch only after every table it
   touched has committed, and a change whose `_sqlload_lsn` the table already holds is skipped.
   A load that stops part-way is safe to run again: nothing is lost or applied twice.
-- A transaction or batch holding more than about 256 MB of changes moves them to the system's
-  temporary folder and stages each table in parts, still committing it once; `merge` folds them
-  by key partition, so no key is written twice.
+- A transaction or batch holding more than about 256 MiB of changes moves them to the system's
+  temporary folder (`TMPDIR`; point it at a disk, not a memory-backed `tmpfs`) and stages each
+  table in parts, still committing it once. `merge` folds them by key partition as it reads
+  them, so no key is written twice and a part holds one change per key.
 - Tables are not promised to be consistent with each other at every moment. Each one converges
   to the source as of the last confirmed position.
 - A captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. It

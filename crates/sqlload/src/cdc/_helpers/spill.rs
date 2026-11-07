@@ -4,6 +4,7 @@ use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
 use crate::cdc::models::{Change, ChangeOp, TupleValue};
 
+/// A local disk error, as the load reports it.
 fn io(error: std::io::Error) -> String {
     format!("cannot spill changes to local disk: {error}")
 }
@@ -14,6 +15,10 @@ pub(crate) struct SpillFile {
     writer: BufWriter<std::fs::File>,
     /// Records written.
     pub(crate) count: usize,
+    /// Bytes written.
+    pub(crate) bytes: usize,
+    /// Whether it has been read back, after which nothing more may be written (the reader shares its offset).
+    read: bool,
 }
 
 impl SpillFile {
@@ -22,16 +27,14 @@ impl SpillFile {
         Ok(Self {
             writer: BufWriter::new(tempfile::tempfile().map_err(io)?),
             count: 0,
+            bytes: 0,
+            read: false,
         })
     }
 
     /// Append one raw message.
     pub(crate) fn push_bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.writer
-            .write_all(&length_prefixed(bytes)?)
-            .map_err(io)?;
-        self.count += 1;
-        Ok(())
+        self.write(&length_prefixed(bytes)?)
     }
 
     /// Append one change.
@@ -56,13 +59,23 @@ impl SpillFile {
             }
             None => record.push(0),
         }
-        self.writer.write_all(&record).map_err(io)?;
+        self.write(&record)
+    }
+
+    /// Append one encoded record.
+    fn write(&mut self, record: &[u8]) -> Result<(), String> {
+        if self.read {
+            return Err("a spill file was written after it was read".to_owned());
+        }
+        self.writer.write_all(record).map_err(io)?;
         self.count += 1;
+        self.bytes += record.len();
         Ok(())
     }
 
     /// Read the records back from the start; nothing is written after.
     pub(crate) fn read(&mut self) -> Result<SpillReader, String> {
+        self.read = true;
         self.writer.flush().map_err(io)?;
         let mut file = self.writer.get_ref().try_clone().map_err(io)?;
         file.seek(SeekFrom::Start(0)).map_err(io)?;
@@ -107,7 +120,8 @@ impl SpillReader {
             0 => ChangeOp::Insert,
             1 => ChangeOp::Update,
             2 => ChangeOp::Delete,
-            _ => ChangeOp::Truncate,
+            3 => ChangeOp::Truncate,
+            tag => return Err(format!("a spill file holds an unknown change tag {tag}")),
         };
         let values = self.read_values()?;
         let mut flag = [0u8; 1];
@@ -147,9 +161,10 @@ impl SpillReader {
             values.push(match tag[0] {
                 0 => TupleValue::Null,
                 1 => TupleValue::Unchanged,
-                _ => TupleValue::Text(
+                2 => TupleValue::Text(
                     String::from_utf8(self.read_bytes()?).map_err(|error| error.to_string())?,
                 ),
+                tag => return Err(format!("a spill file holds an unknown value tag {tag}")),
             });
         }
         Ok(values)
