@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.20.0](https://github.com/sqlstack-io/sqlload/compare/v0.19.0...v0.20.0) (2026-11-07)
+
+
+### Features
+
+* **cdc:** keep streaming with load --follow ([#84](https://github.com/sqlstack-io/sqlload/issues/84)) ([0a58247](https://github.com/sqlstack-io/sqlload/commit/0a5824773ad9b979fa6ecc61c18eb57f1d21c739))
+
+
+### Documentation
+
+* **readme:** give the README a landing page like the other SQLStack tools ([#83](https://github.com/sqlstack-io/sqlload/issues/83)) ([08e2ec6](https://github.com/sqlstack-io/sqlload/commit/08e2ec6df4a4f9dcef503297b5715ae508113a5a))
+* **site:** add a social preview image ([#80](https://github.com/sqlstack-io/sqlload/issues/80)) ([4d127ad](https://github.com/sqlstack-io/sqlload/commit/4d127ad4a9a89ac612b4f2ea2e4e1b77d19afc60))
+* **site:** document Postgres CDC tables joining a source in 0.19.0 ([#85](https://github.com/sqlstack-io/sqlload/issues/85)) ([d0f6706](https://github.com/sqlstack-io/sqlload/commit/d0f67061f222cfd74beeeb1298746931580337a2))
+* **site:** set the wordmark in Space Grotesk Bold and adopt the new tagline ([#82](https://github.com/sqlstack-io/sqlload/issues/82)) ([1967ddb](https://github.com/sqlstack-io/sqlload/commit/1967ddb61a1de1ca4bc9d2cbb32dc4e1d7aaaea2))
+
 ## [0.19.0](https://github.com/sqlstack-io/sqlload/compare/v0.18.0...v0.19.0) (2026-11-07)
 
 

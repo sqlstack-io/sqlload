@@ -30,6 +30,8 @@ All three take the same options.
 | `--end-cursor <VALUE>` | Read only cursor values below this one. |
 | `--reload` | Rebuild the selected tables from the whole source, with the current columns and types. Asks first, unless `--yes`. |
 | `--resnapshot` | `postgres_cdc` sources: drop and recreate the replication slot, then copy every table again. Asks first, unless `--yes`. See [Postgres changes](/docs/sources/postgres-cdc/#re-snapshot). |
+| `--follow` | `load` of one `postgres_cdc` source only: keep streaming after catching up, writing a batch every `batch_interval`, until `--max-duration` passes or Ctrl-C or SIGTERM. See [Keep streaming](/docs/sources/postgres-cdc/#keep-streaming). |
+| `--max-duration <DURATION>` | With `--follow`: stop after this long, such as `10m`, once the changes read so far are written. |
 | `--yes` | Rebuild with `--reload` or `--resnapshot` without asking. Needed when not on a terminal. |
 | `--allow-type-change-rebuild` | Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would block. |
 | `--concurrency <N>` | The most tables loading at once. Default: the project's `concurrency`, else 4. |
