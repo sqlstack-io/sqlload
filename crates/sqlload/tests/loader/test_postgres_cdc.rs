@@ -2,9 +2,10 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 
 use crate::helpers::{
-    CDC_CHANGES, cdc_project, crashed_batch, duckdb_text, run_async, run_sqlload, step,
+    CDC_CHANGES, cdc_project, crashed_batch, duckdb_text, run_async, run_sqlload, spawn_sqlload,
+    step, stop_sqlload,
 };
-use crate::test_types::{CdcScenarioTestCase, CdcStep, QuietSlotTestCase};
+use crate::test_types::{CdcScenarioTestCase, CdcStep, FollowTestCase, QuietSlotTestCase};
 
 const SETUP: &str = "
 CREATE TABLE public.orders (id int8 PRIMARY KEY, qty int4, big text, tags text[]);
@@ -563,6 +564,80 @@ const BACKFILL_REJOIN_EMPTY: [CdcStep; 7] = [
     ),
 ];
 
+const FOLLOW_APP: &[&str] = &["load", "app", "--follow", "--max-duration", "3s"];
+
+const FOLLOW_LOG: &[&str] = &["load", "log", "--follow", "--max-duration", "3s"];
+
+const FOLLOWED: [CdcStep; 3] = [
+    step("", APP, "", (true, "loaded")),
+    step(CHANGES, FOLLOW_APP, "", (true, "Completed")),
+    step("", APP, "", (true, "0 rows")),
+];
+
+const FOLLOWED_LOG: [CdcStep; 3] = [
+    step("", LOG, "", (true, "loaded")),
+    step(CHANGES, FOLLOW_LOG, "", (true, "Completed")),
+    step("", LOG, "", (true, "0 rows")),
+];
+
+const FOLLOW_AFTER_FIRST: [CdcStep; 5] = crashed_batch(FOLLOW_APP, "batch-after-first-table");
+
+const FOLLOW_LOG_BEFORE_CONFIRM: [CdcStep; 5] = crashed_batch(FOLLOW_LOG, "batch-before-confirm");
+
+const PLAIN_SOURCE: &str = r#"
+[sources.plain]
+kind = "postgres"
+connection = "pg"
+include = ["public.items"]
+
+[sources.plain.tables."public.items"]
+description = "Items, read whole."
+"#;
+
+const FOLLOW_REFUSED: [CdcStep; 4] = [
+    step(
+        "",
+        &["load", "app", "log", "--follow"],
+        "",
+        (
+            false,
+            "load --follow follows one postgres_cdc source per process",
+        ),
+    ),
+    step(
+        "",
+        &["load", "app", "plain", "--follow"],
+        "",
+        (
+            false,
+            "plain__items is not captured, so load them without --follow",
+        ),
+    ),
+    step(
+        "",
+        &["plan", "app", "--follow"],
+        "",
+        (false, "--follow and --max-duration apply to load only"),
+    ),
+    step(
+        "",
+        &["load", "app", "--max-duration", "3s"],
+        "",
+        (false, "--follow"),
+    ),
+];
+
+/// Waits up to 15 seconds for slot `sqlload_app` to stream.
+const AWAIT_STREAMING: &str = "DO $$ BEGIN FOR attempt IN 1..150 LOOP EXIT WHEN EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'sqlload_app' AND active); PERFORM pg_sleep(0.1); END LOOP; END $$;";
+
+const FOLLOW_SHORT: &[&str] = &["load", "app", "--follow", "--max-duration", "8s"];
+
+const FIRST_CHANGES: &str = "BEGIN; INSERT INTO public.orders VALUES (4, 4, 'd', '{\"x y\",z}'); UPDATE public.orders SET qty = 10 WHERE id = 1; INSERT INTO public.items VALUES (3, 'three'); COMMIT;";
+
+const SECOND_CHANGES: &str = "BEGIN; DELETE FROM public.orders WHERE id = 2; UPDATE public.items SET name = 'one!' WHERE id = 1; COMMIT; INSERT INTO other.audit SELECT g FROM generate_series(1, 1000) g;";
+
+const ITEMS_WITH_C: &str = "SELECT string_agg(id || ':' || name || ':' || COALESCE(CAST(c AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.app__items";
+
 const NOKEY_SOURCE: &str = r#"
 [sources.nokey]
 kind = "postgres_cdc"
@@ -972,6 +1047,51 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: "1:z:update,2:b:snapshot,3:c:snapshot",
         },
         CdcScenarioTestCase {
+            description: "load --follow catches up, then writes what it read when --max-duration passes",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &FOLLOWED,
+            check_query: MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        CdcScenarioTestCase {
+            description: "load --follow into a changelog holds every change once",
+            tag: "15-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &FOLLOWED_LOG,
+            check_query: CHANGELOG_QUERY,
+            expected_result: CHANGELOG_RESULT,
+        },
+        CdcScenarioTestCase {
+            description: "a follow stopped after its first table committed converges without duplicates",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &FOLLOW_AFTER_FIRST,
+            check_query: MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        CdcScenarioTestCase {
+            description: "a changelog follow stopped before it confirmed converges without duplicates",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &FOLLOW_LOG_BEFORE_CONFIRM,
+            check_query: CHANGELOG_QUERY,
+            expected_result: CHANGELOG_RESULT,
+        },
+        CdcScenarioTestCase {
+            description: "load --follow follows one postgres_cdc source and nothing else, and only under load",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: PLAIN_SOURCE,
+            steps: &FOLLOW_REFUSED,
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        CdcScenarioTestCase {
             description: "a first load of part of the source is refused before it makes the slot, so the whole source snapshots after",
             tag: "17-alpine",
             spill_bytes: "",
@@ -1260,6 +1380,154 @@ fn given_a_quiet_postgres_cdc_source_when_other_tables_write_then_a_load_advance
                 (success, advanced),
                 test_case.expected_advanced,
                 "{}\n{output}",
+                test_case.description
+            );
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// `load --follow` writes changes as they come, plans again when a table gains a column (once, even under --resnapshot), and stops cleanly at --max-duration or SIGTERM; a stop at the re-plan loses nothing.
+#[test]
+fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_and_it_stops_cleanly()
+-> Result<(), String> {
+    let test_cases = [
+        FollowTestCase {
+            description: "changes written while following land, in batches, then it stops at --max-duration",
+            tag: "17-alpine",
+            args: FOLLOW_SHORT,
+            crash_at: "",
+            writes: &[FIRST_CHANGES, SECOND_CHANGES],
+            signal: "-0",
+            expected_follow: (true, "batch written"),
+            expected_after: "0 rows",
+            check_query: MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        FollowTestCase {
+            description: "Postgres 15: changes written while following land",
+            tag: "15-alpine",
+            args: FOLLOW_SHORT,
+            crash_at: "",
+            writes: &[FIRST_CHANGES, SECOND_CHANGES],
+            signal: "-0",
+            expected_follow: (true, "batch written"),
+            expected_after: "0 rows",
+            check_query: MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        FollowTestCase {
+            description: "a column added while following is planned, added and loaded without stopping",
+            tag: "17-alpine",
+            args: FOLLOW_SHORT,
+            crash_at: "",
+            writes: &[ADD_COLUMN],
+            signal: "-0",
+            expected_follow: (true, "planning again"),
+            expected_after: "0 rows",
+            check_query: ITEMS_WITH_C,
+            expected_result: "1:one!:-,2:two:8,3:three:7",
+        },
+        FollowTestCase {
+            description: "--resnapshot recreates the slot once, not again at the re-plan",
+            tag: "17-alpine",
+            args: &[
+                "load",
+                "app",
+                "--follow",
+                "--max-duration",
+                "10s",
+                "--resnapshot",
+                "--yes",
+            ],
+            crash_at: "",
+            writes: &[ADD_COLUMN],
+            signal: "-0",
+            expected_follow: (true, "planning again"),
+            expected_after: "0 rows",
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_cdc_snapshots WHERE table_name = ''",
+            expected_result: "2",
+        },
+        FollowTestCase {
+            description: "a follow stopped as it plans again loses nothing; a catch-up load writes the batch",
+            tag: "17-alpine",
+            args: FOLLOW_SHORT,
+            crash_at: "follow-before-replan",
+            writes: &[ADD_COLUMN],
+            signal: "-0",
+            expected_follow: (false, ""),
+            expected_after: "Completed",
+            check_query: ITEMS_WITH_C,
+            expected_result: "1:one!:-,2:two:8,3:three:7",
+        },
+        FollowTestCase {
+            description: "SIGTERM writes what was read, then stops",
+            tag: "17-alpine",
+            args: &["load", "app", "--follow"],
+            crash_at: "",
+            writes: &[CHANGES],
+            signal: "-TERM",
+            expected_follow: (true, "stopped following"),
+            expected_after: "0 rows",
+            check_query: MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+    ];
+    for test_case in test_cases {
+        run_async(async {
+            let postgres = start_postgres_version(test_case.tag).await?;
+            let client = connect(&postgres).await?;
+            client
+                .batch_execute(SETUP)
+                .await
+                .map_err(|error| error.to_string())?;
+            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let database = folder.path().join("out.duckdb");
+            let config = folder.path().join("sqlload.toml");
+            let project = cdc_project(postgres.port, &database).replacen(
+                "include = [\"public.*\"]\n",
+                "include = [\"public.*\"]\nbatch_interval = \"1s\"\n",
+                1,
+            );
+            std::fs::write(&config, project).map_err(|error| error.to_string())?;
+            run_sqlload(&config, APP, ("", ""))?;
+            let child = spawn_sqlload(&config, test_case.args, test_case.crash_at)?;
+            client
+                .batch_execute(AWAIT_STREAMING)
+                .await
+                .map_err(|error| error.to_string())?;
+            for write in test_case.writes {
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                client
+                    .batch_execute(write)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            let (success, output) = stop_sqlload(child, test_case.signal).await?;
+            assert_eq!(
+                success, test_case.expected_follow.0,
+                "{}\n{output}",
+                test_case.description
+            );
+            assert!(
+                output.contains(test_case.expected_follow.1),
+                "{}: output lacks {:?}\n{output}",
+                test_case.description,
+                test_case.expected_follow.1
+            );
+            let (_, after) = run_sqlload(&config, APP, ("", ""))?;
+            assert!(
+                after.contains(test_case.expected_after),
+                "{}: the load after lacks {:?}\n{after}",
+                test_case.description,
+                test_case.expected_after
+            );
+            assert_eq!(
+                duckdb_text(&database, test_case.check_query)?,
+                test_case.expected_result,
+                "{}",
                 test_case.description
             );
             Ok(())

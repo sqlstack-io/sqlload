@@ -1761,6 +1761,45 @@ pub(crate) fn run_sqlload(
     Ok((output.status.success(), text))
 }
 
+/// Start the `sqlload` executable on `config` with `args` in the background, stopping itself at `crash_at` (see [`run_sqlload`]).
+pub(crate) fn spawn_sqlload(
+    config: &std::path::Path,
+    args: &[&str],
+    crash_at: &str,
+) -> Result<std::process::Child, String> {
+    std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+        .arg("--config")
+        .arg(config)
+        .arg("--no-color")
+        .args(args)
+        .env("SQLLOAD_TEST_CRASH_AT", crash_at)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())
+}
+
+/// Send `signal` (as `kill` takes it, such as `-TERM`; `-0` sends none) to `child`, then wait for it to exit: whether it succeeded, and its output.
+pub(crate) async fn stop_sqlload(
+    child: std::process::Child,
+    signal: &str,
+) -> Result<(bool, String), String> {
+    let _ = std::process::Command::new("kill")
+        .arg(signal)
+        .arg(child.id().to_string())
+        .status();
+    let output = tokio::task::spawn_blocking(move || child.wait_with_output())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok((output.status.success(), text))
+}
+
 /// The single text value `query` returns from the DuckDB file `database`.
 pub(crate) fn duckdb_text(database: &std::path::Path, query: &str) -> Result<String, String> {
     let connection = duckdb::Connection::open(database).map_err(|error| error.to_string())?;
