@@ -249,12 +249,21 @@ deletes = "soft"          # soft (default) | hard; merge only
   owns the tables and has `CREATE` on the database: a `REPLICATION` user with only `SELECT`
   cannot, since Postgres lets only a table's owner publish it. Otherwise create one as the
   tables' owner (`CREATE PUBLICATION app_changes FOR TABLE customers, orders;`) and name it with
-  `publication = "app_changes"`; SQLLoad then only checks it. SQLLoad's own follows `include`
-  again on `--resnapshot`.
+  `publication = "app_changes"`; SQLLoad then only checks it.
+- A table that joins the source after its first load (a new table `include` matches, or a wider
+  `include`) is copied alone on the next load, and the other tables keep streaming. SQLLoad adds
+  it to its own publication, which needs the user to own the table; add it to a named one
+  yourself. The copy runs under a temporary slot, so it needs one free slot under
+  `max_replication_slots` while it runs, and the table's changes from before the copy are
+  skipped. `plan` shows a table not yet in the destination as `snapshot copy, then …`. A table
+  leaving `include` still needs `--resnapshot`, which also sets SQLLoad's own publication to
+  `include` again.
 - Postgres keeps WAL for the slot from its last confirmed position. Every load confirms what it
   applied, even one that found no changes, but the WAL kept shrinks only at the first load after
   Postgres's next checkpoint.
-- When the slot is lost, or a snapshot stopped part-way, the load stops and names the fix:
+- A first snapshot that stopped part-way resumes: the next load copies only the tables it had
+  not finished.
+- When the slot is lost, the load stops and names the fix:
   `sqlload load --resnapshot` drops and recreates the slot and copies every table again,
   replacing what they hold: a `changelog` table loses its history and a `merge` table its
   soft-deleted rows. It asks first unless `--yes`; `plan --resnapshot` shows it first.

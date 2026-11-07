@@ -418,6 +418,83 @@ const BACKFILL_CHANGELOG: [CdcStep; 5] = [
     step("", LOG, "", (true, "0 rows")),
 ];
 
+const BACKFILL_RESTARTS: [CdcStep; 6] = [
+    step("", APP, "", (true, "loaded")),
+    step(
+        NEW_TABLES,
+        &["plan", "app"],
+        "",
+        (true, "snapshot copy, then apply changes"),
+    ),
+    step("", APP, "backfill-before-record", (false, "")),
+    step(
+        "UPDATE public.extra SET v = 'b' WHERE id = 1;",
+        APP,
+        "backfill-before-stream",
+        (false, ""),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (2, 'c');",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "ALTER PUBLICATION sqlload_app DROP TABLE public.extra2",
+        APP,
+        "",
+        (
+            false,
+            "publication sqlload_app no longer publishes app__extra2",
+        ),
+    ),
+];
+
+const NAMED_SOURCE: &str = r#"
+[sources.named]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.*"]
+publication = "named_pub"
+
+[sources.named.tables."public.orders"]
+description = "Orders, captured through a named publication."
+columns = { tags = "text" }
+"#;
+
+const NAMED: &[&str] = &["load", "named"];
+
+const BACKFILL_NAMED: [CdcStep; 5] = [
+    step(
+        "CREATE PUBLICATION named_pub FOR TABLE public.orders, public.items",
+        NAMED,
+        "",
+        (true, "loaded"),
+    ),
+    step(
+        "CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.'; INSERT INTO public.extra VALUES (1, 'a');",
+        NAMED,
+        "",
+        (
+            false,
+            "publication named_pub does not publish \"public\".\"extra\"",
+        ),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (2, 'b'); ALTER PUBLICATION named_pub ADD TABLE public.extra; INSERT INTO public.extra VALUES (3, 'c');",
+        NAMED,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "UPDATE public.extra SET v = 'z' WHERE id = 1;",
+        NAMED,
+        "",
+        (true, "Completed"),
+    ),
+    step("", NAMED, "", (true, "0 rows")),
+];
+
 const NOKEY_SOURCE: &str = r#"
 [sources.nokey]
 kind = "postgres_cdc"
@@ -789,6 +866,24 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             steps: &BACKFILL_CHANGELOG,
             check_query: "SELECT string_agg(_sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq) FROM raw.log__extra",
             expected_result: "insert:9",
+        },
+        CdcScenarioTestCase {
+            description: "a backfill stopped before its record or before streaming copies again and skips the changes its copy holds; a recorded table dropped from the publication is refused",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_RESTARTS,
+            check_query: "SELECT (SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra) || ' | ' || (SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra2)",
+            expected_result: "1:b:snapshot,2:c:insert | 1:x:snapshot",
+        },
+        CdcScenarioTestCase {
+            description: "a table added to a named publication by hand is copied alone, without its earlier changes twice",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: NAMED_SOURCE,
+            steps: &BACKFILL_NAMED,
+            check_query: "SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.named__extra",
+            expected_result: "1:z:update,2:b:snapshot,3:c:snapshot",
         },
         CdcScenarioTestCase {
             description: "a first load of part of the source is refused before it makes the slot, so the whole source snapshots after",
