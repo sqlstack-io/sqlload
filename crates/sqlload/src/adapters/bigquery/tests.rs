@@ -1,3 +1,5 @@
+#[path = "tests/test_arrow_rows.rs"]
+mod arrow_rows;
 #[path = "tests/test_dialect.rs"]
 mod dialect;
 #[path = "tests/helpers.rs"]

@@ -18,3 +18,9 @@ pub const TRANSACTION_STATEMENTS: &[&str] = &[
 
 /// Shown for `copy_to_internal_stage` on a BigQuery target.
 pub const NO_INTERNAL_STAGE_COPY: &str = "copy_to_internal_stage is for Snowflake targets; BigQuery takes the rows through its Storage Write API";
+
+/// The most pending streams one batch's requests are spread over; each opens only when a request needs it.
+pub const STREAMS_PER_BATCH: usize = 4;
+
+/// The most bytes one append request carries, under the Storage Write API's 10 MB request limit.
+pub const APPEND_REQUEST_BYTES: usize = 9 * 1024 * 1024;

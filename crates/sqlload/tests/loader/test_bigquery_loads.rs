@@ -1,9 +1,19 @@
+use sqlload::bigquery_api::main::run_query::run_query;
+
 use crate::bigquery_helpers::{
-    live_bigquery, live_bigquery_client, refused_live_load, reset_live_bigquery,
+    live_bigquery, live_bigquery_client, reset_live_bigquery, run_live_bigquery,
     stream_into_live_table,
 };
-use crate::helpers::run_async;
-use crate::test_types::{LiveRefusedLoadTestCase, LiveWriteApiTestCase};
+use crate::helpers::{run_async, two_batches, two_days};
+use crate::test_types::{LiveBigQueryLoadTestCase, LiveWriteApiTestCase};
+
+const LIVE_APPEND: LiveBigQueryLoadTestCase = LiveBigQueryLoadTestCase {
+    description: "",
+    source: "orders_append",
+    settings: "write_strategy = \"append\"",
+    file_set: two_days,
+    expected_rows: "6",
+};
 
 /// Skipped when `SQLLOAD_BIGQUERY_DATASET` is unset, and fails when it names a dataset outside `sqlload_`; the dataset is dropped first, streamed into, and dropped at the end, its tables expiring after a day if a failed run leaves them. It round-trips the hand-written Storage Write API messages against the real service: requests BigQuery must parse, and answers (results, error codes, row counts, stream errors) sqlload must read.
 #[test]
@@ -110,7 +120,7 @@ fn given_a_live_bigquery_dataset_when_streaming_arrow_rows_then_they_appear_only
                 test_case.description
             );
         }
-        sqlload::bigquery_api::main::run_query::run_query(
+        run_query(
             &client,
             &format!(
                 "DROP SCHEMA IF EXISTS `{}`.`{}` CASCADE",
@@ -123,40 +133,77 @@ fn given_a_live_bigquery_dataset_when_streaming_arrow_rows_then_they_appear_only
     })
 }
 
-/// Skipped when `SQLLOAD_BIGQUERY_DATASET` is unset. BigQuery takes no rows yet, so `load` must refuse right after planning, before it applies or loads anything: no dataset is created.
+/// Skipped when `SQLLOAD_BIGQUERY_DATASET` is unset; loads into `<dataset>_load`, dropped first and at the end.
 #[test]
-fn given_a_live_bigquery_target_when_loading_then_it_is_refused_before_anything_is_applied()
+fn given_a_live_bigquery_dataset_when_loading_each_strategy_then_rows_land_and_nothing_stays_staged()
 -> Result<(), String> {
     let Some(live) = live_bigquery()? else {
         return Ok(());
     };
-    let test_cases = [LiveRefusedLoadTestCase {
-        description: "load into a BigQuery target refuses at plan, and the target's dataset is never created",
-        expected_succeeded: false,
-        expected_refusal: "loading rows into BigQuery (target dev) is not available yet, so nothing was applied or loaded.",
-        expected_datasets: "0",
-    }];
+    let test_cases = [
+        LiveBigQueryLoadTestCase {
+            description: "append",
+            ..LIVE_APPEND
+        },
+        LiveBigQueryLoadTestCase {
+            description: "append again: the files are loaded, so nothing new",
+            ..LIVE_APPEND
+        },
+        LiveBigQueryLoadTestCase {
+            description: "append over two batches: two commits of streamed rows",
+            source: "orders_batches",
+            file_set: two_batches,
+            expected_rows: "2002",
+            ..LIVE_APPEND
+        },
+        LiveBigQueryLoadTestCase {
+            description: "replace",
+            source: "orders_replace",
+            settings: "write_strategy = \"replace\"",
+            ..LIVE_APPEND
+        },
+        LiveBigQueryLoadTestCase {
+            description: "replace again: the same rows, not twice, though the table was just recreated",
+            source: "orders_replace",
+            settings: "write_strategy = \"replace\"",
+            ..LIVE_APPEND
+        },
+        LiveBigQueryLoadTestCase {
+            description: "delete_insert on the day partition",
+            source: "orders_days",
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"",
+            ..LIVE_APPEND
+        },
+        LiveBigQueryLoadTestCase {
+            description: "delete_insert again: the last day is read again and its MERGE deletes the rows it reinserts, so they are not doubled",
+            source: "orders_days",
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"",
+            ..LIVE_APPEND
+        },
+    ];
     run_async(async {
         let client = live_bigquery_client(&live)?;
-        for test_case in test_cases {
-            let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
-            let (succeeded, output, datasets) =
-                refused_live_load(&client, &live, directory.path()).await?;
+        let dataset = format!("`{}`.`{}_load`", live.project, live.dataset);
+        run_query(&client, &format!("DROP SCHEMA IF EXISTS {dataset} CASCADE"))
+            .await
+            .map_err(|error| error.to_string())?;
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        for test_case in &test_cases {
+            let outcome = run_live_bigquery(directory.path(), &live, test_case).await?;
             assert_eq!(
+                outcome,
                 (
-                    succeeded,
-                    output.contains(test_case.expected_refusal),
-                    datasets.as_str()
+                    String::new(),
+                    Some(test_case.expected_rows.to_owned()),
+                    Some("0".to_owned())
                 ),
-                (
-                    test_case.expected_succeeded,
-                    true,
-                    test_case.expected_datasets
-                ),
-                "{}: {output}",
+                "{}: the error, the rows and the staging tables left",
                 test_case.description
             );
         }
+        run_query(&client, &format!("DROP SCHEMA IF EXISTS {dataset} CASCADE"))
+            .await
+            .map_err(|error| error.to_string())?;
         Ok(())
     })
 }

@@ -580,12 +580,12 @@ pub(crate) struct WriteApiOutcome {
     pub(crate) rows: String,
 }
 
-/// `sqlload load` from a files source into a live BigQuery target, which cannot take rows yet.
-pub(crate) struct LiveRefusedLoadTestCase {
+/// One load of files into a live BigQuery dataset.
+pub(crate) struct LiveBigQueryLoadTestCase {
     pub(crate) description: &'static str,
-    pub(crate) expected_succeeded: bool,
-    /// Text the output must hold.
-    pub(crate) expected_refusal: &'static str,
-    /// How many datasets named for the load exist after it.
-    pub(crate) expected_datasets: &'static str,
+    pub(crate) source: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: RouteFileSet,
+    /// Rows in the table afterwards.
+    pub(crate) expected_rows: &'static str,
 }

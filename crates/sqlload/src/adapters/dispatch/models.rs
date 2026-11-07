@@ -1,4 +1,4 @@
-use crate::adapters::bigquery::models::BigQueryDestination;
+use crate::adapters::bigquery::models::{BigQueryDestination, BigQueryWriter};
 use crate::adapters::databricks::models::{DatabricksDestination, DatabricksWriter};
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::models::{DuckDbDestination, DuckDbWriter};
@@ -24,5 +24,6 @@ pub enum Writer {
     DuckDb(DuckDbWriter),
     Snowflake(Box<SnowflakeWriter>),
     Databricks(Box<DatabricksWriter>),
+    BigQuery(Box<BigQueryWriter>),
     Files(ParquetFiles),
 }

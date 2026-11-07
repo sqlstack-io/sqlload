@@ -20,8 +20,14 @@ use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::write_file::write_file;
 use sqlload::store_paths::models::{Location, StoreKind};
 
-use crate::helpers::{run_sqlload, two_days};
-use crate::test_types::{LiveBigQuery, LiveWriteApiTestCase, WriteApiOutcome};
+use sqlload::adapters::dispatch::main::session::single_text::single_text;
+use sqlload::loader::main::connect_targets::connect_targets;
+use sqlload::loader::models::PlanOptions;
+
+use crate::helpers::{described_project, plan_apply_load};
+use crate::test_types::{
+    LiveBigQuery, LiveBigQueryLoadTestCase, LiveWriteApiTestCase, WriteApiOutcome,
+};
 
 /// The key's project and the dataset the live BigQuery tests use; `Ok(None)` when `SQLLOAD_BIGQUERY_DATASET` is unset, which skips them.
 pub(crate) fn live_bigquery() -> Result<Option<LiveBigQuery>, String> {
@@ -238,69 +244,54 @@ pub(crate) async fn stream_into_live_table(
     Ok(outcome)
 }
 
-/// Run `sqlload load --yes` on a project loading two days of files from `directory` into the dataset `<dataset>_load`, dropped before and after: whether it succeeded, its output, and how many datasets of that name existed after it.
-pub(crate) async fn refused_live_load(
-    client: &BigQueryClient,
-    live: &LiveBigQuery,
+/// Load `load`'s files (written once, so a second load of the same source finds them unchanged) into the live dataset `<dataset>_load`: the load's error (empty when it succeeded), the table's row count, and the staging or build tables left in the dataset.
+pub(crate) async fn run_live_bigquery(
     directory: &std::path::Path,
-) -> Result<(bool, String, String), String> {
-    let dataset = format!("{}_load", live.dataset);
-    run_query(
-        client,
-        &format!(
-            "DROP SCHEMA IF EXISTS `{}`.`{dataset}` CASCADE",
-            live.project
-        ),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
+    live: &LiveBigQuery,
+    load: &LiveBigQueryLoadTestCase,
+) -> Result<(String, Option<String>, Option<String>), String> {
     let root = directory.display().to_string();
     let source = open_folder(&Location {
         store: StoreKind::Filesystem { root: root.clone() },
-        prefix: "src/".to_owned(),
+        prefix: format!("{}/", load.source),
     })
     .map_err(|error| error.to_string())?;
-    for (key, body) in two_days()? {
+    let written = directory.join(load.source).exists();
+    for (key, body) in (load.file_set)()?.into_iter().filter(|_| !written) {
         write_file(&source, &key, body)
             .await
             .map_err(|error| error.to_string())?;
     }
-    let config = directory.join("sqlload.toml");
-    std::fs::write(
-        &config,
+    let dataset = format!("{}_load", live.dataset);
+    let text = format!(
+        "[connections.bq]\nkind = \"bigquery\"\nproject = \"{}\"\nlocation = \"{}\"\nservice_account_key = '''{}'''\n\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[targets.dev]\nconnection = \"bq\"\nloader_schema = \"{dataset}\"\n\n[sources.{}]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"{}/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
+        live.project, live.location, live.key, load.source, load.source, load.settings
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (_, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev target".to_owned())?;
+    let rows = single_text(
+        destination,
         format!(
-            "[connections.bq]\nkind = \"bigquery\"\nlocation = \"{}\"\nservice_account_key = \"${{ENV:GCP_BQ_SANDBOX_SA_KEY}}\"\n\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[targets.dev]\nconnection = \"bq\"\nloader_schema = \"{dataset}\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n",
-            live.location
-        ),
-    )
-    .map_err(|error| error.to_string())?;
-    let (succeeded, output) = run_sqlload(&config, &["load", "--yes"], ("", ""))?;
-    let datasets = run_query(
-        client,
-        &format!(
-            "SELECT CAST(COUNT(*) AS STRING) FROM `region-{}`.INFORMATION_SCHEMA.SCHEMATA WHERE schema_name = '{dataset}'",
-            live.location
+            "SELECT CAST(COUNT(*) AS STRING) FROM `{}`.`{dataset}`.`{}`",
+            live.project, load.source
         ),
     )
     .await
     .map_err(|error| error.to_string())?;
-    run_query(
-        client,
-        &format!(
-            "DROP SCHEMA IF EXISTS `{}`.`{dataset}` CASCADE",
+    let staged = single_text(
+        destination,
+        format!(
+            "SELECT CAST(COUNT(*) AS STRING) FROM `{}`.`{dataset}`.INFORMATION_SCHEMA.TABLES WHERE table_name LIKE '%sqlload_staging%'",
             live.project
         ),
     )
     .await
     .map_err(|error| error.to_string())?;
-    Ok((
-        succeeded,
-        output,
-        datasets
-            .rows
-            .into_iter()
-            .next()
-            .and_then(|row| row.into_iter().next().flatten())
-            .unwrap_or_default(),
-    ))
+    Ok((outcome.err().unwrap_or_default(), rows, staged))
 }

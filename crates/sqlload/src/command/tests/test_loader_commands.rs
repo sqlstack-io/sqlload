@@ -1,9 +1,5 @@
-use crate::column_types::models::Warehouse;
-use crate::command::_helpers::loader_commands::unloadable_problem;
 use crate::command::tests::helpers::{debug_without_host, run_without_host};
-use crate::command::tests::test_types::{
-    LoaderCommandTestCase, PlanFailureTestCase, UnloadableTestCase,
-};
+use crate::command::tests::test_types::{LoaderCommandTestCase, PlanFailureTestCase};
 
 const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 const NO_LOAD_METHOD: &str = "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
@@ -79,59 +75,6 @@ fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_e
             output.starts_with(test_case.expected_output)
                 && output.ends_with(test_case.expected_exit),
             "{}: {output}",
-            test_case.description
-        );
-    }
-}
-
-#[test]
-fn given_a_load_plan_when_a_table_targets_a_warehouse_taking_no_rows_yet_then_load_refuses_and_names_it()
- {
-    let test_cases = [
-        UnloadableTestCase {
-            description: "a BigQuery table is refused, naming the warehouse and its target",
-            tables: &[(Warehouse::BigQuery, "dev")],
-            expected_problem: Some(
-                "loading rows into BigQuery (target dev) is not available yet, so nothing was applied or loaded. Fix: leave those tables out with --exclude; plan, apply and contract diff work against it",
-            ),
-        },
-        UnloadableTestCase {
-            description: "warehouses that load rows are not refused",
-            tables: &[
-                (Warehouse::Snowflake, "dev"),
-                (Warehouse::Databricks, "lake"),
-                (Warehouse::Parquet, "files"),
-            ],
-            expected_problem: None,
-        },
-        UnloadableTestCase {
-            description: "a mixed plan is refused whole, each BigQuery target named once",
-            tables: &[
-                (Warehouse::Snowflake, "dev"),
-                (Warehouse::BigQuery, "bq"),
-                (Warehouse::BigQuery, "bq"),
-                (Warehouse::BigQuery, "analytics"),
-            ],
-            expected_problem: Some(
-                "loading rows into BigQuery (target analytics), BigQuery (target bq) is not available yet, so nothing was applied or loaded. Fix: leave those tables out with --exclude; plan, apply and contract diff work against it",
-            ),
-        },
-        UnloadableTestCase {
-            description: "a plan with no unblocked table is not refused",
-            tables: &[],
-            expected_problem: None,
-        },
-    ];
-    for test_case in test_cases {
-        assert_eq!(
-            unloadable_problem(
-                test_case
-                    .tables
-                    .iter()
-                    .map(|(warehouse, target)| (*warehouse, *target))
-            ),
-            test_case.expected_problem.map(str::to_owned),
-            "{}",
             test_case.description
         );
     }

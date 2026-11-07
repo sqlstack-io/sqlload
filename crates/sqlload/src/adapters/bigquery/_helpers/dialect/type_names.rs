@@ -22,12 +22,19 @@ fn lossy(sql: impl Into<String>, reason: &'static str) -> WarehouseType {
     }
 }
 
-/// `decimal(precision,scale)` as a parameterised `NUMERIC` when it fits one, else `BIGNUMERIC`; both need a digit before the point, so a decimal of only fraction digits gets one more digit of precision.
-fn decimal_type(precision: u8, scale: u8) -> String {
+/// The digits `decimal(precision,scale)` is stored with, and whether that needs `BIGNUMERIC` rather than `NUMERIC`: both need a digit before the point, so a decimal of only fraction digits gets one more digit of precision.
+pub(crate) fn decimal_digits(precision: u8, scale: u8) -> (u8, u8, bool) {
     let precision = precision.max(scale + 1);
-    let name = match precision - scale <= NUMERIC_MAX_INTEGER_DIGITS && scale <= NUMERIC_MAX_SCALE {
-        true => "NUMERIC",
-        false => "BIGNUMERIC",
+    let big = precision - scale > NUMERIC_MAX_INTEGER_DIGITS || scale > NUMERIC_MAX_SCALE;
+    (precision, scale, big)
+}
+
+/// `decimal(precision,scale)` as a parameterised `NUMERIC` when it fits one, else `BIGNUMERIC`.
+fn decimal_type(precision: u8, scale: u8) -> String {
+    let (precision, scale, big) = decimal_digits(precision, scale);
+    let name = match big {
+        true => "BIGNUMERIC",
+        false => "NUMERIC",
     };
     format!("{name}({precision},{scale})")
 }
