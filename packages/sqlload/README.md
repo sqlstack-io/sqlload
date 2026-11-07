@@ -207,7 +207,7 @@ afterwards, so name it in `include`.
 ## Postgres change data capture
 
 `kind = "postgres_cdc"` streams a Postgres database's changes from a logical replication slot
-into a DuckDB or Snowflake target, or into a files target as a changelog (not Databricks yet).
+into a DuckDB, Snowflake or Databricks target, or into a files target as a changelog.
 The server needs
 `wal_level = logical`, and the connection's user needs the `REPLICATION` attribute and `SELECT`
 on the tables.
@@ -463,7 +463,8 @@ The Statement Execution API runs every statement in its own transaction, so each
 statement: `append` is the `COPY` into the table (into a staging table, then one `INSERT`, for a
 logged table), `delete_insert` is one `MERGE` that inserts the
 batch and deletes the rows it replaces, and `merge` is one `MERGE` on the key. The run record
-commits after it.
+commits after it. A `postgres_cdc` batch is one `MERGE` per table (a truncate in the batch is its
+`WHEN NOT MATCHED BY SOURCE` clause), or one `INSERT` for a changelog.
 
 `replace` loads into a build table, which then replaces the table with
 `CREATE OR REPLACE TABLE ... AS SELECT`. That keeps the table's history and grants, but Delta has no

@@ -427,6 +427,24 @@ pub(crate) struct LiveDatabricksTestCase {
     pub(crate) expected_rows: &'static str,
 }
 
+/// One `plan` of a `postgres_cdc` project and a line its output must hold.
+pub(crate) struct CdcPlanTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) expected_output: &'static str,
+}
+
+/// One `postgres_cdc` scenario against the live Databricks workspace, checked with a query there.
+pub(crate) struct LiveCdcTestCase {
+    pub(crate) description: &'static str,
+    /// More `sqlload.toml` text appended to the project's, such as another source.
+    pub(crate) extra_config: &'static str,
+    pub(crate) steps: &'static [CdcStep],
+    /// A Databricks query, `{schema}` standing for the qualified live schema, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// One query against the fake workspace with its answers delivered a given way.
 pub(crate) struct DatabricksAnswerTestCase {
     pub(crate) description: &'static str,
