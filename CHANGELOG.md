@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.15.0](https://github.com/sqlstack-io/sqlload/compare/v0.14.0...v0.15.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** sqlload state is now sqlload logged-state, with no alias. Replace sqlload state show|verify|reconcile|reset with sqlload logged-state show|verify|reconcile|reset.
+
+### Features
+
+* **cli:** rename sqlload state to sqlload logged-state ([#67](https://github.com/sqlstack-io/sqlload/issues/67)) ([78f7152](https://github.com/sqlstack-io/sqlload/commit/78f715213d9bb01451114ff21a0e231fa6cbc997))
+
+
+### Documentation
+
+* rewrite the README ([#55](https://github.com/sqlstack-io/sqlload/issues/55)) ([2df26d2](https://github.com/sqlstack-io/sqlload/commit/2df26d2027d6bac1ba1e5f545a022ffa62df23bc))
+* **site:** add the Databricks target page and list Databricks as supported ([#66](https://github.com/sqlstack-io/sqlload/issues/66)) ([9a940f0](https://github.com/sqlstack-io/sqlload/commit/9a940f03ed97573f5a25bfa2b2948f9ae04c25f4))
+* **site:** add the SQLLoad website and documentation ([#63](https://github.com/sqlstack-io/sqlload/issues/63)) ([6f232e2](https://github.com/sqlstack-io/sqlload/commit/6f232e269de9276e0c96914d1d9b756114ac2633))
+
 ## [0.14.0](https://github.com/sqlstack-io/sqlload/compare/v0.13.0...v0.14.0) (2026-11-06)
 
 

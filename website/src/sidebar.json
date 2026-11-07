@@ -28,6 +28,7 @@
 				"slug": "docs/targets"
 			},
 			"docs/targets/snowflake",
+			"docs/targets/databricks",
 			"docs/targets/duckdb",
 			"docs/targets/files"
 		]
