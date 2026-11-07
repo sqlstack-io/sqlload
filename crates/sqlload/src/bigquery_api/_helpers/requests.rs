@@ -31,15 +31,28 @@ pub(crate) async fn access_token(
         .form(&[("grant_type", JWT_BEARER_GRANT), ("assertion", &assertion)])
         .send()
         .await?;
-    let response = google_response(sent)
-        .await
-        .map_err(|error| match error.is_retryable() {
-            true => error,
-            false => ApiError::Auth(format!(
-                "Google refused the service-account key {}: {error}",
-                client.key.client_email
-            )),
-        })?;
+    let response =
+        google_response(sent)
+            .await
+            .map_err(|error| match (error.is_retryable(), error) {
+                (
+                    true,
+                    ApiError::Status {
+                        status,
+                        code,
+                        message,
+                    },
+                ) => ApiError::Status {
+                    status,
+                    code,
+                    message: format!("from Google's token endpoint: {message}"),
+                },
+                (true, error) => error,
+                (false, error) => ApiError::Auth(format!(
+                    "Google refused the service-account key {}: {error}",
+                    client.key.client_email
+                )),
+            })?;
     let body: serde_json::Value = response.json().await?;
     let token = body["access_token"]
         .as_str()

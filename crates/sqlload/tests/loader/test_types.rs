@@ -587,5 +587,5 @@ pub(crate) struct LiveRefusedLoadTestCase {
     /// Text the output must hold.
     pub(crate) expected_refusal: &'static str,
     /// How many datasets named for the load exist after it.
-    pub(crate) expected_datasets: String,
+    pub(crate) expected_datasets: &'static str,
 }

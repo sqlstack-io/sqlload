@@ -123,7 +123,7 @@ fn given_a_live_bigquery_dataset_when_streaming_arrow_rows_then_they_appear_only
     })
 }
 
-/// Skipped when `SQLLOAD_BIGQUERY_DATASET` is unset. BigQuery takes no rows yet, so `load` must refuse before it applies anything: no dataset is created, no file is read.
+/// Skipped when `SQLLOAD_BIGQUERY_DATASET` is unset. BigQuery takes no rows yet, so `load` must refuse right after planning, before it applies or loads anything: no dataset is created.
 #[test]
 fn given_a_live_bigquery_target_when_loading_then_it_is_refused_before_anything_is_applied()
 -> Result<(), String> {
@@ -133,8 +133,8 @@ fn given_a_live_bigquery_target_when_loading_then_it_is_refused_before_anything_
     let test_cases = [LiveRefusedLoadTestCase {
         description: "load into a BigQuery target refuses at plan, and the target's dataset is never created",
         expected_succeeded: false,
-        expected_refusal: "loading rows into target dev is not available yet; plan, apply and contract diff work, and nothing was applied",
-        expected_datasets: "0".to_owned(),
+        expected_refusal: "loading rows into BigQuery (target dev) is not available yet, so nothing was applied or loaded.",
+        expected_datasets: "0",
     }];
     run_async(async {
         let client = live_bigquery_client(&live)?;
@@ -146,7 +146,7 @@ fn given_a_live_bigquery_target_when_loading_then_it_is_refused_before_anything_
                 (
                     succeeded,
                     output.contains(test_case.expected_refusal),
-                    datasets
+                    datasets.as_str()
                 ),
                 (
                     test_case.expected_succeeded,

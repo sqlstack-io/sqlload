@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
+use crate::column_types::models::Warehouse;
 use crate::command::_helpers::output::confirm_reload;
 use crate::command::_helpers::project_file::replace_file;
 use crate::command::_helpers::signals::wait_for_signal;
@@ -214,7 +215,12 @@ async fn run_command(
     if let Some(problem) = follow.and_then(|_| follow_problem(&plan)) {
         return Err(problem);
     }
-    if let Some(problem) = loads.then(|| unloadable_problem(&plan)).flatten() {
+    let loaded = plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_none())
+        .map(|table| (table.spec.warehouse, table.spec.target.as_str()));
+    if let Some(problem) = loads.then(|| unloadable_problem(loaded)).flatten() {
         return Err(problem);
     }
     let flag = match (options.reload, options.resnapshot) {
@@ -258,20 +264,22 @@ async fn run_command(
     Ok((lines, planned && completed))
 }
 
-/// Why `load` cannot run `plan`: a table it would load goes to a target that takes no rows yet; refused before anything is applied, read or staged.
-fn unloadable_problem(plan: &ProjectPlan) -> Option<String> {
-    let targets: std::collections::BTreeSet<&str> = plan
-        .tables
-        .iter()
-        .filter(|table| {
-            table.schema.blocked.is_none() && !sql_adapter(table.spec.warehouse).loads_rows()
-        })
-        .map(|table| table.spec.target.as_str())
+/// Why `load` cannot load `tables` (each unblocked table's warehouse and target): one goes to a warehouse that takes no rows yet; refused before anything is applied or loaded.
+pub(crate) fn unloadable_problem<'a>(
+    tables: impl IntoIterator<Item = (Warehouse, &'a str)>,
+) -> Option<String> {
+    let refused: std::collections::BTreeSet<(Warehouse, &str)> = tables
+        .into_iter()
+        .filter(|(warehouse, _)| !sql_adapter(*warehouse).loads_rows())
         .collect();
-    (!targets.is_empty()).then(|| {
+    (!refused.is_empty()).then(|| {
+        let named: Vec<String> = refused
+            .into_iter()
+            .map(|(warehouse, target)| format!("{warehouse} (target {target})"))
+            .collect();
         format!(
-            "loading rows into target {} is not available yet; plan, apply and contract diff work, and nothing was applied",
-            targets.into_iter().collect::<Vec<&str>>().join(", ")
+            "loading rows into {} is not available yet, so nothing was applied or loaded. Fix: leave those tables out with --exclude; plan, apply and contract diff work against it",
+            named.join(", ")
         )
     })
 }

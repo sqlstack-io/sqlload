@@ -238,7 +238,7 @@ pub(crate) async fn stream_into_live_table(
     Ok(outcome)
 }
 
-/// Run `sqlload load --yes` on a project loading two days of files from `directory` into the dataset `<dataset>_load`, dropped first: whether it succeeded, its output, and how many datasets of that name exist after it.
+/// Run `sqlload load --yes` on a project loading two days of files from `directory` into the dataset `<dataset>_load`, dropped before and after: whether it succeeded, its output, and how many datasets of that name existed after it.
 pub(crate) async fn refused_live_load(
     client: &BigQueryClient,
     live: &LiveBigQuery,
@@ -280,6 +280,15 @@ pub(crate) async fn refused_live_load(
         &format!(
             "SELECT CAST(COUNT(*) AS STRING) FROM `region-{}`.INFORMATION_SCHEMA.SCHEMATA WHERE schema_name = '{dataset}'",
             live.location
+        ),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    run_query(
+        client,
+        &format!(
+            "DROP SCHEMA IF EXISTS `{}`.`{dataset}` CASCADE",
+            live.project
         ),
     )
     .await
