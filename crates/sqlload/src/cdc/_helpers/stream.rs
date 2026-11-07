@@ -452,6 +452,7 @@ impl CdcSource<'_> {
                 columns: String::new(),
                 max_attnum: None,
                 key: None,
+                left: String::new(),
             },
             snapshot_lsn,
         )
@@ -480,6 +481,7 @@ impl CdcSource<'_> {
                 columns: data_columns(&table.read_columns),
                 max_attnum: catalog.iter().map(|column| column.attnum).max(),
                 key: Some(key_list(&table.spec.unique_key)),
+                left: key_list(&[]),
             };
             log.record(&record, snapshot_lsn).await?;
             rows.insert(table.spec.destination.table.clone(), written);
@@ -586,7 +588,7 @@ impl CdcSource<'_> {
         tables: BTreeMap<u32, TableChanges>,
         mut spilled: BTreeMap<u32, SpillFile>,
     ) -> Result<BTreeMap<String, u64>, LoaderError> {
-        let mut planned: Vec<(u32, &TablePlan)> = Vec::with_capacity(tables.len());
+        let mut planned: Vec<(u32, &TablePlan, Vec<String>)> = Vec::with_capacity(tables.len());
         for (oid, changes) in &tables {
             let relation = &changes.relation;
             let Some(table) = self.tables.iter().find(|table| {
@@ -598,12 +600,12 @@ impl CdcSource<'_> {
                     self.cdc.publication, relation.schema, relation.table, self.name
                 )));
             };
-            self.refuse_unplanned(control, changes, table).await?;
-            planned.push((*oid, table));
+            let gone = self.gone_columns(control, changes, table).await?;
+            planned.push((*oid, table, gone));
         }
         let mut rows: BTreeMap<String, u64> = BTreeMap::new();
         let mut written = 0;
-        for (oid, table) in planned {
+        for (oid, table, gone) in planned {
             let Some(changes) = tables.get(&oid) else {
                 continue;
             };
@@ -624,7 +626,7 @@ impl CdcSource<'_> {
                 Publisher::open(plan, (self.destination, self.run.options), None).await?;
             let result = async {
                 while let Some(part) = parts.next_changes().map_err(LoaderError::Invalid)? {
-                    let batch = rows_batch(&part, relation, &table.read_columns)
+                    let batch = rows_batch(&part, relation, (&table.read_columns, &gone))
                         .map_err(LoaderError::Invalid)?;
                     publisher.stage(batch, None).await?;
                 }
@@ -646,39 +648,56 @@ impl CdcSource<'_> {
         Ok(rows)
     }
 
-    /// Refuse a batch of `table` holding columns its plan lacks that the source still has: they were added or renamed during this load. Columns dropped again since are left out, or a column added and dropped between loads would stop every load.
-    async fn refuse_unplanned(
+    /// The columns on `table`'s stream that its plan lacks and the source no longer has (dropped, or renamed, while their changes were unloaded); refuses the batch when the source still has one (added or renamed during this load), or has a column the plan lacks while one is gone (a rename during this load: the next load plans the new name and then sees the rename). Gone columns alone are left out, or a column added and dropped between loads would stop every load.
+    async fn gone_columns(
         &self,
         control: &Client,
         changes: &TableChanges,
         table: &TablePlan,
-    ) -> Result<(), LoaderError> {
+    ) -> Result<Vec<String>, LoaderError> {
         let unplanned = unplanned_columns(&changes.relation, &table.spec.source_table);
         if unplanned.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
-        let present: Vec<String> = control
+        let live: Vec<String> = control
             .query(
-                "SELECT attname::text FROM pg_catalog.pg_attribute WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped AND attname = ANY($2) ORDER BY attnum",
-                &[&changes.relation.oid, &unplanned],
+                "SELECT attname::text FROM pg_catalog.pg_attribute WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped ORDER BY attnum",
+                &[&changes.relation.oid],
             )
             .await
             .map_err(postgres)?
             .iter()
             .map(|row| row.get(0))
             .collect();
-        match present.is_empty() {
-            true => Ok(()),
+        let (present, gone): (Vec<String>, Vec<String>) =
+            unplanned.into_iter().partition(|name| live.contains(name));
+        let known: std::collections::BTreeSet<&str> = table
+            .spec
+            .source_table
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect();
+        let new_live: Vec<&String> = live
+            .iter()
+            .filter(|name| !known.contains(name.as_str()))
+            .collect();
+        let gained: Vec<String> = match gone.is_empty() {
+            true => present,
+            false => new_live.into_iter().cloned().collect(),
+        };
+        match gained.is_empty() {
+            true => Ok(gone),
             false => Err(LoaderError::Invalid(format!(
                 "{}.{} gained {} {} during this load; run it again, and the next load plans for {}",
                 changes.relation.schema,
                 changes.relation.table,
-                match present.len() {
+                match gained.len() {
                     1 => "column",
                     _ => "columns",
                 },
-                present.join(", "),
-                match present.len() {
+                gained.join(", "),
+                match gained.len() {
                     1 => "it",
                     _ => "them",
                 }
@@ -828,7 +847,7 @@ async fn catalog_columns(
 ) -> Result<Vec<CatalogColumn>, LoaderError> {
     Ok(client
         .query(
-            "SELECT a.attname::text, a.attnum, a.attisdropped, a.atthasdef OR a.atthasmissing FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0",
+            "SELECT a.attname::text, a.attnum, a.attisdropped, a.atthasdef OR a.atthasmissing OR a.attidentity <> '' OR a.attgenerated <> '' FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0",
             &[&table.schema, &table.name],
         )
         .await

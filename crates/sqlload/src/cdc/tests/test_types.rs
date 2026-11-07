@@ -26,8 +26,16 @@ pub(crate) struct StagedShapesTestCase {
     pub(crate) description: &'static str,
     pub(crate) transactions: Vec<Vec<Vec<u8>>>,
     pub(crate) columns: Vec<&'static str>,
-    pub(crate) expected_merge: Vec<&'static str>,
-    pub(crate) expected_changelog: Vec<&'static str>,
+    pub(crate) gone: Vec<&'static str>,
+    pub(crate) expected_merge: Result<Vec<&'static str>, &'static str>,
+    pub(crate) expected_changelog: Result<Vec<&'static str>, &'static str>,
+}
+
+/// Transactions on table 7, and the replica identity and key flags of its batch shape.
+pub(crate) struct UnionShapeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) transactions: Vec<Vec<Vec<u8>>>,
+    pub(crate) expected_shape: (char, Vec<bool>),
 }
 
 /// A table's snapshot record (`,id,a,` with highest column number 3 and key `,id,` unless the case says otherwise), its plan and catalog now, and the record to write or why it must be copied again.

@@ -45,7 +45,7 @@ fn given_a_table_changed_since_its_snapshot_when_the_slot_resumes_then_only_chan
             known: vec!["id", "a", "b"],
             catalog: with(vec![catalog_column("b", 4, DEFAULTED)]),
             expected_rewrite: Err(
-                "column b of t was added with a default, which fills existing rows without changes to stream; run `sqlload load --resnapshot` to copy every table again, or exclude the column",
+                "column b of t was added with a default (or as an identity or generated column), which fills existing rows without changes to stream; run `sqlload load --resnapshot` to copy every table again, or exclude the column",
             ),
         },
         ReshapeTestCase {
@@ -58,7 +58,66 @@ fn given_a_table_changed_since_its_snapshot_when_the_slot_resumes_then_only_chan
                 catalog_column("........pg.dropped.2........", 2, DROPPED),
                 catalog_column("........pg.dropped.3........", 3, DROPPED),
             ],
-            expected_rewrite: Ok(Some(record(",id,", Some(3), Some(",id,")))),
+            expected_rewrite: Ok(Some(SnapshotRecord {
+                left: ",a,".to_owned(),
+                ..record(",id,", Some(3), Some(",id,"))
+            })),
+        },
+        ReshapeTestCase {
+            description: "a column dropped and added back between loads has a number above the highest, so it is refused",
+            recorded: recorded(),
+            planned: (",id,a,", ",id,", true),
+            known: vec!["id", "a"],
+            catalog: vec![
+                catalog_column("id", 1, LIVE),
+                catalog_column("........pg.dropped.2........", 2, DROPPED),
+                catalog_column("........pg.dropped.3........", 3, DROPPED),
+                catalog_column("a", 4, LIVE),
+            ],
+            expected_rewrite: Err(
+                "t loads column a again after it stopped loading (dropped and added back, or excluded and included), so its destination values are stale; run `sqlload load --resnapshot` to copy every table again",
+            ),
+        },
+        ReshapeTestCase {
+            description: "a column recorded as no longer loaded and added back is refused",
+            recorded: SnapshotRecord {
+                left: ",a,".to_owned(),
+                ..record(",id,", Some(3), Some(",id,"))
+            },
+            planned: (",id,a,", ",id,", true),
+            known: vec!["id", "a"],
+            catalog: vec![
+                catalog_column("id", 1, LIVE),
+                catalog_column("........pg.dropped.2........", 2, DROPPED),
+                catalog_column("........pg.dropped.3........", 3, DROPPED),
+                catalog_column("a", 4, LIVE),
+            ],
+            expected_rewrite: Err(
+                "t loads column a again after it stopped loading (dropped and added back, or excluded and included), so its destination values are stale; run `sqlload load --resnapshot` to copy every table again",
+            ),
+        },
+        ReshapeTestCase {
+            description: "a column excluded since the snapshot and included again is refused",
+            recorded: SnapshotRecord {
+                left: ",a,".to_owned(),
+                ..record(",id,", Some(3), Some(",id,"))
+            },
+            planned: (",id,a,", ",id,", true),
+            known: vec!["id", "a"],
+            catalog: base(),
+            expected_rewrite: Err(
+                "t loads column a again after it stopped loading (dropped and added back, or excluded and included), so its destination values are stale; run `sqlload load --resnapshot` to copy every table again",
+            ),
+        },
+        ReshapeTestCase {
+            description: "a column planned and gone again by the catalog read asks for a rerun",
+            recorded: recorded(),
+            planned: (",id,a,b,", ",id,", true),
+            known: vec!["id", "a", "b"],
+            catalog: base(),
+            expected_rewrite: Err(
+                "t loads column b, which the source table no longer has: it changed shape during this load, so run it again",
+            ),
         },
         ReshapeTestCase {
             description: "a renamed column keeps its number, so it is refused",
@@ -165,7 +224,7 @@ fn given_snapshot_records_when_reading_them_then_old_and_new_forms_parse_and_the
             rows: vec![
                 "5\t2026-01-01T00:00:00.000000Z\t\t",
                 "5\t2026-01-01T00:00:01.000000Z\tt\t,id,a,",
-                "5\t2026-01-02T00:00:00.000000Z\tt\t,id,a,b,\t4\t,id,",
+                "5\t2026-01-02T00:00:00.000000Z\tt\t,id,a,b,\t4\t,id,\t,",
                 "5\t2026-01-01T00:00:02.000000Z\tu\t,k,",
                 "3\t2025-12-01T00:00:00.000000Z\t\t",
                 "3\t2025-12-01T00:00:01.000000Z\tv\t,x,",

@@ -235,6 +235,49 @@ const COLUMN_ADDED_CRASH: [CdcStep; 4] = [
     step("", APP, "", (true, "0 rows")),
 ];
 
+const COLUMN_ADDED_UNWRITTEN: [CdcStep; 3] = [
+    step("", APP, "", (true, "loaded")),
+    step(
+        "UPDATE public.items SET name = 'one!' WHERE id = 1; ALTER TABLE public.items ADD COLUMN c int4;",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step("", APP, "", (true, "0 rows")),
+];
+
+const IDENTITY_ADDED: [CdcStep; 2] = [
+    step("", APP, "", (true, "loaded")),
+    step(
+        "ALTER TABLE public.items ADD COLUMN n int8 GENERATED ALWAYS AS IDENTITY",
+        APP,
+        "",
+        (
+            false,
+            "column n of app__items was added with a default (or as an identity",
+        ),
+    ),
+];
+
+const COLUMN_READDED: [CdcStep; 3] = [
+    step("", APP, "", (true, "loaded")),
+    step(
+        "ALTER TABLE public.items DROP COLUMN name",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "ALTER TABLE public.items ADD COLUMN name text",
+        APP,
+        "",
+        (
+            false,
+            "app__items loads column name again after it stopped loading",
+        ),
+    ),
+];
+
 const COLUMN_DROPPED_INSIDE: [CdcStep; 3] = [
     step("", BOTH, "", (true, "loaded")),
     step(
@@ -658,6 +701,33 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             steps: &COLUMN_ADDED_CRASH,
             check_query: "SELECT string_agg(id || ':' || name || ':' || COALESCE(CAST(c AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.app__items",
             expected_result: "1:one!:-,2:two:8,3:three:7",
+        },
+        CdcScenarioTestCase {
+            description: "a column added with no change after it loads the changes before it, not a rerun loop",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &COLUMN_ADDED_UNWRITTEN,
+            check_query: "SELECT string_agg(id || ':' || name || ':' || COALESCE(CAST(c AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.app__items",
+            expected_result: "1:one!:-,2:two:-",
+        },
+        CdcScenarioTestCase {
+            description: "an identity column added fills existing rows without changes, so it is refused",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &IDENTITY_ADDED,
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__items",
+            expected_result: "2",
+        },
+        CdcScenarioTestCase {
+            description: "a column dropped, then added back under its name, is refused, since its destination values are stale",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &COLUMN_READDED,
+            check_query: "SELECT string_agg(id || ':' || name, ',' ORDER BY id) FROM raw.app__items",
+            expected_result: "1:one,2:two",
         },
         CdcScenarioTestCase {
             description: "a middle column dropped inside a transaction keeps each change's values in their columns",

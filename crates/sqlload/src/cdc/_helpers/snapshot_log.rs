@@ -128,13 +128,13 @@ impl SnapshotLog<'_> {
     }
 }
 
-/// A record's `columns` text: the data columns, then, tab-separated, the highest column number and the key when it has them.
+/// A record's `columns` text: the data columns, then, tab-separated, the highest column number, the key and the columns it stopped loading, when it has them.
 fn record_columns(record: &SnapshotRecord) -> String {
     match (record.max_attnum, &record.key) {
         (Some(highest), Some(key)) => {
             format!(
-                "{}{FIELD_SEPARATOR}{highest}{FIELD_SEPARATOR}{key}",
-                record.columns
+                "{}{FIELD_SEPARATOR}{highest}{FIELD_SEPARATOR}{key}{FIELD_SEPARATOR}{}",
+                record.columns, record.left
             )
         }
         _ => record.columns.clone(),
@@ -147,18 +147,19 @@ pub(crate) fn read_record(row: &str) -> Result<(i64, String, SnapshotRecord), St
     let fields: Vec<&str> = row.split(FIELD_SEPARATOR).collect();
     let (lsn, recorded_at, table, columns, numbered) = match fields.as_slice() {
         [lsn, recorded_at, table, columns] => (lsn, recorded_at, table, columns, None),
-        [lsn, recorded_at, table, columns, highest, key] => {
-            (lsn, recorded_at, table, columns, Some((highest, key)))
+        [lsn, recorded_at, table, columns, highest, key, left] => {
+            (lsn, recorded_at, table, columns, Some((highest, key, left)))
         }
         _ => return Err(unreadable()),
     };
     let lsn = lsn.parse::<i64>().map_err(|_| unreadable())?;
-    let (max_attnum, key) = match numbered {
-        Some((highest, key)) => (
+    let (max_attnum, key, left) = match numbered {
+        Some((highest, key, left)) => (
             Some(highest.parse::<i16>().map_err(|_| unreadable())?),
             Some((*key).to_owned()),
+            (*left).to_owned(),
         ),
-        None => (None, None),
+        None => (None, None, String::new()),
     };
     Ok((
         lsn,
@@ -168,6 +169,7 @@ pub(crate) fn read_record(row: &str) -> Result<(i64, String, SnapshotRecord), St
             columns: (*columns).to_owned(),
             max_attnum,
             key,
+            left,
         },
     ))
 }

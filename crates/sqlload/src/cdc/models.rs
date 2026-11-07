@@ -125,13 +125,14 @@ pub enum StreamStep<'a> {
     Commit { lsn: u64, end_lsn: u64, time: i64 },
 }
 
-/// A captured table's snapshot record: the data columns it was copied with (`,a,b,`) or last resumed with, the highest column number the table had then (dropped columns included), and its key (`,id,`). Records written before column numbers were kept carry neither.
+/// A captured table's snapshot record: the data columns it was copied with (`,a,b,`) or last resumed with, the highest column number the table had then (dropped columns included), its key (`,id,`), and the columns it stopped loading since its snapshot (`,c,`), whose destination values no longer follow the source. Records written before column numbers were kept carry none of the last three (`left` empty).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRecord {
     pub table: String,
     pub columns: String,
     pub max_attnum: Option<i16>,
     pub key: Option<String>,
+    pub left: String,
 }
 
 /// A source table's column in the catalog now.
@@ -140,7 +141,7 @@ pub struct CatalogColumn {
     pub name: String,
     pub attnum: i16,
     pub dropped: bool,
-    /// It has a default (`atthasdef`), or rows written before it was added read a stored value (`atthasmissing`): values the stream never carried.
+    /// It has a default (`atthasdef`), rows written before it was added read a stored value (`atthasmissing`), or it is an identity or generated column: values the stream never carried.
     pub has_default: bool,
 }
 

@@ -137,25 +137,45 @@ fn row_text(change: &Change) -> String {
     )
 }
 
-/// A pgoutput Relation message for table 7 `public.t` with text `columns`, the first its key.
+/// A pgoutput Relation message for table 7 `public.t` with text `columns`, the first its key, under the default replica identity.
 pub(crate) fn relation_message(columns: &[&str]) -> Vec<u8> {
+    identity_relation_message(columns, 'd')
+}
+
+/// A pgoutput Relation message for table 7 `public.t` with text `columns` under replica `identity`: `f` keys every column, others only the first.
+pub(crate) fn identity_relation_message(columns: &[&str], identity: char) -> Vec<u8> {
     let count = i16::try_from(columns.len()).unwrap_or(i16::MAX);
     let mut bytes = [
         vec![b'R'],
         7_u32.to_be_bytes().to_vec(),
         cstring("public"),
         cstring("t"),
-        vec![b'd'],
+        vec![u8::try_from(identity).unwrap_or(b'd')],
         count.to_be_bytes().to_vec(),
     ]
     .concat();
     for (index, name) in columns.iter().enumerate() {
-        bytes.push(u8::from(index == 0));
+        bytes.push(u8::from(index == 0 || identity == 'f'));
         bytes.extend(cstring(name));
         bytes.extend(25_u32.to_be_bytes());
         bytes.extend((-1_i32).to_be_bytes());
     }
     bytes
+}
+
+/// Table 7's batch shape after `transactions` (see [`committed`]): its replica identity and each column's key flag.
+pub(crate) fn buffered_shape(transactions: &[Vec<Vec<u8>>]) -> Result<(char, Vec<bool>), String> {
+    let buffer = committed(transactions, usize::MAX)?;
+    let table = buffer.tables.get(&7).ok_or("table 7 has no changes")?;
+    Ok((
+        table.relation.replica_identity,
+        table
+            .relation
+            .columns
+            .iter()
+            .map(|column| column.key)
+            .collect(),
+    ))
 }
 
 /// A pgoutput Insert into table 7 of text `values`.
@@ -219,12 +239,13 @@ pub(crate) fn buffered_seqs(messages: &[Vec<u8>], spill_bytes: usize) -> Result<
     Ok(seqs)
 }
 
-/// The rows table 7 stages after `transactions` (see [`committed`]) for `apply` keyed by `id`, reading text `columns`: each `values|unchanged`, data values comma-separated with `-` for NULL, then the `_sqlload_unchanged` flags (`-` for none); sorted.
+/// The rows table 7 stages after `transactions` (see [`committed`]) for `apply` keyed by `id`, reading text `columns`, with `gone` the stream columns the source no longer has: each `values|unchanged`, data values comma-separated with `-` for NULL, then the `_sqlload_unchanged` flags (`-` for none); sorted.
 pub(crate) fn staged_texts(
     transactions: &[Vec<Vec<u8>>],
     (apply, spill_bytes): (ChangeApply, usize),
-    columns: &[&str],
+    (columns, gone): (&[&str], &[&str]),
 ) -> Result<Vec<String>, String> {
+    let gone: Vec<String> = gone.iter().map(|name| (*name).to_owned()).collect();
     let mut buffer = committed(transactions, spill_bytes)?;
     let table = buffer.tables.remove(&7).ok_or("table 7 has no changes")?;
     let key = ["id".to_owned()];
@@ -248,7 +269,7 @@ pub(crate) fn staged_texts(
         std::iter::from_fn(|| parts.next_changes().transpose()).collect::<Result<_, String>>()?;
     let mut rows: Vec<String> = Vec::new();
     for part in staged {
-        let batch = rows_batch(&part, &table.relation, &read)?;
+        let batch = rows_batch(&part, &table.relation, (&read, &gone))?;
         let texts: Vec<Vec<String>> = batch
             .columns()
             .iter()
@@ -289,6 +310,7 @@ pub(crate) fn record(columns: &str, max_attnum: Option<i16>, key: Option<&str>) 
         columns: columns.to_owned(),
         max_attnum,
         key: key.map(str::to_owned),
+        left: max_attnum.map_or_else(String::new, |_| ",".to_owned()),
     }
 }
 

@@ -2,7 +2,9 @@
 
 use crate::cdc::_helpers::pgoutput::decode_message;
 use crate::cdc::_helpers::spill::SpillFile;
-use crate::cdc::constants::{CHANGE_OVERHEAD_BYTES, POSTGRES_EPOCH_MICROS, VALUE_OVERHEAD_BYTES};
+use crate::cdc::constants::{
+    CHANGE_OVERHEAD_BYTES, FULL_IDENTITY, POSTGRES_EPOCH_MICROS, VALUE_OVERHEAD_BYTES,
+};
 use crate::cdc::models::{
     Change, ChangeBuffer, ChangeOp, PgOutputMessage, Relation, RelationColumn, StreamStep,
     TableChanges, TupleValue,
@@ -150,7 +152,7 @@ fn file_message(
     }
 }
 
-/// `current` grown by `newest`: its columns in order, with type and key from `newest` (no longer a key once dropped), then the columns `newest` adds; replica identity from `newest`.
+/// `current` grown by `newest`: its columns in order, with type from `newest`, then the columns `newest` adds. A column is a key only while every shape that had it keys it, and the replica identity is full only while every shape was, so changes written under a narrower identity still need their old key.
 fn union_shape(current: &Relation, newest: &Relation) -> Relation {
     let mut columns: Vec<RelationColumn> = current
         .columns
@@ -158,11 +160,16 @@ fn union_shape(current: &Relation, newest: &Relation) -> Relation {
         .map(|column| {
             named(newest, &column.name)
                 .and_then(|position| newest.columns.get(position))
-                .cloned()
-                .unwrap_or_else(|| RelationColumn {
-                    key: false,
-                    ..column.clone()
-                })
+                .map_or_else(
+                    || RelationColumn {
+                        key: false,
+                        ..column.clone()
+                    },
+                    |now| RelationColumn {
+                        key: column.key && now.key,
+                        ..now.clone()
+                    },
+                )
         })
         .collect();
     for column in &newest.columns {
@@ -174,8 +181,13 @@ fn union_shape(current: &Relation, newest: &Relation) -> Relation {
             columns.push(column.clone());
         }
     }
+    let replica_identity = match current.replica_identity {
+        FULL_IDENTITY => newest.replica_identity,
+        narrower => narrower,
+    };
     Relation {
         columns,
+        replica_identity,
         ..newest.clone()
     }
 }
