@@ -418,7 +418,7 @@ impl CdcSource<'_> {
         }
         let mut rewrites: Vec<(i64, SnapshotRecord)> = Vec::new();
         let mut problems: Vec<String> = Vec::new();
-        for table in self.tables.iter().filter(|table| table.exists) {
+        for table in self.tables.iter().filter(|table| holds_rows(table)) {
             let name = table.spec.destination.table.as_str();
             let Some((copied_at, recorded)) =
                 snapshotted.iter().find(|(_, record)| record.table == name)
@@ -472,7 +472,7 @@ impl CdcSource<'_> {
             .tables
             .iter()
             .filter(|table| {
-                !table.exists || !recorded.contains(&table.spec.destination.table.as_str())
+                !holds_rows(table) || !recorded.contains(&table.spec.destination.table.as_str())
             })
             .copied()
             .collect();
@@ -480,7 +480,7 @@ impl CdcSource<'_> {
         let mut held: Vec<&str> = Vec::new();
         for table in &unrecorded {
             let destination = &table.spec.destination;
-            let earlier_rows = table.exists
+            let earlier_rows = holds_rows(table)
                 && earlier.contains(&destination.table)
                 && log.holds_before(destination, newest).await?;
             held.extend(earlier_rows.then_some(destination.table.as_str()));
@@ -616,7 +616,7 @@ impl CdcSource<'_> {
             })
     }
 
-    /// Copy `tables`, which have no snapshot from the slot (joined since, or a snapshot stopped part-way), alone: `missing` ones join SQLLoad's publication first, then a temporary slot exports a snapshot they are copied under, and each is recorded at that slot's consistent point, so the stream drops their changes from before it. The slot and every other table are left as they are; returns the rows each table wrote.
+    /// Copy `tables`, which have no snapshot from the slot (joined since, or a snapshot stopped part-way) or no destination table or files to hold it (dropped or deleted since), alone: `missing` ones join SQLLoad's publication first, then a temporary slot exports a snapshot they are copied under, and each is recorded at that slot's consistent point, so the stream drops their changes from before it. The slot and every other table are left as they are; returns the rows each table wrote.
     async fn backfill(
         &self,
         control: &Client,
@@ -677,7 +677,7 @@ impl CdcSource<'_> {
         drop(session);
         tracing::info!(
             tables = tables.len(),
-            "copying tables that joined the source alone, under their own snapshot"
+            "copying tables that joined the source, or whose destination is gone, alone, under their own snapshot"
         );
         let rows = self
             .copy_snapshot(&client, tables, (copy_lsn, "backfill"))
@@ -1455,7 +1455,8 @@ async fn newest_change_lsn(table: &TablePlan) -> Result<Option<i64>, LoaderError
         .map(|partition| newest_load_files(&partition.files))
         .unwrap_or_default();
     for file in newest {
-        let (load, number) = load_part(&file.relative_key).unwrap_or_default();
+        let (load, number) = load_part(&file.relative_key)
+            .unwrap_or_else(|| (file.relative_key.clone(), (0, String::new())));
         let later = last_parts
             .get(&load)
             .is_none_or(|(seen, _)| number >= *seen);
@@ -1484,4 +1485,12 @@ fn load_part(key: &str) -> Option<(String, (usize, String))> {
     let (load, number) = key.strip_suffix(PARQUET_SUFFIX)?.rsplit_once('-')?;
     let digits = !number.is_empty() && number.chars().all(|digit| digit.is_ascii_digit());
     digits.then(|| (load.to_owned(), (number.len(), number.to_owned())))
+}
+
+/// Whether `table`'s destination holds rows: the warehouse table exists, or the files folder holds committed files (an unfinished load's files, which its next write deletes, do not count).
+fn holds_rows(table: &TablePlan) -> bool {
+    table
+        .output
+        .as_ref()
+        .map_or(table.exists, |output| output.listed > 0)
 }

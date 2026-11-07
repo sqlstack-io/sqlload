@@ -1839,7 +1839,17 @@ pub(crate) fn delete_items_folder(root: &std::path::Path) -> Result<(), String> 
 
 /// Plant an unfinished load in `out/log/orders/` under `root`: its `writing` marker and a file of a change far past any real one, which no load may count as written.
 pub(crate) fn plant_unfinished_commit(root: &std::path::Path) -> Result<(), String> {
-    let folder = root.join("out/log/orders");
+    plant_unfinished_load(&root.join("out/log/orders"))
+}
+
+/// Delete `out/log/items/` under `root`, then leave in its place what a copy into it stopped mid-write leaves: an unfinished load, which does not count as the table's rows.
+pub(crate) fn replace_items_with_unfinished_copy(root: &std::path::Path) -> Result<(), String> {
+    delete_items_folder(root)?;
+    plant_unfinished_load(&root.join("out/log/items"))
+}
+
+/// Put an unfinished load in the table folder `folder`: its `writing` marker and one file whose `_sqlload_lsn` is far past any real change.
+fn plant_unfinished_load(folder: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(folder.join("_sqlload/pending")).map_err(|error| error.to_string())?;
     std::fs::write(folder.join("_sqlload/pending/planted.00001"), "writing")
         .map_err(|error| error.to_string())?;

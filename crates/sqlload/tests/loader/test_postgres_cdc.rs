@@ -6,8 +6,8 @@ use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 use crate::helpers::{
     CDC_CHANGES, cdc_files_project, cdc_project, crashed_batch, crashed_files_batch,
     delete_items_folder, download_out, duckdb_text, local_store, nothing_planted,
-    plant_unfinished_commit, run_async, run_cdc_steps, run_sqlload, seaweedfs_store, spawn_sqlload,
-    step, stop_sqlload,
+    plant_unfinished_commit, replace_items_with_unfinished_copy, run_async, run_cdc_steps,
+    run_sqlload, seaweedfs_store, spawn_sqlload, step, stop_sqlload,
 };
 use crate::test_types::{
     CdcFilesTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, QuietSlotTestCase,
@@ -1850,6 +1850,17 @@ fn given_a_postgres_cdc_changelog_into_files_when_loads_stop_at_each_restart_poi
             spill_bytes: "",
             extra_config: "",
             plant: delete_items_folder,
+            check_query: "SELECT string_agg(_sqlload_op || ':' || id || ':' || name, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM read_parquet('{root}/out/log/items/*.parquet')",
+            expected_result: "snapshot:1:one!,snapshot:2:two,snapshot:3:three",
+        },
+        CdcFilesTestCase {
+            description: "a recorded table whose folder holds only a copy stopped mid-write is copied again alone",
+            tag: "17-alpine",
+            steps: &FILES_FOLDER_DELETED,
+            store: local_store,
+            spill_bytes: "",
+            extra_config: "",
+            plant: replace_items_with_unfinished_copy,
             check_query: "SELECT string_agg(_sqlload_op || ':' || id || ':' || name, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM read_parquet('{root}/out/log/items/*.parquet')",
             expected_result: "snapshot:1:one!,snapshot:2:two,snapshot:3:three",
         },

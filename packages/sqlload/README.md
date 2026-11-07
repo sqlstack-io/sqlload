@@ -276,7 +276,8 @@ deletes = "soft"          # soft (default) | hard; merge only
   the table; add it to a named one yourself. The copy's snapshot comes from a temporary slot, so
   one slot under `max_replication_slots` must be free when it starts, and the table's changes from
   before the copy are skipped. `plan` shows a table not yet in the destination as
-  `snapshot copy, then …`.
+  `snapshot copy, then …`. A table whose destination table was dropped (or files folder deleted)
+  is copied alone the same way.
   - A table leaving `include` still needs `--resnapshot`, which also sets SQLLoad's own
     publication to `include` again.
   - A table that rejoins after that, while its destination still holds rows captured before,
