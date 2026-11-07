@@ -1,4 +1,4 @@
-//! `sqlload state`: show, verify, reconcile or reset the run log of the selected logged tables.
+//! `sqlload logged-state`: show, verify, reconcile or reset the run log of the selected logged tables.
 
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use std::collections::BTreeMap;
@@ -44,7 +44,7 @@ pub async fn state_command(
             StateKind::Verify if table.schema.blocked.is_some() => {
                 ok = false;
                 lines.push(format!(
-                    "{name}  blocked: sqlload state show {name} lists why"
+                    "{name}  blocked: sqlload logged-state show {name} lists why"
                 ));
                 None
             }
@@ -53,7 +53,7 @@ pub async fn state_command(
                 ok &= !disagrees;
                 lines.push(match (&logged.disagreement, &logged.current) {
                     (Some(data), Some(current)) => format!(
-                        "{name}  disagrees: the log has {} but the data's maximum is {data}; sqlload state reconcile --yes (or the next load) adopts the data's",
+                        "{name}  disagrees: the log has {} but the data's maximum is {data}; sqlload logged-state reconcile --yes (or the next load) adopts the data's",
                         current.cursor_after.as_deref().unwrap_or("nothing")
                     ),
                     _ => format!("{name}  ok  {}", describe_state(logged.current.as_ref())),

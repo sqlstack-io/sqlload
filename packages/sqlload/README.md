@@ -140,8 +140,39 @@ columns nothing declares (`missing_declaration`); SQLLoad's own `_sqlload_*` col
 It exits 0 when every table agrees and 1 otherwise, including when a source cannot be listed or
 a selector matches nothing. `--from TARGET` reads every table as if its source loaded into that
 target, in that target's database and schema (declared types are read for its warehouse), and `--json` prints the report as one document with
-`sqb contract diff --json`'s field names. Tables on a files target are reported as problems: they
-have no catalog to compare yet.
+`sqb contract diff --json`'s field names. A table on a files target is compared with the schema
+`plan` uses for it: the footers of the newest load in its newest partition. `--all-files` also reads
+every file's footer under the table's folder, ignoring `max_footer_reads`, and reports each
+column whose files differ from that load: another type (`files_type_mismatch`), absent
+(`files_missing_column`), or held only by older files (`files_extra_column`), naming the files.
+A file it cannot read, or a store error, makes that table `inspection_unavailable`. It changes
+nothing; on warehouse tables it adds nothing.
+
+`--source` also compares what each table's source would load, from the catalog or file footers
+listed as `plan` lists them, with the live table, for the columns no declaration names: a column the
+source has that the table lacks (`source_new_column`), one it would load as another type
+(`source_type_mismatch`), and a live column the source no longer has (`source_missing_column`).
+A type counts only when the live column does not hold it as it is. These findings carry a
+`source_type` field in `--json`. Tables under `contract = "enforced"` add none, since their
+declaration decides what loads. A Python table's columns are inferred only when it runs, so it is
+`inspection_unavailable` under `--source` and makes the command exit 1: declare its columns, leave
+it out with `--exclude`, or compare after a load.
+
+`sqlload contract generate [SELECTOR ...]` takes the same selection and options and proposes the
+declarations that adopt each live table: every live column nothing declares, with its live type.
+`--write` writes them into the table's `columns` in `sqlload.toml`, creating
+`[sources.app.tables."public.orders"]` when needed and keeping the rest of the file (comments,
+layout) as it was; the edited file must still parse, or nothing is written. Declared columns are
+left alone unless `--overwrite` is also given, which retypes them to their live type and removes
+declared columns the table lacks. A database or files table declares only columns its source
+has, in the source's spelling; masked columns stay under `mask`. Python tables are never edited:
+the report prints the whole `columns={...}` to paste into the table's declaration. A table found
+by an `include` pattern with no description is not written, since its new entry would then need
+one. The file is replaced atomically with its permissions kept, and only if nobody changed it
+while the command ran. Adopted columns become pinned types, so a CSV or JSON source converts
+them while reading. With `--from`, a table whose own target is another kind of warehouse is not
+adopted (its types could be ones its own warehouse cannot take). The exit code is that of
+`diff`, after the write.
 
 ## Descriptions
 
@@ -267,6 +298,49 @@ those files go through SQLLoad, which `plan` warns is much slower.
 
 Files sources add `_sqlload_source_row`, a row's number in its file from 1.
 
+### How rows reach Databricks
+
+A Databricks target loads into a Unity Catalog SQL warehouse through a volume it stages files in.
+It signs in with a service principal's OAuth machine-to-machine credentials:
+
+```toml
+[connections.lakehouse]
+kind = "databricks"
+host = "${ENV:DATABRICKS_HOST}"
+client_id = "${ENV:DATABRICKS_CLIENT_ID}"
+client_secret = "${ENV:DATABRICKS_CLIENT_SECRET}"
+warehouse_id = "${ENV:DATABRICKS_WAREHOUSE_ID}"
+catalog = "main"
+volume = "main.raw.sqlload_stage"   # catalog.schema.volume
+```
+
+The service principal needs `USE CATALOG`, `USE SCHEMA` and `CREATE TABLE` where it loads
+(`CREATE SCHEMA` too when the schema does not exist yet), ownership of or `MANAGE` on the tables it
+replaces or rewrites, and `READ VOLUME` and `WRITE VOLUME` on the volume. `debug` checks that the
+volume lists.
+
+Each batch is written as Parquet to `<volume>/sqlload/<load id>/<batch>/` and loaded with one
+`COPY INTO`. The batch's folder is removed once the `COPY` commits, and when it fails; the next load
+removes what failed runs left after a day, deleting only files it listed as old and folders that
+are empty, so a load writing meanwhile keeps its files. This is the only route: there is no `INSERT`
+fallback. Files of a files source pass through SQLLoad on the way to the volume.
+
+The Statement Execution API runs every statement in its own transaction, so each write is one
+statement: `append` is the `COPY` into the table (into a staging table, then one `INSERT`, for a
+logged table), `delete_insert` is one `MERGE` that inserts the
+batch and deletes the rows it replaces, and `merge` is one `MERGE` on the key. The run record
+commits after it.
+
+`replace` loads into a build table, which then replaces the table with
+`CREATE OR REPLACE TABLE ... AS SELECT`. That keeps the table's history and grants, but Delta has no
+metadata-only swap, so the rows are copied once more. That copy is the expected cost of `replace`
+on Databricks.
+
+Types without an exact Databricks equivalent are lossy, and `plan` says so: times and UUIDs are
+stored as text, and `TIMESTAMP` keeps the instant but not the offset. JSON loads as `VARIANT`.
+Added columns use one `ADD COLUMNS`. Widening a type uses Delta's type widening where it applies
+and rewrites the table where it does not, such as an integer becoming a float.
+
 ### How files reach DuckDB
 
 Parquet files in S3 or a local folder load into DuckDB directly: DuckDB reads them with
@@ -330,11 +404,11 @@ Each successful run appends a record to `_sqlload_runs` in the table's schema (o
 `<table folder>/_sqlload/runs/` in a files target), in the same transaction as the data where the
 warehouse allows it, so a failed load never moves the position. A table with a `cursor_column`
 also logs the data's cursor; when the log and the data disagree, the data wins and the load appends
-a visible reconciliation. `sqlload state show`, `verify`, `reconcile --yes` and
+a visible reconciliation. `sqlload logged-state show`, `verify`, `reconcile --yes` and
 `reset --to VALUE --yes` (or `--clear`) inspect and correct the log; `--reload` starts over.
 `reset` needs the tables or sources to reset named. On a table with a `cursor_column`,
 `reset --to` sets the cursor and keeps `ctx.state`; on one without, it sets `ctx.state` (JSON).
 `--clear` wipes both. A record SQLLoad cannot read (corrupt, or written by a newer version)
-blocks only its table; `state show` lists it and a `reset` starts a new position after it.
+blocks only its table; `logged-state show` lists it and a `reset` starts a new position after it.
 Deleting the log is safe: the next run reads as a stateless one would.
 

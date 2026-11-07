@@ -13,6 +13,7 @@ pub mod command;
 pub mod config;
 pub mod contract;
 pub mod copy;
+pub mod databricks_api;
 pub mod delivery;
 pub mod envelope;
 pub mod exporter;

@@ -10,6 +10,7 @@ pub async fn ddl_guard(destination: &Destination) -> Option<OwnedMutexGuard<()>>
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Some(duckdb.ddl.clone()),
         Destination::Snowflake(snowflake) => Some(snowflake.ddl.clone()),
+        Destination::Databricks(databricks) => Some(databricks.ddl.clone()),
         Destination::Files(_) => None,
     };
     match lock {

@@ -1,15 +1,11 @@
 //! Plan one table into a files target: its folder, unfinished loads, the live schema from the newest load's footers, and the cursor window.
 
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::files::main::newest_load_files::newest_load_files;
 use crate::adapters::files::main::read_table_state::read_table_state;
 use crate::adapters::files::main::write_notes::write_notes;
-use crate::adapters::files::models::{FilesDestination, TableFiles};
-use crate::column_types::models::ColumnType;
+use crate::adapters::files::models::FilesDestination;
 use crate::file_store::main::open_folder::open_folder;
-use crate::file_store::models::{OpenFolder, StoredFile};
-use crate::files_source::main::footer_columns::footer_columns;
-use crate::files_source::main::read_footers::read_footers;
+use crate::loader::_helpers::destination::{live_schema, table_folder};
 use crate::loader::_helpers::table_plan::{CommitRequest, commit_rule};
 use crate::loader::_helpers::table_plan::{
     blocked_plan, blocked_table, check_output, desired_columns, read_columns, read_window,
@@ -17,13 +13,11 @@ use crate::loader::_helpers::table_plan::{
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_files_window::files_window;
-use crate::loader::main::_table_folder::table_folder;
 use crate::loader::models::{
     CommitRule, FilesContext, FilesOutput, FilesWindowRequest, LiveFiles, PlanOptions, TablePlan,
     TableSpec, WholeReason,
 };
 use crate::project::models::FilesFormat;
-use crate::schema_plan::models::LiveColumn;
 
 /// One table's plan against the files already in its folder.
 pub(in crate::loader) async fn plan_files_table(
@@ -121,42 +115,6 @@ pub(in crate::loader) async fn plan_files_table(
             pending: state.pending,
         }),
     })
-}
-
-/// The schema of the newest load's files in the newest partition, or why it cannot be read (too many footers, conflicting types).
-async fn live_schema(
-    folder: &OpenFolder,
-    listed: &TableFiles,
-    max_footer_reads: usize,
-) -> Result<Result<LiveFiles, Vec<String>>, LoaderError> {
-    let newest: Vec<StoredFile> = listed
-        .partitions
-        .last()
-        .map(|partition| newest_load_files(&partition.files))
-        .unwrap_or_default();
-    if newest.len() > max_footer_reads {
-        return Ok(Err(vec![format!(
-            "the newest load in {} wrote {} files, more footers than max_footer_reads = {max_footer_reads} allows reading for its schema; raise max_footer_reads on the target",
-            folder.location,
-            newest.len()
-        )]));
-    }
-    let footers = read_footers(folder, &newest).await?;
-    let (columns, conflicts) = footer_columns(&footers);
-    if !conflicts.is_empty() {
-        return Ok(Err(conflicts));
-    }
-    let live: Option<Vec<LiveColumn>> = (!footers.is_empty()).then(|| {
-        columns
-            .into_iter()
-            .map(|column| LiveColumn {
-                name: column.name,
-                column_type: column.column_type.unwrap_or_else(ColumnType::Native),
-                fraction_digits: None,
-            })
-            .collect()
-    });
-    Ok(Ok(LiveFiles { footers, live }))
 }
 
 /// The table's context, or its blocked plan (marked existing when its folder holds data files).

@@ -156,6 +156,22 @@ pub struct ResolvedTables {
     pub problems: Vec<String>,
 }
 
+/// The selected tables of one project for `contract`, before any destination is read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SelectedTables {
+    pub tables: Vec<SelectedTable>,
+    /// Problems with sources, tables' settings or selectors.
+    pub problems: Vec<String>,
+}
+
+/// One selected table and what its source would load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedTable {
+    pub spec: TableSpec,
+    /// The columns `plan` would ask the table to have, from its source's catalog or file footers as listed, pinned ones included; or why they cannot be read.
+    pub source_columns: Result<Vec<DesiredColumn>, Vec<String>>,
+}
+
 /// One table's plan against the live destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TablePlan {
@@ -197,7 +213,7 @@ pub struct LoggedPlan {
     pub current: Option<RunRecord>,
     /// The data's cursor maximum, when it disagrees with the logged cursor: the data wins and the load appends a reconciliation.
     pub disagreement: Option<String>,
-    /// Records that cannot be used, by `sqlload state show`.
+    /// Records that cannot be used, by `sqlload logged-state show`.
     pub unreadable: Vec<UnreadableRecord>,
     /// The warehouse's `_sqlload_runs` existed at plan, so loading creates nothing.
     pub runs_table: bool,
@@ -515,7 +531,7 @@ pub struct FilesContext {
     pub state: TableState,
 }
 
-/// What `sqlload state` does to the selected logged tables.
+/// What `sqlload logged-state` does to the selected logged tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateKind {
     Show,
@@ -524,7 +540,7 @@ pub enum StateKind {
     Reset,
 }
 
-/// A `sqlload state` command.
+/// A `sqlload logged-state` command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateRequest {
     pub kind: StateKind,
@@ -571,4 +587,25 @@ pub struct TallyLine {
     pub verb: &'static str,
     pub name: String,
     pub detail: String,
+}
+
+/// A files table's columns as its files hold them, for `contract diff`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilesColumns {
+    /// The table's folder.
+    pub folder: String,
+    /// The newest load's merged schema, as `plan` reads it; `None` before any file exists.
+    pub live: Option<Vec<LiveColumn>>,
+    /// Why the folder or the newest load's schema cannot be read.
+    pub problems: Vec<String>,
+    /// Every data file's own columns, oldest partition first; only when every footer was asked for.
+    pub files: Vec<FileSchema>,
+}
+
+/// One data file's columns, from its footer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSchema {
+    /// The key below the table's folder.
+    pub key: String,
+    pub columns: Vec<LiveColumn>,
 }

@@ -31,7 +31,7 @@ pub fn insert_run(
     ];
     let names: Vec<String> = RUNS_COLUMNS
         .iter()
-        .map(|name| format!("\"{}\"", sql_adapter(warehouse).stored_name(name)))
+        .map(|name| sql_adapter(warehouse).render_identifier(name))
         .collect();
     let literals: Vec<String> = values
         .iter()

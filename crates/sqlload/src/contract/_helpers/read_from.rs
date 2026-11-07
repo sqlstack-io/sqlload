@@ -25,3 +25,34 @@ pub(crate) fn read_from(
     }
     Ok(project)
 }
+
+/// The sources whose own target is on another kind of warehouse than `from`, so declarations adopted from `from` could name types their own target cannot use; none without `from`.
+pub(crate) fn other_warehouse(project: &ProjectConfig, from: Option<&str>) -> Vec<String> {
+    let kind = |target: &str| {
+        project
+            .targets
+            .get(target)
+            .and_then(|target| project.connections.get(&target.connection))
+            .map(std::mem::discriminant)
+    };
+    let Some(from_kind) = from.and_then(kind) else {
+        return Vec::new();
+    };
+    let single = (project.targets.len() == 1)
+        .then(|| project.targets.keys().next())
+        .flatten();
+    project
+        .sources
+        .iter()
+        .filter(|(_, source)| {
+            let own = source
+                .destination
+                .as_ref()
+                .or(project.default_target.as_ref())
+                .or(single);
+            own.and_then(|own| kind(own))
+                .is_some_and(|own| own != from_kind)
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}

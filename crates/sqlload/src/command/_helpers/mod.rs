@@ -5,4 +5,5 @@ pub(crate) mod limits;
 pub(crate) mod loader_commands;
 pub(crate) mod logging;
 pub(crate) mod output;
+pub(crate) mod project_file;
 pub(crate) mod signals;

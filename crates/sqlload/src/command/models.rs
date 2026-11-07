@@ -59,11 +59,11 @@ pub enum Command {
     /// Show per-partition lag and committed offsets.
     Status,
     /// Inspect or change the run log of `state = "logged"` tables.
-    State {
+    LoggedState {
         #[command(subcommand)]
         action: StateAction,
     },
-    /// Compare each table's declared columns with its live table; read-only, exits 1 when they differ.
+    /// Compare each table's declared columns with its live table, or adopt the live columns into the declarations; exits 1 when they differ.
     Contract {
         #[command(subcommand)]
         action: ContractAction,
@@ -77,6 +77,21 @@ pub enum Command {
 pub enum ContractAction {
     /// Report each selected table's declared columns that differ from its live table, and on `contract = "enforced"` tables its undeclared live columns.
     Diff(ContractArgs),
+    /// Propose declared `columns` from each selected table's live table; `--write` writes them into sqlload.toml (Python tables print theirs to paste).
+    Generate(ContractGenerateArgs),
+}
+
+/// `sqlload contract generate`'s selection and what it may change.
+#[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
+pub struct ContractGenerateArgs {
+    #[command(flatten)]
+    pub tables: ContractArgs,
+    /// Write the declarations into sqlload.toml.
+    #[arg(long)]
+    pub write: bool,
+    /// Also retype declared columns whose live type differs, and remove declared columns the live table lacks.
+    #[arg(long, requires = "write")]
+    pub overwrite: bool,
 }
 
 /// Table selection and output for `sqlload contract`.
@@ -97,6 +112,12 @@ pub struct ContractArgs {
     /// Print the report as one JSON document.
     #[arg(long)]
     pub json: bool,
+    /// On files targets, also read every file's footer and report the files whose columns differ from the newest load's.
+    #[arg(long)]
+    pub all_files: bool,
+    /// Also report where what each table's source would load differs from the live table, for columns no declaration names.
+    #[arg(long)]
+    pub source: bool,
 }
 
 /// `sqlload copy`'s endpoints and write settings.
@@ -123,7 +144,7 @@ pub struct CopyArgs {
     pub print_toml: bool,
 }
 
-/// What `sqlload state` does.
+/// What `sqlload logged-state` does.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum StateAction {
     /// Show each logged table's run log and current state; read-only.
@@ -136,7 +157,7 @@ pub enum StateAction {
     Reset(ResetArgs),
 }
 
-/// Table selection for `sqlload state`, and confirmation for the commands that append.
+/// Table selection for `sqlload logged-state`, and confirmation for the commands that append.
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub struct StateArgs {
     /// Sources or tables to select; all when empty.
@@ -146,7 +167,7 @@ pub struct StateArgs {
     pub yes: bool,
 }
 
-/// `sqlload state reset`'s position.
+/// `sqlload logged-state reset`'s position.
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub struct ResetArgs {
     #[command(flatten)]

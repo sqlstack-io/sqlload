@@ -9,6 +9,9 @@ pub fn connection_warehouse(connection: &ConnectionConfig) -> Option<(Warehouse,
         ConnectionConfig::Snowflake { database, .. } => {
             Some((Warehouse::Snowflake, Some(database.clone())))
         }
+        ConnectionConfig::Databricks { catalog, .. } => {
+            Some((Warehouse::Databricks, Some(catalog.clone())))
+        }
         ConnectionConfig::DuckDb { .. } => Some((Warehouse::DuckDb, None)),
         ConnectionConfig::S3 { .. } | ConnectionConfig::Filesystem { .. } => {
             Some((Warehouse::Parquet, None))

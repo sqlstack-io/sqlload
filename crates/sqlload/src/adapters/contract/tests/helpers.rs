@@ -100,7 +100,8 @@ pub(crate) fn live(
     }
 }
 
-const WRITE_VERBS: [&str; 6] = [
+const WRITE_VERBS: [&str; 7] = [
+    "INSERT OVERWRITE",
     "INSERT INTO",
     "DELETE FROM",
     "MERGE INTO",

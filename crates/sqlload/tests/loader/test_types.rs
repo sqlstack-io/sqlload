@@ -369,3 +369,71 @@ pub(crate) struct MixedCursorTestCase {
     /// Text the plan must not contain.
     pub(crate) expected_absent: &'static str,
 }
+
+/// One load of files into a fresh fake Databricks workspace.
+pub(crate) struct DatabricksLoadTestCase {
+    pub(crate) description: &'static str,
+    /// TOML added to `[sources.orders]`.
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: RouteFileSet,
+    /// What the fake fails or holds before the load.
+    pub(crate) prepare: fn(&sqlload_testkit::fake_databricks::models::FakeDatabricks),
+    /// Text the plan or load error must contain; empty when the run must succeed.
+    pub(crate) expected_error: &'static str,
+    /// Text the rendered plan must contain.
+    pub(crate) expected_plan: &'static [&'static str],
+    /// Text some statement sent must contain.
+    pub(crate) expected_sent: &'static [&'static str],
+    /// Text no statement sent may contain.
+    pub(crate) expected_unsent: &'static [&'static str],
+    /// Rows in `raw.orders` afterwards; `None` when the fake cannot apply the write.
+    pub(crate) expected_rows: Option<usize>,
+    /// How many `COPY INTO`s read staged files.
+    pub(crate) expected_copies: usize,
+    /// Files and folders left under the volume's `sqlload/` folder.
+    pub(crate) expected_left: &'static [&'static str],
+    /// Statements cancelled after polling them failed.
+    pub(crate) expected_cancelled: usize,
+}
+
+/// What one Databricks load planned, sent and left behind.
+pub(crate) struct DatabricksOutcome {
+    pub(crate) error: String,
+    pub(crate) plan: String,
+    pub(crate) sent: Vec<String>,
+    pub(crate) rows: usize,
+    pub(crate) copies: usize,
+    pub(crate) left: Vec<String>,
+    pub(crate) cancelled: usize,
+}
+
+/// A real Databricks workspace the live test may load into: only its `sqlload_` schema.
+pub(crate) struct LiveDatabricks {
+    pub(crate) host: String,
+    pub(crate) client_id: String,
+    pub(crate) client_secret: String,
+    pub(crate) warehouse_id: String,
+    pub(crate) catalog: String,
+    pub(crate) schema: String,
+}
+
+/// One live load: the source's name (its table's too), its settings and its files.
+pub(crate) struct LiveDatabricksTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) source: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: RouteFileSet,
+    /// Rows in the table afterwards.
+    pub(crate) expected_rows: &'static str,
+}
+
+/// One query against the fake workspace with its answers delivered a given way.
+pub(crate) struct DatabricksAnswerTestCase {
+    pub(crate) description: &'static str,
+    /// Rows per result chunk; `None` sends every row in the first.
+    pub(crate) chunk_rows: Option<usize>,
+    /// Polls before each statement is done.
+    pub(crate) pending_polls: usize,
+    /// The column names `information_schema.columns` returns, in order.
+    pub(crate) expected_columns: &'static [&'static str],
+}

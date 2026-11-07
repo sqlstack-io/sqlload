@@ -17,6 +17,7 @@ pub async fn drop_stale_staging(
 ) -> Result<usize, LoaderError> {
     let database = match destination {
         Destination::Snowflake(snowflake) => Some(snowflake.database.as_str()),
+        Destination::Databricks(databricks) => Some(databricks.catalog.as_str()),
         _ => None,
     };
     let adapter = sql_adapter(warehouse);

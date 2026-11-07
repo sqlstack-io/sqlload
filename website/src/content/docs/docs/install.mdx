@@ -1,0 +1,64 @@
+---
+title: "Install"
+description: "Install the sqlload command from PyPI, as a Python package or a standalone executable."
+---
+
+SQLLoad installs from PyPI. Install it as a tool with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install sqlload
+sqlload --version
+```
+
+```console
+$ sqlload --version
+sqlload 0.13.0
+```
+
+## Choose a package
+
+Two packages provide the same `sqlload` command. Install only one of them, because both provide a
+`sqlload` command.
+
+| Package | What it is | Python sources |
+|---------|------------|----------------|
+| `sqlload` | A native Python extension for CPython 3.10 or newer. Its `sqlload` command runs the loader in the same process as your Python sources. | Yes |
+| `sqlload-cli` | The same command as a standalone executable, without Python. | No |
+
+Use `sqlload` if any table is defined in Python ([Python sources](/docs/sources/python/)). Use
+`sqlload-cli` where Python isn't available and every source is declared in `sqlload.toml`.
+
+```bash
+uv tool install sqlload-cli
+```
+
+With pip, in a virtual environment:
+
+```bash
+pip install sqlload
+```
+
+Both packages are released for:
+
+| Platform | Architectures |
+|----------|---------------|
+| Linux (glibc 2.28 or newer) | x86_64, aarch64 |
+| macOS 11 or newer | arm64 |
+
+## Use it from Python
+
+The `sqlload` package also imports as a library, for declaring Python sources:
+
+```python
+import sqlload as sl
+
+print(sl.__version__)
+print(sl.executable())  # the sqlload command installed alongside the package
+```
+
+See the [Python API](/docs/sources/python/).
+
+## Next
+
+Follow the [Quickstart](/docs/quickstart/) to copy a folder into DuckDB and load a Postgres
+database with a project.

@@ -1,5 +1,6 @@
 //! One text value from a destination query.
 
+use crate::adapters::databricks::main::session::_query_rows::query_rows;
 use crate::adapters::dispatch::_helpers::no_sql::no_sql;
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
@@ -16,6 +17,11 @@ pub async fn single_text(
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(query_duckdb(duckdb, query).await?),
         Destination::Snowflake(snowflake) => Ok(query_snowflake(snowflake, &query).await?),
+        Destination::Databricks(databricks) => Ok(query_rows(databricks, &query)
+            .await?
+            .into_iter()
+            .next()
+            .flatten()),
         Destination::Files(_) => Err(no_sql()),
     }
 }

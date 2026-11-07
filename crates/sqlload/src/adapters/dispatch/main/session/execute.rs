@@ -1,5 +1,6 @@
 //! Run statements on a destination.
 
+use crate::adapters::databricks::main::session::_run_statements::run_statements as run_databricks;
 use crate::adapters::dispatch::_helpers::no_sql::no_sql;
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
@@ -16,6 +17,7 @@ pub async fn execute(
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => Ok(execute_statements(duckdb, statements).await?),
         Destination::Snowflake(snowflake) => Ok(run_statements(snowflake, &statements).await?),
+        Destination::Databricks(databricks) => Ok(run_databricks(databricks, &statements).await?),
         Destination::Files(_) => Err(no_sql()),
     }
 }

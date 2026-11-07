@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.14.0](https://github.com/sqlstack-io/sqlload/compare/v0.13.0...v0.14.0) (2026-11-06)
+
+
+### Features
+
+* **contract:** diff --source compares what each source would load with its live table ([#61](https://github.com/sqlstack-io/sqlload/issues/61)) ([c5a39d7](https://github.com/sqlstack-io/sqlload/commit/c5a39d7168cad47f884cec846e9fe5c7e908ccf1))
+* **databricks:** Databricks SQL warehouse target through a Unity Catalog volume ([#64](https://github.com/sqlstack-io/sqlload/issues/64)) ([9e5dcfd](https://github.com/sqlstack-io/sqlload/commit/9e5dcfd32ec8cf973f21873704941d227b96b26f))
+
+## [0.13.0](https://github.com/sqlstack-io/sqlload/compare/v0.12.0...v0.13.0) (2026-11-06)
+
+
+### Features
+
+* **contract:** compare files targets and report drift with --all-files ([#58](https://github.com/sqlstack-io/sqlload/issues/58)) ([6ff9802](https://github.com/sqlstack-io/sqlload/commit/6ff98029c3aaa0c9256ce6222866b9051d347573))
+
+## [0.12.0](https://github.com/sqlstack-io/sqlload/compare/v0.11.1...v0.12.0) (2026-11-06)
+
+
+### Features
+
+* **cli:** sqlload contract generate proposes and writes declared columns from live tables ([#57](https://github.com/sqlstack-io/sqlload/issues/57)) ([d29f3a5](https://github.com/sqlstack-io/sqlload/commit/d29f3a5b53ac2cbaebe8ca7ad3b3de9185f1b237))
+
+
+### Bug Fixes
+
+* **snowflake:** copy_to_internal_stage matches staged files by their @~/ names ([#56](https://github.com/sqlstack-io/sqlload/issues/56)) ([804de24](https://github.com/sqlstack-io/sqlload/commit/804de2498cc46614badbbcda925169f015a51a2a))
+
+
+### Documentation
+
+* **bench:** publish benchmark results where SQLLoad wins or is at parity ([#53](https://github.com/sqlstack-io/sqlload/issues/53)) ([8a26279](https://github.com/sqlstack-io/sqlload/commit/8a2627981372571a591db25b00af0e4d96db4c38))
+
 ## [0.11.1](https://github.com/sqlstack-io/sqlload/compare/v0.11.0...v0.11.1) (2026-11-06)
 
 

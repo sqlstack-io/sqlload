@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod configs;
+pub mod fake_databricks;
 pub mod fake_snowflake;
 pub mod harness;
 pub mod parity;

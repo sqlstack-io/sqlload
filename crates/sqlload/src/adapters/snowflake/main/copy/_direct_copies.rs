@@ -5,7 +5,7 @@ use crate::adapters::snowflake::constants::{MAX_COPY_SQL_BYTES, MAX_FILES_PER_CO
 use crate::adapters::snowflake::models::{CopyBatch, DirectCopy};
 use crate::files_source::models::DataFile;
 
-/// `COPY` statements loading `request.files` into `request.target`, at most 1,000 files and about 900 KiB of SQL each: data columns read by name and cast (JSON parsed), partition values, source file, version per file (matched on `METADATA$FILENAME`, which on an external stage is the bucket-relative key, failing on any other file) and row number, and literals; always `FORCE = TRUE` and `ON_ERROR = ABORT_STATEMENT`.
+/// `COPY` statements loading `request.files` into `request.target`, at most 1,000 files and about 900 KiB of SQL each: data columns read by name and cast (JSON parsed), partition values, source file, version per file (matched on `METADATA$FILENAME`, which on an external stage is the bucket-relative key and on the user stage `@~/` and the folder, failing on any other file) and row number, and literals; always `FORCE = TRUE` and `ON_ERROR = ABORT_STATEMENT`.
 pub(in crate::adapters) fn direct_copies(
     request: &DirectCopy<'_>,
 ) -> Result<Vec<CopyBatch>, String> {

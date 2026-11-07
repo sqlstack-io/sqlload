@@ -1,0 +1,83 @@
+[
+	{
+		"label": "Getting Started",
+		"items": [
+			"docs",
+			"docs/install",
+			"docs/quickstart"
+		]
+	},
+	{
+		"label": "Sources",
+		"items": [
+			{
+				"label": "Overview",
+				"slug": "docs/sources"
+			},
+			"docs/sources/postgres",
+			"docs/sources/files",
+			"docs/sources/python",
+			"docs/sources/logged-state"
+		]
+	},
+	{
+		"label": "Targets",
+		"items": [
+			{
+				"label": "Overview",
+				"slug": "docs/targets"
+			},
+			"docs/targets/snowflake",
+			"docs/targets/databricks",
+			"docs/targets/duckdb",
+			"docs/targets/files"
+		]
+	},
+	{
+		"label": "Loading",
+		"items": [
+			"docs/concepts/projects",
+			"docs/concepts/write-strategies",
+			"docs/concepts/cursors",
+			"docs/concepts/contracts"
+		]
+	},
+	{
+		"label": "Kafka exporter",
+		"items": [
+			{
+				"label": "Overview",
+				"slug": "docs/kafka"
+			},
+			"docs/kafka/configuration",
+			"docs/kafka/naming"
+		]
+	},
+	{
+		"label": "CLI Reference",
+		"items": [
+			"docs/cli",
+			"docs/cli/plan-apply-load",
+			"docs/cli/copy",
+			"docs/cli/contract",
+			"docs/cli/debug"
+		]
+	},
+	{
+		"label": "Reference",
+		"items": [
+			"docs/configuration",
+			"docs/types",
+			"docs/supported-systems"
+		]
+	},
+	{
+		"label": "About",
+		"items": [
+			"docs/benchmarks",
+			"docs/compared",
+			"docs/troubleshooting",
+			"docs/roadmap"
+		]
+	}
+]

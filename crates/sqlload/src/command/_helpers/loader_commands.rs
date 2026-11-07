@@ -5,12 +5,13 @@ use std::collections::BTreeMap;
 
 use crate::adapters::dispatch::models::Destination;
 use crate::command::_helpers::output::confirm_reload;
+use crate::command::_helpers::project_file::replace_file;
 use crate::command::constants::RELOAD_DECLINED;
-use crate::command::models::{
-    Command, ContractAction, ContractArgs, LoaderArgs, LoaderRequest, StateAction,
-};
-use crate::contract::main::contract_diff::contract_diff;
+use crate::command::models::{Command, ContractAction, LoaderArgs, LoaderRequest, StateAction};
+use crate::contract::main::compare_contracts::compare_contracts;
 use crate::contract::main::render_contract::render_contract;
+use crate::contract::main::write_contracts::write_contracts;
+use crate::contract::models::{ContractReport, ContractRequest};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
@@ -34,6 +35,14 @@ fn environment_variable(name: &str) -> Option<String> {
     }
 }
 
+/// `name`'s value for `${ENV:NAME}`: from `variables`, else the process environment.
+fn variable(variables: &BTreeMap<String, String>, name: &str) -> Option<String> {
+    variables
+        .get(name)
+        .cloned()
+        .or_else(|| environment_variable(name))
+}
+
 /// The plan options `args` give.
 pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
     Ok(PlanOptions {
@@ -52,13 +61,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
 
 /// The project in `request.text`, with its Python sources discovered through the host when it has `python_paths`.
 async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfig, String> {
-    let lookup = |name: &str| {
-        request
-            .variables
-            .get(name)
-            .cloned()
-            .or_else(|| environment_variable(name))
-    };
+    let lookup = |name: &str| variable(&request.variables, name);
     let project = parse_project(request.text, &lookup).map_err(|error| error.to_string())?;
     if project.python_paths.is_empty() {
         return Ok(project);
@@ -91,13 +94,13 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String
         Ok(project) => project,
         Err(error) => return config_failure(&request.command, error),
     };
-    let outcome = run_command(
-        &project,
-        request.command,
-        request.host.clone(),
-        request.no_color,
-    )
-    .await;
+    let outcome = match request.command {
+        Command::Contract { action } => {
+            let file = (request.config, request.text);
+            run_contract(&project, action, file, &request.variables).await
+        }
+        command => run_command(&project, command, request.host.clone(), request.no_color).await,
+    };
     if let Some(host) = request.host {
         let _ = tokio::task::spawn_blocking(move || host.finish()).await;
     }
@@ -163,16 +166,10 @@ async fn run_command(
     let destinations = connect_targets(project)
         .await
         .map_err(|error| error.to_string())?;
-    if let Command::State { action } = command {
+    if let Command::LoggedState { action } = command {
         return run_state(project, &destinations, action)
             .await
             .map(|lines| (lines, true));
-    }
-    if let Command::Contract {
-        action: ContractAction::Diff(args),
-    } = command
-    {
-        return run_contract(project, &destinations, args).await;
     }
     let (args, applies, loads) = match command {
         Command::Plan(args) => (args, false, false),
@@ -231,7 +228,7 @@ async fn run_command(
     Ok((lines, planned && completed))
 }
 
-/// `sqlload state`: plan the selected tables (which reads their run logs), then show, verify, reconcile or reset them.
+/// `sqlload logged-state`: plan the selected tables (which reads their run logs), then show, verify, reconcile or reset them.
 async fn run_state(
     project: &ProjectConfig,
     destinations: &BTreeMap<String, Destination>,
@@ -245,7 +242,7 @@ async fn run_state(
     };
     if kind == StateKind::Reset && args.select.is_empty() {
         return Err(
-            "state reset changes where tables read from next; name the sources or tables to reset"
+            "logged-state reset changes where tables read from next; name the sources or tables to reset"
                 .to_owned(),
         );
     }
@@ -270,19 +267,61 @@ async fn run_state(
     }
 }
 
-/// `sqlload contract diff`: the report, and whether every selected table agrees.
+/// `sqlload contract diff` and `generate`: the report, and whether every selected table agrees; `generate --write` first writes the adoptions into the project `file` (its path and text).
 async fn run_contract(
     project: &ProjectConfig,
-    destinations: &BTreeMap<String, Destination>,
-    args: ContractArgs,
+    action: ContractAction,
+    file: (&Path, &str),
+    variables: &BTreeMap<String, String>,
 ) -> Result<(Vec<String>, bool), String> {
+    let destinations = connect_targets(project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (args, generate, write) = match action {
+        ContractAction::Diff(args) => (args, None, false),
+        ContractAction::Generate(chosen) => (chosen.tables, Some(chosen.overwrite), chosen.write),
+    };
     let options = PlanOptions {
         select: [args.positional_select, args.select].concat(),
         exclude: args.exclude,
         ..PlanOptions::default()
     };
-    let report = contract_diff(project, destinations, &options, args.from.as_deref())
+    let request = ContractRequest {
+        from: args.from,
+        generate,
+        all_files: args.all_files,
+        source: args.source,
+    };
+    let report = compare_contracts(project, &destinations, &options, &request)
         .await
         .map_err(|error| error.to_string())?;
+    let report = match write {
+        true => write_adoptions(report, file, variables)?,
+        false => report,
+    };
     Ok(render_contract(&report, args.json))
+}
+
+/// `report` after writing its adoptions into the project file, which is left as it was when the edited project would no longer parse.
+fn write_adoptions(
+    report: ContractReport,
+    (config, text): (&Path, &str),
+    variables: &BTreeMap<String, String>,
+) -> Result<ContractReport, String> {
+    let (updated, mut report) = write_contracts(text, report)?;
+    let Some(updated) = updated else {
+        return Ok(report);
+    };
+    parse_project(&updated, &|name| variable(variables, name)).map_err(|error| {
+        format!(
+            "contract generate --write left {} unchanged: the edited project would not parse: {error}",
+            config.display()
+        )
+    })?;
+    replace_file(config, (text, &updated))?;
+    report.written_paths.push(config.file_name().map_or_else(
+        || config.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    ));
+    Ok(report)
 }

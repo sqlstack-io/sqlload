@@ -3908,7 +3908,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload"
-version = "0.11.1"
+version = "0.14.0"
 dependencies = [
  "aes",
  "arrow-array",
@@ -3954,6 +3954,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-util",
  "toml",
+ "toml_edit",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -3964,7 +3965,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-benches"
-version = "0.11.1"
+version = "0.14.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -3976,7 +3977,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-python"
-version = "0.11.1"
+version = "0.14.0"
 dependencies = [
  "arrow-array",
  "arrow-pyarrow",
@@ -3989,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-testkit"
-version = "0.11.1"
+version = "0.14.0"
 dependencies = [
  "arrow-array",
  "axum",
@@ -4397,6 +4398,7 @@ dependencies = [
  "indexmap 2.14.2",
  "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

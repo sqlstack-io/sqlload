@@ -1,0 +1,66 @@
+---
+title: "Snowflake"
+description: "Load into Snowflake: the load_method, external stages, and files Snowflake reads itself."
+---
+
+A Snowflake connection needs `load_method`. It has no default, because it decides how data gets
+into Snowflake:
+
+```toml
+[connections.wh]
+kind = "snowflake"
+account = "myorg-myaccount"
+user = "SQLLOAD"
+auth = { method = "key_pair", private_key_file = "/etc/sqlload/key.p8" }
+role = "LOADER"
+warehouse = "LOAD_WH"
+database = "RAW"
+load_method = { type = "external_stage", url = "s3://example-bucket/sqlload/", storage_integration = "LAKE_INT" }
+```
+
+| `type` | Data goes through | Setup |
+|--------|-------------------|-------|
+| `external_stage` | An external stage on your S3 prefix. Files sources under `url` load directly from it. | A storage integration, or an existing stage, and SQLLoad's write access to the bucket. |
+| `internal_user_stage` | The user stage `@~`. | None. |
+| `internal_table_stage` | The table stage `@%table`. | None. |
+| `internal_named_stage` | A named internal stage: `name = "DB.SCHEMA.STAGE"`. | The stage. |
+| `streaming` | Snowpipe Streaming into a transient staging table. | None. |
+| `insert` | Batched multi-row `INSERT` into a transient staging table. Very slow; `plan` warns. | None. |
+
+A method the role can't use fails at `plan`. SQLLoad never falls back to another one.
+
+`auth` is `{ method = "key_pair", private_key_file = "..." }` or
+`{ method = "pat", token = "${ENV:SNOWFLAKE_TOKEN}" }`.
+
+## External stage
+
+| Key | Meaning |
+|-----|---------|
+| `url` | The stage's location, `s3://bucket/prefix/`. Use the bucket and folder the stage reads, not a subfolder. |
+| `storage_integration` | SQLLoad creates `_SQLLOAD_STAGE` in each loader schema with this integration, at `apply`. |
+| `name` | Or an existing stage on `url`, as `DATABASE.SCHEMA.STAGE`. Give exactly one of `storage_integration` and `name`. |
+| `region` | The bucket's region, for SQLLoad's own writes. |
+| `keep_staged_files` | Keep staged files after their batch commits, and leave this stage out of the cleanup. Default `false`. |
+
+SQLLoad writes the Parquet it stages with your AWS credentials: `AWS_*` environment variables, web
+identity, or the instance or container role. Snowflake reads the bucket through the stage.
+
+Staged files are deleted once their batch commits. The next load removes what failed runs left,
+after a day.
+
+## Files into Snowflake
+
+Files of a files source (Parquet, JSON, NDJSON or CSV) under the external stage's `url` load
+directly: Snowflake reads them itself, and nothing passes through SQLLoad. Live tests check that
+this gives the same values as SQLLoad's own reader.
+
+- A column the direct `COPY` can't load exactly, such as `Float16`, a decimal over 38 digits or a
+  nested type, fails `plan`, or the load for a later batch, naming the column.
+- Files no external stage covers fail `plan`, unless the source sets
+  `copy_to_internal_stage = true`. Then SQLLoad downloads each file and uploads it unchanged to `@~`,
+  where Snowflake loads it. That's much slower than an external stage, and `plan` warns.
+- A `hash`-masked column reaches Snowflake in plain text, in a temporary table that ends with the
+  session, and is hashed there. An `hmac` key must never appear in SQL, so `hmac`-masked files go
+  through SQLLoad instead, which `plan` warns is much slower.
+
+Files are never read and re-uploaded by SQLLoad otherwise.

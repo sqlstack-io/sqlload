@@ -1,0 +1,100 @@
+---
+title: "Types"
+description: "SQLLoad's portable column types, how each maps to Snowflake, Databricks, DuckDB and Parquet, and how source types are read."
+---
+
+SQLLoad reasons about columns in a small set of portable types. You write them in `columns`, `plan`
+shows them next to each warehouse type, and one table can load into different warehouses with the
+same declarations.
+
+```toml
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+columns = { total = "decimal(18,2)", closes_at = "timestamp_tz" }
+```
+
+## Portable types
+
+| Type | Snowflake | Databricks | DuckDB | Parquet (Arrow) |
+|------|-----------|------------|--------|-----------------|
+| `bool` | `BOOLEAN` | `BOOLEAN` | `BOOLEAN` | `Boolean` |
+| `smallint` | `NUMBER(38,0)` ¹ | `SMALLINT` | `SMALLINT` | `Int16` |
+| `int` (64-bit) | `NUMBER(38,0)` | `BIGINT` | `BIGINT` | `Int64` |
+| `decimal(p,s)` | `NUMBER(p,s)` | `DECIMAL(p,s)` | `DECIMAL(p,s)` | `Decimal128(p,s)` |
+| `float` (64-bit) | `FLOAT` | `DOUBLE` | `DOUBLE` | `Float64` |
+| `text` | `VARCHAR` | `STRING` | `VARCHAR` | `Utf8` |
+| `varchar(n)` | `VARCHAR(n)` | `STRING` ¹ | `VARCHAR` ¹ | `Utf8` |
+| `date` | `DATE` | `DATE` | `DATE` | `Date32` |
+| `time` | `TIME(9)` | `STRING` ¹ | `TIME` | `Time64` |
+| `timestamp_tz` | `TIMESTAMP_TZ(9)` | `TIMESTAMP` ¹ | `TIMESTAMP WITH TIME ZONE` ¹ | `Timestamp(UTC)` |
+| `timestamp_ntz` | `TIMESTAMP_NTZ(9)` | `TIMESTAMP_NTZ` | `TIMESTAMP` | `Timestamp` |
+| `json` | `VARIANT` | `VARIANT` | `JSON` | `Utf8` |
+| `uuid` | `VARCHAR(36)` ¹ | `STRING` ¹ | `UUID` | `Utf8` |
+| `binary` | `BINARY` | `BINARY` | `BLOB` | `Binary` |
+| `native("...")` | passed through | passed through | passed through | not available |
+
+¹ Held with a loss, which `plan` notes: Snowflake stores `smallint` as a 38-digit integer and `uuid`
+as text; Databricks doesn't enforce `varchar` lengths, stores `time` and `uuid` as text, and keeps
+`timestamp_tz` as an instant without its offset; DuckDB doesn't enforce `varchar` lengths, and
+stores `timestamp_tz` as a UTC instant without its offset.
+
+`native("GEOGRAPHY")` passes a warehouse-only type through unchanged. SQLLoad doesn't widen or
+convert such columns.
+
+## Names SQLLoad accepts
+
+Type names are parsed strictly. An unknown or malformed name fails `plan` with the nearest valid
+one.
+
+| Written | Means |
+|---------|-------|
+| `integer`, `bigint` | `int` |
+| `boolean` | `bool` |
+| `string`, `varchar`, `character varying` | `text` |
+| `double`, `double precision` | `float` |
+| `numeric(p,s)` | `decimal(p,s)` |
+| `timestamp with time zone`, `timestamp without time zone`, `datetime` | `timestamp_tz`, `timestamp_ntz`, `timestamp_ntz` |
+| `varbinary` | `binary` |
+
+Warehouse-specific names, such as Snowflake's `NUMBER` or `VARIANT` or Postgres's `jsonb`, are
+accepted only when every destination of the table is that warehouse.
+
+Some names are rejected because they mean different things in different places:
+
+| Name | Use instead |
+|------|-------------|
+| `timestamp` | `timestamp_tz` or `timestamp_ntz` |
+| `timestamp_ltz` | `timestamp_tz` (it depends on each session's time zone) |
+| `real` | `float` (64-bit) |
+| `tinyint` | `smallint` |
+| `char`, `character` | `text` or `varchar(n)` (they pad with spaces) |
+
+`decimal` needs a precision and a scale, such as `decimal(18,2)`.
+
+## Postgres source types
+
+| Postgres | Portable type |
+|----------|---------------|
+| `boolean` | `bool` |
+| `smallint` | `smallint` |
+| `integer`, `bigint`, `oid` | `int` |
+| `real`, `double precision` | `float` |
+| `numeric(p,s)` | `decimal(p,s)` |
+| `numeric` without a precision | Pin a type, such as `decimal(38,10)` or `text`; `plan` asks for one. |
+| `text` | `text` |
+| `varchar(n)` | `varchar(n)` |
+| `date`, `time` | `date`, `time` |
+| `timestamp`, `timestamptz` | `timestamp_ntz`, `timestamp_tz` |
+| `json`, `jsonb` | `json` |
+| `uuid` | `uuid` |
+| `bytea` | `binary` |
+| arrays | `json` |
+| other types (enums, `interval`, network types, `timetz`, extension types) | `text` |
+
+Columns pinned in `columns` are read as the pinned type, when the source type can be read that way.
+
+## Python and files
+
+Python values are typed as described in [Python sources](/docs/sources/python/#types). Parquet columns
+keep their Arrow types. CSV and JSON columns are inferred from a sample of records; pin any you
+want typed differently.

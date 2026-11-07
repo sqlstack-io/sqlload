@@ -26,9 +26,9 @@ pub(crate) fn findings(
             kind: RELATION_MISSING,
             message: format!("physical relation {relation} does not exist"),
             physical_type: None,
+            source_type: None,
         }];
     };
-    let own = |name: &str| name.to_ascii_lowercase().starts_with(SQLLOAD_COLUMN_PREFIX);
     let declared_type = |name: &str| {
         declared
             .iter()
@@ -36,7 +36,7 @@ pub(crate) fn findings(
     };
     let mut found: Vec<ContractFinding> = live
         .iter()
-        .filter(|column| !own(&column.name))
+        .filter(|column| !is_own(&column.name))
         .filter_map(|column| live_finding(column, declared_type(&column.name), contract, warehouse))
         .collect();
     found.extend(
@@ -49,19 +49,25 @@ pub(crate) fn findings(
                 kind: MISSING_PHYSICAL_COLUMN,
                 message: format!("declared column '{name}' is absent from the physical relation"),
                 physical_type: None,
+                source_type: None,
             }),
     );
     found
 }
 
+/// Whether SQLLoad added the column itself (`_sqlload_*`).
+pub(crate) fn is_own(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with(SQLLOAD_COLUMN_PREFIX)
+}
+
 /// Whether `live` has a column named `name`, ignoring case.
-fn is_live(live: &[LiveColumn], name: &str) -> bool {
+pub(crate) fn is_live(live: &[LiveColumn], name: &str) -> bool {
     live.iter()
         .any(|column| column.name.eq_ignore_ascii_case(name))
 }
 
 /// Whether `live` stores what `declared` declares: the same type, or one the warehouse renders the same way.
-fn agrees(warehouse: Warehouse, declared: &ColumnType, live: &ColumnType) -> bool {
+pub(crate) fn agrees(warehouse: Warehouse, declared: &ColumnType, live: &ColumnType) -> bool {
     let sql = |column_type: &ColumnType| {
         sql_adapter(warehouse)
             .render_loader_logical_type(column_type)
@@ -88,6 +94,7 @@ fn live_finding(
                 "column '{name}' is declared {declared} but physical type is {physical}"
             ),
             physical_type: Some(physical),
+            source_type: None,
         }),
         (None, Contract::Enforced) => Some(ContractFinding {
             column: Some(column.name.clone()),
@@ -98,6 +105,7 @@ fn live_finding(
                 column.name
             ),
             physical_type: Some(physical),
+            source_type: None,
         }),
         (None, Contract::None) => None,
     }

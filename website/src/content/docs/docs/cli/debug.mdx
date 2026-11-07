@@ -1,0 +1,38 @@
+---
+title: "debug"
+description: "Validate sqlload.toml and test every connection."
+---
+
+```bash
+sqlload debug [--no-connection]
+```
+
+`sqlload debug` checks the configuration file, then connects to every target and source:
+
+```console
+$ sqlload debug
+ok    config  2 connections, 1 targets, 1 sources
+ok    target local  DuckDB v2.0.0
+ok    source app  postgres@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2)
+```
+
+| Option | Meaning |
+|--------|---------|
+| `--no-connection` | Only validate the configuration; connect to nothing. |
+
+An invalid file prints each problem with its fix, and exits 1:
+
+```console
+$ sqlload debug --no-connection
+error: invalid project:
+  - connection wh: load_method is required: how should data get into Snowflake? Fix: add one of these to [connections.wh]:
+load_method = { type = "external_stage", url = "s3://...", storage_integration = "..." }   (fastest)
+load_method = { type = "internal_user_stage" }   (no setup)
+```
+
+An environment variable a `${ENV:NAME}` refers to must be set:
+
+```console
+$ sqlload debug
+error: environment variable PGPASSWORD is not set
+```

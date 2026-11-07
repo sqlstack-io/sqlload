@@ -135,7 +135,7 @@ pub(crate) fn alter_statements<A: SqlAdapter + ?Sized>(
         }
     }
     if !rebuilt.is_empty() {
-        statements.insert(0, rebuild_statement(&target, live, &rebuilt));
+        statements.insert(0, rebuild_statement(adapter, &target, (live, &rebuilt)));
     }
     statements
 }
@@ -199,7 +199,7 @@ pub(crate) fn staging_changes<A: SqlAdapter + ?Sized>(
                 .iter()
                 .map(|(name, sql_type)| (name.as_str(), sql_type.as_str()))
                 .collect();
-            statements.insert(0, rebuild_statement(&target, &live, &casts));
+            statements.insert(0, rebuild_statement(adapter, &target, (&live, &casts)));
         }
         (false, false) => statements.extend(rebuilt.iter().map(|(name, sql_type)| {
             format!(
