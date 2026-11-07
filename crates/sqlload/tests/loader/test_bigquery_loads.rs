@@ -1,11 +1,12 @@
 use sqlload::bigquery_api::main::run_query::run_query;
 
 use crate::bigquery_helpers::{
-    live_bigquery, live_bigquery_client, reset_live_bigquery, run_live_bigquery,
-    stream_into_live_table,
+    append_refused, commit_refused, live_bigquery, live_bigquery_client, nothing_in_bigquery,
+    reset_live_bigquery, run_bigquery, run_live_bigquery, stale_staging, stream_into_live_table,
+    token_expired,
 };
-use crate::helpers::{run_async, two_batches, two_days};
-use crate::test_types::{LiveBigQueryLoadTestCase, LiveWriteApiTestCase};
+use crate::helpers::{found, not_found, run_async, two_batches, two_days};
+use crate::test_types::{BigQueryLoadTestCase, LiveBigQueryLoadTestCase, LiveWriteApiTestCase};
 
 const LIVE_APPEND: LiveBigQueryLoadTestCase = LiveBigQueryLoadTestCase {
     description: "",
@@ -14,6 +15,130 @@ const LIVE_APPEND: LiveBigQueryLoadTestCase = LiveBigQueryLoadTestCase {
     file_set: two_days,
     expected_rows: "6",
 };
+
+const STAGED: &str = "raw.orders__sqlload_staging_";
+
+const BASE: BigQueryLoadTestCase = BigQueryLoadTestCase {
+    description: "",
+    settings: "write_strategy = \"append\"",
+    file_set: two_days,
+    prepare: nothing_in_bigquery,
+    expected_error: "",
+    expected_sent: &[],
+    expected_unsent: &[],
+    expected_rows: Some(6),
+    expected_commits: &[STAGED],
+};
+
+#[test]
+fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_commit_once_per_batch()
+-> Result<(), String> {
+    let test_cases = [
+        BigQueryLoadTestCase {
+            description: "append: rows stream into a staging table named for the load, never the table, then one INSERT moves them and the staging table is dropped",
+            expected_sent: &[
+                "INSERT INTO `raw`.`orders` (",
+                "DROP TABLE IF EXISTS `raw`.`orders__sqlload_staging_",
+            ],
+            expected_unsent: &["BEGIN", "COMMIT"],
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "append over two batches: one Storage Write API commit per batch",
+            file_set: two_batches,
+            expected_rows: Some(2002),
+            expected_commits: &[STAGED, STAGED],
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "replace: rows stream into a build table, which replaces the table in one statement, its description set again",
+            settings: "write_strategy = \"replace\"",
+            expected_sent: &[
+                "CREATE OR REPLACE TABLE `raw`.`orders` AS SELECT * FROM `raw`.`orders__sqlload_staging_",
+                "ALTER TABLE `raw`.`orders` SET OPTIONS (description = 'Test table.')",
+            ],
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "delete_insert: one MERGE inserting every staged row and deleting the window",
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"",
+            expected_sent: &["ON FALSE WHEN NOT MATCHED THEN INSERT"],
+            expected_unsent: &["INSERT INTO `raw`.`orders` ("],
+            expected_rows: None,
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "an append BigQuery refuses a row of fails the load with its message, commits nothing and drops the staging table",
+            prepare: append_refused,
+            expected_error: "Field id is required but has no value",
+            expected_rows: Some(0),
+            expected_commits: &[],
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "a commit BigQuery refuses fails the load naming the stream, and drops the staging table",
+            prepare: commit_refused,
+            expected_error: "BigQuery committed none of the streams",
+            expected_rows: Some(0),
+            expected_commits: &[],
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "a refused token is fetched again once and the load goes on",
+            prepare: token_expired,
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "a staging table a failed run left long ago is dropped",
+            prepare: stale_staging,
+            expected_sent: &[
+                "DROP TABLE IF EXISTS `raw`.`orders__sqlload_staging_20260101000000_deadbeef`",
+            ],
+            ..BASE
+        },
+    ];
+    run_async(async {
+        for test_case in &test_cases {
+            let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let outcome = run_bigquery(directory.path(), test_case).await?;
+            let failed = !test_case.expected_error.is_empty();
+            assert!(
+                outcome.error.contains(test_case.expected_error)
+                    && failed != outcome.error.is_empty(),
+                "{}: {}\n{}",
+                test_case.description,
+                outcome.error,
+                outcome.plan
+            );
+            assert_eq!(
+                (
+                    not_found(&outcome.sent, test_case.expected_sent),
+                    found(&outcome.sent, test_case.expected_unsent),
+                    test_case.expected_rows.unwrap_or(outcome.rows),
+                    outcome.commits.clone(),
+                    outcome.staged.clone(),
+                    outcome.unrouted_calls,
+                ),
+                (
+                    Vec::<&str>::new(),
+                    Vec::<&str>::new(),
+                    outcome.rows,
+                    test_case
+                        .expected_commits
+                        .iter()
+                        .map(|table| (*table).to_owned())
+                        .collect::<Vec<String>>(),
+                    Vec::<String>::new(),
+                    0,
+                ),
+                "{}: not sent, sent anyway, rows, commits, staging left, unrouted calls\n{:#?}",
+                test_case.description,
+                outcome.sent
+            );
+        }
+        Ok(())
+    })
+}
 
 /// Skipped when `SQLLOAD_BIGQUERY_DATASET` is unset, and fails when it names a dataset outside `sqlload_`; the dataset is dropped first, streamed into, and dropped at the end, its tables expiring after a day if a failed run leaves them. It round-trips the hand-written Storage Write API messages against the real service: requests BigQuery must parse, and answers (results, error codes, row counts, stream errors) sqlload must read.
 #[test]

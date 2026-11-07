@@ -10,6 +10,8 @@ rust-version.workspace = true
 
 [dependencies]
 arrow-array = { workspace = true, features = ["chrono-tz"] }
+arrow-cast.workspace = true
+arrow-ipc.workspace = true
 axum.workspace = true
 bytes.workspace = true
 flate2.workspace = true
@@ -19,6 +21,8 @@ rsa = { workspace = true, features = ["getrandom"] }
 serde_json.workspace = true
 sqlload = { workspace = true, default-features = true }
 testcontainers.workspace = true
+tonic = { workspace = true, features = ["server", "router"] }
+tonic-prost.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-util.workspace = true
