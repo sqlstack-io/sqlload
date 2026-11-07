@@ -6,5 +6,7 @@ mod change_parts;
 mod decode_message;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_reshape.rs"]
+mod reshape;
 #[path = "tests/test_types.rs"]
 mod test_types;

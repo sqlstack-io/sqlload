@@ -5,6 +5,7 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
+use crate::cdc::models::SnapshotRecord;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::errors::LoaderError;
 use crate::time_text::main::now_utc_text::now_utc_text;
@@ -69,12 +70,11 @@ impl SnapshotLog<'_> {
         .await
     }
 
-    /// Record that `table_name` (empty: the slot itself) holds the snapshot taken at `lsn`, copied with the data `columns` (`,a,b,`).
+    /// Record that `record`'s table (empty: the slot itself) holds the snapshot taken at `lsn`, with its columns, highest column number and key.
     pub(crate) async fn record(
         &self,
-        table_name: &str,
+        record: &SnapshotRecord,
         lsn: i64,
-        columns: &str,
     ) -> Result<(), LoaderError> {
         let adapter = sql_adapter(self.warehouse);
         let text = |value: &str| adapter.render_loader_value_literal(value);
@@ -90,18 +90,16 @@ impl SnapshotLog<'_> {
                 names.join(", "),
                 text(self.source),
                 text(self.slot),
-                text(table_name),
-                text(columns),
+                text(&record.table),
+                text(&record_columns(record)),
                 text(&now_utc_text()),
             )],
         )
         .await
     }
 
-    /// The tables holding the slot's newest snapshot with the data columns each was copied with, and that snapshot's LSN; `None` when SQLLoad never recorded creating the slot.
-    pub(crate) async fn current(
-        &self,
-    ) -> Result<Option<(i64, Vec<(String, String)>)>, LoaderError> {
+    /// The tables holding the slot's newest snapshot, each with its newest record, and that snapshot's LSN; `None` when SQLLoad never recorded creating the slot.
+    pub(crate) async fn current(&self) -> Result<Option<(i64, Vec<SnapshotRecord>)>, LoaderError> {
         let adapter = sql_adapter(self.warehouse);
         let column = |name: &str| adapter.render_identifier(name);
         let text_type = adapter.render_loader_logical_type(&ColumnType::Text).sql;
@@ -109,8 +107,9 @@ impl SnapshotLog<'_> {
         let rows = text_values(
             self.destination,
             format!(
-                "SELECT CAST({} AS {text_type}) || {separator} || {} || {separator} || {} FROM {} WHERE {} = {} AND {} = {}",
+                "SELECT CAST({} AS {text_type}) || {separator} || {} || {separator} || {} || {separator} || {} FROM {} WHERE {} = {} AND {} = {}",
                 column("snapshot_lsn"),
+                column("recorded_at"),
                 column("table_name"),
                 column("columns"),
                 adapter.render_qualified_name(&self.table()),
@@ -121,32 +120,84 @@ impl SnapshotLog<'_> {
             ),
         )
         .await?;
-        let mut records: Vec<(i64, String, String)> = Vec::with_capacity(rows.len());
+        let mut records: Vec<(i64, String, SnapshotRecord)> = Vec::with_capacity(rows.len());
         for row in &rows {
-            let mut fields = row.splitn(3, FIELD_SEPARATOR);
-            let unreadable =
-                || LoaderError::Invalid(format!("an unreadable snapshot record: {row:?}"));
-            let (Some(lsn), Some(table), Some(columns)) =
-                (fields.next(), fields.next(), fields.next())
-            else {
-                return Err(unreadable());
-            };
-            let lsn = lsn.parse::<i64>().map_err(|_| unreadable())?;
-            records.push((lsn, table.to_owned(), columns.to_owned()));
+            records.push(read_record(row).map_err(LoaderError::Invalid)?);
         }
-        let newest = records
-            .iter()
-            .filter(|(_, table, _)| table.is_empty())
-            .map(|(lsn, _, _)| *lsn)
-            .max();
-        let Some(newest) = newest else {
-            return Ok(None);
-        };
-        let tables: Vec<(String, String)> = records
-            .into_iter()
-            .filter(|(lsn, table, _)| *lsn == newest && !table.is_empty())
-            .map(|(_, table, columns)| (table, columns))
-            .collect();
-        Ok(Some((newest, tables)))
+        Ok(newest_snapshot(records))
     }
+}
+
+/// A record's `columns` text: the data columns, then, tab-separated, the highest column number, the key and the columns it stopped loading, when it has them.
+fn record_columns(record: &SnapshotRecord) -> String {
+    match (record.max_attnum, &record.key) {
+        (Some(highest), Some(key)) => {
+            format!(
+                "{}{FIELD_SEPARATOR}{highest}{FIELD_SEPARATOR}{key}{FIELD_SEPARATOR}{}",
+                record.columns, record.left
+            )
+        }
+        _ => record.columns.clone(),
+    }
+}
+
+/// One record read back as `lsn, recorded_at, table, columns`: its snapshot LSN, when it was written, and the record; an error for a row in neither form.
+pub(crate) fn read_record(row: &str) -> Result<(i64, String, SnapshotRecord), String> {
+    let unreadable = || format!("an unreadable snapshot record: {row:?}");
+    let fields: Vec<&str> = row.split(FIELD_SEPARATOR).collect();
+    let (lsn, recorded_at, table, columns, numbered) = match fields.as_slice() {
+        [lsn, recorded_at, table, columns] => (lsn, recorded_at, table, columns, None),
+        [lsn, recorded_at, table, columns, highest, key, left] => {
+            (lsn, recorded_at, table, columns, Some((highest, key, left)))
+        }
+        _ => return Err(unreadable()),
+    };
+    let lsn = lsn.parse::<i64>().map_err(|_| unreadable())?;
+    let (max_attnum, key, left) = match numbered {
+        Some((highest, key, left)) => (
+            Some(highest.parse::<i16>().map_err(|_| unreadable())?),
+            Some((*key).to_owned()),
+            (*left).to_owned(),
+        ),
+        None => (None, None, String::new()),
+    };
+    Ok((
+        lsn,
+        (*recorded_at).to_owned(),
+        SnapshotRecord {
+            table: (*table).to_owned(),
+            columns: (*columns).to_owned(),
+            max_attnum,
+            key,
+            left,
+        },
+    ))
+}
+
+/// The newest slot record's LSN and, of the tables recorded under it, each one's newest record; `None` without a slot record.
+pub(crate) fn newest_snapshot(
+    records: Vec<(i64, String, SnapshotRecord)>,
+) -> Option<(i64, Vec<SnapshotRecord>)> {
+    let newest = records
+        .iter()
+        .filter(|(_, _, record)| record.table.is_empty())
+        .map(|(lsn, _, _)| *lsn)
+        .max()?;
+    let mut tables: std::collections::BTreeMap<String, (String, SnapshotRecord)> =
+        std::collections::BTreeMap::new();
+    for (lsn, recorded_at, record) in records {
+        if lsn != newest || record.table.is_empty() {
+            continue;
+        }
+        let newer = tables
+            .get(&record.table)
+            .is_none_or(|(seen, _)| recorded_at >= *seen);
+        if newer {
+            tables.insert(record.table.clone(), (recorded_at, record));
+        }
+    }
+    Some((
+        newest,
+        tables.into_values().map(|(_, record)| record).collect(),
+    ))
 }

@@ -25,6 +25,8 @@ pub enum TupleValue {
     Null,
     /// A TOASTed value the change did not touch: pgoutput leaves it out.
     Unchanged,
+    /// A column the change's table did not have when it was written: added after it, or dropped before it. Written like an unchanged value, so `merge` keeps the live one.
+    Absent,
     Text(String),
 }
 
@@ -84,6 +86,7 @@ pub struct Change {
 /// One table's changes in a batch: its shape on the stream, and its changes in commit order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableChanges {
+    /// Every shape the batch saw, as one: the first shape's columns, then columns later shapes added, with types and key flags from the newest. A change's values follow these columns; one written before a column was added stops short of it.
     pub relation: Relation,
     pub changes: Vec<Change>,
 }
@@ -120,4 +123,33 @@ pub enum StreamStep<'a> {
     Message(&'a [u8]),
     /// The open transaction's commit: its LSN, end LSN and time (microseconds since 2000 UTC).
     Commit { lsn: u64, end_lsn: u64, time: i64 },
+}
+
+/// A captured table's snapshot record: the data columns it was copied with (`,a,b,`) or last resumed with, the highest column number the table had then (dropped columns included), its key (`,id,`), and the columns it stopped loading since its snapshot (`,c,`), whose destination values no longer follow the source. Records written before column numbers were kept carry none of the last three (`left` empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotRecord {
+    pub table: String,
+    pub columns: String,
+    pub max_attnum: Option<i16>,
+    pub key: Option<String>,
+    pub left: String,
+}
+
+/// A source table's column in the catalog now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogColumn {
+    pub name: String,
+    pub attnum: i16,
+    pub dropped: bool,
+    /// It has a default (`atthasdef`), rows written before it was added read a stored value (`atthasmissing`), or it is an identity or generated column: values the stream never carried.
+    pub has_default: bool,
+}
+
+/// A captured table as this load plans it: its data columns (`,a,b,`), key (`,id,`), how changes apply, and the source columns the plan knew (excluded ones included).
+#[derive(Debug, Clone, Copy)]
+pub struct PlannedShape<'a> {
+    pub columns: &'a str,
+    pub key: &'a str,
+    pub merge: bool,
+    pub known: &'a [String],
 }

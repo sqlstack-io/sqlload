@@ -34,3 +34,12 @@ pub const VALUE_OVERHEAD_BYTES: usize = 32;
 pub const SPILL_PARTITIONS: u64 = 256;
 /// The most spilled changelog changes staged at once.
 pub const SPILL_CHUNK_CHANGES: usize = 50_000;
+
+/// The position of a read column a batch never showed: past every change's values, so each leaves it out.
+pub const NOT_STREAMED: usize = usize::MAX;
+
+/// The first Postgres version (`server_version_num`) whose publications can list columns.
+pub const COLUMN_LISTS_VERSION: i32 = 150_000;
+
+/// The first Postgres version (`server_version_num`) that can publish generated columns.
+pub const GENERATED_COLUMNS_VERSION: i32 = 180_000;

@@ -3,6 +3,7 @@ pub(crate) mod buffer;
 pub(crate) mod fold;
 pub(crate) mod pgoutput;
 pub(crate) mod reader;
+pub(crate) mod reshape;
 pub(crate) mod snapshot_log;
 pub(crate) mod spill;
 pub(crate) mod stream;

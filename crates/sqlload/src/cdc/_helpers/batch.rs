@@ -10,22 +10,23 @@ use crate::cdc::_helpers::fold::{Folder, fold_changes, key_of, key_positions};
 use crate::cdc::_helpers::spill::{SpillFile, SpillReader};
 use crate::cdc::_helpers::text_values::{arrow_type, micros_text, text_array};
 use crate::cdc::constants::{
-    DELETE_OP, INSERT_OP, SPILL_CHUNK_CHANGES, SPILL_PARTITIONS, TRUNCATE_OP, UPDATE_OP,
+    DELETE_OP, INSERT_OP, NOT_STREAMED, SPILL_CHUNK_CHANGES, SPILL_PARTITIONS, TRUNCATE_OP,
+    UPDATE_OP,
 };
 use crate::cdc::models::{Change, ChangeOp, Relation, TableChanges, TupleValue};
-use crate::postgres_source::models::ReadColumn;
+use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::schema_plan::constants::{
     CDC_COMMITTED_AT_COLUMN, CDC_LSN_COLUMN, CDC_OP_COLUMN, CDC_PREFIX, CDC_SEQ_COLUMN,
     CDC_UNCHANGED_COLUMN,
 };
 
-/// The rows `changes` of `relation` write, with the columns `read` (data columns, then the change columns) in that order: a truncate is a row without values.
+/// The rows `changes` of `relation` write, with the columns `read` (data columns, then the change columns) in that order: a truncate is a row without values. A read column the stream never showed in this batch is left out of every change.
 pub(crate) fn rows_batch(
     changes: &[Change],
     relation: &Relation,
     read: &[ReadColumn],
 ) -> Result<RecordBatch, String> {
-    let positions = column_positions(relation, read)?;
+    let positions = column_positions(relation, read);
     let data_positions: Vec<(&str, usize)> = read
         .iter()
         .zip(&positions)
@@ -232,30 +233,101 @@ fn applied_changes(
     Ok((fold_changes(kept, &positions)?, truncated))
 }
 
-/// Each read column's position on the stream; `None` for the change columns.
-fn column_positions(
-    relation: &Relation,
-    read: &[ReadColumn],
-) -> Result<Vec<Option<usize>>, String> {
-    let mut positions: Vec<Option<usize>> = Vec::with_capacity(read.len());
-    for column in read {
-        if column.name.starts_with(CDC_PREFIX) {
-            positions.push(None);
-            continue;
-        }
-        let Some(position) = relation
-            .columns
-            .iter()
-            .position(|source| source.name == column.name)
-        else {
-            return Err(format!(
-                "{}.{} no longer has column {} on the stream; schema changes while streaming come in a later release, so re-snapshot with --resnapshot",
-                relation.schema, relation.table, column.name
-            ));
-        };
-        positions.push(Some(position));
+/// The columns of `relation` on the stream that `planned`, the table as its load was planned, lacks: added (or renamed) since, so the load has nowhere to write them.
+pub(crate) fn unplanned_columns(relation: &Relation, planned: &SourceTable) -> Vec<String> {
+    let known: std::collections::BTreeSet<&str> = planned
+        .columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
+    relation
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .filter(|name| !known.contains(name.as_str()))
+        .collect()
+}
+
+/// Each read column's position on the stream, [`NOT_STREAMED`] when the batch never showed it; `None` for the change columns.
+fn column_positions(relation: &Relation, read: &[ReadColumn]) -> Vec<Option<usize>> {
+    let streamed: std::collections::BTreeMap<&str, usize> = relation
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(position, column)| (column.name.as_str(), position))
+        .collect();
+    read.iter()
+        .map(|column| {
+            (!column.name.starts_with(CDC_PREFIX)).then(|| {
+                streamed
+                    .get(column.name.as_str())
+                    .copied()
+                    .unwrap_or(NOT_STREAMED)
+            })
+        })
+        .collect()
+}
+
+/// Refuse `table`'s batch when an insert or update holds a value of a `gone` column (one the source no longer has) but leaves a `read` column out: the column was renamed (or replaced) while its changes were unloaded, so its values have nowhere to go. Every change is checked, those `spilled` to disk included, before `merge` folds them, since folding fills a left-out value from the key's earlier change and would hide the rename.
+pub(crate) fn refuse_renamed(
+    table: &TableChanges,
+    spilled: Option<&mut SpillFile>,
+    (read, gone): (&[ReadColumn], &[String]),
+) -> Result<(), String> {
+    let relation = &table.relation;
+    let gone_positions: Vec<usize> = relation
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, column)| gone.contains(&column.name))
+        .map(|(position, _)| position)
+        .collect();
+    if gone_positions.is_empty() {
+        return Ok(());
     }
-    Ok(positions)
+    let read_positions: Vec<usize> = column_positions(relation, read)
+        .into_iter()
+        .flatten()
+        .collect();
+    let misplaced = |change: &Change| {
+        matches!(change.op, ChangeOp::Insert | ChangeOp::Update)
+            && !all_left_out(change, &gone_positions)
+            && any_left_out(change, &read_positions)
+    };
+    let mut renamed = table.changes.iter().any(misplaced);
+    if let Some(file) = spilled {
+        let mut reader = file.read()?;
+        while let Some(change) = reader.next_change()? {
+            renamed = renamed || misplaced(&change);
+        }
+    }
+    match renamed {
+        true => Err(format!(
+            "{}.{} renamed or replaced column {} while changes to it were not yet loaded, so their values cannot be placed; run `sqlload load --resnapshot` to copy every table again",
+            relation.schema,
+            relation.table,
+            gone.join(", ")
+        )),
+        false => Ok(()),
+    }
+}
+
+/// Whether `change` leaves the column at `position` out: its shape lacked it.
+fn left_out(change: &Change, position: usize) -> bool {
+    change
+        .values
+        .get(position)
+        .is_none_or(|value| *value == TupleValue::Absent)
+}
+
+/// Whether `change` leaves out every column at `positions`.
+fn all_left_out(change: &Change, positions: &[usize]) -> bool {
+    positions.iter().all(|position| left_out(change, *position))
+}
+
+/// Whether `change` leaves out any column at `positions`.
+fn any_left_out(change: &Change, positions: &[usize]) -> bool {
+    positions.iter().any(|position| left_out(change, *position))
 }
 
 /// The values of the stream's column `position` as `column`'s type; an unchanged TOAST value is NULL here and flagged in `_sqlload_unchanged`.
@@ -315,11 +387,13 @@ fn op_name(op: ChangeOp) -> &'static str {
     }
 }
 
-/// The data columns whose unchanged TOAST value the change left out, as `,a,b,`; `None` when it left none out.
+/// The data columns whose value the change left out, as `,a,b,`: an unchanged TOAST value or, for an insert or update, a column its shape lacked (a delete or truncate writes no data columns); `None` when it left none out.
 fn unchanged_flags(change: &Change, data_positions: &[(&str, usize)]) -> Option<String> {
+    let writes = matches!(change.op, ChangeOp::Insert | ChangeOp::Update);
     let mut names = String::new();
     for (name, position) in data_positions {
-        if change.values.get(*position) == Some(&TupleValue::Unchanged) {
+        let value = change.values.get(*position).unwrap_or(&TupleValue::Absent);
+        if *value == TupleValue::Unchanged || (writes && *value == TupleValue::Absent) {
             names.push(',');
             names.push_str(name);
         }
