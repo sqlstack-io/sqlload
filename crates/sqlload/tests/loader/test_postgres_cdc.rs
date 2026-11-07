@@ -11,6 +11,8 @@ CREATE TABLE public.orders (id int8 PRIMARY KEY, qty int4, big text, tags text[]
 CREATE TABLE public.items (id int8 PRIMARY KEY, name text, w real DEFAULT 1.1);
 CREATE SCHEMA other;
 CREATE TABLE other.audit (n int8);
+CREATE SCHEMA docs;
+CREATE TABLE docs.pages (id int8 PRIMARY KEY, body json);
 INSERT INTO public.orders VALUES
   (1, 1, (SELECT string_agg(md5(g::text), '') FROM generate_series(1, 300) g), '{a,b}'),
   (2, 2, 'b', '{c}'), (3, 3, 'c', NULL);
@@ -192,6 +194,44 @@ const FLOAT4: [CdcStep; 2] = [
     ),
 ];
 
+const UNIQUE_SOURCE: &str = r#"
+[sources.uniq]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.items"]
+
+[sources.uniq.tables."public.items"]
+description = "Items, keyed by name."
+unique_key = ["name"]
+"#;
+
+const KEY_OUTSIDE_IDENTITY: [CdcStep; 2] = [
+    step("", &["load", "uniq"], "", (true, "loaded")),
+    step(
+        CHANGES,
+        &["load", "uniq"],
+        "",
+        (
+            false,
+            "unique_key column name is not in the table's replica identity",
+        ),
+    ),
+];
+
+const JSON_SOURCE: &str = r#"
+[sources.pages]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["docs.*"]
+"#;
+
+const UNPINNED_JSON: [CdcStep; 1] = [step(
+    "",
+    &["load", "pages"],
+    "",
+    (false, "streams json values as the source wrote them"),
+)];
+
 const STRICT_SOURCE: &str = r#"
 [sources.strict]
 kind = "postgres_cdc"
@@ -355,6 +395,22 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             extra_config: NOKEY_SOURCE,
             steps: &NO_PRIMARY_KEY,
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'nokey__audit'",
+            expected_result: "0",
+        },
+        CdcScenarioTestCase {
+            description: "a unique_key outside the replica identity stops the load instead of losing deletes",
+            tag: "17-alpine",
+            extra_config: UNIQUE_SOURCE,
+            steps: &KEY_OUTSIDE_IDENTITY,
+            check_query: "SELECT string_agg(name || ':' || _sqlload_op, ',' ORDER BY name) FROM raw.uniq__items",
+            expected_result: "one:snapshot,two:snapshot",
+        },
+        CdcScenarioTestCase {
+            description: "a json column must be pinned to text, since the stream keeps the source's spelling",
+            tag: "17-alpine",
+            extra_config: JSON_SOURCE,
+            steps: &UNPINNED_JSON,
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'pages__pages'",
             expected_result: "0",
         },
         CdcScenarioTestCase {
