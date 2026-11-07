@@ -88,7 +88,11 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
 pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String>, bool), String> {
     let json = match &request.command {
         Command::Plan(args) | Command::Apply(args) if args.follow => {
-            return Err("--follow and --max-duration apply to load only".to_owned());
+            let error = "--follow and --max-duration apply to load only";
+            return match args.json {
+                true => Ok((vec![json_error("plan", error)], false)),
+                false => Err(error.to_owned()),
+            };
         }
         Command::Plan(args) => args.json,
         Command::Apply(args) | Command::Load(args) if args.json => {
@@ -290,14 +294,18 @@ fn follow_stop(max_duration: Option<std::time::Duration>) -> CancellationToken {
         let timer = stop.clone();
         tokio::spawn(async move {
             tokio::time::sleep(limit).await;
-            tracing::info!("--max-duration passed; stopping after the current batch");
+            tracing::info!(
+                "--max-duration passed; stopping once the batch or copy under way is written"
+            );
             timer.cancel();
         });
     }
     let signalled = stop.clone();
     tokio::spawn(async move {
         wait_for_signal().await;
-        tracing::info!("stopping after the current batch; press Ctrl-C again to stop now");
+        tracing::info!(
+            "stopping once the batch or copy under way is written; press Ctrl-C again to stop now"
+        );
         signalled.cancel();
         wait_for_signal().await;
         std::process::exit(FORCED_STOP_EXIT);

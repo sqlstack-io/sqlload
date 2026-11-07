@@ -1399,7 +1399,10 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
             args: FOLLOW_SHORT,
             crash_at: "",
             writes: &[FIRST_CHANGES, SECOND_CHANGES],
+            batch_interval: "1s",
             signal: "-0",
+            expected_advanced: true,
+            expected_batches: 2,
             expected_follow: (true, "batch written"),
             expected_after: "0 rows",
             check_query: MERGED_QUERY,
@@ -1411,7 +1414,10 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
             args: FOLLOW_SHORT,
             crash_at: "",
             writes: &[FIRST_CHANGES, SECOND_CHANGES],
+            batch_interval: "1s",
             signal: "-0",
+            expected_advanced: true,
+            expected_batches: 2,
             expected_follow: (true, "batch written"),
             expected_after: "0 rows",
             check_query: MERGED_QUERY,
@@ -1423,7 +1429,10 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
             args: FOLLOW_SHORT,
             crash_at: "",
             writes: &[ADD_COLUMN],
+            batch_interval: "1s",
             signal: "-0",
+            expected_advanced: true,
+            expected_batches: 1,
             expected_follow: (true, "planning again"),
             expected_after: "0 rows",
             check_query: ITEMS_WITH_C,
@@ -1443,7 +1452,10 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
             ],
             crash_at: "",
             writes: &[ADD_COLUMN],
+            batch_interval: "1s",
             signal: "-0",
+            expected_advanced: true,
+            expected_batches: 1,
             expected_follow: (true, "planning again"),
             expected_after: "0 rows",
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_cdc_snapshots WHERE table_name = ''",
@@ -1455,23 +1467,44 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
             args: FOLLOW_SHORT,
             crash_at: "follow-before-replan",
             writes: &[ADD_COLUMN],
+            batch_interval: "1s",
             signal: "-0",
+            expected_advanced: false,
+            expected_batches: 0,
             expected_follow: (false, ""),
             expected_after: "Completed",
             check_query: ITEMS_WITH_C,
             expected_result: "1:one!:-,2:two:8,3:three:7",
         },
         FollowTestCase {
-            description: "SIGTERM writes what was read, then stops",
+            description: "SIGTERM writes what was read but not yet written, confirms it and stops",
             tag: "17-alpine",
             args: &["load", "app", "--follow"],
             crash_at: "",
             writes: &[CHANGES],
+            batch_interval: "1m",
             signal: "-TERM",
+            expected_advanced: false,
+            expected_batches: 1,
             expected_follow: (true, "stopped following"),
             expected_after: "0 rows",
             check_query: MERGED_QUERY,
             expected_result: MERGED_RESULT,
+        },
+        FollowTestCase {
+            description: "while idle it confirms the server's position past writes it does not publish",
+            tag: "17-alpine",
+            args: FOLLOW_SHORT,
+            crash_at: "",
+            writes: &[UNPUBLISHED_WRITES],
+            batch_interval: "1s",
+            signal: "-0",
+            expected_advanced: true,
+            expected_batches: 0,
+            expected_follow: (true, "stopped following"),
+            expected_after: "0 rows",
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__orders",
+            expected_result: "3",
         },
     ];
     for test_case in test_cases {
@@ -1487,7 +1520,10 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
             let config = folder.path().join("sqlload.toml");
             let project = cdc_project(postgres.port, &database).replacen(
                 "include = [\"public.*\"]\n",
-                "include = [\"public.*\"]\nbatch_interval = \"1s\"\n",
+                &format!(
+                    "include = [\"public.*\"]\nbatch_interval = \"{}\"\n",
+                    test_case.batch_interval
+                ),
                 1,
             );
             std::fs::write(&config, project).map_err(|error| error.to_string())?;
@@ -1504,8 +1540,29 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
                     .await
                     .map_err(|error| error.to_string())?;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            let written: String = client
+                .query_one("SELECT pg_current_wal_lsn()::text", &[])
+                .await
+                .map_err(|error| error.to_string())?
+                .get(0);
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let advanced: bool = client
+                .query_one(SLOT_ADVANCED, &[&written])
+                .await
+                .map_err(|error| error.to_string())?
+                .get(0);
             let (success, output) = stop_sqlload(child, test_case.signal).await?;
+            assert_eq!(
+                advanced, test_case.expected_advanced,
+                "{}: whether the slot confirmed the writes before the stop\n{output}",
+                test_case.description
+            );
+            assert!(
+                output.matches("batch written").count() >= test_case.expected_batches,
+                "{}: fewer than {} batches written\n{output}",
+                test_case.description,
+                test_case.expected_batches
+            );
             assert_eq!(
                 success, test_case.expected_follow.0,
                 "{}\n{output}",

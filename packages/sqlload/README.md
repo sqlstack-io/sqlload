@@ -226,16 +226,21 @@ deletes = "soft"          # soft (default) | hard; merge only
   started, then stops.
 - `sqlload load app_cdc --follow` keeps streaming after it catches up, writing what it read every
   `batch_interval` (at least `1s`). It stops when `--max-duration` passes (`--max-duration 10m`)
-  or at Ctrl-C or SIGTERM, after writing and confirming what it read; a second Ctrl-C stops at
-  once (exit code 130), which is safe, since the next load skips what was written.
+  or at Ctrl-C or SIGTERM, after writing and confirming what it read (a snapshot or copy under
+  way finishes first); a second Ctrl-C stops at once (exit code 130), which is safe, since the
+  next load skips what was written.
   - It follows one `postgres_cdc` source per process, and nothing else: select that source.
     `--resnapshot` applies once, at the start.
   - A table that gains a column while it follows is planned again, its destination altered, and
-    the stream picks up where it was confirmed. Every other error stops it (exit code 1) without
-    confirming anything unwritten, so run it under a supervisor that restarts it.
+    the stream picks up where it was confirmed. A stop at that moment leaves that batch for the
+    next load, and the same gain again after the re-plan stops it. Every other error, including a
+    re-plan that blocks a table, stops it (exit code 1) without confirming anything unwritten, so
+    run it under a supervisor that restarts it.
   - Each batch written logs its changes, tables, LSN, and how far it is behind the server
     (`behind_bytes`, and `behind_secs` since its newest commit). While idle it writes nothing and
     confirms the server's position, so the slot keeps no WAL for writes it does not publish.
+    An idle follow sends Snowflake no queries, so its warehouse can suspend; each batch written
+    resumes it, and a longer `batch_interval` writes fewer, larger batches.
 - Every row carries `_sqlload_lsn` (its transaction's commit LSN), `_sqlload_op` (`snapshot`,
   `insert`, `update`, `delete` or `truncate`) and `_sqlload_committed_at`.
   - `merge` keeps one row per key. A soft delete sets `_sqlload_deleted_at`, and a truncate

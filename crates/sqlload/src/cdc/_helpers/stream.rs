@@ -18,7 +18,7 @@ use crate::cdc::_helpers::snapshot_log::SnapshotLog;
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{
     BACKFILL_SLOT_SUFFIX, BATCH_CHANGES, COLUMN_LISTS_VERSION, GENERATED_COLUMNS_VERSION,
-    LOST_WAL_STATUS, MICROS_PER_SECOND, POSTGRES_EPOCH_MICROS, REPLICATION_OPTIONS,
+    LOST_WAL_STATUS, MICROS_PER_SECOND, POSTGRES_EPOCH_MICROS, REPLAN_ADVICE, REPLICATION_OPTIONS,
     SLOT_NAME_BYTES, SLOTS_FULL_ERROR, SNAPSHOT_SETTINGS, SPILL_BYTES, STOP_MESSAGE_PREFIX,
 };
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
@@ -799,7 +799,6 @@ impl CdcSource<'_> {
                     }));
                 }
                 FollowStep::Tick | FollowStep::Stop => {
-                    deadline = tokio::time::Instant::now() + interval;
                     let cut = self
                         .cut(control, stream, (buffer, server_end, newest_commit))
                         .await;
@@ -811,6 +810,7 @@ impl CdcSource<'_> {
                         }
                     };
                     (buffer, streamed) = (next_buffer, merged(streamed, written));
+                    deadline = tokio::time::Instant::now() + interval;
                     if matches!(next, FollowStep::Stop) {
                         return Ok(streamed);
                     }
@@ -898,7 +898,7 @@ impl CdcSource<'_> {
         let spilled = std::mem::take(&mut buffer.spilled);
         let changes = buffer.count;
         buffer.count = 0;
-        buffer.bytes = 0;
+        buffer.bytes = buffer.open.iter().map(Vec::len).sum();
         let touched = tables.len()
             + spilled
                 .keys()
@@ -1058,7 +1058,7 @@ impl CdcSource<'_> {
         match gained.is_empty() {
             true => Ok(gone),
             false => Err(LoaderError::Replan(format!(
-                "{}.{} gained {} {} during this load; run it again, and the next load plans for {}",
+                "{}.{} gained {} {}{REPLAN_ADVICE}, and the next load plans for {}",
                 changes.relation.schema,
                 changes.relation.table,
                 match gained.len() {
@@ -1265,7 +1265,7 @@ async fn catalog_columns(
         .collect())
 }
 
-/// One follow of `plan`'s source until `stop`, or until a table gains a column: its unblocked tables, the rows each wrote and why to re-plan, or why it failed. A source with a blocked table does not follow, since its slot would skip that table's changes.
+/// One follow of `plan`'s source until `stop`, or until a table gains a column: its tables, the rows each wrote and why to re-plan, or why it failed. A source with a blocked table does not follow, since its slot would skip that table's changes; the error then names every blocked table with its reasons, and the plan's problems.
 pub(crate) async fn follow_round<'a>(
     run: &LoadRun<'_>,
     plan: &'a ProjectPlan,
@@ -1275,21 +1275,38 @@ pub(crate) async fn follow_round<'a>(
     Result<(BTreeMap<String, u64>, Option<String>), String>,
 ) {
     let Some((name, (tables, blocked))) = captured_sources(plan).into_iter().next() else {
-        return (
-            Vec::new(),
-            Err("load --follow needs a postgres_cdc source".to_owned()),
-        );
+        let problems: Vec<&str> = std::iter::once("load --follow needs a postgres_cdc source")
+            .chain(plan.problems.iter().map(String::as_str))
+            .collect();
+        return (Vec::new(), Err(problems.join("; ")));
     };
     if !blocked.is_empty() {
+        let all: Vec<&TablePlan> = plan
+            .tables
+            .iter()
+            .filter(|table| table.spec.cdc.is_some() && table.spec.source_name == name)
+            .collect();
+        let mut reasons: Vec<String> = Vec::new();
+        for table in &all {
+            if let Some(blocked) = &table.schema.blocked {
+                reasons.push(format!(
+                    "{} ({})",
+                    table.spec.destination.table,
+                    blocked.reasons.join("; ")
+                ));
+            }
+        }
+        reasons.extend(plan.problems.iter().cloned());
         let error = format!(
-            "source {name} does not follow while {} {} blocked: its tables share one slot, so following the rest would skip the blocked tables' changes",
+            "source {name} does not follow while {} {} blocked: its tables share one slot, so following the rest would skip the blocked tables' changes; {}",
             blocked.join(", "),
             match blocked.len() {
                 1 => "is",
                 _ => "are",
-            }
+            },
+            reasons.join("; ")
         );
-        return (tables, Err(error));
+        return (all, Err(error));
     }
     let followed = load_source(run, name, (&tables, Some(stop))).await;
     (tables, followed)
@@ -1314,15 +1331,59 @@ pub(crate) async fn replan(
     Ok((plan, lines))
 }
 
+/// What a follow round's outcome means next, given the rows so far, the last re-plan's reason and whether following was asked to stop: the rows with the round's added, and `Ok(None)` to finish, `Ok(Some(reason))` to plan again, or the error that stops it. The same gain again with no batch written since stops it, since planning again did not take it in; a stop as a table gains a column finishes, leaving that batch for the next load.
+pub(crate) fn follow_next(
+    followed: Result<(BTreeMap<String, u64>, Option<String>), String>,
+    (rows, last_reason, stopped): (BTreeMap<String, u64>, Option<&str>, bool),
+) -> (BTreeMap<String, u64>, Result<Option<String>, String>) {
+    let (written, replan) = match followed {
+        Ok(followed) => followed,
+        Err(error) => return (rows, Err(error)),
+    };
+    let wrote = written.values().sum::<u64>() > 0;
+    let rows = added(rows, written);
+    let Some(reason) = replan else {
+        return (rows, Ok(None));
+    };
+    let gained = reason.split(REPLAN_ADVICE).next().unwrap_or_default();
+    if stopped {
+        tracing::warn!(%gained, "stopped before writing the last batch; the next load plans for it and writes it");
+        return (rows, Ok(None));
+    }
+    match (wrote, last_reason == Some(reason.as_str())) {
+        (false, true) => (
+            rows,
+            Err(format!(
+                "{gained} again after it was planned for, with no batch written since, so following stopped; run `sqlload plan` to see why the plan leaves it out"
+            )),
+        ),
+        _ => (rows, Ok(Some(reason))),
+    }
+}
+
 /// `rows` with each table's `written` rows added.
-pub(crate) fn added(
-    mut rows: BTreeMap<String, u64>,
-    written: BTreeMap<String, u64>,
-) -> BTreeMap<String, u64> {
+fn added(mut rows: BTreeMap<String, u64>, written: BTreeMap<String, u64>) -> BTreeMap<String, u64> {
     for (table, count) in written {
         *rows.entry(table).or_default() += count;
     }
     rows
+}
+
+/// Each of `tables` failing with `error`; one failure for the whole follow when there are none, so the load still fails.
+pub(crate) fn failed_outcomes(
+    tables: &[&TablePlan],
+    error: String,
+    elapsed: Duration,
+) -> Vec<TableOutcome> {
+    let outcomes = source_outcomes(tables, &Err(error.clone()), elapsed);
+    match outcomes.is_empty() {
+        true => vec![TableOutcome {
+            table: "load --follow".to_owned(),
+            loaded: Err(error),
+            elapsed,
+        }],
+        false => outcomes,
+    }
 }
 
 /// `outcomes` with the re-plans' `applied` lines on the first, so the tally prints them.

@@ -58,3 +58,6 @@ pub const BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1
 
 /// Microseconds in a second, for how far behind a followed batch's newest commit is.
 pub const MICROS_PER_SECOND: i64 = 1_000_000;
+
+/// What a load that found a table gaining a column says to do, after naming the table and columns.
+pub const REPLAN_ADVICE: &str = " during this load; run it again";
