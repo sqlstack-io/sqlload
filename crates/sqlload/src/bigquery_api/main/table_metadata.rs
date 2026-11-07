@@ -8,7 +8,7 @@ use crate::bigquery_api::models::BigQueryClient;
 use crate::http::errors::ApiError;
 
 /// `tables.get` for `project.dataset.table` (its schema, options and description), or `None` when the table or dataset does not exist; this reads metadata only, so it scans and bills nothing.
-pub async fn get_table(
+pub async fn table_metadata(
     client: &BigQueryClient,
     (project, dataset, table): (&str, &str, &str),
 ) -> Result<Option<Value>, ApiError> {

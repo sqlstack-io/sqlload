@@ -63,7 +63,10 @@ pub(crate) async fn google_response(
 
 /// The reason and message of a Google error body, falling back to the start of the raw text.
 pub(crate) fn google_error(body: &str) -> (String, String) {
-    let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(parsed) => parsed,
+        Err(_) => return (String::new(), body.chars().take(300).collect()),
+    };
     let error = &parsed["error"];
     if let Some(text) = error.as_str() {
         let message = parsed["error_description"].as_str().unwrap_or(text);

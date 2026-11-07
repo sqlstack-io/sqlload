@@ -2,6 +2,11 @@
 
 use serde_json::Value;
 
+use crate::bigquery_api::_helpers::requests::{json_with_retries, send};
+use crate::bigquery_api::constants::QUERY_WAIT_MS;
+use crate::bigquery_api::models::BigQueryClient;
+use crate::http::errors::ApiError;
+
 /// Where a query job stands: still running, or done with a next page of rows or none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum JobState {
@@ -49,4 +54,56 @@ pub(crate) fn page_rows(response: &Value) -> Vec<Vec<Option<String>>> {
         rows.push(values);
     }
     rows
+}
+
+/// The job's error, when its answer reports one.
+pub(crate) fn job_error(response: &Value) -> Result<(), ApiError> {
+    let error = &response["errors"][0];
+    if error.is_null() {
+        return Ok(());
+    }
+    Err(ApiError::Status {
+        status: 400,
+        code: error["reason"]
+            .as_str()
+            .unwrap_or("invalidQuery")
+            .to_owned(),
+        message: error["message"]
+            .as_str()
+            .unwrap_or("the query failed")
+            .to_owned(),
+    })
+}
+
+/// `jobs.getQueryResults` for `job`, waiting up to [`QUERY_WAIT_MS`] on the server, from `page` when given.
+pub(crate) async fn query_results(
+    client: &BigQueryClient,
+    job: &str,
+    page: Option<&str>,
+) -> Result<Value, ApiError> {
+    let url = format!(
+        "{}/projects/{}/queries/{job}",
+        client.base_url, client.project
+    );
+    let wait = QUERY_WAIT_MS.to_string();
+    json_with_retries(client, |http| {
+        let mut query = vec![("location", client.location.as_str()), ("timeoutMs", &wait)];
+        if let Some(page) = page {
+            query.push(("pageToken", page));
+        }
+        http.get(&url).query(&query)
+    })
+    .await
+}
+
+/// Ask BigQuery to cancel a job this client stopped waiting for; a cancel that fails only warns.
+pub(crate) async fn cancel_job(client: &BigQueryClient, job: &str) {
+    let url = format!(
+        "{}/projects/{}/jobs/{job}/cancel",
+        client.base_url, client.project
+    );
+    let location = [("location", client.location.as_str())];
+    if let Err(error) = send(client, |http| http.post(&url).query(&location)).await {
+        tracing::warn!(%error, job_id = job, "cannot cancel a BigQuery job no longer waited for");
+    }
 }

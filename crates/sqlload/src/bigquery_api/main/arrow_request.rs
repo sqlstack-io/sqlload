@@ -30,7 +30,7 @@ pub fn arrow_request(
                 &mut tracker,
                 &options,
             );
-            let mut bytes = Vec::new();
+            let mut bytes: Vec<u8> = Vec::new();
             write_message(&mut bytes, encoded, &options).map_err(encoding)?;
             Some(ArrowSchema {
                 serialized_schema: bytes,
@@ -51,7 +51,7 @@ pub fn arrow_request(
             "the Storage Write API takes no dictionary columns".to_owned(),
         ));
     }
-    let mut rows = Vec::new();
+    let mut rows: Vec<u8> = Vec::new();
     write_message(&mut rows, encoded, &options).map_err(encoding)?;
     Ok(AppendRowsRequest {
         write_stream: write_stream.to_owned(),

@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::adapters::bigquery::models::{BigQueryDestination, BigQuerySql};
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
-use crate::bigquery_api::main::get_table::get_table;
+use crate::bigquery_api::main::table_metadata::table_metadata;
 use crate::column_types::models::LiveColumnType;
 use crate::http::errors::ApiError;
 use crate::schema_plan::models::LiveColumn;
@@ -16,13 +16,18 @@ pub(in crate::adapters) async fn describe_table(
     table: &TableName,
 ) -> Result<Option<Vec<LiveColumn>>, ApiError> {
     let project = table.database.as_deref().unwrap_or(&destination.project);
-    let Some(found) = get_table(&destination.api, (project, &table.schema, &table.table)).await?
+    let Some(found) =
+        table_metadata(&destination.api, (project, &table.schema, &table.table)).await?
     else {
         return Ok(None);
     };
     let number = |value: &Value| match value {
-        Value::String(text) => text.parse::<i64>().ok(),
-        other => other.as_i64(),
+        Value::String(text) => text.parse::<i64>().map(Some).map_err(|error| {
+            ApiError::Protocol(format!(
+                "tables.get gave a column size {text:?} that is not a number: {error}"
+            ))
+        }),
+        other => Ok(other.as_i64()),
     };
     let adapter = BigQuerySql;
     let columns: Vec<LiveColumn> = found["schema"]["fields"]
@@ -38,17 +43,17 @@ pub(in crate::adapters) async fn describe_table(
                 Some("REPEATED") => format!("ARRAY<{base}>"),
                 _ => base.to_owned(),
             };
-            LiveColumn {
+            Ok(LiveColumn {
                 name: field["name"].as_str().unwrap_or_default().to_owned(),
                 column_type: adapter.live_type(&LiveColumnType {
                     data_type,
-                    precision: number(&field["precision"]),
-                    scale: number(&field["scale"]),
-                    char_length: number(&field["maxLength"]),
+                    precision: number(&field["precision"])?,
+                    scale: number(&field["scale"])?,
+                    char_length: number(&field["maxLength"])?,
                 }),
                 fraction_digits: None,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<LiveColumn>, ApiError>>()?;
     Ok(Some(columns))
 }

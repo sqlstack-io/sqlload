@@ -14,11 +14,11 @@ use sqlload::bigquery_api::main::finalize_write_stream::finalize_write_stream;
 use sqlload::bigquery_api::main::parse_key::parse_key;
 use sqlload::bigquery_api::main::run_query::run_query;
 use sqlload::bigquery_api::main::table_path::table_path;
-use sqlload::bigquery_api::models::BigQueryClient;
+use sqlload::bigquery_api::models::{AppendRowsRequest, AppendStream, BigQueryClient};
 
 use crate::test_types::{LiveBigQuery, LiveWriteApiTestCase, WriteApiOutcome};
 
-/// The project and dataset the live BigQuery tests use; `Ok(None)` when `SQLLOAD_BIGQUERY_DATASET` is unset, which skips them.
+/// The key's project and the dataset the live BigQuery tests use; `Ok(None)` when `SQLLOAD_BIGQUERY_DATASET` is unset, which skips them.
 pub(crate) fn live_bigquery() -> Result<Option<LiveBigQuery>, String> {
     let Ok(dataset) = std::env::var("SQLLOAD_BIGQUERY_DATASET") else {
         return Ok(None);
@@ -28,14 +28,9 @@ pub(crate) fn live_bigquery() -> Result<Option<LiveBigQuery>, String> {
     ))?;
     let key = std::env::var("GCP_BQ_SANDBOX_SA_KEY")
         .map_err(|_| "GCP_BQ_SANDBOX_SA_KEY is not set".to_owned())?;
-    let project = match std::env::var("SQLLOAD_BIGQUERY_PROJECT") {
-        Ok(project) => project,
-        Err(_) => {
-            parse_key(&key)
-                .map_err(|error| error.to_string())?
-                .project_id
-        }
-    };
+    let project = parse_key(&key)
+        .map_err(|error| error.to_string())?
+        .project_id;
     Ok(Some(LiveBigQuery {
         key,
         project,
@@ -140,7 +135,21 @@ async fn table_rows(client: &BigQueryClient, table: &str) -> Result<String, Stri
         .unwrap_or_default())
 }
 
-/// Stream the case's batches into a new table, named for the case and `run` because the Write API keeps refusing a dropped table's name for a while, through one pending stream, then finalize (when the case does) and commit it: the first error, the rows visible before the commit, and the rows after.
+/// The error code of the next answer on `appends`, 0 when BigQuery accepted the request, with how many rows it refused.
+async fn append_answer(appends: &mut AppendStream) -> Result<(i32, usize), String> {
+    let answer = appends
+        .responses
+        .message()
+        .await
+        .map_err(|status| status.to_string())?
+        .ok_or_else(|| "the append stream ended early".to_owned())?;
+    Ok((
+        answer.error.map_or(0, |error| error.code),
+        answer.row_errors.len(),
+    ))
+}
+
+/// Stream the case's batches into a new table through one pending stream, finalize it when the case does, then commit it. The table is named for the case and `run`, because the Write API keeps refusing a dropped table's name for a while.
 pub(crate) async fn stream_into_live_table(
     client: &BigQueryClient,
     live: &LiveBigQuery,
@@ -159,55 +168,54 @@ pub(crate) async fn stream_into_live_table(
     let stream = create_write_stream(client, &parent)
         .await
         .map_err(|error| error.to_string())?;
-    let mut outcome = WriteApiOutcome::default();
+    let mut requests: Vec<AppendRowsRequest> = Vec::new();
     let mut offset = test_case.first_offset;
-    let mut appends = None;
     for (index, ids) in test_case.batches.iter().enumerate() {
-        let request = arrow_request(&stream.name, offset, &orders(ids)?, index == 0)
-            .map_err(|error| error.to_string())?;
-        offset += i64::try_from(ids.len()).map_err(|error| error.to_string())?;
-        let opened = match appends.take() {
-            None => append_rows(client, request)
-                .await
+        requests.push(
+            arrow_request(&stream.name, offset, &orders(ids)?, index == 0)
                 .map_err(|error| error.to_string())?,
-            Some(opened) => {
-                let sqlload::bigquery_api::models::AppendStream {
-                    requests,
-                    responses,
-                } = opened;
-                requests
-                    .send(request)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                sqlload::bigquery_api::models::AppendStream {
-                    requests,
-                    responses,
-                }
-            }
-        };
-        let mut opened = opened;
-        let answer = opened
-            .responses
-            .message()
+        );
+        offset += i64::try_from(ids.len()).map_err(|error| error.to_string())?;
+    }
+    let mut pending = requests.into_iter();
+    let first = pending
+        .next()
+        .ok_or_else(|| "every case appends at least one batch".to_owned())?;
+    let mut appends = append_rows(client, first)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut outcome = WriteApiOutcome {
+        append_answers: vec![append_answer(&mut appends).await?],
+        ..WriteApiOutcome::default()
+    };
+    for request in pending {
+        appends
+            .requests
+            .send(request)
             .await
-            .map_err(|status| status.to_string())?;
-        let answer = answer.ok_or_else(|| "the append stream ended early".to_owned())?;
-        if let Some(error) = answer.error {
-            outcome.error = format!("append refused: {}: {}", error.code, error.message);
-            return Ok(outcome);
-        }
-        appends = Some(opened);
+            .map_err(|error| error.to_string())?;
+        outcome
+            .append_answers
+            .push(append_answer(&mut appends).await?);
     }
     drop(appends);
-    if test_case.finalize {
-        outcome.finalized_rows = finalize_write_stream(client, &stream.name)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
+    outcome.finalized_rows = futures_util::future::OptionFuture::from(
+        test_case
+            .finalize
+            .then(|| finalize_write_stream(client, &stream.name)),
+    )
+    .await
+    .transpose()
+    .map_err(|error| error.to_string())?
+    .unwrap_or_default();
     outcome.visible_before_commit = table_rows(client, &table).await?;
-    if let Err(error) = batch_commit_write_streams(client, &parent, std::slice::from_ref(&stream.name)).await {
-        outcome.error = error.to_string();
-    }
+    outcome.commit =
+        batch_commit_write_streams(client, &parent, std::slice::from_ref(&stream.name))
+            .await
+            .map_or_else(
+                |error| error.to_string().replace(&stream.name, "<stream>"),
+                |_| "committed".to_owned(),
+            );
     outcome.rows = table_rows(client, &table).await?;
     Ok(outcome)
 }

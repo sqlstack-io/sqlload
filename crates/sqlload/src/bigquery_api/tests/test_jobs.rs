@@ -17,8 +17,7 @@ fn given_a_query_answer_when_reading_it_then_running_paged_and_finished_jobs_are
         JobAnswerTestCase {
             description: "a job still running is polled by its id",
             response: json!({"jobComplete": false, "jobReference": {"jobId": "job_1"}}),
-            expected_running: Some("job_1"),
-            expected_page_token: None,
+            expected_state: JobState::Running("job_1".to_owned()),
             expected_columns: &[],
             expected_rows: Vec::new(),
         },
@@ -34,8 +33,7 @@ fn given_a_query_answer_when_reading_it_then_running_paged_and_finished_jobs_are
                     {"f": [{"v": "2"}, {"v": [{"v": "a"}]}]}
                 ]
             }),
-            expected_running: None,
-            expected_page_token: Some("next"),
+            expected_state: JobState::Done(Some("next".to_owned())),
             expected_columns: &["id", "tags"],
             expected_rows: vec![
                 vec![Some("1"), None],
@@ -45,17 +43,12 @@ fn given_a_query_answer_when_reading_it_then_running_paged_and_finished_jobs_are
         JobAnswerTestCase {
             description: "a statement with no rows finishes with none",
             response: json!({"jobComplete": true, "jobReference": {"jobId": "job_3"}}),
-            expected_running: None,
-            expected_page_token: None,
+            expected_state: JobState::Done(None),
             expected_columns: &[],
             expected_rows: Vec::new(),
         },
     ];
     for test_case in test_cases {
-        let expected_state = match test_case.expected_running {
-            Some(id) => JobState::Running(id.to_owned()),
-            None => JobState::Done(test_case.expected_page_token.map(str::to_owned)),
-        };
         let expected_rows: Vec<Vec<Option<String>>> = test_case
             .expected_rows
             .iter()
@@ -68,7 +61,7 @@ fn given_a_query_answer_when_reading_it_then_running_paged_and_finished_jobs_are
                 page_rows(&test_case.response)
             ),
             (
-                expected_state,
+                test_case.expected_state,
                 test_case
                     .expected_columns
                     .iter()
@@ -88,24 +81,27 @@ fn given_a_google_error_body_when_reading_it_then_its_reason_and_message_are_kep
         GoogleErrorTestCase {
             description: "a REST error gives its first reason",
             body: r#"{"error": {"code": 404, "message": "Not found: Table p:d.t", "errors": [{"reason": "notFound"}], "status": "NOT_FOUND"}}"#,
-            expected: ("notFound", "Not found: Table p:d.t"),
+            expected_reason: "notFound",
+            expected_message: "Not found: Table p:d.t",
         },
         GoogleErrorTestCase {
             description: "an OAuth error gives its code and description",
             body: r#"{"error": "invalid_grant", "error_description": "Invalid JWT Signature."}"#,
-            expected: ("invalid_grant", "Invalid JWT Signature."),
+            expected_reason: "invalid_grant",
+            expected_message: "Invalid JWT Signature.",
         },
         GoogleErrorTestCase {
             description: "a body that is not JSON is kept as text",
             body: "upstream connect error",
-            expected: ("", "upstream connect error"),
+            expected_reason: "",
+            expected_message: "upstream connect error",
         },
     ];
     for test_case in test_cases {
         let (code, message) = google_error(test_case.body);
         assert_eq!(
             (code.as_str(), message.as_str()),
-            test_case.expected,
+            (test_case.expected_reason, test_case.expected_message),
             "{}",
             test_case.description
         );
@@ -124,14 +120,14 @@ fn given_a_service_account_key_file_when_signing_then_the_assertion_asks_for_big
         KeyFileTestCase {
             description: "a complete key file signs for its account, audience and BigQuery's scope",
             fields: json!({"client_email": "loader@example.iam.gserviceaccount.com", "token_uri": "https://oauth2.example.com/token", "project_id": "demo"}),
-            expected_error: "",
-            expected_claims: json!({"iss": "loader@example.iam.gserviceaccount.com", "scope": "https://www.googleapis.com/auth/bigquery", "aud": "https://oauth2.example.com/token", "iat": 1000, "exp": 4600}),
+            expected_claims: Ok(
+                json!({"iss": "loader@example.iam.gserviceaccount.com", "scope": "https://www.googleapis.com/auth/bigquery", "aud": "https://oauth2.example.com/token", "iat": 1000, "exp": 4600}),
+            ),
         },
         KeyFileTestCase {
             description: "a key file without its account is refused by name",
             fields: json!({"token_uri": "https://oauth2.example.com/token", "project_id": "demo"}),
-            expected_error: "the service-account key has no client_email",
-            expected_claims: json!(null),
+            expected_claims: Err("the service-account key has no client_email"),
         },
     ];
     for test_case in test_cases {
@@ -148,11 +144,12 @@ fn given_a_service_account_key_file_when_signing_then_the_assertion_asks_for_big
                 serde_json::from_slice::<serde_json::Value>(&bytes)
                     .map_err(|error| error.to_string())
             });
-        let expected = match test_case.expected_error {
-            "" => Ok(test_case.expected_claims.clone()),
-            error => Err(error.to_owned()),
-        };
-        assert_eq!(claims, expected, "{}", test_case.description);
+        assert_eq!(
+            claims,
+            test_case.expected_claims.clone().map_err(str::to_owned),
+            "{}",
+            test_case.description
+        );
     }
     Ok(())
 }

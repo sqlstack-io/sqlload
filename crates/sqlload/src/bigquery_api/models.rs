@@ -64,14 +64,16 @@ impl BigQueryClient {
 }
 
 /// `google.protobuf.Int64Value`.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct Int64Value {
     #[prost(int64, tag = "1")]
     pub value: i64,
 }
 
 /// `google.protobuf.Timestamp`.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct Timestamp {
     #[prost(int64, tag = "1")]
     pub seconds: i64,
@@ -80,7 +82,8 @@ pub struct Timestamp {
 }
 
 /// `google.rpc.Status`, without its details.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct RpcStatus {
     #[prost(int32, tag = "1")]
     pub code: i32,
@@ -89,7 +92,8 @@ pub struct RpcStatus {
 }
 
 /// `WriteStream`: a stream's name and type ([`PENDING_STREAM`](crate::bigquery_api::constants::PENDING_STREAM) for rows that commit together later).
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct WriteStream {
     #[prost(string, tag = "1")]
     pub name: String,
@@ -98,7 +102,8 @@ pub struct WriteStream {
 }
 
 /// `CreateWriteStreamRequest`: a new stream on the table `parent` (`projects/p/datasets/d/tables/t`).
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct CreateWriteStreamRequest {
     #[prost(string, tag = "1")]
     pub parent: String,
@@ -107,21 +112,24 @@ pub struct CreateWriteStreamRequest {
 }
 
 /// `ArrowSchema`: an encapsulated Arrow IPC schema message.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct ArrowSchema {
     #[prost(bytes = "vec", tag = "1")]
     pub serialized_schema: Vec<u8>,
 }
 
 /// `ArrowRecordBatch`: an encapsulated Arrow IPC record batch message.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct ArrowRecordBatch {
     #[prost(bytes = "vec", tag = "1")]
     pub serialized_record_batch: Vec<u8>,
 }
 
 /// `AppendRowsRequest.ArrowData`: the rows, with the schema on a stream's first request.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct ArrowData {
     #[prost(message, optional, tag = "1")]
     pub writer_schema: Option<ArrowSchema>,
@@ -130,7 +138,8 @@ pub struct ArrowData {
 }
 
 /// `AppendRowsRequest` with Arrow rows (field 5 of its `rows` oneof), at the stream row `offset` they start at.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct AppendRowsRequest {
     #[prost(string, tag = "1")]
     pub write_stream: String,
@@ -143,15 +152,17 @@ pub struct AppendRowsRequest {
 }
 
 /// `AppendRowsResponse.AppendResult`.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct AppendResult {
     #[prost(message, optional, tag = "1")]
     pub offset: Option<Int64Value>,
 }
 
 /// `RowError`: a row of a request that BigQuery refused, and why.
-#[derive(Clone, PartialEq, prost::Message)]
-pub struct RowError {
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct RefusedRow {
     #[prost(int64, tag = "1")]
     pub index: i64,
     #[prost(int32, tag = "2")]
@@ -161,34 +172,38 @@ pub struct RowError {
 }
 
 /// `AppendRowsResponse`: the request's result or its error (fields 1 and 2 of its `response` oneof), and refused rows.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct AppendRowsResponse {
     #[prost(message, optional, tag = "1")]
     pub append_result: Option<AppendResult>,
     #[prost(message, optional, tag = "2")]
     pub error: Option<RpcStatus>,
     #[prost(message, repeated, tag = "4")]
-    pub row_errors: Vec<RowError>,
+    pub row_errors: Vec<RefusedRow>,
     #[prost(string, tag = "5")]
     pub write_stream: String,
 }
 
 /// `FinalizeWriteStreamRequest`.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct FinalizeWriteStreamRequest {
     #[prost(string, tag = "1")]
     pub name: String,
 }
 
 /// `FinalizeWriteStreamResponse`.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct FinalizeWriteStreamResponse {
     #[prost(int64, tag = "1")]
     pub row_count: i64,
 }
 
 /// `BatchCommitWriteStreamsRequest`: finalized pending streams of the table `parent`, committed at once.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct BatchCommitWriteStreamsRequest {
     #[prost(string, tag = "1")]
     pub parent: String,
@@ -197,8 +212,9 @@ pub struct BatchCommitWriteStreamsRequest {
 }
 
 /// `StorageError`: why a stream could not commit.
-#[derive(Clone, PartialEq, prost::Message)]
-pub struct StorageError {
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct StreamRefusal {
     #[prost(int32, tag = "1")]
     pub code: i32,
     #[prost(string, tag = "2")]
@@ -208,12 +224,13 @@ pub struct StorageError {
 }
 
 /// `BatchCommitWriteStreamsResponse`: when the streams committed, or why none did.
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
 pub struct BatchCommitWriteStreamsResponse {
     #[prost(message, optional, tag = "1")]
     pub commit_time: Option<Timestamp>,
     #[prost(message, repeated, tag = "2")]
-    pub stream_errors: Vec<StorageError>,
+    pub stream_errors: Vec<StreamRefusal>,
 }
 
 /// An open `AppendRows` call: requests go in through `requests`, and each request's answer comes back, in order, on `responses`.

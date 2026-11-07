@@ -557,18 +557,23 @@ pub(crate) struct LiveWriteApiTestCase {
     /// The row offset the first request claims; a new stream is at 0.
     pub(crate) first_offset: i64,
     pub(crate) finalize: bool,
-    pub(crate) expected: WriteApiOutcome,
+    /// Each request's error code (0 when accepted) and how many rows it refused.
+    pub(crate) expected_append_answers: &'static [(i32, usize)],
+    pub(crate) expected_finalized_rows: i64,
+    pub(crate) expected_visible_before_commit: &'static str,
+    /// `committed`, or the commit's error with the stream's name as `<stream>`.
+    pub(crate) expected_commit: &'static str,
+    pub(crate) expected_rows: &'static str,
 }
 
-/// What one streamed table shows.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// What one streamed table showed.
+#[derive(Debug, Default)]
 pub(crate) struct WriteApiOutcome {
-    /// The first refusal, empty when none.
-    pub(crate) error: String,
-    /// What finalizing counted.
+    pub(crate) append_answers: Vec<(i32, usize)>,
     pub(crate) finalized_rows: i64,
     /// The rows a query saw after the appends, before the commit.
     pub(crate) visible_before_commit: String,
-    /// The rows after the commit.
+    pub(crate) commit: String,
+    /// The rows after the commit, as `id:name:amount:placed_at:note`.
     pub(crate) rows: String,
 }

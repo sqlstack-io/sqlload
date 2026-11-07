@@ -3,7 +3,7 @@ pub mod arrow_request;
 pub mod batch_commit_write_streams;
 pub mod create_write_stream;
 pub mod finalize_write_stream;
-pub mod get_table;
 pub mod parse_key;
 pub mod run_query;
+pub mod table_metadata;
 pub mod table_path;
