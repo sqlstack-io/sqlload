@@ -1,12 +1,12 @@
 ---
 title: "Postgres CDC"
-description: "Stream a Postgres database's inserts, updates and deletes from a logical replication slot into DuckDB, Snowflake or Parquet files."
+description: "Stream a Postgres database's inserts, updates and deletes from a logical replication slot into DuckDB, Snowflake, Databricks or Parquet files."
 ---
 
 A `postgres_cdc` source captures a Postgres database's changes. The first `sqlload load` copies
 every table under a snapshot. Each later load reads the inserts, updates and deletes committed
 since the last one from a logical replication slot, applies them, and stops. It loads into
-DuckDB and Snowflake targets, and into files targets as a changelog.
+DuckDB, Snowflake and Databricks targets, and into files targets as a changelog.
 
 Use sqlload 0.17.0 or later for `postgres_cdc`. In 0.16.0, a transaction that changed a table's
 columns after writing to it could put values in the wrong columns. Schema changes while streaming
@@ -15,7 +15,8 @@ From 0.19.0, a table that joins the source is copied on its own, and a first sna
 stopped part-way resumes; in 0.18.0, both needed `--resnapshot`. `load --follow`, which keeps
 streaming, is in 0.20.0 and later, and files targets in 0.21.0 and later. From 0.22.0,
 `--reload` refuses captured tables on every target (see [Reloading](#reloading)); before, a
-warehouse target accepted it but didn't rebuild the tables.
+warehouse target accepted it but didn't rebuild the tables. Databricks targets are in 0.23.0
+and later.
 
 ## Requirements
 
@@ -26,8 +27,8 @@ warehouse target accepted it but didn't rebuild the tables.
   tables and has `CREATE` on the database. Otherwise, create one as the tables' owner and name it
   with `publication`; SQLLoad then only checks it.
 - **Every table** has a primary key and a replica identity other than `NOTHING`.
-- **The target** is DuckDB, Snowflake, or a files target with `cdc_mode = "changelog"` (see
-  [Into Parquet files](#into-parquet-files)). A Databricks target is refused at `plan`.
+- **The target** is DuckDB, Snowflake, Databricks (see [Into Databricks](#into-databricks)), or a
+  files target with `cdc_mode = "changelog"` (see [Into Parquet files](#into-parquet-files)).
 
 ## Set up a source
 
@@ -237,7 +238,7 @@ long ago its newest change committed. The two changes to one order load as one r
   read, then exits 0. A snapshot or copy under way finishes first. A second signal stops at once
   (exit code 130), which is safe: the next load skips what was already written.
 - **While idle** it writes nothing and confirms the server's position, so the slot keeps no WAL for
-  writes to tables it doesn't publish. It sends Snowflake no queries, so the warehouse can suspend;
+  writes to tables it doesn't publish. It sends Snowflake or Databricks no queries, so the warehouse can suspend;
   each batch written resumes it, and a longer `batch_interval` writes fewer, larger batches.
 - **A column added** while it follows is planned again and added to the destination, and the stream
   carries on from where it was confirmed:
@@ -293,6 +294,84 @@ With `cdc_mode = "changelog"`, two updates to order 5 after the snapshot leave t
 | 5 | shipped | snapshot | 0 |
 | 5 | paid | update | 1 |
 | 5 | shipped | update | 1 |
+
+## Into Databricks
+
+From sqlload 0.23.0, a `postgres_cdc` source loads into a
+[Databricks target](/docs/targets/databricks/), under `merge` (soft or hard deletes) or
+`changelog`. The snapshot copy, schema changes while streaming, tables joining the source and
+`load --follow` work as for DuckDB and Snowflake. With the setup above:
+
+```toml
+default_target = "lakehouse"
+
+[connections.lakehouse]
+kind = "databricks"
+host = "${ENV:DATABRICKS_HOST}"
+client_id = "${ENV:DATABRICKS_CLIENT_ID}"
+client_secret = "${ENV:DATABRICKS_CLIENT_SECRET}"
+warehouse_id = "${ENV:DATABRICKS_WAREHOUSE_ID}"
+catalog = "main"
+volume = "main.raw.stage"
+
+[targets.lakehouse]
+connection = "lakehouse"
+loader_schema = "raw"
+```
+
+`plan` shows each table's snapshot copy, then how its changes apply:
+
+```console
+$ sqlload plan
+Plan ready  2 selected, 2 objects to create, 2 to load
+
+Objects (2)                                         sqlload apply
+├── raw.app__customers                              create table
+│   ├── customer_id int    -> BIGINT
+│   ├── email       text   -> STRING
+│   ├── country     text   -> STRING
+│   └── + _sqlload_lsn, _op, _committed_at, _deleted_at, _load_id, _loaded_at
+└── raw.app__orders                                 create table
+    ├── order_id    int             -> BIGINT
+    ├── customer_id int             -> BIGINT
+    ├── status      text            -> STRING
+    ├── tags        text            -> STRING
+    ├── total       decimal(12,2)   -> DECIMAL(12,2)
+    └── + _sqlload_lsn, _op, _committed_at, _deleted_at, _load_id, _loaded_at
+
+Loads (2)                                           sqlload load
+├── app__customers                                  snapshot copy, then apply changes, soft deletes (key: customer_id)
+│   ├── source  postgres_cdc  app  public.customers  slot sqlload_app
+│   ├── route   read as Arrow -> Parquet -> PUT to /Volumes/main/raw/stage -> COPY INTO
+│   └── batch   about every 1 GB
+└── app__orders                                     snapshot copy, then apply changes, soft deletes (key: order_id)
+    ├── source  postgres_cdc  app  public.orders  slot sqlload_app
+    ├── route   read as Arrow -> Parquet -> PUT to /Volumes/main/raw/stage -> COPY INTO
+    └── batch   about every 1 GB
+
+✓ Plan complete  2 selected, 2 objects to create, 2 to load
+```
+
+With `cdc_mode = "changelog"` a table shows `snapshot copy, then append changes (changelog)`, and
+with `deletes = "hard"`, `apply changes, hard deletes`.
+
+Databricks' Statement Execution API commits every statement on its own, so each table's batch is
+written by one statement, after its rows are staged as Parquet in the volume and copied in with
+`COPY INTO`, as the plan's `route` shows:
+
+- **`merge`** is one `MERGE` on the key. A truncate in the batch is that `MERGE`'s
+  `WHEN NOT MATCHED BY SOURCE` clause, which marks (soft deletes) or removes (hard deletes) the
+  rows from before it. Readers never see the table emptied between the truncate and the rows
+  after it.
+- **`changelog`** is one `INSERT` of the batch's changes.
+
+As on every target, the slot confirms a batch only after every table it touched has committed,
+and a replay skips the changes a table already holds (see
+[What a load guarantees](#what-a-load-guarantees)).
+
+One case isn't covered by tests: if the `sqlload` process is killed while its `MERGE` or `INSERT`
+is still running on the warehouse, that statement can still finish. The restarted load's replay
+then relies on Delta's conflict detection between the two statements.
 
 ## Into Parquet files
 
@@ -653,14 +732,6 @@ Errors (1)
     └── reason  public.events has no primary key; kind = "postgres_cdc" captures tables with one in this release (publishing a table without a replica identity makes Postgres refuse its updates and deletes); add a primary key, or exclude it
 ```
 
-A Databricks target:
-
-```console
-Errors (1)
-└── public.customers, public.orders
-    └── reason  kind = "postgres_cdc" loads into DuckDB and Snowflake targets, and into files targets as a changelog, in this release; not Databricks
-```
-
 A files target with `merge`, or a `{cursor}` path: see [Into Parquet files](#into-parquet-files).
 
 ## Tested
@@ -672,3 +743,13 @@ the snapshot, inserts, updates that left a TOASTed value out, deletes, a truncat
 one transaction, a slot advancing past changes to unpublished tables, a 30,000-change
 transaction spilled to disk (with the spill limit lowered), and, from 0.18.0, the schema changes
 above.
+
+Before 0.23.0 was released, live rounds loaded into a Databricks SQL warehouse (2X-Small,
+serverless) and into DuckDB from the same Postgres, and both matched Postgres exactly. They covered
+the snapshot, inserts, an update that left a TOASTed value out, deletes, and a truncate and reinsert
+in one transaction, under `merge` with soft and with hard deletes and under `changelog`. They also
+covered columns added, dropped and widened while streaming, and `load --follow` with a column added
+and a truncate mid-follow. While the follow was idle, the warehouse's query history showed no
+statements for 40 seconds. A live test then covered a load stopped after its first table committed,
+a changelog load stopped before the slot confirmed, and a truncate alone and a truncate with a
+reinsert under soft and hard deletes.
