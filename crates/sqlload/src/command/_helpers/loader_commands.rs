@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use std::collections::BTreeMap;
 
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
 use crate::command::_helpers::output::confirm_reload;
 use crate::command::_helpers::project_file::replace_file;
@@ -213,6 +214,9 @@ async fn run_command(
     if let Some(problem) = follow.and_then(|_| follow_problem(&plan)) {
         return Err(problem);
     }
+    if let Some(problem) = loads.then(|| unloadable_problem(&plan)).flatten() {
+        return Err(problem);
+    }
     let flag = match (options.reload, options.resnapshot) {
         (true, true) => "--reload and --resnapshot",
         (true, false) => "--reload",
@@ -252,6 +256,24 @@ async fn run_command(
     let (tallied, completed) = render_tally(&applied, &outcomes, started.elapsed());
     lines.extend(tallied);
     Ok((lines, planned && completed))
+}
+
+/// Why `load` cannot run `plan`: a table it would load goes to a target that takes no rows yet; refused before anything is applied, read or staged.
+fn unloadable_problem(plan: &ProjectPlan) -> Option<String> {
+    let targets: std::collections::BTreeSet<&str> = plan
+        .tables
+        .iter()
+        .filter(|table| {
+            table.schema.blocked.is_none() && !sql_adapter(table.spec.warehouse).loads_rows()
+        })
+        .map(|table| table.spec.target.as_str())
+        .collect();
+    (!targets.is_empty()).then(|| {
+        format!(
+            "loading rows into target {} is not available yet; plan, apply and contract diff work, and nothing was applied",
+            targets.into_iter().collect::<Vec<&str>>().join(", ")
+        )
+    })
 }
 
 /// Why `load --follow` cannot follow `plan`: it follows exactly one `postgres_cdc` source, and nothing else, since it never finishes to load other tables after; when it selects none, the plan's problems say why.

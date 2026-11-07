@@ -16,6 +16,11 @@ use sqlload::bigquery_api::main::run_query::run_query;
 use sqlload::bigquery_api::main::table_path::table_path;
 use sqlload::bigquery_api::models::{AppendRowsRequest, AppendStream, BigQueryClient};
 
+use sqlload::file_store::main::open_folder::open_folder;
+use sqlload::file_store::main::write_file::write_file;
+use sqlload::store_paths::models::{Location, StoreKind};
+
+use crate::helpers::{run_sqlload, two_days};
 use crate::test_types::{LiveBigQuery, LiveWriteApiTestCase, WriteApiOutcome};
 
 /// The key's project and the dataset the live BigQuery tests use; `Ok(None)` when `SQLLOAD_BIGQUERY_DATASET` is unset, which skips them.
@@ -62,7 +67,7 @@ pub(crate) async fn reset_live_bigquery(
     for statement in [
         format!("DROP SCHEMA IF EXISTS {dataset} CASCADE"),
         format!(
-            "CREATE SCHEMA {dataset} OPTIONS (location = '{}')",
+            "CREATE SCHEMA {dataset} OPTIONS (location = '{}', default_table_expiration_days = 1)",
             live.location
         ),
     ] {
@@ -73,10 +78,10 @@ pub(crate) async fn reset_live_bigquery(
     Ok(())
 }
 
-/// `ids` as orders: `name` `n<id>`, `amount` 1.50 × id, `placed_at` id seconds after the epoch, `note` `odd` or NULL.
+/// `ids` as orders, a negative id sent as a NULL `id`: `name` `n<id>`, `amount` 1.50 × id, `placed_at` id seconds after the epoch, `note` `odd` or NULL.
 fn orders(ids: &[i64]) -> Result<RecordBatch, String> {
     let schema = Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
+        Field::new("id", DataType::Int64, true),
         Field::new("name", DataType::Utf8, true),
         Field::new("amount", DataType::Decimal128(12, 2), true),
         Field::new(
@@ -96,7 +101,11 @@ fn orders(ids: &[i64]) -> Result<RecordBatch, String> {
     RecordBatch::try_new(
         Arc::new(schema),
         vec![
-            Arc::new(Int64Array::from(ids.to_vec())),
+            Arc::new(Int64Array::from(
+                ids.iter()
+                    .map(|id| (*id >= 0).then_some(*id))
+                    .collect::<Vec<Option<i64>>>(),
+            )),
             Arc::new(StringArray::from(
                 ids.iter()
                     .map(|id| Some(format!("n{id}")))
@@ -135,8 +144,8 @@ async fn table_rows(client: &BigQueryClient, table: &str) -> Result<String, Stri
         .unwrap_or_default())
 }
 
-/// The error code of the next answer on `appends`, 0 when BigQuery accepted the request, with how many rows it refused.
-async fn append_answer(appends: &mut AppendStream) -> Result<(i32, usize), String> {
+/// The next answer on `appends`: its error code (0 when BigQuery accepted the request), the stream offset it says the rows landed at (-1 when none), how many rows it refused, and the first refused row's index (-1 when none).
+async fn append_answer(appends: &mut AppendStream) -> Result<(i32, i64, usize, i64), String> {
     let answer = appends
         .responses
         .message()
@@ -145,7 +154,15 @@ async fn append_answer(appends: &mut AppendStream) -> Result<(i32, usize), Strin
         .ok_or_else(|| "the append stream ended early".to_owned())?;
     Ok((
         answer.error.map_or(0, |error| error.code),
+        answer
+            .append_result
+            .and_then(|result| result.offset)
+            .map_or(-1, |offset| offset.value),
         answer.row_errors.len(),
+        answer
+            .row_errors
+            .first()
+            .map_or(-1, |refused| refused.index),
     ))
 }
 
@@ -160,7 +177,7 @@ pub(crate) async fn stream_into_live_table(
     let table = format!("`{}`.`{}`.`{name}`", live.project, live.dataset);
     run_query(
         client,
-        &format!("CREATE TABLE {table} (id INT64 NOT NULL, name STRING, amount NUMERIC(12, 2), placed_at TIMESTAMP, note STRING)"),
+        &format!("CREATE TABLE {table} (id INT64 NOT NULL, name STRING(3), amount NUMERIC(12, 2), placed_at TIMESTAMP, note STRING)"),
     )
     .await
     .map_err(|error| error.to_string())?;
@@ -185,6 +202,7 @@ pub(crate) async fn stream_into_live_table(
         .await
         .map_err(|error| error.to_string())?;
     let mut outcome = WriteApiOutcome {
+        stream_type: stream.r#type,
         append_answers: vec![append_answer(&mut appends).await?],
         ..WriteApiOutcome::default()
     };
@@ -214,8 +232,66 @@ pub(crate) async fn stream_into_live_table(
             .await
             .map_or_else(
                 |error| error.to_string().replace(&stream.name, "<stream>"),
-                |_| "committed".to_owned(),
+                |time| format!("committed {}", time.seconds > 0),
             );
     outcome.rows = table_rows(client, &table).await?;
     Ok(outcome)
+}
+
+/// Run `sqlload load --yes` on a project loading two days of files from `directory` into the dataset `<dataset>_load`, dropped first: whether it succeeded, its output, and how many datasets of that name exist after it.
+pub(crate) async fn refused_live_load(
+    client: &BigQueryClient,
+    live: &LiveBigQuery,
+    directory: &std::path::Path,
+) -> Result<(bool, String, String), String> {
+    let dataset = format!("{}_load", live.dataset);
+    run_query(
+        client,
+        &format!(
+            "DROP SCHEMA IF EXISTS `{}`.`{dataset}` CASCADE",
+            live.project
+        ),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let root = directory.display().to_string();
+    let source = open_folder(&Location {
+        store: StoreKind::Filesystem { root: root.clone() },
+        prefix: "src/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    for (key, body) in two_days()? {
+        write_file(&source, &key, body)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let config = directory.join("sqlload.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[connections.bq]\nkind = \"bigquery\"\nlocation = \"{}\"\nservice_account_key = \"${{ENV:GCP_BQ_SANDBOX_SA_KEY}}\"\n\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[targets.dev]\nconnection = \"bq\"\nloader_schema = \"{dataset}\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n",
+            live.location
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    let (succeeded, output) = run_sqlload(&config, &["load", "--yes"], ("", ""))?;
+    let datasets = run_query(
+        client,
+        &format!(
+            "SELECT CAST(COUNT(*) AS STRING) FROM `region-{}`.INFORMATION_SCHEMA.SCHEMATA WHERE schema_name = '{dataset}'",
+            live.location
+        ),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok((
+        succeeded,
+        output,
+        datasets
+            .rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next().flatten())
+            .unwrap_or_default(),
+    ))
 }

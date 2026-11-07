@@ -17,6 +17,11 @@ impl SqlAdapter for BigQuerySql {
         Warehouse::BigQuery
     }
 
+    /// Not yet: rows load once the Storage Write API writer exists.
+    fn loads_rows(&self) -> bool {
+        false
+    }
+
     /// Not yet: a later release applies changes to BigQuery once a live round has run them.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false
@@ -47,9 +52,15 @@ impl SqlAdapter for BigQuerySql {
         self.render_exact_identifier(&self.stored_name(name))
     }
 
-    /// Backslash escapes: GoogleSQL has no `''` escape inside a string literal.
+    /// Backslash escapes: GoogleSQL has no `''` escape inside a string literal, and a quoted string holds no raw line break.
     fn render_loader_value_literal(&self, text: &str) -> String {
-        format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
+        format!(
+            "'{}'",
+            text.replace('\\', "\\\\")
+                .replace('\'', "\\'")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+        )
     }
 
     /// JSON is parsed from its staged text; a UUID is stored as the text it arrived as.

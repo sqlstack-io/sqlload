@@ -26,6 +26,11 @@ fn given_a_full_project_when_parsing_then_sources_and_table_settings_are_read() 
             expected_value: "false",
         },
         ParseProjectTestCase {
+            description: "a bigquery connection reads its location and key, the key redacted, and no project until the key gives one",
+            read: |project| format!("{:?}", project.connections["bq"]),
+            expected_value: "BigQuery { project: None, location: \"europe-west2\", service_account_key: <redacted>, base_url: None, storage_url: None }",
+        },
+        ParseProjectTestCase {
             description: "new_tables is read",
             read: |project| format!("{:?}", project.sources["app"].new_tables),
             expected_value: "Skip",

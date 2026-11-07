@@ -27,7 +27,12 @@ pub async fn batch_commit_write_streams(
         let reasons: Vec<String> = response
             .stream_errors
             .iter()
-            .map(|error| format!("{}: {}", error.entity, error.error_message))
+            .map(|error| {
+                format!(
+                    "{}: {} (code {})",
+                    error.entity, error.error_message, error.code
+                )
+            })
             .collect();
         return Err(ApiError::Status {
             status: 400,

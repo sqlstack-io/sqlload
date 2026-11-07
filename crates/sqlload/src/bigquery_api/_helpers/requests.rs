@@ -2,8 +2,11 @@
 
 use crate::auth::models::Secret;
 use crate::bigquery_api::_helpers::token::signed_assertion;
-use crate::bigquery_api::constants::{JWT_BEARER_GRANT, TOKEN_REFRESH_MARGIN_MS, UNAUTHORIZED};
+use crate::bigquery_api::constants::{
+    JWT_BEARER_GRANT, RATE_LIMITED, TOKEN_REFRESH_MARGIN_MS, UNAUTHORIZED,
+};
 use crate::bigquery_api::models::BigQueryClient;
+use crate::http::constants::TOO_MANY_REQUESTS;
 use crate::http::errors::ApiError;
 use crate::http::models::RetryPolicy;
 use crate::time_text::main::now_ms::now_ms;
@@ -28,12 +31,15 @@ pub(crate) async fn access_token(
         .form(&[("grant_type", JWT_BEARER_GRANT), ("assertion", &assertion)])
         .send()
         .await?;
-    let response = google_response(sent).await.map_err(|error| {
-        ApiError::Auth(format!(
-            "Google refused the service-account key {}: {error}",
-            client.key.client_email
-        ))
-    })?;
+    let response = google_response(sent)
+        .await
+        .map_err(|error| match error.is_retryable() {
+            true => error,
+            false => ApiError::Auth(format!(
+                "Google refused the service-account key {}: {error}",
+                client.key.client_email
+            )),
+        })?;
     let body: serde_json::Value = response.json().await?;
     let token = body["access_token"]
         .as_str()
@@ -44,7 +50,7 @@ pub(crate) async fn access_token(
     Ok(token)
 }
 
-/// `response`, or an [`ApiError`] with the reason and message of Google's `{"error": {...}}` body (an OAuth error's `error` and `error_description` too).
+/// `response`, or an [`ApiError`] with the reason and message of Google's `{"error": {...}}` body (an OAuth error's `error` and `error_description` too); a `rateLimitExceeded` refusal, which Google sends as 403, counts as throttling so it is retried.
 pub(crate) async fn google_response(
     response: reqwest::Response,
 ) -> Result<reqwest::Response, ApiError> {
@@ -54,6 +60,10 @@ pub(crate) async fn google_response(
     let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
     let (code, message) = google_error(&body);
+    let status = match code.as_str() {
+        RATE_LIMITED => TOO_MANY_REQUESTS,
+        _ => status,
+    };
     Err(ApiError::Status {
         status,
         code,

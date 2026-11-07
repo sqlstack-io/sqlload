@@ -38,8 +38,9 @@ pub(crate) fn authorized<T>(
     params: &str,
 ) -> Result<tonic::Request<T>, ApiError> {
     let mut request = tonic::Request::new(message);
-    let bearer = MetadataValue::try_from(format!("Bearer {}", token.expose()))
+    let mut bearer = MetadataValue::try_from(format!("Bearer {}", token.expose()))
         .map_err(|error| ApiError::Protocol(error.to_string()))?;
+    bearer.set_sensitive(true);
     let routed =
         MetadataValue::try_from(params).map_err(|error| ApiError::Protocol(error.to_string()))?;
     request.metadata_mut().insert("authorization", bearer);

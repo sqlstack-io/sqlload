@@ -17,6 +17,11 @@ user = "reader"
 password = "${ENV:PG_PASSWORD}"
 database = "app"
 
+[connections.bq]
+kind = "bigquery"
+location = "europe-west2"
+service_account_key = "${ENV:SA_KEY}"
+
 [targets.dev]
 connection = "warehouse"
 loader_schema = "DEV_SQLLOAD"

@@ -42,3 +42,6 @@ pub const PENDING_STREAM: i32 = 2;
 
 /// How many append requests one stream holds before its sender waits for BigQuery to take them.
 pub const APPENDS_IN_FLIGHT: usize = 2;
+
+/// The reason Google gives a request refused for exceeding a rate limit, with HTTP 403.
+pub const RATE_LIMITED: &str = "rateLimitExceeded";

@@ -11,7 +11,7 @@ use crate::bigquery_api::models::BigQueryClient;
 use crate::http::errors::ApiError;
 use crate::sql_api::models::SqlRows;
 
-/// Run `statement` in the client's project and location, waiting while the job runs and reading every page of its rows; a job no longer waited for is cancelled. The request carries a `requestId`, so a retried request never runs it twice.
+/// Run `statement` in the client's project and location, waiting while the job runs and reading every page of its rows; a job whose polling fails is cancelled (one dropped mid-run keeps running). The request carries a `requestId`, so a retried request never runs it twice.
 pub async fn run_query(client: &BigQueryClient, statement: &str) -> Result<SqlRows, ApiError> {
     let body = json!({
         "query": statement,
