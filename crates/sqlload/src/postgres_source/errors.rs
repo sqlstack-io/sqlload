@@ -1,12 +1,14 @@
+use crate::postgres_source::_helpers::server_reason::server_reason;
+
 /// Why reading from Postgres failed.
 #[derive(Debug, thiserror::Error)]
 pub enum PostgresError {
-    #[error("cannot connect to Postgres at {address}: {source}")]
+    #[error("cannot connect to Postgres at {address}: {}", server_reason(source))]
     Connect {
         address: String,
         source: tokio_postgres::Error,
     },
-    #[error("Postgres query failed: {0}")]
+    #[error("Postgres query failed: {}", server_reason(.0))]
     Query(#[from] tokio_postgres::Error),
     #[error("{table}.{column}: {reason}")]
     Value {

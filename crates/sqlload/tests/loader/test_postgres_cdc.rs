@@ -329,6 +329,34 @@ const UNPINNED_JSON: [CdcStep; 1] = [step(
     (false, "streams json values as the source wrote them"),
 )];
 
+const NOT_OWNER_SOURCE: &str = r#"
+[connections.reader]
+kind = "postgres"
+host = "127.0.0.1"
+port = {port}
+user = "reader"
+password = "pw"
+database = "app"
+
+[sources.reader]
+kind = "postgres_cdc"
+connection = "reader"
+include = ["public.items"]
+
+[sources.reader.tables."public.items"]
+description = "Items, captured."
+"#;
+
+const NOT_OWNER: [CdcStep; 1] = [step(
+    "CREATE ROLE reader LOGIN REPLICATION PASSWORD 'pw'; GRANT SELECT ON ALL TABLES IN SCHEMA public TO reader; GRANT CREATE ON DATABASE app TO reader;",
+    &["load", "reader"],
+    "",
+    (
+        false,
+        "Postgres query failed: must be owner of table items (SQLSTATE 42501)",
+    ),
+)];
+
 const STRICT_SOURCE: &str = r#"
 [sources.strict]
 kind = "postgres_cdc"
@@ -593,6 +621,15 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: "1,2",
         },
         CdcScenarioTestCase {
+            description: "a user that does not own the tables cannot create the publication, and the load says what Postgres said",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: NOT_OWNER_SOURCE,
+            steps: &NOT_OWNER,
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.reader__items",
+            expected_result: "0",
+        },
+        CdcScenarioTestCase {
             description: "a publication with tables the source does not load is refused, and SQLLoad's own follows the source again on --resnapshot",
             tag: "17-alpine",
             spill_bytes: "",
@@ -640,7 +677,10 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
             let database = folder.path().join("out.duckdb");
             let config = folder.path().join("sqlload.toml");
-            let project = cdc_project(postgres.port, &database) + test_case.extra_config;
+            let project = cdc_project(postgres.port, &database)
+                + &test_case
+                    .extra_config
+                    .replace("{port}", &postgres.port.to_string());
             std::fs::write(&config, project).map_err(|error| error.to_string())?;
             for (index, step) in test_case.steps.iter().enumerate() {
                 client

@@ -206,7 +206,8 @@ afterwards, so name it in `include`.
 
 `kind = "postgres_cdc"` streams a Postgres database's changes from a logical replication slot
 into a DuckDB or Snowflake target (not Databricks or files targets yet). The server needs
-`wal_level = logical`, and the connection's user needs the `REPLICATION` attribute.
+`wal_level = logical`, and the connection's user needs the `REPLICATION` attribute and `SELECT`
+on the tables.
 
 ```toml
 [sources.app_cdc]
@@ -243,8 +244,16 @@ deletes = "soft"          # soft (default) | hard; merge only
   `--exclude` of some of its tables is refused, since they share one slot.
 - Array and `json` columns stream as Postgres writes them, so pin them to text
   (`columns = { tags = "text" }`); `jsonb` needs nothing.
-- The publication must publish exactly the source's tables. SQLLoad's own (`sqlload_<source>`)
-  follows `include` again on `--resnapshot`; a publication with other tables is refused.
+- The publication must publish exactly the source's tables; one with other tables is refused.
+  When it is missing, SQLLoad creates `sqlload_<source>`, which needs a user that owns the tables
+  and has `CREATE` on the database: a `REPLICATION` user with only `SELECT` cannot, since Postgres
+  lets only a table's owner publish it. Otherwise create one as the tables' owner
+  (`CREATE PUBLICATION app_changes FOR TABLE customers, orders;`) and name it with
+  `publication = "app_changes"`; SQLLoad then only checks it. SQLLoad's own follows `include`
+  again on `--resnapshot`.
+- Postgres keeps WAL for the slot from its last confirmed position. Every load confirms what it
+  applied, even one that found no changes, but the WAL kept shrinks only at the first load after
+  Postgres's next checkpoint.
 - When the slot is lost, or a snapshot stopped part-way, the load stops and names the fix:
   `sqlload load --resnapshot` drops and recreates the slot and copies every table again,
   replacing what they hold: a `changelog` table loses its history and a `merge` table its
