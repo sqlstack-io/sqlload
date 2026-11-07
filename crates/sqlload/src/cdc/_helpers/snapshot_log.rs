@@ -98,8 +98,10 @@ impl SnapshotLog<'_> {
         .await
     }
 
-    /// The tables holding the slot's newest snapshot, each with its newest record, and that snapshot's LSN; `None` when SQLLoad never recorded creating the slot.
-    pub(crate) async fn current(&self) -> Result<Option<(i64, Vec<SnapshotRecord>)>, LoaderError> {
+    /// The slot's newest snapshot LSN and the tables holding its changes, each with its newest record and the LSN it was copied at (see [`newest_snapshot`]); `None` when SQLLoad never recorded creating the slot.
+    pub(crate) async fn current(
+        &self,
+    ) -> Result<Option<(i64, Vec<(i64, SnapshotRecord)>)>, LoaderError> {
         let adapter = sql_adapter(self.warehouse);
         let column = |name: &str| adapter.render_identifier(name);
         let text_type = adapter.render_loader_logical_type(&ColumnType::Text).sql;
@@ -174,30 +176,33 @@ pub(crate) fn read_record(row: &str) -> Result<(i64, String, SnapshotRecord), St
     ))
 }
 
-/// The newest slot record's LSN and, of the tables recorded under it, each one's newest record; `None` without a slot record.
+/// The newest slot record's LSN and, of the tables recorded at or after it, each one's newest record with the LSN it was copied at: the slot's own point for its snapshot, or a later one for a table copied alone since (a backfill), whose changes before that point are already in its copy. Records under older slot records belong to a slot since recreated; `None` without a slot record.
 pub(crate) fn newest_snapshot(
     records: Vec<(i64, String, SnapshotRecord)>,
-) -> Option<(i64, Vec<SnapshotRecord>)> {
+) -> Option<(i64, Vec<(i64, SnapshotRecord)>)> {
     let newest = records
         .iter()
         .filter(|(_, _, record)| record.table.is_empty())
         .map(|(lsn, _, _)| *lsn)
         .max()?;
-    let mut tables: std::collections::BTreeMap<String, (String, SnapshotRecord)> =
+    let mut tables: std::collections::BTreeMap<String, (String, i64, SnapshotRecord)> =
         std::collections::BTreeMap::new();
     for (lsn, recorded_at, record) in records {
-        if lsn != newest || record.table.is_empty() {
+        if lsn < newest || record.table.is_empty() {
             continue;
         }
         let newer = tables
             .get(&record.table)
-            .is_none_or(|(seen, _)| recorded_at >= *seen);
+            .is_none_or(|(seen, _, _)| recorded_at >= *seen);
         if newer {
-            tables.insert(record.table.clone(), (recorded_at, record));
+            tables.insert(record.table.clone(), (recorded_at, lsn, record));
         }
     }
     Some((
         newest,
-        tables.into_values().map(|(_, record)| record).collect(),
+        tables
+            .into_values()
+            .map(|(_, lsn, record)| (lsn, record))
+            .collect(),
     ))
 }

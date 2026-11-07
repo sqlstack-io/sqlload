@@ -347,7 +347,7 @@ impl CdcSource<'_> {
                 "slot {slot} lost WAL it had not confirmed, so changes are missing; run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
         }
-        let Some((snapshot_lsn, snapshotted)) = self.log()?.current().await? else {
+        let Some((_, snapshotted)) = self.log()?.current().await? else {
             return Ok(Some(format!(
                 "slot {slot} exists but SQLLoad has no record of creating it, so it cannot tell which changes the tables already hold; drop it, or run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
@@ -359,7 +359,7 @@ impl CdcSource<'_> {
             .collect();
         let left_out: Vec<&str> = snapshotted
             .iter()
-            .map(|record| record.table.as_str())
+            .map(|(_, record)| record.table.as_str())
             .filter(|name| !loading.contains(name))
             .collect();
         if !left_out.is_empty() {
@@ -369,11 +369,13 @@ impl CdcSource<'_> {
                 self.name
             )));
         }
-        let mut rewrites: Vec<SnapshotRecord> = Vec::new();
+        let mut rewrites: Vec<(i64, SnapshotRecord)> = Vec::new();
         let mut problems: Vec<String> = Vec::new();
         for table in &self.tables {
             let name = table.spec.destination.table.as_str();
-            let Some(recorded) = snapshotted.iter().find(|record| record.table == name) else {
+            let Some((copied_at, recorded)) =
+                snapshotted.iter().find(|(_, record)| record.table == name)
+            else {
                 continue;
             };
             let columns = data_columns(&table.read_columns);
@@ -393,7 +395,7 @@ impl CdcSource<'_> {
             };
             let catalog = catalog_columns(control, &table.spec.source_table).await?;
             match reshape_problem(recorded, planned, &catalog) {
-                Ok(rewrite) => rewrites.extend(rewrite),
+                Ok(rewrite) => rewrites.extend(rewrite.map(|record| (*copied_at, record))),
                 Err(problem) => problems.push(problem),
             }
         }
@@ -402,7 +404,7 @@ impl CdcSource<'_> {
         }
         let recorded: Vec<&str> = snapshotted
             .iter()
-            .map(|record| record.table.as_str())
+            .map(|(_, record)| record.table.as_str())
             .collect();
         let unfinished: Vec<&str> = loading
             .into_iter()
@@ -419,8 +421,8 @@ impl CdcSource<'_> {
             )));
         }
         let log = self.log()?;
-        for record in &rewrites {
-            log.record(record, snapshot_lsn).await?;
+        for (copied_at, record) in &rewrites {
+            log.record(record, *copied_at).await?;
         }
         Ok(None)
     }
@@ -596,6 +598,7 @@ impl CdcSource<'_> {
         let mut rows: BTreeMap<String, u64> = BTreeMap::new();
         let mut buffer = ChangeBuffer {
             spill_bytes: spill_bytes(),
+            floors: self.copy_points().await?,
             ..ChangeBuffer::default()
         };
         let mut confirmed: Option<u64> = None;
@@ -645,6 +648,25 @@ impl CdcSource<'_> {
                 return Ok((Some(stop.as_u64()).max(confirmed), rows));
             }
         }
+    }
+
+    /// Each loaded table's copy point by its source `(schema, table)`, from its snapshot record.
+    async fn copy_points(&self) -> Result<BTreeMap<(String, String), i64>, LoaderError> {
+        let mut points: BTreeMap<(String, String), i64> = BTreeMap::new();
+        let Some((_, records)) = self.log()?.current().await? else {
+            return Ok(points);
+        };
+        for (lsn, record) in records {
+            let table = self
+                .tables
+                .iter()
+                .find(|table| table.spec.destination.table == record.table);
+            if let Some(table) = table {
+                let source = &table.spec.source_table;
+                points.insert((source.schema.clone(), source.name.clone()), lsn);
+            }
+        }
+        Ok(points)
     }
 
     /// Write a batch's transactions, one commit per touched table; returns the rows each table wrote. The slot may confirm the batch once this returns. A batch with a column added since the load was planned writes nothing, so the next load, which plans for it, streams it again.

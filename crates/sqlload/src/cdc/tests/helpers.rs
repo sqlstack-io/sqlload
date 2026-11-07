@@ -198,10 +198,47 @@ pub(crate) fn update_message(values: &[&str]) -> Vec<u8> {
 
 /// Buffer `transactions`, each a list of messages committed at LSN 100, 101, ..., keeping at most `spill_bytes` in memory.
 fn committed(transactions: &[Vec<Vec<u8>>], spill_bytes: usize) -> Result<ChangeBuffer, String> {
-    let mut buffer = ChangeBuffer {
+    committed_into(
+        ChangeBuffer {
+            spill_bytes,
+            ..ChangeBuffer::default()
+        },
+        transactions,
+    )
+}
+
+/// The commit LSNs of the changes table 7 (`public.t`) keeps after `transactions` (see [`committed`]), its copy point at `floor`, keeping at most `spill_bytes` in memory; disk before memory.
+pub(crate) fn floored_lsns(
+    transactions: &[Vec<Vec<u8>>],
+    (floor, spill_bytes): (i64, usize),
+) -> Result<Vec<i64>, String> {
+    let start = ChangeBuffer {
         spill_bytes,
+        floors: [(("public".to_owned(), "t".to_owned()), floor)].into(),
         ..ChangeBuffer::default()
     };
+    let mut buffer = committed_into(start, transactions)?;
+    let mut lsns: Vec<i64> = Vec::new();
+    for file in buffer.spilled.values_mut() {
+        let mut reader = file.read()?;
+        let spilled: Vec<Change> = std::iter::from_fn(|| reader.next_change().transpose())
+            .collect::<Result<_, String>>()?;
+        lsns.extend(spilled.iter().map(|change| change.lsn));
+    }
+    lsns.extend(
+        buffer
+            .tables
+            .values()
+            .flat_map(|table| table.changes.iter().map(|change| change.lsn)),
+    );
+    Ok(lsns)
+}
+
+/// `buffer` after `transactions` (see [`committed`]).
+fn committed_into(
+    mut buffer: ChangeBuffer,
+    transactions: &[Vec<Vec<u8>>],
+) -> Result<ChangeBuffer, String> {
     for (index, messages) in transactions.iter().enumerate() {
         let lsn = 100 + u64::try_from(index).unwrap_or(u64::MAX);
         buffer = buffer_change(buffer, StreamStep::Begin)?;

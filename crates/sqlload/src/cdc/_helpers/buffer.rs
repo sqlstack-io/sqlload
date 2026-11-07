@@ -132,6 +132,13 @@ fn file_message(
                 "a change refers to relation {oid}, which the stream never described"
             ));
         };
+        let copied = buffer
+            .floors
+            .get(&(relation.schema.clone(), relation.table.clone()))
+            .is_some_and(|floor| change.lsn < *floor);
+        if copied {
+            continue;
+        }
         let table = buffer.tables.entry(oid).or_insert_with(|| TableChanges {
             relation: relation.clone(),
             changes: Vec::new(),
