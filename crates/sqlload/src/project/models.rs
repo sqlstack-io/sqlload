@@ -111,6 +111,23 @@ pub enum ConnectionConfig {
         /// The managed volume load files are staged in, `catalog.schema.volume`; it must exist.
         volume: String,
     },
+    /// A BigQuery project, reached with a service-account key.
+    #[serde(rename = "bigquery")]
+    BigQuery {
+        /// The project tables load into and jobs run in; the key's own project when `None`.
+        #[serde(default)]
+        project: Option<String>,
+        /// Where jobs run and datasets are created, such as `EU` or `europe-west2`.
+        location: String,
+        /// The service-account key file's JSON text, such as `${ENV:BIGQUERY_KEY}`.
+        service_account_key: crate::auth::models::Secret,
+        /// Overrides the REST API's root, for tests.
+        #[serde(default)]
+        base_url: Option<String>,
+        /// Overrides the Storage Write API's root, for tests.
+        #[serde(default)]
+        storage_url: Option<String>,
+    },
     Postgres {
         host: String,
         #[serde(default = "defaults::postgres_port")]
@@ -157,6 +174,7 @@ impl ConnectionConfig {
         match self {
             Self::Snowflake { .. } => "snowflake",
             Self::Databricks { .. } => "databricks",
+            Self::BigQuery { .. } => "bigquery",
             Self::Postgres { .. } => "postgres",
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",

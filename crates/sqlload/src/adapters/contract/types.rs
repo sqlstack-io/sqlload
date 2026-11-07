@@ -40,6 +40,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         true
     }
 
+    /// Whether `load` may write rows into the destination yet; one that may not still plans, applies and diffs, and `load` refuses before applying anything.
+    fn loads_rows(&self) -> bool {
+        true
+    }
+
     /// Whether a `postgres_cdc` source applying its changes by `apply` may load into the destination: every SQL warehouse its changes have been applied to live; a files target only as a changelog, having no tables to merge into.
     fn captures_changes(&self, apply: ChangeApply) -> bool {
         self.runs_sql() || apply == ChangeApply::Changelog
@@ -200,6 +205,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// The statement rewriting `target` from its own rows through `select`, in place and keeping its grants.
     fn render_rebuild_table(&self, target: &str, select: &str) -> String {
         format!("CREATE OR REPLACE TABLE {target} COPY GRANTS AS SELECT {select} FROM {target}")
+    }
+
+    /// The statement emptying staging table `staging` for the next batches.
+    fn render_empty_staging(&self, staging: &TableName) -> String {
+        format!("DELETE FROM {}", self.render_qualified_name(staging))
     }
 
     /// Whether a staging table's changed types are cast by rewriting it rather than altered in place.

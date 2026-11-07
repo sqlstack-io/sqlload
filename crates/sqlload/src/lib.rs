@@ -6,6 +6,7 @@ pub mod adapters;
 pub mod auth;
 pub mod batch_plan;
 pub mod batching;
+pub mod bigquery_api;
 pub mod cdc;
 pub mod column_types;
 /// The `sqlload` command line; behind the default `cli` feature.

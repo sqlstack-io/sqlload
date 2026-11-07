@@ -65,6 +65,60 @@ fn given_a_portable_type_when_mapping_to_a_warehouse_then_the_sql_name_and_loss_
             expected_sql: "native(\"GEOGRAPHY\")",
             expected_lossy: true,
         },
+        WarehouseTypeTestCase {
+            description: "BigQuery decimal(38,9) is the widest NUMERIC",
+            column_type: ColumnType::Decimal {
+                precision: 38,
+                scale: 9,
+            },
+            warehouse: Warehouse::BigQuery,
+            expected_sql: "NUMERIC(38,9)",
+            expected_lossy: false,
+        },
+        WarehouseTypeTestCase {
+            description: "BigQuery needs BIGNUMERIC for 30 digits before the point",
+            column_type: ColumnType::Decimal {
+                precision: 30,
+                scale: 0,
+            },
+            warehouse: Warehouse::BigQuery,
+            expected_sql: "BIGNUMERIC(30,0)",
+            expected_lossy: false,
+        },
+        WarehouseTypeTestCase {
+            description: "BigQuery needs BIGNUMERIC for a scale past 9",
+            column_type: ColumnType::Decimal {
+                precision: 20,
+                scale: 10,
+            },
+            warehouse: Warehouse::BigQuery,
+            expected_sql: "BIGNUMERIC(20,10)",
+            expected_lossy: false,
+        },
+        WarehouseTypeTestCase {
+            description: "BigQuery gives a decimal of only fraction digits one digit before the point",
+            column_type: ColumnType::Decimal {
+                precision: 5,
+                scale: 5,
+            },
+            warehouse: Warehouse::BigQuery,
+            expected_sql: "NUMERIC(6,5)",
+            expected_lossy: false,
+        },
+        WarehouseTypeTestCase {
+            description: "BigQuery stores smallint as a 64-bit integer",
+            column_type: ColumnType::SmallInt,
+            warehouse: Warehouse::BigQuery,
+            expected_sql: "INT64",
+            expected_lossy: true,
+        },
+        WarehouseTypeTestCase {
+            description: "BigQuery varchar enforces its length",
+            column_type: ColumnType::Varchar(10),
+            warehouse: Warehouse::BigQuery,
+            expected_sql: "STRING(10)",
+            expected_lossy: false,
+        },
     ];
     for test_case in test_cases {
         let mapped =

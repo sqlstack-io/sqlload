@@ -1,3 +1,4 @@
+use crate::adapters::bigquery::models::BigQueryDestination;
 use crate::adapters::databricks::models::{DatabricksDestination, DatabricksWriter};
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::models::{DuckDbDestination, DuckDbWriter};
@@ -11,6 +12,7 @@ pub enum Destination {
     DuckDb(DuckDbDestination),
     Snowflake(Box<SnowflakeDestination>),
     Databricks(Box<DatabricksDestination>),
+    BigQuery(Box<BigQueryDestination>),
     /// Parquet files in an s3 or filesystem connection.
     Files(Box<FilesDestination>),
 }

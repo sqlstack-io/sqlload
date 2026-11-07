@@ -90,7 +90,12 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
                 .filter(|statement| sources.iter().any(|source| statement.contains(source)))
                 .count();
             let rewrites = usize::from(
-                warehouse == crate::column_types::models::Warehouse::Databricks && test_case.built,
+                [
+                    crate::column_types::models::Warehouse::Databricks,
+                    crate::column_types::models::Warehouse::BigQuery,
+                ]
+                .contains(&warehouse)
+                    && test_case.built,
             );
             assert_eq!(
                 copies,
