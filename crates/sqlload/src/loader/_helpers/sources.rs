@@ -736,7 +736,7 @@ pub(crate) async fn scoped_tables(
     Ok(Ok((resolved, files)))
 }
 
-/// Whether the selection in `options` takes anything from source `source_name`: a table it `listed`, or one named under its `tables`, by destination name or `schema.table`, or the source itself when it holds no table. A source that could not list its tables (`None`) counts when selected by name, or for any `--select` selector naming no source, since that table could be its. Only then do the source's problems count, so one source's bad settings do not fail a command run on another.
+/// Whether the selection in `options` takes anything from source `source_name`: a table it `listed`, or one named under its `tables` but not listed, by destination name or `schema.table`, or the source itself when it holds no table. A source that could not list its tables (`None`) counts when selected by name, or for any `--select` selector naming no source, since that table could be its. Only then do the source's problems count, so one source's bad settings do not fail a command run on another.
 pub(crate) fn source_in_scope(
     (project, options): (&ProjectConfig, &PlanOptions),
     (source_name, source): (&str, &SourceConfig),
@@ -753,13 +753,18 @@ pub(crate) fn source_in_scope(
                     .iter()
                     .any(|selector| !project.sources.contains_key(selector)));
     };
-    let named = source.tables.iter().map(|(qualified, overrides)| {
-        let destination = match overrides.name.as_deref() {
-            Some(name) if !name.contains('{') => name,
-            _ => "",
-        };
-        (destination.to_owned(), qualified.clone())
-    });
+    let found: Vec<String> = discovered.iter().map(SourceTable::qualified_name).collect();
+    let named = source
+        .tables
+        .iter()
+        .filter(|(qualified, _)| !found.contains(qualified))
+        .map(|(qualified, overrides)| {
+            let destination = match overrides.name.as_deref() {
+                Some(name) if !name.contains('{') => name,
+                _ => "",
+            };
+            (destination.to_owned(), qualified.clone())
+        });
     let tables: Vec<(String, String)> = discovered
         .iter()
         .map(|table| {

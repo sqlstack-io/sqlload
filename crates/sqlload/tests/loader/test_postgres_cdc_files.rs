@@ -52,6 +52,9 @@ kind = "postgres_cdc"
 connection = "pg"
 include = ["public.items"]
 
+[sources.merged.tables."public.items"]
+description = "Items, merged."
+
 [sources.down]
 kind = "postgres"
 connection = "pg"
@@ -63,11 +66,12 @@ const MERGE_REFUSED: (bool, &str) = (
     "a files target takes kind = \"postgres_cdc\" only with cdc_mode = \"changelog\"",
 );
 
-const FILES_MERGE_REFUSED: [CdcStep; 7] = [
+const FILES_MERGE_REFUSED: [CdcStep; 8] = [
     step("", &["plan", "merged"], "", MERGE_REFUSED),
     step("", &["plan", "merged__items"], "", MERGE_REFUSED),
     step("", &["plan", "public.items"], "", MERGE_REFUSED),
     step("", &["plan"], "", MERGE_REFUSED),
+    step("", &["load", "merged", "--follow"], "", MERGE_REFUSED),
     step(
         "",
         &["plan", "down"],
@@ -76,7 +80,7 @@ const FILES_MERGE_REFUSED: [CdcStep; 7] = [
     ),
     step(
         "",
-        &["plan", "--exclude", "merged__items", "down"],
+        &["plan", "--exclude", "merged__items", "--exclude", "down"],
         "",
         (true, "Plan complete"),
     ),
