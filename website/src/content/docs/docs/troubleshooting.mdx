@@ -26,7 +26,9 @@ common ones; each message is copied from SQLLoad.
 | `publication app_changes does not publish "public"."refunds"; add them with ALTER PUBLICATION ...` | A table joined the source. Add it to the named publication as the tables' owner. See [Adding tables](/docs/sources/postgres-cdc/#adding-tables). |
 | `rows captured before slot sqlload_app was recreated are still in app__refunds ...` | A table rejoined the source. Run `sqlload load --resnapshot`, or drop its destination table and run `sqlload apply`. See [Adding tables](/docs/sources/postgres-cdc/#adding-tables). |
 | `a files target takes kind = "postgres_cdc" only with cdc_mode = "changelog" ...` | Set `cdc_mode = "changelog"`. See [Into Parquet files](/docs/sources/postgres-cdc/#into-parquet-files). |
-| `a postgres_cdc table is copied again with --resnapshot, not --reload` | Use `sqlload load --resnapshot`. See [Re-snapshot](/docs/sources/postgres-cdc/#re-snapshot). |
+| `a postgres_cdc table is copied again with --resnapshot, not --reload` | Use `sqlload load --resnapshot` for the captured tables, and `--exclude` the `postgres_cdc` source to reload the others. See [Reloading](/docs/sources/postgres-cdc/#reloading). |
+| `cannot connect to Postgres at ...` under `[sources.NAME]` | That source's server can't be reached. Commands that don't select it still run; see [Selecting tables](/docs/concepts/projects/#selecting-tables). |
+| `load --follow follows one postgres_cdc source and nothing else; ... is not captured, so load them without --follow` | Select a `postgres_cdc` source, or load the other tables without `--follow`. |
 | `source app does not follow while app__orders is blocked: its tables share one slot ...` | `load --follow` follows a whole `postgres_cdc` source. Select the source, not some of its tables. See [Keep streaming](/docs/sources/postgres-cdc/#keep-streaming). |
 | `[sources.app] batch_interval must be at least 1s ...` | Set `batch_interval` to `1s` or more. |
 | `Postgres query failed: permission denied for database postgres (SQLSTATE 42501)` | The user can't create the publication. Create it as the tables' owner and name it with `publication`. See [Requirements](/docs/sources/postgres-cdc/#requirements). |
@@ -57,7 +59,9 @@ See [Batches](/docs/concepts/cursors/#batches).
 ## Starting a table over
 
 `sqlload load --reload --yes TABLE` rebuilds it from the whole source. Deleting the destination
-table works too: SQLLoad keeps no other state, so the next run loads everything again.
+table works too: SQLLoad keeps no other state, so the next run loads everything again. A
+`postgres_cdc` table starts over with `sqlload load --resnapshot`; see
+[Re-snapshot](/docs/sources/postgres-cdc/#re-snapshot).
 
 ## More output
 
