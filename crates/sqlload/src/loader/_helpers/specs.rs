@@ -1,6 +1,6 @@
 use crate::adapters::contract::models::{ChangeApply, TableName};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
-use crate::cdc::constants::BATCH_INTERVAL;
+use crate::cdc::constants::{BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM};
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
@@ -132,11 +132,14 @@ pub(crate) fn build_spec(
         });
     let cdc = cdc_spec(context);
     let (strategy, mut problems) = match &cdc {
-        Some(_) if context.target.path.is_some() || !sql_adapter(context.target.warehouse).captures_changes() => (
+        Some(cdc) if !sql_adapter(context.target.warehouse).captures_changes(cdc.apply) => (
             WriteStrategy::Append,
             vec![
-                "kind = \"postgres_cdc\" loads into DuckDB and Snowflake targets in this release, not Databricks or files targets"
-                    .to_owned(),
+                match sql_adapter(context.target.warehouse).runs_sql() {
+                    true => CDC_TARGETS_PROBLEM,
+                    false => CDC_FILES_PROBLEM,
+                }
+                .to_owned(),
             ],
         ),
         Some(_) => (WriteStrategy::Append, cdc_key_problems(table, &unique_key)),

@@ -1,15 +1,21 @@
-//! Where each captured table's snapshot came from, kept in the destination beside the tables: a slot's snapshot point when SQLLoad created it, and each table once its snapshot is in, so a snapshot that stopped part-way is never mistaken for a finished one.
+//! Where each captured table's snapshot came from, kept in the destination beside the tables (a table in a warehouse, one object per record in a files target): a slot's snapshot point when SQLLoad created it, and each table once its snapshot is in, so a snapshot that stopped part-way is never mistaken for a finished one.
 
 use crate::adapters::contract::models::TableName;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
+use crate::cdc::constants::{SNAPSHOT_RECORD_SUFFIX, SNAPSHOTS_FOLDER};
 use crate::cdc::models::SnapshotRecord;
 use crate::cdc::types::CurrentSnapshot;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::file_store::main::list_files::list_files;
+use crate::file_store::main::open_folder::open_folder;
+use crate::file_store::main::read_file::read_file;
+use crate::file_store::main::write_file::write_file;
 use crate::loader::errors::LoaderError;
 use crate::schema_plan::constants::CDC_LSN_COLUMN;
+use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
 /// The table holding snapshot records, in the captured tables' schema.
@@ -36,6 +42,8 @@ pub(crate) struct SnapshotLog<'a> {
     pub(crate) beside: &'a TableName,
     pub(crate) source: &'a str,
     pub(crate) slot: &'a str,
+    /// In a files target, the folder holding the records (see [`snapshot_folder`]); `None` in a warehouse.
+    pub(crate) folder: Option<Location>,
 }
 
 impl SnapshotLog<'_> {
@@ -48,6 +56,9 @@ impl SnapshotLog<'_> {
 
     /// Create the records table when it is missing.
     pub(crate) async fn ensure(&self) -> Result<(), LoaderError> {
+        if self.folder.is_some() {
+            return Ok(());
+        }
         let adapter = sql_adapter(self.warehouse);
         let text = adapter.render_loader_logical_type(&ColumnType::Text).sql;
         let integer = adapter.render_loader_logical_type(&ColumnType::Int).sql;
@@ -78,6 +89,22 @@ impl SnapshotLog<'_> {
         record: &SnapshotRecord,
         lsn: i64,
     ) -> Result<(), LoaderError> {
+        let recorded_at = now_utc_text();
+        if let Some(folder) = &self.folder {
+            let row = [
+                lsn.to_string(),
+                recorded_at.clone(),
+                record.table.clone(),
+                record_columns(record),
+            ]
+            .join(&FIELD_SEPARATOR.to_string());
+            let stamp: String = recorded_at
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .collect();
+            let name = format!("{stamp}-{}{SNAPSHOT_RECORD_SUFFIX}", uuid::Uuid::new_v4());
+            return Ok(write_file(&open_folder(folder)?, &name, row.into_bytes().into()).await?);
+        }
         let adapter = sql_adapter(self.warehouse);
         let text = |value: &str| adapter.render_loader_value_literal(value);
         let names: Vec<String> = RECORD_COLUMNS
@@ -94,18 +121,21 @@ impl SnapshotLog<'_> {
                 text(self.slot),
                 text(&record.table),
                 text(&record_columns(record)),
-                text(&now_utc_text()),
+                text(&recorded_at),
             )],
         )
         .await
     }
 
-    /// Whether captured `table` holds a row tagged before `lsn`: one copied or changed under an older slot record, since LSNs only grow and a later copy is tagged at its own point.
+    /// Whether captured `table` holds a row tagged before `lsn`: one copied or changed under an older slot record, since LSNs only grow and a later copy is tagged at its own point. A files target answers yes: its caller asks only about a table that exists and was captured under an older slot record, whose files hold those rows.
     pub(crate) async fn holds_before(
         &self,
         table: &TableName,
         lsn: i64,
     ) -> Result<bool, LoaderError> {
+        if self.folder.is_some() {
+            return Ok(true);
+        }
         let adapter = sql_adapter(self.warehouse);
         let column = adapter.render_identifier(CDC_LSN_COLUMN);
         let text_type = adapter.render_loader_logical_type(&ColumnType::Text).sql;
@@ -122,11 +152,35 @@ impl SnapshotLog<'_> {
 
     /// The slot's newest snapshot LSN, the tables holding its changes, each with its newest record and the LSN it was copied at, and the tables captured only before the slot was recreated (see [`newest_snapshot`]); `None` when SQLLoad never recorded creating the slot.
     pub(crate) async fn current(&self) -> Result<Option<CurrentSnapshot>, LoaderError> {
+        let rows = match &self.folder {
+            Some(folder) => self.stored_rows(folder).await?,
+            None => self.table_rows().await?,
+        };
+        let mut records: Vec<(i64, String, SnapshotRecord)> = Vec::with_capacity(rows.len());
+        for row in &rows {
+            records.push(read_record(row).map_err(LoaderError::Invalid)?);
+        }
+        Ok(newest_snapshot(records))
+    }
+
+    /// Each record object's text in a files target's records `folder`, in the form [`read_record`] reads.
+    async fn stored_rows(&self, folder: &Location) -> Result<Vec<String>, LoaderError> {
+        let folder = open_folder(folder)?;
+        let mut rows: Vec<String> = Vec::new();
+        for file in list_files(&folder).await? {
+            let bytes = read_file(&folder, &file.relative_key).await?;
+            rows.push(String::from_utf8_lossy(&bytes).into_owned());
+        }
+        Ok(rows)
+    }
+
+    /// This source's and slot's rows of the records table, in the form [`read_record`] reads.
+    async fn table_rows(&self) -> Result<Vec<String>, LoaderError> {
         let adapter = sql_adapter(self.warehouse);
         let column = |name: &str| adapter.render_identifier(name);
         let text_type = adapter.render_loader_logical_type(&ColumnType::Text).sql;
         let separator = adapter.render_loader_value_literal(&FIELD_SEPARATOR.to_string());
-        let rows = text_values(
+        text_values(
             self.destination,
             format!(
                 "SELECT CAST({} AS {text_type}) || {separator} || {} || {separator} || {} || {separator} || {} FROM {} WHERE {} = {} AND {} = {}",
@@ -141,13 +195,29 @@ impl SnapshotLog<'_> {
                 adapter.render_loader_value_literal(self.slot),
             ),
         )
-        .await?;
-        let mut records: Vec<(i64, String, SnapshotRecord)> = Vec::with_capacity(rows.len());
-        for row in &rows {
-            records.push(read_record(row).map_err(LoaderError::Invalid)?);
-        }
-        Ok(newest_snapshot(records))
+        .await
     }
+}
+
+/// The records folder of `source`'s slot `slot` in a files target whose path template is `template`: the template's folders up to the first one naming anything but `{source}`, with `{source}` filled, then `_sqlload/cdc/<source>/<slot>/`. Outside every table's folder, and the same whichever tables the source selects.
+pub(crate) fn snapshot_folder(template: &str, source: &str, slot: &str) -> String {
+    let root = match template.starts_with('/') {
+        true => "/",
+        false => "",
+    };
+    let fixed: Vec<String> = template
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(|part| part.replace("{source}", source))
+        .take_while(|part| !part.contains('{'))
+        .collect();
+    let mut folders = fixed;
+    folders.extend([
+        SNAPSHOTS_FOLDER.to_owned(),
+        source.to_owned(),
+        slot.to_owned(),
+    ]);
+    format!("{root}{}/", folders.join("/"))
 }
 
 /// A record's `columns` text: the data columns, then, tab-separated, the highest column number, the key and the columns it stopped loading, when it has them.

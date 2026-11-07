@@ -9,12 +9,18 @@ use tokio_postgres::Client;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite, WriteMode};
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
+use crate::adapters::files::main::cursor_maximum::cursor_maximum;
+use crate::adapters::files::main::newest_load_files::newest_load_files;
+use crate::adapters::files::main::read_table_state::read_table_state;
+use crate::adapters::files::main::table_path::table_path;
+use crate::adapters::files::models::TablePathRequest;
 use crate::cdc::_helpers::batch::{change_parts, refuse_renamed, rows_batch, unplanned_columns};
 use crate::cdc::_helpers::buffer::buffer_change;
 use crate::cdc::_helpers::reshape::reshape_problem;
-use crate::cdc::_helpers::snapshot_log::SnapshotLog;
+use crate::cdc::_helpers::snapshot_log::{SnapshotLog, snapshot_folder};
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{
     BACKFILL_SLOT_SUFFIX, BATCH_CHANGES, COLUMN_LISTS_VERSION, GENERATED_COLUMNS_VERSION,
@@ -26,6 +32,10 @@ use crate::cdc::models::{
     CatalogColumn, ChangeBuffer, FollowStep, PlannedShape, SnapshotRecord, StreamStep, Streamed,
     TableChanges,
 };
+use crate::column_types::models::ColumnType;
+use crate::file_store::main::open_folder::open_folder;
+use crate::file_store::models::StoredFile;
+use crate::files_source::main::read_footers::read_footers;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::apply_project::apply_project;
@@ -39,8 +49,9 @@ use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::models::{CopyRequest, PostgresAddress, ReadColumn, SourceTable};
-use crate::project::models::{ConnectionConfig, SourceConfig};
-use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN};
+use crate::project::constants::DEFAULT_DESTINATION_PATH;
+use crate::project::models::{ConnectionConfig, SourceConfig, TargetConfig};
+use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_PREFIX, CDC_UNCHANGED_COLUMN};
 
 /// How often the replication session reports the confirmed position.
 const STATUS_INTERVAL: Duration = Duration::from_millis(100);
@@ -151,7 +162,7 @@ impl CdcSource<'_> {
         .with_application_name("sqlload"))
     }
 
-    /// The source's snapshot records, beside its first table.
+    /// The source's snapshot records: beside its first table in a warehouse, in the records folder of its path template in a files target (see [`snapshot_folder`]).
     fn log(&self) -> Result<SnapshotLog<'_>, LoaderError> {
         let first = self
             .tables
@@ -160,7 +171,29 @@ impl CdcSource<'_> {
             .ok_or_else(|| {
                 LoaderError::Invalid(format!("source {} selects no tables", self.name))
             })?;
+        let folder = match files_destination(self.destination) {
+            Some(files) => {
+                let target = self.run.project.targets.get(&first.target);
+                let template = self
+                    .source
+                    .destination_path
+                    .as_deref()
+                    .or_else(|| target.map(TargetConfig::path_template))
+                    .unwrap_or(DEFAULT_DESTINATION_PATH);
+                let request = TablePathRequest {
+                    template: &snapshot_folder(template, self.name, &self.cdc.slot),
+                    connection: &files.connection,
+                    store: &files.store,
+                    source: self.name,
+                    schema: "",
+                    table: "",
+                };
+                Some(table_path(&request).map_err(LoaderError::Invalid)?.folder)
+            }
+            None => None,
+        };
         Ok(SnapshotLog {
+            folder,
             destination: self.destination,
             warehouse: first.warehouse,
             beside: &first.destination,
@@ -928,7 +961,7 @@ impl CdcSource<'_> {
         Ok((buffer, written))
     }
 
-    /// Each loaded table's copy point by its source `(schema, table)`, from its snapshot record.
+    /// Each loaded table's floor by its source `(schema, table)`: the stream drops its changes committed before it. That is its copy point, from its snapshot record; in a files target, past its newest committed change too, which files cannot skip on a replay as a warehouse's changelog insert does.
     async fn copy_points(&self) -> Result<BTreeMap<(String, String), i64>, LoaderError> {
         let mut points: BTreeMap<(String, String), i64> = BTreeMap::new();
         let Some((_, records, _)) = self.log()?.current().await? else {
@@ -941,7 +974,10 @@ impl CdcSource<'_> {
                 .find(|table| table.spec.destination.table == record.table);
             if let Some(table) = table {
                 let source = &table.spec.source_table;
-                points.insert((source.schema.clone(), source.name.clone()), lsn);
+                let floor = newest_change_lsn(table)
+                    .await?
+                    .map_or(lsn, |newest| lsn.max(newest + 1));
+                points.insert((source.schema.clone(), source.name.clone()), floor);
             }
         }
         Ok(points)
@@ -1395,4 +1431,40 @@ pub(crate) fn with_changes(
         loaded.changes.extend(applied);
     }
     outcomes
+}
+
+/// The newest `_sqlload_lsn` in a files table's committed files, from the statistics of its newest commit's files (a table's commits each hold newer changes than the last); `None` for a warehouse table or a folder without files. An unfinished load's files do not count.
+async fn newest_change_lsn(table: &TablePlan) -> Result<Option<i64>, LoaderError> {
+    let Some(output) = &table.output else {
+        return Ok(None);
+    };
+    let folder = open_folder(&output.path.folder)?;
+    let state = read_table_state(&folder, &output.path, None).await?;
+    let newest: Vec<StoredFile> = state
+        .listed
+        .partitions
+        .last()
+        .map(|partition| newest_load_files(&partition.files))
+        .unwrap_or_default();
+    if newest.len() > output.max_footer_reads {
+        return Err(LoaderError::Invalid(format!(
+            "the newest load in {} wrote {} files, more footers than max_footer_reads = {} allows reading for its newest change; raise max_footer_reads on the target",
+            output.path.folder,
+            newest.len(),
+            output.max_footer_reads
+        )));
+    }
+    let footers = read_footers(&folder, &newest).await?;
+    let maximum =
+        cursor_maximum(&footers, CDC_LSN_COLUMN, &ColumnType::Int).map_err(LoaderError::Invalid)?;
+    maximum
+        .map(|text| {
+            text.parse::<i64>().map_err(|_| {
+                LoaderError::Invalid(format!(
+                    "{}: unreadable {CDC_LSN_COLUMN} maximum {text:?}",
+                    output.path.folder
+                ))
+            })
+        })
+        .transpose()
 }

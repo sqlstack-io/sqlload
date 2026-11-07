@@ -61,3 +61,22 @@ pub const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// What a load that found a table gaining a column says to do, after naming the table and columns.
 pub const REPLAN_ADVICE: &str = " during this load; run it again";
+
+/// Where a files target keeps a source's snapshot records, under the static start of its path template.
+pub const SNAPSHOTS_FOLDER: &str = "_sqlload/cdc";
+
+/// The ending of a snapshot record object in a files target.
+pub const SNAPSHOT_RECORD_SUFFIX: &str = ".tsv";
+
+/// Why a warehouse target that changes are not applied to yet takes no `postgres_cdc` source.
+pub const CDC_TARGETS_PROBLEM: &str = "kind = \"postgres_cdc\" loads into DuckDB and Snowflake targets, and into files targets as a changelog, in this release; not Databricks";
+
+/// Why a files target takes a `postgres_cdc` source only as a changelog.
+pub const CDC_FILES_PROBLEM: &str = "a files target takes kind = \"postgres_cdc\" only with cdc_mode = \"changelog\": Parquet files are append-only, so changes cannot be merged into rows";
+
+/// Why a captured table's files path cannot partition by a cursor.
+pub const CDC_PARTITION_PROBLEM: &str = "a postgres_cdc table writes one changelog, not partition folders; remove the cursor placeholder from its path";
+
+/// Why `--reload` does not copy a captured files table again.
+pub const CDC_RELOAD_PROBLEM: &str =
+    "a postgres_cdc table is copied again with --resnapshot, not --reload";

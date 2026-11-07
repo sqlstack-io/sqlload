@@ -8,7 +8,8 @@ use crate::file_store::main::open_folder::open_folder;
 use crate::loader::_helpers::destination::{live_schema, table_folder};
 use crate::loader::_helpers::table_plan::{CommitRequest, commit_rule};
 use crate::loader::_helpers::table_plan::{
-    blocked_plan, blocked_table, check_output, desired_columns, read_columns, read_window,
+    blocked_plan, blocked_table, captured_columns, captured_mode, captured_problems, check_output,
+    desired_columns, read_columns, read_window,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
@@ -32,7 +33,7 @@ pub(in crate::loader) async fn plan_files_table(
         cursor_type,
         folder,
         state,
-    } = match files_context(spec, destination).await? {
+    } = match files_context(spec, destination, options).await? {
         Ok(context) => context,
         Err(blocked) => return Ok(blocked),
     };
@@ -46,7 +47,8 @@ pub(in crate::loader) async fn plan_files_table(
                 });
             }
         };
-    let mut schema = files_schema(spec, &desired, live.as_deref(), options);
+    let schema = files_schema(spec, &desired, live.as_deref(), options);
+    let (mut schema, read_columns) = captured_columns(spec, options, schema, read_columns);
     let window_request = FilesWindowRequest {
         spec,
         options,
@@ -71,6 +73,7 @@ pub(in crate::loader) async fn plan_files_table(
         Some(window) => (window.filter, window.mode, window.note),
         None => (None, WriteMode::Append, None),
     };
+    let mode = captured_mode(spec, mode);
     let notes = write_notes(&mode);
     let commits = commit_rule(&CommitRequest {
         spec,
@@ -121,6 +124,7 @@ pub(in crate::loader) async fn plan_files_table(
 async fn files_context(
     spec: &TableSpec,
     destination: &FilesDestination,
+    options: &PlanOptions,
 ) -> Result<Result<FilesContext, TablePlan>, LoaderError> {
     if spec.files.is_some() {
         return Ok(Err(blocked_table(
@@ -138,6 +142,7 @@ async fn files_context(
         Err(problem) => return Ok(Err(blocked_table(spec, vec![problem]))),
     };
     let (cursor_type, mut problems) = check_output(spec, &path, &desired);
+    problems.extend(captured_problems(spec, &path, options));
     let folder = open_folder(&path.folder)?;
     let state = read_table_state(&folder, &path, cursor_type.as_ref()).await?;
     problems.extend(state.listed.problems.clone());

@@ -63,3 +63,10 @@ pub(crate) struct FloorTestCase {
     pub(crate) floor: i64,
     pub(crate) expected_lsns: Vec<i64>,
 }
+
+/// A files target's path template and the folder that holds its source's snapshot records.
+pub(crate) struct SnapshotFolderTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) template: &'static str,
+    pub(crate) expected_folder: &'static str,
+}
