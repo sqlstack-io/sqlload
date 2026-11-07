@@ -1,4 +1,6 @@
-use crate::adapters::contract::models::{WriteMode, WriteStatementsRequest};
+use crate::adapters::contract::models::{
+    ChangeApply, ChangeWrite, Truncation, WriteMode, WriteStatementsRequest,
+};
 use crate::adapters::contract::tests::helpers::{accounts, columns};
 use crate::adapters::contract::tests::test_types::CommitStatementsTestCase;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
@@ -102,6 +104,42 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             expected_statements: &[
                 "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`updated_at` >= CAST('2026-11-04' AS TIMESTAMP) THEN DELETE",
                 RUN,
+                "DELETE FROM `raw`.`app__accounts__sqlload_staging_load1`",
+            ],
+        },
+        CommitStatementsTestCase {
+            description: "a Databricks merge batch with a truncate is one MERGE, its truncate a NOT MATCHED BY SOURCE clause, then the staging table's emptying",
+            warehouse: Warehouse::Databricks,
+            mode: WriteMode::Changes(ChangeWrite {
+                apply: ChangeApply::SoftDeletes,
+                unique_key: vec!["id".to_owned()],
+                truncated: Some(Truncation {
+                    lsn: 42,
+                    committed_at: "2026-11-07T10:00:00Z".to_owned(),
+                }),
+            }),
+            run_insert: None,
+            keep_staging: false,
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at`, `_sqlload_unchanged` AS `_sqlload_unchanged` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON __target.`id` = __source.`id` WHEN MATCHED AND __source.`_sqlload_lsn` > COALESCE(__target.`_sqlload_lsn`, -1) AND __source.`_sqlload_op` = 'delete' THEN UPDATE SET `_sqlload_deleted_at` = __source.`_sqlload_committed_at`, `_sqlload_load_id` = __source.`_sqlload_load_id`, `_sqlload_loaded_at` = __source.`_sqlload_loaded_at` WHEN MATCHED AND __source.`_sqlload_lsn` > COALESCE(__target.`_sqlload_lsn`, -1) THEN UPDATE SET `profile` = CASE WHEN POSITION(',profile,' IN __source.`_sqlload_unchanged`) > 0 THEN __target.`profile` ELSE __source.`profile` END, `updated_at` = CASE WHEN POSITION(',updated_at,' IN __source.`_sqlload_unchanged`) > 0 THEN __target.`updated_at` ELSE __source.`updated_at` END, `_sqlload_deleted_at` = NULL, `_sqlload_load_id` = __source.`_sqlload_load_id`, `_sqlload_loaded_at` = __source.`_sqlload_loaded_at` WHEN NOT MATCHED AND NOT __source.`_sqlload_op` = 'delete' THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`_sqlload_lsn` < 42 AND __target.`_sqlload_deleted_at` IS NULL THEN UPDATE SET `_sqlload_deleted_at` = CAST('2026-11-07T10:00:00Z' AS TIMESTAMP), `_sqlload_op` = 'truncate'",
+                "DELETE FROM `raw`.`app__accounts__sqlload_staging_load1`",
+            ],
+        },
+        CommitStatementsTestCase {
+            description: "a Databricks hard-delete batch with a truncate deletes the older unmatched rows in its MERGE, and a matched older row keeps none of its values",
+            warehouse: Warehouse::Databricks,
+            mode: WriteMode::Changes(ChangeWrite {
+                apply: ChangeApply::HardDeletes,
+                unique_key: vec!["id".to_owned()],
+                truncated: Some(Truncation {
+                    lsn: 42,
+                    committed_at: "2026-11-07T10:00:00Z".to_owned(),
+                }),
+            }),
+            run_insert: None,
+            keep_staging: false,
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at`, `_sqlload_unchanged` AS `_sqlload_unchanged` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON __target.`id` = __source.`id` WHEN MATCHED AND __source.`_sqlload_lsn` > COALESCE(__target.`_sqlload_lsn`, -1) AND __source.`_sqlload_op` = 'delete' THEN DELETE WHEN MATCHED AND __source.`_sqlload_lsn` > COALESCE(__target.`_sqlload_lsn`, -1) THEN UPDATE SET `profile` = CASE WHEN POSITION(',profile,' IN __source.`_sqlload_unchanged`) > 0 AND __target.`_sqlload_lsn` >= 42 THEN __target.`profile` ELSE __source.`profile` END, `updated_at` = CASE WHEN POSITION(',updated_at,' IN __source.`_sqlload_unchanged`) > 0 AND __target.`_sqlload_lsn` >= 42 THEN __target.`updated_at` ELSE __source.`updated_at` END, `_sqlload_load_id` = __source.`_sqlload_load_id`, `_sqlload_loaded_at` = __source.`_sqlload_loaded_at` WHEN NOT MATCHED AND NOT __source.`_sqlload_op` = 'delete' THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`_sqlload_lsn` < 42 THEN DELETE",
                 "DELETE FROM `raw`.`app__accounts__sqlload_staging_load1`",
             ],
         },

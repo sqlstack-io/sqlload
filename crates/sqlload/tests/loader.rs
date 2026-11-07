@@ -1,5 +1,7 @@
 //! Docker-backed loader tests against real systems.
 
+#[path = "loader/databricks/helpers.rs"]
+mod databricks_helpers;
 #[path = "loader/helpers.rs"]
 mod helpers;
 #[path = "loader/test_batched_loads.rs"]

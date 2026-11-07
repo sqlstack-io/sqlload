@@ -1,11 +1,19 @@
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 
+use sqlload::databricks_api::main::execute_statement::execute_statement;
+use sqlload_testkit::fake_databricks::constants::{FAKE_CATALOG, FAKE_VOLUME};
+use sqlload_testkit::fake_databricks::main::start_fake_databricks::start_fake_databricks;
+
+use crate::databricks_helpers::{live_databricks, live_databricks_client, reset_live_databricks};
 use crate::helpers::{
-    CDC_CHANGES, cdc_project, crashed_batch, duckdb_text, run_async, run_sqlload, spawn_sqlload,
-    step, stop_sqlload,
+    CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, run_async,
+    run_sqlload, spawn_sqlload, step, stop_sqlload,
 };
-use crate::test_types::{CdcScenarioTestCase, CdcStep, FollowTestCase, QuietSlotTestCase};
+use crate::test_types::{
+    CdcPlanTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
+    QuietSlotTestCase,
+};
 
 pub(crate) const SETUP: &str = "
 CREATE TABLE public.orders (id int8 PRIMARY KEY, qty int4, big text, tags text[]);
@@ -24,6 +32,12 @@ pub(crate) const CHANGES: &str = CDC_CHANGES;
 
 const MERGED_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders) || ' | ' || (SELECT string_agg(id || ':' || name || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__items)";
 const MERGED_RESULT: &str = "1:10:9600:{a,b}:update:false,2:2:1:{c}:delete:true,3:3:1:-:snapshot:false,4:4:1:{\"x y\",z}:insert:false | 1:one!:update,2:two:snapshot,3:three:insert";
+
+/// [`MERGED_QUERY`] in Databricks SQL.
+const LIVE_MERGED_QUERY: &str = "SELECT (SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || CAST(_sqlload_deleted_at IS NOT NULL AS STRING)))), r -> r.t), ',') FROM {schema}.app__orders) || ' | ' || (SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || name || ':' || _sqlload_op))), r -> r.t), ',') FROM {schema}.app__items)";
+
+/// [`CHANGELOG_QUERY`] in Databricks SQL.
+const LIVE_CHANGELOG_QUERY: &str = "SELECT (SELECT array_join(transform(array_sort(collect_list(named_struct('l', _sqlload_lsn, 's', _sqlload_seq, 'k', id, 't', _sqlload_seq || ':' || _sqlload_op || ':' || id))), r -> r.t), ',') FROM {schema}.log__orders) || ' | ' || (SELECT array_join(transform(array_sort(collect_list(named_struct('l', _sqlload_lsn, 's', _sqlload_seq, 'k', id, 't', _sqlload_op || ':' || id))), r -> r.t), ',') FROM {schema}.log__items) || ' | ' || (SELECT array_join(collect_list(_sqlload_unchanged), ';') FROM {schema}.log__orders WHERE _sqlload_op = 'update')";
 
 const CHANGELOG_QUERY: &str = "SELECT (SELECT string_agg(_sqlload_seq || ':' || _sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM raw.log__orders) || ' | ' || (SELECT string_agg(_sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM raw.log__items) || ' | ' || (SELECT string_agg(_sqlload_unchanged, ';') FROM raw.log__orders WHERE _sqlload_op = 'update')";
 pub(crate) const CHANGELOG_RESULT: &str = "0:snapshot:1,0:snapshot:2,0:snapshot:3,1:insert:4,2:update:1,1:delete:2 | snapshot:1,snapshot:2,insert:3,update:1 | ,big,";
@@ -141,6 +155,23 @@ deletes = "hard"
 description = "Orders, captured."
 columns = { tags = "text" }
 "#;
+
+const TRUNCATE_ONLY: [CdcStep; 3] = [
+    step("", APP, "", (true, "loaded")),
+    step("TRUNCATE public.orders", APP, "", (true, "Completed")),
+    step("", APP, "", (true, "0 rows")),
+];
+
+const HARD_TRUNCATE_REINSERT: [CdcStep; 3] = [
+    step("", HARD, "", (true, "loaded")),
+    step(
+        "BEGIN; TRUNCATE public.orders; INSERT INTO public.orders VALUES (1, 7, 'z', NULL); COMMIT;",
+        HARD,
+        "",
+        (true, "Completed"),
+    ),
+    step("", HARD, "", (true, "0 rows")),
+];
 
 const HARD_KEY_CHANGE: [CdcStep; 3] = [
     step(
@@ -1339,6 +1370,170 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         })?;
     }
     Ok(())
+}
+
+/// A Databricks target takes `postgres_cdc` sources: each table is copied, then its changes merge or append.
+#[test]
+fn given_a_databricks_target_when_planning_a_postgres_cdc_source_then_each_table_is_copied_then_changes_apply()
+-> Result<(), String> {
+    let test_cases = [
+        CdcPlanTestCase {
+            description: "merge with soft deletes",
+            args: &["plan", "app"],
+            expected_output: "snapshot copy, then apply changes, soft deletes (key: id)",
+        },
+        CdcPlanTestCase {
+            description: "changelog",
+            args: &["plan", "log"],
+            expected_output: "snapshot copy, then append changes (changelog)",
+        },
+    ];
+    run_async(async {
+        let postgres = start_postgres_version("17-alpine").await?;
+        connect(&postgres)
+            .await?
+            .batch_execute(SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let fake = start_fake_databricks().await?;
+        let workspace = LiveDatabricks {
+            host: fake.base_url.clone(),
+            client_id: "id".to_owned(),
+            client_secret: "secret".to_owned(),
+            warehouse_id: "wh".to_owned(),
+            catalog: FAKE_CATALOG.to_owned(),
+            schema: "raw".to_owned(),
+        };
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let config = folder.path().join("sqlload.toml");
+        std::fs::write(
+            &config,
+            databricks_cdc_project(postgres.port, &workspace, FAKE_VOLUME),
+        )
+        .map_err(|error| error.to_string())?;
+        for test_case in &test_cases {
+            let (success, output) = run_sqlload(&config, test_case.args, ("", ""))?;
+            assert!(
+                success && output.contains(test_case.expected_output),
+                "{}: {output}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+/// Skipped unless `SQLLOAD_DATABRICKS_SCHEMA` names a `sqlload_` schema; this test uses that name with `_cdc` appended, so it never drops the schema the files test loads into, and drops and creates it before each case and drops it at the end. Databricks commits each statement alone, so a batch's truncate is part of its `MERGE`, and a load stopped between tables or before the slot confirmed converges on the re-run.
+#[test]
+fn given_a_live_databricks_schema_when_capturing_postgres_changes_then_the_tables_converge_without_duplicates()
+-> Result<(), String> {
+    let Some(live) = live_databricks()? else {
+        return Ok(());
+    };
+    let live = LiveDatabricks {
+        schema: format!("{}_cdc", live.schema),
+        ..live
+    };
+    let test_cases = [
+        LiveCdcTestCase {
+            description: "merge: snapshot, both transactions, then a re-run of nothing",
+            extra_config: "",
+            steps: &CAUGHT_UP,
+            check_query: LIVE_MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        LiveCdcTestCase {
+            description: "merge: stopped after the first table committed",
+            extra_config: "",
+            steps: &APP_AFTER_FIRST,
+            check_query: LIVE_MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        LiveCdcTestCase {
+            description: "changelog: stopped before the slot confirmed, whose replay is skipped",
+            extra_config: "",
+            steps: &LOG_BEFORE_CONFIRM,
+            check_query: LIVE_CHANGELOG_QUERY,
+            expected_result: CHANGELOG_RESULT,
+        },
+        LiveCdcTestCase {
+            description: "soft deletes: a truncate and a reinsert in one transaction mark the older rows truncated and keep the new one",
+            extra_config: "",
+            steps: &TRUNCATE_REINSERT,
+            check_query: "SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || qty || ':' || _sqlload_op || ':' || CAST(_sqlload_deleted_at IS NOT NULL AS STRING)))), r -> r.t), ',') FROM {schema}.app__orders",
+            expected_result: "1:7:insert:false,2:2:truncate:true,3:3:truncate:true",
+        },
+        LiveCdcTestCase {
+            description: "soft deletes: a truncate alone, whose batch stages no rows, marks every row truncated",
+            extra_config: "",
+            steps: &TRUNCATE_ONLY,
+            check_query: "SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || _sqlload_op || ':' || CAST(_sqlload_deleted_at IS NOT NULL AS STRING)))), r -> r.t), ',') FROM {schema}.app__orders",
+            expected_result: "1:truncate:true,2:truncate:true,3:truncate:true",
+        },
+        LiveCdcTestCase {
+            description: "hard deletes: a truncate and a reinsert in one transaction leave only the new row",
+            extra_config: HARD_SOURCE,
+            steps: &HARD_TRUNCATE_REINSERT,
+            check_query: "SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || qty || ':' || _sqlload_op))), r -> r.t), ',') FROM {schema}.hard__orders",
+            expected_result: "1:7:insert",
+        },
+    ];
+    run_async(async {
+        let api = live_databricks_client(&live)?;
+        let schema = format!("`{}`.`{}`", live.catalog, live.schema);
+        let volume = format!("{}.{}.sqlload_stage", live.catalog, live.schema);
+        for test_case in &test_cases {
+            reset_live_databricks(&api, &live).await?;
+            let postgres = start_postgres_version("17-alpine").await?;
+            let client = connect(&postgres).await?;
+            client
+                .batch_execute(SETUP)
+                .await
+                .map_err(|error| error.to_string())?;
+            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let config = folder.path().join("sqlload.toml");
+            let project =
+                databricks_cdc_project(postgres.port, &live, &volume) + test_case.extra_config;
+            std::fs::write(&config, project).map_err(|error| error.to_string())?;
+            for (index, step) in test_case.steps.iter().enumerate() {
+                client
+                    .batch_execute(step.source_change)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let (success, output) = run_sqlload(&config, step.args, (step.crash_at, ""))?;
+                assert_eq!(
+                    success, step.expected_success,
+                    "{}: step {index} {:?}\n{output}",
+                    test_case.description, step.args
+                );
+                assert!(
+                    output.contains(step.expected_output),
+                    "{}: step {index} {:?} output lacks {:?}\n{output}",
+                    test_case.description,
+                    step.args,
+                    step.expected_output
+                );
+            }
+            let rows = execute_statement(&api, &test_case.check_query.replace("{schema}", &schema))
+                .await
+                .map_err(|error| error.to_string())?;
+            let result = rows
+                .rows
+                .into_iter()
+                .next()
+                .and_then(|row| row.into_iter().next().flatten());
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        execute_statement(&api, &format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })
 }
 
 /// Postgres 15 and later send nothing for transactions on tables the slot does not publish, so a load of a quiet source must still confirm up to where it stopped, or the slot would hold the server's WAL forever.

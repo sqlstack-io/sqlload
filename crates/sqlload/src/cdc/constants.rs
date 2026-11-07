@@ -71,9 +71,6 @@ pub const SNAPSHOTS_FOLDER: &str = "_sqlload/cdc";
 /// The ending of a snapshot record object in a files target.
 pub const SNAPSHOT_RECORD_SUFFIX: &str = ".tsv";
 
-/// Why a warehouse target that changes are not applied to yet takes no `postgres_cdc` source.
-pub const CDC_TARGETS_PROBLEM: &str = "kind = \"postgres_cdc\" loads into DuckDB and Snowflake targets, and into files targets as a changelog, in this release; not Databricks";
-
 /// Why a files target takes a `postgres_cdc` source only as a changelog.
 pub const CDC_FILES_PROBLEM: &str = "a files target takes kind = \"postgres_cdc\" only with cdc_mode = \"changelog\": Parquet files are append-only, so changes cannot be merged into rows";
 
