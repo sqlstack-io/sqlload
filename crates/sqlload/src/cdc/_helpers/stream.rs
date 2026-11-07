@@ -354,7 +354,7 @@ impl CdcSource<'_> {
                 "slot {slot} lost WAL it had not confirmed, so changes are missing; run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
         }
-        let Some((_, snapshotted, earlier)) = self.log()?.current().await? else {
+        let Some((newest, snapshotted, earlier)) = self.log()?.current().await? else {
             return Ok(Err(format!(
                 "slot {slot} exists but SQLLoad has no record of creating it, so it cannot tell which changes the tables already hold; drop it, or run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
@@ -434,18 +434,21 @@ impl CdcSource<'_> {
             .filter(|table| !recorded.contains(&table.spec.destination.table.as_str()))
             .copied()
             .collect();
-        let held: Vec<&str> = unrecorded
-            .iter()
-            .filter(|table| table.exists && earlier.contains(&table.spec.destination.table))
-            .map(|table| table.spec.destination.table.as_str())
-            .collect();
+        let log = self.log()?;
+        let mut held: Vec<&str> = Vec::new();
+        for table in &unrecorded {
+            let destination = &table.spec.destination;
+            let earlier_rows = table.exists
+                && earlier.contains(&destination.table)
+                && log.holds_before(destination, newest).await?;
+            held.extend(earlier_rows.then_some(destination.table.as_str()));
+        }
         if !held.is_empty() {
             return Ok(Err(format!(
                 "rows captured before slot {slot} was recreated are still in {}; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or drop the tables from the destination to copy them alone",
                 held.join(", ")
             )));
         }
-        let log = self.log()?;
         for (copied_at, record) in &rewrites {
             log.record(record, *copied_at).await?;
         }

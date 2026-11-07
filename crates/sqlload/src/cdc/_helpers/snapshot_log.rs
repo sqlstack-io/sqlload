@@ -9,6 +9,7 @@ use crate::cdc::models::SnapshotRecord;
 use crate::cdc::types::CurrentSnapshot;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::errors::LoaderError;
+use crate::schema_plan::constants::CDC_LSN_COLUMN;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
 /// The table holding snapshot records, in the captured tables' schema.
@@ -97,6 +98,26 @@ impl SnapshotLog<'_> {
             )],
         )
         .await
+    }
+
+    /// Whether captured `table` holds a row tagged before `lsn`: one copied or changed under an older slot record, since LSNs only grow and a later copy is tagged at its own point.
+    pub(crate) async fn holds_before(
+        &self,
+        table: &TableName,
+        lsn: i64,
+    ) -> Result<bool, LoaderError> {
+        let adapter = sql_adapter(self.warehouse);
+        let column = adapter.render_identifier(CDC_LSN_COLUMN);
+        let text_type = adapter.render_loader_logical_type(&ColumnType::Text).sql;
+        let rows = text_values(
+            self.destination,
+            format!(
+                "SELECT CAST({column} AS {text_type}) FROM {} WHERE {column} < {lsn} LIMIT 1",
+                adapter.render_qualified_name(table)
+            ),
+        )
+        .await?;
+        Ok(!rows.is_empty())
     }
 
     /// The slot's newest snapshot LSN, the tables holding its changes, each with its newest record and the LSN it was copied at, and the tables captured only before the slot was recreated (see [`newest_snapshot`]); `None` when SQLLoad never recorded creating the slot.

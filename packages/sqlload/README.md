@@ -259,14 +259,15 @@ deletes = "soft"          # soft (default) | hard; merge only
   table not yet in the destination as `snapshot copy, then …`.
   - A table leaving `include` still needs `--resnapshot`, which also sets SQLLoad's own
     publication to `include` again.
-  - A table that rejoins after that, while its destination still holds the rows captured
-    before, is refused rather than replaced unasked: run `--resnapshot` (which asks first), or
-    drop the destination table to copy it alone.
+  - A table that rejoins after that, while its destination still holds rows captured before,
+    is refused rather than replaced unasked: run `--resnapshot` (which asks first), or drop the
+    destination table to copy it alone.
 - Postgres keeps WAL for the slot from its last confirmed position. Every load confirms what it
   applied, even one that found no changes, but the WAL kept shrinks only at the first load after
   Postgres's next checkpoint.
 - A first snapshot that stopped part-way resumes: the next load copies only the tables it had
-  not finished.
+  not finished. A `--resnapshot` that stopped part-way needs `--resnapshot` again, since its
+  unfinished tables still hold the rows it was replacing.
 - When the slot is lost, the load stops and names the fix:
   `sqlload load --resnapshot` drops and recreates the slot and copies every table again,
   replacing what they hold: a `changelog` table loses its history and a `merge` table its

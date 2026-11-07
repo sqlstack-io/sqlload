@@ -533,6 +533,36 @@ const BACKFILL_REJOIN: [CdcStep; 8] = [
     step("", APP, "", (false, "are still in app__extra")),
 ];
 
+const BACKFILL_REJOIN_EMPTY: [CdcStep; 7] = [
+    step("", APP, "", (true, "loaded")),
+    step(EXTRA_TABLE, APP, "", (true, "Completed")),
+    step(
+        "DROP TABLE public.extra;",
+        APP,
+        "",
+        (false, "this load leaves out app__extra"),
+    ),
+    step("", RESNAPSHOT, "", (true, "loaded")),
+    step(
+        "CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.'; INSERT INTO public.extra VALUES (5, 'e');",
+        APP,
+        "backfill-before-record",
+        (false, ""),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (6, 'f');",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "UPDATE public.extra SET v = 'g' WHERE id = 6;",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+];
+
 const NOKEY_SOURCE: &str = r#"
 [sources.nokey]
 kind = "postgres_cdc"
@@ -922,6 +952,15 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             steps: &BACKFILL_REJOIN,
             check_query: "SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra",
             expected_result: "1:a:insert",
+        },
+        CdcScenarioTestCase {
+            description: "a table that rejoins with an empty destination, or one holding only its own unfinished copy, is copied alone",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_REJOIN_EMPTY,
+            check_query: "SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra",
+            expected_result: "5:e:snapshot,6:g:update",
         },
         CdcScenarioTestCase {
             description: "a table missing from a named publication is refused with the fix, then copied alone once it is added by hand",
