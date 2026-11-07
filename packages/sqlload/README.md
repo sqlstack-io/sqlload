@@ -463,7 +463,8 @@ The Statement Execution API runs every statement in its own transaction, so each
 statement: `append` is the `COPY` into the table (into a staging table, then one `INSERT`, for a
 logged table), `delete_insert` is one `MERGE` that inserts the
 batch and deletes the rows it replaces, and `merge` is one `MERGE` on the key. The run record
-commits after it.
+commits after it. A `postgres_cdc` batch is one `MERGE` per table (a truncate in the batch is its
+`WHEN NOT MATCHED BY SOURCE` clause), or one `INSERT` for a changelog.
 
 `replace` loads into a build table, which then replaces the table with
 `CREATE OR REPLACE TABLE ... AS SELECT`. That keeps the table's history and grants, but Delta has no

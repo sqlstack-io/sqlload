@@ -13,7 +13,7 @@ const DELETE_OP: &str = "delete";
 /// The `_sqlload_op` a truncate leaves on soft-deleted rows.
 const TRUNCATE_OP: &str = "truncate";
 
-/// Statements applying a batch of captured changes from `staging` in one transaction, each guarded by `_sqlload_lsn` so a replay changes nothing: a changelog inserts the rows newer than the table's newest; `merge` applies the batch's truncate to older rows (soft deletes keep their `_sqlload_lsn`, so a row the same transaction inserts again still merges), then merges each key's newest change where it is newer than the row's, keeping the live value of every column `_sqlload_unchanged` (`,a,b,`) names.
+/// Statements applying a batch of captured changes from `staging` in one transaction, each guarded by `_sqlload_lsn` so a replay changes nothing: a changelog inserts the rows newer than the table's newest; `merge` applies the batch's truncate to older rows (in the `MERGE` itself where the warehouse [truncates in it](SqlAdapter::truncates_in_merge)) (soft deletes keep their `_sqlload_lsn`, so a row the same transaction inserts again still merges), then merges each key's newest change where it is newer than the row's, keeping the live value of every column `_sqlload_unchanged` (`,a,b,`) names.
 pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
@@ -55,6 +55,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
         return statements;
     }
     let text = |value: &str| adapter.render_loader_value_literal(value);
+    let mut truncate_clause = String::new();
     if let Some(truncation) = &change.truncated {
         let at = format!(
             "CAST({} AS {})",
@@ -63,19 +64,30 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
                 .render_loader_logical_type(&ColumnType::TimestampTz)
                 .sql
         );
-        statements.push(match change.apply {
-            ChangeApply::HardDeletes => {
-                format!("DELETE FROM {target} WHERE {lsn} < {}", truncation.lsn)
+        let deleted_at = id(CDC_DELETED_AT_COLUMN);
+        let soft_delete = format!(
+            "{deleted_at} = {at}, {} = {}",
+            id(CDC_OP_COLUMN),
+            text(TRUNCATE_OP)
+        );
+        let older = truncation.lsn;
+        match (adapter.truncates_in_merge(), change.apply) {
+            (true, ChangeApply::HardDeletes) => {
+                truncate_clause =
+                    format!(" WHEN NOT MATCHED BY SOURCE AND __target.{lsn} < {older} THEN DELETE");
             }
-            _ => format!(
-                "UPDATE {target} SET {} = {at}, {} = {} WHERE {lsn} < {} AND {} IS NULL",
-                id(CDC_DELETED_AT_COLUMN),
-                id(CDC_OP_COLUMN),
-                text(TRUNCATE_OP),
-                truncation.lsn,
-                id(CDC_DELETED_AT_COLUMN),
-            ),
-        });
+            (true, _) => {
+                truncate_clause = format!(
+                    " WHEN NOT MATCHED BY SOURCE AND __target.{lsn} < {older} AND __target.{deleted_at} IS NULL THEN UPDATE SET {soft_delete}"
+                );
+            }
+            (false, ChangeApply::HardDeletes) => {
+                statements.push(format!("DELETE FROM {target} WHERE {lsn} < {older}"));
+            }
+            (false, _) => statements.push(format!(
+                "UPDATE {target} SET {soft_delete} WHERE {lsn} < {older} AND {deleted_at} IS NULL"
+            )),
+        }
     }
     let keys: Vec<String> = change.unique_key.iter().map(|key| id(key)).collect();
     let unchanged = id(CDC_UNCHANGED_COLUMN);
@@ -130,7 +142,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
         .map(|name| format!("__source.{name}"))
         .collect();
     statements.push(format!(
-        "MERGE INTO {target} AS __target USING (SELECT {} FROM {source}) AS __source ON {} WHEN MATCHED AND {newer} AND {is_delete} THEN {deleted} WHEN MATCHED AND {newer} THEN UPDATE SET {} WHEN NOT MATCHED AND NOT {is_delete} THEN INSERT ({}) VALUES ({})",
+        "MERGE INTO {target} AS __target USING (SELECT {} FROM {source}) AS __source ON {} WHEN MATCHED AND {newer} AND {is_delete} THEN {deleted} WHEN MATCHED AND {newer} THEN UPDATE SET {} WHEN NOT MATCHED AND NOT {is_delete} THEN INSERT ({}) VALUES ({}){truncate_clause}",
         selected.join(", "),
         join.join(" AND "),
         updates.join(", "),

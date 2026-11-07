@@ -5,13 +5,13 @@ use sqlload::databricks_api::main::execute_statement::execute_statement;
 use sqlload_testkit::fake_databricks::constants::{FAKE_CATALOG, FAKE_VOLUME};
 use sqlload_testkit::fake_databricks::main::start_fake_databricks::start_fake_databricks;
 
+use crate::databricks_helpers::{live_databricks, live_databricks_client, reset_live_databricks};
 use crate::helpers::{
-    CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, live_databricks,
-    live_databricks_client, reset_live_databricks, run_async, run_sqlload, spawn_sqlload, step,
-    stop_sqlload,
+    CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, run_async,
+    run_sqlload, spawn_sqlload, step, stop_sqlload,
 };
 use crate::test_types::{
-    CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
+    CdcPlanTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
     QuietSlotTestCase,
 };
 
@@ -155,6 +155,17 @@ deletes = "hard"
 description = "Orders, captured."
 columns = { tags = "text" }
 "#;
+
+const HARD_TRUNCATE_REINSERT: [CdcStep; 3] = [
+    step("", HARD, "", (true, "loaded")),
+    step(
+        "BEGIN; TRUNCATE public.orders; INSERT INTO public.orders VALUES (1, 7, 'z', NULL); COMMIT;",
+        HARD,
+        "",
+        (true, "Completed"),
+    ),
+    step("", HARD, "", (true, "0 rows")),
+];
 
 const HARD_KEY_CHANGE: [CdcStep; 3] = [
     step(
@@ -1359,6 +1370,18 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
 #[test]
 fn given_a_databricks_target_when_planning_a_postgres_cdc_source_then_each_table_is_copied_then_changes_apply()
 -> Result<(), String> {
+    let test_cases = [
+        CdcPlanTestCase {
+            description: "merge with soft deletes",
+            args: &["plan", "app"],
+            expected_output: "snapshot copy, then apply changes, soft deletes (key: id)",
+        },
+        CdcPlanTestCase {
+            description: "changelog",
+            args: &["plan", "log"],
+            expected_output: "snapshot copy, then append changes (changelog)",
+        },
+    ];
     run_async(async {
         let postgres = start_postgres_version("17-alpine").await?;
         connect(&postgres)
@@ -1382,48 +1405,71 @@ fn given_a_databricks_target_when_planning_a_postgres_cdc_source_then_each_table
             databricks_cdc_project(postgres.port, &workspace, FAKE_VOLUME),
         )
         .map_err(|error| error.to_string())?;
-        let (success, output) = run_sqlload(&config, &["plan", "app", "log"], ("", ""))?;
-        assert!(
-            success
-                && output.contains("snapshot copy, then apply changes, soft deletes (key: id)")
-                && output.contains("snapshot copy, then append changes (changelog)"),
-            "{output}"
-        );
+        for test_case in &test_cases {
+            let (success, output) = run_sqlload(&config, test_case.args, ("", ""))?;
+            assert!(
+                success && output.contains(test_case.expected_output),
+                "{}: {output}",
+                test_case.description
+            );
+        }
         Ok(())
     })
 }
 
-/// Skipped unless `SQLLOAD_DATABRICKS_SCHEMA` names a `sqlload_` schema, which each case drops and creates first and the test drops at the end. Databricks commits each change statement alone, so a load stopped between them must converge on the re-run.
+/// Skipped unless `SQLLOAD_DATABRICKS_SCHEMA` names a `sqlload_` schema; this test uses that name with `_cdc` appended, so it never drops the schema the files test loads into, and drops and creates it before each case and drops it at the end. Databricks commits each statement alone, so a batch's truncate is part of its `MERGE`, and a load stopped between tables or before the slot confirmed converges on the re-run.
 #[test]
 fn given_a_live_databricks_schema_when_capturing_postgres_changes_then_the_tables_converge_without_duplicates()
 -> Result<(), String> {
     let Some(live) = live_databricks()? else {
         return Ok(());
     };
+    let live = LiveDatabricks {
+        schema: format!("{}_cdc", live.schema),
+        ..live
+    };
     let test_cases = [
         LiveCdcTestCase {
             description: "merge: snapshot, both transactions, then a re-run of nothing",
+            extra_config: "",
             steps: &CAUGHT_UP,
             check_query: LIVE_MERGED_QUERY,
             expected_result: MERGED_RESULT,
         },
         LiveCdcTestCase {
             description: "merge: stopped after the first table committed",
+            extra_config: "",
             steps: &APP_AFTER_FIRST,
             check_query: LIVE_MERGED_QUERY,
             expected_result: MERGED_RESULT,
         },
         LiveCdcTestCase {
             description: "changelog: stopped before the slot confirmed, whose replay is skipped",
+            extra_config: "",
             steps: &LOG_BEFORE_CONFIRM,
             check_query: LIVE_CHANGELOG_QUERY,
             expected_result: CHANGELOG_RESULT,
         },
+        LiveCdcTestCase {
+            description: "soft deletes: a truncate and a reinsert in one transaction mark the older rows truncated and keep the new one",
+            extra_config: "",
+            steps: &TRUNCATE_REINSERT,
+            check_query: "SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || qty || ':' || _sqlload_op || ':' || CAST(_sqlload_deleted_at IS NOT NULL AS STRING)))), r -> r.t), ',') FROM {schema}.app__orders",
+            expected_result: "1:7:insert:false,2:2:truncate:true,3:3:truncate:true",
+        },
+        LiveCdcTestCase {
+            description: "hard deletes: a truncate and a reinsert in one transaction leave only the new row",
+            extra_config: HARD_SOURCE,
+            steps: &HARD_TRUNCATE_REINSERT,
+            check_query: "SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || qty || ':' || _sqlload_op))), r -> r.t), ',') FROM {schema}.hard__orders",
+            expected_result: "1:7:insert",
+        },
     ];
-    let api = live_databricks_client(&live)?;
-    let schema = format!("`{}`.`{}`", live.catalog, live.schema);
-    for test_case in &test_cases {
-        run_async(async {
+    run_async(async {
+        let api = live_databricks_client(&live)?;
+        let schema = format!("`{}`.`{}`", live.catalog, live.schema);
+        let volume = format!("{}.{}.sqlload_stage", live.catalog, live.schema);
+        for test_case in &test_cases {
             reset_live_databricks(&api, &live).await?;
             let postgres = start_postgres_version("17-alpine").await?;
             let client = connect(&postgres).await?;
@@ -1433,12 +1479,9 @@ fn given_a_live_databricks_schema_when_capturing_postgres_changes_then_the_table
                 .map_err(|error| error.to_string())?;
             let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
             let config = folder.path().join("sqlload.toml");
-            let volume = format!("{}.{}.sqlload_stage", live.catalog, live.schema);
-            std::fs::write(
-                &config,
-                databricks_cdc_project(postgres.port, &live, &volume),
-            )
-            .map_err(|error| error.to_string())?;
+            let project =
+                databricks_cdc_project(postgres.port, &live, &volume) + test_case.extra_config;
+            std::fs::write(&config, project).map_err(|error| error.to_string())?;
             for (index, step) in test_case.steps.iter().enumerate() {
                 client
                     .batch_execute(step.source_change)
@@ -1472,10 +1515,7 @@ fn given_a_live_databricks_schema_when_capturing_postgres_changes_then_the_table
                 "{}",
                 test_case.description
             );
-            Ok(())
-        })?;
-    }
-    run_async(async {
+        }
         execute_statement(&api, &format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .await
             .map_err(|error| error.to_string())?;

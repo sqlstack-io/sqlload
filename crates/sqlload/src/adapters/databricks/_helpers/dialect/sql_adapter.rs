@@ -107,6 +107,10 @@ impl SqlAdapter for DatabricksSql {
         true
     }
 
+    fn truncates_in_merge(&self) -> bool {
+        true
+    }
+
     fn render_cursor_text(&self, column: &str, value: CursorValue) -> String {
         match value {
             CursorValue::EpochMicros { zoned: true } => {

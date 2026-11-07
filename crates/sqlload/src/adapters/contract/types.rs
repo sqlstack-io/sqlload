@@ -277,6 +277,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         write_statements(self, request, staging)
     }
 
+    /// Whether a `merge` batch's truncate is a `WHEN NOT MATCHED BY SOURCE` clause of its `MERGE` rather than a statement before it, so a warehouse that commits every statement alone still applies the batch in one commit.
+    fn truncates_in_merge(&self) -> bool {
+        false
+    }
+
     /// Whether `statement`, run alone, commits by itself, so a run record cannot share its transaction.
     fn commits_alone(&self, _statement: &str) -> bool {
         false
