@@ -258,8 +258,22 @@ deletes = "soft"          # soft (default) | hard; merge only
   `sqlload load --resnapshot` drops and recreates the slot and copies every table again,
   replacing what they hold: a `changelog` table loses its history and a `merge` table its
   soft-deleted rows. It asks first unless `--yes`; `plan --resnapshot` shows it first.
-- Schema changes while streaming are not handled yet; a table that changes shape stops the load
-  with the same fix.
+- Source schema changes carry through when the stream can carry them. `plan`/`apply` add new
+  columns to the destination, as for other sources (`on_schema_change`).
+  - An added column without a default loads. Changes from before it leave it out: `merge` keeps
+    the row's value, and a changelog writes NULL and lists it in `_sqlload_unchanged`.
+  - A dropped column stays in the destination with its values; new rows get NULL. A value
+    written just before the drop, in the same load, is not loaded for it.
+  - A type change loads when `on_schema_change` widens the column.
+  - A table changed in a way whose values no change carries stops the load with
+    `--resnapshot` as the fix. That covers a column added with a default, or as an identity or
+    generated column; a renamed column, or one loaded again after it stopped loading; and a
+    primary key change under `merge` (a changelog loads it). It also covers a column dropped and
+    another added while changes to the dropped one are unloaded, which the stream cannot tell
+    from a rename: load between the two.
+  - A column added while a load runs stops it before anything is written; run it again.
+- A generated column, or one left out of the publication's column list, never streams, so a
+  table that loads one is refused; add it to `exclude_columns`.
 
 ## Python sources
 

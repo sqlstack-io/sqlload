@@ -43,7 +43,7 @@ pub(crate) fn key_of(values: &[TupleValue], positions: &[usize]) -> Vec<TupleVal
         .collect()
 }
 
-/// Each key's last change in stream order, keys in first-seen order: an update's unchanged TOAST values are taken from the key's earlier change in the batch where it had them, and an update that moves a row to a new key deletes the old key first. The moved row is new to the table, so a value it left out must come from its old row (replica identity full sends it); otherwise the batch fails rather than write NULL.
+/// Each key's last change in stream order, keys in first-seen order: an update's unchanged TOAST values, and columns its shape lacked, are taken from the key's earlier change in the batch where it had them, and an update that moves a row to a new key deletes the old key first. The moved row is new to the table, so a value it left out must come from its old row (replica identity full sends it); otherwise the batch fails rather than write NULL.
 pub(crate) fn fold_changes(changes: &[Change], positions: &[usize]) -> Result<Vec<Change>, String> {
     let mut folder = Folder::default();
     for change in changes {
@@ -82,7 +82,7 @@ impl Folder {
             .filter(|earlier| earlier.op != ChangeOp::Delete)
         {
             for (value, before) in change.values.iter_mut().zip(&earlier.values) {
-                if *value == TupleValue::Unchanged && *before != TupleValue::Unchanged {
+                if left_out(value) && !left_out(before) {
                     *value = before.clone();
                 }
             }
@@ -110,6 +110,11 @@ impl Folder {
         }
         self.last.insert(key, change);
     }
+}
+
+/// Whether a change left `value` out: an unchanged TOAST value, or a column its shape lacked.
+fn left_out(value: &TupleValue) -> bool {
+    matches!(value, TupleValue::Unchanged | TupleValue::Absent)
 }
 
 /// A moved row's values left out as unchanged, taken from its old row; an error when the old row lacks them.

@@ -1,4 +1,4 @@
-use crate::cdc::models::{Change, PgOutputMessage};
+use crate::cdc::models::{CatalogColumn, Change, PgOutputMessage, SnapshotRecord};
 
 pub(crate) struct DecodeTestCase {
     pub(crate) description: &'static str,
@@ -19,4 +19,38 @@ pub(crate) struct BufferTestCase {
     pub(crate) description: &'static str,
     pub(crate) messages: Vec<Vec<u8>>,
     pub(crate) expected_seqs: Result<Vec<i64>, &'static str>,
+}
+
+/// Transactions on table 7 and the rows `merge` and a changelog stage for them (see `staged_texts`).
+pub(crate) struct StagedShapesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) transactions: Vec<Vec<Vec<u8>>>,
+    pub(crate) columns: Vec<&'static str>,
+    pub(crate) gone: Vec<&'static str>,
+    pub(crate) expected_merge: Result<Vec<&'static str>, &'static str>,
+    pub(crate) expected_changelog: Result<Vec<&'static str>, &'static str>,
+}
+
+/// Transactions on table 7, and the replica identity and key flags of its batch shape.
+pub(crate) struct UnionShapeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) transactions: Vec<Vec<Vec<u8>>>,
+    pub(crate) expected_shape: (char, Vec<bool>),
+}
+
+/// A table's snapshot record (`,id,a,` with highest column number 3 and key `,id,` unless the case says otherwise), its plan and catalog now, and the record to write or why it must be copied again.
+pub(crate) struct ReshapeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) recorded: SnapshotRecord,
+    pub(crate) planned: (&'static str, &'static str, bool),
+    pub(crate) known: Vec<&'static str>,
+    pub(crate) catalog: Vec<CatalogColumn>,
+    pub(crate) expected_rewrite: Result<Option<SnapshotRecord>, &'static str>,
+}
+
+/// Snapshot records as read back, and the newest snapshot they give, or the error.
+pub(crate) struct SnapshotRecordsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) rows: Vec<&'static str>,
+    pub(crate) expected_snapshot: Result<Option<(i64, Vec<SnapshotRecord>)>, &'static str>,
 }
