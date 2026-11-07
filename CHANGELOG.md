@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.22.0](https://github.com/sqlstack-io/sqlload/compare/v0.21.0...v0.22.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cdc:** a bare `load --reload` on a project with a postgres_cdc source now refuses that source's tables and exits 1, while the project's other tables still rebuild. Use `--resnapshot` to copy captured tables again, or `--exclude` the CDC source to reload the rest.
+
+### Bug Fixes
+
+* **cdc:** refuse --reload for captured tables on every target ([#91](https://github.com/sqlstack-io/sqlload/issues/91)) ([e57f6d0](https://github.com/sqlstack-io/sqlload/commit/e57f6d0bfb29835ef94e8831d2e6cc71b6490844))
+* **loader:** scope a source's problems to commands that select it ([#90](https://github.com/sqlstack-io/sqlload/issues/90)) ([afef55d](https://github.com/sqlstack-io/sqlload/commit/afef55d5d5f1558566c114828c0fc803bf2ac235))
+
+
+### Documentation
+
+* document Postgres CDC into files targets in 0.21.0 ([#93](https://github.com/sqlstack-io/sqlload/issues/93)) ([f298876](https://github.com/sqlstack-io/sqlload/commit/f298876a8faf79fb86e52ca9e08a4fc2d19444bb))
+
 ## [0.21.0](https://github.com/sqlstack-io/sqlload/compare/v0.20.0...v0.21.0) (2026-11-07)
 
 
