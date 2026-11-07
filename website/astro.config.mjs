@@ -48,6 +48,14 @@ export default defineConfig({
 			},
 			favicon: '/favicon.png',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/sqlstack-io/sqlload' }],
+			// The social preview image. Absolute, since link previews don't resolve relative URLs.
+			head: [
+				['meta', { property: 'og:image', content: 'https://sqlload.io/assets/og-sqlload.png' }],
+				['meta', { property: 'og:image:width', content: '1200' }],
+				['meta', { property: 'og:image:height', content: '630' }],
+				['meta', { property: 'og:image:alt', content: 'SQLLoad. Load data into your warehouse. Fast. $ sqlload plan. See exactly how, before anything changes.' }],
+				['meta', { name: 'twitter:image', content: 'https://sqlload.io/assets/og-sqlload.png' }],
+			].map(([tag, attrs]) => ({ tag, attrs })),
 			components: {
 				PageFrame: './src/components/PageFrame.astro',
 				TwoColumnContent: './src/components/TwoColumnContent.astro',
