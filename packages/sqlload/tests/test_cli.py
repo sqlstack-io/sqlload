@@ -103,7 +103,7 @@ def test_given_a_literal_password_in_a_uri_when_the_copy_fails_then_no_output_sh
 	done = run("copy", "postgresql://app:hunter2-secret@127.0.0.1:1/shop#public.accounts", f"duckdb://{tmp_path / 'wh.duckdb'}#RAW.ACCOUNTS", "-c", str(tmp_path / "sqlload.toml"))
 	assert done.returncode == 1
 	assert "app:***@127.0.0.1" in done.stderr, done.stderr
-	assert "cannot connect to Postgres at 127.0.0.1:1/shop" in done.stderr, done.stderr
+	assert "cannot connect to Postgres at 127.0.0.1:1/shop" in done.stdout, done.stdout
 	assert "hunter2" not in done.stdout + done.stderr
 
 

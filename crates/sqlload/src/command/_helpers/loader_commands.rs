@@ -254,7 +254,7 @@ async fn run_command(
     Ok((lines, planned && completed))
 }
 
-/// Why `load --follow` cannot follow `plan`: it follows exactly one `postgres_cdc` source, and nothing else, since it never finishes to load other tables after.
+/// Why `load --follow` cannot follow `plan`: it follows exactly one `postgres_cdc` source, and nothing else, since it never finishes to load other tables after; when it selects none, the plan's problems say why.
 fn follow_problem(plan: &ProjectPlan) -> Option<String> {
     let others: Vec<&str> = plan
         .tables
@@ -278,7 +278,12 @@ fn follow_problem(plan: &ProjectPlan) -> Option<String> {
         .map(|table| table.spec.source_name.as_str())
         .collect();
     match sources.len() {
-        0 => Some("load --follow needs a postgres_cdc source, and selects none".to_owned()),
+        0 => Some(
+            std::iter::once("load --follow needs a postgres_cdc source, and selects none")
+                .chain(plan.problems.iter().map(String::as_str))
+                .collect::<Vec<&str>>()
+                .join("; "),
+        ),
         1 => None,
         _ => Some(format!(
             "load --follow follows one postgres_cdc source per process; select one of {}",
