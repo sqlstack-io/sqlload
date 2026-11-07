@@ -58,15 +58,26 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
 
 /// A decimal with the reported precision and scale (`default` when the column declares none), when it fits the portable range.
 fn decimal(live: &LiveColumnType, default: Option<(u8, u8)>) -> Option<ColumnType> {
-    let (precision, scale) = match (live.precision, default) {
-        (Some(precision), _) => (
-            u8::try_from(precision).ok()?,
-            u8::try_from(live.scale.unwrap_or(0)).ok()?,
-        ),
+    let reported = live.precision.map(|precision| {
+        (
+            u8::try_from(precision),
+            u8::try_from(live.scale.unwrap_or(0)),
+        )
+    });
+    let (precision, scale) = match (reported, default) {
+        (Some((Ok(precision), Ok(scale))), _) => (precision, scale),
         (None, Some(default)) => default,
-        (None, None) => return None,
+        _ => return None,
     };
     (precision <= MAX_DECIMAL_PRECISION).then_some(ColumnType::Decimal { precision, scale })
+}
+
+/// A `STRING` column, `varchar(n)` when it reports a `maxLength` that fits.
+fn string(live: &LiveColumnType) -> ColumnType {
+    match live.char_length.map(u32::try_from) {
+        Some(Ok(length)) => ColumnType::Varchar(length),
+        _ => ColumnType::Text,
+    }
 }
 
 /// A column type as `tables.get` reports it (`INT64` or its legacy name `INTEGER`, `NUMERIC` with its precision and scale, `STRING` with its `maxLength`); a repeated or nested column, or a type with no portable name, has none.
@@ -77,13 +88,7 @@ pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
         "NUMERIC" => decimal(live, Some(NUMERIC_DEFAULT))?,
         "BIGNUMERIC" => decimal(live, None)?,
         "FLOAT64" | "FLOAT" => ColumnType::Float,
-        "STRING" => match live
-            .char_length
-            .and_then(|length| u32::try_from(length).ok())
-        {
-            Some(length) => ColumnType::Varchar(length),
-            None => ColumnType::Text,
-        },
+        "STRING" => string(live),
         "BYTES" => ColumnType::Binary,
         "DATE" => ColumnType::Date,
         "TIME" => ColumnType::Time,
