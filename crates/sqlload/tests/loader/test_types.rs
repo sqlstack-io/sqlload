@@ -427,6 +427,15 @@ pub(crate) struct LiveDatabricksTestCase {
     pub(crate) expected_rows: &'static str,
 }
 
+/// One `postgres_cdc` scenario against the live Databricks workspace, checked with a query there.
+pub(crate) struct LiveCdcTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) steps: &'static [CdcStep],
+    /// A Databricks query, `{schema}` standing for the qualified live schema, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// One query against the fake workspace with its answers delivered a given way.
 pub(crate) struct DatabricksAnswerTestCase {
     pub(crate) description: &'static str,

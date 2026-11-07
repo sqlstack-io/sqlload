@@ -207,7 +207,7 @@ afterwards, so name it in `include`.
 ## Postgres change data capture
 
 `kind = "postgres_cdc"` streams a Postgres database's changes from a logical replication slot
-into a DuckDB or Snowflake target, or into a files target as a changelog (not Databricks yet).
+into a DuckDB, Snowflake or Databricks target, or into a files target as a changelog.
 The server needs
 `wal_level = logical`, and the connection's user needs the `REPLICATION` attribute and `SELECT`
 on the tables.

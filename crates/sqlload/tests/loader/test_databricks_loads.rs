@@ -1,9 +1,10 @@
 use sqlload::databricks_api::main::execute_statement::execute_statement;
 
 use crate::helpers::{
-    copy_fails, databricks_columns, expired_token, found, live_databricks, not_found,
-    nothing_in_databricks, poll_refused, run_async, run_databricks, run_live_databricks,
-    slow_paged_answers, stale_and_running_loads, two_batches, two_days,
+    copy_fails, databricks_columns, expired_token, found, live_databricks, live_databricks_client,
+    not_found, nothing_in_databricks, poll_refused, reset_live_databricks, run_async,
+    run_databricks, run_live_databricks, slow_paged_answers, stale_and_running_loads, two_batches,
+    two_days,
 };
 use crate::test_types::{DatabricksAnswerTestCase, DatabricksLoadTestCase, LiveDatabricksTestCase};
 
@@ -248,28 +249,9 @@ fn given_a_live_databricks_workspace_when_loading_with_each_strategy_then_rows_l
         },
     ];
     run_async(async {
-        let api = sqlload::databricks_api::models::DatabricksClient::new(
-            sqlload::http::main::http_client::build_http_client(
-                &sqlload::http::models::ConnectionCounter::default(),
-            )
-            .map_err(|error| error.to_string())?,
-            &live.host,
-            &live.warehouse_id,
-            (
-                &live.client_id,
-                sqlload::auth::models::Secret(live.client_secret.clone()),
-            ),
-        );
+        let api = live_databricks_client(&live)?;
+        reset_live_databricks(&api, &live).await?;
         let schema = format!("`{}`.`{}`", live.catalog, live.schema);
-        for statement in [
-            format!("DROP SCHEMA IF EXISTS {schema} CASCADE"),
-            format!("CREATE SCHEMA {schema}"),
-            format!("CREATE VOLUME IF NOT EXISTS {schema}.`sqlload_stage`"),
-        ] {
-            execute_statement(&api, &statement)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
         let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
         for test_case in &test_cases {
             let outcome = run_live_databricks(directory.path(), &live, test_case).await?;

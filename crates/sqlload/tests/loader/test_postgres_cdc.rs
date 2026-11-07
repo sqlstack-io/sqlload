@@ -1,11 +1,19 @@
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 
+use sqlload::databricks_api::main::execute_statement::execute_statement;
+use sqlload_testkit::fake_databricks::constants::{FAKE_CATALOG, FAKE_VOLUME};
+use sqlload_testkit::fake_databricks::main::start_fake_databricks::start_fake_databricks;
+
 use crate::helpers::{
-    CDC_CHANGES, cdc_project, crashed_batch, duckdb_text, run_async, run_sqlload, spawn_sqlload,
-    step, stop_sqlload,
+    CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, live_databricks,
+    live_databricks_client, reset_live_databricks, run_async, run_sqlload, spawn_sqlload, step,
+    stop_sqlload,
 };
-use crate::test_types::{CdcScenarioTestCase, CdcStep, FollowTestCase, QuietSlotTestCase};
+use crate::test_types::{
+    CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
+    QuietSlotTestCase,
+};
 
 pub(crate) const SETUP: &str = "
 CREATE TABLE public.orders (id int8 PRIMARY KEY, qty int4, big text, tags text[]);
@@ -24,6 +32,12 @@ pub(crate) const CHANGES: &str = CDC_CHANGES;
 
 const MERGED_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders) || ' | ' || (SELECT string_agg(id || ':' || name || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__items)";
 const MERGED_RESULT: &str = "1:10:9600:{a,b}:update:false,2:2:1:{c}:delete:true,3:3:1:-:snapshot:false,4:4:1:{\"x y\",z}:insert:false | 1:one!:update,2:two:snapshot,3:three:insert";
+
+/// [`MERGED_QUERY`] in Databricks SQL.
+const LIVE_MERGED_QUERY: &str = "SELECT (SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || CAST(_sqlload_deleted_at IS NOT NULL AS STRING)))), r -> r.t), ',') FROM {schema}.app__orders) || ' | ' || (SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || name || ':' || _sqlload_op))), r -> r.t), ',') FROM {schema}.app__items)";
+
+/// [`CHANGELOG_QUERY`] in Databricks SQL.
+const LIVE_CHANGELOG_QUERY: &str = "SELECT (SELECT array_join(transform(array_sort(collect_list(named_struct('l', _sqlload_lsn, 's', _sqlload_seq, 'k', id, 't', _sqlload_seq || ':' || _sqlload_op || ':' || id))), r -> r.t), ',') FROM {schema}.log__orders) || ' | ' || (SELECT array_join(transform(array_sort(collect_list(named_struct('l', _sqlload_lsn, 's', _sqlload_seq, 'k', id, 't', _sqlload_op || ':' || id))), r -> r.t), ',') FROM {schema}.log__items) || ' | ' || (SELECT array_join(collect_list(_sqlload_unchanged), ';') FROM {schema}.log__orders WHERE _sqlload_op = 'update')";
 
 const CHANGELOG_QUERY: &str = "SELECT (SELECT string_agg(_sqlload_seq || ':' || _sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM raw.log__orders) || ' | ' || (SELECT string_agg(_sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM raw.log__items) || ' | ' || (SELECT string_agg(_sqlload_unchanged, ';') FROM raw.log__orders WHERE _sqlload_op = 'update')";
 pub(crate) const CHANGELOG_RESULT: &str = "0:snapshot:1,0:snapshot:2,0:snapshot:3,1:insert:4,2:update:1,1:delete:2 | snapshot:1,snapshot:2,insert:3,update:1 | ,big,";
@@ -1339,6 +1353,134 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         })?;
     }
     Ok(())
+}
+
+/// A Databricks target takes `postgres_cdc` sources: each table is copied, then its changes merge or append.
+#[test]
+fn given_a_databricks_target_when_planning_a_postgres_cdc_source_then_each_table_is_copied_then_changes_apply()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres_version("17-alpine").await?;
+        connect(&postgres)
+            .await?
+            .batch_execute(SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let fake = start_fake_databricks().await?;
+        let workspace = LiveDatabricks {
+            host: fake.base_url.clone(),
+            client_id: "id".to_owned(),
+            client_secret: "secret".to_owned(),
+            warehouse_id: "wh".to_owned(),
+            catalog: FAKE_CATALOG.to_owned(),
+            schema: "raw".to_owned(),
+        };
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let config = folder.path().join("sqlload.toml");
+        std::fs::write(
+            &config,
+            databricks_cdc_project(postgres.port, &workspace, FAKE_VOLUME),
+        )
+        .map_err(|error| error.to_string())?;
+        let (success, output) = run_sqlload(&config, &["plan", "app", "log"], ("", ""))?;
+        assert!(
+            success
+                && output.contains("snapshot copy, then apply changes, soft deletes (key: id)")
+                && output.contains("snapshot copy, then append changes (changelog)"),
+            "{output}"
+        );
+        Ok(())
+    })
+}
+
+/// Skipped unless `SQLLOAD_DATABRICKS_SCHEMA` names a `sqlload_` schema, which each case drops and creates first and the test drops at the end. Databricks commits each change statement alone, so a load stopped between them must converge on the re-run.
+#[test]
+fn given_a_live_databricks_schema_when_capturing_postgres_changes_then_the_tables_converge_without_duplicates()
+-> Result<(), String> {
+    let Some(live) = live_databricks()? else {
+        return Ok(());
+    };
+    let test_cases = [
+        LiveCdcTestCase {
+            description: "merge: snapshot, both transactions, then a re-run of nothing",
+            steps: &CAUGHT_UP,
+            check_query: LIVE_MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        LiveCdcTestCase {
+            description: "merge: stopped after the first table committed",
+            steps: &APP_AFTER_FIRST,
+            check_query: LIVE_MERGED_QUERY,
+            expected_result: MERGED_RESULT,
+        },
+        LiveCdcTestCase {
+            description: "changelog: stopped before the slot confirmed, whose replay is skipped",
+            steps: &LOG_BEFORE_CONFIRM,
+            check_query: LIVE_CHANGELOG_QUERY,
+            expected_result: CHANGELOG_RESULT,
+        },
+    ];
+    let api = live_databricks_client(&live)?;
+    let schema = format!("`{}`.`{}`", live.catalog, live.schema);
+    for test_case in &test_cases {
+        run_async(async {
+            reset_live_databricks(&api, &live).await?;
+            let postgres = start_postgres_version("17-alpine").await?;
+            let client = connect(&postgres).await?;
+            client
+                .batch_execute(SETUP)
+                .await
+                .map_err(|error| error.to_string())?;
+            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let config = folder.path().join("sqlload.toml");
+            let volume = format!("{}.{}.sqlload_stage", live.catalog, live.schema);
+            std::fs::write(
+                &config,
+                databricks_cdc_project(postgres.port, &live, &volume),
+            )
+            .map_err(|error| error.to_string())?;
+            for (index, step) in test_case.steps.iter().enumerate() {
+                client
+                    .batch_execute(step.source_change)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let (success, output) = run_sqlload(&config, step.args, (step.crash_at, ""))?;
+                assert_eq!(
+                    success, step.expected_success,
+                    "{}: step {index} {:?}\n{output}",
+                    test_case.description, step.args
+                );
+                assert!(
+                    output.contains(step.expected_output),
+                    "{}: step {index} {:?} output lacks {:?}\n{output}",
+                    test_case.description,
+                    step.args,
+                    step.expected_output
+                );
+            }
+            let rows = execute_statement(&api, &test_case.check_query.replace("{schema}", &schema))
+                .await
+                .map_err(|error| error.to_string())?;
+            let result = rows
+                .rows
+                .into_iter()
+                .next()
+                .and_then(|row| row.into_iter().next().flatten());
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+            Ok(())
+        })?;
+    }
+    run_async(async {
+        execute_statement(&api, &format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })
 }
 
 /// Postgres 15 and later send nothing for transactions on tables the slot does not publish, so a load of a quiet source must still confirm up to where it stopped, or the slot would hold the server's WAL forever.

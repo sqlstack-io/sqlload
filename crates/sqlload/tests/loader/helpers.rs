@@ -1246,6 +1246,42 @@ pub(crate) fn live_databricks() -> Result<Option<LiveDatabricks>, String> {
     }))
 }
 
+/// A client for the live workspace's warehouse.
+pub(crate) fn live_databricks_client(
+    live: &LiveDatabricks,
+) -> Result<sqlload::databricks_api::models::DatabricksClient, String> {
+    Ok(sqlload::databricks_api::models::DatabricksClient::new(
+        sqlload::http::main::http_client::build_http_client(
+            &sqlload::http::models::ConnectionCounter::default(),
+        )
+        .map_err(|error| error.to_string())?,
+        &live.host,
+        &live.warehouse_id,
+        (
+            &live.client_id,
+            sqlload::auth::models::Secret(live.client_secret.clone()),
+        ),
+    ))
+}
+
+/// Drop the live `sqlload_` schema, then create it and its staging volume again empty.
+pub(crate) async fn reset_live_databricks(
+    api: &sqlload::databricks_api::models::DatabricksClient,
+    live: &LiveDatabricks,
+) -> Result<(), String> {
+    let schema = format!("`{}`.`{}`", live.catalog, live.schema);
+    for statement in [
+        format!("DROP SCHEMA IF EXISTS {schema} CASCADE"),
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE VOLUME IF NOT EXISTS {schema}.`sqlload_stage`"),
+    ] {
+        sqlload::databricks_api::main::execute_statement::execute_statement(api, &statement)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// Load `load`'s files (written once, so a second load of the same source finds them unchanged) into the live workspace; the load's error (empty when it succeeded), the table's row count, and the load folders left in the staging volume.
 pub(crate) async fn run_live_databricks(
     directory: &std::path::Path,
@@ -1698,6 +1734,35 @@ pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result
 
 /// A project with two `postgres_cdc` sources on every `public` table of `port`'s database, into the DuckDB file `database`: `app` merges with soft deletes, `log` keeps a changelog; `orders.tags`, an array, is pinned to text, as captured arrays must be.
 pub(crate) fn cdc_project(port: u16, database: &std::path::Path) -> String {
+    cdc_project_into(
+        port,
+        &format!(
+            "[connections.local]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"",
+            database.display()
+        ),
+    )
+}
+
+/// [`cdc_project`]'s sources into `live`'s schema, staged in the volume `volume` (`catalog.schema.volume`).
+pub(crate) fn databricks_cdc_project(port: u16, live: &LiveDatabricks, volume: &str) -> String {
+    let LiveDatabricks {
+        host,
+        client_id,
+        client_secret,
+        warehouse_id,
+        catalog,
+        schema,
+    } = live;
+    cdc_project_into(
+        port,
+        &format!(
+            "[connections.dbx]\nkind = \"databricks\"\nhost = \"{host}\"\nclient_id = \"{client_id}\"\nclient_secret = \"{client_secret}\"\nwarehouse_id = \"{warehouse_id}\"\ncatalog = \"{catalog}\"\nvolume = \"{volume}\"\n\n[targets.dev]\nconnection = \"dbx\"\nloader_schema = \"{schema}\""
+        ),
+    )
+}
+
+/// The `postgres_cdc` sources of [`cdc_project`] on `port`'s database, into the connection and `dev` target `target` declares.
+fn cdc_project_into(port: u16, target: &str) -> String {
     format!(
         r#"
 [connections.pg]
@@ -1708,13 +1773,7 @@ user = "sqlload"
 password = "sqlload"
 database = "app"
 
-[connections.local]
-kind = "duckdb"
-database = "{}"
-
-[targets.dev]
-connection = "local"
-loader_schema = "raw"
+{target}
 
 [sources.app]
 kind = "postgres_cdc"
@@ -1734,8 +1793,7 @@ columns = {{ tags = "text" }}
 [sources.log.tables."public.orders"]
 description = "Orders, captured."
 columns = {{ tags = "text" }}
-"#,
-        database.display()
+"#
     )
 }
 

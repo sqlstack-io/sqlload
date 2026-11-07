@@ -1,9 +1,7 @@
 //! Databricks SQL, where it differs from the contract's shared rendering.
 
 use crate::adapters::contract::constants::STAGING_SUFFIX;
-use crate::adapters::contract::models::{
-    ChangeApply, CursorValue, TableName, WriteStatementsRequest,
-};
+use crate::adapters::contract::models::{CursorValue, TableName, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::databricks::_helpers::dialect::type_names::{
     logical_type, portable_type, widens_in_place,
@@ -16,11 +14,6 @@ use crate::schema_plan::models::{ColumnChange, LiveColumn};
 impl SqlAdapter for DatabricksSql {
     fn warehouse(&self) -> Warehouse {
         Warehouse::Databricks
-    }
-
-    /// Not yet: a later release applies changes to Databricks once a live round has run them.
-    fn captures_changes(&self, _apply: ChangeApply) -> bool {
-        false
     }
 
     fn keeps_nanoseconds(&self) -> bool {
