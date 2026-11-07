@@ -846,15 +846,27 @@ connection = "pg"
 include = ["public.items"]
 "#;
 
-const FILES_MERGE_REFUSED: [CdcStep; 1] = [step(
-    "",
-    &["plan", "merged"],
-    "",
-    (
-        false,
-        "a files target takes kind = \"postgres_cdc\" only with cdc_mode = \"changelog\"",
+const FILES_MERGE_REFUSED: [CdcStep; 3] = [
+    step(
+        "",
+        &["plan", "merged"],
+        "",
+        (
+            false,
+            "a files target takes kind = \"postgres_cdc\" only with cdc_mode = \"changelog\"",
+        ),
     ),
-)];
+    step(
+        "",
+        &["plan"],
+        "",
+        (
+            false,
+            "a files target takes kind = \"postgres_cdc\" only with cdc_mode = \"changelog\"",
+        ),
+    ),
+    step("", LOG, "", (true, "loaded")),
+];
 
 const FILES_REFUSED: [CdcStep; 3] = [
     step("", LOG, "", (true, "loaded")),
@@ -1815,15 +1827,15 @@ fn given_a_postgres_cdc_changelog_into_files_when_loads_stop_at_each_restart_poi
             expected_result: CHANGELOG_RESULT,
         },
         CdcFilesTestCase {
-            description: "a source merging its changes is refused",
+            description: "a source merging its changes is refused when selected, and a load of another source goes ahead",
             tag: "17-alpine",
             steps: &FILES_MERGE_REFUSED,
             store: local_store,
             spill_bytes: "",
             extra_config: FILES_MERGED,
             plant: nothing_planted,
-            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM glob('{root}/**')",
-            expected_result: "0",
+            check_query: "SELECT CAST((SELECT count(*) FROM glob('{root}/out/merged/**')) AS VARCHAR) || ':' || CAST((SELECT count(*) > 0 FROM glob('{root}/out/log/orders/*.parquet')) AS VARCHAR)",
+            expected_result: "0:true",
         },
         CdcFilesTestCase {
             description: "--reload and cursor partitions are refused",

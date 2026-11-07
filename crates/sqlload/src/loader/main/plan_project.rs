@@ -10,7 +10,7 @@ use crate::loader::_helpers::destination::table_folder;
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::sources::{
-    admit_tables, selected, source_ends, source_tables, unmatched_selectors,
+    admit_tables, selected, source_ends, source_in_scope, source_tables, unmatched_selectors,
 };
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
@@ -31,14 +31,23 @@ pub async fn plan_project(
         let (discovered, files) = match source_tables(project, source_name, source).await? {
             Ok(found) => found,
             Err(problem) => {
-                plan.problems
-                    .push(format!("[sources.{source_name}]: {problem}"));
+                if source_in_scope(project, options, source_name, None) {
+                    plan.problems
+                        .push(format!("[sources.{source_name}]: {problem}"));
+                }
                 continue;
             }
         };
         let module = project.python_modules.get(source_name);
         let resolved = resolve_tables(project, source_name, &discovered);
-        plan.problems.extend(resolved.problems);
+        if source_in_scope(
+            project,
+            options,
+            source_name,
+            Some((&discovered, &resolved.specs)),
+        ) {
+            plan.problems.extend(resolved.problems);
+        }
         plan.skipped.extend(resolved.skipped);
         claims.extend(folder_claims(&resolved.specs, destinations));
         names.extend(resolved.specs.iter().map(|spec| {

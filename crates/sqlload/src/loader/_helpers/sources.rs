@@ -707,6 +707,40 @@ pub(crate) fn selected(
         && !options.exclude.iter().any(picks)
 }
 
+/// Whether the selection in `options` takes anything from source `source_name`: a table it `listed` (its tables, and the settings they resolved to) by source name or destination name, or the source itself; a source that could not list its tables (`None`) also counts when a `--select` selector names no source, since that table may be its own. Only then do the source's problems count, so one source's bad settings do not fail a load of another.
+pub(crate) fn source_in_scope(
+    project: &ProjectConfig,
+    options: &PlanOptions,
+    source_name: &str,
+    listed: Option<(&[SourceTable], &[TableSpec])>,
+) -> bool {
+    let Some((discovered, specs)) = listed else {
+        return selected(options, (source_name, "", ""))
+            || (!options
+                .exclude
+                .iter()
+                .any(|selector| selector == source_name)
+                && options
+                    .select
+                    .iter()
+                    .any(|selector| !project.sources.contains_key(selector)));
+    };
+    selected(options, (source_name, "", ""))
+        || discovered
+            .iter()
+            .any(|table| selected(options, (source_name, "", &table.qualified_name())))
+        || specs.iter().any(|spec| {
+            selected(
+                options,
+                (
+                    source_name,
+                    &spec.destination.table,
+                    &spec.source_table.qualified_name(),
+                ),
+            )
+        })
+}
+
 /// `planned`, the selected tables of one source, added to `plan`, which is returned (`unselected` and `found`, the destinations and options, tell whether this is the source's first load): a table that appeared after the source's first load (`first_load`: none of its tables, selected or not, existed yet) and is not named exactly in `include` is skipped or fails as `new_tables` says, and a table without a description is blocked.
 pub(crate) async fn admit_tables(
     mut plan: ProjectPlan,
