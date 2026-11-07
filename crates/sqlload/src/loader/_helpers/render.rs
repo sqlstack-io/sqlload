@@ -252,6 +252,7 @@ pub(crate) fn stage_item(stage: &PlannedStage) -> PlanItem {
     }
 }
 
+/// The plan line for loading a table. A captured table whose destination does not exist yet is shown as copied first, as on its source's first load or when it joins a source whose slot already streams.
 pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let spec = &table.spec;
     let action = match &table.mode {
@@ -265,17 +266,23 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         },
         WriteMode::Replace => "replace".to_owned(),
         WriteMode::Recreate => "recreate from the whole source (--reload)".to_owned(),
-        WriteMode::Changes(change) => match change.apply {
-            ChangeApply::SoftDeletes => format!(
-                "apply changes, soft deletes (key: {})",
-                change.unique_key.join(", ")
-            ),
-            ChangeApply::HardDeletes => format!(
-                "apply changes, hard deletes (key: {})",
-                change.unique_key.join(", ")
-            ),
-            ChangeApply::Changelog => "append changes (changelog)".to_owned(),
-        },
+        WriteMode::Changes(change) => {
+            let changes = match change.apply {
+                ChangeApply::SoftDeletes => format!(
+                    "apply changes, soft deletes (key: {})",
+                    change.unique_key.join(", ")
+                ),
+                ChangeApply::HardDeletes => format!(
+                    "apply changes, hard deletes (key: {})",
+                    change.unique_key.join(", ")
+                ),
+                ChangeApply::Changelog => "append changes (changelog)".to_owned(),
+            };
+            match table.exists {
+                true => changes,
+                false => format!("snapshot copy, then {changes}"),
+            }
+        }
     };
     let source = match (&spec.files, &spec.python) {
         (Some(files), _) => format!("files  {}  {}", files.location, files.encoding),

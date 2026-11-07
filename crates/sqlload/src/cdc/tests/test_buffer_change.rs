@@ -1,9 +1,11 @@
 use crate::adapters::contract::models::ChangeApply;
 use crate::cdc::tests::helpers::{
-    buffered_seqs, buffered_shape, identity_relation_message, insert_message, relation_message,
-    staged_texts, update_message,
+    buffered_seqs, buffered_shape, floored_lsns, identity_relation_message, insert_message,
+    of_other_table, other_relation_message, relation_message, staged_texts, update_message,
 };
-use crate::cdc::tests::test_types::{BufferTestCase, StagedShapesTestCase, UnionShapeTestCase};
+use crate::cdc::tests::test_types::{
+    BufferTestCase, FloorTestCase, StagedShapesTestCase, UnionShapeTestCase,
+};
 
 /// A relation message takes effect where it sits in its transaction: a change written before a DDL is never read with the later shape, whose columns would not line up with its values.
 #[test]
@@ -264,6 +266,68 @@ fn given_a_replica_identity_change_in_a_batch_when_it_buffers_then_the_shape_kee
             "{}",
             test_case.description
         );
+    }
+    Ok(())
+}
+
+/// A table's changes committed before its copy point are already in its copy, so the buffer drops them; those at or after it are kept.
+#[test]
+fn given_a_table_copied_at_a_point_when_changes_stream_then_only_those_from_the_point_are_kept()
+-> Result<(), String> {
+    let transactions = || {
+        vec![
+            vec![relation_message(&["id", "a"]), insert_message(&["1", "x"])],
+            vec![update_message(&["1", "y"]), insert_message(&["2", "z"])],
+            vec![update_message(&["2", "w"])],
+        ]
+    };
+    let test_cases = [
+        FloorTestCase {
+            description: "a point before every change keeps them all",
+            transactions: transactions(),
+            floor: 100,
+            expected_lsns: vec![100, 101, 101, 102],
+        },
+        FloorTestCase {
+            description: "a point at the second transaction drops the first",
+            transactions: transactions(),
+            floor: 101,
+            expected_lsns: vec![101, 101, 102],
+        },
+        FloorTestCase {
+            description: "a point after every change drops them all",
+            transactions: transactions(),
+            floor: 103,
+            expected_lsns: vec![],
+        },
+        FloorTestCase {
+            description: "another table's changes in the same transactions are kept, even before the point",
+            transactions: vec![
+                vec![
+                    relation_message(&["id", "a"]),
+                    other_relation_message(&["id", "b"]),
+                    insert_message(&["1", "x"]),
+                    of_other_table(&insert_message(&["1", "p"])),
+                ],
+                vec![update_message(&["1", "y"]), insert_message(&["2", "z"])],
+                vec![
+                    update_message(&["2", "w"]),
+                    of_other_table(&update_message(&["1", "q"])),
+                ],
+            ],
+            floor: 102,
+            expected_lsns: vec![100, 102, 102],
+        },
+    ];
+    for test_case in test_cases {
+        for spill_bytes in [usize::MAX, 1] {
+            assert_eq!(
+                floored_lsns(&test_case.transactions, (test_case.floor, spill_bytes))?,
+                test_case.expected_lsns,
+                "{} (keeping {spill_bytes} bytes in memory)",
+                test_case.description
+            );
+        }
     }
     Ok(())
 }

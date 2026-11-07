@@ -16,8 +16,9 @@ use crate::cdc::_helpers::reshape::reshape_problem;
 use crate::cdc::_helpers::snapshot_log::SnapshotLog;
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{
-    BATCH_CHANGES, COLUMN_LISTS_VERSION, GENERATED_COLUMNS_VERSION, LOST_WAL_STATUS,
-    REPLICATION_OPTIONS, SNAPSHOT_SETTINGS, SPILL_BYTES, STOP_MESSAGE_PREFIX,
+    BACKFILL_SLOT_SUFFIX, BATCH_CHANGES, COLUMN_LISTS_VERSION, GENERATED_COLUMNS_VERSION,
+    LOST_WAL_STATUS, REPLICATION_OPTIONS, SLOT_NAME_BYTES, SLOTS_FULL_ERROR, SNAPSHOT_SETTINGS,
+    SPILL_BYTES, STOP_MESSAGE_PREFIX,
 };
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::cdc::models::{
@@ -162,8 +163,8 @@ impl CdcSource<'_> {
         })
     }
 
-    /// Create the publication for the selected tables when it is missing; when it exists, every selected table must be in it.
-    async fn ensure_publication(&self, control: &Client) -> Result<(), LoaderError> {
+    /// Create the publication for the selected tables when it is missing; when it exists, it must publish no other table, and every selected table unless it is SQLLoad's own (`sqlload_<source>`): its missing tables are returned, for the load to add before copying them.
+    async fn ensure_publication(&self, control: &Client) -> Result<Vec<&TablePlan>, LoaderError> {
         let publication = &self.cdc.publication;
         let names: Vec<String> = self
             .tables
@@ -191,7 +192,7 @@ impl CdcSource<'_> {
         };
         if let Some(statement) = statement {
             control.batch_execute(&statement).await.map_err(postgres)?;
-            return Ok(());
+            return Ok(Vec::new());
         }
         let published: Vec<String> = control
             .query(
@@ -211,8 +212,14 @@ impl CdcSource<'_> {
             .iter()
             .filter(|name| !names.contains(name))
             .collect();
-        match (missing.is_empty(), extra.is_empty()) {
-            (true, true) => Ok(()),
+        match (missing.is_empty() || made_here, extra.is_empty()) {
+            (true, true) => Ok(self
+                .tables
+                .iter()
+                .zip(&names)
+                .filter(|(_, name)| missing.contains(name))
+                .map(|(table, _)| *table)
+                .collect()),
             (false, _) => Err(LoaderError::Invalid(format!(
                 "publication {publication} does not publish {}; add them with ALTER PUBLICATION {} ADD TABLE {}",
                 list(&missing),
@@ -335,20 +342,20 @@ impl CdcSource<'_> {
             .map(|row| (row.get::<_, Option<String>>(0).unwrap_or_default(), row.get(1))))
     }
 
-    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it; the load leaves out a table the slot captured (its changes would be confirmed unwritten); some table has no snapshot from it (a snapshot stopped part-way, or the table joined since); or a table's columns changed since its snapshot in a way the stream does not carry (see [`reshape_problem`]). When it can, the tables whose columns changed in ways it carries are recorded with their new columns first.
+    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it; the load leaves out a table the slot captured (its changes would be confirmed unwritten); a recorded table left the publication (its changes since were not captured); a table to copy alone still holds rows from before the slot was recreated (the copy would replace them unasked); or a table's columns changed since its snapshot in a way the stream does not carry (see [`reshape_problem`]). When it can, the tables whose columns changed in ways it carries are recorded with their new columns first, and the tables without a snapshot from it (joined since, or a snapshot stopped part-way) are returned, to be copied alone before streaming.
     async fn resume_problem(
         &self,
         control: &Client,
-        wal_status: &str,
-    ) -> Result<Option<String>, LoaderError> {
+        (wal_status, missing): (&str, &[&TablePlan]),
+    ) -> Result<Result<Vec<&TablePlan>, String>, LoaderError> {
         let slot = &self.cdc.slot;
         if wal_status == LOST_WAL_STATUS {
-            return Ok(Some(format!(
+            return Ok(Err(format!(
                 "slot {slot} lost WAL it had not confirmed, so changes are missing; run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
         }
-        let Some((snapshot_lsn, snapshotted)) = self.log()?.current().await? else {
-            return Ok(Some(format!(
+        let Some((newest, snapshotted, earlier)) = self.log()?.current().await? else {
+            return Ok(Err(format!(
                 "slot {slot} exists but SQLLoad has no record of creating it, so it cannot tell which changes the tables already hold; drop it, or run `sqlload load --resnapshot` to drop and recreate it and copy every table again"
             )));
         };
@@ -359,21 +366,23 @@ impl CdcSource<'_> {
             .collect();
         let left_out: Vec<&str> = snapshotted
             .iter()
-            .map(|record| record.table.as_str())
+            .map(|(_, record)| record.table.as_str())
             .filter(|name| !loading.contains(name))
             .collect();
         if !left_out.is_empty() {
-            return Ok(Some(format!(
+            return Ok(Err(format!(
                 "this load leaves out {} of source {}, whose tables share slot {slot}; load the whole source (no --select or --exclude of its tables, and none blocked), or their changes would be skipped",
                 left_out.join(", "),
                 self.name
             )));
         }
-        let mut rewrites: Vec<SnapshotRecord> = Vec::new();
+        let mut rewrites: Vec<(i64, SnapshotRecord)> = Vec::new();
         let mut problems: Vec<String> = Vec::new();
         for table in &self.tables {
             let name = table.spec.destination.table.as_str();
-            let Some(recorded) = snapshotted.iter().find(|record| record.table == name) else {
+            let Some((copied_at, recorded)) =
+                snapshotted.iter().find(|(_, record)| record.table == name)
+            else {
                 continue;
             };
             let columns = data_columns(&table.read_columns);
@@ -393,42 +402,63 @@ impl CdcSource<'_> {
             };
             let catalog = catalog_columns(control, &table.spec.source_table).await?;
             match reshape_problem(recorded, planned, &catalog) {
-                Ok(rewrite) => rewrites.extend(rewrite),
+                Ok(rewrite) => rewrites.extend(rewrite.map(|record| (*copied_at, record))),
                 Err(problem) => problems.push(problem),
             }
         }
         if !problems.is_empty() {
-            return Ok(Some(problems.join("; ")));
+            return Ok(Err(problems.join("; ")));
         }
         let recorded: Vec<&str> = snapshotted
             .iter()
-            .map(|record| record.table.as_str())
+            .map(|(_, record)| record.table.as_str())
             .collect();
-        let unfinished: Vec<&str> = loading
-            .into_iter()
-            .filter(|name| !recorded.contains(name))
+        let dropped: Vec<String> = missing
+            .iter()
+            .filter(|table| recorded.contains(&table.spec.destination.table.as_str()))
+            .map(|table| {
+                let source = &table.spec.source_table;
+                format!("{}.{}", quoted(&source.schema), quoted(&source.name))
+            })
             .collect();
-        if !unfinished.is_empty() {
-            return Ok(Some(format!(
-                "{} {} no snapshot from slot {slot} (a snapshot stopped part-way, or the table joined since); run `sqlload load --resnapshot` to drop and recreate the slot and copy every table again",
-                unfinished.join(", "),
-                match unfinished.len() {
-                    1 => "has",
-                    _ => "have",
-                }
+        if !dropped.is_empty() {
+            return Ok(Err(format!(
+                "publication {} no longer publishes {}, so their changes since were not captured; run `sqlload load --resnapshot` to copy every table again",
+                self.cdc.publication,
+                dropped.join(", ")
             )));
         }
+        let unrecorded: Vec<&TablePlan> = self
+            .tables
+            .iter()
+            .filter(|table| !recorded.contains(&table.spec.destination.table.as_str()))
+            .copied()
+            .collect();
         let log = self.log()?;
-        for record in &rewrites {
-            log.record(record, snapshot_lsn).await?;
+        let mut held: Vec<&str> = Vec::new();
+        for table in &unrecorded {
+            let destination = &table.spec.destination;
+            let earlier_rows = table.exists
+                && earlier.contains(&destination.table)
+                && log.holds_before(destination, newest).await?;
+            held.extend(earlier_rows.then_some(destination.table.as_str()));
         }
-        Ok(None)
+        if !held.is_empty() {
+            return Ok(Err(format!(
+                "rows captured before slot {slot} was recreated are still in {}; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or drop the tables from the destination to copy them alone",
+                held.join(", ")
+            )));
+        }
+        for (copied_at, record) in &rewrites {
+            log.record(record, *copied_at).await?;
+        }
+        Ok(Ok(unrecorded))
     }
 
     /// Load the source: rows written per destination table name.
     pub(crate) async fn load(&self) -> Result<BTreeMap<String, u64>, LoaderError> {
         let control = self.connect().await?;
-        self.ensure_publication(&control).await?;
+        let missing = self.ensure_publication(&control).await?;
         self.refuse_unstreamed(&control).await?;
         self.log()?.ensure().await?;
         let mut slot = self.slot_state(&control).await?;
@@ -441,13 +471,19 @@ impl CdcSource<'_> {
         }
         let (mut stream, mut rows) = match slot {
             Some((_, wal_status)) => {
-                if let Some(problem) = self.resume_problem(&control, &wal_status).await? {
-                    return Err(LoaderError::Invalid(problem));
-                }
+                let unrecorded = self
+                    .resume_problem(&control, (&wal_status, &missing))
+                    .await?
+                    .map_err(LoaderError::Invalid)?;
+                let copied = match unrecorded.is_empty() {
+                    true => BTreeMap::new(),
+                    false => self.backfill(&control, &unrecorded, &missing).await?,
+                };
+                crash_point("backfill-before-stream");
                 let session = ReplicationClient::connect(self.replication_config()?)
                     .await
                     .map_err(replication)?;
-                (session, BTreeMap::new())
+                (session, copied)
             }
             None => {
                 let recreated = self.run.options.resnapshot;
@@ -457,6 +493,7 @@ impl CdcSource<'_> {
                         self.cdc.slot
                     )));
                 }
+                self.add_to_publication(&control, &missing).await?;
                 self.snapshot().await?
             }
         };
@@ -485,6 +522,111 @@ impl CdcSource<'_> {
         stream.stop();
         let _ = stream.shutdown().await;
         confirmed.map(|()| rows)
+    }
+
+    /// Add `tables` to SQLLoad's own publication, so the slot captures their changes from here on.
+    async fn add_to_publication(
+        &self,
+        control: &Client,
+        tables: &[&TablePlan],
+    ) -> Result<(), LoaderError> {
+        if tables.is_empty() {
+            return Ok(());
+        }
+        let names: Vec<String> = tables
+            .iter()
+            .map(|table| {
+                let source = &table.spec.source_table;
+                format!("{}.{}", quoted(&source.schema), quoted(&source.name))
+            })
+            .collect();
+        control
+            .batch_execute(&format!(
+                "ALTER PUBLICATION {} ADD TABLE {}",
+                quoted(&self.cdc.publication),
+                names.join(", ")
+            ))
+            .await
+            .map_err(|error| {
+                LoaderError::Invalid(format!(
+                    "cannot add {} to publication {} ({}); Postgres lets only a table's owner publish it, so add them as the owner (ALTER PUBLICATION {} ADD TABLE {})",
+                    names.join(", "),
+                    self.cdc.publication,
+                    PostgresError::from(error),
+                    quoted(&self.cdc.publication),
+                    names.join(", ")
+                ))
+            })
+    }
+
+    /// Copy `tables`, which have no snapshot from the slot (joined since, or a snapshot stopped part-way), alone: `missing` ones join SQLLoad's publication first, then a temporary slot exports a snapshot they are copied under, and each is recorded at that slot's consistent point, so the stream drops their changes from before it. The slot and every other table are left as they are; returns the rows each table wrote.
+    async fn backfill(
+        &self,
+        control: &Client,
+        tables: &[&TablePlan],
+        missing: &[&TablePlan],
+    ) -> Result<BTreeMap<String, u64>, LoaderError> {
+        self.add_to_publication(control, missing).await?;
+        crash_point("backfill-after-publication");
+        let mut session = ReplicationClient::connect_gated(self.replication_config()?)
+            .await
+            .map_err(replication)?;
+        let name: String = self
+            .cdc
+            .slot
+            .chars()
+            .take(SLOT_NAME_BYTES - BACKFILL_SLOT_SUFFIX.len())
+            .chain(BACKFILL_SLOT_SUFFIX.chars())
+            .collect();
+        let created = session
+            .simple_query(&format!(
+                "CREATE_REPLICATION_SLOT {} TEMPORARY LOGICAL pgoutput (SNAPSHOT 'export')",
+                quoted(&name)
+            ))
+            .await
+            .map_err(|error| {
+                let hint = match error.to_string().contains(SLOTS_FULL_ERROR) {
+                    true => " (it needs a free slot under max_replication_slots)",
+                    false => "",
+                };
+                replication(format!(
+                    "cannot make temporary slot {name} to copy {} alone{hint}: {error}",
+                    tables
+                        .iter()
+                        .map(|table| table.spec.destination.table.as_str())
+                        .collect::<Vec<&str>>()
+                        .join(", ")
+                ))
+            })?;
+        let field = |index: usize| {
+            created
+                .first()
+                .and_then(|row| row.get(index))
+                .and_then(Option::as_ref)
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+                .ok_or_else(|| replication("CREATE_REPLICATION_SLOT returned no snapshot"))
+        };
+        let consistent = Lsn::parse(&field(1)?).map_err(replication)?;
+        let snapshot_name = field(2)?;
+        let copy_lsn = i64::try_from(consistent.as_u64()).map_err(replication)?;
+        let client = self.connect().await?;
+        client
+            .batch_execute(&format!(
+                "{SNAPSHOT_SETTINGS}; BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '{}'",
+                snapshot_name.replace('\'', "''")
+            ))
+            .await
+            .map_err(postgres)?;
+        drop(session);
+        tracing::info!(
+            tables = tables.len(),
+            "copying tables that joined the source alone, under their own snapshot"
+        );
+        let rows = self
+            .copy_snapshot(&client, tables, (copy_lsn, "backfill"))
+            .await?;
+        client.batch_execute("COMMIT").await.map_err(postgres)?;
+        Ok(rows)
     }
 
     /// Create the slot with an exported snapshot and copy every table under it, each table's rows getting the snapshot's LSN; returns the session, which streams on from the snapshot.
@@ -531,17 +673,37 @@ impl CdcSource<'_> {
             ))
             .await
             .map_err(postgres)?;
-        for (index, table) in self.tables.iter().enumerate() {
+        rows.extend(
+            self.copy_snapshot(&client, &self.tables, (snapshot_lsn, "snapshot"))
+                .await?,
+        );
+        client.batch_execute("COMMIT").await.map_err(postgres)?;
+        session.start().await.map_err(replication)?;
+        session.wait_started().await.map_err(replication)?;
+        Ok((session, rows))
+    }
+
+    /// Copy `tables` under the snapshot open on `client`, taken at `snapshot_lsn`, recording each once it is in: its rows get `snapshot_lsn - 1`, so its changes from `snapshot_lsn` on apply after them. `stage` names the crash points (`<stage>-after-first-table`, `<stage>-before-record`); returns the rows each table wrote.
+    async fn copy_snapshot(
+        &self,
+        client: &Client,
+        tables: &[&TablePlan],
+        (snapshot_lsn, stage): (i64, &str),
+    ) -> Result<BTreeMap<String, u64>, LoaderError> {
+        let log = self.log()?;
+        let mut rows: BTreeMap<String, u64> = BTreeMap::new();
+        for (index, table) in tables.iter().enumerate() {
             if index == 1 {
-                crash_point("snapshot-after-first-table");
+                crash_point(&format!("{stage}-after-first-table"));
             }
             let mut plan = (*table).clone();
             plan.mode = WriteMode::Replace;
             plan.commits = CommitRule::Whole(WholeReason::Chosen);
             plan.read_columns =
                 with_snapshot_columns(&plan.read_columns, self.cdc, snapshot_lsn - 1);
-            let written = self.copy_table(&client, plan).await?;
-            let catalog = catalog_columns(&client, &table.spec.source_table).await?;
+            let written = self.copy_table(client, plan).await?;
+            crash_point(&format!("{stage}-before-record"));
+            let catalog = catalog_columns(client, &table.spec.source_table).await?;
             let record = SnapshotRecord {
                 table: table.spec.destination.table.clone(),
                 columns: data_columns(&table.read_columns),
@@ -552,10 +714,7 @@ impl CdcSource<'_> {
             log.record(&record, snapshot_lsn).await?;
             rows.insert(table.spec.destination.table.clone(), written);
         }
-        client.batch_execute("COMMIT").await.map_err(postgres)?;
-        session.start().await.map_err(replication)?;
-        session.wait_started().await.map_err(replication)?;
-        Ok((session, rows))
+        Ok(rows)
     }
 
     /// Copy one table under the open snapshot into a build table swapped in when done; returns its rows.
@@ -596,6 +755,7 @@ impl CdcSource<'_> {
         let mut rows: BTreeMap<String, u64> = BTreeMap::new();
         let mut buffer = ChangeBuffer {
             spill_bytes: spill_bytes(),
+            floors: self.copy_points().await?,
             ..ChangeBuffer::default()
         };
         let mut confirmed: Option<u64> = None;
@@ -645,6 +805,25 @@ impl CdcSource<'_> {
                 return Ok((Some(stop.as_u64()).max(confirmed), rows));
             }
         }
+    }
+
+    /// Each loaded table's copy point by its source `(schema, table)`, from its snapshot record.
+    async fn copy_points(&self) -> Result<BTreeMap<(String, String), i64>, LoaderError> {
+        let mut points: BTreeMap<(String, String), i64> = BTreeMap::new();
+        let Some((_, records, _)) = self.log()?.current().await? else {
+            return Ok(points);
+        };
+        for (lsn, record) in records {
+            let table = self
+                .tables
+                .iter()
+                .find(|table| table.spec.destination.table == record.table);
+            if let Some(table) = table {
+                let source = &table.spec.source_table;
+                points.insert((source.schema.clone(), source.name.clone()), lsn);
+            }
+        }
+        Ok(points)
     }
 
     /// Write a batch's transactions, one commit per touched table; returns the rows each table wrote. The slot may confirm the batch once this returns. A batch with a column added since the load was planned writes nothing, so the next load, which plans for it, streams it again.

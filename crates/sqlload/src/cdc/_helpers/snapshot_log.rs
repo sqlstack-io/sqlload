@@ -6,8 +6,10 @@ use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::cdc::models::SnapshotRecord;
+use crate::cdc::types::CurrentSnapshot;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::errors::LoaderError;
+use crate::schema_plan::constants::CDC_LSN_COLUMN;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
 /// The table holding snapshot records, in the captured tables' schema.
@@ -98,8 +100,28 @@ impl SnapshotLog<'_> {
         .await
     }
 
-    /// The tables holding the slot's newest snapshot, each with its newest record, and that snapshot's LSN; `None` when SQLLoad never recorded creating the slot.
-    pub(crate) async fn current(&self) -> Result<Option<(i64, Vec<SnapshotRecord>)>, LoaderError> {
+    /// Whether captured `table` holds a row tagged before `lsn`: one copied or changed under an older slot record, since LSNs only grow and a later copy is tagged at its own point.
+    pub(crate) async fn holds_before(
+        &self,
+        table: &TableName,
+        lsn: i64,
+    ) -> Result<bool, LoaderError> {
+        let adapter = sql_adapter(self.warehouse);
+        let column = adapter.render_identifier(CDC_LSN_COLUMN);
+        let text_type = adapter.render_loader_logical_type(&ColumnType::Text).sql;
+        let rows = text_values(
+            self.destination,
+            format!(
+                "SELECT CAST({column} AS {text_type}) FROM {} WHERE {column} < {lsn} LIMIT 1",
+                adapter.render_qualified_name(table)
+            ),
+        )
+        .await?;
+        Ok(!rows.is_empty())
+    }
+
+    /// The slot's newest snapshot LSN, the tables holding its changes, each with its newest record and the LSN it was copied at, and the tables captured only before the slot was recreated (see [`newest_snapshot`]); `None` when SQLLoad never recorded creating the slot.
+    pub(crate) async fn current(&self) -> Result<Option<CurrentSnapshot>, LoaderError> {
         let adapter = sql_adapter(self.warehouse);
         let column = |name: &str| adapter.render_identifier(name);
         let text_type = adapter.render_loader_logical_type(&ColumnType::Text).sql;
@@ -174,30 +196,43 @@ pub(crate) fn read_record(row: &str) -> Result<(i64, String, SnapshotRecord), St
     ))
 }
 
-/// The newest slot record's LSN and, of the tables recorded under it, each one's newest record; `None` without a slot record.
+/// The newest slot record's LSN and, of the tables recorded at or after it, each one's newest record with the LSN it was copied at: the slot's own point for its snapshot, or a later one for a table copied alone since (a backfill), whose changes before that point are already in its copy. Records under older slot records belong to a slot since recreated: their tables are returned last, by name, unless recorded under the newest too. `None` without a slot record.
 pub(crate) fn newest_snapshot(
     records: Vec<(i64, String, SnapshotRecord)>,
-) -> Option<(i64, Vec<SnapshotRecord>)> {
+) -> Option<CurrentSnapshot> {
     let newest = records
         .iter()
         .filter(|(_, _, record)| record.table.is_empty())
         .map(|(lsn, _, _)| *lsn)
         .max()?;
-    let mut tables: std::collections::BTreeMap<String, (String, SnapshotRecord)> =
+    let mut tables: std::collections::BTreeMap<String, (String, i64, SnapshotRecord)> =
         std::collections::BTreeMap::new();
+    let mut earlier: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (lsn, recorded_at, record) in records {
-        if lsn != newest || record.table.is_empty() {
+        if record.table.is_empty() {
+            continue;
+        }
+        if lsn < newest {
+            earlier.insert(record.table);
             continue;
         }
         let newer = tables
             .get(&record.table)
-            .is_none_or(|(seen, _)| recorded_at >= *seen);
+            .is_none_or(|(seen, _, _)| recorded_at >= *seen);
         if newer {
-            tables.insert(record.table.clone(), (recorded_at, record));
+            tables.insert(record.table.clone(), (recorded_at, lsn, record));
         }
     }
+    let earlier: Vec<String> = earlier
+        .into_iter()
+        .filter(|table| !tables.contains_key(table))
+        .collect();
     Some((
         newest,
-        tables.into_values().map(|(_, record)| record).collect(),
+        tables
+            .into_values()
+            .map(|(_, lsn, record)| (lsn, record))
+            .collect(),
+        earlier,
     ))
 }

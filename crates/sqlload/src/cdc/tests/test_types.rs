@@ -1,4 +1,5 @@
 use crate::cdc::models::{CatalogColumn, Change, PgOutputMessage, SnapshotRecord};
+use crate::cdc::types::CurrentSnapshot;
 
 pub(crate) struct DecodeTestCase {
     pub(crate) description: &'static str,
@@ -52,5 +53,13 @@ pub(crate) struct ReshapeTestCase {
 pub(crate) struct SnapshotRecordsTestCase {
     pub(crate) description: &'static str,
     pub(crate) rows: Vec<&'static str>,
-    pub(crate) expected_snapshot: Result<Option<(i64, Vec<SnapshotRecord>)>, &'static str>,
+    pub(crate) expected_snapshot: Result<Option<CurrentSnapshot>, &'static str>,
+}
+
+/// Transactions on table 7, committed at LSN 100, 101, ..., the table's copy point, and the commit LSNs of the changes it keeps.
+pub(crate) struct FloorTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) transactions: Vec<Vec<Vec<u8>>>,
+    pub(crate) floor: i64,
+    pub(crate) expected_lsns: Vec<i64>,
 }

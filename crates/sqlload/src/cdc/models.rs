@@ -112,6 +112,8 @@ pub struct ChangeBuffer {
     pub count: usize,
     /// The newest committed transaction's end LSN, which the slot may confirm once the batch is written.
     pub end_lsn: Option<u64>,
+    /// Each table's copy point by `(schema, table)`: its changes committed before it are already in its copy, so they are dropped. A table copied alone after the slot was made (a backfill) has a point later than the slot's.
+    pub floors: std::collections::BTreeMap<(String, String), i64>,
 }
 
 /// What the stream delivered next.

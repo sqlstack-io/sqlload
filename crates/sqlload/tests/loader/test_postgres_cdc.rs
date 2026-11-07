@@ -46,7 +46,7 @@ const LOG_BEFORE_CONFIRM: [CdcStep; 5] = crashed_batch(LOG, "batch-before-confir
 
 const SNAPSHOT_CRASH: [CdcStep; 8] = [
     step("", APP, "snapshot-after-first-table", (false, "")),
-    step("", APP, "", (false, "no snapshot from slot sqlload_app")),
+    step("", APP, "", (true, "Completed")),
     step(
         "",
         &["load", "app", "--resnapshot"],
@@ -371,6 +371,198 @@ const TYPE_WIDENED: [CdcStep; 3] = [
     step("", APP, "", (true, "0 rows")),
 ];
 
+const NEW_TABLES: &str = "
+CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.';
+CREATE TABLE public.extra2 (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra2 IS 'More extra rows.';
+INSERT INTO public.extra VALUES (1, 'a'); INSERT INTO public.extra2 VALUES (1, 'x');
+";
+
+const NO_BACKFILL_SLOT: &str = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'sqlload_app_backfill') THEN RAISE EXCEPTION 'the temporary backfill slot is still there'; END IF; END $$;";
+
+const BACKFILL_MERGE: [CdcStep; 6] = [
+    step("", APP, "", (true, "loaded")),
+    step(CHANGES, APP, "", (true, "Completed")),
+    step(NEW_TABLES, APP, "backfill-after-first-table", (false, "")),
+    step(
+        "UPDATE public.orders SET qty = 11 WHERE id = 3; UPDATE public.items SET name = 'two!' WHERE id = 2;",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "UPDATE public.extra SET v = 'b' WHERE id = 1; INSERT INTO public.extra2 VALUES (2, 'y');",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(NO_BACKFILL_SLOT, APP, "", (true, "0 rows")),
+];
+
+const BACKFILL_MERGE_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders) || ' | ' || (SELECT string_agg(id || ':' || name || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__items) || ' | ' || (SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra) || ' | ' || (SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra2)";
+
+const BACKFILL_CHANGELOG: [CdcStep; 5] = [
+    step("", LOG, "", (true, "loaded")),
+    step(
+        "CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.';",
+        LOG,
+        "backfill-after-publication",
+        (false, ""),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (1, 'a'), (2, 'b'), (3, 'c'); DELETE FROM public.extra;",
+        LOG,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (9, 'z');",
+        LOG,
+        "",
+        (true, "Completed"),
+    ),
+    step("", LOG, "", (true, "0 rows")),
+];
+
+const BACKFILL_RESTARTS: [CdcStep; 6] = [
+    step("", APP, "", (true, "loaded")),
+    step(
+        NEW_TABLES,
+        &["plan", "app"],
+        "",
+        (true, "snapshot copy, then apply changes"),
+    ),
+    step("", APP, "backfill-before-record", (false, "")),
+    step(
+        "UPDATE public.extra SET v = 'b' WHERE id = 1;",
+        APP,
+        "backfill-before-stream",
+        (false, ""),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (2, 'c');",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "ALTER PUBLICATION sqlload_app DROP TABLE public.extra2",
+        APP,
+        "",
+        (
+            false,
+            "publication sqlload_app no longer publishes \"public\".\"extra2\"",
+        ),
+    ),
+];
+
+const NAMED_SOURCE: &str = r#"
+[sources.named]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.*"]
+publication = "named_pub"
+
+[sources.named.tables."public.orders"]
+description = "Orders, captured through a named publication."
+columns = { tags = "text" }
+"#;
+
+const NAMED: &[&str] = &["load", "named"];
+
+const BACKFILL_NAMED: [CdcStep; 5] = [
+    step(
+        "CREATE PUBLICATION named_pub FOR TABLE public.orders, public.items",
+        NAMED,
+        "",
+        (true, "loaded"),
+    ),
+    step(
+        "CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.'; INSERT INTO public.extra VALUES (1, 'a');",
+        NAMED,
+        "",
+        (
+            false,
+            "publication named_pub does not publish \"public\".\"extra\"",
+        ),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (2, 'b'); ALTER PUBLICATION named_pub ADD TABLE public.extra; INSERT INTO public.extra VALUES (3, 'c');",
+        NAMED,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "UPDATE public.extra SET v = 'z' WHERE id = 1;",
+        NAMED,
+        "",
+        (true, "Completed"),
+    ),
+    step("", NAMED, "", (true, "0 rows")),
+];
+
+const EXTRA_TABLE: &str = "CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.';";
+
+const EXTRA_UNPUBLISHED: &str = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'sqlload_app' AND tablename = 'extra') THEN RAISE EXCEPTION 'the refused load published extra'; END IF; END $$;";
+
+const BACKFILL_REJOIN: [CdcStep; 8] = [
+    step("", APP, "", (true, "loaded")),
+    step(EXTRA_TABLE, APP, "", (true, "Completed")),
+    step(
+        "INSERT INTO public.extra VALUES (1, 'a');",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "DROP TABLE public.extra;",
+        APP,
+        "",
+        (false, "this load leaves out app__extra"),
+    ),
+    step("", RESNAPSHOT, "", (true, "loaded")),
+    step(
+        EXTRA_TABLE,
+        APP,
+        "",
+        (
+            false,
+            "rows captured before slot sqlload_app was recreated are still in app__extra",
+        ),
+    ),
+    step(EXTRA_UNPUBLISHED, &["plan", "app"], "", (true, "")),
+    step("", APP, "", (false, "are still in app__extra")),
+];
+
+const BACKFILL_REJOIN_EMPTY: [CdcStep; 7] = [
+    step("", APP, "", (true, "loaded")),
+    step(EXTRA_TABLE, APP, "", (true, "Completed")),
+    step(
+        "DROP TABLE public.extra;",
+        APP,
+        "",
+        (false, "this load leaves out app__extra"),
+    ),
+    step("", RESNAPSHOT, "", (true, "loaded")),
+    step(
+        "CREATE TABLE public.extra (id int8 PRIMARY KEY, v text); COMMENT ON TABLE public.extra IS 'Extra rows.'; INSERT INTO public.extra VALUES (5, 'e');",
+        APP,
+        "backfill-before-record",
+        (false, ""),
+    ),
+    step(
+        "INSERT INTO public.extra VALUES (6, 'f');",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+    step(
+        "UPDATE public.extra SET v = 'g' WHERE id = 6;",
+        APP,
+        "",
+        (true, "Completed"),
+    ),
+];
+
 const NOKEY_SOURCE: &str = r#"
 [sources.nokey]
 kind = "postgres_cdc"
@@ -618,7 +810,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: CHANGELOG_RESULT,
         },
         CdcScenarioTestCase {
-            description: "a snapshot stopped part-way, and a dropped slot, both need --resnapshot",
+            description: "a snapshot stopped part-way resumes by copying the rest alone; a dropped slot needs --resnapshot",
             tag: "17-alpine",
             spill_bytes: "",
             extra_config: "",
@@ -724,6 +916,60 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             steps: &APP_AFTER_FIRST,
             check_query: MERGED_QUERY,
             expected_result: MERGED_RESULT,
+        },
+        CdcScenarioTestCase {
+            description: "tables that join a merge source are copied alone, even after a stop between them, while the other tables keep their history and soft deletes and still load their changes from before the copy",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_MERGE,
+            check_query: BACKFILL_MERGE_QUERY,
+            expected_result: "1:10:9600:{a,b}:update:false,2:2:1:{c}:delete:true,3:11:1:-:update:false,4:4:1:{\"x y\",z}:insert:false | 1:one!:update,2:two!:update,3:three:insert | 1:b:update | 1:x:snapshot,2:y:insert",
+        },
+        CdcScenarioTestCase {
+            description: "a table that joins a changelog source keeps none of its changes from before its copy",
+            tag: "15-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_CHANGELOG,
+            check_query: "SELECT string_agg(_sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq) FROM raw.log__extra",
+            expected_result: "insert:9",
+        },
+        CdcScenarioTestCase {
+            description: "a backfill stopped before its record or before streaming copies again and skips the changes its copy holds; a recorded table dropped from the publication is refused",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_RESTARTS,
+            check_query: "SELECT (SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra) || ' | ' || (SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra2)",
+            expected_result: "1:b:snapshot,2:c:insert | 1:x:snapshot",
+        },
+        CdcScenarioTestCase {
+            description: "a table that rejoins after --resnapshot left it out is refused before it is published, keeping the rows it held",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_REJOIN,
+            check_query: "SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra",
+            expected_result: "1:a:insert",
+        },
+        CdcScenarioTestCase {
+            description: "a table that rejoins with an empty destination, or one holding only its own unfinished copy, is copied alone",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: "",
+            steps: &BACKFILL_REJOIN_EMPTY,
+            check_query: "SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__extra",
+            expected_result: "5:e:snapshot,6:g:update",
+        },
+        CdcScenarioTestCase {
+            description: "a table missing from a named publication is refused with the fix, then copied alone once it is added by hand",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: NAMED_SOURCE,
+            steps: &BACKFILL_NAMED,
+            check_query: "SELECT string_agg(id || ':' || v || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.named__extra",
+            expected_result: "1:z:update,2:b:snapshot,3:c:snapshot",
         },
         CdcScenarioTestCase {
             description: "a first load of part of the source is refused before it makes the slot, so the whole source snapshots after",
