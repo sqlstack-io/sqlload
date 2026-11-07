@@ -476,6 +476,24 @@ stored as text, and `TIMESTAMP` keeps the instant but not the offset. JSON loads
 Added columns use one `ADD COLUMNS`. Widening a type uses Delta's type widening where it applies
 and rewrites the table where it does not, such as an integer becoming a float.
 
+### BigQuery (preview)
+
+A BigQuery target signs in with a service account's key file:
+
+```toml
+[connections.bq]
+kind = "bigquery"
+location = "europe-west2"                         # where jobs run and datasets are created
+service_account_key = "${ENV:BIGQUERY_KEY_JSON}"  # the key file's JSON text
+# project = "my-project"                         # defaults to the key's project
+```
+
+`debug`, `plan`, `apply` and `contract diff` work against it: `apply` creates datasets and tables
+and changes columns. `load` does not write rows into BigQuery yet: when any selected table loads
+into BigQuery, `load` fails after planning, before it applies or loads anything, even for
+tables going to other targets. Leave the BigQuery tables out with `--exclude` to load the rest.
+Postgres change data capture into BigQuery is not available.
+
 ### How files reach DuckDB
 
 Parquet files in S3 or a local folder load into DuckDB directly: DuckDB reads them with

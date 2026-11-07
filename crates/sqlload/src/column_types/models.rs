@@ -54,6 +54,7 @@ pub enum Warehouse {
     /// Parquet files in an object store or directory: no SQL dialect, columns are Arrow types.
     Parquet,
     Databricks,
+    BigQuery,
 }
 
 impl std::fmt::Display for Warehouse {
@@ -63,6 +64,7 @@ impl std::fmt::Display for Warehouse {
             Self::DuckDb => "DuckDB",
             Self::Parquet => "Parquet files",
             Self::Databricks => "Databricks",
+            Self::BigQuery => "BigQuery",
         })
     }
 }

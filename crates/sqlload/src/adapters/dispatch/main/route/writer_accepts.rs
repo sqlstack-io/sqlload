@@ -21,7 +21,7 @@ pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> 
             pull_formats: vec![FileFormat::Parquet],
             ..WriterAccepts::default()
         },
-        Destination::Files(_) => WriterAccepts {
+        Destination::Files(_) | Destination::BigQuery(_) => WriterAccepts {
             arrow: true,
             ..WriterAccepts::default()
         },

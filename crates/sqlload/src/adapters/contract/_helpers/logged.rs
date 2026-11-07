@@ -51,7 +51,7 @@ pub(crate) fn commit_statements<A: SqlAdapter + ?Sized>(
         statements = adapter.render_logged(statements, insert);
     }
     if !keep_staging {
-        let empty = format!("DELETE FROM {}", adapter.render_qualified_name(staging));
+        let empty = adapter.render_empty_staging(staging);
         statements = adapter.render_logged(statements, empty);
     }
     statements

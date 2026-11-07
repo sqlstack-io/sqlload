@@ -23,6 +23,18 @@ fn given_text_when_quoting_a_literal_then_the_warehouse_reads_it_back_unchanged(
             warehouse: Warehouse::Databricks,
             expected_literal: "'a\\\\\\'b'",
         },
+        SqlLiteralTestCase {
+            description: "BigQuery escapes backslashes and quotes with a backslash, having no '' escape",
+            text: "a\\'b",
+            warehouse: Warehouse::BigQuery,
+            expected_literal: "'a\\\\\\'b'",
+        },
+        SqlLiteralTestCase {
+            description: "BigQuery escapes line breaks, which no quoted string may hold, as in a multi-line table description",
+            text: "first\r\nsecond",
+            warehouse: Warehouse::BigQuery,
+            expected_literal: "'first\\r\\nsecond'",
+        },
     ];
     for test_case in test_cases {
         assert_eq!(

@@ -1,5 +1,6 @@
 //! The first column of a destination query's rows.
 
+use crate::adapters::bigquery::main::session::_query_rows::query_rows as query_bigquery;
 use crate::adapters::databricks::main::session::_query_rows::query_rows;
 use crate::adapters::dispatch::_helpers::no_sql::no_sql;
 use crate::adapters::dispatch::models::Destination;
@@ -18,6 +19,11 @@ pub async fn text_values(
         Destination::DuckDb(duckdb) => Ok(query_duckdb_texts(duckdb, query).await?),
         Destination::Snowflake(snowflake) => Ok(query_snowflake_texts(snowflake, &query).await?),
         Destination::Databricks(databricks) => Ok(query_rows(databricks, &query)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect()),
+        Destination::BigQuery(bigquery) => Ok(query_bigquery(bigquery, &query)
             .await?
             .into_iter()
             .flatten()

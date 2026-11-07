@@ -26,6 +26,11 @@ fn given_a_full_project_when_parsing_then_sources_and_table_settings_are_read() 
             expected_value: "false",
         },
         ParseProjectTestCase {
+            description: "a bigquery connection reads its location and key, the key redacted, and no project until the key gives one",
+            read: |project| format!("{:?}", project.connections["bq"]),
+            expected_value: "BigQuery { project: None, location: \"europe-west2\", service_account_key: <redacted>, base_url: None, storage_url: None }",
+        },
+        ParseProjectTestCase {
             description: "new_tables is read",
             read: |project| format!("{:?}", project.sources["app"].new_tables),
             expected_value: "Skip",
@@ -312,7 +317,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "a target cannot load into a source database",
             text: "[targets.other]\nconnection = \"pg\"\nloader_schema = \"RAW\"\n",
-            expected_message: "is a postgres connection; targets load into snowflake, databricks, duckdb or write files to s3 or filesystem",
+            expected_message: "is a postgres connection; targets load into snowflake, databricks, bigquery, duckdb or write files to s3 or filesystem",
         },
         ParseProjectErrorTestCase {
             description: "destination_path needs a files target",

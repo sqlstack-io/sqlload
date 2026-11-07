@@ -538,3 +538,54 @@ pub(crate) struct CdcFilesTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// A real BigQuery project the live tests may load into: only its `sqlload_` dataset.
+pub(crate) struct LiveBigQuery {
+    /// The service-account key file's JSON text.
+    pub(crate) key: String,
+    pub(crate) project: String,
+    pub(crate) location: String,
+    pub(crate) dataset: String,
+}
+
+/// Rows streamed through one pending Storage Write API stream into a new table.
+pub(crate) struct LiveWriteApiTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) table: &'static str,
+    /// The ids of each append request's rows.
+    pub(crate) batches: &'static [&'static [i64]],
+    /// The row offset the first request claims; a new stream is at 0.
+    pub(crate) first_offset: i64,
+    pub(crate) finalize: bool,
+    pub(crate) expected_stream_type: i32,
+    /// Each request's error code (0 when accepted), the offset its rows landed at (-1 when none), how many rows it refused, and the first refused row's index (-1 when none).
+    pub(crate) expected_append_answers: &'static [(i32, i64, usize, i64)],
+    pub(crate) expected_finalized_rows: i64,
+    pub(crate) expected_visible_before_commit: &'static str,
+    /// `committed true` (with a commit time), or the commit's error with the stream's name as `<stream>`.
+    pub(crate) expected_commit: &'static str,
+    pub(crate) expected_rows: &'static str,
+}
+
+/// What one streamed table showed.
+#[derive(Debug, Default)]
+pub(crate) struct WriteApiOutcome {
+    pub(crate) stream_type: i32,
+    pub(crate) append_answers: Vec<(i32, i64, usize, i64)>,
+    pub(crate) finalized_rows: i64,
+    /// The rows a query saw after the appends, before the commit.
+    pub(crate) visible_before_commit: String,
+    pub(crate) commit: String,
+    /// The rows after the commit, as `id:name:amount:placed_at:note`.
+    pub(crate) rows: String,
+}
+
+/// `sqlload load` from a files source into a live BigQuery target, which cannot take rows yet.
+pub(crate) struct LiveRefusedLoadTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) expected_succeeded: bool,
+    /// Text the output must hold.
+    pub(crate) expected_refusal: &'static str,
+    /// How many datasets named for the load exist after it.
+    pub(crate) expected_datasets: &'static str,
+}

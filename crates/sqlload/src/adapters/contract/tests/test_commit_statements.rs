@@ -108,6 +108,23 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             ],
         },
         CommitStatementsTestCase {
+            description: "BigQuery's delete_insert commits alone, then the run record, then a DELETE with the WHERE BigQuery requires",
+            warehouse: Warehouse::BigQuery,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "updated_at".to_owned(),
+                from: Some("2026-11-04".to_owned()),
+                to: None,
+                values: Vec::new(),
+            },
+            run_insert: Some(RUN),
+            keep_staging: false,
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, PARSE_JSON(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`updated_at` >= CAST('2026-11-04' AS TIMESTAMP) THEN DELETE",
+                RUN,
+                "DELETE FROM `raw`.`app__accounts__sqlload_staging_load1` WHERE TRUE",
+            ],
+        },
+        CommitStatementsTestCase {
             description: "a Databricks merge batch with a truncate is one MERGE, its truncate a NOT MATCHED BY SOURCE clause, then the staging table's emptying",
             warehouse: Warehouse::Databricks,
             mode: WriteMode::Changes(ChangeWrite {
