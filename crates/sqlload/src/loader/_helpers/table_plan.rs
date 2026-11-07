@@ -354,6 +354,13 @@ async fn plan_table_once(
         return plan_files_table(spec, files, options).await;
     }
     let live = live_columns(destination, &spec.destination).await?;
+    if spec.cdc.is_some() && options.reload {
+        return Ok(TablePlan {
+            exists: live.is_some(),
+            live,
+            ..blocked_table(spec, vec![CDC_RELOAD_PROBLEM.to_owned()])
+        });
+    }
     let read_columns = match read_columns(spec) {
         Ok(read) => read,
         Err(problems) => {

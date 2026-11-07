@@ -80,6 +80,6 @@ pub const CDC_FILES_PROBLEM: &str = "a files target takes kind = \"postgres_cdc\
 /// Why a captured table's files path cannot partition by a cursor.
 pub const CDC_PARTITION_PROBLEM: &str = "a postgres_cdc table writes one changelog, not partition folders; remove the cursor placeholder from its path";
 
-/// Why `--reload` does not copy a captured files table again.
+/// Why `--reload` does not copy a captured table again, on any target: its rows come from the slot's snapshot and changes.
 pub const CDC_RELOAD_PROBLEM: &str =
     "a postgres_cdc table is copied again with --resnapshot, not --reload";
