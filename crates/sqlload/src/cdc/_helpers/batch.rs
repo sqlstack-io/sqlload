@@ -13,7 +13,7 @@ use crate::cdc::constants::{
     DELETE_OP, INSERT_OP, SPILL_CHUNK_CHANGES, SPILL_PARTITIONS, TRUNCATE_OP, UPDATE_OP,
 };
 use crate::cdc::models::{Change, ChangeOp, Relation, TableChanges, TupleValue};
-use crate::postgres_source::models::ReadColumn;
+use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::schema_plan::constants::{
     CDC_COMMITTED_AT_COLUMN, CDC_LSN_COLUMN, CDC_OP_COLUMN, CDC_PREFIX, CDC_SEQ_COLUMN,
     CDC_UNCHANGED_COLUMN,
@@ -230,6 +230,21 @@ fn applied_changes(
     let positions = key_positions(&table.relation, unique_key)?;
     let kept = table.changes.get(after..).unwrap_or_default();
     Ok((fold_changes(kept, &positions)?, truncated))
+}
+
+/// The columns of `relation` on the stream that `planned`, the table as its load was planned, lacks: added (or renamed) since, so the load has nowhere to write them.
+pub(crate) fn unplanned_columns(relation: &Relation, planned: &SourceTable) -> Vec<String> {
+    let known: std::collections::BTreeSet<&str> = planned
+        .columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
+    relation
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .filter(|name| !known.contains(name.as_str()))
+        .collect()
 }
 
 /// Each read column's position on the stream; `None` for the change columns.

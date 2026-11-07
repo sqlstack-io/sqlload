@@ -10,7 +10,7 @@ use tokio_postgres::Client;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
-use crate::cdc::_helpers::batch::{change_parts, rows_batch};
+use crate::cdc::_helpers::batch::{change_parts, rows_batch, unplanned_columns};
 use crate::cdc::_helpers::buffer::buffer_change;
 use crate::cdc::_helpers::snapshot_log::SnapshotLog;
 use crate::cdc::_helpers::spill::SpillFile;
@@ -371,7 +371,7 @@ impl CdcSource<'_> {
             .map_err(postgres)?
             .get(0);
         let stop = Lsn::parse(&stop).map_err(replication)?;
-        let streamed = self.stream(&mut stream, stop).await;
+        let streamed = self.stream(&control, &mut stream, stop).await;
         let confirmed = match streamed {
             Ok((end, written)) => {
                 for (table, count) in written {
@@ -478,6 +478,7 @@ impl CdcSource<'_> {
     /// Read changes until the stop message, writing a batch whenever it holds enough changes at a transaction's end, and the rest at the stop; returns the end LSN of the last transaction read, confirmed to the slot, or `None` when there was none.
     async fn stream(
         &self,
+        control: &Client,
         stream: &mut ReplicationClient,
         stop: Lsn,
     ) -> Result<(Option<u64>, BTreeMap<String, u64>), LoaderError> {
@@ -520,7 +521,7 @@ impl CdcSource<'_> {
                 let spilled = std::mem::take(&mut buffer.spilled);
                 buffer.count = 0;
                 buffer.bytes = 0;
-                for (table, count) in self.flush(tables, spilled).await? {
+                for (table, count) in self.flush(control, tables, spilled).await? {
                     *rows.entry(table).or_default() += count;
                 }
                 if let Some(end) = buffer.end_lsn {
@@ -535,14 +536,14 @@ impl CdcSource<'_> {
         }
     }
 
-    /// Write a batch's transactions, one commit per touched table; returns the rows each table wrote. The slot may confirm the batch once this returns.
+    /// Write a batch's transactions, one commit per touched table; returns the rows each table wrote. The slot may confirm the batch once this returns. A batch with a column added since the load was planned writes nothing, so the next load, which plans for it, streams it again.
     async fn flush(
         &self,
+        control: &Client,
         tables: BTreeMap<u32, TableChanges>,
         mut spilled: BTreeMap<u32, SpillFile>,
     ) -> Result<BTreeMap<String, u64>, LoaderError> {
-        let mut rows: BTreeMap<String, u64> = BTreeMap::new();
-        let mut written = 0;
+        let mut planned: Vec<(u32, &TablePlan)> = Vec::with_capacity(tables.len());
         for (oid, changes) in &tables {
             let relation = &changes.relation;
             let Some(table) = self.tables.iter().find(|table| {
@@ -554,9 +555,19 @@ impl CdcSource<'_> {
                     self.cdc.publication, relation.schema, relation.table, self.name
                 )));
             };
+            self.refuse_unplanned(control, changes, table).await?;
+            planned.push((*oid, table));
+        }
+        let mut rows: BTreeMap<String, u64> = BTreeMap::new();
+        let mut written = 0;
+        for (oid, table) in planned {
+            let Some(changes) = tables.get(&oid) else {
+                continue;
+            };
+            let relation = &changes.relation;
             let (mut parts, truncated) = change_parts(
                 changes,
-                (spilled.remove(oid), spill_bytes()),
+                (spilled.remove(&oid), spill_bytes()),
                 (self.cdc.apply, &table.spec.unique_key),
             )
             .map_err(LoaderError::Invalid)?;
@@ -590,6 +601,46 @@ impl CdcSource<'_> {
         }
         crash_point("batch-before-confirm");
         Ok(rows)
+    }
+
+    /// Refuse a batch of `table` holding columns its plan lacks that the source still has: they were added or renamed during this load. Columns dropped again since are left out, or a column added and dropped between loads would stop every load.
+    async fn refuse_unplanned(
+        &self,
+        control: &Client,
+        changes: &TableChanges,
+        table: &TablePlan,
+    ) -> Result<(), LoaderError> {
+        let unplanned = unplanned_columns(&changes.relation, &table.spec.source_table);
+        if unplanned.is_empty() {
+            return Ok(());
+        }
+        let present: Vec<String> = control
+            .query(
+                "SELECT attname::text FROM pg_catalog.pg_attribute WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped AND attname = ANY($2) ORDER BY attnum",
+                &[&changes.relation.oid, &unplanned],
+            )
+            .await
+            .map_err(postgres)?
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        match present.is_empty() {
+            true => Ok(()),
+            false => Err(LoaderError::Invalid(format!(
+                "{}.{} gained {} {} during this load; run it again, and the next load plans for {}",
+                changes.relation.schema,
+                changes.relation.table,
+                match present.len() {
+                    1 => "column",
+                    _ => "columns",
+                },
+                present.join(", "),
+                match present.len() {
+                    1 => "it",
+                    _ => "them",
+                }
+            ))),
+        }
     }
 
     /// Wait until the slot shows `end` as confirmed, so the next load starts after it.
