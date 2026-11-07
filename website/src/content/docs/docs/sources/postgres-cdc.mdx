@@ -9,7 +9,8 @@ since the last one from a logical replication slot, applies them, and stops. It 
 DuckDB and Snowflake targets.
 
 Use sqlload 0.17.0 or later for `postgres_cdc`. In 0.16.0, a transaction that changed a table's
-columns after writing to it could put values in the wrong columns.
+columns after writing to it could put values in the wrong columns. Schema changes while streaming
+load from 0.18.0; in 0.17.0, any change to a table's columns stops the load until you re-snapshot.
 
 ## Requirements
 
@@ -281,15 +282,55 @@ SELECT pg_drop_replication_slot('sqlload_app');
 DROP PUBLICATION app_changes;
 ```
 
+## Schema changes
+
+From sqlload 0.18.0, changes to a source table's columns carry through when the stream carries
+their values. `plan` and `apply` add new columns to the destination, as for other sources (see
+[`on_schema_change`](/docs/concepts/contracts/)).
+
+| Change in Postgres | What loads |
+|--------------------|------------|
+| A column added without a default | The new column. Rows changed after it was added carry its values. |
+| A column dropped | It stays in the destination with its values; new rows get NULL. A value written just before the drop, in the same load, isn't loaded for it. |
+| A type `on_schema_change` widens, such as `numeric(12,2)` to `numeric(14,2)` | The widened column, altered in place. |
+
+A change from before a column was added leaves that column out. `merge` keeps the row's current
+value; `changelog` writes NULL and lists the column in `_sqlload_unchanged`. Here a changelog
+table loads three transactions, run one after another:
+
+```sql
+UPDATE customers SET country = 'DE' WHERE customer_id = 3;
+ALTER TABLE customers ADD COLUMN vip boolean;
+UPDATE customers SET vip = true WHERE customer_id = 3;
+```
+
+| `customer_id` | `country` | `vip` | `_sqlload_op` | `_sqlload_unchanged` |
+|---------------|-----------|-------|---------------|----------------------|
+| 3 | DE | NULL | update | `,vip,` |
+| 3 | DE | true | update | NULL |
+
+These stop the load, with `--resnapshot` as the fix, because no change carries the values the
+table now holds:
+
+- a column added with a default, or as an identity or generated column;
+- a renamed column, or one loaded again after it stopped loading;
+- a primary key change under `merge` (a `changelog` table loads it);
+- a column dropped and another added while changes to the dropped one are still unloaded, which
+  the stream can't tell from a rename. Run a load between the two.
+
+```console
+failed   raw.app__customers  column tier of app__customers was added with a default (or as an identity or generated column), which fills existing rows without changes to stream; run `sqlload load --resnapshot` to copy every table again, or exclude the column
+```
+
+A column added while a load runs stops that load before anything is written; run it again.
+
+A generated column, or one left out of the publication's column list, never streams, so a table
+that loads one is refused. Add it to `exclude_columns`.
+
 ## Re-snapshot
 
 A load stops and names `--resnapshot` as the fix when the slot is lost or gone, when a snapshot
-stopped part-way, or when a table's columns changed. Schema changes while streaming aren't handled
-in this release: after columns are added or dropped, the load fails until you re-snapshot.
-
-```console
-failed   raw.app__customers  the columns of app__customers changed since their snapshot from slot sqlload_app; schema changes come in a later release, so run `sqlload load --resnapshot` to copy every table again
-```
+stopped part-way, or after a schema change the stream can't carry (see above).
 
 `sqlload load --resnapshot` drops and recreates the slot and copies every table again, replacing
 what it holds. A `changelog` table loses its history, and a `merge` table its soft-deleted rows.
@@ -356,5 +397,6 @@ The test suite runs `postgres_cdc` against real Postgres 15, 16 and 17 in contai
 release, live rounds loaded into DuckDB and into Snowflake (through an S3 external stage), under
 both `merge` and `changelog`, with every table checked against Postgres afterwards. They covered
 the snapshot, inserts, updates that left a TOASTed value out, deletes, a truncate and reinsert in
-one transaction, a slot advancing past changes to unpublished tables, and a 30,000-change
-transaction spilled to disk (with the spill limit lowered).
+one transaction, a slot advancing past changes to unpublished tables, a 30,000-change
+transaction spilled to disk (with the spill limit lowered), and, from 0.18.0, the schema changes
+above.
