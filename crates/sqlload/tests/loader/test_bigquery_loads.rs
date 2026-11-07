@@ -2,8 +2,8 @@ use sqlload::bigquery_api::main::run_query::run_query;
 
 use crate::bigquery_helpers::{
     append_refused, commit_refused, live_bigquery, live_bigquery_client, nothing_in_bigquery,
-    reset_live_bigquery, run_bigquery, run_live_bigquery, stale_staging, stream_into_live_table,
-    token_expired,
+    orders_without_score, reset_live_bigquery, run_bigquery, run_live_bigquery, stale_staging,
+    stream_into_live_table, token_expired,
 };
 use crate::helpers::{found, not_found, run_async, two_batches, two_days};
 use crate::test_types::{BigQueryLoadTestCase, LiveBigQueryLoadTestCase, LiveWriteApiTestCase};
@@ -57,6 +57,12 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
                 "CREATE OR REPLACE TABLE `raw`.`orders` AS SELECT * FROM `raw`.`orders__sqlload_staging_",
                 "ALTER TABLE `raw`.`orders` SET OPTIONS (description = 'Test table.')",
             ],
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "replace ignoring a column the table lacks: the build table leaves it out, and so do the rows streamed into it",
+            settings: "write_strategy = \"replace\"\non_schema_change = \"ignore\"",
+            prepare: orders_without_score,
             ..BASE
         },
         BigQueryLoadTestCase {

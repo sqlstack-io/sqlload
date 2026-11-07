@@ -166,6 +166,28 @@ fn rejected(write_stream: String, code: tonic::Code, message: String) -> AppendR
     }
 }
 
+/// The fields of an Arrow IPC schema message the table has no column for, matched case-insensitively as BigQuery does.
+fn extra_fields(schema: &[u8], columns: &[(String, String)]) -> Vec<String> {
+    let Ok(reader) = arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(schema), None)
+    else {
+        return Vec::new();
+    };
+    reader
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.name().clone())
+        .filter(|name| !has_column(columns, name))
+        .collect()
+}
+
+/// Whether the table has a column `name`, matched case-insensitively as BigQuery does.
+fn has_column(columns: &[(String, String)], name: &str) -> bool {
+    columns
+        .iter()
+        .any(|(column, _)| column.eq_ignore_ascii_case(name))
+}
+
 /// Every row of an Arrow IPC schema and record batch message, each value as its display text or null.
 fn decoded_rows(schema: &[u8], rows: &[u8]) -> Result<Vec<Value>, String> {
     let mut bytes = schema.to_vec();
@@ -262,6 +284,22 @@ impl FakeState {
         let data = request.arrow_rows.unwrap_or_default();
         if let Some(schema) = data.writer_schema {
             stream.schema = schema.serialized_schema;
+        }
+        let columns = self
+            .tables
+            .get(&stream.table)
+            .map(|table| table.columns.clone())
+            .unwrap_or_default();
+        let extra = extra_fields(&stream.schema, &columns);
+        if !extra.is_empty() {
+            return rejected(
+                name,
+                tonic::Code::InvalidArgument,
+                format!(
+                    "Input schema has more fields than BigQuery schema. Extra: {}",
+                    extra.join(", ")
+                ),
+            );
         }
         let rows = match decoded_rows(
             &stream.schema,

@@ -16,6 +16,7 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
 -> Result<(), String> {
     let test_cases = [
         WriteApiBatchTestCase {
+            builds: false,
             description: "integers widen to INT64, and a decimal of only fraction digits gains the digit its NUMERIC has",
             columns: vec![
                 desired("id", ColumnType::Int),
@@ -41,6 +42,7 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
             expected_batch: Ok("id: Int64 = 1|null; share: Decimal128(6, 5) = 0.12345|0.00005"),
         },
         WriteApiBatchTestCase {
+            builds: false,
             description: "a decimal too wide for NUMERIC goes as Decimal256, which is all BIGNUMERIC reads",
             columns: vec![desired(
                 "amount",
@@ -60,6 +62,7 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
             expected_batch: Ok("amount: Decimal256(38, 10) = 1.5000000000"),
         },
         WriteApiBatchTestCase {
+            builds: false,
             description: "a timestamp with an offset keeps its instant, in UTC microseconds; JSON goes as its text",
             columns: vec![
                 desired("at", ColumnType::TimestampTz),
@@ -82,6 +85,7 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
             ),
         },
         WriteApiBatchTestCase {
+            builds: false,
             description: "a value too large for its column fails the batch rather than loading as NULL",
             columns: vec![desired(
                 "amount",
@@ -94,6 +98,7 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
             expected_batch: Err("column amount cannot be sent to BigQuery as Decimal128(4, 2)"),
         },
         WriteApiBatchTestCase {
+            builds: false,
             description: "a nested value is refused by column",
             columns: vec![desired(
                 "tags",
@@ -108,6 +113,7 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
             expected_batch: Err("column tags (List(Int64)) cannot load into BigQuery yet"),
         },
         WriteApiBatchTestCase {
+            builds: false,
             description: "a nested value is refused even for a text column, which a cast would turn into display text",
             columns: vec![desired("tags", ColumnType::Text)],
             batch: batch_of(vec![(
@@ -119,7 +125,8 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
             expected_batch: Err("column tags (List(Int64)) cannot load into BigQuery yet"),
         },
         WriteApiBatchTestCase {
-            description: "a field the columns leave out (one a build table does not have) is not sent; large text in a native column goes as Utf8",
+            builds: true,
+            description: "a field the columns leave out is not sent to a build table; large text in a native column goes as Utf8",
             columns: vec![desired("code", ColumnType::Native("STRING".to_owned()))],
             batch: batch_of(vec![
                 ("code", Arc::new(LargeStringArray::from(vec!["a"]))),
@@ -127,9 +134,19 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
             ])?,
             expected_batch: Ok("code: Utf8 = a"),
         },
+        WriteApiBatchTestCase {
+            builds: false,
+            description: "a field the columns leave out fails a staging table's batch rather than going unloaded",
+            columns: vec![desired("code", ColumnType::Text)],
+            batch: batch_of(vec![
+                ("code", Arc::new(LargeStringArray::from(vec!["a"]))),
+                ("ignored", Arc::new(Int64Array::from(vec![7]))),
+            ])?,
+            expected_batch: Err("column ignored is not among the table's planned columns"),
+        },
     ];
     for test_case in test_cases {
-        let prepared = write_api_batch(&test_case.batch, &test_case.columns)
+        let prepared = write_api_batch(&test_case.batch, (&test_case.columns, test_case.builds))
             .map_err(|error| error.split(": ").next().unwrap_or_default().to_owned())
             .and_then(|batch| shown(&batch).map_err(|error| format!("unshown: {error}")));
         assert_eq!(

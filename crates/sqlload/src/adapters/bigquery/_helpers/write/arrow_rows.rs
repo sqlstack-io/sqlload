@@ -47,10 +47,10 @@ fn write_api_type(column_type: &ColumnType, arrived: &DataType) -> Result<DataTy
     })
 }
 
-/// `batch` in the Arrow types the Write API reads for `columns`, matched by name, every field nullable and without metadata; a batch field that is not among `columns` (one a build table leaves out) is not sent, and a value that does not fit its column is an error, never a silent NULL.
+/// `batch` in the Arrow types the Write API reads for `columns`, matched by name, every field nullable and without metadata. A field not among `columns` is left out for a build table (which holds only the table's own columns) and an error otherwise; a value that does not fit its column is an error, never a silent NULL.
 pub(crate) fn write_api_batch(
     batch: &RecordBatch,
-    columns: &[DesiredColumn],
+    (columns, builds): (&[DesiredColumn], bool),
 ) -> Result<RecordBatch, String> {
     let options = CastOptions {
         safe: false,
@@ -61,8 +61,14 @@ pub(crate) fn write_api_batch(
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
     for (field, array) in schema.fields().iter().zip(batch.columns()) {
         let name = field.name();
-        let Some(column) = columns.iter().find(|column| &column.name == name) else {
-            continue;
+        let column = match (columns.iter().find(|column| &column.name == name), builds) {
+            (Some(column), _) => column,
+            (None, true) => continue,
+            (None, false) => {
+                return Err(format!(
+                    "column {name} is not among the table's planned columns"
+                ));
+            }
         };
         let target = write_api_type(&column.column_type, field.data_type()).map_err(|reason| {
             format!(

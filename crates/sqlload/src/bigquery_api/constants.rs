@@ -49,11 +49,11 @@ pub const RATE_LIMITED: &str = "rateLimitExceeded";
 /// How long opening a Storage Write API connection may take.
 pub const GRPC_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// How often an idle or busy Storage Write API connection is pinged, so a silently dropped one is noticed.
-pub const GRPC_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// How often a Storage Write API connection with calls open is pinged, so a silently dropped one is noticed (no pings while idle, which Google's servers count against a client).
+pub const GRPC_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// How long a keep-alive ping may go unanswered before the connection and its calls fail.
 pub const GRPC_KEEP_ALIVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// How long a unary Storage Write API call (create, finalize, commit) may take.
-pub const GRPC_UNARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+pub const GRPC_UNARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);

@@ -23,8 +23,7 @@ pub(crate) async fn channel(client: &BigQueryClient) -> Result<Channel, ApiError
                 .map_err(|error| ApiError::Protocol(format!("bad Storage Write API URL: {error}")))?
                 .connect_timeout(GRPC_CONNECT_TIMEOUT)
                 .http2_keep_alive_interval(GRPC_KEEP_ALIVE_INTERVAL)
-                .keep_alive_timeout(GRPC_KEEP_ALIVE_TIMEOUT)
-                .keep_alive_while_idle(true);
+                .keep_alive_timeout(GRPC_KEEP_ALIVE_TIMEOUT);
             let endpoint = match client.storage_url.starts_with("https://") {
                 true => endpoint
                     .tls_config(ClientTlsConfig::new().with_webpki_roots())

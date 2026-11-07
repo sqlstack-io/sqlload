@@ -38,8 +38,12 @@ impl TableWriter for BigQueryWriter {
             true => target.write_columns.to_vec(),
             false => target.columns.to_vec(),
         };
+        let builds = target.builds;
         let requests = tokio::task::spawn_blocking(move || {
-            append_requests(&write_api_batch(&batch, &columns)?, APPEND_REQUEST_BYTES)
+            append_requests(
+                &write_api_batch(&batch, (&columns, builds))?,
+                APPEND_REQUEST_BYTES,
+            )
         })
         .await
         .map_err(|error| {

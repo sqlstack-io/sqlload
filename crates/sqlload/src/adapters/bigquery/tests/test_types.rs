@@ -6,6 +6,8 @@ pub(crate) struct RenderedTestCase {
 
 pub(crate) struct WriteApiBatchTestCase {
     pub(crate) description: &'static str,
+    /// The rows go to a build table, which leaves out fields outside `columns`.
+    pub(crate) builds: bool,
     pub(crate) columns: Vec<crate::schema_plan::models::DesiredColumn>,
     pub(crate) batch: arrow_array::RecordBatch,
     /// Each column as `name: type = value|value`, or the error up to its first `: `.

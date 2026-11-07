@@ -318,6 +318,19 @@ pub(crate) fn token_expired(fake: &FakeBigQuery) {
     fake.state.lock().refuse_requests = 1;
 }
 
+/// `raw.orders` as an earlier load left it, before the files gained `score`.
+pub(crate) fn orders_without_score(fake: &FakeBigQuery) {
+    fake.place_table(
+        "raw.orders",
+        &[
+            ("id", "INT64"),
+            ("day", "DATE"),
+            ("_sqlload_load_id", "STRING"),
+            ("_sqlload_loaded_at", "TIMESTAMP"),
+        ],
+    );
+}
+
 /// A staging table a failed run left in January, which the next load drops.
 pub(crate) fn stale_staging(fake: &FakeBigQuery) {
     fake.place_table(
