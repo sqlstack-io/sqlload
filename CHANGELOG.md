@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.18.0](https://github.com/sqlstack-io/sqlload/compare/v0.17.0...v0.18.0) (2026-11-07)
+
+
+### Features
+
+* **cdc:** load source schema changes while streaming ([#76](https://github.com/sqlstack-io/sqlload/issues/76)) ([e5a551f](https://github.com/sqlstack-io/sqlload/commit/e5a551f501c06ab72f71b96717f522968daa8e56))
+
+
+### Bug Fixes
+
+* **postgres:** show what Postgres said when it refuses a statement ([#75](https://github.com/sqlstack-io/sqlload/issues/75)) ([64c7fc4](https://github.com/sqlstack-io/sqlload/commit/64c7fc40c400da1fb4c149c3ff959c97cb7826f5))
+
+
+### Documentation
+
+* **site:** add the Postgres CDC source page ([#73](https://github.com/sqlstack-io/sqlload/issues/73)) ([b5da2be](https://github.com/sqlstack-io/sqlload/commit/b5da2be560948c7ae66f6a5e3f9211e687cf5e7e))
+
 ## [0.17.0](https://github.com/sqlstack-io/sqlload/compare/v0.16.0...v0.17.0) (2026-11-07)
 
 
