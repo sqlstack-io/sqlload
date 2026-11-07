@@ -188,14 +188,11 @@ pub(crate) fn build_spec(
     if !problems.is_empty() {
         return Err(problems);
     }
-    let template = overrides
-        .name
-        .as_deref()
-        .unwrap_or(context.source.table_name_template());
-    let name = match (&overrides.name, template.contains('{')) {
-        (Some(name), false) => name.clone(),
-        _ => destination_name(template, context.name, table),
-    };
+    let name = table_name(
+        (context.name, context.source),
+        overrides.name.as_deref(),
+        table,
+    );
     Ok(TableSpec {
         source_name: context.name.to_owned(),
         source_table: table.clone(),
@@ -440,6 +437,22 @@ pub(crate) fn apply_column_rules(
 fn excluded_by(name: &str, exclude: &[(&String, GlobMatcher)]) -> Option<(String, String)> {
     let (pattern, _) = exclude.iter().find(|(_, matcher)| matcher.is_match(name))?;
     Some((name.to_owned(), format!("exclude_columns {pattern}")))
+}
+
+/// The destination table name of `table` from source `source_name`: `name` (its `name` setting) when it has no placeholder, else that template (or the source's) filled in.
+pub(crate) fn table_name(
+    (source_name, source): (&str, &SourceConfig),
+    name: Option<&str>,
+    table: &SourceTable,
+) -> String {
+    match name {
+        Some(name) if !name.contains('{') => name.to_owned(),
+        _ => destination_name(
+            name.unwrap_or(source.table_name_template()),
+            source_name,
+            table,
+        ),
+    }
 }
 
 /// A destination table name from `template` with `{source}`, `{schema}` and `{table}` filled in.
