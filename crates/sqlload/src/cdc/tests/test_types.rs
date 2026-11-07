@@ -20,3 +20,12 @@ pub(crate) struct BufferTestCase {
     pub(crate) messages: Vec<Vec<u8>>,
     pub(crate) expected_seqs: Result<Vec<i64>, &'static str>,
 }
+
+/// Transactions on table 7 and the rows `merge` and a changelog stage for them (see `staged_texts`).
+pub(crate) struct StagedShapesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) transactions: Vec<Vec<Vec<u8>>>,
+    pub(crate) columns: Vec<&'static str>,
+    pub(crate) expected_merge: Vec<&'static str>,
+    pub(crate) expected_changelog: Vec<&'static str>,
+}

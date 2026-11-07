@@ -161,6 +161,7 @@ impl SpillReader {
             values.push(match tag[0] {
                 0 => TupleValue::Null,
                 1 => TupleValue::Unchanged,
+                3 => TupleValue::Absent,
                 2 => TupleValue::Text(
                     String::from_utf8(self.read_bytes()?).map_err(|error| error.to_string())?,
                 ),
@@ -189,6 +190,7 @@ fn values_bytes(values: &[TupleValue]) -> Result<Vec<u8>, String> {
         match value {
             TupleValue::Null => bytes.push(0),
             TupleValue::Unchanged => bytes.push(1),
+            TupleValue::Absent => bytes.push(3),
             TupleValue::Text(text) => {
                 bytes.push(2);
                 bytes.extend(length_prefixed(text.as_bytes())?);

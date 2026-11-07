@@ -25,6 +25,8 @@ pub enum TupleValue {
     Null,
     /// A TOASTed value the change did not touch: pgoutput leaves it out.
     Unchanged,
+    /// A column the change's table did not have when it was written: added after it, or dropped before it. Written like an unchanged value, so `merge` keeps the live one.
+    Absent,
     Text(String),
 }
 
@@ -84,6 +86,7 @@ pub struct Change {
 /// One table's changes in a batch: its shape on the stream, and its changes in commit order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableChanges {
+    /// Every shape the batch saw, as one: the first shape's columns, then columns later shapes added, with types and key flags from the newest. A change's values follow these columns; one written before a column was added stops short of it.
     pub relation: Relation,
     pub changes: Vec<Change>,
 }

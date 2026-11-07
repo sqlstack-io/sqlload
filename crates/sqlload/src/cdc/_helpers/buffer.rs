@@ -4,10 +4,11 @@ use crate::cdc::_helpers::pgoutput::decode_message;
 use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{CHANGE_OVERHEAD_BYTES, POSTGRES_EPOCH_MICROS, VALUE_OVERHEAD_BYTES};
 use crate::cdc::models::{
-    Change, ChangeBuffer, ChangeOp, PgOutputMessage, StreamStep, TableChanges, TupleValue,
+    Change, ChangeBuffer, ChangeOp, PgOutputMessage, Relation, RelationColumn, StreamStep,
+    TableChanges, TupleValue,
 };
 
-/// Apply one stream step to `buffer`: messages wait in the open transaction, and its commit files its changes under their tables with the commit LSN, so a batch only ever holds whole transactions. A relation message takes effect at its place in the transaction, so changes before a DDL are read with the shape they were written in.
+/// Apply one stream step to `buffer`: messages wait in the open transaction, and its commit files its changes under their tables with the commit LSN, so a batch only ever holds whole transactions. A relation message takes effect at its place in the transaction, so changes before a DDL are read with the shape they were written in; a table that changes shape within a batch keeps one shape that covers them all, and each change's values are put in its columns.
 pub(crate) fn buffer_change(
     mut buffer: ChangeBuffer,
     step: StreamStep<'_>,
@@ -115,43 +116,89 @@ fn file_message(
             .map(|relation| (*relation, change(ChangeOp::Truncate, &[], &None)))
             .collect(),
         PgOutputMessage::Relation(relation) => {
-            let reshaped = buffer
-                .tables
-                .get(&relation.oid)
-                .is_some_and(|table| table.relation.columns != relation.columns);
-            if reshaped {
-                return Err(format!(
-                    "{}.{} changed shape while streaming; schema changes while streaming come in a later release, so re-snapshot with --resnapshot",
-                    relation.schema, relation.table
-                ));
+            if let Some(table) = buffer.tables.get_mut(&relation.oid) {
+                table.relation = union_shape(&table.relation, relation);
             }
             buffer.relations.insert(relation.oid, relation.clone());
             Vec::new()
         }
         PgOutputMessage::Other(_) => Vec::new(),
     };
-    for (oid, change) in filed {
+    for (oid, mut change) in filed {
         let Some(relation) = buffer.relations.get(&oid) else {
             return Err(format!(
                 "a change refers to relation {oid}, which the stream never described"
             ));
         };
+        let table = buffer.tables.entry(oid).or_insert_with(|| TableChanges {
+            relation: relation.clone(),
+            changes: Vec::new(),
+        });
+        if table.relation.columns != relation.columns {
+            change.values = fit_values(&change.values, &table.relation, relation);
+            change.old_key = change
+                .old_key
+                .map(|old| fit_values(&old, &table.relation, relation));
+        }
         buffer.bytes += change_bytes(&change);
-        buffer
-            .tables
-            .entry(oid)
-            .or_insert_with(|| TableChanges {
-                relation: relation.clone(),
-                changes: Vec::new(),
-            })
-            .changes
-            .push(change);
+        table.changes.push(change);
         buffer.count += 1;
     }
     match buffer.bytes > buffer.spill_bytes {
         true => spill_tables(buffer),
         false => Ok(buffer),
     }
+}
+
+/// `current` grown by `newest`: its columns in order, with type and key from `newest` (no longer a key once dropped), then the columns `newest` adds; replica identity from `newest`.
+fn union_shape(current: &Relation, newest: &Relation) -> Relation {
+    let mut columns: Vec<RelationColumn> = current
+        .columns
+        .iter()
+        .map(|column| {
+            named(newest, &column.name)
+                .and_then(|position| newest.columns.get(position))
+                .cloned()
+                .unwrap_or_else(|| RelationColumn {
+                    key: false,
+                    ..column.clone()
+                })
+        })
+        .collect();
+    for column in &newest.columns {
+        if !current
+            .columns
+            .iter()
+            .any(|known| known.name == column.name)
+        {
+            columns.push(column.clone());
+        }
+    }
+    Relation {
+        columns,
+        ..newest.clone()
+    }
+}
+
+/// `values` of a change in `shape`'s columns, put in `union`'s: by name, absent where `shape` lacks a column.
+fn fit_values(values: &[TupleValue], union: &Relation, shape: &Relation) -> Vec<TupleValue> {
+    union
+        .columns
+        .iter()
+        .map(|column| {
+            named(shape, &column.name)
+                .and_then(|position| values.get(position).cloned())
+                .unwrap_or(TupleValue::Absent)
+        })
+        .collect()
+}
+
+/// The position of column `name` in `relation`.
+fn named(relation: &Relation, name: &str) -> Option<usize> {
+    relation
+        .columns
+        .iter()
+        .position(|column| column.name == name)
 }
 
 /// About how many bytes `change` takes in memory.

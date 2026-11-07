@@ -249,7 +249,7 @@ fn column_positions(
             .position(|source| source.name == column.name)
         else {
             return Err(format!(
-                "{}.{} no longer has column {} on the stream; schema changes while streaming come in a later release, so re-snapshot with --resnapshot",
+                "{}.{} has no column {} on the stream: the table changed shape during this load, so run it again, and the next load plans for the change",
                 relation.schema, relation.table, column.name
             ));
         };
@@ -315,11 +315,13 @@ fn op_name(op: ChangeOp) -> &'static str {
     }
 }
 
-/// The data columns whose unchanged TOAST value the change left out, as `,a,b,`; `None` when it left none out.
+/// The data columns whose value the change left out, as `,a,b,`: an unchanged TOAST value or, for an insert or update, a column its shape lacked (a delete or truncate writes no data columns); `None` when it left none out.
 fn unchanged_flags(change: &Change, data_positions: &[(&str, usize)]) -> Option<String> {
+    let writes = matches!(change.op, ChangeOp::Insert | ChangeOp::Update);
     let mut names = String::new();
     for (name, position) in data_positions {
-        if change.values.get(*position) == Some(&TupleValue::Unchanged) {
+        let value = change.values.get(*position).unwrap_or(&TupleValue::Absent);
+        if *value == TupleValue::Unchanged || (writes && *value == TupleValue::Absent) {
             names.push(',');
             names.push_str(name);
         }
