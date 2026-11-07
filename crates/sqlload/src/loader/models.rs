@@ -1,3 +1,4 @@
+use crate::adapters::contract::models::ChangeApply;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -101,6 +102,16 @@ pub struct TableSpec {
     pub flatten: Vec<String>,
     /// The table function behind a Python table; `None` for declarative sources.
     pub python: Option<PythonTable>,
+    /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
+    pub cdc: Option<CdcSpec>,
+}
+
+/// A `postgres_cdc` table's stream: where it comes from and how its changes are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CdcSpec {
+    pub apply: ChangeApply,
+    pub slot: String,
+    pub publication: String,
 }
 
 /// A table declared in Python: its columns are inferred from what the function yields at load.
@@ -280,6 +291,21 @@ pub struct ProjectPlan {
     pub warnings: Vec<String>,
 }
 
+impl ProjectPlan {
+    /// The plan without its `postgres_cdc` tables, which load together per source rather than one by one.
+    pub fn uncaptured(&self) -> Self {
+        Self {
+            tables: self
+                .tables
+                .iter()
+                .filter(|table| table.spec.cdc.is_none())
+                .cloned()
+                .collect(),
+            ..self.clone()
+        }
+    }
+}
+
 /// Choices for one `plan`, `apply` or `load`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlanOptions {
@@ -299,6 +325,8 @@ pub struct PlanOptions {
     pub concurrency: Option<usize>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
     pub batch_bytes: Option<usize>,
+    /// `--resnapshot`: drop and recreate each selected `postgres_cdc` source's slot and copy every table again.
+    pub resnapshot: bool,
 }
 
 /// What one Python table's load needs.

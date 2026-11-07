@@ -1,4 +1,4 @@
-use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::{ChangeApply, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
 use crate::adapters::files::models::{PendingLoad, PendingPhase};
@@ -265,15 +265,34 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         },
         WriteMode::Replace => "replace".to_owned(),
         WriteMode::Recreate => "recreate from the whole source (--reload)".to_owned(),
+        WriteMode::Changes(change) => match change.apply {
+            ChangeApply::SoftDeletes => format!(
+                "apply changes, soft deletes (key: {})",
+                change.unique_key.join(", ")
+            ),
+            ChangeApply::HardDeletes => format!(
+                "apply changes, hard deletes (key: {})",
+                change.unique_key.join(", ")
+            ),
+            ChangeApply::Changelog => "append changes (changelog)".to_owned(),
+        },
     };
     let source = match (&spec.files, &spec.python) {
         (Some(files), _) => format!("files  {}  {}", files.location, files.encoding),
         (None, Some(python)) => format!("python  {} ({})", python.module, spec.source_name),
-        (None, None) => format!(
-            "postgres  {}  {}",
-            spec.source_name,
-            spec.source_table.qualified_name()
-        ),
+        (None, None) => match &spec.cdc {
+            Some(cdc) => format!(
+                "postgres_cdc  {}  {}  slot {}",
+                spec.source_name,
+                spec.source_table.qualified_name(),
+                cdc.slot
+            ),
+            None => format!(
+                "postgres  {}  {}",
+                spec.source_name,
+                spec.source_table.qualified_name()
+            ),
+        },
     };
     let mut details = vec![detail("source", source)];
     details.extend(

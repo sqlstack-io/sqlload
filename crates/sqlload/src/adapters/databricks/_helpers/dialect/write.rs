@@ -47,6 +47,11 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
         }
         WriteMode::Replace => vec![format!("INSERT OVERWRITE {target} {insert_from}")],
         WriteMode::Append => vec![format!("INSERT INTO {target} {insert_from}")],
+        WriteMode::Changes(change) => adapter
+            .render_changes(request, change, staging)
+            .into_iter()
+            .filter(|statement| !matches!(statement.as_str(), "BEGIN" | "COMMIT"))
+            .collect(),
         WriteMode::DeleteInsert { .. } => {
             let condition = range_condition(adapter, request);
             let selected: Vec<String> = values

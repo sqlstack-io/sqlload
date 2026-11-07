@@ -122,7 +122,7 @@ pub(crate) async fn open_source(
     readers: usize,
 ) -> Result<SourceReader, LoaderError> {
     match source.kind {
-        SourceKind::Postgres => {
+        SourceKind::Postgres | SourceKind::PostgresCdc => {
             let client = connect_source(project, source).await?;
             let mut helpers = Vec::with_capacity(readers.saturating_sub(1));
             for _ in 1..readers {
@@ -149,7 +149,7 @@ pub(crate) async fn source_tables(
     source: &SourceConfig,
 ) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>), String>, LoaderError> {
     match source.kind {
-        SourceKind::Postgres => {
+        SourceKind::Postgres | SourceKind::PostgresCdc => {
             let client = connect_source(project, source).await?;
             let discovered = read_catalog(&client, &source.include, &source.exclude).await?;
             Ok(Ok((discovered, None)))
@@ -715,6 +715,12 @@ pub(crate) async fn admit_tables(
     found: (&BTreeMap<String, Destination>, &PlanOptions),
 ) -> Result<ProjectPlan, LoaderError> {
     let first_load = first_load(&planned, unselected, found).await?;
+    let mut planned = planned;
+    if let Some(problem) = partial_capture(source_name, source.kind, (&planned, unselected)) {
+        for table in &mut planned {
+            table.schema = blocked_plan(vec![problem.clone()]);
+        }
+    }
     for mut table in planned {
         let spec = &table.spec;
         let qualified = spec.source_table.qualified_name();
@@ -744,6 +750,25 @@ pub(crate) async fn admit_tables(
         }
     }
     Ok(plan)
+}
+
+/// Why the selection cannot load `postgres_cdc` source `name`, which blocks every table it picks: it picks some of its tables (`planned`) but not all (`unselected`), and the slot they share would confirm the left-out tables' changes unwritten. A plan problem alone would not stop the picked tables loading.
+fn partial_capture(
+    name: &str,
+    kind: SourceKind,
+    (planned, unselected): (&[TablePlan], &[TableSpec]),
+) -> Option<String> {
+    let partial = kind == SourceKind::PostgresCdc && !planned.is_empty() && !unselected.is_empty();
+    partial.then(|| {
+        let left_out: Vec<String> = unselected
+            .iter()
+            .map(|spec| spec.source_table.qualified_name())
+            .collect();
+        format!(
+            "this selection leaves out {} of source {name}, whose changes share its one slot and would be skipped; select the whole source, or move those tables to another postgres_cdc source",
+            left_out.join(", ")
+        )
+    })
 }
 
 /// Whether this is the source's first load: none of its tables exists in the destination, whether selected (`planned`) or not (`unselected`, looked up only while none is found, a table that cannot be read counting as absent), so `--select` cannot make a later table look present at the first load.

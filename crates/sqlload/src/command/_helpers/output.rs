@@ -53,13 +53,14 @@ pub(crate) fn print_lines(lines: Vec<String>, no_color: bool) {
 /// Whether to go on with a `--reload` that rebuilds `tables`: on a terminal, the plan `lines` are printed and the answer read; otherwise it is refused with the fix, before anything changes.
 pub(crate) fn confirm_reload(
     lines: &[String],
+    flag: &str,
     tables: &[&str],
     no_color: bool,
 ) -> Result<bool, String> {
     let names = tables.join(", ");
     if !std::io::stdin().is_terminal() {
         return Err(format!(
-            "--reload rebuilds {names} from the whole source, replacing what they hold; confirm it in a terminal, or add --yes"
+            "{flag} rebuilds {names} from the whole source, replacing what they hold; confirm it in a terminal, or add --yes"
         ));
     }
     print_lines(lines.to_vec(), no_color);

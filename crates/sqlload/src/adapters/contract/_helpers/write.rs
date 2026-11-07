@@ -50,6 +50,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             return vec![adapter.render_merge(request, unique_key, &source, &values)];
         }
         WriteMode::Replace => return adapter.render_replace(request, staging, &insert_from),
+        WriteMode::Changes(change) => return adapter.render_changes(request, change, staging),
         WriteMode::Append => None,
         WriteMode::DeleteInsert {
             cursor_column,

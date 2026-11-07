@@ -33,6 +33,37 @@ pub enum WriteMode {
     Replace,
     /// The table is rebuilt from the staged rows with the current columns and types (`--reload`), in one statement.
     Recreate,
+    /// Captured changes (`kind = "postgres_cdc"`), applied only where their `_sqlload_lsn` is newer than what the table holds, so a replayed batch changes nothing.
+    Changes(ChangeWrite),
+}
+
+/// How a batch of captured changes is applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeWrite {
+    pub apply: ChangeApply,
+    /// The source's key columns, which `merge` matches rows on.
+    pub unique_key: Vec<String>,
+    /// The newest truncate in the batch, applied before its rows (`merge` only; a changelog keeps it as a row).
+    pub truncated: Option<Truncation>,
+}
+
+/// What a captured change does to the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeApply {
+    /// One row per key; a delete sets `_sqlload_deleted_at`.
+    SoftDeletes,
+    /// One row per key; a delete removes the row.
+    HardDeletes,
+    /// Every change appended as a row.
+    Changelog,
+}
+
+/// A source `TRUNCATE`: its transaction's commit LSN and time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Truncation {
+    pub lsn: i64,
+    /// RFC 3339 UTC.
+    pub committed_at: String,
 }
 
 /// Everything the statements of one write need.

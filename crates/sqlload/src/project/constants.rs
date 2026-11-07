@@ -38,6 +38,10 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "allow_columns",
     "mask_key",
     "tables",
+    "publication",
+    "slot",
+    "cdc_mode",
+    "deletes",
 ];
 
 /// Keys a Python source may set (`kind` is added by discovery), besides the table settings.
@@ -104,3 +108,6 @@ pub const WHOLE_BATCH: &str = "none";
 
 /// The parts of an existing stage's name in a Snowflake connection's `load_method`: `DATABASE.SCHEMA.STAGE`.
 pub const STAGE_NAME_PARTS: usize = 3;
+
+/// The longest Postgres identifier, in bytes: a `postgres_cdc` slot or publication name.
+pub const MAX_POSTGRES_NAME_BYTES: usize = 63;

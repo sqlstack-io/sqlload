@@ -5,7 +5,7 @@ use crate::adapters::contract::models::WriteMode;
 /// What `mode` does to the table's existing files, for `plan`.
 pub fn write_notes(mode: &WriteMode) -> Vec<String> {
     match mode {
-        WriteMode::Append => vec!["new files are added; existing files are never changed".to_owned()],
+        WriteMode::Append | WriteMode::Changes(_) => vec!["new files are added; existing files are never changed".to_owned()],
         WriteMode::Replace | WriteMode::Recreate => vec![
             "the new files are written first, then every older file in the folder is deleted; not atomic, so a reader in between sees both".to_owned(),
         ],

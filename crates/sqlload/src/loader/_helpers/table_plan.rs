@@ -2,6 +2,7 @@ use crate::adapters::contract::main::cursor_bound::cursor_bound;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::CursorQuery;
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
@@ -18,6 +19,8 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
+use crate::cdc::constants::PLAIN_JSON_TYPE;
+use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
@@ -42,8 +45,8 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
 use crate::loader::models::WholeReason;
 use crate::postgres_source::main::plan_read::plan_read;
-use crate::postgres_source::models::ReadColumn;
 use crate::postgres_source::models::SourceTable;
+use crate::postgres_source::models::{PgType, ReadColumn};
 use crate::project::models::BatchStep;
 use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
@@ -56,6 +59,7 @@ use crate::routing::models::Route;
 use crate::routing::models::RouteOverrides;
 use crate::routing::models::Step;
 use crate::routing::models::Store;
+use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
@@ -111,6 +115,17 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             },
         })
         .collect();
+    let merged = spec
+        .cdc
+        .as_ref()
+        .is_some_and(|cdc| cdc.apply != ChangeApply::Changelog);
+    desired.retain(|column| !(merged && column.name == CDC_UNCHANGED_COLUMN));
+    for column in desired
+        .iter_mut()
+        .filter(|column| column.name.starts_with(CDC_PREFIX))
+    {
+        column.origin = ColumnOrigin::Metadata;
+    }
     desired.extend(metadata_columns());
     desired
 }
@@ -249,8 +264,52 @@ pub(crate) async fn replan_columns(
 pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     match (&spec.files, &spec.python) {
         (Some(_), _) | (_, Some(_)) => files_read_columns(spec),
-        (None, None) => plan_read(&selected_columns(spec), &spec.pinned),
+        (None, None) => {
+            let selected = selected_columns(spec);
+            let mut read = plan_read(&selected, &spec.pinned)?;
+            if let Some(cdc) = &spec.cdc {
+                let problems = streamed_array_problems(&selected, &read);
+                if !problems.is_empty() {
+                    return Err(problems);
+                }
+                read.extend(metadata_read_columns(cdc.apply, 0));
+            }
+            Ok(read)
+        }
     }
+}
+
+/// A captured table's read columns: the data columns it writes (its snapshot stages them, its stream is matched to them by name and its snapshot record lists them), and every change column.
+fn captured_read(read: Vec<ReadColumn>, schema: &SchemaPlan) -> Vec<ReadColumn> {
+    let written: Vec<&str> = schema
+        .write_columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
+    read.into_iter()
+        .filter(|column| {
+            column.name.starts_with(CDC_PREFIX) || written.contains(&column.name.as_str())
+        })
+        .collect()
+}
+
+/// Array and `json` columns of a captured table read as JSON: the stream sends them as Postgres text (`{a,b}` for an array, the original spacing and duplicate keys for `json`), which would not load as JSON or would differ from the snapshot's jsonb rows, so they must be pinned to text (`jsonb` streams as the snapshot reads it).
+fn streamed_array_problems(table: &SourceTable, read: &[ReadColumn]) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    for column in &table.columns {
+        let as_json = read
+            .iter()
+            .any(|read| read.name == column.name && read.output == ColumnType::Json);
+        let streamed_as_text = column.pg_type == PgType::Array
+            || (column.pg_type == PgType::Json && column.postgres_type == PLAIN_JSON_TYPE);
+        if streamed_as_text && as_json {
+            problems.push(format!(
+                "{}: kind = \"postgres_cdc\" streams {} values as the source wrote them, which the snapshot normalises as jsonb; pin it with columns = {{ {} = \"text\" }}, or exclude it",
+                column.name, column.postgres_type, column.name
+            ));
+        }
+    }
+    problems
 }
 
 /// The read window for a load that filters its own rows, from the window chosen.
@@ -310,6 +369,10 @@ async fn plan_table_once(
     if options.reload && live.is_some() {
         schema.action = TableAction::Recreate;
     }
+    let read_columns = match spec.cdc {
+        Some(_) => captured_read(read_columns, &schema),
+        None => read_columns,
+    };
     let cursor_type = spec.cursor.as_ref().and_then(|cursor| {
         desired
             .iter()
@@ -409,6 +472,22 @@ async fn plan_table_once(
         _ => None,
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
+    schema
+        .warnings
+        .extend(spec.cdc.as_ref().filter(|_| options.resnapshot).map(|cdc| {
+            format!(
+                "--resnapshot drops and recreates slot {}, then copies every table of {} again",
+                cdc.slot, spec.source_name
+            )
+        }));
+    let mode = match &spec.cdc {
+        Some(cdc) => WriteMode::Changes(ChangeWrite {
+            apply: cdc.apply,
+            unique_key: spec.unique_key.clone(),
+            truncated: None,
+        }),
+        None => mode,
+    };
     let exists = live.is_some();
     let chosen = match &schema.blocked {
         None => {

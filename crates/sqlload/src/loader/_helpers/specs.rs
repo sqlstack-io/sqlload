@@ -1,12 +1,14 @@
-use crate::adapters::contract::models::TableName;
+use crate::adapters::contract::models::{ChangeApply, TableName};
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
-use crate::loader::models::{CursorSpec, SettingOrigin, TableSpec};
+use crate::loader::models::{CdcSpec, CursorSpec, SettingOrigin, TableSpec};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
-    MaskMethod, SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, WriteStrategy,
+    CdcDeletes, CdcMode, MaskMethod, SourceConfig, SourceKind, StateMode, TableOverride,
+    TableSettings, WriteStrategy,
 };
 use crate::similar_names::main::nearest_name::nearest_name;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
@@ -127,7 +129,21 @@ pub(crate) fn build_spec(
                 SettingOrigin::Default,
             )
         });
-    let mut problems = strategy_problems(strategy, &unique_key, cursor.as_ref());
+    let cdc = cdc_spec(context);
+    let (strategy, mut problems) = match &cdc {
+        Some(_) if context.target.path.is_some() || !sql_adapter(context.target.warehouse).captures_changes() => (
+            WriteStrategy::Append,
+            vec![
+                "kind = \"postgres_cdc\" loads into DuckDB and Snowflake targets in this release, not Databricks or files targets"
+                    .to_owned(),
+            ],
+        ),
+        Some(_) => (WriteStrategy::Append, cdc_key_problems(table, &unique_key)),
+        None => (
+            strategy,
+            strategy_problems(strategy, &unique_key, cursor.as_ref()),
+        ),
+    };
     problems.extend(column_reference_problems(table, overrides));
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
@@ -229,7 +245,47 @@ pub(crate) fn build_spec(
                 .unwrap_or_else(|| target_path.clone())
         }),
         python: None,
+        cdc,
     })
+}
+
+/// A `postgres_cdc` source's stream settings, with the default slot and publication names.
+fn cdc_spec(context: &SourceContext<'_>) -> Option<CdcSpec> {
+    let source = context.source;
+    (source.kind == SourceKind::PostgresCdc).then(|| {
+        let default_name = format!("sqlload_{}", context.name.to_lowercase());
+        CdcSpec {
+            apply: match (source.cdc_mode, source.deletes) {
+                (CdcMode::Changelog, _) => ChangeApply::Changelog,
+                (CdcMode::Merge, CdcDeletes::Soft) => ChangeApply::SoftDeletes,
+                (CdcMode::Merge, CdcDeletes::Hard) => ChangeApply::HardDeletes,
+            },
+            slot: source.slot.clone().unwrap_or_else(|| default_name.clone()),
+            publication: source.publication.clone().unwrap_or(default_name),
+        }
+    })
+}
+
+/// Why a table cannot be captured: it needs a primary key, which merge matches rows on, and without which publishing it would make Postgres refuse the application's own updates and deletes on it; and its `unique_key` must be within that key, the only columns Postgres sends with a delete by default.
+fn cdc_key_problems(table: &SourceTable, unique_key: &[String]) -> Vec<String> {
+    let qualified = table.qualified_name();
+    if table.primary_key.is_empty() {
+        return vec![format!(
+            "{qualified} has no primary key; kind = \"postgres_cdc\" captures tables with one in this release (publishing a table without a replica identity makes Postgres refuse its updates and deletes); add a primary key, or exclude it"
+        )];
+    }
+    let outside: Vec<&str> = unique_key
+        .iter()
+        .filter(|column| !table.primary_key.contains(column))
+        .map(String::as_str)
+        .collect();
+    match outside.is_empty() {
+        true => Vec::new(),
+        false => vec![format!(
+            "{qualified}: unique_key column {} is not in the primary key, and Postgres sends only the primary key with a delete, so deletes could not find their rows; kind = \"postgres_cdc\" merges on the primary key in this release, so drop unique_key",
+            outside.join(", ")
+        )],
+    }
 }
 
 /// Why a table someone wrote is blocked without a description they wrote, with where to give it; `None` when it has one, or when it was discovered (matched by an `include` pattern, not named), which takes the source's own table comment or none (D203). Python tables, files sources (described by the source's own `description`), `[sources.*.tables]` entries and tables named exactly in `include` are written.
@@ -240,9 +296,8 @@ pub(crate) fn missing_description(
 ) -> Option<String> {
     let qualified = table.qualified_name();
     let entry = source.tables.get(&qualified);
-    let written = source.kind != SourceKind::Postgres
-        || entry.is_some()
-        || source.include.contains(&qualified);
+    let written =
+        !source.reads_postgres() || entry.is_some() || source.include.contains(&qualified);
     let described = [
         entry.and_then(|entry| entry.description.as_deref()),
         source
@@ -260,7 +315,7 @@ pub(crate) fn missing_description(
         SourceKind::Files => {
             format!("no description; add description = \"...\" under [sources.{source_name}]")
         }
-        SourceKind::Postgres => format!(
+        SourceKind::Postgres | SourceKind::PostgresCdc => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
         ),
     };

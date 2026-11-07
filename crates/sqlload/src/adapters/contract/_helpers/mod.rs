@@ -1,3 +1,4 @@
+pub(crate) mod changes;
 pub(crate) mod identifiers;
 pub(crate) mod logged;
 pub(crate) mod promote;

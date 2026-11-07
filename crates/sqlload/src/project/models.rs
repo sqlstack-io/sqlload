@@ -267,9 +267,48 @@ pub struct SourceConfig {
     /// Per-table settings, keyed by `schema.table`.
     #[serde(default)]
     pub tables: BTreeMap<String, TableOverride>,
+    /// The publication streamed (`postgres_cdc`); `sqlload_<source>` when omitted, created for the selected tables if missing.
+    #[serde(default)]
+    pub publication: Option<String>,
+    /// The replication slot holding the stream's position (`postgres_cdc`); `sqlload_<source>` when omitted.
+    #[serde(default)]
+    pub slot: Option<String>,
+    /// How captured changes are written (`postgres_cdc`).
+    #[serde(default)]
+    pub cdc_mode: CdcMode,
+    /// What a captured delete does to a merged row (`postgres_cdc` with `cdc_mode = "merge"`).
+    #[serde(default)]
+    pub deletes: CdcDeletes,
+}
+
+/// How a `postgres_cdc` source writes its changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CdcMode {
+    /// One row per key, as the source has it now.
+    #[default]
+    Merge,
+    /// Every change as a row of its own.
+    Changelog,
+}
+
+/// What a captured delete does under `cdc_mode = "merge"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CdcDeletes {
+    /// The row stays, with `_sqlload_deleted_at` set.
+    #[default]
+    Soft,
+    /// The row is removed.
+    Hard,
 }
 
 impl SourceConfig {
+    /// Whether the source reads a Postgres database's tables (`postgres` or `postgres_cdc`).
+    pub fn reads_postgres(&self) -> bool {
+        matches!(self.kind, SourceKind::Postgres | SourceKind::PostgresCdc)
+    }
+
     /// How a files source's files are encoded, with defaults for what is not set.
     pub fn files_encoding(&self) -> FilesEncoding {
         FilesEncoding {
@@ -283,7 +322,9 @@ impl SourceConfig {
     pub fn table_name_template(&self) -> &str {
         match (&self.table_name, self.kind) {
             (Some(template), _) => template,
-            (None, SourceKind::Postgres | SourceKind::Python) => DEFAULT_TABLE_NAME,
+            (None, SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Python) => {
+                DEFAULT_TABLE_NAME
+            }
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
         }
     }
@@ -294,6 +335,8 @@ impl SourceConfig {
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Postgres,
+    /// A Postgres database's changes, streamed from a logical replication slot.
+    PostgresCdc,
     /// Existing files in an object store or directory.
     Files,
     /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.

@@ -2,8 +2,12 @@ use crate::files_source::models::SourceFormat;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
-use crate::project::constants::{FILES_CONNECTION_KINDS, TABLE_PLACEHOLDER};
-use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig, SourceKind};
+use crate::project::constants::{
+    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, TABLE_PLACEHOLDER,
+};
+use crate::project::models::{
+    CdcDeletes, CdcMode, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind,
+};
 
 /// Problems with names one section uses to refer to another.
 pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
@@ -31,7 +35,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     let mut problems: Vec<String> = Vec::new();
     let place = source_place(project, name);
     let expected = match source.kind {
-        SourceKind::Postgres => "postgres",
+        SourceKind::Postgres | SourceKind::PostgresCdc => "postgres",
         SourceKind::Files => "s3 or filesystem",
         SourceKind::Python => "any",
     };
@@ -79,12 +83,16 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         )),
     }
     problems.extend(kind_problems(&place, source));
+    if source.kind == SourceKind::PostgresCdc {
+        problems.extend(cdc_name_problems(&place, name, source));
+    }
     problems
 }
 
 fn source_kind_name(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Postgres => "postgres",
+        SourceKind::PostgresCdc => "postgres_cdc",
         SourceKind::Files => "files",
         SourceKind::Python => "python",
     }
@@ -125,8 +133,20 @@ fn source_place(project: &ProjectConfig, name: &str) -> String {
 fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     let template = source.table_name_template();
+    let cdc_only = source.publication.is_some()
+        || source.slot.is_some()
+        || source.cdc_mode != CdcMode::Merge
+        || source.deletes != CdcDeletes::Soft;
+    if cdc_only && source.kind != SourceKind::PostgresCdc {
+        problems.push(format!(
+            "{place} publication, slot, cdc_mode and deletes are for kind = \"postgres_cdc\""
+        ));
+    }
+    if source.kind == SourceKind::PostgresCdc {
+        problems.extend(cdc_problems(place, source));
+    }
     match source.kind {
-        SourceKind::Postgres => {
+        SourceKind::Postgres | SourceKind::PostgresCdc => {
             if source.include.is_empty() {
                 problems.push(format!("{place} include is empty, so it selects no tables"));
             }
@@ -198,6 +218,51 @@ fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             "{place} csv is for format = \"csv\", not {format:?}",
             format = format.to_string()
         )),
+    }
+    problems
+}
+
+/// Settings a `postgres_cdc` source cannot take: the change stream decides how rows are written, so no strategy or cursor; `deletes = "hard"` needs `merge`.
+fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let settings = std::iter::once(&source.defaults)
+        .chain(source.tables.values().map(|table| &table.settings));
+    for settings in settings {
+        if settings.write_strategy.is_some()
+            || settings.cursor_column.is_some()
+            || settings.batch_size.is_some()
+            || settings.state.is_some()
+        {
+            problems.push(format!(
+                "{place} kind = \"postgres_cdc\" writes every captured change, so it takes no write_strategy, cursor_column, batch_size or state; choose cdc_mode = \"merge\" or \"changelog\""
+            ));
+            break;
+        }
+    }
+    if source.deletes == CdcDeletes::Hard && source.cdc_mode == CdcMode::Changelog {
+        problems.push(format!(
+            "{place} deletes = \"hard\" applies to cdc_mode = \"merge\"; a changelog keeps every delete as a row"
+        ));
+    }
+    problems
+}
+
+/// A `postgres_cdc` source's slot and publication names, as set or by default (`sqlload_<source>`), must be plain Postgres names.
+fn cdc_name_problems(place: &str, name: &str, source: &SourceConfig) -> Vec<String> {
+    let default_name = format!("sqlload_{}", name.to_lowercase());
+    let mut problems: Vec<String> = Vec::new();
+    for (setting, chosen) in [("slot", &source.slot), ("publication", &source.publication)] {
+        let effective = chosen.as_deref().unwrap_or(&default_name);
+        let valid = !effective.is_empty()
+            && effective.len() <= MAX_POSTGRES_NAME_BYTES
+            && effective
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if !valid {
+            problems.push(format!(
+                "{place} {setting} {effective:?} must be lower-case letters, digits and underscores, at most {MAX_POSTGRES_NAME_BYTES} characters; set {setting} = \"...\""
+            ));
+        }
     }
     problems
 }

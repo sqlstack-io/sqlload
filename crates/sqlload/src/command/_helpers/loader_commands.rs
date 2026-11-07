@@ -53,6 +53,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         start_cursor: args.start_cursor,
         end_cursor: args.end_cursor,
         concurrency: args.concurrency.map(usize::from),
+        resnapshot: args.resnapshot,
         batch_bytes: args
             .batch_bytes
             .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),
@@ -196,14 +197,24 @@ async fn run_command(
     if !applies {
         return Ok((lines, planned));
     }
+    let flag = match (options.reload, options.resnapshot) {
+        (true, true) => "--reload and --resnapshot",
+        (true, false) => "--reload",
+        (false, _) => "--resnapshot",
+    };
     let rebuilt: Vec<&str> = plan
         .tables
         .iter()
-        .filter(|table| loads && options.reload && !yes && table.schema.blocked.is_none())
+        .filter(|table| {
+            loads
+                && !yes
+                && table.schema.blocked.is_none()
+                && (options.reload || (options.resnapshot && table.spec.cdc.is_some()))
+        })
         .map(|table| table.spec.destination.table.as_str())
         .collect();
     if !rebuilt.is_empty() {
-        match confirm_reload(&lines, &rebuilt, no_color)? {
+        match confirm_reload(&lines, flag, &rebuilt, no_color)? {
             true => lines.clear(),
             false => return Ok((vec![RELOAD_DECLINED.to_owned()], false)),
         }

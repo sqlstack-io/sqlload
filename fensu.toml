@@ -140,3 +140,8 @@ reason = "The crossing's test hook panics on purpose, to prove a panicking cross
 rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/fake_databricks/main/start_fake_databricks.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/postgres/main/start_postgres_version.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
