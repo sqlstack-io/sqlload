@@ -23,7 +23,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
     let target = adapter.render_qualified_name(request.table);
     let source = adapter.render_qualified_name(staging);
     let id = |name: &str| adapter.render_identifier(name);
-    let written: Vec<(String, String, bool, &str)> = request
+    let written: Vec<(String, String, &str)> = request
         .columns
         .iter()
         .filter(|column| {
@@ -33,7 +33,6 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
             (
                 id(&column.name),
                 adapter.render_source_expression_cast(&column.name, &column.column_type),
-                !column.name.starts_with(CDC_PREFIX),
                 column.name.as_str(),
             )
         })
@@ -96,12 +95,12 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
     let is_delete = format!("__source.{} = {}", id(CDC_OP_COLUMN), text(DELETE_OP));
     let metadata: Vec<String> = written
         .iter()
-        .filter(|(name, _, data, _)| !data && *name != id(CDC_DELETED_AT_COLUMN))
+        .filter(|(name, _, raw)| raw.starts_with(CDC_PREFIX) && *name != id(CDC_DELETED_AT_COLUMN))
         .map(|(name, ..)| format!("{name} = __source.{name}"))
         .collect();
     let mut updates: Vec<String> = Vec::new();
-    for (name, _, data, raw) in &written {
-        if !data || keys.contains(name) {
+    for (name, _, raw) in &written {
+        if raw.starts_with(CDC_PREFIX) || keys.contains(name) {
             continue;
         }
         let listed = text(&format!(",{raw},"));

@@ -124,13 +124,14 @@ impl SnapshotLog<'_> {
         let mut records: Vec<(i64, String, String)> = Vec::with_capacity(rows.len());
         for row in &rows {
             let mut fields = row.splitn(3, FIELD_SEPARATOR);
-            let lsn = fields.next().and_then(|lsn| lsn.parse::<i64>().ok());
-            let (Some(lsn), Some(table), Some(columns)) = (lsn, fields.next(), fields.next())
+            let unreadable =
+                || LoaderError::Invalid(format!("an unreadable snapshot record: {row:?}"));
+            let (Some(lsn), Some(table), Some(columns)) =
+                (fields.next(), fields.next(), fields.next())
             else {
-                return Err(LoaderError::Invalid(format!(
-                    "an unreadable snapshot record: {row:?}"
-                )));
+                return Err(unreadable());
             };
+            let lsn = lsn.parse::<i64>().map_err(|_| unreadable())?;
             records.push((lsn, table.to_owned(), columns.to_owned()));
         }
         let newest = records

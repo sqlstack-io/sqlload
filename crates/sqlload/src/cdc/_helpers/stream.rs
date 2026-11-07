@@ -241,26 +241,24 @@ impl CdcSource<'_> {
                 self.name
             )));
         }
-        let reshaped: Vec<&str> = self
-            .tables
-            .iter()
-            .filter(|table| {
-                snapshotted.iter().any(|(name, columns)| {
-                    *name == table.spec.destination.table
-                        && *columns != data_columns(&table.read_columns)
-                })
-            })
-            .map(|table| table.spec.destination.table.as_str())
-            .collect();
+        let mut reshaped: Vec<&str> = Vec::new();
+        for table in &self.tables {
+            let name = table.spec.destination.table.as_str();
+            let recorded = snapshotted.iter().find(|(done, _)| done == name);
+            if recorded.is_some_and(|(_, columns)| *columns != data_columns(&table.read_columns)) {
+                reshaped.push(name);
+            }
+        }
         if !reshaped.is_empty() {
             return Ok(Some(format!(
                 "the columns of {} changed since their snapshot from slot {slot}; schema changes come in a later release, so run `sqlload load --resnapshot` to copy every table again",
                 reshaped.join(", ")
             )));
         }
+        let recorded: Vec<&str> = snapshotted.iter().map(|(done, _)| done.as_str()).collect();
         let unfinished: Vec<&str> = loading
             .into_iter()
-            .filter(|name| !snapshotted.iter().any(|(done, _)| done == name))
+            .filter(|name| !recorded.contains(name))
             .collect();
         Ok((!unfinished.is_empty()).then(|| {
             format!(

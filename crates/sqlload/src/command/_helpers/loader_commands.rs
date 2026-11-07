@@ -197,14 +197,23 @@ async fn run_command(
     if !applies {
         return Ok((lines, planned));
     }
+    let flag = match options.reload {
+        true => "--reload",
+        false => "--resnapshot",
+    };
     let rebuilt: Vec<&str> = plan
         .tables
         .iter()
-        .filter(|table| loads && options.reload && !yes && table.schema.blocked.is_none())
+        .filter(|table| {
+            loads
+                && !yes
+                && table.schema.blocked.is_none()
+                && (options.reload || (options.resnapshot && table.spec.cdc.is_some()))
+        })
         .map(|table| table.spec.destination.table.as_str())
         .collect();
     if !rebuilt.is_empty() {
-        match confirm_reload(&lines, &rebuilt, no_color)? {
+        match confirm_reload(&lines, flag, &rebuilt, no_color)? {
             true => lines.clear(),
             false => return Ok((vec![RELOAD_DECLINED.to_owned()], false)),
         }

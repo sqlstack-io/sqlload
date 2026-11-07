@@ -456,7 +456,17 @@ pub(crate) struct CdcScenarioTestCase {
     /// The Postgres image tag.
     pub(crate) tag: &'static str,
     pub(crate) steps: &'static [CdcStep],
+    /// More `sqlload.toml` text appended to [`cdc_project`](crate::helpers::cdc_project)'s, such as another source.
+    pub(crate) extra_config: &'static str,
     /// A query on the DuckDB file after the last step, and its expected single text result.
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
+}
+
+/// A quiet `postgres_cdc` source on one Postgres version: whether its load confirmed past the WAL other tables wrote.
+pub(crate) struct QuietSlotTestCase {
+    pub(crate) description: &'static str,
+    /// The Postgres image tag.
+    pub(crate) tag: &'static str,
+    pub(crate) expected_advanced: (bool, bool),
 }

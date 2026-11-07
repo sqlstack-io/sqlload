@@ -279,6 +279,20 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
     }
 }
 
+/// A captured table's read columns: the data columns it writes (its snapshot stages them, its stream is matched to them by name and its snapshot record lists them), and every change column.
+fn captured_read(read: Vec<ReadColumn>, schema: &SchemaPlan) -> Vec<ReadColumn> {
+    let written: Vec<&str> = schema
+        .write_columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
+    read.into_iter()
+        .filter(|column| {
+            column.name.starts_with(CDC_PREFIX) || written.contains(&column.name.as_str())
+        })
+        .collect()
+}
+
 /// Array and `json` columns of a captured table read as JSON: the stream sends them as Postgres text (`{a,b}` for an array, the original spacing and duplicate keys for `json`), which would not load as JSON or would differ from the snapshot's jsonb rows, so they must be pinned to text (`jsonb` streams as the snapshot reads it).
 fn streamed_array_problems(table: &SourceTable, read: &[ReadColumn]) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
@@ -355,6 +369,10 @@ async fn plan_table_once(
     if options.reload && live.is_some() {
         schema.action = TableAction::Recreate;
     }
+    let read_columns = match spec.cdc {
+        Some(_) => captured_read(read_columns, &schema),
+        None => read_columns,
+    };
     let cursor_type = spec.cursor.as_ref().and_then(|cursor| {
         desired
             .iter()

@@ -40,6 +40,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         true
     }
 
+    /// Whether a `postgres_cdc` source may load into the destination: every SQL warehouse its changes have been applied to live; a files target has no tables to merge into.
+    fn captures_changes(&self) -> bool {
+        self.runs_sql()
+    }
+
     /// Whether a `--reload` build table starts `LIKE` the table to keep its grants, and so keeps the live columns.
     fn builds_like_target(&self) -> bool {
         false

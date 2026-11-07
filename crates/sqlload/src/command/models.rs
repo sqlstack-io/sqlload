@@ -198,10 +198,10 @@ pub struct LoaderArgs {
     /// Rebuild the selected tables from the whole source, with the current columns and types; asks first unless --yes.
     #[arg(long)]
     pub reload: bool,
-    /// Rebuild with --reload without asking.
+    /// Rebuild with --reload or --resnapshot without asking.
     #[arg(long)]
     pub yes: bool,
-    /// postgres_cdc sources: drop and recreate the replication slot, then copy every table again (after a snapshot stopped part-way, or a lost slot).
+    /// postgres_cdc sources: drop and recreate the replication slot, then copy every table again (after a snapshot stopped part-way, or a lost slot); asks first unless --yes.
     #[arg(long)]
     pub resnapshot: bool,
     /// Backfill from this cursor value instead of the destination's maximum, typed from each selected table's cursor (an integer, or RFC 3339 or a date).

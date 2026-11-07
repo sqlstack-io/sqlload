@@ -16,6 +16,11 @@ impl SqlAdapter for DatabricksSql {
         Warehouse::Databricks
     }
 
+    /// Not yet: a later release applies changes to Databricks once a live round has run them.
+    fn captures_changes(&self) -> bool {
+        false
+    }
+
     fn keeps_nanoseconds(&self) -> bool {
         false
     }

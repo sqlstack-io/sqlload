@@ -236,8 +236,9 @@ deletes = "soft"          # soft (default) | hard; merge only
 - A captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. `merge`
   needs a primary key or a `unique_key`.
 - When the slot is lost, or a snapshot stopped part-way, the load stops and names the fix:
-  `sqlload load --resnapshot` drops and recreates the slot and copies every table again. `plan
-  --resnapshot` shows it first.
+  `sqlload load --resnapshot` drops and recreates the slot and copies every table again,
+  replacing what they hold: a `changelog` table loses its history and a `merge` table its
+  soft-deleted rows. It asks first unless `--yes`; `plan --resnapshot` shows it first.
 - Schema changes while streaming are not handled yet; a table that changes shape stops the load
   with the same fix.
 

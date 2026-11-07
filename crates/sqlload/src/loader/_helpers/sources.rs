@@ -715,6 +715,11 @@ pub(crate) async fn admit_tables(
     found: (&BTreeMap<String, Destination>, &PlanOptions),
 ) -> Result<ProjectPlan, LoaderError> {
     let first_load = first_load(&planned, unselected, found).await?;
+    plan.problems.extend(partial_capture(
+        source_name,
+        source.kind,
+        (&planned, unselected),
+    ));
     for mut table in planned {
         let spec = &table.spec;
         let qualified = spec.source_table.qualified_name();
@@ -744,6 +749,25 @@ pub(crate) async fn admit_tables(
         }
     }
     Ok(plan)
+}
+
+/// Why the selection cannot load `postgres_cdc` source `name`: it picks some of its tables (`planned`) but not all (`unselected`), and the slot they share would confirm the left-out tables' changes unwritten.
+fn partial_capture(
+    name: &str,
+    kind: SourceKind,
+    (planned, unselected): (&[TablePlan], &[TableSpec]),
+) -> Option<String> {
+    let partial = kind == SourceKind::PostgresCdc && !planned.is_empty() && !unselected.is_empty();
+    partial.then(|| {
+        let left_out: Vec<String> = unselected
+            .iter()
+            .map(|spec| spec.source_table.qualified_name())
+            .collect();
+        format!(
+            "[sources.{name}]: this selection leaves out {}, whose changes share the source's one slot and would be skipped; select the whole source, or move those tables to another postgres_cdc source",
+            left_out.join(", ")
+        )
+    })
 }
 
 /// Whether this is the source's first load: none of its tables exists in the destination, whether selected (`planned`) or not (`unselected`, looked up only while none is found, a table that cannot be read counting as absent), so `--select` cannot make a later table look present at the first load.

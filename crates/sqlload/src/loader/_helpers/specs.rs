@@ -1,4 +1,5 @@
 use crate::adapters::contract::models::{ChangeApply, TableName};
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
@@ -130,7 +131,7 @@ pub(crate) fn build_spec(
         });
     let cdc = cdc_spec(context);
     let (strategy, mut problems) = match &cdc {
-        Some(_) if context.target.path.is_some() || context.target.warehouse == Warehouse::Databricks => (
+        Some(_) if context.target.path.is_some() || !sql_adapter(context.target.warehouse).captures_changes() => (
             WriteStrategy::Append,
             vec![
                 "kind = \"postgres_cdc\" loads into DuckDB and Snowflake targets in this release, not Databricks or files targets"
