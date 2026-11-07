@@ -22,3 +22,5 @@ pub const POSTGRES_EPOCH_MICROS: i64 = 946_684_800_000_000;
 pub const LOST_WAL_STATUS: &str = "lost";
 /// `relreplident` of a table whose changes carry the whole old row.
 pub const FULL_IDENTITY: char = 'f';
+/// The Postgres type name of `json`, which keeps the text as written (unlike `jsonb`).
+pub const PLAIN_JSON_TYPE: &str = "json";

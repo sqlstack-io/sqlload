@@ -19,6 +19,7 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
+use crate::cdc::constants::PLAIN_JSON_TYPE;
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
@@ -278,17 +279,19 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
     }
 }
 
-/// Array columns of a captured table read as JSON: the stream sends Postgres array text (`{a,b}`), which would neither load as JSON nor match the snapshot's rows, so they must be pinned to text.
+/// Array and `json` columns of a captured table read as JSON: the stream sends them as Postgres text (`{a,b}` for an array, the original spacing and duplicate keys for `json`), which would not load as JSON or would differ from the snapshot's jsonb rows, so they must be pinned to text (`jsonb` streams as the snapshot reads it).
 fn streamed_array_problems(table: &SourceTable, read: &[ReadColumn]) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     for column in &table.columns {
         let as_json = read
             .iter()
             .any(|read| read.name == column.name && read.output == ColumnType::Json);
-        if column.pg_type == PgType::Array && as_json {
+        let streamed_as_text = column.pg_type == PgType::Array
+            || (column.pg_type == PgType::Json && column.postgres_type == PLAIN_JSON_TYPE);
+        if streamed_as_text && as_json {
             problems.push(format!(
-                "{}: kind = \"postgres_cdc\" streams arrays as Postgres array text, not JSON; pin it with columns = {{ {} = \"text\" }}, or exclude it",
-                column.name, column.name
+                "{}: kind = \"postgres_cdc\" streams {} values as the source wrote them, which the snapshot normalises as jsonb; pin it with columns = {{ {} = \"text\" }}, or exclude it",
+                column.name, column.postgres_type, column.name
             ));
         }
     }

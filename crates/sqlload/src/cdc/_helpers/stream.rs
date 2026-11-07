@@ -571,21 +571,21 @@ fn with_snapshot_columns(read: &[ReadColumn], cdc: &CdcSpec, snapshot_lsn: i64) 
     columns
 }
 
-/// The plan's unblocked `postgres_cdc` tables, by source.
-pub(crate) fn captured_sources(plan: &ProjectPlan) -> BTreeMap<&str, Vec<&TablePlan>> {
-    let mut sources: BTreeMap<&str, Vec<&TablePlan>> = BTreeMap::new();
-    let captured = plan
-        .tables
-        .iter()
-        .filter(|table| table.spec.cdc.is_some() && table.schema.blocked.is_none());
-    for table in captured {
-        sources
-            .entry(table.spec.source_name.as_str())
-            .or_default()
-            .push(table);
+/// The plan's `postgres_cdc` tables by source: the unblocked ones, and the names of the blocked ones.
+pub(crate) fn captured_sources(plan: &ProjectPlan) -> BTreeMap<&str, CapturedTables<'_>> {
+    let mut sources: BTreeMap<&str, CapturedTables<'_>> = BTreeMap::new();
+    for table in plan.tables.iter().filter(|table| table.spec.cdc.is_some()) {
+        let entry = sources.entry(table.spec.source_name.as_str()).or_default();
+        match table.schema.blocked {
+            None => entry.0.push(table),
+            Some(_) => entry.1.push(table.spec.destination.table.clone()),
+        }
     }
     sources
 }
+
+/// One source's unblocked tables, and its blocked tables' names.
+pub(crate) type CapturedTables<'a> = (Vec<&'a TablePlan>, Vec<String>);
 
 /// Load source `name` with `tables`: rows written per destination table name, or why it failed.
 pub(crate) async fn load_source(
