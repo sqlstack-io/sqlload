@@ -8,9 +8,15 @@
 		<meta property="og:title" content="SQLLoad · Load data into your warehouse, and see how first" />
 		<meta property="og:description" content="A free, open-source data loader in Rust that shows you its plan before it changes anything." />
 		<meta property="og:type" content="website" />
-		<meta name="twitter:card" content="summary" />
+		<meta property="og:image" content="https://sqlload.io/assets/og-sqlload-v2.png" />
+		<meta property="og:image:width" content="1200" />
+		<meta property="og:image:height" content="630" />
+		<meta property="og:image:alt" content="SQLLoad. Load data into your warehouse. Fast. $ sqlload plan. See the plan before any data moves." />
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:image" content="https://sqlload.io/assets/og-sqlload-v2.png" />
 		<link rel="icon" type="image/png" sizes="128x128" href="/favicon.png" />
 		<link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+		<link rel="preload" href="/fonts/space-grotesk-bold.woff2" as="font" type="font/woff2" crossorigin />
 		<link rel="stylesheet" href="/styles.css" />
 		<script>
 			(function () {
@@ -25,8 +31,8 @@
 			<div class="wrap">
 				<div class="brand-lockup">
 					<a class="brand" href="/" aria-label="SQLLoad home">
-						<img class="logo-for-light" src="/assets/logo-light.png" alt="SQLLoad" width="133" height="30" />
-						<img class="logo-for-dark" src="/assets/logo-dark.png" alt="SQLLoad" width="133" height="30" />
+						<img src="/assets/mark.png" alt="" width="31" height="30" />
+						<span>SQLLoad</span>
 					</a>
 					<a class="brand-byline" href="https://sqlstack.io">by SQLStack</a>
 				</div>
@@ -50,7 +56,7 @@
 				<div class="hero-text">
 					<p class="eyebrow">Rust-powered · Free and open source · Apache-2.0</p>
 					<h1>Load data into your warehouse. Fast.</h1>
-					<p class="tagline">See exactly how, before anything changes.</p>
+					<p class="tagline">See the plan before any data moves.</p>
 					<p class="lede">
 						When your files are already in a bucket or folder, the warehouse loads them itself, and no
 						row passes through the loader. Everything else is staged as Parquet and bulk-loaded, not
@@ -270,7 +276,7 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 							Install it, then copy a folder or a Postgres table with one command. No configuration file needed.
 						</p>
 						<ul>
-							<li>Reads Postgres, Parquet, CSV, JSON and NDJSON in S3 or a folder, Python and HTTP APIs.</li>
+							<li>Reads Postgres, including <a href="/docs/sources/postgres-cdc/">change data capture</a>; Parquet, CSV, JSON and NDJSON in S3 or a folder; Python and HTTP APIs.</li>
 							<li>Writes Snowflake, Databricks, DuckDB, and Parquet files in S3 or a folder.</li>
 							<li>Linux and macOS; Python only for Python sources.</li>
 							<li>Free and open source, Apache-2.0.</li>

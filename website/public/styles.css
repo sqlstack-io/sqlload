@@ -7,6 +7,14 @@
 }
 
 @font-face {
+	font-family: 'Space Grotesk';
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url('/fonts/space-grotesk-bold.woff2') format('woff2');
+}
+
+@font-face {
 	font-family: 'IBM Plex Mono';
 	font-style: normal;
 	font-weight: 400;
@@ -164,11 +172,13 @@ pre {
 .brand {
 	display: inline-flex;
 	align-items: center;
-	gap: 10px;
+	gap: 6px;
 	color: var(--foreground);
-	font-weight: 650;
-	font-size: 18px;
-	letter-spacing: -0.01em;
+	font-family: 'Space Grotesk', sans-serif;
+	font-weight: 700;
+	font-size: 20px;
+	line-height: 30px;
+	letter-spacing: 0;
 }
 
 .brand:hover {
@@ -178,15 +188,6 @@ pre {
 .brand img {
 	width: auto;
 	height: 30px;
-}
-
-.brand .logo-for-dark,
-:root[data-theme='dark'] .brand .logo-for-light {
-	display: none;
-}
-
-:root[data-theme='dark'] .brand .logo-for-dark {
-	display: block;
 }
 
 .nav {
