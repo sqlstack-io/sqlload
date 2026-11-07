@@ -56,6 +56,9 @@ pub const SLOTS_FULL_ERROR: &str = "all replication slots are in use";
 /// How often `load --follow` writes the changes it has read, when the source sets no `batch_interval`.
 pub const BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// [`BATCH_INTERVAL`] for a files target, where every batch adds a file to each table it changes.
+pub const FILES_BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Microseconds in a second, for how far behind a followed batch's newest commit is.
 pub const MICROS_PER_SECOND: i64 = 1_000_000;
 

@@ -483,8 +483,12 @@ impl CdcSource<'_> {
             held.extend(earlier_rows.then_some(destination.table.as_str()));
         }
         if !held.is_empty() {
+            let remove = match log.folder {
+                Some(_) => "delete their folders",
+                None => "drop the tables from the destination",
+            };
             return Ok(Err(format!(
-                "rows captured before slot {slot} was recreated are still in {}; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or drop the tables from the destination to copy them alone",
+                "rows captured before slot {slot} was recreated are still in {}; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or {remove} to copy them alone",
                 held.join(", ")
             )));
         }

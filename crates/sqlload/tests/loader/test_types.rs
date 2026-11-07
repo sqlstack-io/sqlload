@@ -500,3 +500,23 @@ pub(crate) struct FollowTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// A `postgres_cdc` scenario into a files target (see [`cdc_files_project`](crate::helpers::cdc_files_project)), with what is planted in the folders after its first step.
+pub(crate) struct CdcFilesTestCase {
+    pub(crate) description: &'static str,
+    /// The Postgres image tag.
+    pub(crate) tag: &'static str,
+    pub(crate) steps: &'static [CdcStep],
+    /// The target's store (see [`local_store`](crate::helpers::local_store)), from an S3 endpoint and a local folder.
+    pub(crate) store:
+        fn(&str, &std::path::Path) -> (sqlload::store_paths::models::StoreKind, String),
+    /// The most bytes of changes a load keeps in memory before spilling them to disk; empty for the default.
+    pub(crate) spill_bytes: &'static str,
+    /// More `sqlload.toml` text appended to the project's.
+    pub(crate) extra_config: &'static str,
+    /// Writes into the local folder of a local store after the first step.
+    pub(crate) plant: fn(&std::path::Path) -> Result<(), String>,
+    /// A DuckDB query over the written files, copied to a local folder that `{root}` stands for, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}

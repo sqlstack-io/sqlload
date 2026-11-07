@@ -205,7 +205,8 @@ afterwards, so name it in `include`.
 ## Postgres change data capture
 
 `kind = "postgres_cdc"` streams a Postgres database's changes from a logical replication slot
-into a DuckDB or Snowflake target (not Databricks or files targets yet). The server needs
+into a DuckDB or Snowflake target, or into a files target as a changelog (not Databricks yet).
+The server needs
 `wal_level = logical`, and the connection's user needs the `REPLICATION` attribute and `SELECT`
 on the tables.
 
@@ -218,7 +219,7 @@ cdc_mode = "merge"        # merge (default) | changelog
 deletes = "soft"          # soft (default) | hard; merge only
 # slot = "sqlload_app_cdc"         # the default: sqlload_<source>
 # publication = "sqlload_app_cdc"  # created for the selected tables when missing
-# batch_interval = "10s"           # load --follow: how often it writes what it read
+# batch_interval = "10s"           # load --follow: how often it writes what it read (1m into files)
 ```
 
 - The first `sqlload load` creates the slot with an exported snapshot and copies every table
@@ -281,6 +282,21 @@ deletes = "soft"          # soft (default) | hard; merge only
   - A table that rejoins after that, while its destination still holds rows captured before,
     is refused rather than replaced unasked: run `--resnapshot` (which asks first), or drop the
     destination table to copy it alone.
+- Into a files target, `cdc_mode = "changelog"` only (`merge` is refused at `plan`): the
+  snapshot and every batch add Parquet files to each table's folder, which is never rewritten.
+  - A change already in a table's committed files is skipped on a replay, and an unfinished
+    load's files are deleted before the next write, so each change is in exactly one row.
+  - Files written after a column was added hold it and older ones do not: read the folder with
+    schema merging (DuckDB's `read_parquet(..., union_by_name = true)`).
+  - The slot's snapshot records are objects under the path template's fixed folders, in
+    `_sqlload/cdc/<source>/<slot>/` (for the default `{source}/{table}/`,
+    `<source>/_sqlload/cdc/...`).
+  - `--resnapshot` writes each table's new snapshot, then deletes its older files: the history
+    goes, and a reader in between sees both. A table that rejoins while its folder holds files
+    is refused: delete the folder, or run `--resnapshot`.
+  - A path partitioned by `{cursor}` and `--reload` are refused.
+  - Under `--follow`, `batch_interval` defaults to `1m`, since each batch adds a file to every
+    table it changed; nothing compacts them yet.
 - Postgres keeps WAL for the slot from its last confirmed position. Every load confirms what it
   applied, even one that found no changes, but the WAL kept shrinks only at the first load after
   Postgres's next checkpoint.

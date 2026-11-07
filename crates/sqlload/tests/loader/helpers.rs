@@ -19,6 +19,7 @@ use sqlload::loader::models::{LoadRun, PlanOptions, ProjectPlan};
 use sqlload::project::main::parse_project::parse_project;
 use sqlload::project::models::ProjectConfig;
 use sqlload::store_paths::models::{Location, StoreKind};
+use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
@@ -1736,6 +1737,141 @@ columns = {{ tags = "text" }}
 "#,
         database.display()
     )
+}
+
+/// [`cdc_project`]'s changelog source `log` into a files target on the store `connection` describes, each table under `out/<source>/<table>/`.
+pub(crate) fn cdc_files_project(port: u16, connection: &str) -> String {
+    format!(
+        r#"
+[connections.pg]
+kind = "postgres"
+host = "127.0.0.1"
+port = {port}
+user = "{USER}"
+password = "{PASSWORD}"
+database = "app"
+
+[connections.lake]
+{connection}
+
+[targets.dev]
+connection = "lake"
+path = "out/{{source}}/{{table}}/"
+
+[sources.log]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.*"]
+cdc_mode = "changelog"
+
+[sources.log.tables."public.orders"]
+description = "Orders, captured."
+columns = {{ tags = "text" }}
+"#
+    )
+}
+
+/// Copy every object under `out/` in `store` into `directory`'s `out/`, keeping their keys.
+pub(crate) async fn download_out(
+    store: StoreKind,
+    directory: &std::path::Path,
+) -> Result<(), String> {
+    let folder = open_folder(&Location {
+        store,
+        prefix: "out/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    for file in list_files(&folder)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        let bytes = read_file(&folder, &file.relative_key)
+            .await
+            .map_err(|error| error.to_string())?;
+        let path = directory.join("out").join(&file.relative_key);
+        std::fs::create_dir_all(path.parent().unwrap_or(directory))
+            .map_err(|error| error.to_string())?;
+        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Run each of `steps` on `config` after its change to Postgres through `client`, asserting how it ended; `first` numbers the first step in messages.
+pub(crate) async fn run_cdc_steps(
+    client: &Client,
+    config: &std::path::Path,
+    (steps, first, spill_bytes): (&[CdcStep], usize, &str),
+    description: &str,
+) -> Result<(), String> {
+    for (index, step) in steps.iter().enumerate() {
+        client
+            .batch_execute(step.source_change)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (success, output) = run_sqlload(config, step.args, (step.crash_at, spill_bytes))?;
+        assert_eq!(
+            success,
+            step.expected_success,
+            "{description}: step {} {:?}\n{output}",
+            first + index,
+            step.args
+        );
+        assert!(
+            output.contains(step.expected_output),
+            "{description}: step {} {:?} output lacks {:?}\n{output}",
+            first + index,
+            step.args,
+            step.expected_output
+        );
+    }
+    Ok(())
+}
+
+/// Plant nothing.
+pub(crate) fn nothing_planted(_: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
+
+/// Plant an unfinished load in `out/log/orders/` under `root`: its `writing` marker and a file of a change far past any real one, which no load may count as written.
+pub(crate) fn plant_unfinished_commit(root: &std::path::Path) -> Result<(), String> {
+    let folder = root.join("out/log/orders");
+    std::fs::create_dir_all(folder.join("_sqlload/pending")).map_err(|error| error.to_string())?;
+    std::fs::write(folder.join("_sqlload/pending/planted.00001"), "writing")
+        .map_err(|error| error.to_string())?;
+    let batch = RecordBatch::try_from_iter([
+        (
+            "id",
+            std::sync::Arc::new(arrow_array::Int64Array::from(vec![99])) as arrow_array::ArrayRef,
+        ),
+        (
+            "_sqlload_lsn",
+            std::sync::Arc::new(arrow_array::Int64Array::from(vec![i64::MAX / 2])),
+        ),
+    ])
+    .map_err(|error| error.to_string())?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    std::fs::write(folder.join("part-planted.00001-1.parquet"), buffer)
+        .map_err(|error| error.to_string())
+}
+
+/// Snapshot, [`CDC_CHANGES`], then a changelog load into files that stops itself at `crash_at`, a load that recovers, a re-run that finds nothing, and the plan.
+pub(crate) const fn crashed_files_batch(crash_at: &'static str) -> [CdcStep; 5] {
+    [
+        step("", &["load", "log"], "", (true, "loaded")),
+        step(CDC_CHANGES, &["load", "log"], crash_at, (false, "")),
+        step("", &["load", "log"], "", (true, "Completed")),
+        step("", &["load", "log"], "", (true, "0 rows")),
+        step(
+            "",
+            &["plan", "log"],
+            "",
+            (true, "append changes (changelog)"),
+        ),
+    ]
 }
 
 /// Run the `sqlload` executable on `config` with `args`, stopping itself at `crash_at` and keeping at most `spill_bytes` of changes in memory when set; whether it succeeded, and its output.
