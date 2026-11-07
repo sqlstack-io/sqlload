@@ -11,6 +11,8 @@ DuckDB and Snowflake targets.
 Use sqlload 0.17.0 or later for `postgres_cdc`. In 0.16.0, a transaction that changed a table's
 columns after writing to it could put values in the wrong columns. Schema changes while streaming
 load from 0.18.0; in 0.17.0, any change to a table's columns stops the load until you re-snapshot.
+From 0.19.0, a table that joins the source is copied on its own, and a first snapshot that
+stopped part-way resumes; in 0.18.0, both needed `--resnapshot`.
 
 ## Requirements
 
@@ -138,11 +140,11 @@ Objects (2)                                         sqlload apply
     └── + _sqlload_lsn, _op, _committed_at, _deleted_at, _load_id, _loaded_at
 
 Loads (2)                                           sqlload load
-├── app__customers                                  apply changes, soft deletes (key: customer_id)
+├── app__customers                                  snapshot copy, then apply changes, soft deletes (key: customer_id)
 │   ├── source  postgres_cdc  app  public.customers  slot sqlload_app
 │   ├── route   read as Arrow -> DuckDB takes Arrow
 │   └── batch   about every 1 GB
-└── app__orders                                     apply changes, soft deletes (key: order_id)
+└── app__orders                                     snapshot copy, then apply changes, soft deletes (key: order_id)
     ├── source  postgres_cdc  app  public.orders  slot sqlload_app
     ├── route   read as Arrow -> DuckDB takes Arrow
     └── batch   about every 1 GB
@@ -327,10 +329,81 @@ A column added while a load runs stops that load before anything is written; run
 A generated column, or one left out of the publication's column list, never streams, so a table
 that loads one is refused. Add it to `exclude_columns`.
 
+## Adding tables
+
+From sqlload 0.19.0, a table that joins a source after its first load, because `include` now
+matches it or was widened, is copied on its own at the start of the next load. The other tables
+keep streaming, with their history and soft deletes; they aren't copied again. The copy reads
+under a temporary slot, so one slot under `max_replication_slots` must be free when it starts.
+The table's changes from before its copy are skipped, and from then on it streams with the
+others.
+
+Here a `refunds` table is created, as the tables' owner:
+
+```sql
+CREATE TABLE refunds (
+    refund_id bigint PRIMARY KEY,
+    order_id bigint NOT NULL REFERENCES orders,
+    amount numeric(12,2) NOT NULL
+);
+INSERT INTO refunds SELECT i, i * 10, 5.00 FROM generate_series(1, 20) AS i;
+GRANT SELECT ON refunds TO loader;
+```
+
+`include = ["public.*"]` matches it, and `plan` shows it as a copy before it streams:
+
+```console
+$ sqlload plan
+…
+└── app__refunds                                    snapshot copy, then apply changes, soft deletes (key: refund_id)
+    ├── source  postgres_cdc  app  public.refunds  slot sqlload_app
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    └── batch   about every 1 GB
+```
+
+SQLLoad adds a new table to its own publication, `sqlload_<source>`, which needs a user that owns
+the table. A named publication is yours to change, so until it publishes the table, the load
+stops:
+
+```console
+$ sqlload load
+…
+failed   raw.app__refunds    publication app_changes does not publish "public"."refunds"; add them with ALTER PUBLICATION "app_changes" ADD TABLE "public"."refunds"
+```
+
+After `ALTER PUBLICATION app_changes ADD TABLE refunds;` as the owner, and `sqlload apply` to
+create the destination table, the next load copies `refunds` and applies the other tables'
+changes, here one update to an order:
+
+```console
+$ sqlload load
+…
+loaded   raw.app__customers  0 rows  0.4s
+loaded   raw.app__orders     1 rows  0.4s
+loaded   raw.app__refunds    20 rows  0.4s
+
+✓ Completed  3 loaded, 21 rows, 0.4s
+```
+
+A table leaving `include` still needs `--resnapshot`. If it joins again later while its destination
+table still holds rows captured before that, the load stops rather than replace them without
+asking:
+
+```console
+failed   raw.app__refunds    rows captured before slot sqlload_app was recreated are still in app__refunds; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or drop the tables from the destination to copy them alone
+```
+
+Drop the destination table and run `sqlload apply`, and the next load copies it alone. An empty
+destination table is copied without asking.
+
 ## Re-snapshot
 
-A load stops and names `--resnapshot` as the fix when the slot is lost or gone, when a snapshot
-stopped part-way, or after a schema change the stream can't carry (see above).
+A load stops and names `--resnapshot` as the fix when the slot is lost or gone, after a schema
+change the stream can't carry, or when a table leaves `include` (see above).
+
+A first snapshot that stopped part-way resumes: the next load copies only the tables it hadn't
+finished, and keeps the slot. A `--resnapshot` that stopped part-way needs `--resnapshot` again,
+since its unfinished tables still hold the rows it was replacing.
 
 `sqlload load --resnapshot` drops and recreates the slot and copies every table again, replacing
 what it holds. A `changelog` table loses its history, and a `merge` table its soft-deleted rows.
