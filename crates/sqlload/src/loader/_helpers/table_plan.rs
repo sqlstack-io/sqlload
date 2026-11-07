@@ -1028,7 +1028,7 @@ fn quoted(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-/// The cursor's type, and why the table's strategy and cursor do not suit its path.
+/// The cursor's type, and why the table's strategy and cursor do not suit its path; a captured table's path is checked by [`captured_problems`] instead.
 pub(crate) fn check_output(
     spec: &TableSpec,
     path: &TablePath,
@@ -1039,12 +1039,15 @@ pub(crate) fn check_output(
         .iter()
         .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
         .map(|column| column.column_type.clone());
-    let problems = output_problems(&OutputCheck {
-        strategy: spec.strategy,
-        cursor_column: cursor_name,
-        cursor_type: cursor_type.as_ref(),
-        partition: path.partition.as_ref(),
-    });
+    let problems = match spec.cdc {
+        Some(_) => Vec::new(),
+        None => output_problems(&OutputCheck {
+            strategy: spec.strategy,
+            cursor_column: cursor_name,
+            cursor_type: cursor_type.as_ref(),
+            partition: path.partition.as_ref(),
+        }),
+    };
     (cursor_type, problems)
 }
 

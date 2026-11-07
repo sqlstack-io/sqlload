@@ -167,7 +167,11 @@ impl SnapshotLog<'_> {
     async fn stored_rows(&self, folder: &Location) -> Result<Vec<String>, LoaderError> {
         let folder = open_folder(folder)?;
         let mut rows: Vec<String> = Vec::new();
-        for file in list_files(&folder).await? {
+        for file in list_files(&folder)
+            .await?
+            .into_iter()
+            .filter(|file| file.relative_key.ends_with(SNAPSHOT_RECORD_SUFFIX))
+        {
             let bytes = read_file(&folder, &file.relative_key).await?;
             rows.push(String::from_utf8_lossy(&bytes).into_owned());
         }
@@ -199,19 +203,25 @@ impl SnapshotLog<'_> {
     }
 }
 
-/// The records folder of `source`'s slot `slot` in a files target whose path template is `template`: the template's folders up to the first one naming anything but `{source}`, with `{source}` filled, then `_sqlload/cdc/<source>/<slot>/`. Outside every table's folder, and the same whichever tables the source selects.
+/// The records folder of `source`'s slot `slot` in a files target whose path template is `template`: the template's folders up to the first one naming anything but `{source}`, with `{source}` filled (all but the last when every one is fixed, the table's own folder then), then `_sqlload/cdc/<source>/<slot>/`. Outside every table's folder, and the same whichever tables the source selects; a table's own `destination_path` does not move it.
 pub(crate) fn snapshot_folder(template: &str, source: &str, slot: &str) -> String {
     let root = match template.starts_with('/') {
         true => "/",
         false => "",
     };
-    let fixed: Vec<String> = template
+    let segments: Vec<String> = template
         .split('/')
         .filter(|part| !part.is_empty())
         .map(|part| part.replace("{source}", source))
-        .take_while(|part| !part.contains('{'))
         .collect();
-    let mut folders = fixed;
+    let mut folders: Vec<String> = segments
+        .iter()
+        .take_while(|part| !part.contains('{'))
+        .cloned()
+        .collect();
+    if folders.len() == segments.len() {
+        folders.pop();
+    }
     folders.extend([
         SNAPSHOTS_FOLDER.to_owned(),
         source.to_owned(),

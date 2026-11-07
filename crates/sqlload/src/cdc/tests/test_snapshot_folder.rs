@@ -32,6 +32,16 @@ fn given_a_files_path_template_when_placing_snapshot_records_then_they_sit_under
             expected_folder: "lake/_sqlload/cdc/app/sqlload_app/",
         },
         SnapshotFolderTestCase {
+            description: "a template naming only the source keeps the records out of the table's folder",
+            template: "lake/{source}/",
+            expected_folder: "lake/_sqlload/cdc/app/sqlload_app/",
+        },
+        SnapshotFolderTestCase {
+            description: "a fixed template keeps the records out of the table's folder",
+            template: "lake/orders/",
+            expected_folder: "lake/_sqlload/cdc/app/sqlload_app/",
+        },
+        SnapshotFolderTestCase {
             description: "an absolute template stays absolute",
             template: "/srv/out/{table}",
             expected_folder: "/srv/out/_sqlload/cdc/app/sqlload_app/",

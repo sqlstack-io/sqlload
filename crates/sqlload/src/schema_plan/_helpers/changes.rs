@@ -97,7 +97,7 @@ pub(crate) fn existing_column(
         (TypeFit::Fits, _) => written,
         (_, false) => ColumnDecision {
             problem: Some(format!(
-                "{} is {} in the existing files but {} in the source; existing files cannot be altered, so pin the files' type (columns = {{ {} = \"{}\" }}) or rewrite every file with --reload",
+                "{} is {} in the existing files but {} in the source; existing files cannot be altered, so pin the files' type (columns = {{ {} = \"{}\" }}) or rewrite every file with --reload (--resnapshot for a postgres_cdc table)",
                 live.name, live.column_type, column.column_type, column.name, live.column_type
             )),
             ..ColumnDecision::default()

@@ -282,15 +282,21 @@ deletes = "soft"          # soft (default) | hard; merge only
   - A table that rejoins after that, while its destination still holds rows captured before,
     is refused rather than replaced unasked: run `--resnapshot` (which asks first), or drop the
     destination table to copy it alone.
-- Into a files target, `cdc_mode = "changelog"` only (`merge` is refused at `plan`): the
-  snapshot and every batch add Parquet files to each table's folder, which is never rewritten.
-  - A change already in a table's committed files is skipped on a replay, and an unfinished
-    load's files are deleted before the next write, so each change is in exactly one row.
+- Into a files target, `cdc_mode = "changelog"` only (`merge` is refused at `plan`): every batch
+  adds Parquet files to each table's folder it changed, and a snapshot copy (the first load, a
+  table joining the source, or `--resnapshot`) writes its files, then deletes the folder's older
+  ones.
+  - A change already in a table's committed files is skipped on a replay, and the files of a
+    load that stopped part-way are deleted at the table's next write, so from then on each change
+    is in exactly one row. A table whose folder was deleted is copied again alone.
   - Files written after a column was added hold it and older ones do not: read the folder with
     schema merging (DuckDB's `read_parquet(..., union_by_name = true)`).
-  - The slot's snapshot records are objects under the path template's fixed folders, in
-    `_sqlload/cdc/<source>/<slot>/` (for the default `{source}/{table}/`,
-    `<source>/_sqlload/cdc/...`).
+  - The slot's snapshot records are objects under the fixed folders of the source's
+    `destination_path` (else the target's `path`), in `_sqlload/cdc/<source>/<slot>/`: for the
+    default `{source}/{table}/`, `<source>/_sqlload/cdc/...`. A table's own `destination_path`
+    does not move them.
+  - A snapshot copy written in more files than the target's `max_footer_reads` (100 by default,
+    at about 1M rows a file) blocks the next `plan` until it is raised.
   - `--resnapshot` writes each table's new snapshot, then deletes its older files: the history
     goes, and a reader in between sees both. A table that rejoins while its folder holds files
     is refused: delete the folder, or run `--resnapshot`.

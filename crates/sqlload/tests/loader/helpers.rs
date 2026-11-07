@@ -1832,6 +1832,11 @@ pub(crate) fn nothing_planted(_: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Delete `out/log/items/` under `root`, a recorded table's whole folder.
+pub(crate) fn delete_items_folder(root: &std::path::Path) -> Result<(), String> {
+    std::fs::remove_dir_all(root.join("out/log/items")).map_err(|error| error.to_string())
+}
+
 /// Plant an unfinished load in `out/log/orders/` under `root`: its `writing` marker and a file of a change far past any real one, which no load may count as written.
 pub(crate) fn plant_unfinished_commit(root: &std::path::Path) -> Result<(), String> {
     let folder = root.join("out/log/orders");

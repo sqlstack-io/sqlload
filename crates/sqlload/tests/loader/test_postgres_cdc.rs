@@ -4,9 +4,10 @@ use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
 use crate::helpers::{
-    CDC_CHANGES, cdc_files_project, cdc_project, crashed_batch, crashed_files_batch, download_out,
-    duckdb_text, local_store, nothing_planted, plant_unfinished_commit, run_async, run_cdc_steps,
-    run_sqlload, seaweedfs_store, spawn_sqlload, step, stop_sqlload,
+    CDC_CHANGES, cdc_files_project, cdc_project, crashed_batch, crashed_files_batch,
+    delete_items_folder, download_out, duckdb_text, local_store, nothing_planted,
+    plant_unfinished_commit, run_async, run_cdc_steps, run_sqlload, seaweedfs_store, spawn_sqlload,
+    step, stop_sqlload,
 };
 use crate::test_types::{
     CdcFilesTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, QuietSlotTestCase,
@@ -872,12 +873,30 @@ const FILES_REFUSED: [CdcStep; 3] = [
         "",
         (
             false,
-            "a postgres_cdc table writes one changelog, not partition folders",
+            "part__items\n    └── reason  a postgres_cdc table writes one changelog, not partition folders",
         ),
     ),
 ];
 
 const LOG_RESNAPSHOT: &[&str] = &["load", "log", "--resnapshot", "--yes"];
+
+const FILES_FOLDER_DELETED: [CdcStep; 3] = [
+    step("", LOG, "", (true, "loaded")),
+    step(CHANGES, LOG, "", (true, "Completed")),
+    step("", LOG, "", (true, "0 rows")),
+];
+
+const FILES_TYPE_CHANGED: [CdcStep; 4] = [
+    step("", LOG, "", (true, "loaded")),
+    step(
+        "ALTER TABLE public.items ALTER COLUMN w TYPE text",
+        LOG,
+        "",
+        (false, "--resnapshot for a postgres_cdc table"),
+    ),
+    step("", LOG_RESNAPSHOT, "", (true, "loaded")),
+    step("", LOG, "", (true, "0 rows")),
+];
 
 const FILES_SNAPSHOT_CRASH: [CdcStep; 7] = [
     step("", LOG, "snapshot-after-first-table", (false, "")),
@@ -1824,6 +1843,28 @@ fn given_a_postgres_cdc_changelog_into_files_when_loads_stop_at_each_restart_poi
             expected_result: "snapshot:1,snapshot:3,snapshot:4",
         },
         CdcFilesTestCase {
+            description: "a recorded table whose folder was deleted is copied again alone, not just streamed into",
+            tag: "17-alpine",
+            steps: &FILES_FOLDER_DELETED,
+            store: local_store,
+            spill_bytes: "",
+            extra_config: "",
+            plant: delete_items_folder,
+            check_query: "SELECT string_agg(_sqlload_op || ':' || id || ':' || name, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM read_parquet('{root}/out/log/items/*.parquet')",
+            expected_result: "snapshot:1:one!,snapshot:2:two,snapshot:3:three",
+        },
+        CdcFilesTestCase {
+            description: "a type change the files cannot hold blocks until --resnapshot rewrites every file",
+            tag: "17-alpine",
+            steps: &FILES_TYPE_CHANGED,
+            store: local_store,
+            spill_bytes: "",
+            extra_config: "",
+            plant: nothing_planted,
+            check_query: "SELECT string_agg(id || ':' || typeof(w), ',' ORDER BY id) FROM read_parquet('{root}/out/log/items/*.parquet')",
+            expected_result: "1:VARCHAR,2:VARCHAR",
+        },
+        CdcFilesTestCase {
             description: "a column added between loads is in the new files",
             tag: "17-alpine",
             steps: &FILES_COLUMN_ADDED,
@@ -1842,7 +1883,7 @@ fn given_a_postgres_cdc_changelog_into_files_when_loads_stop_at_each_restart_poi
             spill_bytes: "100000",
             extra_config: "",
             plant: nothing_planted,
-            check_query: "SELECT (SELECT count(DISTINCT (_sqlload_lsn, _sqlload_seq)) || '/' || count(*) || ':' || max(_sqlload_seq) FROM read_parquet('{root}/out/log/orders/*.parquet') WHERE _sqlload_op <> 'snapshot') || ' | ' || (SELECT count(DISTINCT _sqlload_lsn) FROM read_parquet('{root}/out/log/orders/*.parquet') WHERE _sqlload_op <> 'snapshot')",
+            check_query: "SELECT (SELECT count(DISTINCT (_sqlload_lsn, _sqlload_seq)) || '/' || count(*) || ':' || max(_sqlload_seq) FROM read_parquet('{root}/out/log/orders/*.parquet') WHERE _sqlload_op <> 'snapshot') || ' | ' || (SELECT count(DISTINCT regexp_extract(filename, 'part-(.*)-[0-9]+[.]parquet$', 1)) FROM read_parquet('{root}/out/log/orders/*.parquet', filename = true) WHERE _sqlload_op <> 'snapshot')",
             expected_result: "68017/68017:68017 | 1",
         },
         CdcFilesTestCase {

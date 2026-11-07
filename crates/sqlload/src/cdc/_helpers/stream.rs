@@ -12,6 +12,7 @@ use crate::adapters::contract::models::{ChangeApply, ChangeWrite, WriteMode};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
+use crate::adapters::files::constants::PARQUET_SUFFIX;
 use crate::adapters::files::main::cursor_maximum::cursor_maximum;
 use crate::adapters::files::main::newest_load_files::newest_load_files;
 use crate::adapters::files::main::read_table_state::read_table_state;
@@ -381,7 +382,7 @@ impl CdcSource<'_> {
             .map(|row| (row.get::<_, Option<String>>(0).unwrap_or_default(), row.get(1))))
     }
 
-    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it; the load leaves out a table the slot captured (its changes would be confirmed unwritten); a recorded table left the publication (its changes since were not captured); a table to copy alone still holds rows from before the slot was recreated (the copy would replace them unasked); or a table's columns changed since its snapshot in a way the stream does not carry (see [`reshape_problem`]). When it can, the tables whose columns changed in ways it carries are recorded with their new columns first, and the tables without a snapshot from it (joined since, or a snapshot stopped part-way) are returned, to be copied alone before streaming.
+    /// Why the slot cannot resume, if it cannot: SQLLoad did not create it; the load leaves out a table the slot captured (its changes would be confirmed unwritten); a recorded table left the publication (its changes since were not captured); a table to copy alone still holds rows from before the slot was recreated (the copy would replace them unasked); or a table's columns changed since its snapshot in a way the stream does not carry (see [`reshape_problem`]). When it can, the tables whose columns changed in ways it carries are recorded with their new columns first, and the tables without a snapshot from it (joined since, or a snapshot stopped part-way) or without their destination table or folder (dropped or moved since, which streaming alone would leave without its copied rows) are returned, to be copied alone before streaming.
     async fn resume_problem(
         &self,
         control: &Client,
@@ -417,7 +418,7 @@ impl CdcSource<'_> {
         }
         let mut rewrites: Vec<(i64, SnapshotRecord)> = Vec::new();
         let mut problems: Vec<String> = Vec::new();
-        for table in &self.tables {
+        for table in self.tables.iter().filter(|table| table.exists) {
             let name = table.spec.destination.table.as_str();
             let Some((copied_at, recorded)) =
                 snapshotted.iter().find(|(_, record)| record.table == name)
@@ -470,7 +471,9 @@ impl CdcSource<'_> {
         let unrecorded: Vec<&TablePlan> = self
             .tables
             .iter()
-            .filter(|table| !recorded.contains(&table.spec.destination.table.as_str()))
+            .filter(|table| {
+                !table.exists || !recorded.contains(&table.spec.destination.table.as_str())
+            })
             .copied()
             .collect();
         let log = self.log()?;
@@ -1437,27 +1440,30 @@ pub(crate) fn with_changes(
     outcomes
 }
 
-/// The newest `_sqlload_lsn` in a files table's committed files, from the statistics of its newest commit's files (a table's commits each hold newer changes than the last); `None` for a warehouse table or a folder without files. An unfinished load's files do not count.
+/// The newest `_sqlload_lsn` in a files table's committed files: the statistics of its newest commit's last part (a transaction's changes to a table go in one commit, each commit's are newer than the last's, and a commit's parts are written in order, one at a time); `None` for a warehouse table or a folder without files. Commits that tie for newest (a store's times are whole seconds) each give their last part. An unfinished load's files do not count, and one footer per newest commit is read however large it is.
 async fn newest_change_lsn(table: &TablePlan) -> Result<Option<i64>, LoaderError> {
     let Some(output) = &table.output else {
         return Ok(None);
     };
     let folder = open_folder(&output.path.folder)?;
     let state = read_table_state(&folder, &output.path, None).await?;
-    let newest: Vec<StoredFile> = state
+    let mut last_parts: BTreeMap<String, ((usize, String), StoredFile)> = BTreeMap::new();
+    let newest = state
         .listed
         .partitions
         .last()
         .map(|partition| newest_load_files(&partition.files))
         .unwrap_or_default();
-    if newest.len() > output.max_footer_reads {
-        return Err(LoaderError::Invalid(format!(
-            "the newest load in {} wrote {} files, more footers than max_footer_reads = {} allows reading for its newest change; raise max_footer_reads on the target",
-            output.path.folder,
-            newest.len(),
-            output.max_footer_reads
-        )));
+    for file in newest {
+        let (load, number) = load_part(&file.relative_key).unwrap_or_default();
+        let later = last_parts
+            .get(&load)
+            .is_none_or(|(seen, _)| number >= *seen);
+        if later {
+            last_parts.insert(load, (number, file));
+        }
     }
+    let newest: Vec<StoredFile> = last_parts.into_values().map(|(_, file)| file).collect();
     let footers = read_footers(&folder, &newest).await?;
     let maximum =
         cursor_maximum(&footers, CDC_LSN_COLUMN, &ColumnType::Int).map_err(LoaderError::Invalid)?;
@@ -1471,4 +1477,11 @@ async fn newest_change_lsn(table: &TablePlan) -> Result<Option<i64>, LoaderError
             })
         })
         .transpose()
+}
+
+/// The load and part number `<n>` of a written file's key (`part-<load id>-<n>.parquet`), the number as its digit count and digits, which order as the number does; `None` for another shape.
+fn load_part(key: &str) -> Option<(String, (usize, String))> {
+    let (load, number) = key.strip_suffix(PARQUET_SUFFIX)?.rsplit_once('-')?;
+    let digits = !number.is_empty() && number.chars().all(|digit| digit.is_ascii_digit());
+    digits.then(|| (load.to_owned(), (number.len(), number.to_owned())))
 }
