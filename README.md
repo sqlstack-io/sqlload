@@ -88,7 +88,8 @@ write strategies each supports.
 **Postgres change data capture.** A `postgres_cdc` source copies every table under a snapshot on
 the first `sqlload load`. Each later load applies the inserts, updates and deletes committed since
 the last one, from a logical replication slot, as `merge` or `changelog` into DuckDB or Snowflake.
-From 0.18.0, columns added, dropped or widened while streaming carry through.
+From 0.18.0, columns added, dropped or widened while streaming carry through. From 0.20.0,
+`sqlload load app --follow` keeps streaming, writing a batch every 10 seconds by default.
 See [Postgres CDC](https://sqlload.io/docs/sources/postgres-cdc/).
 
 **Kafka exporter.** A separate mode, `sqlload run`, streams Kafka topics into Snowflake. Its
