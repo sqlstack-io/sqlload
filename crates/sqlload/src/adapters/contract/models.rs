@@ -124,6 +124,8 @@ pub struct WriteTarget<'a> {
     pub staging: Option<&'a TableName>,
     /// The columns staged batches carry, the `_sqlload_*` metadata included.
     pub columns: &'a [DesiredColumn],
+    /// The table's own columns in their final types, which a build table has.
+    pub write_columns: &'a [DesiredColumn],
     pub load_id: &'a str,
     /// The batch being filled, from 1.
     pub batch: u64,

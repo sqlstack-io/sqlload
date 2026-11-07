@@ -7,18 +7,24 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
 use crate::auth::models::Secret;
 use crate::bigquery_api::_helpers::requests::access_token;
-use crate::bigquery_api::constants::REQUEST_PARAMS;
+use crate::bigquery_api::constants::{
+    GRPC_CONNECT_TIMEOUT, GRPC_KEEP_ALIVE_INTERVAL, GRPC_KEEP_ALIVE_TIMEOUT, GRPC_UNARY_TIMEOUT,
+    REQUEST_PARAMS,
+};
 use crate::bigquery_api::models::BigQueryClient;
 use crate::http::errors::ApiError;
 
-/// The client's channel to the Storage Write API, opened (lazily, with TLS for `https`) on the first call.
+/// The client's channel to the Storage Write API, opened (lazily, with TLS for `https`) on the first call; a connection that stops answering keep-alive pings fails its calls rather than hanging them.
 pub(crate) async fn channel(client: &BigQueryClient) -> Result<Channel, ApiError> {
     let opened = client
         .channel
         .get_or_try_init(|| async {
-            let endpoint = Endpoint::from_shared(client.storage_url.clone()).map_err(|error| {
-                ApiError::Protocol(format!("bad Storage Write API URL: {error}"))
-            })?;
+            let endpoint = Endpoint::from_shared(client.storage_url.clone())
+                .map_err(|error| ApiError::Protocol(format!("bad Storage Write API URL: {error}")))?
+                .connect_timeout(GRPC_CONNECT_TIMEOUT)
+                .http2_keep_alive_interval(GRPC_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(GRPC_KEEP_ALIVE_TIMEOUT)
+                .keep_alive_while_idle(true);
             let endpoint = match client.storage_url.starts_with("https://") {
                 true => endpoint
                     .tls_config(ClientTlsConfig::new().with_webpki_roots())
@@ -48,7 +54,7 @@ pub(crate) fn authorized<T>(
     Ok(request)
 }
 
-/// A unary Storage Write API call to `path`, sent once more with a new token if the first was refused as unauthenticated.
+/// A unary Storage Write API call to `path`, given [`GRPC_UNARY_TIMEOUT`] to answer, sent once more with a new token if the first was refused as unauthenticated.
 pub(crate) async fn unary<Req, Res>(
     client: &BigQueryClient,
     path: &'static str,
@@ -66,7 +72,8 @@ where
         grpc.ready()
             .await
             .map_err(|error| ApiError::Transport(error.to_string()))?;
-        let request = authorized(message.clone(), &token, params)?;
+        let mut request = authorized(message.clone(), &token, params)?;
+        request.set_timeout(GRPC_UNARY_TIMEOUT);
         let answer = grpc
             .unary(
                 request,

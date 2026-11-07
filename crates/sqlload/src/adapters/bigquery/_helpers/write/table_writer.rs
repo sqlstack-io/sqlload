@@ -34,7 +34,10 @@ impl TableWriter for BigQueryWriter {
             .as_deref()
             .unwrap_or(&self.destination.project);
         self.parent = table_path(project, &table.schema, &table.table);
-        let columns = target.columns.to_vec();
+        let columns = match target.builds {
+            true => target.write_columns.to_vec(),
+            false => target.columns.to_vec(),
+        };
         let requests = tokio::task::spawn_blocking(move || {
             append_requests(&write_api_batch(&batch, &columns)?, APPEND_REQUEST_BYTES)
         })
@@ -91,16 +94,15 @@ impl TableWriter for BigQueryWriter {
 }
 
 impl BigQueryWriter {
-    /// Send one request of `rows` rows to the batch's next stream in turn, opening it with the writer schema on its first request; a stream the server has ended fails with the error it gave.
+    /// Send one request of `rows` rows to the batch's next stream in turn, opening it with the writer schema on its first request; a stream whose answers already failed, or that the server has ended, fails with the error it gave instead of taking more rows.
     async fn send(
         &mut self,
         mut request: AppendRowsRequest,
         rows: usize,
     ) -> Result<(), LoaderError> {
         let index = self.requests_sent % STREAMS_PER_BATCH;
-        self.requests_sent += 1;
         let rows = i64::try_from(rows).map_err(|error| LoaderError::Invalid(error.to_string()))?;
-        if index == self.streams.len() {
+        if index >= self.streams.len() {
             let stream = create_write_stream(&self.destination.api, &self.parent).await?;
             request.write_stream.clone_from(&stream.name);
             request.offset = Some(Int64Value { value: 0 });
@@ -111,9 +113,23 @@ impl BigQueryWriter {
                 requests: Some(opened.requests),
                 answers: Some(tokio::spawn(read_answers(opened.responses))),
             });
+            self.requests_sent += 1;
             return Ok(());
         }
+        self.requests_sent += 1;
         let stream = &mut self.streams[index];
+        if stream
+            .answers
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+        {
+            let answers = stream.answers.take();
+            return Err(match answers {
+                Some(answers) => ended(answers.await),
+                None => ApiError::Protocol("the append stream was already closed".to_owned()),
+            }
+            .into());
+        }
         request.write_stream.clone_from(&stream.name);
         request.offset = Some(Int64Value {
             value: stream.offset,

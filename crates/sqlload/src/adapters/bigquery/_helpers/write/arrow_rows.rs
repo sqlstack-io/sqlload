@@ -15,36 +15,39 @@ use crate::schema_plan::models::DesiredColumn;
 
 /// The Arrow type the Write API reads into a column of `column_type`, given the type the rows arrived as, or why it cannot load it yet.
 fn write_api_type(column_type: &ColumnType, arrived: &DataType) -> Result<DataType, String> {
-    let supported = match column_type {
-        ColumnType::Bool => Some(DataType::Boolean),
-        ColumnType::SmallInt | ColumnType::Int => Some(DataType::Int64),
+    if arrived.is_nested() {
+        return Err("nested values are not streamed".to_owned());
+    }
+    Ok(match column_type {
+        ColumnType::Bool => DataType::Boolean,
+        ColumnType::SmallInt | ColumnType::Int => DataType::Int64,
         ColumnType::Decimal { precision, scale } => {
             let (precision, scale, big) = decimal_digits(*precision, *scale);
             let scale = i8::try_from(scale)
                 .map_err(|_| format!("a decimal scale of {scale} has no Arrow type"))?;
-            Some(match big {
+            match big {
                 true => DataType::Decimal256(precision, scale),
                 false => DataType::Decimal128(precision, scale),
-            })
+            }
         }
-        ColumnType::Float => Some(DataType::Float64),
+        ColumnType::Float => DataType::Float64,
         ColumnType::Text | ColumnType::Varchar(_) | ColumnType::Uuid | ColumnType::Json => {
-            Some(DataType::Utf8)
+            DataType::Utf8
         }
-        ColumnType::Date => Some(DataType::Date32),
-        ColumnType::Time => Some(DataType::Time64(TimeUnit::Microsecond)),
-        ColumnType::TimestampTz => Some(DataType::Timestamp(
-            TimeUnit::Microsecond,
-            Some("UTC".into()),
-        )),
-        ColumnType::TimestampNtz => Some(DataType::Timestamp(TimeUnit::Microsecond, None)),
-        ColumnType::Binary => Some(DataType::Binary),
-        ColumnType::Native(_) => (!arrived.is_nested()).then(|| arrived.clone()),
-    };
-    supported.ok_or_else(|| "nested values are not streamed".to_owned())
+        ColumnType::Date => DataType::Date32,
+        ColumnType::Time => DataType::Time64(TimeUnit::Microsecond),
+        ColumnType::TimestampTz => DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        ColumnType::TimestampNtz => DataType::Timestamp(TimeUnit::Microsecond, None),
+        ColumnType::Binary => DataType::Binary,
+        ColumnType::Native(_) => match arrived {
+            DataType::LargeUtf8 | DataType::Utf8View | DataType::Dictionary(_, _) => DataType::Utf8,
+            DataType::LargeBinary | DataType::BinaryView => DataType::Binary,
+            other => other.clone(),
+        },
+    })
 }
 
-/// `batch` in the Arrow types the Write API reads for `columns`, matched by name, every field nullable and without metadata; a value that does not fit its column is an error, never a silent NULL.
+/// `batch` in the Arrow types the Write API reads for `columns`, matched by name, every field nullable and without metadata; a batch field that is not among `columns` (one a build table leaves out) is not sent, and a value that does not fit its column is an error, never a silent NULL.
 pub(crate) fn write_api_batch(
     batch: &RecordBatch,
     columns: &[DesiredColumn],
@@ -53,14 +56,14 @@ pub(crate) fn write_api_batch(
         safe: false,
         ..CastOptions::default()
     };
+    let schema = batch.schema();
     let mut fields: Vec<Field> = Vec::with_capacity(batch.num_columns());
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
-    for (field, array) in batch.schema().fields().iter().zip(batch.columns()) {
+    for (field, array) in schema.fields().iter().zip(batch.columns()) {
         let name = field.name();
-        let column = columns
-            .iter()
-            .find(|column| &column.name == name)
-            .ok_or_else(|| format!("column {name} is not among the table's planned columns"))?;
+        let Some(column) = columns.iter().find(|column| &column.name == name) else {
+            continue;
+        };
         let target = write_api_type(&column.column_type, field.data_type()).map_err(|reason| {
             format!(
                 "column {name} ({}) cannot load into BigQuery yet: {reason}",
@@ -76,13 +79,19 @@ pub(crate) fn write_api_batch(
     RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|error| error.to_string())
 }
 
-/// `batch` cut into append requests of at most `max_bytes` each, every one carrying the writer schema and no stream yet, with its rows; a single row larger than `max_bytes` goes alone, for BigQuery to refuse by name.
+/// `batch` cut into append requests of at most `max_bytes` each (sized by the rows it holds, not the buffers a slice shares), every one carrying the writer schema and no stream yet, with its rows; a single row larger than `max_bytes` goes alone, for BigQuery to refuse by name.
 pub(crate) fn append_requests(
     batch: &RecordBatch,
     max_bytes: usize,
 ) -> Result<Vec<(AppendRowsRequest, usize)>, String> {
     let rows = batch.num_rows();
-    let memory = batch.get_array_memory_size().max(1);
+    let memory = batch
+        .columns()
+        .iter()
+        .map(|column| column.to_data().get_slice_memory_size())
+        .sum::<Result<usize, _>>()
+        .map_err(|error| error.to_string())?
+        .max(1);
     let mut step = (rows.saturating_mul(max_bytes) / memory).clamp(1, rows.max(1));
     let mut requests: Vec<(AppendRowsRequest, usize)> = Vec::new();
     let mut start = 0;

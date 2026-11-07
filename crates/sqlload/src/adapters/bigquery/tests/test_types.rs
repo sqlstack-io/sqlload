@@ -17,6 +17,8 @@ pub(crate) struct AppendRequestsTestCase {
     /// Ids 0 to `rows - 1`, each with a note of `note_bytes` characters.
     pub(crate) rows: i64,
     pub(crate) note_bytes: usize,
+    /// The first rows of the batch that are cut, as a slice sharing its buffers.
+    pub(crate) sliced_rows: usize,
     pub(crate) max_bytes: usize,
     /// Every request at most `max_bytes` once encoded.
     pub(crate) expected_within_limit: bool,

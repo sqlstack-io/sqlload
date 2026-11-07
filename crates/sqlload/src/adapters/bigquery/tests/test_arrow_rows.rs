@@ -107,6 +107,26 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
             )])?,
             expected_batch: Err("column tags (List(Int64)) cannot load into BigQuery yet"),
         },
+        WriteApiBatchTestCase {
+            description: "a nested value is refused even for a text column, which a cast would turn into display text",
+            columns: vec![desired("tags", ColumnType::Text)],
+            batch: batch_of(vec![(
+                "tags",
+                Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                    Some(vec![Some(1)]),
+                ])),
+            )])?,
+            expected_batch: Err("column tags (List(Int64)) cannot load into BigQuery yet"),
+        },
+        WriteApiBatchTestCase {
+            description: "a field the columns leave out (one a build table does not have) is not sent; large text in a native column goes as Utf8",
+            columns: vec![desired("code", ColumnType::Native("STRING".to_owned()))],
+            batch: batch_of(vec![
+                ("code", Arc::new(LargeStringArray::from(vec!["a"]))),
+                ("ignored", Arc::new(Int64Array::from(vec![7]))),
+            ])?,
+            expected_batch: Ok("code: Utf8 = a"),
+        },
     ];
     for test_case in test_cases {
         let prepared = write_api_batch(&test_case.batch, &test_case.columns)
@@ -133,6 +153,7 @@ fn given_a_batch_when_cutting_it_into_append_requests_then_each_fits_and_every_r
             description: "a batch larger than one request is cut into requests under the limit, in order",
             rows: 2000,
             note_bytes: 20,
+            sliced_rows: 2000,
             max_bytes: 8 * 1024,
             expected_within_limit: true,
             expected_split: true,
@@ -142,6 +163,7 @@ fn given_a_batch_when_cutting_it_into_append_requests_then_each_fits_and_every_r
             description: "a batch under the limit is one request",
             rows: 10,
             note_bytes: 20,
+            sliced_rows: 10,
             max_bytes: 8 * 1024,
             expected_within_limit: true,
             expected_split: false,
@@ -151,15 +173,36 @@ fn given_a_batch_when_cutting_it_into_append_requests_then_each_fits_and_every_r
             description: "a row larger than the limit goes alone, for BigQuery to refuse",
             rows: 1,
             note_bytes: 10_000,
+            sliced_rows: 1,
             max_bytes: 8 * 1024,
             expected_within_limit: false,
             expected_split: false,
             expected_ids: "0..=0 (1)".to_owned(),
         },
+        AppendRequestsTestCase {
+            description: "a small slice of a large batch is one request, not cut by the size of the buffers it shares",
+            rows: 2000,
+            note_bytes: 20,
+            sliced_rows: 100,
+            max_bytes: 8 * 1024,
+            expected_within_limit: true,
+            expected_split: false,
+            expected_ids: "0..=99 (100)".to_owned(),
+        },
+        AppendRequestsTestCase {
+            description: "an empty batch is no request",
+            rows: 0,
+            note_bytes: 20,
+            sliced_rows: 0,
+            max_bytes: 8 * 1024,
+            expected_within_limit: true,
+            expected_split: false,
+            expected_ids: "-1..=-1 (0)".to_owned(),
+        },
     ];
     for test_case in test_cases {
         let requests = append_requests(
-            &noted_ids(test_case.rows, test_case.note_bytes)?,
+            &noted_ids(test_case.rows, test_case.note_bytes)?.slice(0, test_case.sliced_rows),
             test_case.max_bytes,
         )?;
         assert_eq!(
@@ -175,7 +218,7 @@ fn given_a_batch_when_cutting_it_into_append_requests_then_each_fits_and_every_r
                 test_case.expected_within_limit,
                 test_case.expected_split,
                 test_case.expected_ids,
-                usize::try_from(test_case.rows).map_err(|error| error.to_string())?,
+                test_case.sliced_rows,
             ),
             "{}",
             test_case.description

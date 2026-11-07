@@ -294,6 +294,18 @@ fn given_a_live_bigquery_dataset_when_loading_each_strategy_then_rows_land_and_n
             ..LIVE_APPEND
         },
         LiveBigQueryLoadTestCase {
+            description: "replace without a column the files carry",
+            source: "orders_ignored",
+            settings: "write_strategy = \"replace\"\nexclude_columns = [\"score\"]",
+            ..LIVE_APPEND
+        },
+        LiveBigQueryLoadTestCase {
+            description: "replace again ignoring the new column: the build table leaves it out, so its rows stream without it",
+            source: "orders_ignored",
+            settings: "write_strategy = \"replace\"\non_schema_change = \"ignore\"",
+            ..LIVE_APPEND
+        },
+        LiveBigQueryLoadTestCase {
             description: "delete_insert on the day partition",
             source: "orders_days",
             settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"",

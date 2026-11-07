@@ -123,6 +123,7 @@ fn write_target<'a>(
         table: &table.spec.destination,
         staging,
         columns,
+        write_columns: &table.schema.write_columns,
         load_id,
         batch,
         direct,
