@@ -744,6 +744,38 @@ pub(crate) struct CdcTlsTestCase {
     pub(crate) expected_result: &'static str,
 }
 
+/// A `debug` case through the SSH bastion.
+pub(crate) struct SshDebugTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    /// The database port as the bastion sees it; 5432 reaches the server.
+    pub(crate) port: u16,
+    pub(crate) user: &'static str,
+    /// The connection's TLS and `ssh` settings: `FILES` stands for the test certificates' folder, `KEYS` for the bastion's key files, `SSH_PORT` for its port.
+    pub(crate) settings: &'static str,
+    pub(crate) expected_status: &'static str,
+    pub(crate) expected_text: &'static str,
+}
+
+/// A `postgres_cdc` case through the SSH bastion.
+pub(crate) struct CdcSshTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    /// As in [`SshDebugTestCase::settings`].
+    pub(crate) settings: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
+/// A load through the bastion whose tunnel drops part way.
+pub(crate) struct TunnelDropTestCase {
+    pub(crate) description: &'static str,
+    /// How long into the load (or, following, after streaming starts) the bastion stops.
+    pub(crate) drop_after: std::time::Duration,
+    pub(crate) expected_success: bool,
+    /// Text the output holds; `SSH_PORT` stands for the bastion's port.
+    pub(crate) expected_text: &'static str,
+}
+
 /// A ClickHouse load stopped at every statement in turn, its source switching between two states.
 pub(crate) struct StoppedLoadTestCase {
     pub(crate) description: &'static str,

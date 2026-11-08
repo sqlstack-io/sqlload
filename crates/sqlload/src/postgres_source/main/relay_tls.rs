@@ -2,7 +2,6 @@
 
 use std::os::unix::fs::PermissionsExt;
 
-use tempfile::TempDir;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixListener};
 use tokio_rustls::TlsConnector;
@@ -11,23 +10,49 @@ use crate::postgres_source::_helpers::tls::client_config;
 use crate::postgres_source::constants::{RELAY_ACCEPT_TIMEOUT, SSL_REQUEST};
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::{PostgresAddress, SslMode};
+use crate::ssh_tunnel::main::open_channel::open_channel;
 
-/// When `address` may use TLS: a private socket folder whose `.s.PGSQL.<port>` socket carries the next session opened on it to the server, encrypted, or in plain text when the server refuses TLS under `prefer` (one connection either way, so the server logs no abandoned one). `None` to connect directly: `sslmode = "disable"`, a Unix socket host, or a failed handshake under `prefer`, which libpq also retries in plain text.
+/// When `address` may use TLS or goes through a bastion: a private socket folder whose `.s.PGSQL.<port>` socket carries the next session opened on it to the server, encrypted, or in plain text when the server refuses TLS under `prefer` (one connection either way, so the server logs no abandoned one). `None` to connect directly: `sslmode = "disable"`, a Unix socket host, or a failed handshake under `prefer`, which libpq also retries in plain text. Through a bastion it never connects directly: that retry opens a fresh channel.
 pub async fn relay_tls(address: &PostgresAddress<'_>) -> Result<Option<String>, PostgresError> {
+    let failed = |reason: String| PostgresError::Tls {
+        address: address.shown(),
+        reason,
+    };
+    if let Some(tunnel) = address.ssh {
+        if address.tls.mode != SslMode::Disable {
+            let server = open_channel(tunnel, address.host, address.port).await?;
+            if let Some(relayed) = negotiate(server, address).await? {
+                return Ok(Some(relayed));
+            }
+        }
+        let server = open_channel(tunnel, address.host, address.port).await?;
+        return Ok(Some(relay(server, address.port).map_err(failed)?));
+    }
     if address.tls.mode == SslMode::Disable || address.host.starts_with('/') {
         return Ok(None);
     }
-    let failed = |reason: String| PostgresError::Tls {
-        address: format!("{}:{}/{}", address.host, address.port, address.database),
-        reason,
-    };
-    let config = client_config(&address.tls).map_err(failed)?;
-    let mut server = TcpStream::connect((address.host, address.port))
+    let server = TcpStream::connect((address.host, address.port))
         .await
         .map_err(|error| failed(error.to_string()))?;
     server
         .set_nodelay(true)
         .map_err(|error| failed(error.to_string()))?;
+    negotiate(server, address).await
+}
+
+/// Ask `server` for TLS and relay the session it allows; `None` when the handshake failed under `prefer`.
+async fn negotiate<S>(
+    mut server: S,
+    address: &PostgresAddress<'_>,
+) -> Result<Option<String>, PostgresError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let failed = |reason: String| PostgresError::Tls {
+        address: address.shown(),
+        reason,
+    };
+    let config = client_config(&address.tls).map_err(failed)?;
     server
         .write_all(&SSL_REQUEST)
         .await
@@ -53,8 +78,8 @@ pub async fn relay_tls(address: &PostgresAddress<'_>) -> Result<Option<String>, 
     Ok(Some(relay(session, address.port).map_err(failed)?))
 }
 
-/// A folder only this user can enter (some systems ignore a socket's own permissions) whose `.s.PGSQL.<port>` socket pipes the first session opened on it through `server`.
-fn relay<S>(server: S, port: u16) -> Result<String, String>
+/// A folder only this user can enter (some systems ignore a socket's own permissions) whose `.s.PGSQL.<port>` socket pipes the first session opened on it through `server`; the folder and its socket go once it is accepted, or after [`RELAY_ACCEPT_TIMEOUT`] without one.
+fn relay<S>(mut server: S, port: u16) -> Result<String, String>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -66,19 +91,13 @@ where
     let listener = UnixListener::bind(folder.path().join(format!(".s.PGSQL.{port}")))
         .map_err(|error| error.to_string())?;
     let host = folder.path().to_string_lossy().into_owned();
-    tokio::spawn(relay_one(folder, listener, server));
+    tokio::spawn(async move {
+        let accepted = tokio::time::timeout(RELAY_ACCEPT_TIMEOUT, listener.accept()).await;
+        drop(listener);
+        drop(folder);
+        if let Ok(Ok((mut local, _))) = accepted {
+            let _ = tokio::io::copy_bidirectional(&mut local, &mut server).await;
+        }
+    });
     Ok(host)
-}
-
-/// Pipe the first session opened on `listener` through `server`; the folder and its socket go once it is accepted, or after [`RELAY_ACCEPT_TIMEOUT`] without one.
-async fn relay_one<S>(folder: TempDir, listener: UnixListener, mut server: S)
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    let accepted = tokio::time::timeout(RELAY_ACCEPT_TIMEOUT, listener.accept()).await;
-    drop(listener);
-    drop(folder);
-    if let Ok(Ok((mut local, _))) = accepted {
-        let _ = tokio::io::copy_bidirectional(&mut local, &mut server).await;
-    }
 }

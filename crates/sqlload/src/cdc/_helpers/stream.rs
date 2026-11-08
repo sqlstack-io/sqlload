@@ -54,6 +54,7 @@ use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::main::postgres_address::postgres_address;
 use crate::project::models::{SourceConfig, TargetConfig};
 use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_PREFIX, CDC_UNCHANGED_COLUMN};
+use crate::ssh_tunnel::main::tunnel_closed::tunnel_closed;
 
 /// How often the replication session reports the confirmed position.
 const STATUS_INTERVAL: Duration = Duration::from_millis(100);
@@ -120,6 +121,19 @@ impl CdcSource<'_> {
     /// The source's Postgres connection settings.
     fn address(&self) -> Result<PostgresAddress<'_>, LoaderError> {
         postgres_address(self.run.project, &self.source.connection).map_err(LoaderError::Invalid)
+    }
+
+    /// Why reading the replication stream failed: the tunnel when the source goes through a bastion whose session closed (the relay hides that behind a plain end of stream), else `error`.
+    fn stream_failure(&self, error: impl std::fmt::Display) -> LoaderError {
+        match self.address() {
+            Ok(PostgresAddress {
+                ssh: Some(tunnel), ..
+            }) if tunnel_closed(tunnel) => replication(format!(
+                "the SSH tunnel through {} closed ({error})",
+                tunnel.route()
+            )),
+            _ => replication(error),
+        }
     }
 
     /// A control connection to the source.
@@ -513,7 +527,7 @@ impl CdcSource<'_> {
                 crash_point("backfill-before-stream");
                 let session = ReplicationClient::connect(self.replication_config().await?)
                     .await
-                    .map_err(replication)?;
+                    .map_err(|error| self.stream_failure(error))?;
                 (session, copied)
             }
             None => {
@@ -610,7 +624,7 @@ impl CdcSource<'_> {
         crash_point("backfill-after-publication");
         let mut session = ReplicationClient::connect_gated(self.replication_config().await?)
             .await
-            .map_err(replication)?;
+            .map_err(|error| self.stream_failure(error))?;
         let name: String = self
             .cdc
             .slot
@@ -674,7 +688,7 @@ impl CdcSource<'_> {
         let mut rows: BTreeMap<String, u64> = BTreeMap::new();
         let mut session = ReplicationClient::connect_gated(self.replication_config().await?)
             .await
-            .map_err(replication)?;
+            .map_err(|error| self.stream_failure(error))?;
         let created = session
             .simple_query(&format!(
                 "CREATE_REPLICATION_SLOT {} LOGICAL pgoutput (SNAPSHOT 'export')",
@@ -718,8 +732,14 @@ impl CdcSource<'_> {
                 .await?,
         );
         client.batch_execute("COMMIT").await.map_err(postgres)?;
-        session.start().await.map_err(replication)?;
-        session.wait_started().await.map_err(replication)?;
+        session
+            .start()
+            .await
+            .map_err(|error| self.stream_failure(error))?;
+        session
+            .wait_started()
+            .await
+            .map_err(|error| self.stream_failure(error))?;
         Ok((session, rows))
     }
 
@@ -809,14 +829,19 @@ impl CdcSource<'_> {
                     biased;
                     () = follow.cancelled() => FollowStep::Stop,
                     () = tokio::time::sleep_until(deadline) => FollowStep::Tick,
-                    event = stream.recv() => FollowStep::Event(event.map_err(replication)?),
+                    event = stream.recv() => FollowStep::Event(event.map_err(|error| self.stream_failure(error))?),
                 },
-                _ => FollowStep::Event(stream.recv().await.map_err(replication)?),
+                _ => FollowStep::Event(
+                    stream
+                        .recv()
+                        .await
+                        .map_err(|error| self.stream_failure(error))?,
+                ),
             };
             let event = match next {
                 FollowStep::Event(Some(event)) => event,
                 FollowStep::Event(None) => {
-                    return Err(replication(match stop {
+                    return Err(self.stream_failure(match stop {
                         Some(_) => "the stream ended before the load caught up",
                         None => "the stream ended while following",
                     }));

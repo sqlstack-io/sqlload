@@ -109,6 +109,19 @@ pub struct PostgresAddress<'a> {
     pub password: Option<&'a str>,
     pub database: &'a str,
     pub tls: PostgresTls<'a>,
+    /// The bastion `host` is reached through; `host` and `port` are then as the bastion sees them.
+    pub ssh: Option<&'a crate::ssh_tunnel::models::SshTunnel>,
+}
+
+impl PostgresAddress<'_> {
+    /// The address as errors show it: `host:port/database`, and the bastion it goes through.
+    pub fn shown(&self) -> String {
+        let route = self
+            .ssh
+            .map(|tunnel| format!(" via {}", tunnel.route()))
+            .unwrap_or_default();
+        format!("{}:{}/{}{route}", self.host, self.port, self.database)
+    }
 }
 
 /// How a connection uses TLS, under libpq's names.

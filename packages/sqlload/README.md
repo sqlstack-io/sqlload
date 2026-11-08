@@ -287,6 +287,32 @@ sslrootcert = "certs/db-ca.pem"        # CA certificates (PEM) to trust
 - `sqlload debug` shows what protects each Postgres source and target: `not encrypted`,
   `TLS, certificate not checked`, `TLS, CA checked` or `TLS, CA and host name checked`.
 
+## SSH tunnels
+
+A Postgres connection reaches a database behind a bastion through an `ssh` table; `host` and
+`port` are then the database as the bastion sees it:
+
+```toml
+[connections.app_pg]
+kind = "postgres"
+host = "db.internal"
+user = "loader"
+password = "${ENV:PGPASSWORD}"
+database = "app"
+ssh = { host = "bastion.example.com", user = "deploy", private_key_file = "~/.ssh/id_ed25519" }
+# ssh also takes port (22), private_key_passphrase and known_hosts (~/.ssh/known_hosts)
+```
+
+- SQLLoad opens the tunnel itself (no `ssh` program needed), one session per bastion per run
+  shared by every table, and opens no local TCP port. Replication sessions go through it too,
+  by a Unix socket in a folder only your user can enter. Python sources get no tunnel.
+- It signs in with `private_key_file`, or with ssh-agent's keys when no file is set; not with a
+  password. The bastion's host key must be in `known_hosts`: an unknown or changed key fails
+  with its SHA256 fingerprint and the fix, and is never accepted on first use.
+- TLS runs end to end with the database, so `verify-full` checks the database's name.
+- Keepalives every 15 seconds; a dropped tunnel fails the table with an error naming it.
+- `sqlload debug` says which hop failed, and `plan` shows `via ssh user@bastion:port`.
+
 ## Postgres change data capture
 
 `kind = "postgres_cdc"` streams a Postgres database's changes from a logical replication slot

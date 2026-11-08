@@ -45,6 +45,7 @@ pub mod sheets_source;
 pub mod similar_names;
 pub mod snowflake_source;
 pub mod sql_api;
+pub mod ssh_tunnel;
 pub mod stage_api;
 pub mod status;
 pub mod store_paths;

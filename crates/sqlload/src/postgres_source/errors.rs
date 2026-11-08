@@ -8,6 +8,8 @@ pub enum PostgresError {
         address: String,
         source: tokio_postgres::Error,
     },
+    #[error(transparent)]
+    Ssh(#[from] crate::ssh_tunnel::errors::SshError),
     #[error("cannot set up TLS for Postgres at {address}: {reason}")]
     Tls { address: String, reason: String },
     #[error("Postgres query failed: {}", server_reason(.0))]

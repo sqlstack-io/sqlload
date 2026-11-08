@@ -114,6 +114,8 @@ pub struct TableSpec {
     pub sheet: Option<crate::sheets_source::models::SheetRead>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
+    /// The bastion a Postgres source is reached through, as `ssh user@host:port`.
+    pub tunnel: Option<String>,
     /// The checks its staged rows must pass before they are published (the table's own, else its source's).
     pub checks: Option<TableChecks>,
     /// How a warehouse source's table is read; `None` for other sources.

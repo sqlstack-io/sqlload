@@ -1749,17 +1749,29 @@ pub(crate) fn spawn_sqlload(
         .map_err(|error| error.to_string())
 }
 
-/// Send `signal` (as `kill` takes it, such as `-TERM`; `-0` sends none) to `child`, then wait for it to exit: whether it succeeded, and its output.
+/// How long [`stop_sqlload`] waits before killing a run that has not exited, so a hang fails with its output.
+const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Send `signal` (as `kill` takes it, such as `-TERM`; `-0` sends none) to `child`, then wait for it to exit, killing it after `STOP_DEADLINE`: whether it succeeded, and its output.
 pub(crate) async fn stop_sqlload(
     child: std::process::Child,
     signal: &str,
 ) -> Result<(bool, String), String> {
+    let pid = child.id().to_string();
     let _ = std::process::Command::new("kill")
         .arg(signal)
-        .arg(child.id().to_string())
+        .arg(&pid)
         .status();
-    let output = tokio::task::spawn_blocking(move || child.wait_with_output())
-        .await
+    let deadline = tokio::spawn(async move {
+        tokio::time::sleep(STOP_DEADLINE).await;
+        let _ = std::process::Command::new("kill")
+            .arg("-KILL")
+            .arg(pid)
+            .status();
+    });
+    let waited = tokio::task::spawn_blocking(move || child.wait_with_output()).await;
+    deadline.abort();
+    let output = waited
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
     let text = format!(
@@ -1832,4 +1844,16 @@ pub(crate) async fn bridge_address(
         .await
         .map(|ip| ip.to_string())
         .map_err(|error| error.to_string())
+}
+
+/// `settings` with its placeholders filled: `SSH_PORT` and `KEYS` for `bastion`'s port and key files, `FILES` for the test certificates' folder `files`.
+pub(crate) fn ssh_settings(
+    settings: &str,
+    bastion: &sqlload_testkit::ssh::models::Bastion,
+    files: &str,
+) -> String {
+    settings
+        .replace("SSH_PORT", &bastion.port.to_string())
+        .replace("KEYS", &bastion.files.path().display().to_string())
+        .replace("FILES", files)
 }
