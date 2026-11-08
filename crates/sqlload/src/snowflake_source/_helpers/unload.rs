@@ -30,15 +30,15 @@ pub(crate) fn copy_statement(folder: &UnloadFolder, query: &str) -> (String, Str
     )
 }
 
-/// The `rows_unloaded` a `COPY INTO` reports; 0 when it reports none.
+/// The `rows_unloaded` a `COPY INTO` reports.
 pub(crate) fn rows_unloaded(result: &SqlRows) -> Result<u64, SnowflakeSourceError> {
-    let Some(count) = result
+    let count = result
         .rows
         .first()
         .and_then(|row| result.value(row, "rows_unloaded"))
-    else {
-        return Ok(0);
-    };
+        .ok_or_else(|| {
+            SnowflakeSourceError::Invalid("COPY INTO reported no rows_unloaded".to_owned())
+        })?;
     count.parse::<u64>().map_err(|error| {
         SnowflakeSourceError::Invalid(format!(
             "COPY INTO reported rows_unloaded {count:?}: {error}"
@@ -54,7 +54,7 @@ pub(crate) async fn read_unloaded(
     on_batch: &mut impl AsyncFnMut(RecordBatch) -> Result<(), String>,
 ) -> Result<u64, SnowflakeSourceError> {
     let mut fetched = futures_util::stream::iter(0..files.len())
-        .map(|index| async move { (index, files.fetch(&reader.http, index).await) })
+        .map(|index| async move { (index, files.fetch(reader, index).await) })
         .buffered(PARALLEL_DOWNLOADS);
     let mut rows: u64 = 0;
     while let Some((index, bytes)) = fetched.next().await {

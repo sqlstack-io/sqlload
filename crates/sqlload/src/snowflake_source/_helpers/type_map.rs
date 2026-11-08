@@ -1,7 +1,7 @@
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
 use crate::column_types::models::ColumnType;
 use crate::snowflake_source::constants::{
-    LONGEST_INT_DIGITS, LONGEST_VARCHAR, TIME_ZERO, UNLOAD_INTEGER,
+    LONGEST_INT_DIGITS, LONGEST_VARCHAR, TIME_ZERO, UNLOAD_BIGINT, UNLOAD_INTEGER,
 };
 
 /// A Snowflake type family, which decides how a column unloads.
@@ -131,7 +131,7 @@ pub(crate) fn unload_expression(
             format!("CONVERT_TIMEZONE('UTC', {quoted})::DATE")
         }
         (ColumnType::Int | ColumnType::SmallInt, Family::Number { scale: 0, .. }) => {
-            format!("{quoted}::{UNLOAD_INTEGER}")
+            format!("{quoted}::{UNLOAD_BIGINT}")
         }
         (ColumnType::Decimal { precision, scale }, Family::Number { .. } | Family::Float) => {
             format!("{quoted}::NUMBER({precision},{scale})")

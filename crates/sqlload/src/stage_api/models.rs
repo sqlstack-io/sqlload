@@ -85,6 +85,8 @@ pub struct StageInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageDownloads {
     pub target: ObjectTarget,
+    /// When the target's temporary credentials expire, in milliseconds since the epoch.
+    pub credentials_expire_ms: Option<i64>,
     pub files: Vec<StageFile>,
 }
 

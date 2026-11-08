@@ -70,7 +70,8 @@ Loads (2)                                           sqlload load
 
 `include` and `exclude` are `SCHEMA.TABLE` patterns of the connection's database, matched without
 regard to case (`*` matches any text). Views match too. A `[sources.shop.tables."SCHEMA.TABLE"]`
-entry sets options for one table; on its own, it doesn't add the table.
+entry sets options for one table; on its own, it doesn't add the table. Write its key as Snowflake
+stores the name, normally in upper case.
 
 A source needs at least one `include` pattern or one query table.
 
@@ -100,8 +101,9 @@ ahead on every run, which suits tables whose rows change for a while and include
 Use `write_strategy = "delete_insert"` with them, so each run replaces the whole window.
 
 Days are counted in UTC. The first run reads the same window. `--start-cursor` and `--end-cursor`
-override it for one run. `--reload` rebuilds the table from the first row up to the lookahead. A
-files target takes neither setting: its window follows its newest partition.
+override it for one run. `--reload` rebuilds the table from `cursor_start`, or from the first row,
+up to the lookahead. A files target takes neither setting: its window follows its newest
+partition.
 
 ## Where the files go
 
@@ -111,9 +113,14 @@ files target takes neither setting: its window follows its newest partition.
 | `{ url = "s3://example-bucket/unload/", storage_integration = "S3_UNLOAD", region = "eu-west-2" }` | That S3 folder, through the storage integration | The S3 credentials in its environment |
 | `{ name = "ANALYTICS.SHOP.UNLOAD_STAGE" }` | That stage, internal or external on S3 | As for the rows above |
 
+The user stage and other internal stages work on Snowflake accounts hosted on AWS. A named internal
+stage must use Snowflake's default client-side encryption; one created with
+`ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')` is refused when the table loads.
+
 Each read unloads into a folder of its own, which SQLLoad removes after the read, when the read
-fails too. A run that is killed can leave its folder behind; remove such folders with `REMOVE`, or
-with a lifecycle rule on the bucket.
+fails too. A read fails when the files hold a different number of rows than `COPY INTO` reports.
+A run that is killed can leave its folder behind; remove such folders with `REMOVE`, or with a
+lifecycle rule on the bucket.
 
 With an external stage, SQLLoad needs to list, read and delete objects under the folder. The
 storage integration must allow Snowflake to write there.

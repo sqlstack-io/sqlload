@@ -102,6 +102,7 @@ pub(crate) fn parse_stage_downloads(data: &Value) -> Result<StageDownloads, Stri
         .collect::<Result<Vec<StageFile>, String>>()?;
     Ok(StageDownloads {
         target: stage.target,
+        credentials_expire_ms: stage.credentials_expire_ms,
         files,
     })
 }

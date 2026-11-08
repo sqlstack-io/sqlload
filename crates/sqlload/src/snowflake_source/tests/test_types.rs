@@ -41,3 +41,12 @@ pub(crate) struct ConvertBatchTestCase {
     /// Each value as text (NULL as empty), or the error.
     pub(crate) expected_values: Result<Vec<&'static str>, &'static str>,
 }
+
+pub(crate) struct RowsUnloadedTestCase {
+    pub(crate) description: &'static str,
+    /// The `COPY INTO` result's columns and first row.
+    pub(crate) columns: &'static [&'static str],
+    pub(crate) row: &'static [Option<&'static str>],
+    /// The row count, or the error.
+    pub(crate) expected_rows: Result<u64, &'static str>,
+}

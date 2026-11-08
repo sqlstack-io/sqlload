@@ -10,6 +10,9 @@ pub const TIME_ZERO: &str = "'00:00:00'::TIME";
 /// The type times and timestamps unload as: whole microseconds.
 pub const UNLOAD_INTEGER: &str = "NUMBER(18,0)";
 
+/// The type an `int` column unloads as: wide enough for every 64-bit integer, which SQLLoad checks as it reads.
+pub const UNLOAD_BIGINT: &str = "NUMBER(19,0)";
+
 /// The user stage folder unloads go to when the source sets no `stage`.
 pub const USER_STAGE_FOLDER: &str = "@~/sqlload_unload/";
 
@@ -31,3 +34,9 @@ pub const CATALOG_NOT_NULL: &str = "NO";
 
 /// `DESCRIBE RESULT`'s `null?` for a column that cannot be NULL.
 pub const DESCRIBED_NOT_NULL: &str = "N";
+
+/// `SHOW STAGES`'s type of an internal stage with client-side encryption; other internal types start with it.
+pub const INTERNAL_STAGE: &str = "INTERNAL";
+
+/// The S3 statuses for temporary credentials that have expired.
+pub const EXPIRED_CREDENTIALS: [u16; 2] = [400, 403];

@@ -17,7 +17,7 @@ fn given_a_table_or_query_when_unloading_then_each_column_is_selected_by_its_sno
             filter: Some("\"SEEN_AT\" >= '2026-11-01'"),
             pinned: &[],
             expected_query: Ok(
-                "SELECT \"EVENT_ID\"::NUMBER(18,0) AS \"event_id\", \"MixedCase\" AS \"MixedCase\", \
+                "SELECT \"EVENT_ID\"::NUMBER(19,0) AS \"event_id\", \"MixedCase\" AS \"MixedCase\", \
 DATE_PART(EPOCH_MICROSECOND, \"SEEN_AT\")::NUMBER(18,0) AS \"seen_at\" \
 FROM \"MARTS\".\"EVENTS\" WHERE \"SEEN_AT\" >= '2026-11-01'",
             ),
@@ -28,7 +28,7 @@ FROM \"MARTS\".\"EVENTS\" WHERE \"SEEN_AT\" >= '2026-11-01'",
             filter: None,
             pinned: &[("seen_at", ColumnType::Date)],
             expected_query: Ok(
-                "SELECT \"EVENT_ID\"::NUMBER(18,0) AS \"event_id\", \"MixedCase\" AS \"MixedCase\", \
+                "SELECT \"EVENT_ID\"::NUMBER(19,0) AS \"event_id\", \"MixedCase\" AS \"MixedCase\", \
 CONVERT_TIMEZONE('UTC', \"SEEN_AT\")::DATE AS \"seen_at\" \
 FROM (SELECT * FROM MARTS.EVENTS -- all of it\n)",
             ),
