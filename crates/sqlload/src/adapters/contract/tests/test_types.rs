@@ -1,7 +1,7 @@
 use crate::column_types::models::Warehouse;
 use std::time::Duration;
 
-use crate::adapters::contract::models::{CursorValue, WriteMode};
+use crate::adapters::contract::models::{CursorValue, NowShift, WriteMode};
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit};
 
 pub(crate) struct WriteStatementsTestCase {
@@ -123,4 +123,12 @@ pub(crate) struct ContractTestCase {
     pub(crate) built: bool,
     /// How many statements copy rows out of the staging table.
     pub(crate) expected_copies: usize,
+}
+
+pub(crate) struct CursorFromNowTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) column_type: ColumnType,
+    pub(crate) shift: NowShift,
+    /// The cursor text, or text the error contains.
+    pub(crate) expected_text: Result<&'static str, &'static str>,
 }

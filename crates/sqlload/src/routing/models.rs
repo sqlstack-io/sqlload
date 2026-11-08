@@ -69,7 +69,7 @@ pub struct ReaderOffer {
     pub unload_to: Vec<Store>,
     /// The data's estimated size, when the source knows it.
     pub estimated_bytes: Option<u64>,
-    /// Why the destination cannot load `existing_files` exactly by reading them itself.
+    /// Why the destination cannot load `existing_files`, or the files a warehouse source unloads, exactly by reading them itself.
     pub direct_blocked: Option<String>,
     /// Why SQLLoad must read `existing_files` itself even where the destination could: the only case is `hmac` masking, whose key must never appear in SQL.
     pub needs_loader: Option<String>,

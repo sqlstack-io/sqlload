@@ -15,6 +15,8 @@ pub struct SourceColumn {
     /// The portable type it maps to, or why it has none (then a type must be pinned).
     pub column_type: Result<ColumnType, String>,
     pub nullable: bool,
+    /// The name as the source's own SQL spells it, when it differs from `name` (a Snowflake upper-case name loads in lower case).
+    pub source_spelling: Option<String>,
 }
 
 /// One source table or view, as the catalog describes it.

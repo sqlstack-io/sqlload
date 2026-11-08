@@ -20,7 +20,7 @@
 </p>
 
 SQLLoad loads Postgres tables, files and Python sources into Snowflake, Databricks, BigQuery
-(preview), DuckDB or Parquet files. `sqlload plan` shows every table, column type, write strategy and route before
+(preview), DuckDB, Postgres or Parquet files. `sqlload plan` shows every table, column type, write strategy and route before
 anything is created or loaded. Where Snowflake or DuckDB can load your files exactly by itself,
 the files never pass through SQLLoad. It is written in Rust and is open source under Apache-2.0;
 Python is needed only for Python sources.
@@ -78,9 +78,10 @@ Add `--print-toml` to print the same copy as a `sqlload.toml` project, which loa
 | Sources | Targets |
 |---------|---------|
 | Postgres tables, and Postgres changes from a logical replication slot | Snowflake |
-| Parquet, CSV, JSON and NDJSON files in S3 or a local folder | Databricks |
-| Python sources, including HTTP APIs | BigQuery (preview) |
-| | DuckDB |
+| Snowflake tables and query results | Databricks |
+| Parquet, CSV, JSON and NDJSON files in S3 or a local folder | BigQuery (preview) |
+| Python sources, including HTTP APIs | DuckDB |
+| | Postgres |
 | | Parquet files in S3 or a local folder |
 
 See [Supported systems](https://sqlload.io/docs/supported-systems/) for which combinations and

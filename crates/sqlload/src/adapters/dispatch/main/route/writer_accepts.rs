@@ -21,12 +21,13 @@ pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> 
             pull_formats: vec![FileFormat::Parquet],
             ..WriterAccepts::default()
         },
-        Destination::Files(_) | Destination::BigQuery(_) | Destination::ClickHouse(_) => {
-            WriterAccepts {
-                arrow: true,
-                ..WriterAccepts::default()
-            }
-        }
+        Destination::Files(_)
+        | Destination::BigQuery(_)
+        | Destination::Postgres(_)
+        | Destination::ClickHouse(_) => WriterAccepts {
+            arrow: true,
+            ..WriterAccepts::default()
+        },
         Destination::Snowflake(_) => snowflake_accepts(stage),
         Destination::Databricks(databricks) => databricks_accepts(databricks),
     }

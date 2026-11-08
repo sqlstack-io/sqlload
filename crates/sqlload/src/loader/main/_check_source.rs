@@ -2,9 +2,11 @@
 
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::probe_folder::probe_folder;
-use crate::loader::_helpers::sources::{connect_source, files_location};
+use crate::loader::_helpers::sources::{connect_source, files_location, open_source};
 use crate::loader::errors::LoaderError;
+use crate::loader::models::SourceReader;
 use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig, SourceKind};
+use crate::sql_api::main::execute_sql::execute_sql;
 
 /// What source `source` reads as, or why it cannot connect; for Postgres, what protects the connection and the bastion it goes through (a failure names the hop: the SSH tunnel, or the database via it).
 pub(in crate::loader) async fn check_source(
@@ -35,6 +37,23 @@ pub(in crate::loader) async fn check_source(
                 "{}, {encryption}{route}",
                 answer.split(" on ").next().unwrap_or_default()
             ))
+        }
+        SourceKind::Snowflake => {
+            let SourceReader::Snowflake(snowflake) = open_source(project, source, 1).await? else {
+                return Err(LoaderError::Invalid(
+                    "a snowflake source opens as a Snowflake reader".to_owned(),
+                ));
+            };
+            let answer = execute_sql(
+                &snowflake.sql,
+                "SELECT CURRENT_USER() || '@' || CURRENT_ACCOUNT() || ', warehouse ' || COALESCE(CURRENT_WAREHOUSE(), 'none') || ', Snowflake ' || CURRENT_VERSION()",
+            )
+            .await?;
+            Ok(answer
+                .rows
+                .first()
+                .and_then(|row| row.first().cloned().flatten())
+                .unwrap_or_default())
         }
         SourceKind::Files => {
             let folder = open_folder(&files_location(project, source)?)?;

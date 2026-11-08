@@ -7,7 +7,9 @@ use crate::loader::_helpers::specs::{
 };
 use crate::loader::models::{ResolvedTables, SkippedTable, TableSpec};
 use crate::postgres_source::models::SourceTable;
-use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig, TableOverride};
+use crate::project::models::{
+    ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride,
+};
 use crate::ssh_tunnel::models::SshTunnel;
 
 /// The specs for `discovered` tables of source `source_name`, with problems and skipped tables.
@@ -42,11 +44,15 @@ pub(crate) fn resolve_tables(
         };
         match resolve_table(&context, table, &overrides) {
             Ok(Ok(mut spec)) => {
-                spec.approved = !source.reads_postgres() || source.include.contains(&qualified);
+                let query = overrides.sql.is_some();
+                spec.approved =
+                    !source.discovers_tables() || query || source.include.contains(&qualified);
                 spec.tunnel = project
                     .connections
                     .get(&source.connection)
-                    .filter(|_| source.reads_postgres())
+                    .filter(|_| {
+                        matches!(source.kind, SourceKind::Postgres | SourceKind::PostgresCdc)
+                    })
                     .and_then(|connection| match connection {
                         ConnectionConfig::Postgres { ssh, .. } => {
                             ssh.as_ref().map(SshTunnel::route)

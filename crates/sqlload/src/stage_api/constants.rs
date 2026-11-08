@@ -9,3 +9,9 @@ pub const CREDENTIAL_MARGIN_MS: i64 = 5 * 60 * 1000;
 pub const HOST_HEADER: &str = "host";
 pub const BAD_REQUEST: u16 = 400;
 pub const NOT_FOUND: u16 = 404;
+/// The S3 metadata header holding an internal-stage file's wrapped key.
+pub const KEY_HEADER: &str = "x-amz-meta-x-amz-key";
+/// The S3 metadata header holding an internal-stage file's IV.
+pub const IV_HEADER: &str = "x-amz-meta-x-amz-iv";
+/// The S3 metadata header holding an internal-stage file's material description.
+pub const MATDESC_HEADER: &str = "x-amz-meta-x-amz-matdesc";
