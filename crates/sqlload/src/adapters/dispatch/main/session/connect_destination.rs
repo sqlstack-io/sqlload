@@ -82,10 +82,12 @@ fn files(
             bucket,
             region,
             endpoint,
+            profile,
         } => StoreKind::S3 {
             bucket: bucket.clone(),
             region: region.clone(),
             endpoint: endpoint.clone(),
+            profile: profile.clone(),
         },
         ConnectionConfig::Filesystem { root } => StoreKind::Filesystem { root: root.clone() },
         _ => return None,
@@ -94,6 +96,7 @@ fn files(
         connection: target.connection.clone(),
         store,
         max_footer_reads: target.footer_read_limit(),
+        encoding: target.output_encoding(),
     })))
 }
 

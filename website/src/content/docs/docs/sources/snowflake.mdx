@@ -6,7 +6,8 @@ description: "Load Snowflake tables and query results: choosing tables, query ta
 From sqlload 0.26.0, a Snowflake source loads tables and views of one
 database, and the results of queries you write.
 Snowflake unloads each read as Parquet with `COPY INTO`, and SQLLoad reads the files and loads
-them into the source's target.
+them into the source's target. From 0.27.0 (not released yet), a DuckDB target reads them from S3
+itself.
 
 ```toml
 [connections.warehouse]
@@ -111,7 +112,7 @@ partition.
 | `stage` | Snowflake writes to | SQLLoad reads with |
 |---------|---------------------|--------------------|
 | Omitted | A folder of your user stage, `@~/sqlload_unload/` | The temporary credentials Snowflake hands out, several files at a time |
-| `{ url = "s3://example-bucket/unload/", storage_integration = "S3_UNLOAD", region = "eu-west-2" }` | That S3 folder, through the storage integration | The S3 credentials in its environment |
+| `{ url = "s3://example-bucket/unload/", storage_integration = "S3_UNLOAD", region = "eu-west-2" }` | That S3 folder, through the storage integration | Its AWS credentials, found as for an [`s3` connection](/docs/configuration/#s3) (the shared credentials file from 0.27.0, not released yet) |
 | `{ name = "ANALYTICS.SHOP.UNLOAD_STAGE" }` | That stage, internal or external on S3 | As for the rows above |
 
 The user stage and other internal stages work on Snowflake accounts hosted on AWS. A named internal
@@ -125,6 +126,23 @@ lifecycle rule on the bucket.
 
 With an external stage, SQLLoad needs to list, read and delete objects under the folder. The
 storage integration must allow Snowflake to write there.
+
+### DuckDB reads the files itself
+
+From 0.27.0 (not released yet). With a stage given by `url` and a DuckDB target, DuckDB reads the unloaded files from S3 itself,
+so no rows pass through SQLLoad. `plan` shows it in the route:
+
+```text
+route   unload Parquet to s3://example-bucket/unload/ -> DuckDB reads them (nothing through the loader)
+```
+
+DuckDB uses the same S3 credentials as SQLLoad, and turns times and timestamps back exactly,
+whatever its session time zone. A load fails before it commits when DuckDB loads a different number
+of rows than `COPY INTO` reports, and the folder is removed either way. A table without a cursor
+commits once per run rather than about every 1 GB.
+
+SQLLoad reads the files instead, and `plan` says why, for a table with masked columns or checks
+before publish, for a stage given by `name`, and for targets other than DuckDB.
 
 ## Permissions
 

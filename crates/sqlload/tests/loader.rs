@@ -6,6 +6,8 @@ mod bigquery_helpers;
 mod clickhouse_helpers;
 #[path = "loader/databricks/helpers.rs"]
 mod databricks_helpers;
+#[path = "loader/files_target/helpers.rs"]
+mod files_target_helpers;
 #[path = "loader/helpers.rs"]
 mod helpers;
 #[cfg(feature = "odbc")]
@@ -56,6 +58,8 @@ mod test_postgres_to_duckdb;
 mod test_postgres_to_files;
 #[path = "loader/test_publish_checks.rs"]
 mod test_publish_checks;
+#[path = "loader/test_s3_profiles.rs"]
+mod test_s3_profiles;
 #[path = "loader/test_sheets_to_duckdb.rs"]
 mod test_sheets_to_duckdb;
 #[path = "loader/test_snowflake_routes.rs"]

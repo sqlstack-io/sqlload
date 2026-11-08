@@ -7,7 +7,7 @@ use crate::adapters::contract::models::TableShape;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::contract::models::WriteTarget;
-use crate::adapters::contract::models::{DirectBatch, DirectLoaded};
+use crate::adapters::contract::models::{DirectBatch, DirectLoaded, UnloadedBatch};
 use crate::adapters::contract::types::TableWriter;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
@@ -18,6 +18,7 @@ use crate::adapters::dispatch::main::session::table_destination::table_destinati
 use crate::adapters::dispatch::main::session::table_shape::table_shape;
 use crate::adapters::dispatch::main::write::file_keys::file_keys;
 use crate::adapters::dispatch::main::write::load_files::load_files;
+use crate::adapters::dispatch::main::write::load_unloaded::load_unloaded;
 use crate::adapters::dispatch::main::write::open_table_writer::open_table_writer;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::dispatch::models::Writer;
@@ -26,6 +27,7 @@ use crate::adapters::files::main::close_writer::close_writer;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::open_writer::open_writer;
 use crate::adapters::files::main::partitions_finished::partitions_finished;
+use crate::adapters::files::main::swap_folder::swap_folder;
 use crate::adapters::files::main::write_rows::write_rows;
 use crate::adapters::files::models::FilesWriter;
 use crate::adapters::files::models::PartitionFolder;
@@ -62,6 +64,7 @@ use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
+use crate::loader::_helpers::sources::unload_source;
 use crate::loader::_helpers::table_plan::source_filter;
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
@@ -72,6 +75,7 @@ use crate::loader::main::_files_repair::files_to_replace;
 use crate::loader::models::CommitRange;
 use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
+use crate::loader::models::FolderSwap;
 use crate::loader::models::Publisher;
 use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
@@ -92,6 +96,7 @@ use crate::schema_plan::constants::LOADED_AT_COLUMN;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
+use crate::snowflake_source::models::UnloadedFiles;
 use crate::store_paths::models::Location;
 use crate::table_lease::constants::LEASE_REFRESH;
 use crate::table_lease::main::keep_lease::keep_lease;
@@ -114,7 +119,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use crate::loader::_helpers::table_plan::is_direct;
+use crate::loader::_helpers::table_plan::{is_direct, pulls_unloaded};
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself).
 fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
@@ -212,18 +217,34 @@ impl Publisher {
         let load_id = uuid::Uuid::new_v4().to_string();
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
-                let folder = open_folder(&output.path.folder)?;
-                let lease = take_lease(&folder, &load_id, lease_now())
+                let live = open_folder(&output.path.folder)?;
+                let staged = output
+                    .path
+                    .staged_folder(&table.mode, &load_id)
+                    .map(|staged| open_folder(&staged))
+                    .transpose()?;
+                let lease = take_lease(&live, &load_id, lease_now())
                     .await?
                     .map_err(LoaderError::Invalid)?;
-                let replaced = match files_to_replace(&folder, &table, output).await {
+                let replaced = match files_to_replace(&live, &table, output).await {
                     Ok(replaced) => replaced,
                     Err(error) => {
-                        give_back(&folder, &lease).await;
+                        give_back(&live, &lease).await;
                         return Err(error);
                     }
                 };
-                let keeper = keep_in_background(&folder, &lease);
+                let keeper = keep_in_background(&live, &lease);
+                let (folder, replaced, swap) = match staged {
+                    Some(staged) => (
+                        staged,
+                        ReplacedFiles::default(),
+                        Some(FolderSwap {
+                            live,
+                            replaced: replaced.keys(&BTreeSet::new()).into_iter().collect(),
+                        }),
+                    ),
+                    None => (live, replaced, None),
+                };
                 Some(FilesSink {
                     output: output.clone(),
                     folder,
@@ -232,6 +253,7 @@ impl Publisher {
                     deleted: BTreeSet::new(),
                     lease,
                     keeper: Some(keeper),
+                    swap,
                 })
             }
             (false, None) => {
@@ -425,7 +447,7 @@ impl Publisher {
                     tracing::warn!(%error, "the lease's renewal task failed");
                 }
             }
-            give_back(&sink.folder, &sink.lease).await;
+            give_back(leased_folder(sink), &sink.lease).await;
         }
         self.writer.rollback_batch().await;
         let warehouse = self.table.spec.warehouse;
@@ -542,6 +564,52 @@ impl Publisher {
                 self.table.spec.destination.table
             ))),
         }
+    }
+
+    /// Load one unload's `files` by having the destination read them itself, where the plan chose that; the destination must load them so.
+    pub(crate) async fn load_unloaded(
+        &mut self,
+        files: &UnloadedFiles,
+    ) -> Result<DirectLoaded, LoaderError> {
+        let columns = staged_columns(&self.table);
+        let batch = UnloadedBatch {
+            files,
+            read: &self.table.read_columns,
+            write_columns: &self.table.schema.write_columns,
+            target: write_target(
+                &self.table,
+                self.staging.as_ref(),
+                &columns,
+                ((&self.load_id, self.batch), (self.direct, self.builds)),
+            ),
+            loaded_at: &self.loaded_at,
+        };
+        let loaded = load_unloaded(&mut self.writer, &batch).await?.ok_or_else(|| {
+            LoaderError::Invalid(format!(
+                "{}: the plan has the destination load the unloaded files itself, but it cannot",
+                self.table.spec.destination.table
+            ))
+        })?;
+        self.note_direct(&loaded);
+        Ok(loaded)
+    }
+
+    /// Pass `part` of the table's rows on: the destination loads the unloaded files itself where the plan chose that, otherwise SQLLoad stages the rows.
+    async fn pass_part(
+        &mut self,
+        reader: &SourceReader,
+        part: ReadPart,
+    ) -> Result<(), LoaderError> {
+        let table = self.table.clone();
+        if pulls_unloaded(table.route.as_ref()) {
+            unload_source(reader, &table, part, async |files| {
+                self.load_unloaded(files).await
+            })
+            .await?;
+            return Ok(());
+        }
+        read_source(reader, &table, part, async |batch| stage(self, batch).await).await?;
+        Ok(())
     }
 
     /// Note what a direct batch did; a batch that is not yet committed waits for `cut`.
@@ -876,10 +944,7 @@ async fn feed(
                         batch_bytes,
                         ..ReadPart::default()
                     };
-                    read_source(reader, table, part, async |batch| {
-                        stage(&mut publisher, batch).await
-                    })
-                    .await?;
+                    publisher.pass_part(reader, part).await?;
                     publisher
                         .cut(CommitRange::Window {
                             from: window.from.clone(),
@@ -988,27 +1053,29 @@ async fn feed(
                     batch_bytes,
                     ..ReadPart::default()
                 };
-                read_source(reader, table, part, async |batch| {
-                    stage(&mut publisher, batch).await?;
-                    match publisher.full() {
-                        true => publisher
-                            .cut(CommitRange::Planned)
-                            .await
-                            .map_err(|error| error.to_string()),
-                        false => Ok(()),
+                match pulls_unloaded(table.route.as_ref()) {
+                    true => publisher.pass_part(reader, part).await?,
+                    false => {
+                        read_source(reader, table, part, async |batch| {
+                            stage(&mut publisher, batch).await?;
+                            match publisher.full() {
+                                true => publisher
+                                    .cut(CommitRange::Planned)
+                                    .await
+                                    .map_err(|error| error.to_string()),
+                                false => Ok(()),
+                            }
+                        })
+                        .await?;
                     }
-                })
-                .await?;
+                }
             }
             CommitRule::Whole(_) => {
                 let part = ReadPart {
                     batch_bytes,
                     ..ReadPart::default()
                 };
-                read_source(reader, table, part, async |batch| {
-                    stage(&mut publisher, batch).await
-                })
-                .await?;
+                publisher.pass_part(reader, part).await?;
                 if deletes_range(table) {
                     publisher.cut(CommitRange::Planned).await?;
                 }
@@ -1105,6 +1172,7 @@ impl Publisher {
             load_id: &self.load_id,
             file_id: &file_id,
             loaded_at: &self.loaded_at,
+            encoding: &sink.output.encoding,
         })
         .map_err(LoaderError::Invalid)?;
         mark_pending(&sink.folder, &file_id, PendingPhase::Writing, (&[], None)).await?;
@@ -1127,18 +1195,19 @@ impl Publisher {
         let keep_schema = self.at_end && self.committed_rows == 0;
         close_writer(&mut writer, keep_schema).await?;
         let sink = self.sink()?;
-        let keys = commit_deletes(
+        let mut keys = commit_deletes(
             &sink.replaced,
             sink.output.path.partition.as_ref(),
             (&writer.partitions, last),
             &sink.deleted,
         );
+        keys.retain(|key| !writer.written.contains(key));
         let run = match &self.run {
             Some(_) => {
                 let mut record = self.record(self.waiting_rows)?;
                 record.files = writer.written.clone();
                 Some(PendingRun {
-                    prefix: runs_location(&self.sink()?.output.path.folder).prefix,
+                    prefix: runs_location(&self.sink()?.folder.location).prefix,
                     name: record_object_name(&record),
                     json: serde_json::to_string(&record)
                         .map_err(|error| LoaderError::Invalid(error.to_string()))?,
@@ -1148,9 +1217,19 @@ impl Publisher {
         };
         let sink = self.sink()?;
         let (folder, lease) = (sink.folder.clone(), sink.lease.clone());
-        replace_files((&folder, &lease), &writer.file_id, (&keys, run.as_ref())).await?;
+        let table_folder = leased_folder(sink).clone();
+        replace_files(
+            (&folder, (&table_folder, &lease)),
+            &writer.file_id,
+            (&keys, run.as_ref()),
+        )
+        .await?;
+        if let Some(swap) = self.sink()?.swap.as_ref().filter(|_| last) {
+            swap_folder(&swap.live, &folder, &swap.replaced).await?;
+        }
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
+            sink.deleted.extend(writer.written.iter().cloned());
         }
         self.committed_rows += self.waiting_rows;
         self.waiting_rows = 0;
@@ -1194,6 +1273,13 @@ impl Publisher {
         let Some(mut writer) = sink.writer.take() else {
             return Ok(());
         };
+        if writer.encoding.single_file && !(writer.open.is_empty() && writer.written.is_empty()) {
+            sink.writer = Some(writer);
+            return Err(LoaderError::Invalid(format!(
+                "{}: new columns appeared partway through the load, and single_file writes each file once, with one header; drop single_file, or have the source return every column from its first rows",
+                self.table.spec.destination.table
+            )));
+        }
         let cursor_column = self
             .table
             .spec
@@ -1208,6 +1294,7 @@ impl Publisher {
             load_id: &self.load_id,
             file_id: &writer.file_id,
             loaded_at: &self.loaded_at,
+            encoding: &sink.output.encoding,
         });
         let closed = close_writer(&mut writer, false).await.map(|_| ());
         let schema = opened.map(|opened| opened.schema);
@@ -1246,18 +1333,22 @@ impl Publisher {
         }
         let file_id = format!("{}.{:05}", self.load_id, self.commits + 1);
         let (folder, lease) = (sink.folder.clone(), sink.lease.clone());
-        replace_files((&folder, &lease), &file_id, (&keys, None)).await?;
+        let table_folder = leased_folder(sink).clone();
+        replace_files((&folder, (&table_folder, &lease)), &file_id, (&keys, None)).await?;
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
         }
         Ok(())
     }
 
-    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored.
+    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored; a table staged beside its folder is deleted whole by the next load. Outside such a folder, `single_file` names are the table's own, so files already put stay: deleting them would delete the table's data.
     pub(crate) async fn abandon_files(&mut self) {
         let Some(sink) = self.files.as_mut() else {
             return;
         };
+        if sink.swap.is_none() && sink.output.encoding.single_file {
+            return;
+        }
         let Some(writer) = sink.writer.take() else {
             return;
         };
@@ -1276,13 +1367,13 @@ impl Publisher {
     }
 }
 
-/// Once the load still holds the table's lease (extending it), record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
+/// Once the load still holds the table's lease in `table_folder` (extending it), record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
 async fn replace_files(
-    (folder, lease): (&OpenFolder, &Lease),
+    (folder, (table_folder, lease)): (&OpenFolder, (&OpenFolder, &Lease)),
     file_id: &str,
     (keys, run): (&[String], Option<&PendingRun>),
 ) -> Result<(), LoaderError> {
-    keep_lease(folder, lease, lease_now())
+    keep_lease(table_folder, lease, lease_now())
         .await?
         .map_err(LoaderError::Invalid)?;
     mark_pending(folder, file_id, PendingPhase::Replacing, (keys, run)).await?;
@@ -1326,6 +1417,11 @@ fn keep_in_background(
         }
     });
     (stop.drop_guard(), renewal)
+}
+
+/// The table's own folder, where its lease lives: the live folder, also while the load writes a staged one.
+fn leased_folder(sink: &FilesSink) -> &OpenFolder {
+    sink.swap.as_ref().map_or(&sink.folder, |swap| &swap.live)
 }
 
 /// Release `lease` after the load, best effort: one left behind expires on its own.

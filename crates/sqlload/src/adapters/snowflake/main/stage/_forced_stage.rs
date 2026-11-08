@@ -46,17 +46,18 @@ pub(in crate::adapters) fn forced_stage(
             ..
         }
     );
-    Ok(ForcedStage::External(ExternalStage {
+    Ok(ForcedStage::External(Box::new(ExternalStage {
         location: Location {
             store: StoreKind::S3 {
                 bucket,
                 region: store.0.clone(),
                 endpoint: store.1.clone(),
+                profile: None,
             },
             prefix: location.prefix,
         },
         object,
         home,
         keep_staged_files,
-    }))
+    })))
 }

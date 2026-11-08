@@ -1,9 +1,17 @@
 //! Discover a Snowflake source's tables: catalog tables matching `include`, and query tables described without reading rows.
 
-use crate::postgres_source::models::{SourceColumn, SourceTable};
-use crate::snowflake_source::_helpers::catalog::{catalog_tables, source_column, table_matcher};
+use futures_util::{StreamExt, TryStreamExt};
+use globset::GlobSet;
+
+use crate::postgres_source::models::SourceTable;
+use crate::snowflake_source::_helpers::catalog::{
+    catalog_tables, described_columns, listed_tables, table_matcher,
+};
+use crate::snowflake_source::_helpers::type_map::quote_identifier;
 use crate::snowflake_source::_helpers::unload_query::subquery;
-use crate::snowflake_source::constants::{CATALOG_SQL, DESCRIBED_NOT_NULL};
+use crate::snowflake_source::constants::{
+    CATALOG_SQL, DESCRIBED_TABLES_MAX, PARALLEL_DESCRIBES, SHOW_TABLES_SQL, SHOW_VIEWS_SQL,
+};
 use crate::snowflake_source::errors::SnowflakeSourceError;
 use crate::snowflake_source::models::SnowflakeReader;
 use crate::sql_api::main::execute_script_rows::execute_script_rows;
@@ -15,46 +23,82 @@ pub async fn read_catalog(
     (include, exclude): (&[String], &[String]),
     queries: &[(String, String)],
 ) -> Result<Vec<SourceTable>, SnowflakeSourceError> {
-    let mut tables: Vec<SourceTable> = Vec::new();
-    if !include.is_empty() {
-        let include = table_matcher(include)?;
-        let exclude = table_matcher(exclude)?;
-        let rows = execute_sql(&reader.sql, CATALOG_SQL).await?;
-        tables.extend(catalog_tables(&rows, &include, &exclude));
-    }
-    for (name, sql) in queries {
-        let statements = vec![
-            format!("SELECT * FROM {} LIMIT 0", subquery(sql)),
-            "DESCRIBE RESULT LAST_QUERY_ID()".to_owned(),
-        ];
-        let described = execute_script_rows(&reader.sql, &statements)
-            .await
-            .map_err(|error| {
-                SnowflakeSourceError::Invalid(format!("query table {name}: {error}"))
-            })?;
-        let result = described.last().cloned().unwrap_or_default();
-        let columns: Vec<SourceColumn> = result
-            .rows
-            .iter()
-            .map(|row| {
-                let text = |column: &str| result.value(row, column).unwrap_or_default().to_owned();
-                source_column(
-                    &text("name"),
-                    &text("type"),
-                    text("null?") != DESCRIBED_NOT_NULL,
-                )
-            })
-            .collect();
-        tables.push(SourceTable {
-            schema: String::new(),
-            name: name.clone(),
-            columns,
-            primary_key: Vec::new(),
-            indexed_columns: Vec::new(),
-            estimated_rows: -1,
-            estimated_bytes: -1,
-            comment: None,
-        });
-    }
+    let catalog = async {
+        match include.is_empty() {
+            true => Ok(Vec::new()),
+            false => {
+                matching_tables(reader, &table_matcher(include)?, &table_matcher(exclude)?).await
+            }
+        }
+    };
+    let described = futures_util::stream::iter(queries)
+        .map(|(name, sql)| query_table(reader, name, sql))
+        .buffered(PARALLEL_DESCRIBES)
+        .try_collect::<Vec<SourceTable>>();
+    let (mut tables, described) = tokio::try_join!(catalog, described)?;
+    tables.extend(described);
     Ok(tables)
+}
+
+/// The matching tables, listed with `SHOW` and described a few at a time, which takes no warehouse and is quicker than the catalog views; many matching tables read the catalog views once instead.
+async fn matching_tables(
+    reader: &SnowflakeReader,
+    include: &GlobSet,
+    exclude: &GlobSet,
+) -> Result<Vec<SourceTable>, SnowflakeSourceError> {
+    let (shown_tables, shown_views) = tokio::try_join!(
+        execute_sql(&reader.sql, SHOW_TABLES_SQL),
+        execute_sql(&reader.sql, SHOW_VIEWS_SQL)
+    )?;
+    let listed = match listed_tables(&[shown_tables, shown_views], include, exclude) {
+        Some(listed) if listed.len() <= DESCRIBED_TABLES_MAX => listed,
+        _ => {
+            let rows = execute_sql(&reader.sql, CATALOG_SQL).await?;
+            return Ok(catalog_tables(&rows, include, exclude));
+        }
+    };
+    futures_util::stream::iter(listed)
+        .map(|mut table| async move {
+            let statement = format!(
+                "DESCRIBE TABLE {}.{}",
+                quote_identifier(&table.schema),
+                quote_identifier(&table.name)
+            );
+            table.columns = described_columns(&execute_sql(&reader.sql, &statement).await?);
+            match table.columns.is_empty() {
+                true => Err(SnowflakeSourceError::Invalid(format!(
+                    "{}.{} has no columns, as for a view whose underlying table was dropped",
+                    table.schema, table.name
+                ))),
+                false => Ok(table),
+            }
+        })
+        .buffered(PARALLEL_DESCRIBES)
+        .try_collect()
+        .await
+}
+
+/// Query table `name`: its columns as Snowflake describes the result of `sql`, without reading rows.
+async fn query_table(
+    reader: &SnowflakeReader,
+    name: &str,
+    sql: &str,
+) -> Result<SourceTable, SnowflakeSourceError> {
+    let statements = vec![
+        format!("SELECT * FROM {} LIMIT 0", subquery(sql)),
+        "DESCRIBE RESULT LAST_QUERY_ID()".to_owned(),
+    ];
+    let described = execute_script_rows(&reader.sql, &statements)
+        .await
+        .map_err(|error| SnowflakeSourceError::Invalid(format!("query table {name}: {error}")))?;
+    Ok(SourceTable {
+        schema: String::new(),
+        name: name.to_owned(),
+        columns: described_columns(&described.last().cloned().unwrap_or_default()),
+        primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
+        estimated_rows: -1,
+        estimated_bytes: -1,
+        comment: None,
+    })
 }

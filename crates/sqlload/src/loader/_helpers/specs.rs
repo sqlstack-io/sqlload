@@ -293,7 +293,7 @@ fn warehouse_source(source: &SourceConfig, overrides: &TableOverride) -> Option<
             }) => (
                 Store::ObjectStore(url.clone()),
                 format!(
-                    "external: Snowflake writes to {url} through storage integration {integration}, and SQLLoad reads the files there and removes them after the read"
+                    "external: Snowflake writes to {url} through storage integration {integration}; the files are read there and removed after the read"
                 ),
             ),
             Some(UnloadStage {

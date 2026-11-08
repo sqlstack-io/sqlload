@@ -30,6 +30,7 @@ use sqlload::parquet_parts::main::write_part::write_part;
 use sqlload::parquet_parts::models::PartWriter;
 use sqlload::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use sqlload::postgres_source::main::decode_copy::decode_copy;
+use sqlload::project::models::OutputEncoding;
 use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::conform_batch::conform_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
@@ -177,6 +178,7 @@ fn write_parquet((runtime, folder, columns, batch): ParquetInput) -> (u64, Vec<S
         load_id: "20261105T000000Z",
         file_id: "20261105T000000Z",
         loaded_at: "2026-11-05T00:00:00Z",
+        encoding: &OutputEncoding::default(),
     };
     let mut writer = open_writer(request).unwrap_or_else(|error| panic!("{error}"));
     runtime.block_on(async {
@@ -329,6 +331,7 @@ fn lines(bytes: Vec<u8>) -> JsonInput {
         layout: JsonLayout::Lines,
         path: None,
         batch_rows: CROSSING_ROWS,
+        projection: None,
     };
     (bytes, read)
 }
@@ -346,6 +349,7 @@ fn flat_document() -> JsonInput {
         layout: JsonLayout::Document,
         path: Some("data.items".to_owned()),
         batch_rows: CROSSING_ROWS,
+        projection: None,
     };
     (fixtures::flat_document(20_000), read)
 }

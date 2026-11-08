@@ -111,6 +111,7 @@ async fn lake_folder(live: &Live, prefix: &str) -> Result<OpenFolder, String> {
             bucket: live.bucket.clone(),
             region: Some(live.region.clone()),
             endpoint: None,
+            profile: None,
         },
         prefix: prefix.to_owned(),
     })

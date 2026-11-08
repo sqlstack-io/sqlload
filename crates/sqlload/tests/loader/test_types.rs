@@ -240,6 +240,13 @@ pub(crate) struct WrittenRun<'a> {
 }
 
 /// Postgres into a files target, then those files through a files source into DuckDB, loaded twice.
+pub(crate) struct CsvTargetTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) scenario: FilesTargetScenarioTestCase,
+    /// The data files left in the table folder, sorted, with each `part-<load>-<n>` name as `part-*`.
+    pub(crate) expected_keys: &'static [&'static str],
+}
+
 pub(crate) struct MetadataRoundTripTestCase {
     pub(crate) description: &'static str,
     /// SQL creating `public.orders`.
@@ -785,4 +792,15 @@ pub(crate) struct SheetsRefusalTestCase {
     pub(crate) source: &'static str,
     /// Text the refusal holds.
     pub(crate) expected_output: &'static str,
+}
+
+pub(crate) struct S3ProfileTestCase {
+    pub(crate) description: &'static str,
+    /// The `s3` connection's `profile`.
+    pub(crate) profile: &'static str,
+    /// The `sqlload` command run, with no AWS keys in its environment.
+    pub(crate) command: &'static str,
+    /// Text its output must contain.
+    pub(crate) expected_text: &'static str,
+    pub(crate) expected_ok: bool,
 }

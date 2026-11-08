@@ -27,6 +27,7 @@ fn given_a_store_when_writing_and_listing_files_then_data_files_round_trip_and_h
                 bucket: "example-bucket-test".to_owned(),
                 region: Some(REGION.to_owned()),
                 endpoint: Some(endpoint.to_owned()),
+                profile: None,
             },
             expected_keys: DATA_KEYS,
         },

@@ -14,6 +14,7 @@ pub mod partitions_finished;
 pub mod plan_replaced_files;
 pub mod read_table_state;
 pub mod repair_table;
+pub mod swap_folder;
 pub mod table_path;
 pub mod write_notes;
 pub mod write_rows;

@@ -281,7 +281,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "a warehouse target takes no path",
             text: "[targets.other]\nconnection = \"wh\"\nloader_schema = \"RAW\"\npath = \"{table}/\"\n",
-            expected_message: "[targets.other] path, format and max_footer_reads are for targets on an s3 or filesystem connection",
+            expected_message: "[targets.other] path, format, compression, csv, single_file and max_footer_reads are for targets on an s3 or filesystem connection",
         },
         ParseProjectErrorTestCase {
             description: "a files target takes no loader_schema",
@@ -322,6 +322,11 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "a query table is for snowflake and odbc sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\nsql = \"SELECT 1\"\n",
             expected_message: "[sources.app] sql is for kind = \"snowflake\" and kind = \"odbc\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "an empty AWS profile is never read as a profile named \"\"",
+            text: "[connections.lake]\nkind = \"s3\"\nbucket = \"b\"\nprofile = \"\"\n",
+            expected_message: "[connections.lake] profile is empty; omit it",
         },
         ParseProjectErrorTestCase {
             description: "an odbc connection needs a connection string or a DSN",

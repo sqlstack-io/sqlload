@@ -28,7 +28,7 @@ import shutil
 import sysconfig
 from importlib.metadata import version
 
-from sqlload._data import checkpoint, json, ndjson
+from sqlload._data import checkpoint, field, json, ndjson
 from sqlload._http import (
 	Http,
 	Job,
@@ -62,6 +62,7 @@ __all__ = [
 	"checkpoint",
 	"cursor",
 	"executable",
+	"field",
 	"http",
 	"json",
 	"link_header",

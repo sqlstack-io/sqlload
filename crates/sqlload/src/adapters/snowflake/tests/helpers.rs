@@ -100,6 +100,7 @@ pub(crate) fn lake(prefix: &str) -> Location {
             bucket: "lake".to_owned(),
             region: None,
             endpoint: None,
+            profile: None,
         },
         prefix: prefix.to_owned(),
     }

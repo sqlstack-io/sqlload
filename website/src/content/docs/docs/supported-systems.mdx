@@ -9,7 +9,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 |--------|---------|---------|
 | Postgres | Tables, by `include` patterns | Binary `COPY` into Arrow, over TLS when the connection's `sslmode` asks |
 | Postgres changes (`postgres_cdc`) | Inserts, updates and deletes of tables, by `include` patterns | A snapshot, then a logical replication slot (`pgoutput`), in whole transactions. See [Postgres changes](/docs/sources/postgres-cdc/). |
-| Snowflake (from 0.26.0) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad. See [Snowflake](/docs/sources/snowflake/). |
+| Snowflake (from 0.26.0) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad, or (from 0.27.0, not released yet) by DuckDB itself from an S3 stage. See [Snowflake](/docs/sources/snowflake/). |
 | Databases with an ODBC driver (from 0.27.0, not released yet) | Tables and views, by `include` patterns, and query results | The driver, as Arrow, in builds with the `odbc` feature. See [ODBC](/docs/sources/odbc/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
@@ -28,8 +28,8 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ClickHouse (preview) | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. See [ClickHouse](/docs/targets/clickhouse/). |
 | Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
-| Parquet files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed. |
-| Parquet files in a local folder | As for S3 | As for S3 |
+| Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or, from 0.27.0 (not released yet), CSV: plain, gzip or zstd. |
+| Parquet or CSV files in a local folder | As for S3; from 0.27.0, `replace` swaps the folder in one rename | As for S3 |
 
 ## Source and destination combinations
 

@@ -5,4 +5,6 @@ pub mod open_folder;
 pub mod probe_folder;
 pub mod read_file;
 pub mod s3_builder;
+pub mod s3_key_source;
+pub mod s3_keys;
 pub mod write_file;
