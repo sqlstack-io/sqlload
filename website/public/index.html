@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>SQLLoad · Load data into your warehouse, and see how first</title>
-		<meta name="description" content="SQLLoad loads Postgres tables, files and Python sources into Snowflake, Databricks, BigQuery, ClickHouse, Postgres, DuckDB or Parquet files. sqlload plan shows every table, column and route before anything changes. Free and open source, written in Rust." />
+		<meta name="description" content="SQLLoad loads Postgres and Snowflake tables, files, Google Sheets and Python sources into Snowflake, Databricks, BigQuery, ClickHouse, Postgres, DuckDB or Parquet files. sqlload plan shows every table, column and route before anything changes. Free and open source, written in Rust." />
 		<meta property="og:title" content="SQLLoad · Load data into your warehouse, and see how first" />
 		<meta property="og:description" content="A free, open-source data loader in Rust that shows you its plan before it changes anything." />
 		<meta property="og:type" content="website" />
@@ -276,7 +276,7 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 							Install it, then copy a folder or a Postgres table with one command. No configuration file needed.
 						</p>
 						<ul>
-							<li>Reads Postgres, including <a href="/docs/sources/postgres-cdc/">change data capture</a>; Parquet, CSV, JSON and NDJSON in S3 or a folder; Python and HTTP APIs.</li>
+							<li>Reads Postgres, including <a href="/docs/sources/postgres-cdc/">change data capture</a>; Snowflake; Parquet, CSV, JSON and NDJSON in S3 or a folder; Google Sheets; Python and HTTP APIs; and, in builds with the <code>odbc</code> feature, databases with an ODBC driver.</li>
 							<li>Writes Snowflake, Databricks, BigQuery (preview), ClickHouse (preview), Postgres, DuckDB, and Parquet files in S3 or a folder.</li>
 							<li>Linux and macOS; Python only for Python sources.</li>
 							<li>Free and open source, Apache-2.0.</li>
