@@ -2,6 +2,8 @@
 
 #[path = "loader/bigquery/helpers.rs"]
 mod bigquery_helpers;
+#[path = "loader/clickhouse/helpers.rs"]
+mod clickhouse_helpers;
 #[path = "loader/databricks/helpers.rs"]
 mod databricks_helpers;
 #[path = "loader/helpers.rs"]

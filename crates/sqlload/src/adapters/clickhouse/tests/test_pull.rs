@@ -1,26 +1,13 @@
 use crate::adapters::clickhouse::_helpers::dialect::pull::{
     PullCredentials, PulledFile, object_url, pull_insert,
 };
+use crate::adapters::clickhouse::tests::helpers::desired;
+use crate::adapters::clickhouse::tests::test_types::{ObjectUrlTestCase, PullInsertTestCase};
 use crate::column_types::models::ColumnType;
-use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 
 #[test]
 fn given_a_parquet_file_in_s3_when_clickhouse_pulls_it_then_each_column_takes_the_file_its_constant_or_null()
  {
-    let column = |name: &str, column_type: ColumnType| DesiredColumn {
-        name: name.to_owned(),
-        column_type,
-        origin: ColumnOrigin::Source,
-    };
-    let columns = [
-        column("id", ColumnType::Int),
-        column("raw", ColumnType::Binary),
-        column("gone", ColumnType::Text),
-        column("day", ColumnType::Date),
-        column("region", ColumnType::Text),
-        column("_sqlload_source_row", ColumnType::Int),
-        column("_sqlload_loaded_at", ColumnType::TimestampTz),
-    ];
     let file = PulledFile {
         url: "https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/a.parquet"
             .to_owned(),
@@ -35,48 +22,82 @@ fn given_a_parquet_file_in_s3_when_clickhouse_pulls_it_then_each_column_takes_th
         secret: "it's".to_owned(),
         token: Some("token".to_owned()),
     };
+    let test_cases = [
+        PullInsertTestCase {
+            description: "the folder's value wins over the file's day, a column no file holds and a missing folder are NULL, a fixed-size binary keeps its zero bytes, and rows are numbered in stored order by one thread",
+            columns: vec![
+                desired("id", ColumnType::Int),
+                desired("raw", ColumnType::Binary),
+                desired("gone", ColumnType::Text),
+                desired("day", ColumnType::Date),
+                desired("region", ColumnType::Text),
+                desired("_sqlload_source_row", ColumnType::Int),
+                desired("_sqlload_loaded_at", ColumnType::TimestampTz),
+            ],
+            expected_insert: "INSERT INTO `raw`.`s` (`id`, `raw`, `gone`, `day`, `region`, `_sqlload_source_row`, `_sqlload_loaded_at`) SELECT CAST(`id` AS Nullable(int)), CAST(substring(`raw`, 1) AS Nullable(binary)), CAST(NULL AS Nullable(text)), CAST(CAST('2026-01-01' AS Date32) AS Nullable(date)), CAST(NULL AS Nullable(text)), CAST(rowNumberInAllBlocks() + 1 AS Nullable(int)), CAST(parseDateTime64BestEffort('2026-11-08T07:00:00Z', 6, 'UTC') AS Nullable(timestamp_tz)) FROM s3('https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/a.parquet', 'AKIDEXAMPLE', 'it\\'s', 'token', 'Parquet') SETTINGS max_threads = 1, max_insert_threads = 1, input_format_parquet_preserve_order = 1",
+        },
+        PullInsertTestCase {
+            description: "without row numbers the read keeps ClickHouse's parallelism",
+            columns: vec![
+                desired("id", ColumnType::Int),
+                desired("_sqlload_load_id", ColumnType::Text),
+            ],
+            expected_insert: "INSERT INTO `raw`.`s` (`id`, `_sqlload_load_id`) SELECT CAST(`id` AS Nullable(int)), CAST(CAST('load1' AS String) AS Nullable(text)) FROM s3('https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/a.parquet', 'AKIDEXAMPLE', 'it\\'s', 'token', 'Parquet')",
+        },
+    ];
     let sql_type = |column_type: &ColumnType| format!("Nullable({column_type})");
-    assert_eq!(
-        pull_insert(
-            "`raw`.`s`",
-            (&columns, &sql_type),
-            &file,
-            &credentials,
-            ("load1", "2026-11-08T07:00:00Z"),
-        ),
-        "INSERT INTO `raw`.`s` (`id`, `raw`, `gone`, `day`, `region`, `_sqlload_source_row`, `_sqlload_loaded_at`) SELECT CAST(`id` AS Nullable(int)), CAST(substring(`raw`, 1) AS Nullable(binary)), CAST(NULL AS Nullable(text)), CAST(CAST('2026-01-01' AS Date32) AS Nullable(date)), CAST(NULL AS Nullable(text)), CAST(rowNumberInAllBlocks() + 1 AS Nullable(int)), CAST(parseDateTime64BestEffort('2026-11-08T07:00:00Z', 6, 'UTC') AS Nullable(timestamp_tz)) FROM s3('https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/a.parquet', 'AKIDEXAMPLE', 'it\\'s', 'token', 'Parquet') SETTINGS max_threads = 1, max_insert_threads = 1, input_format_parquet_preserve_order = 1",
-        "the folder's value wins over the file's day, a column no file holds and a missing folder are NULL, and rows are numbered in stored order"
-    );
+    for test_case in test_cases {
+        assert_eq!(
+            pull_insert(
+                "`raw`.`s`",
+                (&test_case.columns, &sql_type),
+                (&file, &credentials),
+                ("load1", "2026-11-08T07:00:00Z"),
+            ),
+            test_case.expected_insert,
+            "{}",
+            test_case.description
+        );
+    }
 }
 
 #[test]
 fn given_an_object_key_when_clickhouse_reads_it_then_its_url_is_on_aws_or_the_endpoint_and_percent_encoded()
  {
     let test_cases = [
-        (
-            "AWS in a known region, by virtual host; a space and a percent sign are encoded",
-            (Some("eu-west-2"), None),
-            "lake/day=2026-01-01/part one 100%.parquet",
-            "https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/part%20one%20100%25.parquet",
-        ),
-        (
-            "AWS with no region",
-            (None, None),
-            "a.parquet",
-            "https://example-bucket.s3.amazonaws.com/a.parquet",
-        ),
-        (
-            "a custom endpoint, by path, its trailing slash dropped",
-            (Some("us-east-1"), Some("http://172.17.0.4:8333/")),
-            "lake/a.parquet",
-            "http://172.17.0.4:8333/example-bucket/lake/a.parquet",
-        ),
+        ObjectUrlTestCase {
+            description: "AWS in a known region, by virtual host; a space and a percent sign are encoded",
+            region: Some("eu-west-2"),
+            endpoint: None,
+            key: "lake/day=2026-01-01/part one 100%.parquet",
+            expected_url: "https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/part%20one%20100%25.parquet",
+        },
+        ObjectUrlTestCase {
+            description: "AWS with no region",
+            region: None,
+            endpoint: None,
+            key: "a.parquet",
+            expected_url: "https://example-bucket.s3.amazonaws.com/a.parquet",
+        },
+        ObjectUrlTestCase {
+            description: "a custom endpoint, by path, its trailing slash dropped",
+            region: Some("us-east-1"),
+            endpoint: Some("http://172.17.0.4:8333/"),
+            key: "lake/a.parquet",
+            expected_url: "http://172.17.0.4:8333/example-bucket/lake/a.parquet",
+        },
     ];
-    for (description, (region, endpoint), key, expected_url) in test_cases {
+    for test_case in test_cases {
         assert_eq!(
-            object_url(("example-bucket", key), region, endpoint).as_deref(),
-            Ok(expected_url),
-            "{description}"
+            object_url(
+                ("example-bucket", test_case.key),
+                test_case.region,
+                test_case.endpoint
+            )
+            .as_deref(),
+            Ok(test_case.expected_url),
+            "{}",
+            test_case.description
         );
     }
 }

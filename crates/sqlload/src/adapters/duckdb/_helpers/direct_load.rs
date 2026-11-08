@@ -1,7 +1,8 @@
 //! A files batch loaded by DuckDB reading the source's own Parquet files.
 
-use crate::adapters::contract::_helpers::direct_checks::{batch_problem, footer_rows};
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
+use crate::adapters::contract::main::_batch_direct_problem::batch_direct_problem;
+use crate::adapters::contract::main::_footer_rows::footer_rows;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded};
 use crate::adapters::duckdb::_helpers::pull_sql::{PulledFile, pull_insert};
 use crate::adapters::duckdb::main::_direct_problem::direct_problem;
@@ -24,7 +25,7 @@ impl DuckDbWriter {
         let Some(source) = batch.spec.files.as_ref() else {
             return Ok(None);
         };
-        let problem = batch_problem(batch, source, direct_problem(batch.spec, batch.read));
+        let problem = batch_direct_problem(batch, source, direct_problem(batch.spec, batch.read));
         if let Some(problem) = problem {
             return Err(LoaderError::Invalid(format!(
                 "DuckDB cannot load this batch's files exactly by reading them itself, and they never go through SQLLoad instead: {problem}"

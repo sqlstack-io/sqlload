@@ -1,4 +1,4 @@
-//! The checks that decide whether a destination may read a files table's files itself and load them exactly.
+//! Whether one batch's own files load exactly when the destination reads them itself.
 
 use crate::adapters::contract::models::DirectBatch;
 use crate::column_types::main::portable_type::portable_type;
@@ -8,58 +8,12 @@ use crate::files_source::constants::{
 };
 use crate::files_source::main::batch_refusals::batch_refusals;
 use crate::files_source::main::stored_read_of::stored_read_of;
-use crate::files_source::models::{BatchFooters, DataFile, FileColumn, StoredRead};
+use crate::files_source::models::{BatchFooters, StoredRead};
 use crate::loader::models::FilesSource;
-use crate::schema_plan::models::DesiredColumn;
 use parquet::arrow::arrow_reader::ArrowReaderMetadata;
 
-/// How `column` is held when a plain cast would not load it exactly, as a problem.
-pub(crate) fn held_as(column: &FileColumn) -> Option<String> {
-    let held = match (
-        &column.column_type,
-        &column.direct_refusal,
-        column.stored_read,
-    ) {
-        (Err(reason), _, _) => Some(reason.clone()),
-        (Ok(_), Some(arrow_type), _) => Some(arrow_type.clone()),
-        (Ok(_), None, StoredRead::Plain) => None,
-        (Ok(_), None, StoredRead::Nanos) => Some("nanoseconds".to_owned()),
-        (Ok(_), None, StoredRead::Epoch(_)) => Some("an epoch integer".to_owned()),
-    };
-    Some(format!("column {} is held as {}", column.name, held?))
-}
-
-/// A read column the files hold as another type than it loads as; SQLLoad's own values (file name, version, row, partitions) are not the files'.
-pub(crate) fn retyped(files: &FilesSource, column: &DesiredColumn) -> Option<String> {
-    let own = [SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN]
-        .contains(&column.name.as_str())
-        || files
-            .partition_types
-            .iter()
-            .any(|(partition, _)| *partition == column.name);
-    let held = files
-        .table
-        .columns
-        .iter()
-        .find(|found| found.name == column.name)?;
-    match &held.column_type {
-        Ok(file_type) if !own && *file_type != column.column_type => Some(format!(
-            "{} is {file_type} in the files but loads as {}; SQLLoad converts it",
-            column.name, column.column_type
-        )),
-        _ => None,
-    }
-}
-
-/// A file whose path the destination's reader would take as a glob pattern.
-pub(crate) fn pattern(files: &FilesSource, data: &DataFile) -> Option<String> {
-    let path = format!("{}{}", files.location, data.file.relative_key);
-    path.contains(['*', '?', '[', '{'])
-        .then(|| format!("the path {path} reads as a pattern"))
-}
-
 /// Why `batch`'s own files cannot be loaded exactly by the destination reading them itself: `planned`, the problem plan's checks give, else a column the batch's files hold in a way only SQLLoad reads (`batch_refusals`), else a read column its footers hold in different ways.
-pub(crate) fn batch_problem(
+pub(in crate::adapters) fn batch_direct_problem(
     batch: &DirectBatch<'_>,
     source: &FilesSource,
     planned: Option<String>,
@@ -106,17 +60,8 @@ fn disagreeing(footers: &BatchFooters, name: &str) -> Option<String> {
         .map(|_| format!("column {name} is held in different ways by this batch's files, or in a way a cast would not keep exactly"))
 }
 
-/// The rows the batch's footers record.
-pub(crate) fn footer_rows(footers: &BatchFooters) -> u64 {
-    footers
-        .parquet
-        .values()
-        .map(|footer| u64::try_from(footer.metadata().file_metadata().num_rows()).unwrap_or(0))
-        .sum()
-}
-
 /// Whether `name` is a value SQLLoad gives each file (its name, version, row number or a partition), which the destination never reads from the files.
-pub(crate) fn constant(source: &FilesSource, name: &str) -> bool {
+fn constant(source: &FilesSource, name: &str) -> bool {
     [SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN].contains(&name)
         || source
             .partition_types

@@ -1,6 +1,6 @@
 //! Whether DuckDB may load a files table's files itself.
 
-use crate::adapters::contract::_helpers::direct_checks::{held_as, pattern, retyped};
+use crate::adapters::contract::main::_files_direct_problem::files_direct_problem;
 use crate::adapters::duckdb::_helpers::direct_checks::{custom_endpoint, reserved_name};
 use crate::files_source::models::{FilesRead, SourceFormat};
 use crate::loader::models::TableSpec;
@@ -14,11 +14,7 @@ pub(in crate::adapters) fn direct_problem(spec: &TableSpec, read: &FilesRead) ->
         custom_endpoint(&files.location.store),
         files.table.columns.iter().find_map(reserved_name),
         (!spec.masked.columns.is_empty()).then(|| "the table masks columns".to_owned()),
-        files.table.columns.iter().find_map(held_as),
-        read.columns
-            .iter()
-            .find_map(|column| retyped(files, column)),
-        read.files.iter().find_map(|data| pattern(files, data)),
+        files_direct_problem(files, read),
     ];
     problems.into_iter().flatten().next()
 }
