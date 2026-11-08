@@ -70,7 +70,6 @@ Each destination stores an array in its own array type:
 | Databricks | `ARRAY<T>` | Nothing. |
 | Parquet | `List(T)` | Nothing. |
 | BigQuery | `ARRAY<T>` | NULLs: a NULL array loads as an empty one, and a NULL element fails the load. `array(timestamp_tz)` is refused; use `array(timestamp_ntz)`. |
-| ClickHouse | `Array(Nullable(T))` | A NULL array, which loads as an empty one. |
 | Snowflake | `ARRAY` | Typed elements: each one is a JSON value, so decimals and timestamps are strings, such as `"1.50"`. |
 
 Arrays come from:
