@@ -213,7 +213,7 @@ pub struct LoaderArgs {
     /// The most tables loading at once (default: the project's `concurrency`, else 4); one table's batches always commit one at a time.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     pub concurrency: Option<u16>,
-    /// `plan` only: print the plan as one JSON document.
+    /// Print one JSON document on stdout: the plan for `plan`; for `apply` and `load`, the plan and what was created, altered and loaded.
     #[arg(long)]
     pub json: bool,
     /// `load` of one postgres_cdc source only: keep streaming after catching up, writing a batch every `batch_interval`, until --max-duration passes or Ctrl-C/SIGTERM (a second one stops at once).

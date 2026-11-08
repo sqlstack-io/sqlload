@@ -17,13 +17,15 @@ use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
 use crate::loader::main::debug_project::debug_project;
+use crate::loader::main::json_report::json_report;
 use crate::loader::main::load_tables::load_tables;
-use crate::loader::main::plan_json::plan_json;
 use crate::loader::main::plan_project::plan_project;
 use crate::loader::main::render_plan::render_plan;
 use crate::loader::main::render_tally::render_tally;
 use crate::loader::main::state_command::state_command;
-use crate::loader::models::{LoadRun, PlanOptions, ProjectPlan, StateKind, StateRequest};
+use crate::loader::models::{
+    LoadRun, PlanOptions, ProjectPlan, RunReport, StateKind, StateRequest,
+};
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::project::models::ProjectConfig;
@@ -84,20 +86,22 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
     parse_python_project(request.text, &lookup, &found).map_err(|error| error.to_string())
 }
 
-/// Run a loader command against the project in `request.text`: the lines to print, and whether it succeeded. Under `plan --json` every failure is a JSON error document.
+/// Run a loader command against the project in `request.text`: the lines to print, and whether it succeeded. Under `--json` every failure is a JSON error document.
 pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String>, bool), String> {
+    let name = match &request.command {
+        Command::Apply(_) => "apply",
+        Command::Load(_) => "load",
+        _ => "plan",
+    };
     let json = match &request.command {
         Command::Plan(args) | Command::Apply(args) if args.follow => {
             let error = "--follow and --max-duration apply to load only";
             return match args.json {
-                true => Ok((vec![json_error("plan", error)], false)),
+                true => Ok((vec![json_error(name, error)], false)),
                 false => Err(error.to_owned()),
             };
         }
-        Command::Plan(args) => args.json,
-        Command::Apply(args) | Command::Load(args) if args.json => {
-            return Err("--json applies to plan only".to_owned());
-        }
+        Command::Plan(args) | Command::Apply(args) | Command::Load(args) => args.json,
         _ => false,
     };
     let project = match load_project_config(&request).await {
@@ -115,7 +119,7 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String
         let _ = tokio::task::spawn_blocking(move || host.finish()).await;
     }
     match (outcome, json) {
-        (Err(error), true) => Ok((vec![json_error("plan", &error)], false)),
+        (Err(error), true) => Ok((vec![json_error(name, &error)], false)),
         (outcome, _) => outcome,
     }
 }
@@ -146,7 +150,7 @@ pub(crate) fn json_error(code: &str, error: &str) -> String {
         .to_string()
 }
 
-/// A project that does not parse: a failed plan's `Errors` for `plan`, `apply` and `load` (as JSON for `plan --json`), else the error.
+/// A project that does not parse: a failed plan's `Errors` for `plan`, `apply` and `load` (as JSON under `--json`), else the error.
 fn config_failure(command: &Command, error: String) -> Result<(Vec<String>, bool), String> {
     let (Command::Plan(args) | Command::Apply(args) | Command::Load(args)) = command else {
         return Err(error);
@@ -197,16 +201,19 @@ async fn run_command(
         args.yes,
         args.follow.then_some(args.max_duration),
     );
-    let started = std::time::Instant::now();
+    let started = (chrono::Utc::now(), std::time::Instant::now());
     let options = options(args)?;
     let plan = plan_project(project, &destinations, &options)
         .await
         .map_err(|error| error.to_string())?;
-    if json {
-        let (text, ok) = plan_json(&plan);
+    if json && !applies {
+        let (text, ok) = json_report(&plan, None);
         return Ok((vec![text], ok));
     }
-    let (mut lines, planned) = render_plan(&plan);
+    let (mut lines, planned) = match json {
+        true => (Vec::new(), true),
+        false => render_plan(&plan),
+    };
     if !applies {
         return Ok((lines, planned));
     }
@@ -229,6 +236,12 @@ async fn run_command(
         })
         .map(|table| table.spec.destination.table.as_str())
         .collect();
+    if !rebuilt.is_empty() && json {
+        return Err(format!(
+            "{flag} rebuilds {}, replacing what they hold, and --json cannot ask to confirm it; add --yes",
+            rebuilt.join(", ")
+        ));
+    }
     if !rebuilt.is_empty() {
         match confirm_reload(&lines, flag, &rebuilt, no_color)? {
             true => lines.clear(),
@@ -249,7 +262,18 @@ async fn run_command(
         true => load_tables(&run, &plan, stop.as_ref()).await,
         false => Vec::new(),
     };
-    let (tallied, completed) = render_tally(&applied, &outcomes, started.elapsed());
+    if json {
+        let run = RunReport {
+            command: if loads { "load" } else { "apply" },
+            applied: &applied,
+            outcomes: &outcomes,
+            started: started.0,
+            elapsed: started.1.elapsed(),
+        };
+        let (text, ok) = json_report(&plan, Some(&run));
+        return Ok((vec![text], ok));
+    }
+    let (tallied, completed) = render_tally(&applied, &outcomes, started.1.elapsed());
     lines.extend(tallied);
     Ok((lines, planned && completed))
 }

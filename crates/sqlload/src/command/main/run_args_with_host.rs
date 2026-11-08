@@ -30,7 +30,12 @@ where
         }
     };
     init_logging(cli.log_format);
-    let json = matches!(&cli.command, Command::Plan(args) if args.json);
+    let (json, name) = match &cli.command {
+        Command::Plan(args) => (args.json, "plan"),
+        Command::Apply(args) => (args.json, "apply"),
+        Command::Load(args) => (args.json, "load"),
+        _ => (false, "plan"),
+    };
     let copies = matches!(&cli.command, Command::Copy(_));
     let text = match config_text(&cli.config, copies) {
         Ok(text) => text,
@@ -42,7 +47,7 @@ where
     };
     let runtime = match runtime(cli_threads, &text) {
         Ok(runtime) => runtime,
-        Err(message) => return failed(json, "plan", &message),
+        Err(message) => return failed(json, name, &message),
     };
     let outcome = runtime.block_on(async {
         if copies || is_project(&text) {
@@ -72,7 +77,7 @@ where
     }
 }
 
-/// Report a failure and return exit code 1: as one JSON error on stdout under `plan --json`, so its output always parses, else as `error:` on stderr.
+/// Report a failure and return exit code 1: as one JSON error on stdout under `--json`, so its output always parses, else as `error:` on stderr.
 fn failed(json: bool, code: &str, message: &str) -> u8 {
     match json {
         true => print_lines(vec![json_error(code, message)], true),

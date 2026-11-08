@@ -50,6 +50,7 @@ fn given_a_load_when_rendering_its_tally_then_lines_align_and_the_last_counts_th
             .iter()
             .map(|(table, loaded, elapsed_ms)| TableOutcome {
                 table: table.to_string(),
+                origin: None,
                 loaded: loaded
                     .map(|rows| TableLoaded {
                         rows,
