@@ -1,7 +1,25 @@
 //! The files a connection names to reach the test bastion.
 
-/// A folder holding the key files [`crate::ssh::models::Bastion`] describes, from `output` (the key blocks [`crate::ssh::constants::KEYS_SCRIPT`] printed) for the bastion on host port `port`.
-pub(crate) fn key_files(output: &str, port: u16) -> Result<tempfile::TempDir, String> {
+use testcontainers::core::ExecCommand;
+use testcontainers::{ContainerAsync, GenericImage};
+
+use crate::ssh::constants::KEYS_SCRIPT;
+
+/// A folder holding the key files [`crate::ssh::models::Bastion`] describes, made by running [`KEYS_SCRIPT`] in `container`, the bastion on host port `port`.
+pub(crate) async fn key_files(
+    container: &ContainerAsync<GenericImage>,
+    port: u16,
+) -> Result<tempfile::TempDir, String> {
+    let mut keys = container
+        .exec(ExecCommand::new(["sh", "-c", KEYS_SCRIPT]))
+        .await
+        .map_err(|error| format!("cannot make the bastion's keys: {error}"))?;
+    let output = String::from_utf8(
+        keys.stdout_to_vec()
+            .await
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     let [client, other, client_public, host_keys] = output
         .split("@@\n")
         .collect::<Vec<_>>()

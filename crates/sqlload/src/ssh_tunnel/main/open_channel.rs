@@ -1,5 +1,7 @@
 //! Open a connection through a bastion.
 
+use russh::ChannelOpenFailure;
+
 use crate::ssh_tunnel::_helpers::session::shared_session;
 use crate::ssh_tunnel::errors::SshError;
 use crate::ssh_tunnel::models::{SshTunnel, TunnelStream};
@@ -19,7 +21,14 @@ pub async fn open_channel(
     let channel = session
         .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
         .await
-        .map_err(|error| failed(format!("the bastion cannot open {host}:{port}: {error}")))?;
+        .map_err(|error| {
+            failed(match error {
+                russh::Error::ChannelOpenFailure(ChannelOpenFailure::AdministrativelyProhibited) => format!(
+                    "the bastion forbids forwarding to {host}:{port} (its sshd needs AllowTcpForwarding)"
+                ),
+                error => format!("the bastion cannot reach {host}:{port}: {error}"),
+            })
+        })?;
     Ok(TunnelStream {
         stream: channel.into_stream(),
         session,

@@ -263,7 +263,8 @@ ssh = { host = "bastion.example.com", user = "deploy", private_key_file = "~/.ss
 ```
 
 - SQLLoad opens the tunnel itself (no `ssh` program needed), one session per bastion per run
-  shared by every table, and opens no local port. Replication sessions go through it too.
+  shared by every table, and opens no local TCP port. Replication sessions go through it too,
+  by a Unix socket in a folder only your user can enter. Python sources get no tunnel.
 - It signs in with `private_key_file`, or with ssh-agent's keys when no file is set; not with a
   password. The bastion's host key must be in `known_hosts`: an unknown or changed key fails
   with its SHA256 fingerprint and the fix, and is never accepted on first use.

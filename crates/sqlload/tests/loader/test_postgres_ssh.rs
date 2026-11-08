@@ -5,17 +5,20 @@ use sqlload_testkit::postgres::constants::USER;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_tls::start_postgres_tls;
+use sqlload_testkit::ssh::main::behind_bastion::behind_bastion;
 use sqlload_testkit::ssh::main::start_bastion::start_bastion;
 
 use crate::helpers::{
-    CDC_CHANGES, bridge_address, cdc_project, described_project, duckdb_text, run_async,
-    run_sqlload, spawn_sqlload, ssh_settings, stop_sqlload, tls_project,
+    CDC_CHANGES, cdc_project, described_project, duckdb_text, run_async, run_sqlload,
+    spawn_sqlload, ssh_settings, stop_sqlload, tls_project,
 };
 use crate::test_postgres_cdc::{MERGED_QUERY, MERGED_RESULT, SETUP};
 use crate::test_types::{CdcSshTestCase, SshDebugTestCase, TlsServer, TunnelDropTestCase};
 
 /// How `debug` starts a source line that connected.
 const OK: &str = "ok    source app  ";
+/// The servers' names on the bastion's network, which only the bastion resolves, indexed by [`TlsServer`].
+const HOSTS: [&str; 2] = ["db-tls", "db-plain"];
 /// How `debug` starts a source line that failed.
 const FAIL: &str = "fail  source app  ";
 /// A tunnel the bastion accepts: the right key, and its host keys known.
@@ -86,7 +89,7 @@ fn given_a_bastion_when_debugging_then_it_names_the_hop_that_failed() -> Result<
             user: USER,
             settings: TUNNEL,
             expected_status: FAIL,
-            expected_text: "the bastion cannot open",
+            expected_text: "the bastion cannot reach db-plain:5433",
         },
         SshDebugTestCase {
             description: "a database that refuses the user, past the tunnel",
@@ -102,14 +105,12 @@ fn given_a_bastion_when_debugging_then_it_names_the_hop_that_failed() -> Result<
         let bastion = start_bastion().await?;
         let tls = start_postgres_tls().await?;
         let plain = start_postgres().await?;
-        let hosts = [
-            bridge_address(&tls.postgres).await?,
-            bridge_address(&plain).await?,
-        ];
+        behind_bastion(&bastion, tls.postgres.container.id(), HOSTS[0])?;
+        behind_bastion(&bastion, plain.container.id(), HOSTS[1])?;
         let files = tls.files.path().display().to_string();
         for test_case in test_cases {
             let settings = ssh_settings(test_case.settings, &bastion, &files);
-            let host = &hosts[test_case.server as usize];
+            let host = HOSTS[test_case.server as usize];
             let text = tls_project((host, test_case.port, test_case.user), &settings);
             let project = described_project(&text).await?;
             let (lines, _) = debug_project(&project, true).await;
@@ -140,6 +141,18 @@ fn given_a_bastion_when_capturing_changes_then_they_land_once() -> Result<(), St
             expected_result: MERGED_RESULT,
         },
         CdcSshTestCase {
+            description: "a plain server under the default prefer, falling back to plain text inside the tunnel",
+            server: TlsServer::Plain,
+            settings: "",
+            expected_result: MERGED_RESULT,
+        },
+        CdcSshTestCase {
+            description: "a TLS-only server under the default prefer, encrypted inside the tunnel",
+            server: TlsServer::TlsOnly,
+            settings: "",
+            expected_result: MERGED_RESULT,
+        },
+        CdcSshTestCase {
             description: "a TLS-only server, its CA checked end to end",
             server: TlsServer::TlsOnly,
             settings: "sslmode = \"verify-ca\"\nsslrootcert = \"FILES/ca.pem\"",
@@ -151,6 +164,8 @@ fn given_a_bastion_when_capturing_changes_then_they_land_once() -> Result<(), St
             let bastion = start_bastion().await?;
             let tls = start_postgres_tls().await?;
             let plain = start_postgres().await?;
+            behind_bastion(&bastion, tls.postgres.container.id(), HOSTS[0])?;
+            behind_bastion(&bastion, plain.container.id(), HOSTS[1])?;
             let server = [&tls.postgres, &plain][test_case.server as usize];
             let client = connect(server).await?;
             client
@@ -169,7 +184,7 @@ fn given_a_bastion_when_capturing_changes_then_they_land_once() -> Result<(), St
                 &format!("host = \"127.0.0.1\"\nport = {}", server.port),
                 &format!(
                     "host = \"{}\"\nport = 5432\n{settings}",
-                    bridge_address(server).await?
+                    HOSTS[test_case.server as usize]
                 ),
                 1,
             );
@@ -216,6 +231,7 @@ fn given_a_load_through_a_bastion_when_the_tunnel_drops_then_the_table_fails_nam
         run_async(async {
             let bastion = start_bastion().await?;
             let plain = start_postgres().await?;
+            behind_bastion(&bastion, plain.container.id(), HOSTS[1])?;
             connect(&plain)
                 .await?
                 .batch_execute(
@@ -227,16 +243,65 @@ fn given_a_load_through_a_bastion_when_the_tunnel_drops_then_the_table_fails_nam
                 .map_err(|error| error.to_string())?;
             let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
             let config = folder.path().join("sqlload.toml");
-            let text = tls_project(
-                (&bridge_address(&plain).await?, 5432, USER),
-                &ssh_settings(TUNNEL, &bastion, ""),
-            )
-            .replace(
-                ":memory:",
-                &folder.path().join("out.duckdb").display().to_string(),
-            );
+            let text = tls_project((HOSTS[1], 5432, USER), &ssh_settings(TUNNEL, &bastion, ""))
+                .replace(
+                    ":memory:",
+                    &folder.path().join("out.duckdb").display().to_string(),
+                );
             std::fs::write(&config, text).map_err(|error| error.to_string())?;
             let load = spawn_sqlload(&config, &["load", "app"], "")?;
+            tokio::time::sleep(test_case.drop_after).await;
+            bastion
+                .container
+                .stop()
+                .await
+                .map_err(|error| error.to_string())?;
+            let (succeeded, output) = stop_sqlload(load, "-0").await?;
+            let expected = ssh_settings(test_case.expected_text, &bastion, "");
+            assert!(
+                succeeded == test_case.expected_success && output.contains(&expected),
+                "{}: {output}",
+                test_case.description
+            );
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// A tunnel that drops under `load --follow` fails the stream with an error naming the tunnel, though replication reaches it through the relay, which sees only an end of stream.
+#[test]
+fn given_a_follow_through_a_bastion_when_the_tunnel_drops_then_it_fails_naming_it()
+-> Result<(), String> {
+    let test_cases = [TunnelDropTestCase {
+        description: "the bastion stops while load --follow streams changes",
+        drop_after: Duration::from_secs(10),
+        expected_success: false,
+        expected_text: "logical replication: the SSH tunnel through ssh loader@127.0.0.1:SSH_PORT closed",
+    }];
+    for test_case in test_cases {
+        run_async(async {
+            let bastion = start_bastion().await?;
+            let plain = start_postgres().await?;
+            behind_bastion(&bastion, plain.container.id(), HOSTS[1])?;
+            connect(&plain)
+                .await?
+                .batch_execute(SETUP)
+                .await
+                .map_err(|error| error.to_string())?;
+            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let config = folder.path().join("sqlload.toml");
+            let text = cdc_project(plain.port, &folder.path().join("out.duckdb")).replacen(
+                &format!("host = \"127.0.0.1\"\nport = {}", plain.port),
+                &format!(
+                    "host = \"{}\"\nport = 5432\n{}",
+                    HOSTS[1],
+                    ssh_settings(TUNNEL, &bastion, "")
+                ),
+                1,
+            );
+            std::fs::write(&config, text).map_err(|error| error.to_string())?;
+            let load = spawn_sqlload(&config, &["load", "app", "--follow"], "")?;
             tokio::time::sleep(test_case.drop_after).await;
             bastion
                 .container

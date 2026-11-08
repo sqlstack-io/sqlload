@@ -47,6 +47,11 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/ssh/main/behind_bastion.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/configs/main/streaming_config.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
 

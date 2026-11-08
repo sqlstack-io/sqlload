@@ -121,7 +121,8 @@ ssh = { host = "bastion.example.com", user = "deploy", private_key_file = "~/.ss
 
 - SQLLoad opens the tunnel itself, with no `ssh` program needed. It keeps one session to the
   bastion per run, shared by every table, and closes it when the run ends. It opens no local
-  port, so other processes on the machine can't use the tunnel.
+  TCP port: direct reads use the tunnel in process, and a `postgres_cdc` source's replication
+  session reaches it through a Unix socket in a folder only your user can enter.
 - It signs in with `private_key_file` (with `private_key_passphrase` if the key has one), or with
   each key ssh-agent holds when no file is set. Passwords aren't supported.
 - The bastion's host key must be in `known_hosts` (`~/.ssh/known_hosts` by default). An unknown or
@@ -132,7 +133,8 @@ ssh = { host = "bastion.example.com", user = "deploy", private_key_file = "~/.ss
   `postgres_cdc` source resumes from its slot on the next run.
 - `sqlload debug` says which hop failed: the tunnel, or the database through it. `plan` shows the
   route on each table's `source` line, for example `via ssh deploy@bastion.example.com:22`.
-- Postgres connections only for now. Copy URIs, jump chains and `~/.ssh/config` aren't read.
+- `postgres` and `postgres_cdc` sources only for now: a Python source that names the connection
+  gets its settings but no tunnel. Copy URIs, jump chains and `~/.ssh/config` aren't supported.
 
 ## How Postgres is read
 

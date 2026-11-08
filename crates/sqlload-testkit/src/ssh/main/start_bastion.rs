@@ -2,16 +2,17 @@
 
 use std::time::Duration;
 
-use testcontainers::core::{ExecCommand, IntoContainerPort, WaitFor};
+use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
 
 use crate::ssh::_helpers::key_files::key_files;
-use crate::ssh::constants::{FORWARDING, IMAGE, KEYS_SCRIPT, SSH_PORT, SSH_USER, TAG};
+use crate::ssh::constants::{FORWARDING, IMAGE, SSH_PORT, SSH_USER, TAG};
 use crate::ssh::models::Bastion;
 
-/// A bastion that lets [`SSH_USER`] in with a fresh key and forwards connections to other containers, on a free host port.
+/// A bastion that lets [`SSH_USER`] in with a fresh key and forwards connections to containers on its own network (see [`crate::ssh::main::behind_bastion::behind_bastion`]), on a free host port.
 pub async fn start_bastion() -> Result<Bastion, String> {
+    let network = format!("sqlload-bastion-{}", uuid::Uuid::new_v4().simple());
     let container = GenericImage::new(IMAGE, TAG)
         .with_exposed_port(SSH_PORT.tcp())
         .with_wait_for(WaitFor::message_on_stdout("[ls.io-init] done."))
@@ -20,6 +21,7 @@ pub async fn start_bastion() -> Result<Bastion, String> {
             "/config/sshd/sshd_config.d/forwarding.conf",
             FORWARDING.as_bytes().to_vec(),
         )
+        .with_network(network.clone())
         .with_startup_timeout(Duration::from_secs(120))
         .start()
         .await
@@ -28,20 +30,11 @@ pub async fn start_bastion() -> Result<Bastion, String> {
         .get_host_port_ipv4(SSH_PORT.tcp())
         .await
         .map_err(|error| error.to_string())?;
-    let mut keys = container
-        .exec(ExecCommand::new(["sh", "-c", KEYS_SCRIPT]))
-        .await
-        .map_err(|error| format!("cannot make the bastion's keys: {error}"))?;
-    let output = String::from_utf8(
-        keys.stdout_to_vec()
-            .await
-            .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    let files = key_files(&output, port)?;
+    let files = key_files(&container, port).await?;
     Ok(Bastion {
         port,
         files,
+        network,
         container,
     })
 }

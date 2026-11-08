@@ -22,10 +22,9 @@ use crate::ssh_tunnel::models::TunnelStream;
 pub async fn connect_postgres(
     address: PostgresAddress<'_>,
 ) -> Result<(Client, Encryption), PostgresError> {
-    let shown = format!("{}:{}/{}", address.host, address.port, address.database);
     let tls = RustlsConnect {
         config: client_config(&address.tls).map_err(|reason| PostgresError::Tls {
-            address: shown.clone(),
+            address: address.shown(),
             reason,
         })?,
         encrypted: Arc::new(AtomicBool::new(false)),
@@ -58,12 +57,8 @@ async fn attempt(
     mut tls: RustlsConnect,
 ) -> Result<Client, PostgresError> {
     let settings = client_settings(address, mode);
-    let shown = format!("{}:{}/{}", address.host, address.port, address.database);
     let failed = |source| PostgresError::Connect {
-        address: match address.ssh {
-            Some(tunnel) => format!("{shown} via {}", tunnel.route()),
-            None => shown.clone(),
-        },
+        address: address.shown(),
         source,
     };
     type Connection = Pin<Box<dyn Future<Output = Result<(), tokio_postgres::Error>> + Send>>;
@@ -77,7 +72,7 @@ async fn attempt(
             let handshake =
                 MakeTlsConnect::<TunnelStream>::make_tls_connect(&mut tls, address.host).map_err(
                     |error| PostgresError::Tls {
-                        address: shown.clone(),
+                        address: address.shown(),
                         reason: error.to_string(),
                     },
                 )?;

@@ -6,31 +6,59 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use russh::client::{Config, Handle};
 use russh::keys::agent::client::AgentClient;
-use russh::keys::known_hosts::check_known_hosts_path;
+use russh::keys::known_hosts::known_host_keys_path;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_secret_key};
 
 use crate::ssh_tunnel::constants::{CONNECT_TIMEOUT, KEEPALIVE_INTERVAL, KEEPALIVE_MAX};
 use crate::ssh_tunnel::models::{HostCheck, SshTunnel};
 
-/// The open sessions, one per bastion and sign-in, shared by every connection through it while it stays open. A session ends with the runtime that opened it, so each run opens its own.
-static SESSIONS: OnceLock<tokio::sync::Mutex<HashMap<String, Arc<Handle<HostCheck>>>>> =
-    OnceLock::new();
+/// One bastion's session, opened by one runtime; locked while it opens, so connections to other bastions don't wait on it.
+type Slot = Arc<tokio::sync::Mutex<Option<Arc<Handle<HostCheck>>>>>;
 
-/// The open session with the bastion of `tunnel`, opening one when there is none or it closed.
-pub(crate) async fn shared_session(tunnel: &SshTunnel) -> Result<Arc<Handle<HostCheck>>, String> {
+/// The sessions, one per runtime, bastion and sign-in. A session's task runs on the runtime that opened it and ends with it, so two runs in one process (Python threads, say) never share one, and each run closes its own.
+static SESSIONS: OnceLock<Mutex<HashMap<String, Slot>>> = OnceLock::new();
+
+/// The slot for `tunnel` on the current runtime; with `prune`, other slots whose sessions closed (their runs ended) go.
+fn slot(tunnel: &SshTunnel, prune: bool) -> Slot {
     let key = format!(
-        "{}|{:?}|{:?}",
+        "{}|{}|{:?}|{:?}",
+        tokio::runtime::Handle::current().id(),
         tunnel.route(),
         tunnel.private_key_file,
         tunnel.known_hosts
     );
-    let mut sessions = SESSIONS.get_or_init(Default::default).lock().await;
-    if let Some(session) = sessions.get(&key).filter(|session| !session.is_closed()) {
-        return Ok(session.clone());
+    let mut slots = SESSIONS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if prune {
+        slots.retain(|other, slot| {
+            *other == key
+                || slot.try_lock().map_or(true, |session| {
+                    session.as_ref().is_some_and(|open| !open.is_closed())
+                })
+        });
     }
-    let session = Arc::new(open_session(tunnel).await?);
-    sessions.insert(key, session.clone());
-    Ok(session)
+    slots.entry(key).or_default().clone()
+}
+
+/// The open session with the bastion of `tunnel`, opening one when there is none or it closed.
+pub(crate) async fn shared_session(tunnel: &SshTunnel) -> Result<Arc<Handle<HostCheck>>, String> {
+    let slot = slot(tunnel, true);
+    let mut session = slot.lock().await;
+    if let Some(open) = session.as_ref().filter(|open| !open.is_closed()) {
+        return Ok(open.clone());
+    }
+    let open = Arc::new(open_session(tunnel).await?);
+    *session = Some(open.clone());
+    Ok(open)
+}
+
+/// Whether this runtime's session with the bastion of `tunnel` was open and has since closed: a connection through it that failed failed because the tunnel went.
+pub(crate) fn session_closed(tunnel: &SshTunnel) -> bool {
+    slot(tunnel, false)
+        .try_lock()
+        .is_ok_and(|session| session.as_ref().is_some_and(|open| open.is_closed()))
 }
 
 /// `path` with a leading `~/` read as the home folder.
@@ -52,19 +80,37 @@ pub(crate) fn host_key_refusal(check: &HostCheck, key: &PublicKeyOrCertificate) 
         22 => check.host.clone(),
         port => format!("[{}]:{port}", check.host),
     };
-    match check_known_hosts_path(&check.host, check.port, key, &check.known_hosts) {
-        Ok(true) => None,
-        Ok(false) => Some(format!(
-            "the bastion's host key {fingerprint} ({}) is not in {shown}; once its administrator confirms that fingerprint, add it with `ssh-keyscan -p {} {} >> {shown}` (entries for {listed})",
+    if !check.known_hosts.is_file() {
+        return Some(format!(
+            "{shown} is missing or not a file, so the bastion's host key {fingerprint} ({}) cannot be checked; once its administrator confirms that fingerprint, add it with `ssh-keyscan -p {} {} >> {shown}` and compare the fingerprint it prints",
+            key.algorithm(),
+            check.port,
+            check.host,
+        ));
+    }
+    let listed_keys = match known_host_keys_path(&check.host, check.port, &check.known_hosts) {
+        Ok(keys) => keys,
+        Err(error) => return Some(format!("cannot read {shown}: {error}")),
+    };
+    match (
+        listed_keys.iter().any(|(_, listed_key)| listed_key == key),
+        listed_keys
+            .iter()
+            .any(|(_, listed_key)| listed_key.algorithm() == key.algorithm()),
+    ) {
+        (true, _) => None,
+        (false, true) => Some(format!(
+            "the bastion's host key changed: it now presents {fingerprint} ({}), which {shown} does not list for {listed}; if the change is expected, remove the old entry with `ssh-keygen -R '{listed}' -f {shown}`, then add the new one with `ssh-keyscan -p {} {} >> {shown}` and compare the fingerprint it prints",
             key.algorithm(),
             check.port,
             check.host,
         )),
-        Err(russh::keys::Error::KeyChanged { line }) => Some(format!(
-            "the bastion's host key changed: it now presents {fingerprint} ({}), unlike line {line} of {shown}; if the change is expected, replace that line (`ssh-keygen -R '{listed}' -f {shown}`, then `ssh-keyscan`)",
+        (false, false) => Some(format!(
+            "the bastion's host key {fingerprint} ({}) is not in {shown}; once its administrator confirms that fingerprint, add it with `ssh-keyscan -p {} {} >> {shown}` and compare the fingerprint it prints",
             key.algorithm(),
+            check.port,
+            check.host,
         )),
-        Err(error) => Some(format!("cannot read {shown}: {error}")),
     }
 }
 
@@ -169,7 +215,7 @@ async fn agent_sign_in(
                 &mut agent,
             )
             .await
-            .map_err(|error| format!("ssh-agent could not sign: {error}"))?;
+            .map_err(|error| format!("signing in with ssh-agent's keys failed: {error}"))?;
         if accepted.success() {
             return Ok(session);
         }

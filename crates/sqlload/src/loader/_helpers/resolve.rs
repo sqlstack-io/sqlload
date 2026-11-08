@@ -46,6 +46,7 @@ pub(crate) fn resolve_tables(
                 spec.tunnel = project
                     .connections
                     .get(&source.connection)
+                    .filter(|_| source.reads_postgres())
                     .and_then(|connection| match connection {
                         ConnectionConfig::Postgres { ssh, .. } => {
                             ssh.as_ref().map(SshTunnel::route)
