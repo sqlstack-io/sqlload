@@ -19,10 +19,10 @@ path = "{source}/{table}/dt={cursor:date}/"
 |-----|---------|
 | `connection` | An `s3` or `filesystem` connection. |
 | `path` | Each table's folder: a template with `{source}`, `{schema}`, `{table}`, and `{cursor}` or `{cursor:date}` to partition by the cursor. Default `{source}/{table}/`. |
-| `format` | `parquet` (default), or from 0.26.0 (not released yet) `csv`. See [CSV files](#csv-files). |
-| `compression` | From 0.26.0. CSV only: `none` (default), `gzip` or `zstd`. |
-| `csv` | From 0.26.0. CSV only: `{ delimiter, header, quote, null_value }`. Default `{ delimiter = ",", header = true, quote = '"', null_value = "" }`. |
-| `single_file` | From 0.26.0. Write one file per table, or per partition, named after the table folder. Default `false`. |
+| `format` | `parquet` (default), or from 0.27.0 (not released yet) `csv`. See [CSV files](#csv-files). |
+| `compression` | From 0.27.0. CSV only: `none` (default), `gzip` or `zstd`. |
+| `csv` | From 0.27.0. CSV only: `{ delimiter, header, quote, null_value }`. Default `{ delimiter = ",", header = true, quote = '"', null_value = "" }`. |
+| `single_file` | From 0.27.0. Write one file per table, or per partition, named after the table folder. Default `false`. |
 | `max_footer_reads` | The most Parquet footers `plan` reads for one table's schema. Default 100. |
 
 A source's `destination_path`, or one table's, overrides the target's `path`.
@@ -61,7 +61,7 @@ progress, and the run log of `state = "logged"` tables. Run one load at a time p
 
 ## Replacing a table
 
-From sqlload 0.26.0, which isn't released yet: in a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
+From sqlload 0.27.0, which isn't released yet: in a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
 table folder, carry over every file of the table folder that the load doesn't replace (the
 `_sqlload/runs/` log, and any file you keep beside the data), then swap the two folders in one rename
 (`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
@@ -75,7 +75,7 @@ both. `delete_insert` works this way in both stores, as the plan's `note` says.
 
 ## CSV files
 
-From sqlload 0.26.0, which isn't released yet, a files target can write CSV instead of Parquet.
+From sqlload 0.27.0, which isn't released yet, a files target can write CSV instead of Parquet.
 
 ```toml
 [targets.exports]
