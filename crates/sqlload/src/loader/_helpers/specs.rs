@@ -254,6 +254,7 @@ pub(crate) fn build_spec(
         logged: layered(&settings.state, &defaults.state)
             .is_some_and(|(value, _)| value == StateMode::Logged),
         approved: false,
+        tunnel: None,
         new_tables: context.source.new_tables,
         checks,
         files: None,

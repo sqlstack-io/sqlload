@@ -42,6 +42,18 @@ too.
 | `sslmode` | `prefer` | `disable`, `prefer`, `require`, `verify-ca` or `verify-full`, as in libpq. See [TLS](/docs/sources/postgres/#tls). |
 | `sslrootcert` | none | CA certificates (PEM) to trust, instead of the public roots built into SQLLoad. |
 | `sslcert`, `sslkey` | none | A client certificate and its private key (PEM). Set both or neither. |
+| `ssh` | none | From 0.27.0 (not released yet). A bastion to reach `host` through. See [SSH tunnels](/docs/sources/postgres/#ssh-tunnels). |
+
+The `ssh` table, from 0.27.0 (not released yet):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `host` | required | The bastion. |
+| `port` | 22 | |
+| `user` | required | |
+| `private_key_file` | ssh-agent | The private key to sign in with. `~/` is the home folder. Without it, SQLLoad tries each key ssh-agent holds. |
+| `private_key_passphrase` | none | Use `${ENV:NAME}`. |
+| `known_hosts` | `~/.ssh/known_hosts` | The file the bastion's host key must be listed in. |
 
 ### `snowflake`
 

@@ -18,6 +18,7 @@ pub async fn connect(postgres: &Postgres) -> Result<Client, String> {
             password: Some(PASSWORD),
             database: DATABASE,
             tls: PostgresTls::default(),
+            ssh: None,
         };
         match connect_postgres(address).await {
             Ok((client, _)) => return Ok(client),

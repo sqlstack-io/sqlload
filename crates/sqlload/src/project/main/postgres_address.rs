@@ -18,10 +18,16 @@ pub fn postgres_address<'a>(
         sslrootcert,
         sslcert,
         sslkey,
+        ssh,
     }) = project.connections.get(name)
     else {
         return Err(format!("connection {name:?} is not a Postgres connection"));
     };
+    if ssh.is_some() && host.starts_with('/') {
+        return Err(format!(
+            "connection {name:?} sets ssh, so its host must be a host name or address the bastion can reach, not the Unix socket folder {host}"
+        ));
+    }
     Ok(PostgresAddress {
         host,
         port: *port,
@@ -34,5 +40,6 @@ pub fn postgres_address<'a>(
             cert: sslcert.as_deref(),
             key: sslkey.as_deref(),
         },
+        ssh: ssh.as_ref(),
     })
 }

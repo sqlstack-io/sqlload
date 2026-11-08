@@ -389,6 +389,7 @@ fn given_the_replication_relay_when_opening_it_then_it_checks_like_a_direct_conn
                     root_cert: root.as_deref(),
                     ..PostgresTls::default()
                 },
+                ssh: None,
             };
             let relayed = relay_tls(&address).await;
             let error = relayed
@@ -447,6 +448,7 @@ fn given_a_relay_when_its_session_is_taken_then_its_socket_folder_is_gone() -> R
                     root_cert: Some(&root),
                     ..PostgresTls::default()
                 },
+                ssh: None,
             };
             let folder = relay_tls(&address)
                 .await

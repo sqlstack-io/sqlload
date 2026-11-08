@@ -54,6 +54,7 @@ regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json", "form", "query", "gzip"] }
 rlimit = "0.11"
 rsa = { version = "0.9", features = ["pem"] }
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa"] }
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
