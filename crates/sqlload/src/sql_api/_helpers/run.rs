@@ -27,8 +27,13 @@ pub(crate) async fn run_script(client: &SqlClient, body: Value) -> Result<Vec<Sq
     let mut results: Vec<SqlRows> = Vec::with_capacity(handles.len());
     for handle in handles {
         let path = format!("/api/v2/statements/{handle}");
-        let response =
-            check_response(request(client, reqwest::Method::GET, &path)?.send().await?).await?;
+        let response = check_response(
+            request(client, reqwest::Method::GET, &path)
+                .await?
+                .send()
+                .await?,
+        )
+        .await?;
         let page: Value = response.json().await?;
         results.push(collect_partitions(client, &page, &handle).await?);
     }
@@ -37,7 +42,8 @@ pub(crate) async fn run_script(client: &SqlClient, body: Value) -> Result<Vec<Sq
 
 /// The final response to `body`, polling while it runs.
 async fn run_to_end(client: &SqlClient, body: Value) -> Result<Value, ApiError> {
-    let sent = request(client, reqwest::Method::POST, "/api/v2/statements")?
+    let sent = request(client, reqwest::Method::POST, "/api/v2/statements")
+        .await?
         .json(&body)
         .send()
         .await?;
@@ -54,7 +60,12 @@ async fn run_to_end(client: &SqlClient, body: Value) -> Result<Value, ApiError> 
         }
         tokio::time::sleep(POLL_INTERVAL).await;
         let path = format!("/api/v2/statements/{handle}");
-        response =
-            check_response(request(client, reqwest::Method::GET, &path)?.send().await?).await?;
+        response = check_response(
+            request(client, reqwest::Method::GET, &path)
+                .await?
+                .send()
+                .await?,
+        )
+        .await?;
     }
 }

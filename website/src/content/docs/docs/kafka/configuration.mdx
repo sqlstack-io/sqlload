@@ -35,7 +35,7 @@ every section.
 |-----|---------|---------|
 | `kind` | required | `snowflake`. |
 | `account`, `user` | required | The Snowflake account and user. |
-| `auth` | required | `{ method = "pat", token = "..." }` or `{ method = "key_pair", private_key_file = "..." }`. |
+| `auth` | required | `{ method = "pat", token = "..." }` or `{ method = "key_pair", private_key_file = "..." }`. From 0.27.0 (not released yet), browser sign-in (`oauth_authorization_code`) works too, but it needs a person at a terminal, so it doesn't suit a long-running exporter. |
 | `role` | none | The role to use. |
 | `warehouse` | none | Needed for `COPY` loads, `plan` and `apply`; streaming doesn't use it. |
 | `database`, `schema` | required | Where the tables, stages and pipes go. |

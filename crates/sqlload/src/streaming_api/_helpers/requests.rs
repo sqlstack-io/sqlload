@@ -27,7 +27,7 @@ pub(crate) async fn send(
             .http
             .request(method.clone(), format!("{}{path}", access.base))
             .query(&[("requestId", uuid::Uuid::new_v4().to_string())]);
-        let request = authorize(client, request, &access)?;
+        let request = authorize(client, request, &access).await?;
         match check_response(build(request).send().await?).await {
             Err(error) if error.status() == Some(UNAUTHORIZED) && !refreshed => {
                 refreshed = true;
@@ -38,7 +38,7 @@ pub(crate) async fn send(
     }
 }
 
-fn authorize(
+async fn authorize(
     client: &StreamingClient,
     request: reqwest::RequestBuilder,
     access: &IngestAccess,
@@ -46,7 +46,7 @@ fn authorize(
     if let Some(token) = &access.scoped_token {
         return Ok(request.bearer_auth(token));
     }
-    let bearer = client.auth.bearer()?;
+    let bearer = client.auth.bearer().await?;
     Ok(request
         .bearer_auth(bearer.token)
         .header("X-Snowflake-Authorization-Token-Type", bearer.token_type))
@@ -79,7 +79,7 @@ pub(crate) async fn access(client: &StreamingClient) -> Result<IngestAccess, Api
 }
 
 async fn discover_host(client: &StreamingClient) -> Result<String, ApiError> {
-    let bearer = client.auth.bearer()?;
+    let bearer = client.auth.bearer().await?;
     let response = client
         .http
         .get(format!("{}/v2/streaming/hostname", client.account_url))
@@ -92,7 +92,7 @@ async fn discover_host(client: &StreamingClient) -> Result<String, ApiError> {
 }
 
 async fn scoped_token(client: &StreamingClient, host: &str) -> Result<String, ApiError> {
-    let bearer = client.auth.bearer()?;
+    let bearer = client.auth.bearer().await?;
     let response = client
         .http
         .post(format!("{}/oauth/token", client.account_url))

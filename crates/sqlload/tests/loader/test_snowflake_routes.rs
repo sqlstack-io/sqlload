@@ -684,7 +684,7 @@ fn given_an_external_stage_when_debugging_then_its_state_is_reported() -> Result
         DebugStageTestCase {
             description: "a stage that exists and lists",
             prepare: stage_exists,
-            expected_line: "ok    target dev  LOADER; stage @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\" reads s3://fake-bucket/ and lists",
+            expected_line: "ok    target dev  LOADER, signed in with a programmatic access token; stage @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\" reads s3://fake-bucket/ and lists",
             expected_sent: "LIST @\"DB\".\"RAW\".\"_SQLLOAD_STAGE\"/_sqlload/",
         },
         DebugStageTestCase {

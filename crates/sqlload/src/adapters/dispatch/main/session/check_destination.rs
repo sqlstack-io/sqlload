@@ -55,6 +55,7 @@ pub async fn check_destination(destination: Destination) -> Result<String, Loade
             let answer = single_text(&destination, query.to_owned())
                 .await?
                 .unwrap_or_default();
+            let answer = format!("{answer}, signed in with {}", snowflake.auth.describe());
             let ForcedStage::External(stage) = &snowflake.stage else {
                 return Ok(answer);
             };

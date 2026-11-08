@@ -112,8 +112,23 @@ pub enum DestinationKind {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthConfig {
-    Pat { token: Secret },
-    KeyPair { private_key_file: PathBuf },
+    Pat {
+        token: Secret,
+    },
+    KeyPair {
+        private_key_file: PathBuf,
+    },
+    /// Sign in once in the browser (Snowflake OAuth for local applications, with PKCE); the tokens are cached and refreshed.
+    OauthAuthorizationCode {
+        /// A custom OAuth security integration's client; default Snowflake's built-in `LOCAL_APPLICATION`.
+        #[serde(default)]
+        client_id: Option<String>,
+        #[serde(default)]
+        client_secret: Option<Secret>,
+        /// The redirect URI registered on a custom integration, on 127.0.0.1; default a free local port.
+        #[serde(default)]
+        redirect_uri: Option<String>,
+    },
 }
 
 /// How batches reach the warehouse.
