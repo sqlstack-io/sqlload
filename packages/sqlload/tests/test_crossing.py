@@ -372,3 +372,43 @@ def test_given_decimals_when_crossed_then_the_column_holds_every_value_exactly(c
 	table = read(iter([{"v": value} for value in values]), crossing=crossing)
 	assert str(table.schema.field("v").type) == expected_type
 	assert table.column("v").to_pylist() == expected_values
+
+
+def test_given_fields_when_json_and_ndjson_cross_then_only_those_values_load_renamed() -> None:
+	rows = [{"id": 1, "code": "A1", "address": {"city": "Leeds"}, "updated-at": "2026-01-02T03:04:05Z", "noise": True}, {"id": 2, "code": "B2"}]
+	fields = {"id": "$.id", "account_code": "$.code", "city": "$.address.city", "updated_at": sl.field("$.updated-at")}
+	forms = {
+		"json": sl.json(stdlib_json.dumps({"data": {"items": rows}}), path="data.items", fields=fields, keep_record="raw"),
+		"ndjson": sl.ndjson(b"\n".join(orjson.dumps(row) for row in rows), fields=fields, keep_record="raw"),
+	}
+	for name, data in forms.items():
+		table = read(iter([data]))
+		assert table.column_names == ["id", "account_code", "city", "updated_at", "raw"], name
+		assert str(table.schema.field("updated_at").type) == "timestamp[us, tz=UTC]", name
+		assert [stdlib_json.loads(raw) for raw in table.column("raw").to_pylist()] == rows, name
+		assert table.drop_columns(["raw", "updated_at"]).to_pylist() == [
+			{"id": 1, "account_code": "A1", "city": "Leeds"},
+			{"id": 2, "account_code": "B2", "city": None},
+		], name
+
+
+@pytest.mark.parametrize(
+	("make", "expected_text"),
+	[
+		(lambda: sl.json(b"[]", fields={"id": "id"}), 'field path "id" is not a path'),
+		(lambda: sl.ndjson(b"", keep_record="raw"), "keep_record needs fields"),
+		(lambda: sl.json(b"[]", fields={"id": 1}), "takes a path such as"),
+		(lambda: sl.json(b"[]", fields={1: "$.id"}), "names columns with text"),
+		(lambda: sl.json(b"[]", fields={"id": sl.field("$.id", required="yes")}), "required takes True or False"),
+		(lambda: sl.json(b"[]", fields=[("id", "$.id")]), "fields takes a mapping"),
+	],
+	ids=["path-without-root", "keep-record-alone", "path-not-text", "name-not-text", "required-not-bool", "fields-not-a-mapping"],
+)
+def test_given_bad_fields_when_building_json_data_then_it_fails_at_once(make: Any, expected_text: str) -> None:
+	with pytest.raises((ValueError, TypeError), match=expected_text):
+		make()
+
+
+def test_given_a_required_field_when_a_row_lacks_it_then_the_read_fails_naming_the_row() -> None:
+	with pytest.raises(ValueError, match="row 2: field id needs a value at \\$.id"):
+		read(iter([sl.ndjson(b'{"id":1}\n{"other":2}', fields={"id": sl.field("$.id", required=True)})]))

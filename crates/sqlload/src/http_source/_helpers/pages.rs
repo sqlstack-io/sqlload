@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 use tokio::sync::mpsc::Sender;
 
 use crate::http_source::_helpers::fetch::fetch;
+use crate::http_source::_helpers::job::request_projection;
 use crate::http_source::_helpers::selector::{pointer_text, selected_node, selector};
 use crate::http_source::_helpers::urls::{redacted, request_url};
 use crate::http_source::models::{Calls, Fetched, HttpPage, Paginator, Request, Selector};
@@ -21,6 +22,7 @@ pub(crate) async fn paginate(
     pages: &Sender<HttpPage>,
 ) -> Result<(), String> {
     let rows = selector(request.select.as_deref())?;
+    let projection = request_projection(request)?;
     let rows_path = Some(rows.rows.join(".")).filter(|path| !path.is_empty());
     let first = request_url(&calls.endpoint.base_url, path)?;
     let mut url = with_params(&first, &request.params, &start_params(&request.paginator));
@@ -54,6 +56,7 @@ pub(crate) async fn paginate(
             bytes: fetched.bytes,
             path: rows_path.clone(),
             source: shown,
+            projection: projection.clone(),
         };
         if has_rows && pages.send(page).await.is_err() {
             return Ok(());

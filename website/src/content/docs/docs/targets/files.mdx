@@ -1,9 +1,9 @@
 ---
-title: "Parquet files"
-description: "Write each table as zstd Parquet files in S3 or a local folder, partitioned by a template."
+title: "Parquet and CSV files"
+description: "Write each table as zstd Parquet or CSV files in S3 or a local folder, partitioned by a template."
 ---
 
-A files target writes each table as Parquet files in its own folder.
+A files target writes each table as Parquet or CSV files in its own folder.
 
 ```toml
 [connections.out]
@@ -19,7 +19,10 @@ path = "{source}/{table}/dt={cursor:date}/"
 |-----|---------|
 | `connection` | An `s3` or `filesystem` connection. |
 | `path` | Each table's folder: a template with `{source}`, `{schema}`, `{table}`, and `{cursor}` or `{cursor:date}` to partition by the cursor. Default `{source}/{table}/`. |
-| `format` | `parquet`, the only format and the default. |
+| `format` | `parquet` (default), or from 0.27.0 (not released yet) `csv`. See [CSV files](#csv-files). |
+| `compression` | From 0.27.0. CSV only: `none` (default), `gzip` or `zstd`. |
+| `csv` | From 0.27.0. CSV only: `{ delimiter, header, quote, null_value }`. Default `{ delimiter = ",", header = true, quote = '"', null_value = "" }`. |
+| `single_file` | From 0.27.0. Write one file per table, or per partition, named after the table folder. Default `false`. |
 | `max_footer_reads` | The most Parquet footers `plan` reads for one table's schema. Default 100. |
 
 A source's `destination_path`, or one table's, overrides the target's `path`.
@@ -68,6 +71,67 @@ the table is being loaded by load 3f9c… (started 2026-11-08 09:00:00 UTC, leas
 A lease lasts 10 minutes, so a load that crashed holds the table until then. The next load
 then repairs what it left. Before deleting older files, a load checks that it still holds the
 lease. If its lease lapsed, or another load took the table, it stops without deleting them.
+
+## Replacing a table
+
+From sqlload 0.27.0, which isn't released yet: in a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
+table folder, carry over every file of the table folder that the load doesn't replace (the
+`_sqlload/runs/` log, the load's lease, and any file you keep beside the data), then swap the two folders in one rename
+(`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
+reader sees the old files or the new ones, never both. Where the filesystem can't swap folders in one
+rename, SQLLoad moves the old folder aside first and warns, which leaves a moment with no folder. A
+hidden folder left by a stopped or failed load is deleted by the next load. A table at the root of the
+folder connection has no folder beside it to swap, so it is replaced as in S3.
+
+In S3, `replace` writes the new files first, then deletes the older ones, so a reader in between sees
+both. `delete_insert` works this way in both stores, as the plan's `note` says.
+
+## CSV files
+
+From sqlload 0.27.0, which isn't released yet, a files target can write CSV instead of Parquet.
+
+```toml
+[targets.exports]
+connection = "out"
+path = "{table}/"
+format = "csv"
+compression = "gzip"
+csv = { delimiter = ",", header = true, quote = '"', null_value = "" }
+single_file = true
+```
+
+Files are named `part-<load id>.<commit>-<n>.csv`, with `.gz` or `.zst` added when compressed. With
+`single_file = true` each table, or each partition, is one file named after the table folder, such
+as `orders/orders.csv.gz`. It is held in memory and written whole at the end of the load, which
+commits in one piece; a load that would hold more than 2 GiB fails instead. Outside the local
+`replace` swap, the file is overwritten in place, so a load that fails while writing several
+partitions can leave some partitions new and others old until it is rerun. A table whose columns
+grow partway through a load (a Python source adding a column) can't use `single_file`.
+
+Columns are written in the table's order, the loader's `_sqlload_load_id` and `_sqlload_loaded_at`
+last. Values are rendered the same way on every load:
+
+| Type | Written as |
+|------|------------|
+| `text`, `varchar`, `uuid` | As is |
+| `int`, `smallint` | Digits, with `-` when negative |
+| `decimal(p,s)` | Plain digits with exactly `s` decimals, such as `-0.05` |
+| `float` | The shortest digits that read back the same value, never an exponent, such as `0.0000001`; `NaN`, `Infinity`, `-Infinity` |
+| `bool` | `true`, `false` |
+| `date` | `2026-11-08` |
+| `time` | `05:00:00.123456` |
+| `timestamp_tz` | In UTC: `2026-11-08T05:00:00.123456Z` (years outside 0 to 9999 as `+10000-…`) |
+| `timestamp_ntz` | `2026-11-08T05:00:00.123456` |
+| `json` | Compact JSON text: no whitespace outside strings, keys in their order |
+| `binary` | Lowercase hex |
+
+A value is quoted when it is empty, equals `null_value`, or holds the delimiter, the quote or a line
+break; a quote inside it is written twice. NULL is written as `null_value`, unquoted, so with the
+default empty `null_value` a NULL is an empty field and an empty string is `""`.
+
+`plan` doesn't compare an existing CSV table's columns with the new ones, since CSV files have no
+footers. For the same reason, `append` by a `{cursor:date}` partition and `postgres_cdc` sources
+need Parquet, and `single_file` doesn't take `append`; `plan` says so.
 
 ## Limitations
 

@@ -3,21 +3,28 @@ use serde::de::{DeserializeSeed, Deserializer, Error as _, MapAccess, SeqAccess,
 use serde_json::value::RawValue;
 
 use crate::row_batches::_helpers::cells::number_cell;
-use crate::row_batches::models::{Cell, RowColumns};
+use crate::row_batches::_helpers::projection_seed::projected_values;
+use crate::row_batches::models::{Cell, Projection, RowColumns};
 
 /// Collects parsed rows and hands them to `on_rows` every `batch_rows` rows.
 pub(crate) struct RowSink<F: FnMut(RowColumns) -> Result<(), String>> {
     columns: RowColumns,
     batch_rows: usize,
     on_rows: F,
+    /// Which values of each object load, when not all of them.
+    projection: Option<Projection>,
+    /// Rows read so far, for errors naming a row.
+    read: u64,
 }
 
 impl<F: FnMut(RowColumns) -> Result<(), String>> RowSink<F> {
-    pub(crate) fn new(batch_rows: usize, on_rows: F) -> Self {
+    pub(crate) fn new(batch_rows: usize, projection: Option<Projection>, on_rows: F) -> Self {
         Self {
             columns: RowColumns::new(),
             batch_rows: batch_rows.max(1),
             on_rows,
+            projection,
+            read: 0,
         }
     }
 
@@ -30,6 +37,7 @@ impl<F: FnMut(RowColumns) -> Result<(), String>> RowSink<F> {
     }
 
     fn end_row(&mut self) -> Result<(), String> {
+        self.read += 1;
         self.columns.end_row();
         match self.columns.rows() >= self.batch_rows {
             true => (self.on_rows)(std::mem::take(&mut self.columns)),
@@ -47,7 +55,46 @@ impl<'de, F: FnMut(RowColumns) -> Result<(), String>> DeserializeSeed<'de> for O
     type Value = ();
 
     fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
-        deserializer.deserialize_map(self)
+        match self.0.projection.is_some() {
+            true => {
+                let raw = <&'de RawValue>::deserialize(deserializer)?;
+                self.0.project(raw).map_err(D::Error::custom)
+            }
+            false => deserializer.deserialize_map(self),
+        }
+    }
+}
+
+impl<F: FnMut(RowColumns) -> Result<(), String>> RowSink<F> {
+    /// Push the projected values of the row object `raw`: each field's value, NULL when missing, and the whole object for `keep_record`.
+    fn project(&mut self, raw: &RawValue) -> Result<(), String> {
+        let row = self.read + 1;
+        let Self {
+            projection: Some(projection),
+            columns,
+            ..
+        } = self
+        else {
+            return Ok(());
+        };
+        let values = projected_values(raw, &projection.tree, projection.fields.len())?;
+        for (field, value) in projection.fields.iter().zip(values) {
+            let cell = match value {
+                Some(value) => raw_cell(value.get()).map_err(|error| error.to_string())?,
+                None => Cell::Null,
+            };
+            if field.required && cell == Cell::Null {
+                return Err(format!(
+                    "row {row}: field {} needs a value at {}, and the row has none",
+                    field.name, field.text
+                ));
+            }
+            columns.push(&field.name, cell);
+        }
+        if let Some(kept) = &projection.keep_record {
+            columns.push(kept, Cell::Json(compact(raw.get())));
+        }
+        self.end_row()
     }
 }
 
@@ -95,13 +142,13 @@ impl<'de, F: FnMut(RowColumns) -> Result<(), String>> Visitor<'de> for ArraySeed
 }
 
 /// An object key, borrowed from the input unless it has escapes.
-enum Key<'de> {
+pub(crate) enum Key<'de> {
     Borrowed(&'de str),
     Owned(String),
 }
 
 impl Key<'_> {
-    fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Key::Borrowed(text) => text,
             Key::Owned(text) => text,

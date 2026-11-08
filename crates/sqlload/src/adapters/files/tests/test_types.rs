@@ -1,9 +1,12 @@
 use std::time::Duration;
 
+use arrow_array::ArrayRef;
+use arrow_schema::Field;
+
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::files::models::{FolderClaim, PartitionBy, PendingPhase};
 use crate::column_types::models::ColumnType;
-use crate::project::models::WriteStrategy;
+use crate::project::models::{CsvOutput, OutputCompression, WriteStrategy};
 use crate::store_paths::models::StoreKind;
 
 pub(crate) struct TablePathTestCase {
@@ -158,4 +161,44 @@ pub(crate) struct CommittedRepairTestCase {
     pub(crate) expected_left: &'static [&'static str],
     /// The run record object's text after repair.
     pub(crate) expected_record: &'static str,
+}
+
+pub(crate) struct CsvRenderTestCase {
+    pub(crate) description: &'static str,
+    /// The columns of one batch, each with its field.
+    pub(crate) columns: Vec<(Field, ArrayRef)>,
+    pub(crate) csv: CsvOutput,
+    /// The whole file's text, header included, or text the error must contain.
+    pub(crate) expected_text: Result<&'static str, &'static str>,
+}
+
+pub(crate) struct CsvCompressionTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) compression: OutputCompression,
+    /// Reads the file back as plain text.
+    pub(crate) decode: fn(&[u8]) -> Result<Vec<u8>, String>,
+    /// Rows of text written, in batches of 10,000.
+    pub(crate) rows: usize,
+    /// The compressed file's first bytes: its format's magic number, or the header for plain text.
+    pub(crate) expected_magic: &'static [u8],
+}
+
+pub(crate) struct SwapFolderTestCase {
+    pub(crate) description: &'static str,
+    /// Files in the table folder before the swap; empty when the folder does not exist yet.
+    pub(crate) live: &'static [&'static str],
+    /// Of those, the files the load replaces.
+    pub(crate) replaced: &'static [&'static str],
+    /// Files the load wrote into its staging folder.
+    pub(crate) staged: &'static [&'static str],
+    /// Files in the table folder after the swap.
+    pub(crate) expected_live: &'static [&'static str],
+}
+
+pub(crate) struct RemoveStagedTestCase {
+    pub(crate) description: &'static str,
+    /// Files below the table's parent folder before the cleanup.
+    pub(crate) before: &'static [&'static str],
+    /// Files below the parent folder after it.
+    pub(crate) expected_after: &'static [&'static str],
 }

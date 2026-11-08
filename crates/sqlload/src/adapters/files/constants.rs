@@ -34,6 +34,18 @@ pub const SECONDS_PER_DAY: i64 = 86_400;
 /// The folder below a table's folder holding one marker per load that has not finished.
 pub const PENDING_FOLDER: &str = "_sqlload/pending/";
 
+/// The most a `single_file` commit holds in memory across its open files (2 GiB); each file is stored in one put at the commit, well under S3's 5 GiB limit for one put.
+pub const SINGLE_FILE_MAX_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Marks the hidden folder a filesystem `replace` stages the table in, beside the table folder: `.<table folder>.sqlload-<load id>`.
+pub const STAGED_FOLDER_MARK: &str = ".sqlload-";
+
+/// The length of a load id, a hyphenated UUID, as staging folder names end with it.
+pub const LOAD_ID_LENGTH: usize = 36;
+
+/// Added to a staging folder's name for the old table while a filesystem without a one-rename swap moves it aside.
+pub const MOVED_ASIDE_SUFFIX: &str = "-old";
+
 /// The first line of a pending marker while the load writes its files.
 pub const PENDING_WRITING: &str = "writing";
 
@@ -48,3 +60,33 @@ pub const OPEN_FILE_OVERHEAD_BYTES: usize = 1024 * 1024;
 
 /// The start of a pending marker line holding a run record (keys never start with `@`).
 pub const PENDING_RUN_PREFIX: &str = "@run\t";
+
+/// The file name suffix of the CSV files written, before any compression suffix.
+pub const CSV_SUFFIX: &str = ".csv";
+
+/// The suffix of gzip-compressed CSV files.
+pub const GZIP_SUFFIX: &str = ".gz";
+
+/// The suffix of zstd-compressed CSV files.
+pub const ZSTD_SUFFIX: &str = ".zst";
+
+/// The name suffixes of a files table's data files, whatever format wrote them, so a replace removes files of an earlier format too.
+pub const DATA_SUFFIXES: &[&str] = &[".parquet", ".csv", ".csv.gz", ".csv.zst"];
+
+/// CSV text compressed into one zstd frame once this many bytes wait (4 MiB).
+pub const ZSTD_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+/// The file name of a `single_file` table whose folder has no name of its own.
+pub const SINGLE_FILE_STEM: &str = "data";
+
+/// How timestamps with a zone are written to CSV: RFC 3339 in UTC.
+pub const CSV_TIMESTAMP_TZ: &str = "%Y-%m-%dT%H:%M:%S%.6fZ";
+
+/// How timestamps without a zone are written to CSV.
+pub const CSV_TIMESTAMP: &str = "%Y-%m-%dT%H:%M:%S%.6f";
+
+/// How dates are written to CSV.
+pub const CSV_DATE: &str = "%Y-%m-%d";
+
+/// How times of day are written to CSV.
+pub const CSV_TIME: &str = "%H:%M:%S%.6f";
