@@ -1,6 +1,6 @@
 //! Signing in to the bastion and checking who it is.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -18,33 +18,39 @@ type Slot = Arc<tokio::sync::Mutex<Option<Arc<Handle<HostCheck>>>>>;
 /// The sessions, one per runtime, bastion and sign-in. A session's task runs on the runtime that opened it and ends with it, so two runs in one process (Python threads, say) never share one, and each run closes its own.
 static SESSIONS: OnceLock<Mutex<HashMap<String, Slot>>> = OnceLock::new();
 
-/// The slot for `tunnel` on the current runtime; with `prune`, other slots whose sessions closed (their runs ended) go.
-fn slot(tunnel: &SshTunnel, prune: bool) -> Slot {
-    let key = format!(
+/// The tunnels, by [`slot_key`], whose connections saw their session close: a session can be reopened (by another table) before a failed connection asks, so the closing is kept for the rest of the run.
+static DROPPED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+/// Which session `tunnel` uses on the current runtime: the runtime, the bastion and the sign-in.
+pub(crate) fn slot_key(tunnel: &SshTunnel) -> String {
+    format!(
         "{}|{}|{:?}|{:?}",
         tokio::runtime::Handle::current().id(),
         tunnel.route(),
         tunnel.private_key_file,
         tunnel.known_hosts
-    );
+    )
+}
+
+/// The slot for `key`, after dropping other slots whose sessions closed (their runs ended); a slot someone holds (copies are only made under the lock) stays.
+fn slot(key: &str) -> Slot {
     let mut slots = SESSIONS
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    if prune {
-        slots.retain(|other, slot| {
-            *other == key
-                || slot.try_lock().map_or(true, |session| {
-                    session.as_ref().is_some_and(|open| !open.is_closed())
-                })
-        });
-    }
-    slots.entry(key).or_default().clone()
+    slots.retain(|other, slot| {
+        other == key
+            || Arc::strong_count(slot) > 1
+            || slot.try_lock().map_or(true, |session| {
+                session.as_ref().is_some_and(|open| !open.is_closed())
+            })
+    });
+    slots.entry(key.to_owned()).or_default().clone()
 }
 
 /// The open session with the bastion of `tunnel`, opening one when there is none or it closed.
 pub(crate) async fn shared_session(tunnel: &SshTunnel) -> Result<Arc<Handle<HostCheck>>, String> {
-    let slot = slot(tunnel, true);
+    let slot = slot(&slot_key(tunnel));
     let mut session = slot.lock().await;
     if let Some(open) = session.as_ref().filter(|open| !open.is_closed()) {
         return Ok(open.clone());
@@ -54,11 +60,22 @@ pub(crate) async fn shared_session(tunnel: &SshTunnel) -> Result<Arc<Handle<Host
     Ok(open)
 }
 
-/// Whether this runtime's session with the bastion of `tunnel` was open and has since closed: a connection through it that failed failed because the tunnel went.
+/// Note that a connection through the tunnel `key` saw its session close.
+pub(crate) fn mark_dropped(key: &str) {
+    DROPPED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(key.to_owned());
+}
+
+/// Whether a connection through `tunnel` on this run saw its session close: a connection through it that failed failed because the tunnel went.
 pub(crate) fn session_closed(tunnel: &SshTunnel) -> bool {
-    slot(tunnel, false)
-        .try_lock()
-        .is_ok_and(|session| session.as_ref().is_some_and(|open| open.is_closed()))
+    DROPPED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(&slot_key(tunnel))
 }
 
 /// `path` with a leading `~/` read as the home folder.

@@ -72,6 +72,8 @@ pub struct TunnelStream {
     pub(crate) stream: ChannelStream<Msg>,
     pub(crate) session: Arc<Handle<HostCheck>>,
     pub(crate) route: String,
+    /// The tunnel's session slot, where it notes that it saw the session close.
+    pub(crate) key: String,
 }
 
 /// The route only: the channel and session have no `Debug` of their own.
@@ -88,10 +90,13 @@ impl TunnelStream {
     /// `result`, or the tunnel's closing when it `ended` (the stream ended or failed) because the session closed: then the bastion went away, not the database.
     fn checked<T>(&self, result: io::Result<T>, ended: bool) -> io::Result<T> {
         match ended && self.session.is_closed() {
-            true => Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                format!("the SSH tunnel through {} closed", self.route),
-            )),
+            true => Err({
+                crate::ssh_tunnel::_helpers::session::mark_dropped(&self.key);
+                io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    format!("the SSH tunnel through {} closed", self.route),
+                )
+            }),
             false => result,
         }
     }

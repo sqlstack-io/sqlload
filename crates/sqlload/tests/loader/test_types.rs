@@ -723,7 +723,7 @@ pub(crate) struct CdcSshTestCase {
 /// A load through the bastion whose tunnel drops part way.
 pub(crate) struct TunnelDropTestCase {
     pub(crate) description: &'static str,
-    /// How long into the load the bastion stops.
+    /// How long into the load (or, following, after streaming starts) the bastion stops.
     pub(crate) drop_after: std::time::Duration,
     pub(crate) expected_success: bool,
     /// Text the output holds; `SSH_PORT` stands for the bastion's port.

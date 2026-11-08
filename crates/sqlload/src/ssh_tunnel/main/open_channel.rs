@@ -2,7 +2,7 @@
 
 use russh::ChannelOpenFailure;
 
-use crate::ssh_tunnel::_helpers::session::shared_session;
+use crate::ssh_tunnel::_helpers::session::{shared_session, slot_key};
 use crate::ssh_tunnel::errors::SshError;
 use crate::ssh_tunnel::models::{SshTunnel, TunnelStream};
 
@@ -33,5 +33,6 @@ pub async fn open_channel(
         stream: channel.into_stream(),
         session,
         route,
+        key: slot_key(tunnel),
     })
 }

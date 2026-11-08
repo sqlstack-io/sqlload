@@ -19,6 +19,8 @@ use crate::test_types::{CdcSshTestCase, SshDebugTestCase, TlsServer, TunnelDropT
 const OK: &str = "ok    source app  ";
 /// The servers' names on the bastion's network, which only the bastion resolves, indexed by [`TlsServer`].
 const HOSTS: [&str; 2] = ["db-tls", "db-plain"];
+/// Waits, up to a minute, until the server streams changes to a replication session (past its snapshot).
+const STREAMING: &str = "DO $$ BEGIN FOR attempt IN 1..120 LOOP EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_replication WHERE state = 'streaming'); PERFORM pg_sleep(0.5); END LOOP; END $$;";
 /// How `debug` starts a source line that failed.
 const FAIL: &str = "fail  source app  ";
 /// A tunnel the bastion accepts: the right key, and its host keys known.
@@ -275,7 +277,7 @@ fn given_a_follow_through_a_bastion_when_the_tunnel_drops_then_it_fails_naming_i
 -> Result<(), String> {
     let test_cases = [TunnelDropTestCase {
         description: "the bastion stops while load --follow streams changes",
-        drop_after: Duration::from_secs(10),
+        drop_after: Duration::from_secs(1),
         expected_success: false,
         expected_text: "logical replication: the SSH tunnel through ssh loader@127.0.0.1:SSH_PORT closed",
     }];
@@ -284,8 +286,8 @@ fn given_a_follow_through_a_bastion_when_the_tunnel_drops_then_it_fails_naming_i
             let bastion = start_bastion().await?;
             let plain = start_postgres().await?;
             behind_bastion(&bastion, plain.container.id(), HOSTS[1])?;
-            connect(&plain)
-                .await?
+            let client = connect(&plain).await?;
+            client
                 .batch_execute(SETUP)
                 .await
                 .map_err(|error| error.to_string())?;
@@ -302,6 +304,10 @@ fn given_a_follow_through_a_bastion_when_the_tunnel_drops_then_it_fails_naming_i
             );
             std::fs::write(&config, text).map_err(|error| error.to_string())?;
             let load = spawn_sqlload(&config, &["load", "app", "--follow"], "")?;
+            client
+                .batch_execute(STREAMING)
+                .await
+                .map_err(|error| error.to_string())?;
             tokio::time::sleep(test_case.drop_after).await;
             bastion
                 .container
