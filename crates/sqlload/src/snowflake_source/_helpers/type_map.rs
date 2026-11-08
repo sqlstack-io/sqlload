@@ -28,9 +28,14 @@ pub(crate) enum Family {
     Other,
 }
 
-/// The family of a type as Snowflake prints it, such as `NUMBER(38,0)`, `VARCHAR(16777216)` or `TIMESTAMP_TZ(9)`.
+/// The family of a type as Snowflake prints it, such as `NUMBER(38,0)`, `VARCHAR(16777216)`, `TIMESTAMP_TZ(9)` or, from `DESCRIBE`, `VARCHAR(10) COLLATE 'en-ci'`.
 pub(crate) fn family(type_text: &str) -> Family {
     let upper = type_text.trim().to_ascii_uppercase();
+    let upper = upper
+        .split(" COLLATE ")
+        .next()
+        .unwrap_or_default()
+        .to_owned();
     let (base, arguments) = match upper.split_once('(') {
         Some((base, rest)) => (base.trim(), rest.trim_end_matches(')')),
         None => (upper.as_str(), ""),

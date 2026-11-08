@@ -7,6 +7,7 @@ use arrow_schema::{DataType, Field, Schema};
 use crate::column_types::models::ColumnType;
 use crate::postgres_source::models::{PgType, ReadColumn, SourceColumn, SourceTable, WireType};
 use crate::snowflake_source::_helpers::convert::{convert_batch, output_schema};
+use crate::sql_api::models::SqlRows;
 
 fn column(
     name: &str,
@@ -80,4 +81,15 @@ pub(crate) fn convert_values(
             array_value_to_string(converted.column(0), row).map_err(|error| error.to_string())
         })
         .collect()
+}
+
+/// A SQL API result with `columns` and `rows`.
+pub(crate) fn sql_rows(columns: &[&str], rows: &[Vec<Option<&str>>]) -> SqlRows {
+    SqlRows {
+        columns: columns.iter().map(|column| (*column).to_owned()).collect(),
+        rows: rows
+            .iter()
+            .map(|row| row.iter().map(|value| value.map(str::to_owned)).collect())
+            .collect(),
+    }
 }
