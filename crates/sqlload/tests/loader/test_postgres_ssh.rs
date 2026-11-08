@@ -6,14 +6,13 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_tls::start_postgres_tls;
 use sqlload_testkit::ssh::main::start_bastion::start_bastion;
-use sqlload_testkit::ssh::models::Bastion;
 
 use crate::helpers::{
     CDC_CHANGES, bridge_address, cdc_project, described_project, duckdb_text, run_async,
-    run_sqlload, spawn_sqlload, stop_sqlload, tls_project,
+    run_sqlload, spawn_sqlload, ssh_settings, stop_sqlload, tls_project,
 };
 use crate::test_postgres_cdc::{MERGED_QUERY, MERGED_RESULT, SETUP};
-use crate::test_types::{CdcSshTestCase, SshDebugTestCase, TlsServer};
+use crate::test_types::{CdcSshTestCase, SshDebugTestCase, TlsServer, TunnelDropTestCase};
 
 /// How `debug` starts a source line that connected.
 const OK: &str = "ok    source app  ";
@@ -21,14 +20,6 @@ const OK: &str = "ok    source app  ";
 const FAIL: &str = "fail  source app  ";
 /// A tunnel the bastion accepts: the right key, and its host keys known.
 const TUNNEL: &str = "ssh = { host = \"127.0.0.1\", port = SSH_PORT, user = \"loader\", private_key_file = \"KEYS/client.key\", known_hosts = \"KEYS/known_hosts\" }";
-
-/// `settings` with its placeholders filled for `bastion` and the test certificates in `files`.
-fn filled(settings: &str, bastion: &Bastion, files: &str) -> String {
-    settings
-        .replace("SSH_PORT", &bastion.port.to_string())
-        .replace("KEYS", &bastion.files.path().display().to_string())
-        .replace("FILES", files)
-}
 
 /// `debug` through a bastion: which hop failed, and what protects the connection when it opens; TLS runs end to end with the database, whose own name `verify-full` checks.
 #[test]
@@ -117,7 +108,7 @@ fn given_a_bastion_when_debugging_then_it_names_the_hop_that_failed() -> Result<
         ];
         let files = tls.files.path().display().to_string();
         for test_case in test_cases {
-            let settings = filled(test_case.settings, &bastion, &files);
+            let settings = ssh_settings(test_case.settings, &bastion, &files);
             let host = &hosts[test_case.server as usize];
             let text = tls_project((host, test_case.port, test_case.user), &settings);
             let project = described_project(&text).await?;
@@ -169,7 +160,7 @@ fn given_a_bastion_when_capturing_changes_then_they_land_once() -> Result<(), St
             let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
             let config = folder.path().join("sqlload.toml");
             let database = folder.path().join("out.duckdb");
-            let settings = filled(
+            let settings = ssh_settings(
                 &format!("{}\n{TUNNEL}", test_case.settings),
                 &bastion,
                 &tls.files.path().display().to_string(),
@@ -215,38 +206,52 @@ fn given_a_bastion_when_capturing_changes_then_they_land_once() -> Result<(), St
 #[test]
 fn given_a_load_through_a_bastion_when_the_tunnel_drops_then_the_table_fails_naming_it()
 -> Result<(), String> {
-    run_async(async {
-        let bastion = start_bastion().await?;
-        let plain = start_postgres().await?;
-        connect(&plain)
-            .await?
-            .batch_execute(
-                "CREATE VIEW public.slow AS SELECT g AS id FROM generate_series(1, 2000) AS g, LATERAL (SELECT pg_sleep(0.01)) AS pause;
-                 COMMENT ON VIEW public.slow IS 'Rows that take 20 seconds to read.';",
+    let test_cases = [TunnelDropTestCase {
+        description: "the bastion stops while a 20-second read streams",
+        drop_after: Duration::from_secs(6),
+        expected_success: false,
+        expected_text: "the SSH tunnel through ssh loader@127.0.0.1:SSH_PORT closed",
+    }];
+    for test_case in test_cases {
+        run_async(async {
+            let bastion = start_bastion().await?;
+            let plain = start_postgres().await?;
+            connect(&plain)
+                .await?
+                .batch_execute(
+                    "CREATE FUNCTION public.slowly(id int) RETURNS int VOLATILE LANGUAGE sql AS 'SELECT pg_sleep(0.01); SELECT id';
+                     CREATE VIEW public.slow AS SELECT public.slowly(g) AS id FROM generate_series(1, 2000) AS g;
+                     COMMENT ON VIEW public.slow IS 'Rows that take 20 seconds to read.';",
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let config = folder.path().join("sqlload.toml");
+            let text = tls_project(
+                (&bridge_address(&plain).await?, 5432, USER),
+                &ssh_settings(TUNNEL, &bastion, ""),
             )
-            .await
-            .map_err(|error| error.to_string())?;
-        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
-        let config = folder.path().join("sqlload.toml");
-        let text = tls_project(
-            (&bridge_address(&plain).await?, 5432, USER),
-            &filled(TUNNEL, &bastion, ""),
-        )
-        .replace(
-            ":memory:",
-            &folder.path().join("out.duckdb").display().to_string(),
-        );
-        std::fs::write(&config, text).map_err(|error| error.to_string())?;
-        let load = spawn_sqlload(&config, &["load", "app"], "")?;
-        tokio::time::sleep(Duration::from_secs(6)).await;
-        bastion
-            .container
-            .stop()
-            .await
-            .map_err(|error| error.to_string())?;
-        let (succeeded, output) = stop_sqlload(load, "-0").await?;
-        let route = format!("the SSH tunnel through ssh loader@127.0.0.1:{} closed", bastion.port);
-        assert!(!succeeded && output.contains(&route), "{output}");
-        Ok(())
-    })
+            .replace(
+                ":memory:",
+                &folder.path().join("out.duckdb").display().to_string(),
+            );
+            std::fs::write(&config, text).map_err(|error| error.to_string())?;
+            let load = spawn_sqlload(&config, &["load", "app"], "")?;
+            tokio::time::sleep(test_case.drop_after).await;
+            bastion
+                .container
+                .stop()
+                .await
+                .map_err(|error| error.to_string())?;
+            let (succeeded, output) = stop_sqlload(load, "-0").await?;
+            let expected = ssh_settings(test_case.expected_text, &bastion, "");
+            assert!(
+                succeeded == test_case.expected_success && output.contains(&expected),
+                "{}: {output}",
+                test_case.description
+            );
+            Ok(())
+        })?;
+    }
+    Ok(())
 }

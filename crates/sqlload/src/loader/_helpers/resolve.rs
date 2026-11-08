@@ -43,10 +43,15 @@ pub(crate) fn resolve_tables(
         match resolve_table(&context, table, &overrides) {
             Ok(Ok(mut spec)) => {
                 spec.approved = !source.reads_postgres() || source.include.contains(&qualified);
-                spec.tunnel = project.connections.get(&source.connection).and_then(|connection| match connection {
-                    ConnectionConfig::Postgres { ssh, .. } => ssh.as_ref().map(SshTunnel::route),
-                    _ => None,
-                });
+                spec.tunnel = project
+                    .connections
+                    .get(&source.connection)
+                    .and_then(|connection| match connection {
+                        ConnectionConfig::Postgres { ssh, .. } => {
+                            ssh.as_ref().map(SshTunnel::route)
+                        }
+                        _ => None,
+                    });
                 resolved.specs.push(spec);
             }
             Ok(Err(reason)) => resolved.skipped.push(SkippedTable {

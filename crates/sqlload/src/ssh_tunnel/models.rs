@@ -1,12 +1,12 @@
 use std::io;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
+use russh::ChannelStream;
 use russh::client::{Handle, Msg};
 use russh::keys::PublicKeyOrCertificate;
-use russh::ChannelStream;
 use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -45,6 +45,7 @@ impl SshTunnel {
 }
 
 /// Checks the bastion's host key against `known_hosts`, keeping why it refused one.
+#[derive(Debug)]
 pub(crate) struct HostCheck {
     pub(crate) host: String,
     pub(crate) port: u16,
@@ -55,12 +56,13 @@ pub(crate) struct HostCheck {
 impl russh::client::Handler for HostCheck {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+    async fn check_server_key(
+        &mut self,
+        key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
         let refusal = crate::ssh_tunnel::_helpers::session::host_key_refusal(self, key);
         let known = refusal.is_none();
-        if let Ok(mut kept) = self.refusal.lock() {
-            *kept = refusal;
-        }
+        *self.refusal.lock().unwrap_or_else(PoisonError::into_inner) = refusal;
         Ok(known)
     }
 }
@@ -72,10 +74,20 @@ pub struct TunnelStream {
     pub(crate) route: String,
 }
 
+/// The route only: the channel and session have no `Debug` of their own.
+impl std::fmt::Debug for TunnelStream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TunnelStream")
+            .field("route", &self.route)
+            .finish_non_exhaustive()
+    }
+}
+
 impl TunnelStream {
-    /// `result`, or the tunnel's closing when it closed under it: the end of a stream or a failed write then means the bastion went away, not the database.
+    /// `result`, or the tunnel's closing when it `ended` (the stream ended or failed) because the session closed: then the bastion went away, not the database.
     fn checked<T>(&self, result: io::Result<T>, ended: bool) -> io::Result<T> {
-        match (ended || result.is_err()) && self.session.is_closed() {
+        match ended && self.session.is_closed() {
             true => Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
                 format!("the SSH tunnel through {} closed", self.route),
@@ -94,10 +106,11 @@ impl AsyncRead for TunnelStream {
         let before = buffer.filled().len();
         let wanted = buffer.remaining() > 0;
         match Pin::new(&mut self.stream).poll_read(context, buffer) {
-            Poll::Ready(result) => {
-                let ended = wanted && result.is_ok() && buffer.filled().len() == before;
-                Poll::Ready(self.checked(result, ended))
+            Poll::Ready(Ok(())) => {
+                let ended = wanted && buffer.filled().len() == before;
+                Poll::Ready(self.checked(Ok(()), ended))
             }
+            Poll::Ready(Err(error)) => Poll::Ready(self.checked(Err(error), true)),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -110,14 +123,16 @@ impl AsyncWrite for TunnelStream {
         buffer: &[u8],
     ) -> Poll<io::Result<usize>> {
         match Pin::new(&mut self.stream).poll_write(context, buffer) {
-            Poll::Ready(result) => Poll::Ready(self.checked(result, false)),
+            Poll::Ready(Ok(written)) => Poll::Ready(self.checked(Ok(written), written == 0)),
+            Poll::Ready(Err(error)) => Poll::Ready(self.checked(Err(error), true)),
             Poll::Pending => Poll::Pending,
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         match Pin::new(&mut self.stream).poll_flush(context) {
-            Poll::Ready(result) => Poll::Ready(self.checked(result, false)),
+            Poll::Ready(Err(error)) => Poll::Ready(self.checked(Err(error), true)),
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Pending => Poll::Pending,
         }
     }

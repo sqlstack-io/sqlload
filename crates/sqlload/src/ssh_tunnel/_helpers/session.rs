@@ -1,7 +1,8 @@
 //! Signing in to the bastion and checking who it is.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use russh::client::{Config, Handle};
 use russh::keys::agent::client::AgentClient;
@@ -10,6 +11,27 @@ use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_s
 
 use crate::ssh_tunnel::constants::{CONNECT_TIMEOUT, KEEPALIVE_INTERVAL, KEEPALIVE_MAX};
 use crate::ssh_tunnel::models::{HostCheck, SshTunnel};
+
+/// The open sessions, one per bastion and sign-in, shared by every connection through it while it stays open. A session ends with the runtime that opened it, so each run opens its own.
+static SESSIONS: OnceLock<tokio::sync::Mutex<HashMap<String, Arc<Handle<HostCheck>>>>> =
+    OnceLock::new();
+
+/// The open session with the bastion of `tunnel`, opening one when there is none or it closed.
+pub(crate) async fn shared_session(tunnel: &SshTunnel) -> Result<Arc<Handle<HostCheck>>, String> {
+    let key = format!(
+        "{}|{:?}|{:?}",
+        tunnel.route(),
+        tunnel.private_key_file,
+        tunnel.known_hosts
+    );
+    let mut sessions = SESSIONS.get_or_init(Default::default).lock().await;
+    if let Some(session) = sessions.get(&key).filter(|session| !session.is_closed()) {
+        return Ok(session.clone());
+    }
+    let session = Arc::new(open_session(tunnel).await?);
+    sessions.insert(key, session.clone());
+    Ok(session)
+}
 
 /// `path` with a leading `~/` read as the home folder.
 pub(crate) fn expanded(path: &Path) -> PathBuf {
@@ -47,7 +69,7 @@ pub(crate) fn host_key_refusal(check: &HostCheck, key: &PublicKeyOrCertificate) 
 }
 
 /// A signed-in session with the bastion of `tunnel`, sending keepalives.
-pub(crate) async fn open_session(tunnel: &SshTunnel) -> Result<Handle<HostCheck>, String> {
+async fn open_session(tunnel: &SshTunnel) -> Result<Handle<HostCheck>, String> {
     let config = Config {
         keepalive_interval: Some(KEEPALIVE_INTERVAL),
         keepalive_max: KEEPALIVE_MAX,
@@ -75,22 +97,27 @@ pub(crate) async fn open_session(tunnel: &SshTunnel) -> Result<Handle<HostCheck>
         ),
     )
     .await;
-    let mut session = match connected {
+    let session = match connected {
         Err(_) => return Err(format!("no answer within {}s", CONNECT_TIMEOUT.as_secs())),
         Ok(Ok(session)) => session,
         Ok(Err(error)) => {
-            let refused = refusal.lock().ok().and_then(|mut kept| kept.take());
+            let refused = refusal
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
             return Err(refused.unwrap_or_else(|| error.to_string()));
         }
     };
-    tokio::time::timeout(CONNECT_TIMEOUT, sign_in(&mut session, tunnel))
+    tokio::time::timeout(CONNECT_TIMEOUT, sign_in(session, tunnel))
         .await
-        .map_err(|_| format!("signing in took longer than {}s", CONNECT_TIMEOUT.as_secs()))??;
-    Ok(session)
+        .map_err(|_| format!("signing in took longer than {}s", CONNECT_TIMEOUT.as_secs()))?
 }
 
-/// Sign in as `tunnel.user` with its private key, or with ssh-agent's keys when it names none.
-async fn sign_in(session: &mut Handle<HostCheck>, tunnel: &SshTunnel) -> Result<(), String> {
+/// `session` signed in as `tunnel.user` with its private key, or with ssh-agent's keys when it names none.
+async fn sign_in(
+    mut session: Handle<HostCheck>,
+    tunnel: &SshTunnel,
+) -> Result<Handle<HostCheck>, String> {
     let rsa_hash = session
         .best_supported_rsa_hash()
         .await
@@ -101,7 +128,10 @@ async fn sign_in(session: &mut Handle<HostCheck>, tunnel: &SshTunnel) -> Result<
         return agent_sign_in(session, user, rsa_hash).await;
     };
     let file = expanded(file);
-    let passphrase = tunnel.private_key_passphrase.as_ref().map(|secret| secret.expose());
+    let passphrase = tunnel
+        .private_key_passphrase
+        .as_ref()
+        .map(|secret| secret.expose());
     let key = load_secret_key(&file, passphrase)
         .map_err(|error| format!("cannot read private key {}: {error}", file.display()))?;
     let result = session
@@ -109,7 +139,7 @@ async fn sign_in(session: &mut Handle<HostCheck>, tunnel: &SshTunnel) -> Result<
         .await
         .map_err(|error| error.to_string())?;
     match result.success() {
-        true => Ok(()),
+        true => Ok(session),
         false => Err(format!(
             "the bastion refused {user}'s key {}",
             file.display()
@@ -117,12 +147,12 @@ async fn sign_in(session: &mut Handle<HostCheck>, tunnel: &SshTunnel) -> Result<
     }
 }
 
-/// Sign in as `user` with each key ssh-agent holds, until one is accepted.
+/// `session` signed in as `user` with the first key ssh-agent holds that the bastion accepts.
 async fn agent_sign_in(
-    session: &mut Handle<HostCheck>,
+    mut session: Handle<HostCheck>,
     user: &str,
     rsa_hash: Option<HashAlg>,
-) -> Result<(), String> {
+) -> Result<Handle<HostCheck>, String> {
     let mut agent = AgentClient::connect_env().await.map_err(|error| {
         format!("no private_key_file is set and ssh-agent is not reachable ({error}); set private_key_file in the ssh table")
     })?;
@@ -141,7 +171,7 @@ async fn agent_sign_in(
             .await
             .map_err(|error| format!("ssh-agent could not sign: {error}"))?;
         if accepted.success() {
-            return Ok(());
+            return Ok(session);
         }
     }
     Err(format!(

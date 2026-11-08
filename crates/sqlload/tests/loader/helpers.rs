@@ -1815,3 +1815,15 @@ pub(crate) async fn bridge_address(
         .map(|ip| ip.to_string())
         .map_err(|error| error.to_string())
 }
+
+/// `settings` with its placeholders filled: `SSH_PORT` and `KEYS` for `bastion`'s port and key files, `FILES` for the test certificates' folder `files`.
+pub(crate) fn ssh_settings(
+    settings: &str,
+    bastion: &sqlload_testkit::ssh::models::Bastion,
+    files: &str,
+) -> String {
+    settings
+        .replace("SSH_PORT", &bastion.port.to_string())
+        .replace("KEYS", &bastion.files.path().display().to_string())
+        .replace("FILES", files)
+}

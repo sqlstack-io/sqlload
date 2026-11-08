@@ -6,6 +6,7 @@ use testcontainers::core::{ExecCommand, IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
 
+use crate::ssh::_helpers::key_files::key_files;
 use crate::ssh::constants::{FORWARDING, IMAGE, KEYS_SCRIPT, SSH_PORT, SSH_USER, TAG};
 use crate::ssh::models::Bastion;
 
@@ -13,7 +14,7 @@ use crate::ssh::models::Bastion;
 pub async fn start_bastion() -> Result<Bastion, String> {
     let container = GenericImage::new(IMAGE, TAG)
         .with_exposed_port(SSH_PORT.tcp())
-        .with_wait_for(WaitFor::message_on_stdout("Server listening on"))
+        .with_wait_for(WaitFor::message_on_stdout("[ls.io-init] done."))
         .with_env_var("USER_NAME", SSH_USER)
         .with_copy_to(
             "/config/sshd/sshd_config.d/forwarding.conf",
@@ -31,44 +32,13 @@ pub async fn start_bastion() -> Result<Bastion, String> {
         .exec(ExecCommand::new(["sh", "-c", KEYS_SCRIPT]))
         .await
         .map_err(|error| format!("cannot make the bastion's keys: {error}"))?;
-    let output = String::from_utf8(keys.stdout_to_vec().await.map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
-    let [client, other, client_public, host_keys] = output
-        .split("---\n")
-        .collect::<Vec<_>>()
-        .try_into()
-        .map_err(|parts: Vec<&str>| format!("the bastion printed {} key blocks, not 4", parts.len()))?;
-    let listed = format!("[127.0.0.1]:{port}");
-    let entries = |keys: &str| {
-        keys.lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                Some(format!("{listed} {} {}\n", fields.next()?, fields.next()?))
-            })
-            .collect::<String>()
-    };
-    let known = entries(host_keys);
-    let impostor = client_public.split_whitespace().nth(1).unwrap_or_default();
-    let changed = entries(host_keys)
-        .lines()
-        .map(|line| match line.split(' ').nth(1) {
-            Some("ssh-ed25519") => format!("{listed} ssh-ed25519 {impostor}\n"),
-            _ => format!("{line}\n"),
-        })
-        .collect::<String>();
-    let files = tempfile::tempdir().map_err(|error| error.to_string())?;
-    for (name, text, mode) in [
-        ("client.key", client, 0o600),
-        ("other.key", other, 0o600),
-        ("known_hosts", known.as_str(), 0o644),
-        ("changed_hosts", changed.as_str(), 0o644),
-        ("empty_hosts", "", 0o644),
-    ] {
-        let path = files.path().join(name);
-        std::fs::write(&path, text).map_err(|error| error.to_string())?;
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(mode))
-            .map_err(|error| error.to_string())?;
-    }
+    let output = String::from_utf8(
+        keys.stdout_to_vec()
+            .await
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let files = key_files(&output, port)?;
     Ok(Bastion {
         port,
         files,

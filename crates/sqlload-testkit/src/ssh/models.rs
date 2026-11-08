@@ -5,7 +5,7 @@ use testcontainers::{ContainerAsync, GenericImage};
 pub struct Bastion {
     /// The host port sshd answers on, at 127.0.0.1.
     pub port: u16,
-    /// `client.key` (accepted), `other.key` (unknown to the bastion), `known_hosts` (the bastion's real host keys), `changed_hosts` (another key in their place) and `empty_hosts`.
+    /// `client.key` (accepted), `other.key` (unknown to the bastion), `known_hosts` (the bastion's real host keys), `changed_hosts` (another Ed25519 key in place of the bastion's) and `empty_hosts`.
     pub files: tempfile::TempDir,
     pub container: ContainerAsync<GenericImage>,
 }

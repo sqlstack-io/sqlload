@@ -13,6 +13,12 @@ path = "crates/sqlload/src/auth/models.rs"
 symbols = ["Secret"]
 reason = "Secret wraps credentials and implements Debug by hand so tokens, keys and passwords never reach logs; a derived Debug would print them."
 
+[[targets.rust.rule_exceptions]]
+rule = "FPRSS201"
+path = "crates/sqlload/src/ssh_tunnel/models.rs"
+symbols = ["TunnelStream"]
+reason = "TunnelStream wraps russh's channel stream and session handle, which implement no Debug; it implements Debug by hand, showing its route."
+
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
@@ -32,6 +38,11 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/postgres/main/start_postgres_tls.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/ssh/main/start_bastion.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
 
 [[targets.rust.rule_exceptions]]

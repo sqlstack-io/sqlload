@@ -24,7 +24,9 @@ pub(in crate::loader) async fn check_source(
                 .map_err(|error| LoaderError::Invalid(format!("cannot query Postgres: {error}")))?;
             let answer: String = row.get(0);
             let route = match project.connections.get(&source.connection) {
-                Some(ConnectionConfig::Postgres { ssh: Some(tunnel), .. }) => {
+                Some(ConnectionConfig::Postgres {
+                    ssh: Some(tunnel), ..
+                }) => {
                     format!(", via {}", tunnel.route())
                 }
                 _ => String::new(),
