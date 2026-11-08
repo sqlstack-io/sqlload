@@ -43,7 +43,10 @@ impl DuckDbWriter {
             execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
             self.open_transaction = true;
         }
+        let t=std::time::Instant::now();
         let rows = pull_files(&self.destination, &files.folder.store, insert).await?;
+        eprintln!("PROF duck_insert {:?}", t.elapsed());
+        let t=std::time::Instant::now();
         if rows != files.rows {
             return Err(LoaderError::Invalid(format!(
                 "DuckDB loaded {rows} rows from the unloaded files in {}, but the unload reports {}; the batch is not committed",
@@ -54,6 +57,7 @@ impl DuckDbWriter {
             execute_statements(&self.destination, vec![COMMIT_STATEMENT.to_owned()]).await?;
             self.open_transaction = false;
         }
+        eprintln!("PROF duck_commit {:?}", t.elapsed());
         Ok(loaded(rows))
     }
 }

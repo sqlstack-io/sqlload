@@ -32,7 +32,9 @@ pub(crate) fn unload_route(
     if let Some(store) = stores.iter().find(|store| {
         reader.direct_blocked.is_none()
             && reader.needs_loader.is_none()
-            && destination_pulls(writer, store, FileFormat::Parquet)
+            && (destination_pulls(writer, store, FileFormat::Parquet)
+                || (matches!(store, crate::routing::models::Store::InternalStage(_))
+                    && destination_pulls(writer, &crate::routing::models::Store::Local(String::new()), FileFormat::Parquet)))
     }) {
         let files = FileSet {
             store: store.clone(),

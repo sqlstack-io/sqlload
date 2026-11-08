@@ -22,13 +22,19 @@ pub async fn unload_rows(
     let folder = unload_folder(reader, &run).await?;
     let (target, copy) = copy_statement(&folder, &query);
     let read = async {
+        let t=std::time::Instant::now();
         let unloaded = rows_unloaded(&execute_sql(&reader.sql, &copy).await?)?;
+        eprintln!("PROF copy {:?}", t.elapsed());
         if unloaded == 0 {
             return Ok(0);
         }
+        let t=std::time::Instant::now();
         let files = unloaded_files(reader, &folder).await?;
+        eprintln!("PROF list {:?} files={}", t.elapsed(), files.len());
+        let t=std::time::Instant::now();
         let read =
             read_unloaded(reader, &files, (&schema, request.batch_rows), &mut on_batch).await?;
+        eprintln!("PROF read {:?} batch_rows={}", t.elapsed(), request.batch_rows);
         match read == unloaded {
             true => Ok(read),
             false => Err(SnowflakeSourceError::Invalid(format!(
@@ -37,7 +43,10 @@ pub async fn unload_rows(
         }
     }
     .await;
-    if let Err(error) = remove_folder(reader, &folder).await {
+    let t=std::time::Instant::now();
+    let removed = remove_folder(reader, &folder).await;
+    eprintln!("PROF remove {:?}", t.elapsed());
+    if let Err(error) = removed {
         tracing::warn!(folder = %target, %error, "cannot remove the unloaded files");
     }
     read

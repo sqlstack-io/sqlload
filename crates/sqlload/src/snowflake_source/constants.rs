@@ -17,7 +17,7 @@ pub const UNLOAD_BIGINT: &str = "NUMBER(19,0)";
 pub const USER_STAGE_FOLDER: &str = "@~/sqlload_unload/";
 
 /// Unloaded files downloaded at once.
-pub const PARALLEL_DOWNLOADS: usize = 8;
+pub const PARALLEL_DOWNLOADS: usize = 16;
 
 /// The session schema; tables are always named with their schema.
 pub const SESSION_SCHEMA: &str = "PUBLIC";

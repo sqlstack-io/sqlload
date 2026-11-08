@@ -25,7 +25,8 @@ pub(crate) fn copy_statement(folder: &UnloadFolder, query: &str) -> (String, Str
     (
         target.to_owned(),
         format!(
-            "COPY INTO {target} FROM ({query}){options} FILE_FORMAT = (TYPE = PARQUET) HEADER = TRUE"
+            "COPY INTO {target} FROM ({query}){options} FILE_FORMAT = (TYPE = PARQUET) HEADER = TRUE{}",
+            std::env::var("SQLLOAD_PROBE_MFS").map(|v| format!(" MAX_FILE_SIZE = {v}")).unwrap_or_default()
         ),
     )
 }
@@ -55,9 +56,12 @@ pub(crate) async fn read_unloaded(
 ) -> Result<u64, SnowflakeSourceError> {
     let mut fetched = futures_util::stream::iter(0..files.len())
         .map(|index| async move { (index, files.fetch(reader, index).await) })
-        .buffered(PARALLEL_DOWNLOADS);
+        .buffered(std::env::var("SQLLOAD_PROBE_PD").ok().and_then(|v| v.parse().ok()).unwrap_or(PARALLEL_DOWNLOADS));
     let mut rows: u64 = 0;
+    let (mut tw, mut td, mut tc, mut tb) = (std::time::Duration::ZERO,std::time::Duration::ZERO,std::time::Duration::ZERO,std::time::Duration::ZERO);
+    let mut t = std::time::Instant::now();
     while let Some((index, bytes)) = fetched.next().await {
+        tw += t.elapsed(); t = std::time::Instant::now();
         let failed = |reason: String| SnowflakeSourceError::File {
             file: files.name(index),
             reason,
@@ -67,12 +71,17 @@ pub(crate) async fn read_unloaded(
             .map_err(|error| failed(error.to_string()))?;
         for batch in batches {
             let batch = batch.map_err(|error| failed(error.to_string()))?;
+            td += t.elapsed(); t = std::time::Instant::now();
             let converted = convert_batch(&batch, schema).map_err(failed)?;
+            tc += t.elapsed(); t = std::time::Instant::now();
             rows += converted.num_rows() as u64;
             on_batch(converted)
                 .await
                 .map_err(SnowflakeSourceError::Consumer)?;
+            tb += t.elapsed(); t = std::time::Instant::now();
         }
+        td += t.elapsed(); t = std::time::Instant::now();
     }
+    eprintln!("PROF read_unloaded wait={tw:?} decode={td:?} convert={tc:?} on_batch={tb:?}");
     Ok(rows)
 }

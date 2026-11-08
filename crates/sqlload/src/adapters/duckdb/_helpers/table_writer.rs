@@ -38,7 +38,9 @@ impl TableWriter for DuckDbWriter {
 
     async fn load_batch(&mut self, _target: &WriteTarget<'_>) -> Result<(), LoaderError> {
         if self.open_transaction {
+            let t=std::time::Instant::now();
             execute_statements(&self.destination, vec![COMMIT_STATEMENT.to_owned()]).await?;
+            eprintln!("PROF arrow_commit {:?}", t.elapsed());
             self.open_transaction = false;
         }
         Ok(())
