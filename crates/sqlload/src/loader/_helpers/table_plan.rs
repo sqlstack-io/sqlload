@@ -35,7 +35,9 @@ use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
-use crate::loader::constants::{ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES};
+use crate::loader::constants::{
+    CHECKS_LOADER_WARNING, ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES,
+};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
@@ -57,6 +59,7 @@ use crate::project::models::BatchStep;
 use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
+use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
 use crate::routing::models::FileSet;
@@ -406,6 +409,23 @@ fn reload_refusal(spec: &TableSpec, options: &PlanOptions) -> Option<&'static st
     }
 }
 
+/// `schema` blocked when the table's checks name columns it does not load; a Python table's columns are checked once its rows show them.
+fn checked_columns(spec: &TableSpec, schema: SchemaPlan) -> SchemaPlan {
+    let loaded: Vec<String> = schema
+        .write_columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let problems = match (&spec.checks, &spec.python, &schema.blocked) {
+        (Some(checks), None, None) => check_column_problems(checks, &loaded),
+        _ => Vec::new(),
+    };
+    match problems.is_empty() {
+        true => schema,
+        false => blocked_plan(problems),
+    }
+}
+
 /// `schema` with what stops or endangers writing `mode` into the existing table: blocked by its problems, with its warnings added.
 async fn checked_writes(
     destination: &Destination,
@@ -585,6 +605,7 @@ async fn plan_table_once(
     schema.warnings.extend(resnapshot_warning(spec, options));
     let mode = captured_mode(spec, mode);
     let exists = live.is_some();
+    schema = checked_columns(spec, schema);
     if schema.blocked.is_none() && exists {
         schema = checked_writes(destination, spec, &mode, schema).await?;
     }
@@ -723,13 +744,16 @@ fn reader_offer(
         .filter(|(_, method)| **method == MaskMethod::Hmac)
         .map(|(name, _)| name.as_str())
         .collect();
-    let needs_loader = match (hmac.is_empty(), spec.test_loader_route) {
-        (false, _) => Some(format!(
+    let needs_loader = match (hmac.is_empty(), spec.test_loader_route, &spec.checks) {
+        (false, _, _) => Some(format!(
             "{} masked with hmac, whose key must never appear in SQL",
             hmac.join(", ")
         )),
-        (true, true) => Some("the table sets test_loader_route (tests only)".to_owned()),
-        (true, false) => None,
+        (true, true, _) => Some("the table sets test_loader_route (tests only)".to_owned()),
+        (true, false, Some(_)) => {
+            Some("the table has checks, which run on the rows SQLLoad stages".to_owned())
+        }
+        (true, false, None) => None,
     };
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
@@ -791,6 +815,7 @@ fn hmac_warnings(
     let reads_itself = writer_accepts(destination, stage)
         .reads_files_itself
         .is_some();
+    let checked = reads_itself && spec.files.is_some() && spec.checks.is_some();
     spec.masked
         .columns
         .iter()
@@ -800,6 +825,7 @@ fn hmac_warnings(
                 "{name}: hmac masking pulls every file through the loader (the key must never be in SQL), which is much slower than a direct load. mask = \"hash\" stays on the direct route."
             )
         })
+        .chain(checked.then(|| CHECKS_LOADER_WARNING.to_owned()))
         .collect()
 }
 

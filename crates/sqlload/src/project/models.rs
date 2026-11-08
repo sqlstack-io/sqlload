@@ -11,6 +11,7 @@ use crate::files_source::models::{
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
+    deserialize_optional_percent,
 };
 use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
@@ -520,6 +521,9 @@ pub struct TableSettings {
     /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones; `"none"` commits the whole read once.
     #[serde(default, deserialize_with = "deserialize_optional_batch")]
     pub batch_size: Option<BatchStep>,
+    /// Checks the staged rows must pass before they are published.
+    #[serde(default)]
+    pub checks: Option<TableChecks>,
     /// The table engine a created table gets (ClickHouse), with its arguments.
     #[serde(default)]
     pub engine: Option<String>,
@@ -544,6 +548,37 @@ pub enum LayoutSetting {
     Bool(bool),
     Integer(i64),
     Text(String),
+}
+
+/// Checks on a table's staged rows, run before each commit publishes them; any failure fails the table and publishes nothing, unless the check is listed in `warn`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TableChecks {
+    /// No two staged rows share these columns' values (rows with a NULL in them are skipped, as in SQL).
+    #[serde(default)]
+    pub unique: Option<Vec<String>>,
+    /// None of these columns holds a NULL.
+    #[serde(default)]
+    pub not_null: Vec<String>,
+    /// The load stages at least this many rows (`replace` only).
+    #[serde(default)]
+    pub min_rows: Option<u64>,
+    /// The table loses at most this percentage of its rows (`replace` only), written as `"20%"`.
+    #[serde(default, deserialize_with = "deserialize_optional_percent")]
+    pub max_row_drop: Option<u8>,
+    /// The checks that only log a failure rather than failing the table.
+    #[serde(default)]
+    pub warn: Vec<CheckName>,
+}
+
+/// A check in `checks`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckName {
+    Unique,
+    NotNull,
+    MinRows,
+    MaxRowDrop,
 }
 
 /// What a cursor's `lookback` counts back from.

@@ -82,3 +82,6 @@ pub const UNLOADED_TIMES: &str = "the warehouse writes times and timestamps as w
 
 /// Why an `odbc` source cannot be read by this build.
 pub const NO_ODBC: &str = "this build of SQLLoad has no ODBC support; build it with the odbc feature (cargo install sqlload --features odbc)";
+
+/// The plan warning for a files table whose checks pull its files through SQLLoad instead of the destination's own read.
+pub const CHECKS_LOADER_WARNING: &str = "checks run on rows SQLLoad stages, so every file goes through the loader rather than the destination's own read, which is slower; without checks the table stays on the direct route.";
