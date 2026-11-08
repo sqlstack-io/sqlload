@@ -12,9 +12,9 @@ use crate::http_source::_helpers::endpoint::{endpoint, interval, shared_limiter}
 use crate::http_source::_helpers::pages::paginate;
 use crate::http_source::_helpers::selector::{selected_rows, selector};
 use crate::http_source::_helpers::urls::{filled_path, placeholders};
-use crate::row_batches::main::cursor_problem::cursor_problem;
 use crate::row_batches::main::projection::projection;
-use crate::row_batches::models::Projection;
+use crate::row_batches::main::projection_problem::projection_problem;
+use crate::row_batches::models::{Projection, ProjectionRules};
 use std::time::Duration;
 
 use crate::http::main::install_tls_provider::install_tls_provider;
@@ -24,17 +24,14 @@ use crate::http_source::models::{
     StatusAction,
 };
 
-/// Every problem the job's definition has, found before any request; `cursor_column` is the table's, which projected rows must keep.
-pub(crate) fn job_problems(job: &HttpJob, cursor_column: Option<&str>) -> Vec<String> {
+/// Every problem the job's definition has, found before any request, including projected rows that break the table's `rules`.
+pub(crate) fn job_problems(job: &HttpJob, rules: ProjectionRules<'_>) -> Vec<String> {
     let rows = match job {
         HttpJob::Paginate(request) => request,
         HttpJob::FanOut(fan_out) => &fan_out.request,
     };
     let mut problems = match request_projection(rows) {
-        Ok(Some(projection)) => cursor_column
-            .and_then(|column| cursor_problem(&projection, column))
-            .into_iter()
-            .collect(),
+        Ok(Some(projection)) => projection_problem(&projection, rules).into_iter().collect(),
         Ok(None) => Vec::new(),
         Err(problem) => vec![problem],
     };

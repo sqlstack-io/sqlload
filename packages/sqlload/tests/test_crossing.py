@@ -398,8 +398,11 @@ def test_given_fields_when_json_and_ndjson_cross_then_only_those_values_load_ren
 		(lambda: sl.json(b"[]", fields={"id": "id"}), 'field path "id" is not a path'),
 		(lambda: sl.ndjson(b"", keep_record="raw"), "keep_record needs fields"),
 		(lambda: sl.json(b"[]", fields={"id": 1}), "takes a path such as"),
+		(lambda: sl.json(b"[]", fields={1: "$.id"}), "names columns with text"),
+		(lambda: sl.json(b"[]", fields={"id": sl.field("$.id", required="yes")}), "required takes True or False"),
+		(lambda: sl.json(b"[]", fields=[("id", "$.id")]), "fields takes a mapping"),
 	],
-	ids=["path-without-root", "keep-record-alone", "path-not-text"],
+	ids=["path-without-root", "keep-record-alone", "path-not-text", "name-not-text", "required-not-bool", "fields-not-a-mapping"],
 )
 def test_given_bad_fields_when_building_json_data_then_it_fails_at_once(make: Any, expected_text: str) -> None:
 	with pytest.raises((ValueError, TypeError), match=expected_text):

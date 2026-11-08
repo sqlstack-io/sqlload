@@ -42,10 +42,21 @@ pub(crate) struct FlattenBatchTestCase {
 pub(crate) struct ProjectionTestCase {
     pub(crate) description: &'static str,
     pub(crate) layout: JsonLayout,
+    pub(crate) batch_rows: usize,
     /// Column, path and whether required, as `sl.json(..., fields=...)` passes them.
     pub(crate) fields: Option<&'static [(&'static str, &'static str, bool)]>,
     pub(crate) keep_record: Option<&'static str>,
     pub(crate) text: &'static str,
     /// Each batch rendered as `schema / rows`, or the error text.
     pub(crate) expected_batches: Result<&'static [&'static str], &'static str>,
+}
+
+pub(crate) struct ProjectionProblemTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) fields: &'static [&'static str],
+    pub(crate) keep_record: Option<&'static str>,
+    pub(crate) cursor_column: Option<&'static str>,
+    pub(crate) flatten: &'static [&'static str],
+    pub(crate) masked: &'static [&'static str],
+    pub(crate) expected_problem: Option<&'static str>,
 }

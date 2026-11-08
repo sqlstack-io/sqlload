@@ -1,6 +1,7 @@
 use crate::http_source::_helpers::job::job_problems;
 use crate::http_source::models::HttpJob;
 use crate::http_source::tests::test_types::JobProblemsTestCase;
+use crate::row_batches::models::ProjectionRules;
 
 #[test]
 fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_any_request() {
@@ -82,11 +83,18 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
                 "select \"$.items[*].sku\" names a key field (sku); that form is for fan_out's over, so select the rows instead",
             ],
         },
+        JobProblemsTestCase {
+            description: "fields on a fan-out's over are refused; they belong to the fan-out's rows",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id","fields":[{"name":"id","path":"$.id"}]}}"#,
+            expected_problems: &[
+                "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows",
+            ],
+        },
     ];
     for test_case in test_cases {
         let job: HttpJob = serde_json::from_str(test_case.job).expect(test_case.description);
         assert_eq!(
-            job_problems(&job, None),
+            job_problems(&job, ProjectionRules::default()),
             test_case.expected_problems,
             "{}",
             test_case.description

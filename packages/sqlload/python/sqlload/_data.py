@@ -44,11 +44,17 @@ def field_list(fields: Fields | None) -> list[tuple[str, str, bool]] | None:
 	"""`fields` as (column, path, required) triples, in the order given."""
 	if fields is None:
 		return None
+	if not isinstance(fields, Mapping):
+		raise TypeError(f"fields takes a mapping of column name to path, such as {{\"id\": \"$.id\"}}, not {fields!r}")
 	listed = []
 	for name, spec in fields.items():
 		projected = spec if isinstance(spec, Field) else Field(spec)
+		if not isinstance(name, str):
+			raise TypeError(f"fields names columns with text, not {name!r}")
 		if not isinstance(projected.path, str):
 			raise TypeError(f"fields[{name!r}] takes a path such as \"$.id\" or sl.field(...), not {spec!r}")
+		if not isinstance(projected.required, bool):
+			raise TypeError(f"fields[{name!r}]: required takes True or False, not {projected.required!r}")
 		listed.append((name, projected.path, projected.required))
 	return listed
 

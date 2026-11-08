@@ -65,6 +65,7 @@ impl PythonHost for ExtensionHost {
                     flatten: request.flatten.clone(),
                     connections: request.connections.clone(),
                     cursor_column: request.cursor.as_ref().map(|cursor| cursor.column.clone()),
+                    masked: request.masked.clone(),
                 },
             ))
         })

@@ -8,10 +8,10 @@ use std::time::Instant;
 use arrow_array::RecordBatch;
 use sqlload::http_source::main::run_http_job::run_http_job;
 use sqlload::row_batches::main::columns_batch::columns_batch;
-use sqlload::row_batches::main::cursor_problem::cursor_problem;
 use sqlload::row_batches::main::flatten_batch::flatten_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
 use sqlload::row_batches::main::normalise_batch::normalise_batch;
+use sqlload::row_batches::main::projection_problem::projection_problem;
 use sqlload::row_batches::models::{JsonLayout, JsonRead};
 
 use crate::crossing::errors::CrossError;
@@ -192,12 +192,10 @@ impl Output {
                 open = self.send(batch, started);
             }
             Crossed::Json { bytes, read } => {
-                let unprojected_cursor = read
+                if let Some(problem) = read
                     .projection
                     .as_ref()
-                    .zip(self.context.cursor_column.as_deref());
-                if let Some(problem) = unprojected_cursor
-                    .and_then(|(projection, column)| cursor_problem(projection, column))
+                    .and_then(|projection| projection_problem(projection, self.context.rules()))
                 {
                     return Err(CrossError::Data(problem));
                 }
@@ -249,11 +247,10 @@ impl Output {
     fn http(&self, definition: &str) -> Result<bool, CrossError> {
         let mut open = true;
         let mut failed: Option<String> = None;
-        let cursor_column = self.context.cursor_column.as_deref();
         run_http_job(
             definition,
             &self.context.connections,
-            cursor_column,
+            self.context.rules(),
             |page| {
                 let read = JsonRead {
                     layout: JsonLayout::Document,

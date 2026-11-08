@@ -395,10 +395,12 @@ def test_given_fields_and_keep_record_when_a_paginate_and_a_fan_out_load_then_ro
 	("data", "cursor", "expected_text"),
 	[
 		("api.paginate('/offset', paginator=sl.offset(limit=10), fields={'id': '$.order_id', 'status': '$.status'})", "id", None),
-		("api.paginate('/offset', paginator=sl.offset(limit=10), fields={'id': '$.order_id'})", "order_id", "the table's cursor_column order_id is not among the job's fields"),
-		("[sl.ndjson(b'{\"order_id\": 1}', fields={'id': '$.order_id'})]", "order_id", "the table's cursor_column order_id is not among the job's fields"),
+		("api.paginate('/offset', paginator=sl.offset(limit=10), fields={'id': '$.order_id', 'status': '$.status'})", "ID", None),
+		("api.paginate('/offset', paginator=sl.offset(limit=10), fields={'id': '$.order_id'})", "order_id", "the table's cursor_column order_id is not among the fields"),
+		("api.fan_out('/orders/{order_id}/items', over=range(1, 8), select='$.items', on_status={404: 'skip'}, fields={'line_no': '$.line'})", "order_id", "the table's cursor_column order_id is not among the fields"),
+		("[sl.ndjson(b'{\"order_id\": 1}', fields={'id': '$.order_id'})]", "order_id", "the table's cursor_column order_id is not among the fields"),
 	],
-	ids=["cursor-on-a-renamed-field", "http-cursor-not-projected", "ndjson-cursor-not-projected"],
+	ids=["cursor-on-a-renamed-field", "cursor-in-another-case", "http-cursor-not-projected", "fan-out-cursor-not-projected", "ndjson-cursor-not-projected"],
 )
 def test_given_a_cursor_column_when_rows_are_projected_then_the_cursor_must_be_among_the_fields(
 	tmp_path: Path, api: ThreadingHTTPServer, data: str, cursor: str, expected_text: str | None

@@ -1,7 +1,7 @@
 //! The parts of a projection: column names, paths and name clashes.
 
 use crate::row_batches::constants::{PROJECTION_ROOT, PROJECTION_SEPARATOR};
-use crate::row_batches::models::ProjectedField;
+use crate::row_batches::models::{PathNode, ProjectedField};
 
 /// Whether one of `fields` loads as `name`, ignoring case as the destinations do.
 pub(crate) fn names_field(fields: &[ProjectedField], name: &str) -> bool {
@@ -36,4 +36,18 @@ pub(crate) fn path(text: &str) -> Result<Vec<String>, String> {
         true => Err(invalid()),
         false => Ok(keys),
     }
+}
+
+/// The fields' paths as a tree; a field with path `$` ends at the root.
+pub(crate) fn path_tree(fields: &[ProjectedField]) -> PathNode {
+    let mut root = PathNode::default();
+    for (index, field) in fields.iter().enumerate() {
+        let mut node = &mut root;
+        for key in &field.path {
+            node = node.children.entry(key.clone()).or_default();
+            node.under.push(index);
+        }
+        node.ends.push(index);
+    }
+    root
 }

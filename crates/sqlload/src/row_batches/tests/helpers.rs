@@ -81,7 +81,7 @@ pub(crate) fn read_projected(test_case: &ProjectionTestCase) -> Result<Vec<Strin
     let read = JsonRead {
         layout: test_case.layout,
         path: None,
-        batch_rows: 10,
+        batch_rows: test_case.batch_rows,
         projection: projection(fields.as_deref(), test_case.keep_record)?,
     };
     let mut batches: Vec<String> = Vec::new();

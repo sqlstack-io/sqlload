@@ -151,6 +151,25 @@ pub struct Projection {
     pub fields: Vec<ProjectedField>,
     /// A column holding the whole row object as JSON.
     pub keep_record: Option<String>,
+    /// The fields' paths as a tree, so each row walks every object on them once.
+    pub tree: PathNode,
+}
+
+/// One key of the projection's paths: the keys below it, and the fields whose path ends or passes here, by position in `fields`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PathNode {
+    pub children: HashMap<String, PathNode>,
+    pub ends: Vec<usize>,
+    pub under: Vec<usize>,
+}
+
+/// What a table asks of its projected rows: the cursor column must load, and masked columns must not hide in `keep_record`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProjectionRules<'a> {
+    pub cursor_column: Option<&'a str>,
+    /// Columns expanded into `<column>__<key>` after projection.
+    pub flatten: &'a [String],
+    pub masked: &'a [String],
 }
 
 /// One column a projection loads: the value at `path` (keys from the row object down), or NULL when it is missing.

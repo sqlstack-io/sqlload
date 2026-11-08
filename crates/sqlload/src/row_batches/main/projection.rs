@@ -1,6 +1,6 @@
 //! A projection of JSON row objects: which values load, under which column names.
 
-use crate::row_batches::_helpers::projected::{column_name, names_field, path};
+use crate::row_batches::_helpers::projected::{column_name, names_field, path, path_tree};
 use crate::row_batches::models::{ProjectedField, Projection};
 
 /// The projection `fields` (column name, path such as `$.address.city`, whether required) and `keep_record` describe, `None` when neither is given, or why it can't be read.
@@ -45,6 +45,7 @@ pub fn projection(
         ));
     }
     Ok(Some(Projection {
+        tree: path_tree(&projected),
         fields: projected,
         keep_record,
     }))

@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use serde::Deserialize;
 use serde::de::{DeserializeSeed, Deserializer, Error as _, MapAccess, SeqAccess, Visitor};
 use serde_json::value::RawValue;
 
 use crate::row_batches::_helpers::cells::number_cell;
+use crate::row_batches::_helpers::projection_seed::projected_values;
 use crate::row_batches::models::{Cell, Projection, RowColumns};
 
 /// Collects parsed rows and hands them to `on_rows` every `batch_rows` rows.
@@ -69,8 +68,6 @@ impl<'de, F: FnMut(RowColumns) -> Result<(), String>> DeserializeSeed<'de> for O
 impl<F: FnMut(RowColumns) -> Result<(), String>> RowSink<F> {
     /// Push the projected values of the row object `raw`: each field's value, NULL when missing, and the whole object for `keep_record`.
     fn project(&mut self, raw: &RawValue) -> Result<(), String> {
-        let object: HashMap<String, &RawValue> =
-            serde_json::from_str(raw.get()).map_err(|_| "expected a JSON object".to_owned())?;
         let row = self.read + 1;
         let Self {
             projection: Some(projection),
@@ -80,11 +77,8 @@ impl<F: FnMut(RowColumns) -> Result<(), String>> RowSink<F> {
         else {
             return Ok(());
         };
-        for field in &projection.fields {
-            let value = match field.path.split_first() {
-                None => Some(raw),
-                Some((first, rest)) => object.get(first).copied().and_then(|top| nested(top, rest)),
-            };
+        let values = projected_values(raw, &projection.tree, projection.fields.len())?;
+        for (field, value) in projection.fields.iter().zip(values) {
             let cell = match value {
                 Some(value) => raw_cell(value.get()).map_err(|error| error.to_string())?,
                 None => Cell::Null,
@@ -102,16 +96,6 @@ impl<F: FnMut(RowColumns) -> Result<(), String>> RowSink<F> {
         }
         self.end_row()
     }
-}
-
-/// The value at `keys` below `value`, when every step is an object holding the next key.
-fn nested<'v>(value: &'v RawValue, keys: &[String]) -> Option<&'v RawValue> {
-    keys.iter().try_fold(value, |current, key| {
-        match serde_json::from_str::<HashMap<String, &'v RawValue>>(current.get()) {
-            Ok(object) => object.get(key).copied(),
-            Err(_) => None,
-        }
-    })
 }
 
 impl<'de, F: FnMut(RowColumns) -> Result<(), String>> Visitor<'de> for ObjectSeed<'_, F> {
@@ -158,13 +142,13 @@ impl<'de, F: FnMut(RowColumns) -> Result<(), String>> Visitor<'de> for ArraySeed
 }
 
 /// An object key, borrowed from the input unless it has escapes.
-enum Key<'de> {
+pub(crate) enum Key<'de> {
     Borrowed(&'de str),
     Owned(String),
 }
 
 impl Key<'_> {
-    fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Key::Borrowed(text) => text,
             Key::Owned(text) => text,
