@@ -3,11 +3,18 @@
 use crate::adapters::clickhouse::_helpers::dialect::type_names::unwrapped;
 use crate::adapters::clickhouse::constants::{ASIDE_SUFFIX, COPY_SUFFIX, PUBLISH_PREFIX};
 use crate::adapters::clickhouse::models::{ClickHouseSql, PublishStep};
-use crate::adapters::contract::_helpers::identifiers::with_suffix;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
+
+/// `table` with `suffix` added to its name.
+fn with_suffix(table: &TableName, suffix: &str) -> TableName {
+    TableName {
+        table: format!("{}{suffix}", table.table),
+        ..table.clone()
+    }
+}
 
 /// `step` as the statement the runner carries out itself.
 pub(crate) fn publish_statement(step: &PublishStep) -> String {

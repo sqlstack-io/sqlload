@@ -2,7 +2,7 @@
 
 use arrow_array::RecordBatch;
 
-use crate::adapters::clickhouse::_helpers::arrow_batch::clickhouse_batch;
+use crate::adapters::clickhouse::_helpers::write::arrow_batch::clickhouse_batch;
 use crate::adapters::clickhouse::constants::INSERT_BYTES;
 use crate::adapters::clickhouse::main::session::_insert_arrow::insert_arrow;
 use crate::adapters::clickhouse::models::{ClickHouseSql, ClickHouseWriter, PendingInsert};

@@ -1,5 +1,6 @@
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, STAGE_NAME_PARTS, WAREHOUSE_CONNECTION_KINDS,
+    CLICKHOUSE_CONNECTION_KIND, FILES_CONNECTION_KINDS, STAGE_NAME_PARTS,
+    WAREHOUSE_CONNECTION_KINDS,
 };
 use crate::project::models::{
     ConnectionConfig, LoadMethod, ProjectConfig, SourceConfig, TargetConfig,
@@ -95,7 +96,7 @@ pub(crate) fn target_problems(
             if target.loader_schema.is_none() {
                 problems.push(format!("{place} needs a loader_schema"));
             }
-            if kind == "clickhouse" && target.database.is_some() {
+            if kind == CLICKHOUSE_CONNECTION_KIND && target.database.is_some() {
                 problems.push(format!(
                     "{place} loads into ClickHouse, which has no level above its databases: drop database and name the ClickHouse database in loader_schema"
                 ));

@@ -25,3 +25,18 @@ pub(crate) struct ArrowBatchTestCase {
     /// Each column as `name: type = value|value`, or the error up to its first `: `.
     pub(crate) expected_batch: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct LayoutProblemsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: crate::column_types::models::Warehouse,
+    pub(crate) layout: crate::loader::models::TableLayout,
+    /// Text the single problem holds; `None` when the layout is taken.
+    pub(crate) expected_problem: Option<&'static str>,
+}
+
+pub(crate) struct PublishStepTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) statement: &'static str,
+    /// The step it names, `None` for plain SQL, or an error.
+    pub(crate) expected_step: Result<Option<crate::adapters::clickhouse::models::PublishStep>, ()>,
+}

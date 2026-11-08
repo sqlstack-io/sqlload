@@ -1,9 +1,9 @@
 //! Run SQL statements in order.
 
-use crate::adapters::clickhouse::_helpers::publish::{
+use crate::adapters::clickhouse::_helpers::dialect::publish::{
     PartitionPublish, delta_partitions_query, displaced_partitions_query, partition_statements,
 };
-use crate::adapters::clickhouse::_helpers::steps::{publish_step, run_step};
+use crate::adapters::clickhouse::_helpers::session::steps::{publish_step, run_step};
 use crate::adapters::clickhouse::main::session::_query_rows::query_rows;
 use crate::adapters::clickhouse::models::{ClickHouseDestination, PublishStep};
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};

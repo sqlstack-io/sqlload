@@ -1,7 +1,11 @@
-use crate::adapters::clickhouse::_helpers::publish::{PartitionPublish, partition_statements};
-use crate::adapters::clickhouse::_helpers::steps::publish_step;
+use crate::adapters::clickhouse::_helpers::dialect::publish::{
+    PartitionPublish, partition_statements,
+};
+use crate::adapters::clickhouse::_helpers::session::steps::publish_step;
 use crate::adapters::clickhouse::models::PublishStep;
-use crate::adapters::clickhouse::tests::test_types::PartitionStatementsTestCase;
+use crate::adapters::clickhouse::tests::test_types::{
+    PartitionStatementsTestCase, PublishStepTestCase,
+};
 
 const EXCHANGE: &str = "-- sqlload publish {\"Exchange\":{\"target\":\"`raw`.`events`\",\"build\":\"`raw`.`c`\",\"aside\":\"`raw`.`a`\"}}";
 
@@ -113,20 +117,34 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
 }
 
 #[test]
-fn given_a_publish_statement_when_running_it_then_the_step_it_names_is_read_back()
--> Result<(), String> {
-    assert_eq!(
-        publish_step(EXCHANGE).map_err(|error| error.to_string())?,
-        Some(PublishStep::Exchange {
-            target: "`raw`.`events`".to_owned(),
-            build: "`raw`.`c`".to_owned(),
-            aside: "`raw`.`a`".to_owned(),
-        })
-    );
-    assert_eq!(
-        publish_step("DROP TABLE IF EXISTS `raw`.`c`").map_err(|error| error.to_string())?,
-        None
-    );
-    assert!(publish_step("-- sqlload publish {").is_err());
-    Ok(())
+fn given_a_publish_statement_when_running_it_then_the_step_it_names_is_read_back() {
+    let test_cases = [
+        PublishStepTestCase {
+            description: "an exchange step is read back from its JSON",
+            statement: EXCHANGE,
+            expected_step: Ok(Some(PublishStep::Exchange {
+                target: "`raw`.`events`".to_owned(),
+                build: "`raw`.`c`".to_owned(),
+                aside: "`raw`.`a`".to_owned(),
+            })),
+        },
+        PublishStepTestCase {
+            description: "plain SQL is sent as it is",
+            statement: "DROP TABLE IF EXISTS `raw`.`c`",
+            expected_step: Ok(None),
+        },
+        PublishStepTestCase {
+            description: "a malformed step fails rather than being sent",
+            statement: "-- sqlload publish {",
+            expected_step: Err(()),
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            publish_step(test_case.statement).map_err(|_| ()),
+            test_case.expected_step,
+            "{}",
+            test_case.description
+        );
+    }
 }

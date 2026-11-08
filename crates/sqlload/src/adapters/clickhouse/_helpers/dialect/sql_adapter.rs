@@ -5,13 +5,11 @@ use crate::adapters::clickhouse::_helpers::dialect::type_names::{logical_type, p
 use crate::adapters::clickhouse::_helpers::dialect::write::{swap_statements, write_statements};
 use crate::adapters::clickhouse::constants::EMPTY_SORTING_KEY;
 use crate::adapters::clickhouse::models::ClickHouseSql;
-use crate::adapters::contract::_helpers::schema::staging_name;
-use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::models::{
     ChangeApply, CursorValue, TableName, WriteStatementsRequest,
 };
 use crate::adapters::contract::types::SqlAdapter;
-use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
+use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
 use crate::loader::models::{TableLayout, TableSpec};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 
@@ -56,22 +54,6 @@ impl SqlAdapter for ClickHouseSql {
 
     fn live_type(&self, live: &LiveColumnType) -> ColumnType {
         portable_type(live).unwrap_or_else(|| ColumnType::Native(live.data_type.clone()))
-    }
-
-    /// A pinned `native(...)` type fits the live column it created, which reads back as its portable type (`LowCardinality(String)` as text, `JSON` as json).
-    fn type_fit(&self, desired: &ColumnType, live: &ColumnType) -> TypeFit {
-        if let ColumnType::Native(text) = desired {
-            let pinned = LiveColumnType {
-                data_type: text.clone(),
-                precision: None,
-                scale: None,
-                char_length: None,
-            };
-            if &self.live_type(&pinned) == live {
-                return TypeFit::Fits;
-            }
-        }
-        type_fit(self, desired, live)
     }
 
     /// `MODIFY COLUMN` converts the column's values in place.
@@ -157,7 +139,7 @@ impl SqlAdapter for ClickHouseSql {
         columns: &[DesiredColumn],
         staging_id: &str,
     ) -> (TableName, String) {
-        let staging = staging_name(table, staging_id);
+        let staging = self.staging_relation_name(table, staging_id);
         let create = format!(
             "CREATE TABLE {} ({}) ENGINE = MergeTree ORDER BY {EMPTY_SORTING_KEY}",
             self.render_qualified_name(&staging),

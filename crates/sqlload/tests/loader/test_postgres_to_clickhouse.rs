@@ -1,22 +1,16 @@
-use std::collections::BTreeMap;
-
-use sqlload::adapters::clickhouse::main::stop_after::stop_after;
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
-use sqlload::adapters::dispatch::models::Destination;
-use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;
-use sqlload::loader::main::plan_project::plan_project;
-use sqlload::loader::main::render_plan::render_plan;
 use sqlload::loader::models::PlanOptions;
-use sqlload::project::models::ProjectConfig;
-use sqlload_testkit::clickhouse::constants::{PASSWORD, USER};
 use sqlload_testkit::clickhouse::main::run_client::run_client;
 use sqlload_testkit::clickhouse::main::start_clickhouse::start_clickhouse;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
-use crate::helpers::{described_project, load_with_options, run_async};
-use crate::test_types::LoadRunTestCase;
+use crate::helpers::{
+    clickhouse_project, described_project, plan_apply_load_with, run_async, run_clickhouse_stops,
+    select_only,
+};
+use crate::test_types::{LoadRunTestCase, StoppedLoadTestCase};
 
 const SETUP: &str = "
 CREATE TABLE public.accounts (id int8 PRIMARY KEY, name text, balance numeric(12,2), updated_at timestamptz NOT NULL);
@@ -71,62 +65,6 @@ write_strategy = "replace"
 description = "Stores, in a database that cannot exchange tables."
 "#;
 
-/// A project reading the test Postgres into the test ClickHouse's `schema` database (and `legacy` for the `old` source).
-fn clickhouse_project(postgres_port: u16, clickhouse_port: u16, schema: &str) -> String {
-    format!(
-        r#"
-[connections.app_pg]
-kind = "postgres"
-host = "127.0.0.1"
-port = {postgres_port}
-user = "sqlload"
-password = "sqlload"
-database = "app"
-
-[connections.serving]
-kind = "clickhouse"
-host = "127.0.0.1"
-port = {clickhouse_port}
-user = "{USER}"
-password = "{PASSWORD}"
-
-[targets.dev]
-connection = "serving"
-loader_schema = "{schema}"
-
-[sources.app]
-kind = "postgres"
-connection = "app_pg"
-include = ["public.*"]
-{TABLES}
-"#
-    )
-}
-
-/// Plan, apply and load `selected` with `options`; the load's error, if any.
-async fn load(
-    project: &ProjectConfig,
-    destinations: &BTreeMap<String, Destination>,
-    options: &PlanOptions,
-) -> Result<(), String> {
-    let plan = plan_project(project, destinations, options)
-        .await
-        .map_err(|error| error.to_string())?;
-    let (lines, ok) = render_plan(&plan);
-    ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
-    apply_project(&plan, destinations)
-        .await
-        .map_err(|error| error.to_string())?;
-    load_with_options(project, &plan, destinations, options).await
-}
-
-fn only(table: &str) -> PlanOptions {
-    PlanOptions {
-        select: vec![table.to_owned()],
-        ..PlanOptions::default()
-    }
-}
-
 #[test]
 fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strategy_keeps_the_table_right()
 -> Result<(), String> {
@@ -144,8 +82,13 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
             &["--allow_deprecated_database_ordinary=1"],
         )
         .await?;
-        let project =
-            described_project(&clickhouse_project(postgres.port, clickhouse.port, "raw")).await?;
+        let project = described_project(&clickhouse_project(
+            postgres.port,
+            clickhouse.port,
+            "raw",
+            TABLES,
+        ))
+        .await?;
         let destinations = connect_targets(&project)
             .await
             .map_err(|error| error.to_string())?;
@@ -225,7 +168,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 .batch_execute(test_case.source_change)
                 .await
                 .map_err(|error| error.to_string())?;
-            load(&project, &destinations, &PlanOptions::default())
+            plan_apply_load_with(&project, &destinations, &PlanOptions::default())
                 .await
                 .map_err(|error| format!("{}: {error}", test_case.description))?;
             let result = single_text(serving, test_case.check_query.to_owned())
@@ -242,14 +185,6 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
     })
 }
 
-/// The rows of `query`'s single text, read on `serving`.
-async fn read(serving: &Destination, query: &str) -> Result<String, String> {
-    Ok(single_text(serving, query.to_owned())
-        .await
-        .map_err(|error| error.to_string())?
-        .unwrap_or_default())
-}
-
 #[test]
 fn given_a_load_stopped_at_every_statement_when_it_runs_again_then_the_table_was_never_half_published_and_converges()
 -> Result<(), String> {
@@ -261,30 +196,28 @@ fn given_a_load_stopped_at_every_statement_when_it_runs_again_then_the_table_was
             .batch_execute(SETUP)
             .await
             .map_err(|error| error.to_string())?;
-        let project =
-            described_project(&clickhouse_project(postgres.port, clickhouse.port, "stops")).await?;
+        let project = described_project(&clickhouse_project(
+            postgres.port,
+            clickhouse.port,
+            "stops",
+            TABLES,
+        ))
+        .await?;
         let destinations = connect_targets(&project)
             .await
             .map_err(|error| error.to_string())?;
-        let Some(serving) = destinations.get("dev") else {
-            return Err("no ClickHouse destination".to_owned());
-        };
-        // A window with a lookahead, today−7 … today+7 style: it spans October and November, so its publish rebuilds two partitions at once.
-        let window = PlanOptions {
-            start_cursor: Some("2026-10-25".to_owned()),
-            end_cursor: Some("2026-11-10".to_owned()),
-            ..only("app__events")
-        };
-        let events = "SELECT arrayStringConcat(groupArray(r), ',') FROM (SELECT toString(event_id) || ':' || kind || '@' || toString(day) AS r FROM stops.app__events ORDER BY event_id, kind)";
-        let stores = "SELECT arrayStringConcat(groupArray(code), ',') FROM (SELECT code FROM stops.app__stores ORDER BY code)";
-        // Each table switches between two source states; a stopped run must leave it in one of them, and the rerun in the new one. The October row before the window is kept rows of a rebuilt partition.
-        let scenarios = [
-            (
-                "app__events",
-                8,
-                window,
-                events,
-                [
+        // Each table switches between two source states; a stopped run must leave it in one of them, and the rerun in the new one.
+        let test_cases = [
+            StoppedLoadTestCase {
+                description: "a window with a lookahead (today−7 … today+7 style) spanning October and November, so its publish rebuilds two partitions at once, keeping the October row before the window",
+                table: "app__events",
+                options: PlanOptions {
+                    start_cursor: Some("2026-10-25".to_owned()),
+                    end_cursor: Some("2026-11-10".to_owned()),
+                    ..select_only("app__events")
+                },
+                query: "SELECT arrayStringConcat(groupArray(r), ',') FROM (SELECT toString(event_id) || ':' || kind || '@' || toString(day) AS r FROM stops.app__events ORDER BY event_id, kind)",
+                states: [
                     (
                         "DELETE FROM public.events; INSERT INTO public.events VALUES (1, 'open', '2026-10-20'), (2, 'close', '2026-10-30'), (3, 'open', '2026-11-03');",
                         "1:open@2026-10-20,2:close@2026-10-30,3:open@2026-11-03",
@@ -294,13 +227,14 @@ fn given_a_load_stopped_at_every_statement_when_it_runs_again_then_the_table_was
                         "1:open@2026-10-20,2:shut@2026-10-30,5:late@2026-11-08",
                     ),
                 ],
-            ),
-            (
-                "app__stores",
-                3,
-                only("app__stores"),
-                stores,
-                [
+                expected_minimum_stops: 8,
+            },
+            StoppedLoadTestCase {
+                description: "a replace exchanging a whole table in",
+                table: "app__stores",
+                options: select_only("app__stores"),
+                query: "SELECT arrayStringConcat(groupArray(code), ',') FROM (SELECT code FROM stops.app__stores ORDER BY code)",
+                states: [
                     (
                         "DELETE FROM public.stores; INSERT INTO public.stores VALUES ('L1', 'Leeds'), ('Y1', 'York');",
                         "L1,Y1",
@@ -310,50 +244,18 @@ fn given_a_load_stopped_at_every_statement_when_it_runs_again_then_the_table_was
                         "B1,Y1",
                     ),
                 ],
-            ),
+                expected_minimum_stops: 3,
+            },
         ];
-        for (table, minimum, options, query, states) in scenarios {
-            // The stop matches the table's qualified name, which its staging, delta and copy tables start with; this test's own database keeps it out of the other test, which runs at the same time.
-            let stopped_name = format!("`stops`.`{table}");
-            load(&project, &destinations, &only(table)).await?;
-            assert_eq!(
-                read(serving, query).await?,
-                states[0].1,
-                "{table}: the first load"
-            );
-            let mut stops = 0;
-            loop {
-                let (change, expected) = states[(stops + 1) % 2];
-                let current = states[stops % 2].1;
-                client
-                    .batch_execute(change)
+        for test_case in &test_cases {
+            let unstopped =
+                run_clickhouse_stops(&project, &destinations, &client, ("stops", test_case))
                     .await
-                    .map_err(|error| error.to_string())?;
-                stop_after(&stopped_name, Some(stops));
-                let stopped = load(&project, &destinations, &options).await;
-                stop_after(&stopped_name, None);
-                let seen = read(serving, query).await?;
-                assert!(
-                    seen == current || seen == expected,
-                    "{table}: a run stopped after {stops} statements left the table half published: {seen}"
-                );
-                if stopped.is_ok() {
-                    assert_eq!(seen, expected, "{table}: the run that was never stopped");
-                    break;
-                }
-                load(&project, &destinations, &options)
-                    .await
-                    .map_err(|error| format!("{table}: the rerun after {stops}: {error}"))?;
-                assert_eq!(
-                    read(serving, query).await?,
-                    expected,
-                    "{table}: the rerun after a stop at {stops} statements"
-                );
-                stops += 1;
-            }
+                    .map_err(|error| format!("{}: {error}", test_case.description))?;
             assert!(
-                stops >= minimum,
-                "{table}: only {stops} stop points were tried"
+                unstopped.is_some_and(|stops| stops >= test_case.expected_minimum_stops),
+                "{}: a run finished unstopped after {unstopped:?} stop points",
+                test_case.description
             );
         }
         Ok(())

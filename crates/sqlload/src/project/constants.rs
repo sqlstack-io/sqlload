@@ -97,6 +97,9 @@ pub const WAREHOUSE_CONNECTION_KINDS: &[&str] = &[
     "duckdb",
 ];
 
+/// The connection kind of a ClickHouse server, whose targets name no database above their loader schema.
+pub const CLICKHOUSE_CONNECTION_KIND: &str = "clickhouse";
+
 /// The connection kinds a target writes files into.
 pub const FILES_CONNECTION_KINDS: &[&str] = &["s3", "filesystem"];
 

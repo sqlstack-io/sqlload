@@ -1,6 +1,6 @@
 //! Statements as the runner carries them out: sent as they are, or a publish step it carries out itself.
 
-use crate::adapters::clickhouse::_helpers::http::send;
+use crate::adapters::clickhouse::_helpers::session::http::send;
 use crate::adapters::clickhouse::constants::{EXCHANGE_UNSUPPORTED_CODES, PUBLISH_PREFIX};
 use crate::adapters::clickhouse::models::{ClickHouseDestination, PublishStep};
 use crate::http::errors::ApiError;

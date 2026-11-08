@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::adapters::clickhouse::_helpers::dialect::layout::{layout_clauses, layout_problems};
-use crate::adapters::clickhouse::tests::test_types::LayoutTestCase;
+use crate::adapters::clickhouse::_helpers::dialect::layout::layout_clauses;
+use crate::adapters::clickhouse::tests::test_types::{LayoutProblemsTestCase, LayoutTestCase};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 use crate::loader::models::TableLayout;
@@ -73,31 +73,70 @@ fn given_a_layout_when_planning_then_only_clickhouse_takes_it_and_only_with_a_me
         engine: Some(name.to_owned()),
         ..TableLayout::default()
     };
-    assert_eq!(
-        layout_problems(&engine("ReplacingMergeTree(version)")),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        layout_problems(&engine("SharedMergeTree")),
-        Vec::<String>::new()
-    );
-    for refused in [
-        "ReplicatedMergeTree('/t', '{replica}')",
-        "Log",
-        "Distributed(c, d, t)",
-    ] {
-        assert_eq!(layout_problems(&engine(refused)).len(), 1, "{refused}");
+    let refused = "SQLLoad loads ClickHouse tables of the MergeTree family on one server";
+    let test_cases = [
+        LayoutProblemsTestCase {
+            description: "a ReplacingMergeTree engine is taken",
+            warehouse: Warehouse::ClickHouse,
+            layout: engine("ReplacingMergeTree(version)"),
+            expected_problem: None,
+        },
+        LayoutProblemsTestCase {
+            description: "ClickHouse Cloud's SharedMergeTree is taken",
+            warehouse: Warehouse::ClickHouse,
+            layout: engine("SharedMergeTree"),
+            expected_problem: None,
+        },
+        LayoutProblemsTestCase {
+            description: "a replicated engine is refused",
+            warehouse: Warehouse::ClickHouse,
+            layout: engine("ReplicatedMergeTree('/t', '{replica}')"),
+            expected_problem: Some(refused),
+        },
+        LayoutProblemsTestCase {
+            description: "an engine outside the MergeTree family is refused",
+            warehouse: Warehouse::ClickHouse,
+            layout: engine("Log"),
+            expected_problem: Some(refused),
+        },
+        LayoutProblemsTestCase {
+            description: "a distributed table is refused",
+            warehouse: Warehouse::ClickHouse,
+            layout: engine("Distributed(c, d, t)"),
+            expected_problem: Some(refused),
+        },
+        LayoutProblemsTestCase {
+            description: "another warehouse refuses any layout setting",
+            warehouse: Warehouse::Snowflake,
+            layout: TableLayout {
+                partition_by: Some("toYYYYMM(day)".to_owned()),
+                ..TableLayout::default()
+            },
+            expected_problem: Some(
+                "engine, order_by, partition_by, primary_key and table_settings lay out ClickHouse tables; Snowflake tables take none",
+            ),
+        },
+        LayoutProblemsTestCase {
+            description: "another warehouse takes an empty layout",
+            warehouse: Warehouse::Snowflake,
+            layout: TableLayout::default(),
+            expected_problem: None,
+        },
+    ];
+    for test_case in test_cases {
+        let problems = sql_adapter(test_case.warehouse).layout_problems(&test_case.layout);
+        assert_eq!(
+            problems.len(),
+            usize::from(test_case.expected_problem.is_some()),
+            "{}: {problems:?}",
+            test_case.description
+        );
+        assert!(
+            problems.iter().all(|problem| test_case
+                .expected_problem
+                .is_some_and(|expected| problem.contains(expected))),
+            "{}: {problems:?}",
+            test_case.description
+        );
     }
-    let partitioned = TableLayout {
-        partition_by: Some("toYYYYMM(day)".to_owned()),
-        ..TableLayout::default()
-    };
-    assert_eq!(
-        sql_adapter(Warehouse::Snowflake).layout_problems(&partitioned),
-        vec!["engine, order_by, partition_by, primary_key and table_settings lay out ClickHouse tables; Snowflake tables take none".to_owned()]
-    );
-    assert_eq!(
-        sql_adapter(Warehouse::Snowflake).layout_problems(&TableLayout::default()),
-        Vec::<String>::new()
-    );
 }

@@ -2,7 +2,7 @@
 
 use arrow_array::RecordBatch;
 
-use crate::adapters::clickhouse::_helpers::http::send;
+use crate::adapters::clickhouse::_helpers::session::http::send;
 use crate::adapters::clickhouse::models::ClickHouseDestination;
 use crate::http::errors::ApiError;
 

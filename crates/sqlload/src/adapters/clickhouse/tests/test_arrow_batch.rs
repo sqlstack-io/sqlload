@@ -2,46 +2,13 @@ use std::sync::Arc;
 
 use arrow_array::types::{Int32Type, Int64Type};
 use arrow_array::{
-    ArrayRef, Decimal128Array, DictionaryArray, Int64Array, LargeBinaryArray, ListArray,
-    RecordBatch, StringViewArray, Time64MicrosecondArray, TimestampMillisecondArray,
+    Decimal128Array, DictionaryArray, Int64Array, LargeBinaryArray, ListArray, StringViewArray,
+    Time64MicrosecondArray, TimestampMillisecondArray,
 };
 
-use crate::adapters::clickhouse::_helpers::arrow_batch::clickhouse_batch;
+use crate::adapters::clickhouse::tests::helpers::{batch_of, converted, desired};
 use crate::adapters::clickhouse::tests::test_types::ArrowBatchTestCase;
 use crate::column_types::models::ColumnType;
-use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
-
-fn desired(name: &str, column_type: ColumnType) -> DesiredColumn {
-    DesiredColumn {
-        name: name.to_owned(),
-        column_type,
-        origin: ColumnOrigin::Source,
-    }
-}
-
-fn batch_of(columns: Vec<(&str, ArrayRef)>) -> Result<RecordBatch, String> {
-    RecordBatch::try_from_iter(columns).map_err(|error| error.to_string())
-}
-
-/// Each column of `batch` as `name: type = value|value`, NULLs as `null`, columns joined by `; `.
-fn shown(batch: &RecordBatch) -> Result<String, String> {
-    let options = arrow_cast::display::FormatOptions::default().with_null("null");
-    let mut shown: Vec<String> = Vec::new();
-    for (field, array) in batch.schema().fields().iter().zip(batch.columns()) {
-        let formatter = arrow_cast::display::ArrayFormatter::try_new(array, &options)
-            .map_err(|error| error.to_string())?;
-        let values: Vec<String> = (0..array.len())
-            .map(|row| formatter.value(row).to_string())
-            .collect();
-        shown.push(format!(
-            "{}: {} = {}",
-            field.name(),
-            field.data_type(),
-            values.join("|")
-        ));
-    }
-    Ok(shown.join("; "))
-}
 
 #[test]
 fn given_planned_columns_when_preparing_rows_for_clickhouse_then_each_takes_an_arrow_type_its_reader_takes()
@@ -148,16 +115,15 @@ fn given_planned_columns_when_preparing_rows_for_clickhouse_then_each_takes_an_a
         },
     ];
     for test_case in test_cases {
-        let converted = clickhouse_batch(&test_case.batch, (&test_case.columns, test_case.builds));
-        let outcome = match converted {
-            Ok(batch) => Ok(shown(&batch)?),
-            Err(error) => Err(error.split(": ").next().unwrap_or_default().to_owned()),
-        };
-        let expected = test_case
-            .expected_batch
-            .map(str::to_owned)
-            .map_err(str::to_owned);
-        assert_eq!(outcome, expected, "{}", test_case.description);
+        assert_eq!(
+            converted(&test_case.batch, (&test_case.columns, test_case.builds))?,
+            test_case
+                .expected_batch
+                .map(str::to_owned)
+                .map_err(str::to_owned),
+            "{}",
+            test_case.description
+        );
     }
     Ok(())
 }

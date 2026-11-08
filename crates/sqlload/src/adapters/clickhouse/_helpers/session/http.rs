@@ -15,7 +15,7 @@ pub(crate) async fn send(
     #[cfg(feature = "container-tests")]
     {
         let sent = String::from_utf8_lossy(&body);
-        if crate::adapters::clickhouse::_helpers::stops::stopped(query.unwrap_or(&sent)) {
+        if crate::adapters::clickhouse::_helpers::session::stops::stopped(query.unwrap_or(&sent)) {
             return Err(ApiError::Transport("stopped by a test".to_owned()));
         }
     }
@@ -38,8 +38,7 @@ pub(crate) async fn send(
     let code = response
         .headers()
         .get(EXCEPTION_CODE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+        .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned());
     let text = response.text().await?;
     match (status.is_success(), code) {
         (true, None) => Ok(text),

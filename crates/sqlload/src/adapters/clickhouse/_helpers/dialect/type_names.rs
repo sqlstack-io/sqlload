@@ -85,7 +85,10 @@ fn arguments(text: &str) -> Vec<&str> {
 
 /// A decimal of `precision` and `scale` when it fits the portable range.
 fn decimal(precision: u8, scale: Option<&str>) -> Option<ColumnType> {
-    let scale: u8 = scale?.parse().ok()?;
+    let scale: u8 = match scale?.parse() {
+        Ok(scale) => scale,
+        Err(_) => return None,
+    };
     (precision <= MAX_DECIMAL_PRECISION && scale <= precision)
         .then_some(ColumnType::Decimal { precision, scale })
 }
@@ -107,7 +110,10 @@ pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
             Some(_) => ColumnType::TimestampTz,
             None => ColumnType::TimestampNtz,
         },
-        "Decimal" => decimal(arguments.first()?.parse().ok()?, arguments.get(1).copied())?,
+        "Decimal" => match arguments.first()?.parse() {
+            Ok(precision) => decimal(precision, arguments.get(1).copied())?,
+            Err(_) => return None,
+        },
         "Decimal32" => decimal(9, arguments.first().copied())?,
         "Decimal64" => decimal(18, arguments.first().copied())?,
         "Decimal128" => decimal(38, arguments.first().copied())?,
