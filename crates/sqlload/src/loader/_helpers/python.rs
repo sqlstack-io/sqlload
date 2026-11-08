@@ -364,6 +364,7 @@ pub(crate) fn field_type(field: &Field) -> ColumnType {
         ) => ColumnType::TimestampNtz,
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => ColumnType::Binary,
         DataType::Utf8 if json => ColumnType::Json,
+        DataType::List(_) => ColumnType::Json,
         _ => ColumnType::Text,
     }
 }
@@ -446,7 +447,7 @@ fn read_schema(table: &TablePlan) -> SchemaRef {
     Arc::new(Schema::new(fields))
 }
 
-/// `batch` with the target's columns (excluded columns dropped), each converted to its planned type (an array from the JSON text a list arrives as); a value that does not convert is an error naming the column.
+/// `batch` with the target's columns (excluded columns dropped), each converted to its planned type (an array from the list, or from the JSON text a list arrives as); a value that does not convert is an error naming the column.
 fn read_types(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch, LoaderError> {
     let strict = CastOptions {
         safe: false,
@@ -983,5 +984,11 @@ fn table_read(
         is_reload: load.options.reload,
         flatten: spec.flatten.clone(),
         masked: spec.masked.columns.keys().cloned().collect(),
+        arrays: spec
+            .pinned
+            .iter()
+            .filter(|(_, column_type)| matches!(column_type, ColumnType::Array(_)))
+            .map(|(name, _)| name.clone())
+            .collect(),
     }
 }

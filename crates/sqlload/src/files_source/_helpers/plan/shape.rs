@@ -168,7 +168,10 @@ fn json_text(name: &str, column: &ArrayRef) -> Result<ArrayRef, ShapeError> {
         let rows = NESTED_JSON_SLICE_ROWS.min(column.len() - start);
         let batch = RecordBatch::try_from_iter([(name, column.slice(start, rows))])
             .map_err(|error| failed(error.to_string()))?;
-        let text = normalise_batch(&batch).map_err(failed)?.column(0).clone();
+        let text = normalise_batch(&batch, &[])
+            .map_err(failed)?
+            .column(0)
+            .clone();
         bytes += text.as_string::<i32>().values().len();
         if bytes > MAX_TEXT_ARRAY_BYTES {
             return Err(ShapeError {

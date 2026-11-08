@@ -298,7 +298,7 @@ pub(crate) fn lists_as_json(batch: RecordBatch) -> Result<RecordBatch, String> {
                 }
                 let one = RecordBatch::try_from_iter([(field.name().as_str(), column.clone())])
                     .map_err(|error| error.to_string())?;
-                let text = normalise_batch(&one)?;
+                let text = normalise_batch(&one, &[])?;
                 fields.push(text.schema().field(0).clone());
                 columns.push(text.column(0).clone());
             }

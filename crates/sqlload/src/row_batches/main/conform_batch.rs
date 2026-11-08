@@ -2,9 +2,11 @@
 
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, new_null_array};
 use arrow_cast::cast::cast;
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, SchemaRef};
 
-/// `batch` with `schema`'s columns in its order: missing columns are NULL and differing types are cast; a column `schema` lacks is an error.
+use crate::row_batches::_helpers::arrow_json::normalise_column;
+
+/// `batch` with `schema`'s columns in its order: missing columns are NULL, a list becomes its JSON text where the schema has none, and other differing types are cast; a column `schema` lacks is an error.
 pub fn conform_batch(batch: &RecordBatch, schema: &SchemaRef) -> Result<RecordBatch, String> {
     for field in batch.schema().fields() {
         if schema.column_with_name(field.name()).is_none() {
@@ -19,6 +21,14 @@ pub fn conform_batch(batch: &RecordBatch, schema: &SchemaRef) -> Result<RecordBa
         .iter()
         .map(|field| match batch.column_by_name(field.name()) {
             Some(column) if column.data_type() == field.data_type() => Ok(column.clone()),
+            Some(column)
+                if matches!(column.data_type(), DataType::List(_))
+                    && !matches!(field.data_type(), DataType::List(_)) =>
+            {
+                let (_, text) = normalise_column(field.name(), column)?;
+                cast(&text, field.data_type())
+                    .map_err(|error| format!("column {}: {error}", field.name()))
+            }
             Some(column) => cast(column, field.data_type())
                 .map_err(|error| format!("column {}: {error}", field.name())),
             None => Ok(new_null_array(field.data_type(), batch.num_rows())),

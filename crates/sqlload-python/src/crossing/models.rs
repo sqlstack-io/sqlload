@@ -47,6 +47,8 @@ pub struct ReadContext {
     pub cursor_column: Option<String>,
     /// The table's masked columns, which `keep_record` must not carry.
     pub masked: Vec<String>,
+    /// Columns whose Arrow lists of scalars cross as lists (the table pins them as arrays); other lists cross as json text.
+    pub arrays: Vec<String>,
 }
 
 impl ReadContext {
