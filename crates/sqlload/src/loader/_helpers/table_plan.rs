@@ -6,6 +6,7 @@ use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
 use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
@@ -25,6 +26,7 @@ use crate::batch_plan::models::WindowSplit;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
+use crate::column_types::models::Warehouse;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::SourceFormat;
@@ -35,7 +37,6 @@ use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
-use crate::loader::constants::SNOWFLAKE_SOURCE;
 use crate::loader::constants::{
     CHECKS_LOADER_WARNING, ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES,
 };
@@ -893,7 +894,7 @@ fn write_mode(
     }
 }
 
-/// The source expression of `spec`'s cursor among `read_columns`, as its filter compares it: a text cursor bytewise, in code point order, as the destination's maximum is read (`render_binary_text`), whatever collation the source column has; any other cursor, and a source no filter reaches, as it is. `None` when the cursor is not read.
+/// The source expression of `spec`'s cursor among `read_columns`, as its filter compares it: a text cursor bytewise, in code point order, in the source's own dialect (`render_binary_text`), as the destination's maximum is read, whatever collation the source column has; any other cursor, and a source no filter reaches, as it is. `None` when the cursor is not read.
 pub(crate) fn source_cursor(
     spec: &TableSpec,
     read_columns: &[ReadColumn],
@@ -906,15 +907,17 @@ pub(crate) fn source_cursor(
         .expression
         .as_str();
     let text = matches!(cursor_type, Some(ColumnType::Text | ColumnType::Varchar(_)));
-    Some(match (text, &spec.warehouse_source) {
-        (false, _) => expression.to_owned(),
-        (true, Some(source)) if source.system == SNOWFLAKE_SOURCE => {
-            format!("COLLATE({expression}, 'utf8')")
+    let dialect = match (text, &spec.warehouse_source) {
+        (false, _) => None,
+        (true, Some(source)) => source_dialect(source.system),
+        (true, None) => {
+            (spec.python.is_none() && spec.files.is_none()).then_some(Warehouse::Postgres)
         }
-        (true, Some(_)) => expression.to_owned(),
-        (true, None) if spec.python.is_some() || spec.files.is_some() => expression.to_owned(),
-        (true, None) => format!("{expression} COLLATE \"C\""),
-    })
+    };
+    Some(dialect.map_or_else(
+        || expression.to_owned(),
+        |dialect| sql_adapter(dialect).render_binary_text(expression),
+    ))
 }
 
 /// `"column" >= 'from' AND "column" < 'to'` for Postgres, from the bounds that are set.

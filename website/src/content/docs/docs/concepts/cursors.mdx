@@ -34,10 +34,18 @@ Where the read starts, in order:
 
 From 0.27.0 (not released yet), text cursors compare by Unicode code point on both sides,
 whatever collation the source column or the destination uses, so `'B1'` comes before `'a9'`.
-Postgres sources and targets compare with `COLLATE "C"`, and Snowflake with `utf8`. Otherwise a
-case-insensitive source collation could read rows again on every run. BigQuery and Databricks
-compare by code point unless a dataset or schema sets a default collation, which SQLLoad doesn't
-override.
+Postgres sources and targets compare with `COLLATE "C"`, and Snowflake with `utf8`. Before,
+each side used its own collation. A linguistic one, such as `en_US` or a case-insensitive ICU
+collation, could then read rows again on every run.
+
+- An index on a text cursor only speeds up the read and the destination's maximum when it
+  uses the same order. On Postgres, create it as `CREATE INDEX ... (event_key COLLATE "C")`.
+- If an existing table's keys only increase in a linguistic order (`apple1`, `Banana2`,
+  `cherry3`, `Date4`), code point order puts some new keys below the maximum, so they are not
+  read. Use keys that increase in either order, such as zero-padded numbers, ULIDs or ISO
+  timestamps.
+- DuckDB, BigQuery and Databricks compare by code point unless a dataset, schema, table or
+  column sets a collation, which SQLLoad doesn't override.
 
 ## Backfilling a range
 
