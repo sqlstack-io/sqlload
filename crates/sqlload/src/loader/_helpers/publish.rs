@@ -1118,6 +1118,7 @@ impl Publisher {
         }
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
+            sink.deleted.extend(writer.written.iter().cloned());
         }
         self.committed_rows += self.waiting_rows;
         self.waiting_rows = 0;

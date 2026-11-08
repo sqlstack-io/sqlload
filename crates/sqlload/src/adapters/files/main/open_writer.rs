@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use arrow_schema::{Field, Schema};
 
+use crate::adapters::files::constants::SINGLE_FILE_STEM;
 use crate::adapters::files::models::{FilesWriter, WriterRequest};
 use crate::column_types::main::arrow_field::arrow_field;
 
@@ -28,6 +29,16 @@ pub fn open_writer(request: WriterRequest<'_>) -> Result<FilesWriter, String> {
     Ok(FilesWriter {
         folder: request.folder,
         encoding: request.encoding.clone(),
+        single_name: request
+            .path
+            .folder
+            .prefix
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(SINGLE_FILE_STEM)
+            .to_owned(),
         partition: request.path.partition.clone(),
         cursor_column: request.cursor_column.map(str::to_owned),
         schema: Arc::new(Schema::new(fields)),

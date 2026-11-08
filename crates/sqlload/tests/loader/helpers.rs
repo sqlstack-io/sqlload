@@ -1147,16 +1147,14 @@ async fn written_rows(table: &Location, column: &str) -> Result<Vec<WrittenRow>,
         let bytes = read_file(&folder, &file.relative_key)
             .await
             .map_err(|error| error.to_string())?;
-        let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(bytes)
-            .and_then(|builder| builder.build())
-            .map_err(|error| error.to_string())?;
+        let reader = file_batches(&file.relative_key, bytes)?;
         let partition = file
             .relative_key
             .rsplit_once('/')
             .map_or("-", |(partition, _)| partition)
             .to_owned();
         for batch in reader {
-            let batch = [batch.map_err(|error| error.to_string())?];
+            let batch = [batch];
             let count = batch[0].num_rows();
             let ids = column_values(&batch, "id")?;
             let values = batch[0]
@@ -1185,6 +1183,38 @@ async fn written_rows(table: &Location, column: &str) -> Result<Vec<WrittenRow>,
         }
     }
     Ok(rows)
+}
+
+/// The rows of a data file a files target wrote: Parquet, or CSV (gzip or zstd by its suffix) with a header, read with every column as text.
+fn file_batches(key: &str, bytes: bytes::Bytes) -> Result<Vec<RecordBatch>, String> {
+    if key.ends_with(".parquet") {
+        return parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .and_then(|builder| builder.build())
+            .map_err(|error| error.to_string())?
+            .map(|batch| batch.map_err(|error| error.to_string()))
+            .collect();
+    }
+    let text = match key.rsplit_once('.').map(|(_, suffix)| suffix) {
+        Some("gz") => {
+            let mut text = Vec::new();
+            std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&bytes[..]), &mut text)
+                .map_err(|error| error.to_string())?;
+            text
+        }
+        Some("zst") => zstd::decode_all(&bytes[..]).map_err(|error| error.to_string())?,
+        _ => bytes.to_vec(),
+    };
+    let header = text.split(|byte| *byte == b'\n').next().unwrap_or_default();
+    let fields: Vec<arrow_schema::Field> = String::from_utf8_lossy(header)
+        .split(',')
+        .map(|name| arrow_schema::Field::new(name, arrow_schema::DataType::Utf8, true))
+        .collect();
+    arrow_csv::ReaderBuilder::new(std::sync::Arc::new(arrow_schema::Schema::new(fields)))
+        .with_header(true)
+        .build(std::io::Cursor::new(text))
+        .map_err(|error| error.to_string())?
+        .map(|batch| batch.map_err(|error| error.to_string()))
+        .collect()
 }
 
 /// Per partition folder: the runs whose loads wrote it, then `id:value` for each row in id order; then the column's types if files differ, and leftover pending markers.
@@ -1319,6 +1349,31 @@ pub(crate) async fn run_files_target_scenario(
     let rows = written_rows(&table, test_case.check_column).await?;
     let pending = pending_markers(&table).await?;
     Ok((written_summary(rows, &runs, pending), table))
+}
+
+/// The data files in the table folder, sorted, each `part-<load>-<n>` file name shown as `part-*` before its suffix.
+pub(crate) async fn data_keys(table: &Location) -> Result<Vec<String>, String> {
+    let folder = open_folder(table).map_err(|error| error.to_string())?;
+    let mut keys: Vec<String> = list_files(&folder)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|file| {
+            let (folder, name) = file.relative_key.rsplit_once('/').map_or(
+                (String::new(), file.relative_key.clone()),
+                |(folder, name)| (format!("{folder}/"), name.to_owned()),
+            );
+            let suffix = name.find(".csv").or_else(|| name.find(".parquet"));
+            let name = match (name.starts_with("part-"), suffix) {
+                (true, Some(at)) => format!("part-*{}", &name[at..]),
+                _ => name,
+            };
+            format!("{folder}{name}")
+        })
+        .collect();
+    keys.sort();
+    keys.dedup();
+    Ok(keys)
 }
 
 /// The values of partition column `column` the files source reads from the table folder's files, sorted.

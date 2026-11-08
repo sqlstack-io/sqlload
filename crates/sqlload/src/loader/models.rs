@@ -533,7 +533,7 @@ pub struct FilesSink {
     pub folder: OpenFolder,
     pub replaced: ReplacedFiles,
     pub writer: Option<FilesWriter>,
-    /// Replaced files already deleted by earlier commits.
+    /// Replaced files already dealt with by earlier commits: deleted, or overwritten by a file of the same name (`single_file`).
     pub deleted: std::collections::BTreeSet<String>,
     /// Set when the load writes the whole table into a hidden folder beside it (`folder`) and swaps it in at commit.
     pub swap: Option<FolderSwap>,

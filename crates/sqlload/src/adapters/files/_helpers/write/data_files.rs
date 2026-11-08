@@ -9,8 +9,7 @@ use crate::adapters::files::_helpers::write::csv_files::{
     csv_bytes, csv_header, csv_rows, finish_csv, new_csv, push_csv,
 };
 use crate::adapters::files::constants::{
-    CSV_SUFFIX, GZIP_SUFFIX, OPEN_FILE_OVERHEAD_BYTES, PARQUET_SUFFIX, PART_PREFIX,
-    SINGLE_FILE_STEM, ZSTD_SUFFIX,
+    CSV_SUFFIX, GZIP_SUFFIX, OPEN_FILE_OVERHEAD_BYTES, PARQUET_SUFFIX, PART_PREFIX, ZSTD_SUFFIX,
 };
 use crate::adapters::files::errors::FilesDestinationError;
 use crate::adapters::files::models::{FileBody, FilesWriter, OpenFile};
@@ -79,18 +78,7 @@ pub(crate) fn next_key(writer: &FilesWriter, value: &str) -> String {
     };
     let suffix = file_suffix(&writer.encoding);
     match writer.encoding.single_file {
-        true => {
-            let stem = writer
-                .folder
-                .location
-                .prefix
-                .trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .filter(|name| !name.is_empty())
-                .unwrap_or(SINGLE_FILE_STEM);
-            format!("{folder}{stem}{suffix}")
-        }
+        true => format!("{folder}{}{suffix}", writer.single_name),
         false => format!(
             "{folder}{PART_PREFIX}{}-{}{suffix}",
             writer.file_id,

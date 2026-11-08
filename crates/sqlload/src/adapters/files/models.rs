@@ -197,6 +197,8 @@ pub enum CsvOut {
 pub struct FilesWriter {
     pub folder: OpenFolder,
     pub encoding: OutputEncoding,
+    /// With `single_file`, each file's name before its suffix: the table folder's own name.
+    pub single_name: String,
     pub partition: Option<PartitionFolder>,
     pub cursor_column: Option<String>,
     pub schema: SchemaRef,
