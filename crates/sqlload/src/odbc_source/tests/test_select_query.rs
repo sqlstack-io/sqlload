@@ -1,32 +1,8 @@
-use crate::column_types::models::ColumnType;
 use crate::odbc_source::_helpers::query::select_query;
 use crate::odbc_source::main::read_columns::read_columns;
 use crate::odbc_source::models::OdbcReadRequest;
+use crate::odbc_source::tests::helpers::table;
 use crate::odbc_source::tests::test_types::SelectQueryTestCase;
-use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
-
-fn table(schema: &str, name: &str, columns: &[&str]) -> SourceTable {
-    SourceTable {
-        schema: schema.to_owned(),
-        name: name.to_owned(),
-        columns: columns
-            .iter()
-            .map(|column| SourceColumn {
-                name: (*column).to_owned(),
-                postgres_type: "Utf8".to_owned(),
-                pg_type: PgType::Other,
-                column_type: Ok(ColumnType::Text),
-                nullable: true,
-                source_spelling: None,
-            })
-            .collect(),
-        primary_key: Vec::new(),
-        indexed_columns: Vec::new(),
-        estimated_rows: -1,
-        estimated_bytes: -1,
-        comment: None,
-    }
-}
 
 #[test]
 fn given_an_odbc_read_when_writing_its_select_then_names_are_quoted_and_queries_aliased() {

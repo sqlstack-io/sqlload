@@ -733,3 +733,17 @@ pub(crate) struct StoppedLoadTestCase {
     pub(crate) states: [(&'static str, &'static str); 2],
     pub(crate) expected_minimum_stops: usize,
 }
+
+/// One `load` of the ODBC scenario.
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcLoadTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run in Postgres first.
+    pub(crate) source_change: &'static str,
+    /// The source's `max_text_size`.
+    pub(crate) max_text_size: usize,
+    /// Whether the load succeeds, and text its output holds.
+    pub(crate) expected_output: (bool, &'static str),
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}

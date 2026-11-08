@@ -6,6 +6,9 @@ mod bigquery_helpers;
 mod databricks_helpers;
 #[path = "loader/helpers.rs"]
 mod helpers;
+#[cfg(feature = "odbc")]
+#[path = "loader/odbc/helpers.rs"]
+mod odbc_helpers;
 #[path = "loader/postgres/helpers.rs"]
 mod postgres_helpers;
 #[path = "loader/test_batched_loads.rs"]
@@ -26,6 +29,9 @@ mod test_files_to_duckdb;
 mod test_loader_edge_cases;
 #[path = "loader/test_mixed_cursors.rs"]
 mod test_mixed_cursors;
+#[cfg(feature = "odbc")]
+#[path = "loader/test_odbc_to_duckdb.rs"]
+mod test_odbc_to_duckdb;
 #[path = "loader/test_postgres_cdc.rs"]
 mod test_postgres_cdc;
 #[path = "loader/test_postgres_cdc_files.rs"]
