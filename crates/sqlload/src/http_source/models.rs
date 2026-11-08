@@ -31,6 +31,22 @@ pub struct Request {
     /// What an HTTP status other than success means, such as `{"404": "skip"}`.
     #[serde(default)]
     pub on_status: BTreeMap<String, StatusAction>,
+    /// The only values of each row that load, renamed: `None` loads every key under its own name.
+    #[serde(default)]
+    pub fields: Option<Vec<FieldSpec>>,
+    /// A column holding each row's whole object as JSON.
+    #[serde(default)]
+    pub keep_record: Option<String>,
+}
+
+/// One projected column of a job's rows.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FieldSpec {
+    pub name: String,
+    /// Such as `$.address.city`.
+    pub path: String,
+    #[serde(default)]
+    pub required: bool,
 }
 
 /// A request per key of `over`.
@@ -124,6 +140,8 @@ pub struct HttpPage {
     pub path: Option<String>,
     /// The request, secrets hidden, for errors about the page.
     pub source: String,
+    /// The columns each row loads as, when the job names its fields.
+    pub projection: Option<crate::row_batches::models::Projection>,
 }
 
 /// A parsed `select`: the fields down to the rows and, for keys, the field of each row.

@@ -86,7 +86,7 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
     for test_case in test_cases {
         let job: HttpJob = serde_json::from_str(test_case.job).expect(test_case.description);
         assert_eq!(
-            job_problems(&job),
+            job_problems(&job, None),
             test_case.expected_problems,
             "{}",
             test_case.description

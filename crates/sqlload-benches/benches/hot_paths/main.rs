@@ -329,6 +329,7 @@ fn lines(bytes: Vec<u8>) -> JsonInput {
         layout: JsonLayout::Lines,
         path: None,
         batch_rows: CROSSING_ROWS,
+        projection: None,
     };
     (bytes, read)
 }
@@ -346,6 +347,7 @@ fn flat_document() -> JsonInput {
         layout: JsonLayout::Document,
         path: Some("data.items".to_owned()),
         batch_rows: CROSSING_ROWS,
+        projection: None,
     };
     (fixtures::flat_document(20_000), read)
 }

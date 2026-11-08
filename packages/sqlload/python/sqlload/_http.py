@@ -10,6 +10,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from sqlload._data import Fields, field_list
 from sqlload._declare import Source
 
 #: Default retries of a request that failed with a transport error, 429 or a 5xx.
@@ -143,9 +144,14 @@ class Http:
 		params: Mapping[str, Any] | None = None,
 		select: str | None = None,
 		on_status: Mapping[int, str] | None = None,
+		fields: Fields | None = None,
+		keep_record: str | None = None,
 	) -> Job:
-		"""Every page of `path`; `select` (such as `"$.items"`) is where the rows are, `on_status={404: "skip"}` treats a status as no rows."""
-		return Job({"kind": "paginate", **self._request(path, paginator, params, select, on_status)})
+		"""Every page of `path`; `select` (such as `"$.items"`) is where the rows are, `on_status={404: "skip"}` treats a status as no rows.
+
+		`fields` loads only those values of each row, renamed (`{"account_code": "$.code"}`); `keep_record` adds each
+		row's whole object as a JSON column."""
+		return Job({"kind": "paginate", **self._request(path, paginator, params, select, on_status), **_projection(fields, keep_record)})
 
 	def fan_out(
 		self,
@@ -157,6 +163,8 @@ class Http:
 		params: Mapping[str, Any] | None = None,
 		select: str | None = None,
 		on_status: Mapping[int, str] | None = None,
+		fields: Fields | None = None,
+		keep_record: str | None = None,
 	) -> Job:
 		"""Every page of `path` once per key of `over`, up to `concurrency` at a time: `over` is a paginate whose
 		`select` picks the keys (`"$.items[*].id"` fills `{id}`), or values (`["uk", "fr"]` fill the one placeholder;
@@ -171,7 +179,8 @@ class Http:
 			else {"kind": "values", "values": list(over)}
 		)
 		request = self._request(path, paginator or single(), params, select, on_status)
-		return Job({"kind": "fan_out", **request, "over": over_spec, "concurrency": concurrency})
+		projected = _projection(fields, keep_record)
+		return Job({"kind": "fan_out", **request, **projected, "over": over_spec, "concurrency": concurrency})
 
 	def _request(
 		self,
@@ -189,6 +198,14 @@ class Http:
 			"select": select,
 			"on_status": {str(status): action for status, action in (on_status or {}).items()},
 		}
+
+
+def _projection(fields: Fields | None, keep_record: str | None) -> dict[str, Any]:
+	listed = field_list(fields)
+	return {
+		"fields": None if listed is None else [{"name": name, "path": path, "required": required} for name, path, required in listed],
+		"keep_record": keep_record,
+	}
 
 
 def http(

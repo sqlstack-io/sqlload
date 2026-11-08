@@ -93,6 +93,15 @@ def order_items(ctx):
 - A job's rows never come back into Python: iterating a job hands the job itself to Rust, and
   reading a row from it fails (rule `python_row_loop`). Filter rows downstream.
 
+### Fields
+
+`fields` on `sl.json`, `sl.ndjson`, `api.paginate` and `api.fan_out` loads only the values it
+names, renamed, in Rust: `fields={"id": "$.id", "account_code": "$.code", "city": "$.address.city",
+"updated_at": sl.field("$.updated-at", required=True)}`. A missing value loads NULL unless the field
+is required. `keep_record="raw_json"` adds each row's whole object as a JSON column. Pin types with
+the table's `columns`. A table's `cursor_column` must be among the fields. Without `fields`, each
+key loads under its own name as written, such as `updated-at`.
+
 ## Upgrading from 0.4
 
 Both this package and `sqlload-cli` install a `sqlload` command. Remove the old one first:

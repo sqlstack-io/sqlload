@@ -14,9 +14,12 @@ use crate::row_batches::main::conform_batch::conform_batch;
 use crate::row_batches::main::flatten_batch::flatten_batch;
 use crate::row_batches::main::json_rows::json_rows;
 use crate::row_batches::main::merge_schema::merge_schema;
+use crate::row_batches::main::projection::projection;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::row_batches::models::{JsonLayout, JsonRead};
-use crate::row_batches::tests::test_types::{FlattenBatchTestCase, JsonRowsTestCase};
+use crate::row_batches::tests::test_types::{
+    FlattenBatchTestCase, JsonRowsTestCase, ProjectionTestCase,
+};
 
 /// `batch` as `name:type,... / v|v|...; ...`, with `(json)` after JSON columns and `NULL` for nulls.
 pub(crate) fn render(batch: &RecordBatch) -> String {
@@ -57,6 +60,29 @@ pub(crate) fn read_json(test_case: &JsonRowsTestCase) -> Result<Vec<String>, Str
         layout: test_case.layout,
         path: test_case.path.map(str::to_owned),
         batch_rows: test_case.batch_rows,
+        projection: None,
+    };
+    let mut batches: Vec<String> = Vec::new();
+    json_rows(test_case.text.as_bytes(), &read, &mut |columns| {
+        batches.push(render(&columns_batch(columns)?));
+        Ok(())
+    })?;
+    Ok(batches)
+}
+
+/// The batches `json_rows` produces for the projection test case, rendered; a projection that can't be built is its error.
+pub(crate) fn read_projected(test_case: &ProjectionTestCase) -> Result<Vec<String>, String> {
+    let fields: Option<Vec<(String, String, bool)>> = test_case.fields.map(|fields| {
+        fields
+            .iter()
+            .map(|(name, path, required)| ((*name).to_owned(), (*path).to_owned(), *required))
+            .collect()
+    });
+    let read = JsonRead {
+        layout: test_case.layout,
+        path: None,
+        batch_rows: 10,
+        projection: projection(fields.as_deref(), test_case.keep_record)?,
     };
     let mut batches: Vec<String> = Vec::new();
     json_rows(test_case.text.as_bytes(), &read, &mut |columns| {
@@ -72,6 +98,7 @@ pub(crate) fn merged_table(texts: &[&str]) -> Result<String, String> {
         layout: JsonLayout::Lines,
         path: None,
         batch_rows: usize::MAX,
+        projection: None,
     };
     let mut batches: Vec<RecordBatch> = Vec::new();
     for text in texts {
@@ -145,6 +172,7 @@ pub(crate) fn flattened(test_case: &FlattenBatchTestCase) -> Result<String, Stri
         layout: JsonLayout::Lines,
         path: None,
         batch_rows: usize::MAX,
+        projection: None,
     };
     let mut batches: Vec<RecordBatch> = Vec::new();
     json_rows(test_case.rows.as_bytes(), &read, |columns| {

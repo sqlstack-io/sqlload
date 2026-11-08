@@ -365,3 +365,52 @@ def test_given_a_redirect_listed_in_on_status_when_loading_then_it_is_skipped_an
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert elsewhere.seen == []  # type: ignore[attr-defined]
+
+
+def test_given_fields_and_keep_record_when_a_paginate_and_a_fan_out_load_then_rows_are_projected(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	tables = textwrap.dedent("""\
+		@shop.table(description='Orders.')
+		def orders(ctx):
+		    return api.paginate('/next', paginator=sl.next_link('$.next'), select='$.data.items',
+		                        fields={'id': '$.order_id', 'state': sl.field('$.status', required=True)}, keep_record='raw')
+
+		@shop.table(description='Items.')
+		def items(ctx):
+		    return api.fan_out('/orders/{order_id}/items', over=range(1, 8), select='$.items', on_status={404: 'skip'},
+		                       fields={'order': '$.order_id', 'line_no': '$.line'})
+		""")
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT id, state FROM "RAW".shop__orders ORDER BY id') == ALL_ORDERS
+	raw = query(project, 'SELECT raw FROM "RAW".shop__orders ORDER BY id')
+	assert [json.loads(text) for (text,) in raw] == ORDERS
+	columns = [name for (name,) in query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__items' AND column_name NOT LIKE '\\_%' ESCAPE '\\' ORDER BY ordinal_position")]
+	assert columns == ["order", "line_no"]
+	expected = sorted((n, line) for n, lines in ITEMS.items() if n != 4 for line in range(len(lines)))
+	assert query(project, 'SELECT "order", line_no FROM "RAW".shop__items ORDER BY 1, 2') == expected
+
+
+@pytest.mark.parametrize(
+	("data", "cursor", "expected_text"),
+	[
+		("api.paginate('/offset', paginator=sl.offset(limit=10), fields={'id': '$.order_id', 'status': '$.status'})", "id", None),
+		("api.paginate('/offset', paginator=sl.offset(limit=10), fields={'id': '$.order_id'})", "order_id", "the table's cursor_column order_id is not among the job's fields"),
+		("[sl.ndjson(b'{\"order_id\": 1}', fields={'id': '$.order_id'})]", "order_id", "the table's cursor_column order_id is not among the job's fields"),
+	],
+	ids=["cursor-on-a-renamed-field", "http-cursor-not-projected", "ndjson-cursor-not-projected"],
+)
+def test_given_a_cursor_column_when_rows_are_projected_then_the_cursor_must_be_among_the_fields(
+	tmp_path: Path, api: ThreadingHTTPServer, data: str, cursor: str, expected_text: str | None
+) -> None:
+	tables = f"@shop.table(description='T.', write_strategy='append', cursor_column='{cursor}')\ndef t(ctx):\n    return {data}\n"
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load")
+	output = done.stdout + done.stderr
+	if expected_text is None:
+		assert done.returncode == 0, output
+		assert query(project, 'SELECT max(id) FROM "RAW".shop__t') == [(7,)]
+		return
+	assert done.returncode == 1, output
+	assert expected_text in output, output
+	assert api.log == []  # type: ignore[attr-defined]

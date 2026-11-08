@@ -8,6 +8,8 @@ mod json_rows;
 mod merge_schema;
 #[path = "tests/test_normalise_batch.rs"]
 mod normalise_batch;
+#[path = "tests/test_projection.rs"]
+mod projection;
 #[path = "tests/test_types.rs"]
 mod test_types;
 #[path = "tests/test_text_rows.rs"]

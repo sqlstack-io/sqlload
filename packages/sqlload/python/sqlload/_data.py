@@ -1,6 +1,8 @@
 """What a table function can yield besides rows: JSON bytes, which Rust parses without the GIL, and checkpoints."""
 
 import json as _json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from sqlload._native import JsonData
@@ -8,14 +10,47 @@ from sqlload._native import JsonData
 BytesLike = bytes | bytearray | memoryview | str
 
 
-def json(data: BytesLike, path: str | None = None) -> JsonData:
-	"""Rows in a JSON document: an array of objects (at dotted `path`, such as `"data.items"`), or objects."""
-	return JsonData(_as_bytes(data), path=path)
+@dataclass(frozen=True)
+class Field:
+	"""One projected column's path, and whether every row must have a value there."""
+
+	path: str
+	required: bool = False
 
 
-def ndjson(data: BytesLike) -> JsonData:
-	"""Rows as newline-delimited JSON, one object per line."""
-	return JsonData(_as_bytes(data), lines=True)
+#: `fields=`: each column's path, such as `"$.address.city"`, or an `sl.field(...)`.
+Fields = Mapping[str, "str | Field"]
+
+
+def field(path: str, *, required: bool = False) -> Field:
+	"""The value at `path` (such as `"$.updated-at"`) for `fields=`; `required=True` fails the table on a row without one."""
+	return Field(path, required)
+
+
+def json(data: BytesLike, path: str | None = None, *, fields: Fields | None = None, keep_record: str | None = None) -> JsonData:
+	"""Rows in a JSON document: an array of objects (at dotted `path`, such as `"data.items"`), or objects.
+
+	`fields` loads only those values, renamed (`{"account_code": "$.code"}`); `keep_record` adds each row's whole
+	object as a JSON column."""
+	return JsonData(_as_bytes(data), path=path, fields=field_list(fields), keep_record=keep_record)
+
+
+def ndjson(data: BytesLike, *, fields: Fields | None = None, keep_record: str | None = None) -> JsonData:
+	"""Rows as newline-delimited JSON, one object per line; `fields` and `keep_record` as for `sl.json`."""
+	return JsonData(_as_bytes(data), lines=True, fields=field_list(fields), keep_record=keep_record)
+
+
+def field_list(fields: Fields | None) -> list[tuple[str, str, bool]] | None:
+	"""`fields` as (column, path, required) triples, in the order given."""
+	if fields is None:
+		return None
+	listed = []
+	for name, spec in fields.items():
+		projected = spec if isinstance(spec, Field) else Field(spec)
+		if not isinstance(projected.path, str):
+			raise TypeError(f"fields[{name!r}] takes a path such as \"$.id\" or sl.field(...), not {spec!r}")
+		listed.append((name, projected.path, projected.required))
+	return listed
 
 
 def _as_bytes(data: BytesLike) -> bytes | bytearray:

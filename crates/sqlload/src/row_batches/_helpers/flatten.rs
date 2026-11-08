@@ -181,6 +181,7 @@ fn json_keys(field: &Field, array: &ArrayRef) -> Result<Vec<(Arc<Field>, ArrayRe
         layout: JsonLayout::Document,
         path: None,
         batch_rows: array.len().max(1),
+        projection: None,
     };
     let mut keys: Vec<(Arc<Field>, ArrayRef)> = Vec::new();
     json_rows(document.as_bytes(), &read, |columns| {

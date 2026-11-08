@@ -141,6 +141,27 @@ pub struct JsonRead {
     /// A dotted path to the array of rows inside a document, such as `data.items`.
     pub path: Option<String>,
     pub batch_rows: usize,
+    /// The columns each row object loads as, when only some of its values load, renamed.
+    pub projection: Option<Projection>,
+}
+
+/// Which values of each row object load, under which column names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Projection {
+    pub fields: Vec<ProjectedField>,
+    /// A column holding the whole row object as JSON.
+    pub keep_record: Option<String>,
+}
+
+/// One column a projection loads: the value at `path` (keys from the row object down), or NULL when it is missing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectedField {
+    pub name: String,
+    pub path: Vec<String>,
+    /// The path as written, such as `$.address.city`, for errors.
+    pub text: String,
+    /// A row without a value at `path` fails the read rather than loading NULL.
+    pub required: bool,
 }
 
 /// Builds compact JSON text for nested values, escaping strings as serde_json does.

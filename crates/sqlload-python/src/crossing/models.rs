@@ -42,6 +42,8 @@ pub struct CrossingOptions {
 pub struct ReadContext {
     pub flatten: Vec<String>,
     pub connections: serde_json::Map<String, serde_json::Value>,
+    /// The table's cursor column, which projected JSON rows must keep.
+    pub cursor_column: Option<String>,
 }
 
 /// A crossing thread that can be made to panic for tests.

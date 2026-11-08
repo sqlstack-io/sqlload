@@ -1,9 +1,11 @@
 pub mod columns_batch;
 pub mod conform_batch;
+pub mod cursor_problem;
 pub mod flatten_batch;
 pub mod flattened_columns;
 pub mod json_rows;
 pub mod merge_schema;
 pub mod normalise_batch;
+pub mod projection;
 pub mod settled_schema;
 pub mod text_rows;
