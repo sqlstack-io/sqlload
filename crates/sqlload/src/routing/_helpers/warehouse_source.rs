@@ -57,7 +57,11 @@ pub(crate) fn unload_route(
         ],
         writer,
         overrides.stage,
-        &match &reader.direct_blocked {
+        &match reader
+            .direct_blocked
+            .as_ref()
+            .or(reader.needs_loader.as_ref())
+        {
             Some(reason) => {
                 format!("unloaded to {store} and read back by SQLLoad, because {reason}")
             }
