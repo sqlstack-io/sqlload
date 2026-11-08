@@ -1,6 +1,7 @@
 //! Why the destination cannot load a files table's files exactly by reading them itself.
 
 use crate::adapters::bigquery::constants::NO_INTERNAL_STAGE_COPY as BIGQUERY_NO_INTERNAL_STAGE_COPY;
+use crate::adapters::clickhouse::_helpers::dialect::pull::direct_problem as clickhouse_direct_problem;
 use crate::adapters::clickhouse::constants::NO_INTERNAL_STAGE_COPY as CLICKHOUSE_NO_INTERNAL_STAGE_COPY;
 use crate::adapters::databricks::constants::NO_INTERNAL_STAGE_COPY;
 #[cfg(feature = "duckdb")]
@@ -12,7 +13,7 @@ use crate::column_types::models::Warehouse;
 use crate::files_source::models::FilesRead;
 use crate::loader::models::TableSpec;
 
-/// Why the destination cannot load the planned `read` of a files table exactly from its files: for DuckDB, by reading them itself wherever they are; for Snowflake, under the external `stage` that covers them, or copied unchanged to an internal stage (`copy_to_internal_stage`); `None` when it can, or when neither applies.
+/// Why the destination cannot load the planned `read` of a files table exactly from its files: for DuckDB, by reading them itself wherever they are; for ClickHouse, by reading them from S3; for Snowflake, under the external `stage` that covers them, or copied unchanged to an internal stage (`copy_to_internal_stage`); `None` when it can, or when neither applies.
 pub fn direct_blocked(
     spec: &TableSpec,
     read: &FilesRead,
@@ -26,7 +27,11 @@ pub fn direct_blocked(
         _ => None,
     };
     if let Some(refused) = refused {
-        return files.copy_to_internal_stage.then(|| refused.to_owned());
+        return match (files.copy_to_internal_stage, spec.warehouse) {
+            (true, _) => Some(refused.to_owned()),
+            (false, Warehouse::ClickHouse) => clickhouse_direct_problem(spec, read),
+            (false, _) => None,
+        };
     }
     #[cfg(feature = "duckdb")]
     if spec.warehouse == Warehouse::DuckDb {

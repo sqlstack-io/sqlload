@@ -6,5 +6,7 @@ mod helpers;
 mod layout;
 #[path = "tests/test_publish.rs"]
 mod publish;
+#[path = "tests/test_pull.rs"]
+mod pull;
 #[path = "tests/test_types.rs"]
 mod test_types;

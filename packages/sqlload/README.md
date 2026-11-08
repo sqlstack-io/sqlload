@@ -590,7 +590,13 @@ an existing table out again, drop it and load. ClickHouse cannot change the type
 sorting or partition key, so a key column whose source type widens fails the load.
 
 Rows go as Arrow over HTTP into a staging table (a build table for `replace`) and reach the table
-only when the load publishes them. ClickHouse has no transactions, so each publish is one swap,
+only when the load publishes them. A files source of Parquet in S3 skips SQLLoad: ClickHouse reads
+each file itself with `s3()`, signed with the credentials SQLLoad reads S3 with, and `plan` shows
+"ClickHouse reads directly from s3://...". The server must reach the bucket (or the S3 connection's
+`endpoint`). A table whose files ClickHouse would not load exactly (another format, masks, a column
+loaded as another type than the files hold, nanosecond or epoch timestamps, times of day, or a path
+that reads as a glob) goes through SQLLoad instead, and a batch's files load only if ClickHouse
+writes exactly as many rows as their footers hold. ClickHouse has no transactions, so each publish is one swap,
 atomic in an `Atomic` database (ClickHouse's default). `replace` and `--reload` swap the build
 table in with `EXCHANGE TABLES`. In a database that cannot exchange tables (an `Ordinary` one) they
 swap with one `RENAME TABLE`, which ClickHouse does not make atomic: readers can briefly find no
