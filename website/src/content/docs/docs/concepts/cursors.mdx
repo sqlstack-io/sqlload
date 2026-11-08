@@ -26,14 +26,14 @@ Where the read starts, in order:
 
 1. `--start-cursor`, when given.
 2. The destination's maximum of `cursor_column`, minus `lookback`. `append` reads strictly after
-   it. From 0.27.0 (not released yet), `plan` prints that read as `after` the maximum; before, it
+   it. From 0.27.0, `plan` prints that read as `after` the maximum; before, it
    printed `from`.
 3. `cursor_start`, when the table is empty.
 4. Otherwise, everything.
 
 `plan` says which one applies, on the table's `cursor` line.
 
-From 0.27.0 (not released yet), text cursors compare by Unicode code point on both sides,
+From 0.27.0, text cursors compare by Unicode code point on both sides,
 whatever collation the source column or the destination uses, so `'B1'` comes before `'a9'`.
 Postgres sources and targets compare with `COLLATE "C"`, and Snowflake with `utf8`. Before,
 each side used its own collation. A linguistic one, such as `en_US` or a case-insensitive ICU

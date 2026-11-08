@@ -44,7 +44,7 @@ A method the role can't use fails at `plan`. SQLLoad never falls back to another
 
 SQLLoad writes the Parquet it stages with your AWS credentials, found as for an
 [`s3` connection](/docs/configuration/#s3): `AWS_*` environment variables, the shared credentials
-file under `AWS_PROFILE` (from 0.27.0, not released yet), web identity, or the instance or
+file under `AWS_PROFILE` (from 0.27.0), web identity, or the instance or
 container role. Snowflake reads the bucket through the stage.
 
 Staged files are deleted once their batch commits. The next load removes what failed runs left,

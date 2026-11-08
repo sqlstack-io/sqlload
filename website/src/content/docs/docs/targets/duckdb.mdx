@@ -28,7 +28,7 @@ SQLLoad's reader loads a files table instead when DuckDB can't load it exactly:
 A later batch whose files hold a column differently fails the load, naming the column.
 
 DuckDB reads S3 with the keys SQLLoad finds for the [`s3` connection](/docs/configuration/#s3):
-from the environment or, from 0.27.0 (not released yet), the shared credentials file. Without
+from the environment or, from 0.27.0, the shared credentials file. Without
 either, it uses the AWS credential chain. The first load from S3 installs DuckDB's `httpfs`
 extension into `~/.duckdb`, and `aws` too when it uses the chain. That needs the network once.
 Local folders need nothing extra.

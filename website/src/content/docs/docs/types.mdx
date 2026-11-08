@@ -46,7 +46,7 @@ keeps neither key order nor duplicate keys; DuckDB doesn't enforce `varchar` len
 
 ² `BIGNUMERIC(p,s)` for more than 29 digits before the point or a scale over 9.
 
-³ From 0.27.0 (not released yet). See [Arrays](#arrays).
+³ From 0.27.0. See [Arrays](#arrays).
 
 Every ClickHouse column is `Nullable`, such as `Nullable(Int64)`.
 
@@ -55,7 +55,7 @@ convert such columns.
 
 ## Arrays
 
-From 0.27.0 (not released yet). `array(T)` is a list of values of one portable type, such as
+From 0.27.0. `array(T)` is a list of values of one portable type, such as
 `array(int)` or `array(decimal(10,2))`. `T` is one of `bool`, `smallint`, `int`, `float`,
 `decimal(p,s)`, `text`, `date`, `timestamp_tz`, `timestamp_ntz` or `uuid`. Arrays of arrays,
 `json` or other types are refused.

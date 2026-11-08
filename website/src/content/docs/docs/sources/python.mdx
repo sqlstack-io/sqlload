@@ -174,7 +174,7 @@ A table function is a generator (or returns an iterable). It can yield, in any m
 ### Types
 
 Dict values are typed like JSON: numbers, booleans and text keep their types, and nested dicts and
-lists become JSON columns. From 0.27.0 (not released yet), a list column pinned as
+lists become JSON columns. From 0.27.0, a list column pinned as
 [`array(T)`](/docs/types/#arrays) loads as an array instead. Also:
 
 | Python value | Column type |
@@ -231,7 +231,7 @@ when a listed value arrives as a scalar or a list.
 
 ### Fields
 
-From 0.27.0 (not released yet). Without `fields`, each key of a JSON row object loads as a column
+From 0.27.0. Without `fields`, each key of a JSON row object loads as a column
 under its own name, as written: a key `updated-at` makes a column `updated-at`, which the
 destination quotes, so queries must quote it too. `fields` loads only the values it names, under
 the names it gives. It works on `sl.json`, `sl.ndjson`, and an `sl.http` job's `paginate` and
@@ -353,8 +353,8 @@ loaded   raw.shop__orders       5 rows  1.0s
 | Function | Meaning |
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
-| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0, not released yet) pick and rename each row's values; see [Fields](#fields). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0 (not released yet). `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list of values. |
+| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list of values. |
 
 | Paginator | Next page |
 |-----------|-----------|
@@ -370,8 +370,8 @@ loaded   raw.shop__orders       5 rows  1.0s
 | `sl.bearer()` | `Authorization: Bearer <token>`, the connection's `token`. |
 | `sl.api_key(header=...)` or `sl.api_key(query=...)` | The `token` in that header or query parameter. |
 | `sl.basic()` | Basic auth with the connection's `username` and `password`. |
-| `sl.oauth2_client_credentials(token_url, *, scope=None, client_auth="basic")` | From 0.27.0 (not released yet). `Authorization: Bearer <access token>`, with the token `token_url` issues for the connection's `client_id` and `client_secret`. See [OAuth2](#oauth2). |
-| `sl.oauth2_refresh_token(token_url, *, scope=None, client_auth="basic")` | From 0.27.0 (not released yet). The same, with the token issued for the connection's `refresh_token`. The connection's `client_id` and `client_secret` go along when it has them. |
+| `sl.oauth2_client_credentials(token_url, *, scope=None, client_auth="basic")` | From 0.27.0. `Authorization: Bearer <access token>`, with the token `token_url` issues for the connection's `client_id` and `client_secret`. See [OAuth2](#oauth2). |
+| `sl.oauth2_refresh_token(token_url, *, scope=None, client_auth="basic")` | From 0.27.0. The same, with the token issued for the connection's `refresh_token`. The connection's `client_id` and `client_secret` go along when it has them. |
 
 - Every `paginate` names its paginator; nothing is guessed.
 - Credentials go only to the connection's own scheme, host and port, never to a next-page link
@@ -385,7 +385,7 @@ loaded   raw.shop__orders       5 rows  1.0s
 
 ### OAuth2
 
-From 0.27.0 (not released yet). For APIs that issue short-lived access tokens:
+From 0.27.0. For APIs that issue short-lived access tokens:
 
 ```toml
 [connections.erp]
