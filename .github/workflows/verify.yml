@@ -211,15 +211,16 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          # Both switches discard tracked changes, such as a build's rewrite of a stale Cargo.lock,
+          # so neither side's leftovers block or leak into the other. perf-base.jsonl is untracked.
           head=$(git rev-parse HEAD)
-          git checkout --quiet --detach "$(git merge-base "${BASE_SHA}" "${head}")"
+          git checkout --quiet --force --detach "$(git merge-base "${BASE_SHA}" "${head}")"
           if [[ -d crates/sqlload-benches ]]; then
             make bench-perf > perf-base.jsonl
           else
             echo "The merge base has no benchmarks." >&2
             : > perf-base.jsonl
           fi
-          # Building the base can rewrite its Cargo.lock; discard that so the head checks out.
           git checkout --quiet --force --detach "${head}"
       - name: Benchmark the head
         run: make bench-perf > perf-head.jsonl
