@@ -32,6 +32,8 @@ pub struct TableRead {
     pub flatten: Vec<String>,
     /// Columns loaded masked.
     pub masked: Vec<String>,
+    /// Columns pinned as `array(...)`: their Arrow lists cross as lists, so each element converts exactly.
+    pub arrays: Vec<String>,
 }
 
 /// The cursor window a table function may use to read only new data.

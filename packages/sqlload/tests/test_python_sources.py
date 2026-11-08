@@ -1037,3 +1037,23 @@ def test_given_append_with_an_undeclared_date_cursor_when_loading_then_it_is_ref
 	done = sqlload(project, "load")
 	assert (done.returncode, 'cannot follow the date cursor day' in done.stdout + done.stderr) == (1, True), done.stdout + done.stderr
 	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__days'") == [(0,)]
+
+
+@pytest.mark.parametrize(
+	"data",
+	[
+		"__import__('pyarrow').table({'id': [1, 2, 3], 'xs': __import__('pyarrow').array([[float('nan'), float('inf'), -float('inf'), 1.5], None, [None]], __import__('pyarrow').list_(__import__('pyarrow').float32()))})",
+		"__import__('polars').DataFrame({'id': [1, 2, 3], 'xs': [[float('nan'), float('inf'), -float('inf'), 1.5], None, [None]]})",
+	],
+	ids=["pyarrow", "polars"],
+)
+def test_given_non_finite_floats_in_an_arrow_list_when_loading_then_a_pinned_array_keeps_them_and_json_is_unchanged(tmp_path: Path, data: str) -> None:
+	module = (
+		"import sqlload as sl\nshop = sl.source('shop')\n"
+		f"shop.table(description='Test table.', name='pinned', columns={{'xs': 'array(float)'}})(lambda ctx: [{data}])\n"
+		f"shop.table(description='Test table.', name='inferred')(lambda ctx: [{data}])\n"
+	)
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	load(project)
+	assert query(project, 'SELECT id, xs::VARCHAR FROM "RAW".shop__pinned ORDER BY id') == [(1, "[nan, inf, -inf, 1.5]"), (2, None), (3, "[NULL]")]
+	assert query(project, 'SELECT id, xs::VARCHAR FROM "RAW".shop__inferred ORDER BY id') == [(1, "[null,null,null,1.5]"), (2, None), (3, "[null]")]

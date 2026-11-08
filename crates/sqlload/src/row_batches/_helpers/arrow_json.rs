@@ -65,6 +65,46 @@ pub(crate) fn normalise_column(name: &str, array: &ArrayRef) -> Result<(Field, A
     }
 }
 
+/// Column `name` as a list of the element types the loader carries, when it is a list of scalars; `None` for anything else (it then crosses as JSON text). An element that does not convert exactly is an error.
+fn scalar_list(name: &str, array: &ArrayRef) -> Result<Option<(Field, ArrayRef)>, String> {
+    let element = match array.data_type() {
+        DataType::List(element)
+        | DataType::LargeList(element)
+        | DataType::FixedSizeList(element, _) => element.data_type(),
+        _ => return Ok(None),
+    };
+    let carried = match normal_form(element) {
+        _ if *element == DataType::Null => return Ok(None),
+        Normal::Keep => element.clone(),
+        Normal::Cast(data_type) => data_type,
+        Normal::Json => return Ok(None),
+    };
+    let list_type = DataType::List(Arc::new(Field::new("item", carried, true)));
+    let strict = CastOptions {
+        safe: false,
+        ..CastOptions::default()
+    };
+    let cast_array = cast_with_options(array, &list_type, &strict)
+        .map_err(|error| format!("column {name}: an element does not convert: {error}"))?;
+    Ok(Some((Field::new(name, list_type, true), cast_array)))
+}
+
+/// Column `name` as a list of carried element types when `lists` names it and it is a list of scalars, otherwise as [`normalise_column`] makes it.
+pub(crate) fn list_or_normal(
+    name: &str,
+    array: &ArrayRef,
+    lists: &[String],
+) -> Result<(Field, ArrayRef), String> {
+    let list = match lists.iter().any(|list| list == name) {
+        true => scalar_list(name, array)?,
+        false => None,
+    };
+    match list {
+        Some(list) => Ok(list),
+        None => normalise_column(name, array),
+    }
+}
+
 fn cast_column(array: &ArrayRef, field: Field) -> Result<(Field, ArrayRef), String> {
     let cast_array = cast(array, field.data_type()).map_err(|error| error.to_string())?;
     Ok((field, cast_array))

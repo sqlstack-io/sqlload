@@ -23,7 +23,7 @@ fn given_arrow_batches_when_normalising_then_types_match_inferred_rows_and_neste
     ];
     for test_case in test_cases {
         assert_eq!(
-            normalise_batch(&(test_case.batch)()).map(|batch| render(&batch)),
+            normalise_batch(&(test_case.batch)(), &[]).map(|batch| render(&batch)),
             Ok(test_case.expected_batch.to_owned()),
             "{}",
             test_case.description

@@ -240,7 +240,7 @@ impl Output {
     /// A yielded Arrow batch with its listed struct columns flattened, then in the loader's types.
     fn arrow(&self, batch: &RecordBatch) -> Result<RecordBatch, CrossError> {
         let flattened = flatten_batch(batch, &self.context.flatten).map_err(CrossError::Data)?;
-        normalise_batch(&flattened).map_err(CrossError::Data)
+        normalise_batch(&flattened, &self.context.arrays).map_err(CrossError::Data)
     }
 
     /// Run an `sl.http` job, parsing each page into batches as it arrives; `Ok(false)` once the consumer has gone, which cancels the requests in flight.
