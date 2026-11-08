@@ -1,3 +1,5 @@
+#[path = "tests/test_catalog.rs"]
+mod catalog;
 #[path = "tests/test_convert_batch.rs"]
 mod convert_batch;
 #[path = "tests/helpers.rs"]

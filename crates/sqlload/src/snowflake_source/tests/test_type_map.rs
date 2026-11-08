@@ -42,6 +42,11 @@ fn given_a_snowflake_type_when_mapping_then_it_gets_the_portable_type_that_holds
             expected_type: Ok(ColumnType::Varchar(40)),
         },
         NaturalTypeTestCase {
+            description: "a collation, as DESCRIBE prints it, does not hide the length",
+            type_text: "VARCHAR(10) COLLATE 'en-ci'",
+            expected_type: Ok(ColumnType::Varchar(10)),
+        },
+        NaturalTypeTestCase {
             description: "the default varchar length is unbounded text",
             type_text: "VARCHAR(16777216)",
             expected_type: Ok(ColumnType::Text),
