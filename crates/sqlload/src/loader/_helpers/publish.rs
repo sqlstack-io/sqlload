@@ -223,7 +223,9 @@ impl Publisher {
         };
         let direct = files.is_none() && writes_directly(&table, &writer);
         let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
-        let builds = at_end && files.is_none() && !sends_rows(table.stage.as_ref());
+        let keeps_tables = sql_adapter(table.spec.warehouse).keeps_tables();
+        let builds =
+            at_end && files.is_none() && !keeps_tables && !sends_rows(table.stage.as_ref());
         let mut shape: Option<TableShape> = None;
         let staging = match direct || files.is_some() {
             true => None,
@@ -355,7 +357,7 @@ impl Publisher {
         self.commit(false).await
     }
 
-    /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it, and a `delete_insert` read of no rows still clears its range, since its rows were deleted upstream); a logged table records `state`, where its function left `ctx.state`, even without rows; a swapped-in table gets its description as its comment again, where a failure only warns, as its rows are already in.
+    /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it, and a `delete_insert` read of no rows still clears its range, since its rows were deleted upstream); a logged table records `state`, where its function left `ctx.state`, even without rows; a swapped-in or rebuilt table gets its description as its comment again (a table refilled in place keeps its own), where a failure only warns, as its rows are already in.
     pub(crate) async fn finish(&mut self, state: Option<String>) -> Result<u64, LoaderError> {
         self.flush_batch().await?;
         if state.is_some() {
@@ -379,9 +381,10 @@ impl Publisher {
             _ => {}
         }
         let spec = &self.table.spec;
-        let comment = sql_adapter(spec.warehouse)
+        let adapter = sql_adapter(spec.warehouse);
+        let comment = adapter
             .render_table_comment(&spec.destination, &spec.description)
-            .filter(|_| self.at_end && self.files.is_none());
+            .filter(|_| self.at_end && self.files.is_none() && !adapter.keeps_tables());
         if let Some(comment) = comment
             && let Err(error) = execute(&self.destination, vec![comment]).await
         {
@@ -553,7 +556,7 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
-        let _held = match self.at_end {
+        let _held = match self.at_end && !sql_adapter(warehouse).keeps_tables() {
             true => ddl_guard(&self.destination).await,
             false => None,
         };

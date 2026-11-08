@@ -10,6 +10,7 @@ pub(in crate::adapters) fn every_warehouse() -> Vec<Warehouse> {
         Warehouse::Parquet,
         Warehouse::Databricks,
         Warehouse::BigQuery,
+        Warehouse::Postgres,
         Warehouse::ClickHouse,
     ]
     .into_iter()
@@ -19,6 +20,7 @@ pub(in crate::adapters) fn every_warehouse() -> Vec<Warehouse> {
         | Warehouse::Parquet
         | Warehouse::Databricks
         | Warehouse::BigQuery
+        | Warehouse::Postgres
         | Warehouse::ClickHouse => true,
     })
     .collect()
