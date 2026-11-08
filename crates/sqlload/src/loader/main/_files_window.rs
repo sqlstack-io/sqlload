@@ -107,7 +107,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 (None, None, None) => (None, format!("{column} first run, everything")),
             };
             let operator = match (cursor.inclusive, &options.start_cursor) {
-                (false, None) => EXCLUSIVE_BOUND,
+                (Some(false), None) => EXCLUSIVE_BOUND,
                 _ => INCLUSIVE_BOUND,
             };
             (from, end, note, operator)

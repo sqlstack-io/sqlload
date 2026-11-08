@@ -53,8 +53,8 @@ pub struct CursorSpec {
     pub column: String,
     pub start: Option<String>,
     pub lookback: Option<Duration>,
-    /// `>=` the destination's maximum (true) or `>` it.
-    pub inclusive: bool,
+    /// `append_cursor_inclusive` as set: `append` reads `>=` its lower bound (true) or `>` it; unset, `>` the destination's maximum but `>=` `cursor_start`, and a files source `>=` either.
+    pub inclusive: Option<bool>,
 }
 
 /// One table to load, with every setting resolved.

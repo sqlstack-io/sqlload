@@ -26,18 +26,25 @@ Without `write_strategy`, a table takes:
 
 ## append
 
-Each run inserts what it reads. With a `cursor_column`, it reads from the destination's maximum.
-That read includes the maximum itself, so rows sharing the last value aren't missed, but the row at
-the maximum is inserted again. When cursor values are unique and only grow, such as an `id`, set
-`append_cursor_inclusive = false` to read strictly after the maximum:
+Each run inserts what it reads. With a `cursor_column`, it reads strictly after the destination's
+maximum, so a run with no new rows inserts nothing. A row that arrives later with a value at or
+below the maximum is not picked up; when that can happen, use `delete_insert` (no key needed) or
+`merge` with a `lookback`. The first run reads from `cursor_start`, including it.
+
+`append_cursor_inclusive = true` reads from the maximum itself instead, as SQLLoad did before
+0.25.0 and as SQLBuild does by default. Each run then inserts the rows at the maximum again, and
+`plan` warns about it.
 
 ```toml
 [sources.app.tables."public.events"]
 description = "Events, one row per event."
 write_strategy = "append"
 cursor_column = "event_id"
-append_cursor_inclusive = false
 ```
+
+`append` refuses a date cursor: rows added later to the last day would be lost, or, read
+inclusively, the whole day would be inserted again on every run. Use `delete_insert`, which
+replaces the last day.
 
 `append` takes no `lookback`, which would insert the window again on every run. Use `merge` or
 `delete_insert` for that.

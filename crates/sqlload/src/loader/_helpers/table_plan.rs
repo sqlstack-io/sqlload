@@ -305,6 +305,34 @@ pub(crate) fn captured_mode(spec: &TableSpec, mode: WriteMode) -> WriteMode {
     }
 }
 
+/// Why `append` cannot follow this cursor: a date's last day may still gain rows, and reading after it would lose them while reading from it would append that day again; files sources are exempt, since they skip files already loaded rather than reading after the cursor.
+fn append_problem(spec: &TableSpec, cursor_type: Option<&ColumnType>) -> Option<String> {
+    let cursor = spec.cursor.as_ref()?;
+    (spec.strategy == WriteStrategy::Append
+        && cursor_type == Some(&ColumnType::Date)
+        && spec.files.is_none())
+    .then(|| {
+        format!(
+            "write_strategy = \"append\" cannot follow the date cursor {}: rows added later to its last day would be lost (or, with append_cursor_inclusive = true, the whole day appended again on every run); use delete_insert, which replaces the last day (no key needed), or merge",
+            cursor.column
+        )
+    })
+}
+
+/// A warning for `append_cursor_inclusive = true` on a cursor read: every run appends the rows at the cursor's maximum again.
+fn inclusive_append_warning(spec: &TableSpec) -> Option<String> {
+    let cursor = spec.cursor.as_ref()?;
+    (spec.strategy == WriteStrategy::Append
+        && cursor.inclusive == Some(true)
+        && spec.files.is_none())
+    .then(|| {
+        format!(
+            "append_cursor_inclusive = true reads from the maximum {} itself, so every run appends the rows at that value again; leave it unset to read after it, or use delete_insert or merge to pick up late rows without duplicates",
+            cursor.column
+        )
+    })
+}
+
 /// What `--resnapshot` does to a captured table's source, for `plan`.
 pub(crate) fn resnapshot_warning(spec: &TableSpec, options: &PlanOptions) -> Option<String> {
     spec.cdc.as_ref().filter(|_| options.resnapshot).map(|cdc| {
@@ -449,6 +477,10 @@ async fn plan_table_once(
             "the table has no {name} column yet, so this load would read every row again and duplicate the rows already there; run it once with --reload"
         )]);
     }
+    if let Some(problem) = append_problem(spec, cursor_type).filter(|_| schema.blocked.is_none()) {
+        schema = blocked_plan(vec![problem]);
+    }
+    schema.warnings.extend(inclusive_append_warning(spec));
     let request = WindowRequest {
         spec,
         destination,
@@ -930,10 +962,10 @@ pub(crate) async fn cursor_window(
             Ok(bound) => bound,
             Err(problem) => return Ok(Err(problem)),
         };
-    let inclusive = !matches!(
-        (spec.strategy, cursor.inclusive, &options.start_cursor),
-        (WriteStrategy::Append, false, None)
-    );
+    let inclusive = match (spec.strategy, &options.start_cursor) {
+        (WriteStrategy::Append, None) => cursor.inclusive.unwrap_or(maximum.is_none()),
+        _ => true,
+    };
     let operator = match inclusive {
         true => ">=",
         false => ">",

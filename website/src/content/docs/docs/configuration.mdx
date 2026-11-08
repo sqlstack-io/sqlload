@@ -152,7 +152,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `cursor_column` | none | The column runs continue from. See [Cursors](/docs/concepts/cursors/). |
 | `cursor_start` | none | Where the first run starts. |
 | `lookback` | none | Read this far before the maximum, such as `"2h"`. |
-| `append_cursor_inclusive` | `true` | Whether `append` reads from the maximum itself. |
+| `append_cursor_inclusive` | `false` | Whether `append` reads from the maximum itself (inserting its rows again) rather than after it. |
 | `batch_size` | none | Commit one cursor window at a time: a duration (`"1d"`) or an integer step, or `"none"`. |
 | `contract` | `none` | `none` or `enforced`. See [Contracts](/docs/concepts/contracts/). |
 | `on_schema_change` | `append_new_columns` | `append_new_columns`, `ignore` or `fail`. |

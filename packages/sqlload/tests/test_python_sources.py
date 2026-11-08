@@ -533,7 +533,7 @@ def test_given_a_files_target_and_an_undeclared_cursor_when_planning_then_it_ask
 def test_given_a_decimal_or_smallint_cursor_when_appending_again_then_only_new_rows_load(
 	tmp_path: Path, column_type: str, first: list[Any], second: list[Any], expected: list[Any]
 ) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', write_strategy='append', cursor_column='v', append_cursor_inclusive=False, columns={{'v': '{column_type}'}})(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', write_strategy='append', cursor_column='v', columns={{'v': '{column_type}'}})(rows)\n")
 	give(project, "rows", [{"v": value} for value in first])
 	load(project)
 	give(project, "rows", [{"v": value} for value in second])
