@@ -11,6 +11,7 @@ use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
 use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
 use crate::adapters::dispatch::main::route::route_warning::route_warning;
 use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
+use crate::adapters::dispatch::main::route::unload_blocked::unload_blocked;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
@@ -34,8 +35,8 @@ use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
+use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
-use crate::loader::constants::{ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
@@ -728,7 +729,7 @@ fn reader_offer(
     };
     let direct_blocked = match unload_to.is_empty() {
         true => direct_blocked,
-        false => Some(UNLOADED_TIMES.to_owned()),
+        false => unload_blocked(spec),
     };
     ReaderOffer {
         arrow: unload_to.is_empty(),
@@ -749,6 +750,16 @@ fn reader_offer(
             .as_ref()
             .is_some_and(|files| stage_misses(stage, &files.location)),
     }
+}
+
+/// Whether `route` has the destination load a warehouse source's unloaded files itself.
+pub(crate) fn pulls_unloaded(route: Option<&Route>) -> bool {
+    route.is_some_and(|route| {
+        matches!(
+            route.steps.as_slice(),
+            [Step::Unload(_), Step::DestinationPulls(_)]
+        )
+    })
 }
 
 /// Whether `route` has the destination load a files source's own files.

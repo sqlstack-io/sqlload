@@ -4,3 +4,5 @@ mod helpers;
 mod pull_insert;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_unloaded_insert.rs"]
+mod unloaded_insert;

@@ -4,3 +4,5 @@ pub const DESCRIBE_TABLE_SQL: &str = "SELECT column_name, data_type, numeric_pre
 pub const DEFINITION_QUERY: &str = "SELECT sql FROM duckdb_tables() WHERE database_name = current_database() AND lower(schema_name) = lower(?) AND lower(table_name) = lower(?)";
 /// The `CREATE INDEX` statements of a table's indexes, by schema and name.
 pub const INDEXES_QUERY: &str = "SELECT sql FROM duckdb_indexes() WHERE database_name = current_database() AND lower(schema_name) = lower(?) AND lower(table_name) = lower(?) AND sql IS NOT NULL ORDER BY index_name";
+/// The UTC offset an unloaded timestamp with time zone's text is read with.
+pub const UTC_OFFSET: &str = "+00";

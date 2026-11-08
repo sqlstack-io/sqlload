@@ -126,6 +126,23 @@ lifecycle rule on the bucket.
 With an external stage, SQLLoad needs to list, read and delete objects under the folder. The
 storage integration must allow Snowflake to write there.
 
+### DuckDB reads the files itself
+
+With a stage given by `url` and a DuckDB target, DuckDB reads the unloaded files from S3 itself,
+so no rows pass through SQLLoad. `plan` shows it in the route:
+
+```text
+route   unload Parquet to s3://example-bucket/unload/ -> DuckDB reads them (nothing through the loader)
+```
+
+DuckDB uses the same S3 credentials as SQLLoad, and turns times and timestamps back exactly,
+whatever its session time zone. A load fails before it commits when DuckDB loads a different number
+of rows than `COPY INTO` reports, and the folder is removed either way. A table without a cursor
+commits once per run rather than about every 1 GB.
+
+A table that masks columns is read by SQLLoad instead, and `plan` says why. So are stages given by
+`name`, and targets other than DuckDB.
+
 ## Permissions
 
 The role needs `USAGE` on the warehouse, database and schemas, and `SELECT` on the tables and
