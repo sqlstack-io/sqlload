@@ -1,8 +1,8 @@
 //! Why the destination cannot load a files table's files exactly by reading them itself.
 
 use crate::adapters::bigquery::constants::NO_INTERNAL_STAGE_COPY as BIGQUERY_NO_INTERNAL_STAGE_COPY;
-use crate::adapters::clickhouse::_helpers::dialect::pull::direct_problem as clickhouse_direct_problem;
 use crate::adapters::clickhouse::constants::NO_INTERNAL_STAGE_COPY as CLICKHOUSE_NO_INTERNAL_STAGE_COPY;
+use crate::adapters::clickhouse::main::plan::_direct_problem::direct_problem as clickhouse_direct_problem;
 use crate::adapters::databricks::constants::NO_INTERNAL_STAGE_COPY;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_direct_problem::direct_problem;

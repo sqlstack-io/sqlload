@@ -3,15 +3,17 @@
 use object_store::aws::AmazonS3ConfigKey;
 
 use crate::adapters::clickhouse::_helpers::dialect::pull::{
-    PullCredentials, PulledFile, direct_problem, object_url, pull_insert,
+    PullCredentials, PulledFile, object_url, pull_insert,
 };
 use crate::adapters::clickhouse::_helpers::session::http::written_rows;
+use crate::adapters::clickhouse::main::plan::_direct_problem::direct_problem;
 use crate::adapters::clickhouse::models::{ClickHouseSql, ClickHouseWriter};
-use crate::adapters::contract::_helpers::direct_checks::{batch_problem, footer_rows};
+use crate::adapters::contract::main::_batch_direct_problem::batch_direct_problem;
+use crate::adapters::contract::main::_footer_rows::footer_rows;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded};
 use crate::adapters::contract::types::{SqlAdapter, TableWriter};
 use crate::column_types::models::ColumnType;
-use crate::file_store::main::open_folder::s3_builder;
+use crate::file_store::main::s3_builder::s3_builder;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
 use crate::files_source::models::DataFile;
 use crate::loader::errors::LoaderError;
@@ -35,7 +37,8 @@ impl ClickHouseWriter {
         else {
             return Ok(None);
         };
-        if let Some(problem) = batch_problem(batch, source, direct_problem(batch.spec, batch.read))
+        if let Some(problem) =
+            batch_direct_problem(batch, source, direct_problem(batch.spec, batch.read))
         {
             return Err(LoaderError::Invalid(format!(
                 "ClickHouse cannot load this batch's files exactly by reading them itself, and they never go through SQLLoad instead: {problem}"
@@ -83,8 +86,7 @@ impl ClickHouseWriter {
             let insert = pull_insert(
                 &into,
                 (columns, &sql_type),
-                &file,
-                &credentials,
+                (&file, &credentials),
                 (target.load_id, batch.loaded_at),
             );
             rows += written_rows(&self.destination, &insert)
@@ -108,19 +110,16 @@ fn pulled_file(
     url: String,
     batch: &DirectBatch<'_>,
 ) -> PulledFile {
-    let in_file = batch
-        .footers
-        .parquet
-        .get(&data.file.relative_key)
-        .map(|footer| {
+    let mut in_file: Vec<String> = Vec::new();
+    if let Some(footer) = batch.footers.parquet.get(&data.file.relative_key) {
+        in_file.extend(
             footer
                 .schema()
                 .fields()
                 .iter()
-                .map(|field| field.name().clone())
-                .collect()
-        })
-        .unwrap_or_default();
+                .map(|field| field.name().clone()),
+        );
+    }
     let mut constants = vec![
         (
             SOURCE_FILE_COLUMN.to_owned(),

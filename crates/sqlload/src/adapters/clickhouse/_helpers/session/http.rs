@@ -25,11 +25,15 @@ pub(crate) async fn written_rows(
     let (_, summary) = request(destination, None, statement.as_bytes().to_vec()).await?;
     let summary: serde_json::Value = serde_json::from_str(&summary.unwrap_or_default())
         .map_err(|error| ApiError::Protocol(format!("an unreadable query summary: {error}")))?;
-    summary
+    let rows = summary
         .get("written_rows")
         .and_then(serde_json::Value::as_str)
-        .and_then(|rows| rows.parse().ok())
-        .ok_or_else(|| ApiError::Protocol("the query summary has no written_rows".to_owned()))
+        .ok_or_else(|| ApiError::Protocol("the query summary has no written_rows".to_owned()))?;
+    rows.parse().map_err(|error| {
+        ApiError::Protocol(format!(
+            "the query summary's written_rows {rows:?}: {error}"
+        ))
+    })
 }
 
 /// [`send`], with the response's query summary header.

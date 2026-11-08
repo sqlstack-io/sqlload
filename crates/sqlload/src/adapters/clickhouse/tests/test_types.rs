@@ -40,3 +40,17 @@ pub(crate) struct PublishStepTestCase {
     /// The step it names, `None` for plain SQL, or an error.
     pub(crate) expected_step: Result<Option<crate::adapters::clickhouse::models::PublishStep>, ()>,
 }
+
+pub(crate) struct PullInsertTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) columns: Vec<crate::schema_plan::models::DesiredColumn>,
+    pub(crate) expected_insert: &'static str,
+}
+
+pub(crate) struct ObjectUrlTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) region: Option<&'static str>,
+    pub(crate) endpoint: Option<&'static str>,
+    pub(crate) key: &'static str,
+    pub(crate) expected_url: &'static str,
+}
