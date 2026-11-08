@@ -3,8 +3,9 @@ use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
+use crate::files_target_helpers::data_keys;
 use crate::helpers::{
-    data_keys, local_store, partition_values, run_async, run_files_target_scenario, seaweedfs_store,
+    local_store, partition_values, run_async, run_files_target_scenario, seaweedfs_store,
 };
 use crate::test_types::{
     CsvTargetTestCase, FilesTargetRun, FilesTargetScenarioTestCase, RoundTripTestCase,

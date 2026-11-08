@@ -49,23 +49,16 @@ pub async fn connect_destination(
             bucket,
             region,
             endpoint,
-        }) => Destination::Files(Box::new(FilesDestination {
-            connection: target.connection.clone(),
-            store: StoreKind::S3 {
+        }) => files(
+            target,
+            StoreKind::S3 {
                 bucket: bucket.clone(),
                 region: region.clone(),
                 endpoint: endpoint.clone(),
             },
-            max_footer_reads: target.footer_read_limit(),
-            encoding: target.output_encoding(),
-        })),
+        ),
         Some(ConnectionConfig::Filesystem { root }) => {
-            Destination::Files(Box::new(FilesDestination {
-                connection: target.connection.clone(),
-                store: StoreKind::Filesystem { root: root.clone() },
-                max_footer_reads: target.footer_read_limit(),
-                encoding: target.output_encoding(),
-            }))
+            files(target, StoreKind::Filesystem { root: root.clone() })
         }
         Some(other) => {
             return Err(LoaderError::Invalid(format!(
@@ -81,6 +74,16 @@ pub async fn connect_destination(
         }
     };
     Ok(destination)
+}
+
+/// The files destination of `target` in `store`.
+fn files(target: &crate::project::models::TargetConfig, store: StoreKind) -> Destination {
+    Destination::Files(Box::new(FilesDestination {
+        connection: target.connection.clone(),
+        store,
+        max_footer_reads: target.footer_read_limit(),
+        encoding: target.output_encoding(),
+    }))
 }
 
 /// The Snowflake destination of target `name`, from its `snowflake` connection.

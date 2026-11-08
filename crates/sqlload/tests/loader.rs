@@ -4,6 +4,8 @@
 mod bigquery_helpers;
 #[path = "loader/databricks/helpers.rs"]
 mod databricks_helpers;
+#[path = "loader/files_target/helpers.rs"]
+mod files_target_helpers;
 #[path = "loader/helpers.rs"]
 mod helpers;
 #[path = "loader/test_batched_loads.rs"]
