@@ -288,10 +288,9 @@ pub(crate) async fn refuse_emptying(
             single_text(destination, query).await?.is_some()
         }
     };
-    let name = sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination);
     match has_rows {
         true => Err(LoaderError::Invalid(
-            EMPTY_REPLACE_PROBLEM.replace("{table}", &name),
+            EMPTY_REPLACE_PROBLEM.replace("{table}", &table.outcome_name()),
         )),
         false => Ok(()),
     }
