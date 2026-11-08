@@ -242,4 +242,8 @@ impl SqlAdapter for PostgresSql {
             CursorValue::Plain => format!("CAST(MAX({column}) AS text)"),
         }
     }
+
+    fn render_binary_text(&self, expression: &str) -> String {
+        format!("{expression} COLLATE \"C\"")
+    }
 }

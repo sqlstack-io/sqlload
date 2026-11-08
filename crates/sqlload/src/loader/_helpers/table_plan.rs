@@ -518,7 +518,7 @@ async fn plan_table_once(
     let cursor_expression = read_columns
         .iter()
         .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
-        .map(|column| column.expression.as_str());
+        .map(|column| source_cursor(spec, &column.expression, cursor_type));
     let lacks_cursor =
         live.is_some() && cursor_name.is_some() && !cursor_in_table && !options.reload;
     let restart_duplicates = match spec.strategy {
@@ -543,7 +543,7 @@ async fn plan_table_once(
         destination,
         table_exists: cursor_in_table,
         cursor_type,
-        cursor_expression,
+        cursor_expression: cursor_expression.as_deref(),
         options,
     };
     let window = match schema.blocked {
@@ -892,6 +892,27 @@ fn write_mode(
             to,
             values: Vec::new(),
         },
+    }
+}
+
+/// A text cursor's source `expression` as its filter compares it: bytewise, in code point order, as the destination's maximum is read (`render_binary_text`), whatever collation the source column has; any other cursor, and a source no filter reaches, as it is.
+pub(crate) fn source_cursor(
+    spec: &TableSpec,
+    expression: &str,
+    cursor_type: Option<&ColumnType>,
+) -> String {
+    let text = matches!(
+        cursor_type,
+        Some(ColumnType::Text | ColumnType::Varchar(_))
+    );
+    match (text, &spec.warehouse_source) {
+        (false, _) => expression.to_owned(),
+        (true, Some(source)) if source.system == "snowflake" => {
+            format!("COLLATE({expression}, 'utf8')")
+        }
+        (true, Some(_)) => expression.to_owned(),
+        (true, None) if spec.python.is_some() || spec.files.is_some() => expression.to_owned(),
+        (true, None) => format!("{expression} COLLATE \"C\""),
     }
 }
 
