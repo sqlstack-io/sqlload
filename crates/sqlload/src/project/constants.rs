@@ -19,6 +19,8 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "partition_by",
     "primary_key",
     "table_settings",
+    "header",
+    "header_row",
     #[cfg(feature = "container-tests")]
     "test_loader_route",
 ];
@@ -58,6 +60,8 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "batch_interval",
     "warehouse",
     "stage",
+    "spreadsheet_id",
+    "ranges",
 ];
 
 /// Keys a Python source may set (`kind` is added by discovery), besides the table settings.

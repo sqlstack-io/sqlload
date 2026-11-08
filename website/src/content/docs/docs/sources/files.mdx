@@ -68,6 +68,15 @@ records, unless you pin them with `columns`. Each row also gets `_sqlload_source
 `_sqlload_source_version` and `_sqlload_source_row` ([Columns SQLLoad
 adds](/docs/concepts/projects/#columns-sqlload-adds)).
 
+From sqlload 0.27.0, which isn't released yet, Parquet list, struct and map columns load as `json`.
+A list becomes an array, a struct becomes an object with its fields in order, and a map becomes an
+object keyed by its keys' text. Decimals, dates, times and timestamps inside them are strings, such
+as `"1.50"` or `"2026-11-08T10:00:00.123456"`. Before 0.27.0 these columns fail `plan`, and
+`exclude_columns` leaves them out. A destination never reads these files itself, because its own
+conversion differs. In Snowflake, where files under an external stage or copied with
+`copy_to_internal_stage` only load directly, such a column still fails `plan`, so leave it out with
+`exclude_columns`.
+
 ## Columns from paths
 
 From sqlload 0.26.0, which isn't released yet, values can come from folder and file names that

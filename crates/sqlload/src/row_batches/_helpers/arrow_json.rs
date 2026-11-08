@@ -136,11 +136,15 @@ impl ArrowJson {
 
     /// Write `array[row]`; types JSON has no form for become their display text.
     fn value(&mut self, array: &dyn Array, row: usize) {
-        if array.is_null(row) {
+        if array.is_null(row) || *array.data_type() == DataType::Null {
             self.writer.raw("null");
             return;
         }
         match array.data_type() {
+            DataType::Dictionary(_, value_type) => match cast(&array.slice(row, 1), value_type) {
+                Ok(values) => self.value(values.as_ref(), 0),
+                Err(_) => self.writer.string(&display_text(array, row)),
+            },
             DataType::Boolean => self.writer.raw(match array.as_boolean().value(row) {
                 true => "true",
                 false => "false",

@@ -181,3 +181,8 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/fake_bigquery/main/start_fake_bigquery.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/fake_sheets/main/start_fake_sheets.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."

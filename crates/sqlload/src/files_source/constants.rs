@@ -80,3 +80,9 @@ pub const NORMAL_TIMESTAMP: &str = "%Y-%m-%d %H:%M:%S%.6f";
 
 /// How a captured or constant timestamp with a zone is stored: in UTC, the offset right after the time, which every destination reads.
 pub const NORMAL_TIMESTAMP_TZ: &str = "%Y-%m-%dT%H:%M:%S%.6f%:z";
+
+/// Rows of a nested Parquet column written as JSON text at a time.
+pub const NESTED_JSON_SLICE_ROWS: usize = 1024;
+
+/// The most text one Arrow text array holds: its offsets are 32-bit.
+pub const MAX_TEXT_ARRAY_BYTES: usize = i32::MAX as usize;
