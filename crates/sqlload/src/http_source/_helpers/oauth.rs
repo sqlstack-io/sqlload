@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -14,7 +14,8 @@ use crate::http::models::RetryPolicy;
 use crate::http_source::_helpers::fetch::{jittered, transport_text};
 use crate::http_source::_helpers::urls::{encoded, redacted};
 use crate::http_source::constants::{
-    ERROR_EXCERPT_CHARS, FIRST_RETRY_DELAY, MAX_RETRY_DELAY, MAX_TOKEN_RENEWAL_MARGIN,
+    ERROR_EXCERPT_CHARS, FIRST_RETRY_DELAY, MAX_RETRY_DELAY, MAX_TOKEN_LIFETIME,
+    MAX_TOKEN_RENEWAL_MARGIN,
 };
 use crate::http_source::models::{ClientAuth, Grant, Issued, OAuth2Spec, TokenSource, TokenState};
 
@@ -73,27 +74,27 @@ fn token_source(token_url: Url, spec: &OAuth2Spec, grant: Grant) -> TokenSource 
     };
     let mut form = vec![("grant_type".to_owned(), grant_type.to_owned())];
     form.extend(spec.scope.clone().map(|scope| ("scope".to_owned(), scope)));
-    let mut secrets: Vec<String> = refresh_token.iter().cloned().collect();
+    let mut secrets: Vec<String> = refresh_token
+        .iter()
+        .flat_map(|token| secret_forms(token))
+        .collect();
     let basic = match (client, spec.client_auth) {
         ((Some(id), Some(secret)), ClientAuth::Basic) => {
-            let pair = format!("{id}:{secret}");
-            secrets.push(base64::engine::general_purpose::STANDARD.encode(pair));
-            secrets.push(secret.clone());
-            Some((id, secret))
+            let pair = (encoded(&id), encoded(&secret));
+            secrets.extend(secret_forms(&secret));
+            secrets.push(
+                base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", pair.0, pair.1)),
+            );
+            Some(pair)
         }
         ((id, secret), _) => {
             form.extend(id.map(|id| ("client_id".to_owned(), id)));
-            secrets.extend(secret.clone());
+            secrets.extend(secret.iter().flat_map(|secret| secret_forms(secret)));
             form.extend(secret.map(|secret| ("client_secret".to_owned(), secret)));
             None
         }
     };
-    secrets.extend(
-        secrets
-            .iter()
-            .map(|secret| encoded(secret))
-            .collect::<Vec<_>>(),
-    );
+    secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
     TokenSource {
         token_url,
         form,
@@ -111,8 +112,8 @@ impl TokenSource {
     pub(crate) fn secrets(&self) -> Vec<String> {
         self.secrets
             .lock()
-            .map(|secrets| secrets.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The access token to send: the cached one while it is fresh and is not `refused`, else a new one from the token URL.
@@ -131,18 +132,20 @@ impl TokenSource {
             Some(_) | None => {}
         }
         let issued = self.request(http, retries, &state).await?;
-        let mut secrets = self
-            .secrets
-            .lock()
-            .map_err(|_| "the OAuth2 secrets' lock is poisoned".to_owned())?;
-        secrets.push(issued.access.clone());
-        secrets.extend(issued.refresh_token.clone());
+        let renew_at = issued
+            .renew_after
+            .and_then(|delay| Instant::now().checked_add(delay));
+        let mut secrets = self.secrets.lock().unwrap_or_else(PoisonError::into_inner);
+        for secret in std::iter::once(&issued.access).chain(&issued.refresh_token) {
+            secrets.extend(secret_forms(secret));
+        }
         secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+        drop(secrets);
         state.access = Some(issued.access.clone());
-        state.renew_at = issued.lifetime.map(|lifetime| {
-            Instant::now() + lifetime - (lifetime / 10).min(MAX_TOKEN_RENEWAL_MARGIN)
-        });
-        state.refresh_token = issued.refresh_token.or(state.refresh_token.take());
+        state.renew_at = renew_at;
+        if state.refresh_token.is_some() {
+            state.refresh_token = issued.refresh_token.or(state.refresh_token.take());
+        }
         Ok(issued.access)
     }
 
@@ -251,24 +254,11 @@ impl TokenSource {
             }
             Some(_) | None => {}
         }
-        let seconds = match document.get("expires_in") {
-            None | Some(Value::Null) => None,
-            Some(Value::Number(seconds)) => seconds.as_f64(),
-            Some(Value::String(seconds)) => Some(seconds.trim().parse::<f64>().map_err(|_| {
-                format!("{shown}: expires_in {seconds:?} is not a number of seconds")
-            })?),
-            Some(other) => {
-                return Err(format!(
-                    "{shown}: expires_in {other} is not a number of seconds"
-                ));
-            }
-        };
-        let lifetime = seconds
-            .filter(|seconds| seconds.is_normal() && seconds.is_sign_positive())
-            .map(Duration::from_secs_f64);
+        let renew_after = renewal_delay(document.get("expires_in"))
+            .map_err(|error| format!("{shown}: {error}"))?;
         Ok(Ok(Issued {
             access,
-            lifetime,
+            renew_after,
             refresh_token: text("refresh_token").filter(|token| !token.is_empty()),
         }))
     }
@@ -282,4 +272,32 @@ fn oauth_error(document: &Value) -> Option<String> {
         Some(description) => format!("{error}: {description}"),
         None => error.to_owned(),
     })
+}
+
+/// How long after issue a token with this `expires_in` is renewed: its lifetime less min(60 s, a tenth of it), the lifetime capped at a year; `None` when the response gives no positive lifetime.
+pub(crate) fn renewal_delay(expires_in: Option<&Value>) -> Result<Option<Duration>, String> {
+    let seconds = match expires_in {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Number(seconds)) => seconds.as_f64(),
+        Some(Value::String(seconds)) => Some(
+            seconds
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| format!("expires_in {seconds:?} is not a number of seconds"))?,
+        ),
+        Some(other) => return Err(format!("expires_in {other} is not a number of seconds")),
+    };
+    Ok(seconds
+        .filter(|seconds| seconds.is_normal() && seconds.is_sign_positive())
+        .map(|seconds| {
+            let lifetime = Duration::from_secs_f64(seconds.min(MAX_TOKEN_LIFETIME.as_secs_f64()));
+            lifetime - (lifetime / 10).min(MAX_TOKEN_RENEWAL_MARGIN)
+        }))
+}
+
+/// `secret` as sent and as it appears in a URL or a form body, for redaction.
+fn secret_forms(secret: &str) -> [String; 3] {
+    let percent = encoded(secret);
+    let form = percent.replace("%20", "+");
+    [secret.to_owned(), percent, form]
 }

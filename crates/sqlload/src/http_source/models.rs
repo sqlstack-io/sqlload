@@ -117,7 +117,7 @@ pub struct TokenSource {
     pub token_url: reqwest::Url,
     /// `grant_type` and its fields, plus the client's fields under `client_auth = "post"`.
     pub form: Vec<(String, String)>,
-    /// `client_id` and `client_secret` for basic client auth.
+    /// `client_id` and `client_secret` for basic client auth, form-encoded as RFC 6749 asks.
     pub basic: Option<(String, String)>,
     pub state: tokio::sync::Mutex<TokenState>,
     /// Every secret of the token flow, including each access token issued, for redaction.
@@ -150,7 +150,8 @@ pub enum Grant {
 #[derive(Debug, Clone)]
 pub struct Issued {
     pub access: String,
-    pub lifetime: Option<Duration>,
+    /// When after issue to renew it; `None` keeps it until a 401.
+    pub renew_after: Option<Duration>,
     pub refresh_token: Option<String>,
 }
 

@@ -118,8 +118,8 @@ async fn once(
             next_link,
             url: landed,
         })),
-        UNAUTHORIZED if may_renew && access.is_some() => Attempt::Refused,
         _ if skipped => Attempt::Done(None),
+        UNAUTHORIZED if may_renew && own && access.is_some() => Attempt::Refused,
         300..=399 => {
             return Err(format!(
                 "{shown}: HTTP {status}: the redirect was not followed: it leads to another origin, has no Location, or goes past {MAX_REDIRECTS} hops; credentials never leave the connection's origin, so use the final URL as base_url"

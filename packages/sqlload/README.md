@@ -79,7 +79,8 @@ def order_items(ctx):
   `sl.basic()`), or `client_id`, `client_secret` and `refresh_token` (for
   `sl.oauth2_client_credentials(token_url)` and `sl.oauth2_refresh_token(token_url)`, which fetch
   and renew short-lived access tokens), plus optional `headers`. Credentials go only to the
-  connection's own scheme, host and port, never to a next-page link elsewhere.
+  connection's own scheme, host and port, never to a next-page link elsewhere; an OAuth2 client
+  secret and refresh token go only to the `token_url`.
 - Every `paginate` names its paginator: `sl.single()`, `sl.next_link(pointer)`,
   `sl.link_header()`, `sl.offset(param, limit=...)`, `sl.page_number(param, start=1)` or
   `sl.cursor(pointer, param)`. Nothing is guessed.

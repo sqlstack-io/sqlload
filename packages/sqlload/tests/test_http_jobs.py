@@ -58,6 +58,9 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/landed/more": lambda query: self.reply(200, {"items": ORDERS[3:], "next": None}),
 			"/v1/sparse": self.sparse,
 			"/v1/slow": self.slow,
+			"/v1/leak": lambda query: self.reply(200, {"items": ORDERS[:1], "next": f"/v1/notjson?access_token={bearer}"}),
+			"/v1/notjson": lambda query: self.reply_text("<html>maintenance</html>"),
+			"/v1/denied": lambda query: self.reply(401, {"message": "not your shop"}),
 			"/v1/whoami": lambda query: self.reply(400, {"message": f"you are {self.headers.get('Authorization')}"}),
 			"/v1/echo": lambda query: self.reply(400, {"message": f"version {self.headers.get('X-Version')} session {self.headers.get('X-Session-Id')} credential {self.headers.get('X-Credential')}"}),
 		}.get(url.path)
@@ -103,6 +106,13 @@ class Api(BaseHTTPRequestHandler):
 		time.sleep(0.5)
 		page = int(query["p"])
 		self.reply(200, {"items": ORDERS[page - 1 : page]})
+
+	def reply_text(self, text: str) -> None:
+		data = text.encode()
+		self.send_response(200)
+		self.send_header("Content-Length", str(len(data)))
+		self.end_headers()
+		self.wfile.write(data)
 
 	def reply(self, status: int, body: Any, headers: dict[str, str] | None = None) -> None:
 		data = json.dumps(body).encode()
@@ -474,8 +484,13 @@ def test_given_a_token_revoked_mid_pagination_when_the_api_answers_401_then_a_ne
 			"paginate('/whoami', paginator=sl.single())",
 			'HTTP 400: {"message": "you are Bearer ***"}',
 		),
+		(
+			"sl.oauth2_client_credentials(TOKEN_URL)",
+			"paginate('/leak', paginator=sl.next_link('$.next'), select='$.items')",
+			"/v1/notjson?access_token=***: the response is not JSON",
+		),
 	],
-	ids=["bad-client-secret", "http-token-url-elsewhere", "access-token-redacted"],
+	ids=["bad-client-secret", "http-token-url-elsewhere", "access-token-redacted", "access-token-in-a-next-link-redacted"],
 )
 def test_given_an_oauth2_failure_when_loading_then_the_error_says_why_and_hides_every_secret(
 	tmp_path: Path, api: ThreadingHTTPServer, auth: str, job: str, expected_text: str
@@ -488,4 +503,12 @@ def test_given_an_oauth2_failure_when_loading_then_the_error_says_why_and_hides_
 	assert done.returncode == 1
 	assert expected_text in output, output
 	assert not any(secret in output for secret in (CLIENT_SECRET, "wrong-secret", "access-1"))
-	assert all(path == "/v1/whoami" for path, _, _ in api.log)  # type: ignore[attr-defined]
+	assert all(path in ("/v1/whoami", "/v1/leak", "/v1/notjson") for path, _, _ in api.log)  # type: ignore[attr-defined]
+
+
+def test_given_401_listed_as_skip_when_the_api_answers_it_then_the_request_is_skipped_without_a_new_token(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = oauth_project(tmp_path, api, "sl.oauth2_client_credentials(TOKEN_URL)", "fan_out('/denied?k={k}', over=range(5), concurrency=1, paginator=sl.single(), on_status={401: 'skip'})")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert len([path for path, _, _ in api.log if path == "/v1/denied"]) == 5  # type: ignore[attr-defined]
+	assert len(api.token_requests) == 1  # type: ignore[attr-defined]
