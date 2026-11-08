@@ -103,7 +103,9 @@ pub(crate) fn files_location(
 /// The Postgres connections a table's read uses: several for a large Postgres table read whole and in no order (windows and cursor-ordered reads keep one connection).
 pub(crate) fn source_readers(table: &TablePlan) -> usize {
     let whole = matches!(table.commits, CommitRule::Size | CommitRule::Whole(_));
-    let postgres = table.spec.python.is_none() && table.spec.files.is_none();
+    let postgres = table.spec.python.is_none()
+        && table.spec.files.is_none()
+        && table.spec.warehouse_source.is_none();
     match whole && postgres && table.spec.source_table.estimated_bytes >= PARALLEL_READ_MIN_BYTES {
         true => PARALLEL_READERS,
         false => 1,

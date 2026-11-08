@@ -535,6 +535,9 @@ fn batch_line(table: &TablePlan) -> String {
                 thousands(MAX_BATCH_FILES as u64)
             )
         }
+        (_, true) if pulls_unloaded(table.route.as_ref()) => {
+            "each unload loaded at once into a new table, swapped in once at the end".to_owned()
+        }
         (_, true) if sql_adapter(spec.warehouse).keeps_tables() => {
             "about 1 GB at a time into a staging table, then the table emptied and refilled in one transaction".to_owned()
         }

@@ -6,7 +6,7 @@ description: "Load Snowflake tables and query results: choosing tables, query ta
 From sqlload 0.26.0, which isn't released yet, a Snowflake source loads tables and views of one
 database, and the results of queries you write.
 Snowflake unloads each read as Parquet with `COPY INTO`, and SQLLoad reads the files and loads
-them into the source's target.
+them into the source's target, or a DuckDB target reads them from S3 itself.
 
 ```toml
 [connections.warehouse]
@@ -140,8 +140,8 @@ whatever its session time zone. A load fails before it commits when DuckDB loads
 of rows than `COPY INTO` reports, and the folder is removed either way. A table without a cursor
 commits once per run rather than about every 1 GB.
 
-A table that masks columns is read by SQLLoad instead, and `plan` says why. So are stages given by
-`name`, and targets other than DuckDB.
+SQLLoad reads the files instead, and `plan` says why, for a table with masked columns or checks
+before publish, for a stage given by `name`, and for targets other than DuckDB.
 
 ## Permissions
 
