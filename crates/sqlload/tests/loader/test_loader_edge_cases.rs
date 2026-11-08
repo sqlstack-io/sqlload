@@ -37,6 +37,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                 ScenarioRun {
                     source_change: "DELETE FROM public.prices WHERE id = 3;",
                     destination_change: "",
+                    expected_plan: "updated_at from 2026-11-01 00:00:00.000000+00 (destination maximum)",
                     ..OK
                 },
             ],
@@ -50,7 +51,10 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             settings: "write_strategy = \"append\"\ncursor_column = \"seq\"\ncursor_start = \"1\"\n[sources.app.tables.\"public.ticks\"]\n",
             runs: &[
                 OK,
-                OK,
+                ScenarioRun {
+                    expected_plan: "seq after 2 (destination maximum)",
+                    ..OK
+                },
                 ScenarioRun {
                     source_change: "INSERT INTO public.ticks VALUES (3, 'c');",
                     ..OK
@@ -87,7 +91,10 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                     expected_plan: "append_cursor_inclusive = true reads from the maximum seq itself, so every run appends the rows at that value again",
                     ..OK
                 },
-                OK,
+                ScenarioRun {
+                    expected_plan: "seq from 2 (destination maximum)",
+                    ..OK
+                },
             ],
             check_query: "SELECT string_agg(seq || note, ',' ORDER BY seq) FROM raw.app__ticks",
             expected_result: "1a,2b,2b",

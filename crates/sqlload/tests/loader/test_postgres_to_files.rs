@@ -35,7 +35,7 @@ const APPEND_RUNS: &[FilesTargetRun] = &[
     },
     FilesTargetRun {
         source_change: "INSERT INTO public.orders VALUES (3, 'c', 3, '2026-11-04 12:00:00+00');",
-        expected_plan: "placed_at from 2026-11-04 10:00:00.000000+00 (maximum in the newest load's files)",
+        expected_plan: "placed_at after 2026-11-04 10:00:00.000000+00 (maximum in the newest load's files)",
         ..OK
     },
 ];
@@ -398,7 +398,7 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             runs: &[
                 OK,
                 FilesTargetRun {
-                    expected_plan: "code from a (the newest partition)",
+                    expected_plan: "code after a (the newest partition)",
                     ..OK
                 },
             ],

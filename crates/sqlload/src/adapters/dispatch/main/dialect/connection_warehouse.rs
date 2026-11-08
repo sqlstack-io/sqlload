@@ -21,6 +21,6 @@ pub fn connection_warehouse(connection: &ConnectionConfig) -> Option<(Warehouse,
         ConnectionConfig::Postgres { database, .. } => {
             Some((Warehouse::Postgres, Some(database.clone())))
         }
-        ConnectionConfig::Http { .. } => None,
+        ConnectionConfig::GoogleSheets { .. } | ConnectionConfig::Http { .. } => None,
     }
 }

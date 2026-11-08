@@ -299,6 +299,33 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             expected_result: "0",
         },
         TextFilesScenarioTestCase {
+            description: "append on a partition cursor reads from the newest partition, so a new file in it loads, and plan says from",
+            store: local_store,
+            settings: "format = \"csv\"\nwrite_strategy = \"append\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\n",
+            runs: &[
+                TextFilesRun {
+                    files: &[TextFile {
+                        key: "day=2026-11-03/a.csv",
+                        contents: "id\n1\n",
+                        encode: plain,
+                    }],
+                    expected_error: "",
+                    expected_plan: "",
+                },
+                TextFilesRun {
+                    files: &[TextFile {
+                        key: "day=2026-11-03/b.csv",
+                        contents: "id\n2\n",
+                        encode: plain,
+                    }],
+                    expected_error: "",
+                    expected_plan: "day from 2026-11-03 (destination maximum)",
+                },
+            ],
+            check_query: "SELECT string_agg(id || ':' || day, ',' ORDER BY id) FROM raw.scores",
+            expected_result: "1:2026-11-03,2:2026-11-03",
+        },
+        TextFilesScenarioTestCase {
             description: "a headerless CSV of one record without a final line break loads it",
             store: local_store,
             settings: "format = \"csv\"\nwrite_strategy = \"append\"\ncsv = { header = false }\n",

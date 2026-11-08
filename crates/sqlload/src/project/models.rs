@@ -183,6 +183,21 @@ pub enum ConnectionConfig {
         /// The database file; `:memory:` for an in-memory database.
         database: String,
     },
+    /// Google Sheets, read with a service-account key: at most one of the three key settings, or the key file `GOOGLE_APPLICATION_CREDENTIALS` names.
+    GoogleSheets {
+        /// A path to the key file.
+        #[serde(default)]
+        service_account_file: Option<PathBuf>,
+        /// The key file's JSON text, such as `${ENV:GOOGLE_SA_JSON}`.
+        #[serde(default)]
+        service_account_json: Option<crate::auth::models::Secret>,
+        /// The key file's JSON text, base64-encoded.
+        #[serde(default)]
+        service_account_json_base64: Option<crate::auth::models::Secret>,
+        /// Overrides the Sheets API's root, for tests.
+        #[serde(default)]
+        base_url: Option<String>,
+    },
     /// An HTTP API, for Python sources; its settings reach table functions as `ctx.connection`.
     Http {
         base_url: String,
@@ -210,6 +225,7 @@ impl ConnectionConfig {
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",
             Self::Filesystem { .. } => "filesystem",
+            Self::GoogleSheets { .. } => "google_sheets",
             Self::Http { .. } => "http",
         }
     }
@@ -350,6 +366,12 @@ pub struct SourceConfig {
     /// The replication slot holding the stream's position (`postgres_cdc`); `sqlload_<source>` when omitted.
     #[serde(default)]
     pub slot: Option<String>,
+    /// The spreadsheet read (`google_sheets`), the ID in its URL.
+    #[serde(default)]
+    pub spreadsheet_id: Option<String>,
+    /// The tables read (`google_sheets`): a tab or an A1 range by table name; every tab, named after it, when empty.
+    #[serde(default)]
+    pub ranges: BTreeMap<String, String>,
     /// How captured changes are written (`postgres_cdc`).
     #[serde(default)]
     pub cdc_mode: CdcMode,
@@ -437,6 +459,7 @@ impl SourceConfig {
                 | SourceKind::Python,
             ) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
+            (None, SourceKind::GoogleSheets) => DEFAULT_TABLE_NAME,
         }
     }
 }
@@ -454,6 +477,8 @@ pub enum SourceKind {
     Snowflake,
     /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
     Python,
+    /// Tabs or ranges of a Google Sheets spreadsheet, one table each.
+    GoogleSheets,
 }
 
 /// The file formats a files target writes.
@@ -579,6 +604,12 @@ pub struct TableSettings {
     /// Table settings a created table gets (ClickHouse), by name.
     #[serde(default)]
     pub table_settings: Option<BTreeMap<String, LayoutSetting>>,
+    /// Whether a sheet's range starts with a header row (`google_sheets`); `column_1`, `column_2`, … without one.
+    #[serde(default)]
+    pub header: Option<bool>,
+    /// Which row of a sheet's range holds the header, counting from 1 (`google_sheets`); rows above it are skipped.
+    #[serde(default)]
+    pub header_row: Option<u32>,
 }
 
 /// A table setting's value in a ClickHouse layout.

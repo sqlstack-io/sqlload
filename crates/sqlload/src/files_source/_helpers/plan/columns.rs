@@ -175,7 +175,7 @@ pub(crate) fn stored_read(
     })
 }
 
-/// `data_type` as text unless a direct `COPY` is known to load it exactly (decision 96; live, 2026-11-05): `Float16` makes Snowflake reject the whole file, a decimal over 38 digits does not fit, and nested and other types not listed have no portable type yet.
+/// `data_type` as text unless a direct `COPY` is known to load it exactly (decision 96; live, 2026-11-05): `Float16` makes Snowflake reject the whole file, a decimal over 38 digits does not fit, nested types load as JSON text only through SQLLoad's reader, and other types not listed have no portable type yet.
 pub(crate) fn direct_refusal(data_type: &DataType) -> Option<String> {
     let exact = match data_type {
         DataType::Boolean
@@ -208,7 +208,21 @@ pub(crate) fn direct_refusal(data_type: &DataType) -> Option<String> {
         DataType::Dictionary(_, value) => return direct_refusal(value),
         _ => false,
     };
-    (!exact).then(|| data_type.to_string())
+    let nested = matches!(
+        data_type,
+        DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(..)
+            | DataType::Struct(_)
+            | DataType::Map(..)
+    );
+    match (exact, nested) {
+        (true, _) => None,
+        (false, true) => Some(format!(
+            "{data_type} (a nested type, which loads as JSON only through SQLLoad's reader; leave the column out with exclude_columns)"
+        )),
+        (false, false) => Some(data_type.to_string()),
+    }
 }
 
 /// How one file's columns join those of newer files.

@@ -12,6 +12,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Snowflake (from 0.26.0, not released yet) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad. See [Snowflake](/docs/sources/snowflake/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
+| Google Sheets | From 0.26.0 (not released yet). Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |
 | Python | Dicts, Arrow data (pyarrow, polars, pandas), JSON and NDJSON bytes | The `sqlload` package, in process |
 | HTTP APIs | JSON, through `sl.http` in a Python source | Rust |
 | Kafka | Topics, through the separate [exporter](/docs/kafka/) | Rust |
@@ -35,10 +36,12 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Postgres changes (`postgres_cdc`) | Yes | Yes | No | Yes | Yes, as a changelog |
 | Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes |
 | Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet read by DuckDB | No |
+| Google Sheets | Yes | Yes | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes |
 
 A files source into a files target is refused at `plan`. `merge` isn't available for files
-sources or files targets.
+sources or files targets. Google Sheets tables reach every target through the same Arrow path;
+the tests load them into DuckDB.
 
 These are the systems in the current release. Planned ones are on the [roadmap](/docs/roadmap/).
 
@@ -51,6 +54,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |
 | Kafka | Redpanda in containers. |
+| Google Sheets | A local fake Sheets API (OAuth, tabs and A1 ranges, refused tokens), plus a live smoke test on a real spreadsheet with generic contents. |
 | Snowflake | A local fake for protocol and failure tests, plus live tests on a real Snowflake account. |
 | BigQuery | A local fake (OAuth, query jobs, table metadata, the Storage Write API) for protocol and failure tests, plus live tests on a real BigQuery project. See [BigQuery](/docs/targets/bigquery/#tested). |
 | Databricks | A local fake workspace (OAuth, statements, the volume) for protocol and failure tests, plus live tests of every pathway on a real SQL warehouse. See [Databricks](/docs/targets/databricks/#tested-live). |
