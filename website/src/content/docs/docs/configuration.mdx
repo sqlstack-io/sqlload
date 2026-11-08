@@ -111,10 +111,10 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `loader_schema` | warehouses, required | The schema for tables whose source sets no `schema`; a BigQuery target's dataset. |
 | `database` | warehouses | Overrides the connection's database. |
 | `path` | files | Each table's folder template, with `{source}`, `{schema}`, `{table}`, `{cursor}` and `{cursor:date}`. Default `{source}/{table}/`. |
-| `format` | files | `parquet` (default) or `csv`. |
-| `compression` | files, csv | `none` (default), `gzip` or `zstd`. |
-| `csv` | files, csv | `{ delimiter, header, quote, null_value }`; default `,`, `true`, `"` and an empty string. |
-| `single_file` | files | One file per table or partition, named after the table folder. Default `false`. |
+| `format` | files | `parquet` (default), or from 0.26.0 (not released yet) `csv`. |
+| `compression` | files, csv | From 0.26.0. `none` (default), `gzip` or `zstd`. |
+| `csv` | files, csv | From 0.26.0. `{ delimiter, header, quote, null_value }`; default `,`, `true`, `"` and an empty string. |
+| `single_file` | files | From 0.26.0. One file per table or partition, named after the table folder. Default `false`. |
 | `max_footer_reads` | files | The most Parquet footers `plan` reads for one table's schema. Default 100. |
 
 ## Sources

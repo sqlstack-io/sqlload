@@ -6,6 +6,7 @@ use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::databricks::models::DatabricksSql;
 use crate::adapters::duckdb::models::DuckDbSql;
 use crate::adapters::files::models::ParquetFiles;
+use crate::adapters::postgres::models::PostgresSql;
 use crate::adapters::snowflake::models::SnowflakeSql;
 use crate::column_types::models::Warehouse;
 
@@ -17,6 +18,7 @@ pub fn sql_adapter(warehouse: Warehouse) -> &'static dyn SqlAdapter {
         Warehouse::Parquet => &ParquetFiles,
         Warehouse::Databricks => &DatabricksSql,
         Warehouse::BigQuery => &BigQuerySql,
+        Warehouse::Postgres => &PostgresSql,
         Warehouse::ClickHouse => &ClickHouseSql,
     }
 }

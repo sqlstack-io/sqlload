@@ -2,7 +2,9 @@ use crate::column_types::models::{ColumnType, Warehouse};
 use crate::project::models::{Contract, OnSchemaChange, Policy};
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::SchemaRules;
-use crate::schema_plan::tests::helpers::{inferred, live, pinned, snowflake_rules, source};
+use crate::schema_plan::tests::helpers::{
+    inferred, live, pinned, postgres_rules, snowflake_rules, source,
+};
 use crate::schema_plan::tests::test_types::PlanSchemaTestCase;
 
 const DECIMAL: ColumnType = ColumnType::Decimal {
@@ -281,6 +283,94 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             },
             expected_action: &["add column  tier text -> Utf8"],
             expected_written: &["id", "tier"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a Postgres table SQLLoad did not create gets no column, loads narrower integers, shorter varchars and plain numeric (which refuse a value that does not fit), and warns about the source column it lacks",
+            desired: vec![
+                source("id", ColumnType::Int),
+                source("code", ColumnType::Text),
+                source("amount", DECIMAL),
+                source("extra", ColumnType::Date),
+            ],
+            live: Some(vec![
+                live("id", ColumnType::SmallInt),
+                live("code", ColumnType::Varchar(5)),
+                live("amount", ColumnType::Native("numeric".to_owned())),
+                live("note", ColumnType::Text),
+            ]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &["id", "code", "amount"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 1,
+        },
+        PlanSchemaTestCase {
+            description: "a Postgres table SQLLoad did not create refuses a column that would round values, fewer digits after the point",
+            desired: vec![source("amount", DECIMAL)],
+            live: Some(vec![live(
+                "amount",
+                ColumnType::Decimal {
+                    precision: 18,
+                    scale: 1,
+                },
+            )]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "amount is decimal(18,1) in the table, which SQLLoad did not create and does not alter, and decimal(18,2) values would not all load exactly there",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a Postgres table SQLLoad did not create refuses a decimal into an integer column, which would round it",
+            desired: vec![source("amount", DECIMAL)],
+            live: Some(vec![live("amount", ColumnType::Int)]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "amount is int in the table",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a Postgres table SQLLoad did not create refuses a column whose name matches only when case is ignored",
+            desired: vec![source("OrderId", ColumnType::Int)],
+            live: Some(vec![live("orderid", ColumnType::Int)]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "OrderId matches the table's column orderid only when case is ignored",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a Postgres table with columns differing only in case loads into the one of exactly the stored name",
+            desired: vec![source("id", ColumnType::Int)],
+            live: Some(vec![
+                live("Id", ColumnType::Text),
+                live("id", ColumnType::Int),
+            ]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &["id"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a Postgres table SQLLoad created (it has _sqlload_load_id) is widened as on any warehouse",
+            desired: vec![source("amount", DECIMAL)],
+            live: Some(vec![
+                live("amount", ColumnType::Int),
+                live("_sqlload_load_id", ColumnType::Text),
+            ]),
+            rules: postgres_rules(),
+            expected_action: &["widen  amount int -> decimal(18,2) (numeric(21,2))  in place"],
+            expected_written: &["amount"],
             expected_blocked: "",
             expected_fix_flag: None,
             expected_warnings: 0,

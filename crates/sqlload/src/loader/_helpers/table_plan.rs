@@ -12,6 +12,7 @@ use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
+use crate::adapters::dispatch::main::session::write_problems::write_problems;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::output_problems::output_problems;
 use crate::adapters::files::models::{OutputCheck, TablePath};
@@ -27,10 +28,12 @@ use crate::files_source::models::FilesRead;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::FilesPlanRequest;
+use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
+use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
@@ -373,6 +376,32 @@ pub(crate) fn read_window(spec: &TableSpec, window: &Window) -> Option<ReadWindo
     })
 }
 
+/// Why `--reload` cannot run for `spec`: a CDC table's, or one on a warehouse that keeps tables, which never drops and recreates one.
+fn reload_refusal(spec: &TableSpec, options: &PlanOptions) -> Option<&'static str> {
+    match (spec.cdc.is_some(), options.reload) {
+        (true, true) => Some(CDC_RELOAD_PROBLEM),
+        (false, true) if sql_adapter(spec.warehouse).keeps_tables() => {
+            Some(KEPT_TABLES_RELOAD_PROBLEM)
+        }
+        _ => None,
+    }
+}
+
+/// `schema` with what stops or endangers writing `mode` into the existing table: blocked by its problems, with its warnings added.
+async fn checked_writes(
+    destination: &Destination,
+    spec: &TableSpec,
+    mode: &WriteMode,
+    mut schema: SchemaPlan,
+) -> Result<SchemaPlan, LoaderError> {
+    let (problems, warnings) = write_problems(destination, &spec.destination, mode).await?;
+    schema.warnings.extend(warnings);
+    Ok(match problems.is_empty() {
+        true => schema,
+        false => blocked_plan(problems),
+    })
+}
+
 async fn plan_table_once(
     spec: &TableSpec,
     destination: &Destination,
@@ -382,11 +411,11 @@ async fn plan_table_once(
         return plan_files_table(spec, files, options).await;
     }
     let live = live_columns(destination, &spec.destination).await?;
-    if spec.cdc.is_some() && options.reload {
+    if let Some(refusal) = reload_refusal(spec, options) {
         return Ok(TablePlan {
             exists: live.is_some(),
             live,
-            ..blocked_table(spec, vec![CDC_RELOAD_PROBLEM.to_owned()])
+            ..blocked_table(spec, vec![refusal.to_owned()])
         });
     }
     let read_columns = match read_columns(spec) {
@@ -474,7 +503,8 @@ async fn plan_table_once(
         cursor_name.filter(|_| lacks_cursor && restart_duplicates && schema.blocked.is_none())
     {
         schema = blocked_plan(vec![format!(
-            "the table has no {name} column yet, so this load would read every row again and duplicate the rows already there; run it once with --reload"
+            "the table has no {name} column yet, so this load would read every row again and duplicate the rows already there; {}",
+            column_fix(spec.warehouse)
         )]);
     }
     if let Some(problem) = append_problem(spec, cursor_type).filter(|_| schema.blocked.is_none()) {
@@ -536,6 +566,9 @@ async fn plan_table_once(
     schema.warnings.extend(resnapshot_warning(spec, options));
     let mode = captured_mode(spec, mode);
     let exists = live.is_some();
+    if schema.blocked.is_none() && exists {
+        schema = checked_writes(destination, spec, &mode, schema).await?;
+    }
     let chosen = match &schema.blocked {
         None => {
             let direct_append = mode == WriteMode::Append && !spec.logged;
@@ -624,6 +657,9 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
                 adapter.render_create_schema(&spec.destination),
                 adapter.render_create_loaded_table(spec, &table.schema.write_columns),
             ];
+            if let WriteMode::Merge { unique_key } = &table.mode {
+                statements.extend(adapter.render_key_index(&spec.destination, unique_key));
+            }
             statements.extend(adapter.render_table_comment(&spec.destination, &spec.description));
             Some(statements)
         }

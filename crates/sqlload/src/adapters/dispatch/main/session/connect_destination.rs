@@ -8,6 +8,7 @@ use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_open_duckdb::open_duckdb;
 use crate::adapters::files::models::FilesDestination;
+use crate::adapters::postgres::main::session::_open_postgres::open_postgres;
 use crate::adapters::snowflake::main::session::_connect_snowflake::connect_snowflake;
 use crate::adapters::snowflake::main::stage::_forced_stage::forced_stage;
 use crate::adapters::snowflake::models::SnowflakeAccount;
@@ -42,23 +43,18 @@ pub async fn connect_destination(
         Some(connection @ ConnectionConfig::BigQuery { .. }) => Destination::BigQuery(Box::new(
             connect_bigquery(connection, target.database.as_deref())?,
         )),
+        Some(ConnectionConfig::Postgres { .. }) => Destination::Postgres(Box::new(open_postgres(
+            project,
+            &target.connection,
+            target.database.as_deref(),
+        )?)),
         Some(connection @ ConnectionConfig::ClickHouse { .. }) => {
             Destination::ClickHouse(Box::new(connect_clickhouse(connection)?))
         }
-        Some(ConnectionConfig::S3 {
-            bucket,
-            region,
-            endpoint,
-        }) => files(
-            target,
-            StoreKind::S3 {
-                bucket: bucket.clone(),
-                region: region.clone(),
-                endpoint: endpoint.clone(),
-            },
-        ),
-        Some(ConnectionConfig::Filesystem { root }) => {
-            files(target, StoreKind::Filesystem { root: root.clone() })
+        Some(connection @ (ConnectionConfig::S3 { .. } | ConnectionConfig::Filesystem { .. })) => {
+            files(connection, target).ok_or_else(|| {
+                LoaderError::Invalid(format!("target {name:?}: its connection holds no files"))
+            })?
         }
         Some(other) => {
             return Err(LoaderError::Invalid(format!(
@@ -76,14 +72,30 @@ pub async fn connect_destination(
     Ok(destination)
 }
 
-/// The files destination of `target` in `store`.
-fn files(target: &crate::project::models::TargetConfig, store: StoreKind) -> Destination {
-    Destination::Files(Box::new(FilesDestination {
+/// The files destination of `target`, from its `s3` or `filesystem` connection; `None` for another kind.
+fn files(
+    connection: &ConnectionConfig,
+    target: &crate::project::models::TargetConfig,
+) -> Option<Destination> {
+    let store = match connection {
+        ConnectionConfig::S3 {
+            bucket,
+            region,
+            endpoint,
+        } => StoreKind::S3 {
+            bucket: bucket.clone(),
+            region: region.clone(),
+            endpoint: endpoint.clone(),
+        },
+        ConnectionConfig::Filesystem { root } => StoreKind::Filesystem { root: root.clone() },
+        _ => return None,
+    };
+    Some(Destination::Files(Box::new(FilesDestination {
         connection: target.connection.clone(),
         store,
         max_footer_reads: target.footer_read_limit(),
         encoding: target.output_encoding(),
-    }))
+    })))
 }
 
 /// The Snowflake destination of target `name`, from its `snowflake` connection.

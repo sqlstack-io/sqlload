@@ -28,7 +28,8 @@ use crate::loader::_helpers::resolve::{resolve_tables, source_target};
 use crate::loader::_helpers::specs::{missing_description, table_name};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
-    LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS,
+    KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, RELOAD_FIX,
+    SOURCE_BATCH_ROWS,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -508,6 +509,14 @@ fn fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> Option<i64> {
         .filter(|digits| *digits < i64::from(NANOSECOND_SCALE))
 }
 
+/// How to give a table with rows a column a load needs, on `warehouse`.
+pub(crate) fn column_fix(warehouse: Warehouse) -> &'static str {
+    match sql_adapter(warehouse).keeps_tables() {
+        true => KEPT_TABLES_COLUMN_FIX,
+        false => RELOAD_FIX,
+    }
+}
+
 /// The files to read, or why the table cannot be loaded.
 pub(crate) async fn plan_files(
     request: &FilesPlanRequest<'_>,
@@ -553,7 +562,8 @@ pub(crate) async fn plan_files(
         && !request.options.reload
     {
         return Ok(Err(format!(
-            "the table has no {SOURCE_FILE_COLUMN} column, so append cannot tell which files are loaded and would load them all again; run it once with --reload"
+            "the table has no {SOURCE_FILE_COLUMN} column, so append cannot tell which files are loaded and would load them all again; {}",
+            column_fix(spec.warehouse)
         )));
     }
     if skips_loaded

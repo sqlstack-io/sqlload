@@ -23,8 +23,8 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | BigQuery (preview) | `append`, `merge`, `delete_insert`, `replace` | Arrow streamed through the Storage Write API into a staging table, then one query job per write. See [BigQuery](/docs/targets/bigquery/). |
 | Databricks | `append`, `merge`, `delete_insert`, `replace` | Parquet staged in a Unity Catalog volume, then `COPY INTO`; one statement per write. Files of a files source pass through SQLLoad. |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
-| Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or CSV, plain, gzip or zstd. |
-| Parquet or CSV files in a local folder | As for S3; `replace` swaps the folder in one rename | As for S3 |
+| Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or, from 0.26.0 (not released yet), CSV: plain, gzip or zstd. |
+| Parquet or CSV files in a local folder | As for S3; from 0.26.0, `replace` swaps the folder in one rename | As for S3 |
 
 ## Source and destination combinations
 
