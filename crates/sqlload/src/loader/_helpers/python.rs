@@ -39,6 +39,7 @@ use crate::postgres_source::models::PgType;
 use crate::postgres_source::models::SourceColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::constants::FILES_CONNECTION_KINDS;
+use crate::project::models::CheckName;
 use crate::project::models::ProjectConfig;
 use crate::project::models::SourceConfig;
 use crate::publish_checks::main::check_column_problems::check_column_problems;
@@ -608,6 +609,7 @@ impl PythonFeed {
             refuse_emptying(load.table, load.destination).await?;
         }
         if self.publisher.is_none() && self.rows == 0 && !load.table.exists && declared == 0 {
+            empty_problem(load.table)?;
             let run = run_entry(
                 load,
                 load.table,
@@ -832,6 +834,21 @@ impl PythonFeed {
     }
 }
 
+/// Fail a table whose function yielded no rows when its `min_rows` check needs some (unless the check only warns).
+fn empty_problem(table: &TablePlan) -> Result<(), LoaderError> {
+    let minimum = table.spec.checks.as_ref().and_then(|checks| {
+        checks
+            .min_rows
+            .filter(|minimum| *minimum > 0 && !checks.warn.contains(&CheckName::MinRows))
+    });
+    match minimum {
+        Some(minimum) => Err(LoaderError::Invalid(format!(
+            "checks.min_rows failed: 0 row(s) staged, fewer than the {minimum} required; nothing was published"
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// `planned` with its columns planned again for those `data` has (`known` being the live columns when they need no read); everything else stays as planned before the read, so it matches what the function was asked for.
 async fn replan(
     load: &PythonLoad<'_>,
@@ -894,6 +911,7 @@ async fn replan(
         .write_columns
         .iter()
         .map(|column| column.name.clone())
+        .chain(data.null_columns.iter().cloned())
         .collect();
     let problems: Vec<String> = columns
         .spec

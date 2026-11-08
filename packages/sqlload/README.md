@@ -209,14 +209,17 @@ checks = { unique = ["customer_id"], not_null = ["customer_id", "email"], min_ro
 - `min_rows`: at least this many rows are loaded.
 - `max_row_drop`: the table loses at most this share of its rows, compared with what it holds now.
 
-A failed check fails the table with the counts and up to five repeated keys, and publishes
-nothing: the table keeps its rows and the staging table is dropped. A check listed in
-`warn = ["max_row_drop"]` only logs its failure. Each commit is checked by itself, so a load
-that commits batch by batch (`append`, `merge`, `delete_insert`) checks each batch; `min_rows` and
-`max_row_drop` describe the whole table, so only `replace`, which commits once, takes them.
-Columns the checks name must be loaded columns. A source can set `checks` for all its tables, and
-Python tables take the same setting. Tables with checks always stage their rows, so a files
-source's direct load goes through SQLLoad instead; `plan` shows that route. Files targets and
+A failed check fails the table with the counts and up to five repeated keys, and the commit
+publishes none of its rows: the table keeps what it held and the staging table is dropped. A check
+listed in `warn = ["max_row_drop"]` only logs its failure. Each commit is checked by itself, so a
+load that commits batch by batch (`append`, `merge`, `delete_insert`) checks each batch, and a
+failing batch leaves the batches committed before it in place; `min_rows` and `max_row_drop`
+describe the whole table, so only `replace`, which commits once, takes them.
+
+Columns the checks name must be loaded columns, matched ignoring case. A source can set `checks`
+for all its tables; a table's own `checks` replaces the source's whole block, as other settings
+do. Python tables take the same setting. Tables with checks always stage their rows, so a files
+source's direct load goes through SQLLoad instead, which `plan` warns about. Files targets and
 `postgres_cdc` sources take no checks.
 
 ## New tables

@@ -566,6 +566,8 @@ impl Publisher {
                 staging: &staging,
                 table: &spec.destination,
                 exists: self.table.exists,
+                columns: &self.table.schema.write_columns,
+                committed: self.committed_rows,
             };
             run_checks(&commit, checks).await?;
         }

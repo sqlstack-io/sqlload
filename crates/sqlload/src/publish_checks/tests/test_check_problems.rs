@@ -57,6 +57,13 @@ fn given_a_tables_checks_when_validating_them_then_only_runnable_checks_pass() {
             ],
         },
         CheckProblemsTestCase {
+            description: "a checks block that sets no check is refused rather than silently changing the route",
+            checks: TableChecks::default(),
+            strategy: WriteStrategy::Replace,
+            files_target: false,
+            expected_problems: &["checks sets no check; add one, or remove checks"],
+        },
+        CheckProblemsTestCase {
             description: "a files target has no staged rows to check",
             checks: TableChecks {
                 not_null: vec!["id".to_owned()],

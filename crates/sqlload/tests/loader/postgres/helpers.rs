@@ -120,7 +120,7 @@ table_name = "{{table}}"
 
 [sources.app.tables."public.customers"]
 write_strategy = "replace"
-checks = {{ unique = ["id"], not_null = ["email"], min_rows = 1, max_row_drop = "50%" }}
+checks = {{ unique = ["ID"], not_null = ["EMAIL"], min_rows = 1, max_row_drop = "50%" }}
 
 [sources.app.tables."public.events"]
 write_strategy = "append"

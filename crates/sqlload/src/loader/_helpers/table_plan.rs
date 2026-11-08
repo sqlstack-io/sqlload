@@ -35,7 +35,9 @@ use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
-use crate::loader::constants::{ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES};
+use crate::loader::constants::{
+    CHECKS_LOADER_WARNING, ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES,
+};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
@@ -797,6 +799,7 @@ fn hmac_warnings(
     let reads_itself = writer_accepts(destination, stage)
         .reads_files_itself
         .is_some();
+    let checked = reads_itself && spec.files.is_some() && spec.checks.is_some();
     spec.masked
         .columns
         .iter()
@@ -806,6 +809,7 @@ fn hmac_warnings(
                 "{name}: hmac masking pulls every file through the loader (the key must never be in SQL), which is much slower than a direct load. mask = \"hash\" stays on the direct route."
             )
         })
+        .chain(checked.then(|| CHECKS_LOADER_WARNING.to_owned()))
         .collect()
 }
 

@@ -192,7 +192,17 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
         )
     };
     match check {
-        CheckQuery::Rows => format!("SELECT {count} FROM {from}"),
+        CheckQuery::Counts(columns) => {
+            let counts: Vec<String> = std::iter::once(count.clone())
+                .chain(columns.iter().map(|column| {
+                    adapter.render_text_cast(&format!(
+                        "COUNT(*) - COUNT({})",
+                        adapter.render_identifier(column)
+                    ))
+                }))
+                .collect();
+            format!("SELECT {} FROM {from}", counts.join(" || ',' || "))
+        }
         CheckQuery::Duplicates(columns) => format!(
             "SELECT {count} FROM (SELECT 1 AS repeated {}) repeated_keys",
             grouped(columns).1
@@ -208,9 +218,5 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
                 texts.join(" || ', ' || ")
             )
         }
-        CheckQuery::Nulls(column) => format!(
-            "SELECT {count} FROM {from} WHERE {} IS NULL",
-            adapter.render_identifier(column)
-        ),
     }
 }

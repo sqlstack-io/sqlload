@@ -15,6 +15,9 @@ pub fn check_problems(
         ];
     }
     let mut problems: Vec<String> = Vec::new();
+    if set.is_empty() {
+        problems.push("checks sets no check; add one, or remove checks".to_owned());
+    }
     if checks.unique.as_ref().is_some_and(Vec::is_empty) {
         problems.push("checks.unique needs at least one column".to_owned());
     }
