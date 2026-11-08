@@ -253,10 +253,9 @@ fn given_a_load_through_a_bastion_when_the_tunnel_drops_then_the_table_fails_nam
             std::fs::write(&config, text).map_err(|error| error.to_string())?;
             let load = spawn_sqlload(&config, &["load", "app"], "")?;
             tokio::time::sleep(test_case.drop_after).await;
-            bastion
-                .container
-                .stop()
+            tokio::time::timeout(Duration::from_secs(120), bastion.container.stop())
                 .await
+                .map_err(|_| "stopping the bastion took longer than 120 s".to_owned())?
                 .map_err(|error| error.to_string())?;
             let (succeeded, output) = stop_sqlload(load, "-0").await?;
             let expected = ssh_settings(test_case.expected_text, &bastion, "");
@@ -309,10 +308,9 @@ fn given_a_follow_through_a_bastion_when_the_tunnel_drops_then_it_fails_naming_i
                 .await
                 .map_err(|error| error.to_string())?;
             tokio::time::sleep(test_case.drop_after).await;
-            bastion
-                .container
-                .stop()
+            tokio::time::timeout(Duration::from_secs(120), bastion.container.stop())
                 .await
+                .map_err(|_| "stopping the bastion took longer than 120 s".to_owned())?
                 .map_err(|error| error.to_string())?;
             let (succeeded, output) = stop_sqlload(load, "-0").await?;
             let expected = ssh_settings(test_case.expected_text, &bastion, "");

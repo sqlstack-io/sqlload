@@ -11,6 +11,3 @@ pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Unanswered keepalives after which the tunnel counts as dropped.
 pub const KEEPALIVE_MAX: usize = 3;
-
-/// How long the tunnel may make no progress at all, including a write to a bastion that stopped answering, before it counts as dropped; longer than the keepalives take, so it only ends a session they cannot reach.
-pub const STALL_TIMEOUT: Duration = Duration::from_secs(75);

@@ -1758,11 +1758,11 @@ pub(crate) async fn stop_sqlload(
             .arg(pid)
             .status();
     });
-    let output = tokio::task::spawn_blocking(move || child.wait_with_output())
-        .await
+    let waited = tokio::task::spawn_blocking(move || child.wait_with_output()).await;
+    deadline.abort();
+    let output = waited
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-    deadline.abort();
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),

@@ -9,9 +9,7 @@ use russh::keys::agent::client::AgentClient;
 use russh::keys::known_hosts::known_host_keys_path;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_secret_key};
 
-use crate::ssh_tunnel::constants::{
-    CONNECT_TIMEOUT, KEEPALIVE_INTERVAL, KEEPALIVE_MAX, STALL_TIMEOUT,
-};
+use crate::ssh_tunnel::constants::{CONNECT_TIMEOUT, KEEPALIVE_INTERVAL, KEEPALIVE_MAX};
 use crate::ssh_tunnel::models::{HostCheck, SshTunnel};
 
 /// One bastion's session, opened by one runtime; locked while it opens, so connections to other bastions don't wait on it.
@@ -138,7 +136,6 @@ async fn open_session(tunnel: &SshTunnel) -> Result<Handle<HostCheck>, String> {
     let config = Config {
         keepalive_interval: Some(KEEPALIVE_INTERVAL),
         keepalive_max: KEEPALIVE_MAX,
-        inactivity_timeout: Some(STALL_TIMEOUT),
         nodelay: true,
         ..Config::default()
     };
