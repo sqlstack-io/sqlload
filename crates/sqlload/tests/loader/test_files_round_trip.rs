@@ -89,9 +89,9 @@ fn given_a_files_source_when_loading_it_into_a_files_target_again_then_each_sour
             ..APPEND
         },
         FilesToFilesTestCase {
-            description: "delete_insert by day: the last day is read again and replaces its own files, never doubling",
+            description: "delete_insert by day: each load reads the target's newest day again and replaces its files, never doubling (the third load replaces the second's day and adds the new one)",
             settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\ndestination_path = \"PREFIX/out/{table}/day={cursor:date}/\"",
-            expected: &["6|1", "6|2", "8|3"],
+            expected: &["6|1", "6|2", "8|2"],
             ..APPEND
         },
     ];

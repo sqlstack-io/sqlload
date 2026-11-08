@@ -2,10 +2,13 @@
 
 use std::collections::BTreeSet;
 
-use crate::adapters::files::_helpers::layout::loaded::{is_loaded_record, parse_loaded};
+use crate::adapters::files::_helpers::layout::loaded::{
+    is_loaded_record, loaded_folder, parse_loaded,
+};
 use crate::adapters::files::_helpers::layout::loads::load_id_of;
 use crate::adapters::files::_helpers::layout::markers::{parse_marker, pending_folder};
 use crate::adapters::files::_helpers::layout::partitions::group_partitions;
+use crate::adapters::files::constants::LOADED_FOLDER;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
 use crate::adapters::files::errors::FilesDestinationError;
 use crate::adapters::files::models::{PendingLoad, PendingPhase, TablePath, TableState};
@@ -64,14 +67,16 @@ pub async fn read_table_state(
         .collect();
     let mut loaded: Vec<LoadedFile> = Vec::new();
     let mut stale_loaded: Vec<String> = Vec::new();
-    for record in files
-        .iter()
+    let records = loaded_folder(folder);
+    for record in list_files(&records)
+        .await?
+        .into_iter()
         .filter(|file| is_loaded_record(&file.relative_key))
     {
-        let text = read_file(folder, &record.relative_key).await?;
+        let text = read_file(&records, &record.relative_key).await?;
         let entries = parse_loaded(&String::from_utf8_lossy(&text)).map_err(|reason| {
             FilesDestinationError::Write {
-                key: format!("{}{}", folder.location, record.relative_key),
+                key: format!("{}{}", records.location, record.relative_key),
                 reason,
             }
         })?;
@@ -81,7 +86,7 @@ pub async fn read_table_state(
             .map(|(_, file)| file)
             .collect();
         if held.is_empty() {
-            stale_loaded.push(record.relative_key.clone());
+            stale_loaded.push(format!("{LOADED_FOLDER}{}", record.relative_key));
         }
         loaded.extend(held);
     }
