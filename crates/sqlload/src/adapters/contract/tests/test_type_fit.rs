@@ -90,6 +90,27 @@ fn given_a_desired_and_live_type_when_comparing_then_the_needed_change_is_named(
             warehouse: Warehouse::Snowflake,
             expected_fit: TypeFit::Incompatible,
         },
+        TypeFitTestCase {
+            description: "a ClickHouse column pinned to LowCardinality(String) fits the column it created, read back as text",
+            desired: ColumnType::Native("LowCardinality(String)".to_owned()),
+            live: ColumnType::Text,
+            warehouse: Warehouse::ClickHouse,
+            expected_fit: TypeFit::Fits,
+        },
+        TypeFitTestCase {
+            description: "a ClickHouse column pinned to JSON fits the column it created, read back as json",
+            desired: ColumnType::Native("JSON".to_owned()),
+            live: ColumnType::Json,
+            warehouse: Warehouse::ClickHouse,
+            expected_fit: TypeFit::Fits,
+        },
+        TypeFitTestCase {
+            description: "a ClickHouse pin to LowCardinality(String) does not fit a live int column",
+            desired: ColumnType::Native("LowCardinality(String)".to_owned()),
+            live: ColumnType::Int,
+            warehouse: Warehouse::ClickHouse,
+            expected_fit: TypeFit::Incompatible,
+        },
     ];
     for test_case in test_cases {
         assert_eq!(

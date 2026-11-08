@@ -3,8 +3,7 @@ use crate::adapters::clickhouse::_helpers::steps::publish_step;
 use crate::adapters::clickhouse::models::PublishStep;
 use crate::adapters::clickhouse::tests::test_types::PartitionStatementsTestCase;
 
-const EXCHANGE: &str =
-    "-- sqlload publish {\"Exchange\":{\"target\":\"`raw`.`events`\",\"build\":\"`raw`.`c`\"}}";
+const EXCHANGE: &str = "-- sqlload publish {\"Exchange\":{\"target\":\"`raw`.`events`\",\"build\":\"`raw`.`c`\",\"aside\":\"`raw`.`a`\"}}";
 
 const WINDOW: &str = "`day` >= CAST('2024-01-10' AS Date32)";
 
@@ -98,6 +97,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             target: "`raw`.`events`",
             delta: "`raw`.`d`",
             copy: "`raw`.`c`",
+            aside: "`raw`.`a`",
             displaced: test_case.displaced,
         };
         assert_eq!(
@@ -120,6 +120,7 @@ fn given_a_publish_statement_when_running_it_then_the_step_it_names_is_read_back
         Some(PublishStep::Exchange {
             target: "`raw`.`events`".to_owned(),
             build: "`raw`.`c`".to_owned(),
+            aside: "`raw`.`a`".to_owned(),
         })
     );
     assert_eq!(

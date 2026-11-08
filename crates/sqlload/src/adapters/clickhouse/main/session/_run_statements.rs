@@ -27,6 +27,7 @@ pub(in crate::adapters) async fn run_statements(
             target,
             delta,
             copy,
+            aside,
             displaced,
         }) = publish_step(statement)?
         else {
@@ -50,6 +51,7 @@ pub(in crate::adapters) async fn run_statements(
             target: &target,
             delta: &delta,
             copy: &copy,
+            aside: &aside,
             displaced: displaced.as_deref(),
         };
         for step in partition_statements(&publish, (&new, &replaced)) {

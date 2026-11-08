@@ -23,7 +23,7 @@ pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// The header carrying the code of the error a request failed with.
 pub const EXCEPTION_CODE_HEADER: &str = "X-ClickHouse-Exception-Code";
 
-/// The error codes of an `EXCHANGE TABLES` the database cannot run (one not of the `Atomic` or `Replicated` engine).
+/// The error codes of an `EXCHANGE TABLES` the database cannot run (a database not of the `Atomic` engine), which a rename swap replaces.
 pub const EXCHANGE_UNSUPPORTED_CODES: &[&str] = &["1", "48"];
 
 /// The engine a created table gets when its layout names none.
@@ -40,6 +40,9 @@ pub const PUBLISH_PREFIX: &str = "-- sqlload publish ";
 
 /// Suffix (after the delta table's name) of the copy a publish rebuilds partitions in.
 pub const COPY_SUFFIX: &str = "_copy";
+
+/// Suffix (after the build table's name) a rename swap moves the old table to.
+pub const ASIDE_SUFFIX: &str = "_aside";
 
 /// The most bytes of Arrow rows one insert request carries; a batch's rows go in several.
 pub const INSERT_BYTES: usize = 64 * 1024 * 1024;

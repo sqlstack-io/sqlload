@@ -36,13 +36,18 @@ pub struct PendingInsert {
 /// A step of a write that the statement runner carries out itself, as it needs what the server answers or a fallback (sent among the statements as [`PUBLISH_PREFIX`](crate::adapters::clickhouse::constants::PUBLISH_PREFIX) and JSON).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PublishStep {
-    /// Swap `build` in for `target` with `EXCHANGE TABLES`; `build` then holds the old table.
-    Exchange { target: String, build: String },
-    /// Publish the rows of `delta` (a table in `target`'s shape) into `target`, partition by partition. With `displaced`, a condition on `target`'s rows, the rows it holds are replaced: each partition the delta or those rows touch is rebuilt in `copy` from its kept rows and the delta's, then swapped in. Without it the delta's partitions are added.
+    /// Swap `build` in for `target` with `EXCHANGE TABLES`, or by renames through `aside` where the database cannot exchange tables; `build` then holds the old table.
+    Exchange {
+        target: String,
+        build: String,
+        aside: String,
+    },
+    /// Publish the rows of `delta` (a table in `target`'s shape) into `target`, partition by partition. With `displaced`, a condition on `target`'s rows, the rows it holds are replaced: each partition the delta or those rows touch is rebuilt in `copy` from its kept rows and the delta's, then swapped in. Without it the delta's partitions are added. `aside` is where a rename swap of `copy` moves the old table.
     Partitions {
         target: String,
         delta: String,
         copy: String,
+        aside: String,
         displaced: Option<String>,
     },
 }

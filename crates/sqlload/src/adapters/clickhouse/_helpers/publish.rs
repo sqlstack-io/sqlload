@@ -10,6 +10,7 @@ pub(crate) struct PartitionPublish<'a> {
     pub target: &'a str,
     pub delta: &'a str,
     pub copy: &'a str,
+    pub aside: &'a str,
     /// The condition on the target's rows that the delta replaces; `None` when it replaces none.
     pub displaced: Option<&'a str>,
 }
@@ -37,6 +38,7 @@ pub(crate) fn partition_statements(
         target,
         delta,
         copy,
+        aside,
         displaced: condition,
     } = *publish;
     let attach = |into: &str, partition: &String| {
@@ -86,6 +88,7 @@ pub(crate) fn partition_statements(
             statements.push(publish_statement(&PublishStep::Exchange {
                 target: target.to_owned(),
                 build: copy.to_owned(),
+                aside: aside.to_owned(),
             }));
         }
     }

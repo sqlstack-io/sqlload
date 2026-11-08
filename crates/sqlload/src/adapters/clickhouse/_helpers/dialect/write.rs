@@ -1,7 +1,7 @@
 //! ClickHouse's writes: no transactions, so each is published by one swap of a whole table or of whole partitions, and a rerun converges.
 
 use crate::adapters::clickhouse::_helpers::dialect::type_names::unwrapped;
-use crate::adapters::clickhouse::constants::{COPY_SUFFIX, PUBLISH_PREFIX};
+use crate::adapters::clickhouse::constants::{ASIDE_SUFFIX, COPY_SUFFIX, PUBLISH_PREFIX};
 use crate::adapters::clickhouse::models::{ClickHouseSql, PublishStep};
 use crate::adapters::contract::_helpers::identifiers::with_suffix;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
@@ -28,6 +28,7 @@ pub(crate) fn swap_statements(
         publish_statement(&PublishStep::Exchange {
             target: adapter.render_qualified_name(target),
             build: build_name.clone(),
+            aside: adapter.render_qualified_name(&with_suffix(build, ASIDE_SUFFIX)),
         }),
         format!("DROP TABLE IF EXISTS {build_name}"),
     ]
@@ -84,6 +85,7 @@ pub(crate) fn write_statements(
         WriteMode::Replace | WriteMode::Recreate => PublishStep::Exchange {
             target: target.clone(),
             build: delta.clone(),
+            aside: adapter.render_qualified_name(&with_suffix(&delta_table, ASIDE_SUFFIX)),
         },
         _ => {
             let copy = with_suffix(&delta_table, COPY_SUFFIX);
@@ -91,6 +93,7 @@ pub(crate) fn write_statements(
                 target: target.clone(),
                 delta: delta.clone(),
                 copy: adapter.render_qualified_name(&copy),
+                aside: adapter.render_qualified_name(&with_suffix(&copy, ASIDE_SUFFIX)),
                 displaced,
             }
         }

@@ -580,8 +580,8 @@ Every loaded column is `Nullable`, so a table with a key gets `allow_nullable_ke
 `table_settings` sets it. Only engines of the `MergeTree` family on a single server are taken.
 `plan` shows each column's type: `timestamp_tz` is `DateTime64(6, 'UTC')`, `timestamp_ntz`
 `DateTime64(6)`, `date` `Date32` (1900 to 2299; a date outside them fails the load), decimals keep
-their precision and scale, and JSON and times are text. Pin `native("JSON")` or
-`native("LowCardinality(String)")` on a column to use those types. An existing table's narrower
+their precision and scale, and JSON and times are text. A Python table can pin `native("JSON")` or
+`native("LowCardinality(String)")` on a text column to use those types. An existing table's narrower
 types (`Int32`, `UInt16`, `Float32`, `Date`, `DateTime`, `DateTime64(3)`) would wrap or cut wider
 values without an error, so `plan` reports them as incompatible rather than load into them.
 
@@ -590,13 +590,15 @@ an existing table out again, drop it and load. ClickHouse cannot change the type
 sorting or partition key, so a key column whose source type widens fails the load.
 
 Rows go as Arrow over HTTP into a staging table (a build table for `replace`) and reach the table
-only when the load publishes them. ClickHouse has no transactions, so each publish is one atomic
-swap. `replace` and `--reload` swap the build table in with `EXCHANGE TABLES`, which needs an
-`Atomic` database (ClickHouse's default); a load into an `Ordinary` database is refused. `append`
-attaches the new rows' partitions. `merge` and `delete_insert` rewrite whole partitions: one partition is rebuilt beside
+only when the load publishes them. ClickHouse has no transactions, so each publish is one swap,
+atomic in an `Atomic` database (ClickHouse's default). `replace` and `--reload` swap the build
+table in with `EXCHANGE TABLES`. In a database that cannot exchange tables (an `Ordinary` one) they
+swap with one `RENAME TABLE`, which ClickHouse does not make atomic: readers can briefly find no
+table, and a server failing mid-rename can leave the old table under the build table's name.
+`append` attaches the new rows' partitions. `merge` and `delete_insert` rewrite whole partitions: one partition is rebuilt beside
 the table and swapped in with `REPLACE PARTITION`, and several are rebuilt in a copy that
-hard-links the table's other parts, then exchanged in at once. A load killed at any point leaves the table as it was or fully
-published, and the next run converges. `merge` matches rows on `unique_key` exactly, so readers
+hard-links the table's other parts, then exchanged in at once. In an `Atomic` database, a load
+killed at any point leaves the table as it was or fully published, and the next run converges. `merge` matches rows on `unique_key` exactly, so readers
 need no `FINAL`. It replaces whole rows, so a column the source no longer has is `NULL` on the rows
 it updates. Rows arrive by swapping parts, never by `INSERT`, so materialized views on a loaded
 table see none of them: build them from the table instead.
