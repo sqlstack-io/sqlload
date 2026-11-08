@@ -28,6 +28,7 @@ use crate::adapters::contract::models::{
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::loader::errors::LoaderError;
+use crate::loader::models::{TableLayout, TableSpec};
 use crate::schema_plan::models::{ColumnChange, DesiredColumn, LiveColumn};
 
 /// What a warehouse's SQL looks like. Pure rendering, with no I/O; names follow sqlbuild's adapter contract.
@@ -149,6 +150,22 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// `CREATE TABLE IF NOT EXISTS` with every column nullable.
     fn render_create_table(&self, table: &TableName, columns: &[DesiredColumn]) -> String {
         create_table(self, table, columns)
+    }
+
+    /// Problems with a table's layout settings (`engine`, `order_by`, `partition_by`, `primary_key`, `table_settings`), which only ClickHouse takes.
+    fn layout_problems(&self, layout: &TableLayout) -> Vec<String> {
+        match layout.is_empty() {
+            true => Vec::new(),
+            false => vec![format!(
+                "engine, order_by, partition_by, primary_key and table_settings lay out ClickHouse tables; {} tables take none",
+                self.warehouse()
+            )],
+        }
+    }
+
+    /// `CREATE TABLE IF NOT EXISTS` for a loaded table: the table `spec` names with `columns`, laid out as it says where the warehouse takes a layout.
+    fn render_create_loaded_table(&self, spec: &TableSpec, columns: &[DesiredColumn]) -> String {
+        self.render_create_table(&spec.destination, columns)
     }
 
     /// `COMMENT ON TABLE`, giving `table` its description; none for a table without one.

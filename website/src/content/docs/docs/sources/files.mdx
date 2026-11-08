@@ -30,6 +30,9 @@ cursor_column = "dt"
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
 | `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
+| `path_columns` | A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
+| `unmatched_paths` | What a file whose path doesn't match `path_columns` does: `fail` (default) fails `plan` and names it, `skip` leaves it out. |
+| `constant_columns` | Columns with the same value in every row, such as `{ region = "eu", as_of = 2026-11-08 }`. See [Columns from paths](#columns-from-paths). |
 | `copy_to_internal_stage` | Snowflake only: upload files no external stage covers to the user stage. See [Load methods](/docs/targets/snowflake/#files-into-snowflake). |
 
 ## Which files load
@@ -37,7 +40,7 @@ cursor_column = "dt"
 | Strategy | Reads |
 |----------|-------|
 | `append` | Only files not loaded yet, by `_sqlload_source_file`. A file rewritten in place since it loaded fails the table, with the fix. |
-| `delete_insert` with a partition `cursor_column` | The newest loaded partition and everything after it, replacing those partitions whole. |
+| `delete_insert` with a partition `cursor_column` (from `partition_columns` or `path_columns`) | The newest loaded partition and everything after it, replacing those partitions whole. |
 | `replace` | Every file, swapped in as a new table. |
 
 `merge` isn't supported for files sources: a file would be read again once its rows are updated.
@@ -62,6 +65,58 @@ Parquet columns come from the files' footers. CSV and JSON columns are inferred 
 records, unless you pin them with `columns`. Each row also gets `_sqlload_source_file`,
 `_sqlload_source_version` and `_sqlload_source_row` ([Columns SQLLoad
 adds](/docs/concepts/projects/#columns-sqlload-adds)).
+
+## Columns from paths
+
+Values can come from folder and file names that aren't `key=value` folders. `path_columns` is a
+template over each file's path below `path`:
+
+```toml
+[sources.orders]
+kind = "files"
+connection = "lake"
+path = "orders/"
+path_columns = "{region}/{channel}/{order_date:date}/*.parquet"
+constant_columns = { shop = "main", schema_version = 2 }
+write_strategy = "delete_insert"
+cursor_column = "order_date"
+```
+
+A file at `orders/eu/web/2026-11-08/part-0.parquet` loads with `region = 'eu'`, `channel = 'web'`,
+`order_date = 2026-11-08`, `shop = 'main'` and `schema_version = 2`.
+
+| In a template | Matches |
+|---------------|---------|
+| `{name}` or `{name:type}` | A value inside one folder or file name, loaded as column `name`. The type is anything `partition_columns` takes, `text` by default. |
+| `*` | Any text inside one folder or file name. |
+| `**` | Any number of folders, as a whole segment: `**/{day:date}.json`. |
+| Anything else | Itself. `/` separates folders. |
+
+The template matches the whole path, file name included. A `date` capture matches `2026-11-08` or
+`20261108` and loads as a date, and an integer capture matches digits only, so
+`*_{export_date:date}_*.csv` finds the date in `orders_eu_20261108_v2.csv`. A text capture takes the
+shortest value the rest of the template allows, so keep a literal between two captures. `%XX`
+escapes in a captured value are undone, as for Hive folders.
+
+A file whose path doesn't match fails `plan` and names the file, unless `unmatched_paths = "skip"`;
+`plan` then counts the files it leaves out. A captured value that doesn't convert to its type always
+fails `plan`.
+
+`constant_columns` gives every row of the source the same values. A string loads as `text`, an
+integer as `int`, a float as `float` and `true` or `false` as `bool`. An unquoted TOML date
+(`2026-11-08`) loads as `date`, and a date and time as `timestamp_tz` with an offset or
+`timestamp_ntz` without. For any other type, write `{ value = "12.50", type = "decimal(10,2)" }`.
+
+Captured and typed values load the same in every destination: a boolean as `true` or `false`, an
+integer without leading zeros, a date as `2026-11-08`, and a timestamp with an offset converted to
+UTC.
+
+Captured and constant columns work like Hive partition columns. A captured date can be the
+`cursor_column` of `delete_insert`, which replaces the newest loaded value and everything after
+it; a constant can't. A column in the files with the same name is replaced. Destinations that
+read the files themselves still do: SQLLoad writes each file's values into the `COPY` or
+`read_parquet` as literals. A column can come from only one of `partition_columns`, `path_columns` and
+`constant_columns`, ignoring case.
 
 ## Files the destination reads itself
 

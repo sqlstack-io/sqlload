@@ -1,6 +1,7 @@
 //! Why the destination cannot load a files table's files exactly by reading them itself.
 
 use crate::adapters::bigquery::constants::NO_INTERNAL_STAGE_COPY as BIGQUERY_NO_INTERNAL_STAGE_COPY;
+use crate::adapters::clickhouse::constants::NO_INTERNAL_STAGE_COPY as CLICKHOUSE_NO_INTERNAL_STAGE_COPY;
 use crate::adapters::databricks::constants::NO_INTERNAL_STAGE_COPY;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_direct_problem::direct_problem;
@@ -23,6 +24,7 @@ pub fn direct_blocked(
         Warehouse::Databricks => Some(NO_INTERNAL_STAGE_COPY),
         Warehouse::BigQuery => Some(BIGQUERY_NO_INTERNAL_STAGE_COPY),
         Warehouse::Postgres => Some(POSTGRES_NO_INTERNAL_STAGE_COPY),
+        Warehouse::ClickHouse => Some(CLICKHOUSE_NO_INTERNAL_STAGE_COPY),
         _ => None,
     };
     if let Some(refused) = refused {

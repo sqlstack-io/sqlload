@@ -56,6 +56,7 @@ pub enum Warehouse {
     Databricks,
     BigQuery,
     Postgres,
+    ClickHouse,
 }
 
 impl std::fmt::Display for Warehouse {
@@ -67,6 +68,7 @@ impl std::fmt::Display for Warehouse {
             Self::Databricks => "Databricks",
             Self::BigQuery => "BigQuery",
             Self::Postgres => "Postgres",
+            Self::ClickHouse => "ClickHouse",
         })
     }
 }

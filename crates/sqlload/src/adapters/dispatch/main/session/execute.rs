@@ -1,6 +1,7 @@
 //! Run statements on a destination.
 
 use crate::adapters::bigquery::main::session::_run_statements::run_statements as run_bigquery;
+use crate::adapters::clickhouse::main::session::_run_statements::run_statements as run_clickhouse;
 use crate::adapters::databricks::main::session::_run_statements::run_statements as run_databricks;
 use crate::adapters::dispatch::_helpers::no_sql::no_sql;
 use crate::adapters::dispatch::models::Destination;
@@ -22,6 +23,7 @@ pub async fn execute(
         Destination::Databricks(databricks) => Ok(run_databricks(databricks, &statements).await?),
         Destination::BigQuery(bigquery) => Ok(run_bigquery(bigquery, &statements).await?),
         Destination::Postgres(postgres) => run_postgres(postgres, &statements).await,
+        Destination::ClickHouse(clickhouse) => Ok(run_clickhouse(clickhouse, &statements).await?),
         Destination::Files(_) => Err(no_sql()),
     }
 }

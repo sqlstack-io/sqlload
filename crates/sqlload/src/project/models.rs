@@ -5,7 +5,9 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::config::models::AuthConfig;
-use crate::files_source::models::{Compression, CsvOptions, FilesEncoding, SourceFormat};
+use crate::files_source::models::{
+    Compression, CsvOptions, FilesEncoding, SourceFormat, UnmatchedPaths,
+};
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
@@ -128,6 +130,21 @@ pub enum ConnectionConfig {
         #[serde(default)]
         storage_url: Option<String>,
     },
+    /// A ClickHouse server, reached over its HTTP interface.
+    #[serde(rename = "clickhouse")]
+    ClickHouse {
+        host: String,
+        /// 8123, or 8443 with `secure = true`, when omitted.
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default = "defaults::clickhouse_user")]
+        user: String,
+        #[serde(default)]
+        password: Option<crate::auth::models::Secret>,
+        /// HTTPS instead of HTTP.
+        #[serde(default)]
+        secure: bool,
+    },
     Postgres {
         host: String,
         #[serde(default = "defaults::postgres_port")]
@@ -187,6 +204,7 @@ impl ConnectionConfig {
             Self::Snowflake { .. } => "snowflake",
             Self::Databricks { .. } => "databricks",
             Self::BigQuery { .. } => "bigquery",
+            Self::ClickHouse { .. } => "clickhouse",
             Self::Postgres { .. } => "postgres",
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",
@@ -279,6 +297,15 @@ pub struct SourceConfig {
     /// Hive `key=value` folders loaded as typed columns (files sources).
     #[serde(default)]
     pub partition_columns: BTreeMap<String, String>,
+    /// A template over each file's key below `path` whose `{name:type}` captures load as typed columns (files sources).
+    #[serde(default)]
+    pub path_columns: Option<String>,
+    /// What a file whose key does not match `path_columns` does: fail `plan` (default) or be skipped.
+    #[serde(default)]
+    pub unmatched_paths: Option<UnmatchedPaths>,
+    /// Columns with the same value in every row, typed by their TOML values (files sources).
+    #[serde(default)]
+    pub constant_columns: BTreeMap<String, toml::Value>,
     /// For files no external stage of the warehouse can read: download them and upload them unchanged to the user stage `@~`, where the warehouse loads them itself (much slower than an external stage; files sources).
     #[serde(default)]
     pub copy_to_internal_stage: bool,
@@ -430,6 +457,30 @@ pub struct TableSettings {
     /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones; `"none"` commits the whole read once.
     #[serde(default, deserialize_with = "deserialize_optional_batch")]
     pub batch_size: Option<BatchStep>,
+    /// The table engine a created table gets (ClickHouse), with its arguments.
+    #[serde(default)]
+    pub engine: Option<String>,
+    /// The sorting key a created table gets (ClickHouse): an expression or a list of them.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub order_by: Option<Vec<String>>,
+    /// The partitioning expression a created table gets (ClickHouse).
+    #[serde(default)]
+    pub partition_by: Option<String>,
+    /// The primary key a created table gets (ClickHouse), a prefix of `order_by`.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub primary_key: Option<Vec<String>>,
+    /// Table settings a created table gets (ClickHouse), by name.
+    #[serde(default)]
+    pub table_settings: Option<BTreeMap<String, LayoutSetting>>,
+}
+
+/// A table setting's value in a ClickHouse layout.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum LayoutSetting {
+    Bool(bool),
+    Integer(i64),
+    Text(String),
 }
 
 /// One table's settings: everything a source can set, plus what only a table can.

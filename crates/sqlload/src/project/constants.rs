@@ -11,6 +11,11 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "auto_widen",
     "type_change_rebuild",
     "batch_size",
+    "engine",
+    "order_by",
+    "partition_by",
+    "primary_key",
+    "table_settings",
     #[cfg(feature = "container-tests")]
     "test_loader_route",
 ];
@@ -32,6 +37,9 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "csv",
     "destination_path",
     "partition_columns",
+    "path_columns",
+    "unmatched_paths",
+    "constant_columns",
     "copy_to_internal_stage",
     "exclude_columns",
     "skip_tables_with_columns",
@@ -84,8 +92,17 @@ pub const PROJECT_MARKER_KEYS: &[&str] = &["connections", "targets", "sources"];
 pub const TABLE_PLACEHOLDER: &str = "{table}";
 
 /// The warehouse connection kinds a target may load into.
-pub const WAREHOUSE_CONNECTION_KINDS: &[&str] =
-    &["snowflake", "databricks", "bigquery", "duckdb", "postgres"];
+pub const WAREHOUSE_CONNECTION_KINDS: &[&str] = &[
+    "snowflake",
+    "databricks",
+    "bigquery",
+    "clickhouse",
+    "duckdb",
+    "postgres",
+];
+
+/// The connection kind of a ClickHouse server, whose targets name no database above their loader schema.
+pub const CLICKHOUSE_CONNECTION_KIND: &str = "clickhouse";
 
 /// The connection kinds a target writes files into.
 pub const FILES_CONNECTION_KINDS: &[&str] = &["s3", "filesystem"];
@@ -98,6 +115,9 @@ pub const DEFAULT_MAX_FOOTER_READS: usize = 100;
 
 /// The Postgres port used when a connection sets none.
 pub const DEFAULT_POSTGRES_PORT: u16 = 5432;
+
+/// The ClickHouse user a connection that sets none signs in as.
+pub const DEFAULT_CLICKHOUSE_USER: &str = "default";
 
 /// The destination table name template used when a source sets none.
 pub const DEFAULT_TABLE_NAME: &str = "{source}__{table}";

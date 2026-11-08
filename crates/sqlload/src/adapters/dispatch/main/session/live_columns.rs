@@ -1,6 +1,7 @@
 //! A destination table's live columns.
 
 use crate::adapters::bigquery::main::session::_describe_table::describe_table as describe_bigquery;
+use crate::adapters::clickhouse::main::session::_describe_table::describe_table as describe_clickhouse;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::databricks::main::session::_describe_table::describe_table as describe_databricks;
 use crate::adapters::dispatch::_helpers::no_sql::no_sql;
@@ -25,6 +26,7 @@ pub async fn live_columns(
         Destination::Databricks(databricks) => Ok(describe_databricks(databricks, table).await?),
         Destination::BigQuery(bigquery) => Ok(describe_bigquery(bigquery, table).await?),
         Destination::Postgres(postgres) => describe_postgres(postgres, table).await,
+        Destination::ClickHouse(clickhouse) => Ok(describe_clickhouse(clickhouse, table).await?),
         Destination::Files(_) => Err(no_sql()),
     }
 }

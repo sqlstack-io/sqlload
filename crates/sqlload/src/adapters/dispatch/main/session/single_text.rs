@@ -1,6 +1,7 @@
 //! One text value from a destination query.
 
 use crate::adapters::bigquery::main::session::_query_rows::query_rows as query_bigquery;
+use crate::adapters::clickhouse::main::session::_query_rows::query_rows as query_clickhouse;
 use crate::adapters::databricks::main::session::_query_rows::query_rows;
 use crate::adapters::dispatch::_helpers::no_sql::no_sql;
 use crate::adapters::dispatch::models::Destination;
@@ -33,6 +34,12 @@ pub async fn single_text(
             .await?
             .into_iter()
             .next()
+            .flatten()),
+        Destination::ClickHouse(clickhouse) => Ok(query_clickhouse(clickhouse, &query)
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next())
             .flatten()),
         Destination::Files(_) => Err(no_sql()),
     }

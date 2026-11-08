@@ -43,6 +43,12 @@ pub async fn check_destination(destination: Destination) -> Result<String, Loade
                 .unwrap_or_default();
             Ok(format!("{answer}, jobs in {location}"))
         }
+        Destination::ClickHouse(clickhouse) => {
+            let query = "SELECT currentUser() || ' on ClickHouse ' || version() || ', time zone ' || timezone()";
+            let destination = Destination::ClickHouse(clickhouse);
+            let answer = single_text(&destination, query.to_owned()).await?;
+            Ok(answer.unwrap_or_default())
+        }
         Destination::Snowflake(snowflake) => {
             let query = "SELECT CURRENT_USER() || ' as ' || CURRENT_ROLE() || ', warehouse ' || COALESCE(CURRENT_WAREHOUSE(), '-')";
             let destination = Destination::Snowflake(snowflake.clone());

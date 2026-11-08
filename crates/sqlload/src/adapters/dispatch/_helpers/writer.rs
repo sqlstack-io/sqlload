@@ -16,6 +16,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.writes_directly(),
             Writer::BigQuery(writer) => writer.writes_directly(),
             Writer::Postgres(writer) => writer.writes_directly(),
+            Writer::ClickHouse(writer) => writer.writes_directly(),
             Writer::Files(writer) => writer.writes_directly(),
         }
     }
@@ -32,6 +33,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.write_batch(target, batch).await,
             Writer::BigQuery(writer) => writer.write_batch(target, batch).await,
             Writer::Postgres(writer) => writer.write_batch(target, batch).await,
+            Writer::ClickHouse(writer) => writer.write_batch(target, batch).await,
             Writer::Files(writer) => writer.write_batch(target, batch).await,
         }
     }
@@ -44,6 +46,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.staged_bytes(),
             Writer::BigQuery(writer) => writer.staged_bytes(),
             Writer::Postgres(writer) => writer.staged_bytes(),
+            Writer::ClickHouse(writer) => writer.staged_bytes(),
             Writer::Files(writer) => writer.staged_bytes(),
         }
     }
@@ -56,6 +59,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.finish_files(target).await,
             Writer::BigQuery(writer) => writer.finish_files(target).await,
             Writer::Postgres(writer) => writer.finish_files(target).await,
+            Writer::ClickHouse(writer) => writer.finish_files(target).await,
             Writer::Files(writer) => writer.finish_files(target).await,
         }
     }
@@ -68,6 +72,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.load_batch(target).await,
             Writer::BigQuery(writer) => writer.load_batch(target).await,
             Writer::Postgres(writer) => writer.load_batch(target).await,
+            Writer::ClickHouse(writer) => writer.load_batch(target).await,
             Writer::Files(writer) => writer.load_batch(target).await,
         }
     }
@@ -80,6 +85,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.next_batch(),
             Writer::BigQuery(writer) => writer.next_batch(),
             Writer::Postgres(writer) => writer.next_batch(),
+            Writer::ClickHouse(writer) => writer.next_batch(),
             Writer::Files(writer) => writer.next_batch(),
         }
     }
@@ -92,6 +98,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.settle_rows().await,
             Writer::BigQuery(writer) => writer.settle_rows().await,
             Writer::Postgres(writer) => writer.settle_rows().await,
+            Writer::ClickHouse(writer) => writer.settle_rows().await,
             Writer::Files(writer) => writer.settle_rows().await,
         }
     }
@@ -104,6 +111,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.reopen_rows(),
             Writer::BigQuery(writer) => writer.reopen_rows(),
             Writer::Postgres(writer) => writer.reopen_rows(),
+            Writer::ClickHouse(writer) => writer.reopen_rows(),
             Writer::Files(writer) => writer.reopen_rows(),
         }
     }
@@ -116,6 +124,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.rollback_batch().await,
             Writer::BigQuery(writer) => writer.rollback_batch().await,
             Writer::Postgres(writer) => writer.rollback_batch().await,
+            Writer::ClickHouse(writer) => writer.rollback_batch().await,
             Writer::Files(writer) => writer.rollback_batch().await,
         }
     }
@@ -128,6 +137,7 @@ impl TableWriter for Writer {
             Writer::Databricks(writer) => writer.remove_batch_files(target).await,
             Writer::BigQuery(writer) => writer.remove_batch_files(target).await,
             Writer::Postgres(writer) => writer.remove_batch_files(target).await,
+            Writer::ClickHouse(writer) => writer.remove_batch_files(target).await,
             Writer::Files(writer) => writer.remove_batch_files(target).await,
         }
     }

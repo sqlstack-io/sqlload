@@ -1,4 +1,5 @@
 use crate::adapters::bigquery::models::{BigQueryDestination, BigQueryWriter};
+use crate::adapters::clickhouse::models::{ClickHouseDestination, ClickHouseWriter};
 use crate::adapters::databricks::models::{DatabricksDestination, DatabricksWriter};
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::models::{DuckDbDestination, DuckDbWriter};
@@ -15,6 +16,7 @@ pub enum Destination {
     Databricks(Box<DatabricksDestination>),
     BigQuery(Box<BigQueryDestination>),
     Postgres(Box<PostgresDestination>),
+    ClickHouse(Box<ClickHouseDestination>),
     /// Parquet files in an s3 or filesystem connection.
     Files(Box<FilesDestination>),
 }
@@ -28,5 +30,6 @@ pub enum Writer {
     Databricks(Box<DatabricksWriter>),
     BigQuery(Box<BigQueryWriter>),
     Postgres(Box<PostgresWriter>),
+    ClickHouse(Box<ClickHouseWriter>),
     Files(ParquetFiles),
 }
