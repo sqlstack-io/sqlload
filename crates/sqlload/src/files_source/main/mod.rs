@@ -6,6 +6,7 @@ pub mod constant_columns;
 pub mod discover_files;
 pub mod footer_columns;
 pub mod key_columns;
+pub mod normal_value;
 pub mod path_template;
 pub mod read_files;
 pub mod read_footers;
