@@ -4639,7 +4639,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "aes",
  "arrow-array",
@@ -4703,7 +4703,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-benches"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -4715,7 +4715,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-python"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "arrow-array",
  "arrow-pyarrow",
@@ -4728,7 +4728,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-testkit"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "arrow-array",
  "arrow-cast",
