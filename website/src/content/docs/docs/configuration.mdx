@@ -86,7 +86,7 @@ Credentials come from `AWS_*` environment variables, web identity, or the instan
 role. AWS profiles and SSO aren't read.
 
 SQLLoad removes files in bulk, up to 1,000 per request. For an S3-compatible store without bulk
-delete, set `AWS_DISABLE_BULK_DELETE=true` and it deletes them one request each.
+delete, set `AWS_DISABLE_BULK_DELETE=true`: SQLLoad then deletes each file with its own request.
 
 ### `filesystem`
 
