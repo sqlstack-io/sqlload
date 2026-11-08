@@ -15,6 +15,7 @@ use crate::loader::_helpers::publish::staged_columns;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
 use crate::loader::_helpers::run_log::run_entry;
+use crate::loader::_helpers::table_plan::append_problem;
 use crate::loader::_helpers::table_plan::replan_columns;
 use crate::loader::_helpers::table_plan::schema_statements;
 use crate::loader::constants::EMPTY_REPLACE_PROBLEM;
@@ -875,6 +876,17 @@ async fn replan(
         load.options,
     )
     .await?;
+    let cursor_type = columns.spec.cursor.as_ref().and_then(|cursor| {
+        columns
+            .schema
+            .write_columns
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
+            .map(|column| &column.column_type)
+    });
+    if let Some(problem) = append_problem(&columns.spec, cursor_type) {
+        return Err(LoaderError::Invalid(problem));
+    }
     Ok(TablePlan {
         spec: columns.spec,
         read_columns: columns.read_columns,

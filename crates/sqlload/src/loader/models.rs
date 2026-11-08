@@ -53,7 +53,7 @@ pub struct CursorSpec {
     pub column: String,
     pub start: Option<String>,
     pub lookback: Option<Duration>,
-    /// `>=` the destination's maximum (true) or `>` it.
+    /// `append_cursor_inclusive`: `append` reads from the destination's maximum itself (true) rather than after it; a first run reads from `cursor_start` inclusively either way.
     pub inclusive: bool,
 }
 
