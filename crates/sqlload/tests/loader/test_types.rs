@@ -704,3 +704,17 @@ pub(crate) struct CdcTlsTestCase {
     pub(crate) settings: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// A ClickHouse load stopped at every statement in turn, its source switching between two states.
+pub(crate) struct StoppedLoadTestCase {
+    pub(crate) description: &'static str,
+    /// The destination table, whose statements stop.
+    pub(crate) table: &'static str,
+    /// The options of every load after the first.
+    pub(crate) options: sqlload::loader::models::PlanOptions,
+    /// The table's state as one text.
+    pub(crate) query: &'static str,
+    /// Each source state: the SQL setting it up, and the query's text once it is loaded.
+    pub(crate) states: [(&'static str, &'static str); 2],
+    pub(crate) expected_minimum_stops: usize,
+}

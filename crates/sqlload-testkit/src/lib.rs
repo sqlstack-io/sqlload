@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod clickhouse;
 pub mod configs;
 pub mod fake_bigquery;
 pub mod fake_databricks;

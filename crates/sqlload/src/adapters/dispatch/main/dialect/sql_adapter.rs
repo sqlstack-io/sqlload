@@ -1,6 +1,7 @@
 //! A warehouse's SQL adapter.
 
 use crate::adapters::bigquery::models::BigQuerySql;
+use crate::adapters::clickhouse::models::ClickHouseSql;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::databricks::models::DatabricksSql;
 use crate::adapters::duckdb::models::DuckDbSql;
@@ -16,5 +17,6 @@ pub fn sql_adapter(warehouse: Warehouse) -> &'static dyn SqlAdapter {
         Warehouse::Parquet => &ParquetFiles,
         Warehouse::Databricks => &DatabricksSql,
         Warehouse::BigQuery => &BigQuerySql,
+        Warehouse::ClickHouse => &ClickHouseSql,
     }
 }

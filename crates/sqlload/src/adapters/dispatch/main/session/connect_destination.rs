@@ -1,6 +1,7 @@
 //! Open the destination one target uses.
 
 use crate::adapters::bigquery::main::session::_connect_bigquery::connect_bigquery;
+use crate::adapters::clickhouse::main::session::_connect_clickhouse::connect_clickhouse;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::databricks::main::session::_connect_databricks::connect_databricks;
 use crate::adapters::dispatch::models::Destination;
@@ -41,6 +42,9 @@ pub async fn connect_destination(
         Some(connection @ ConnectionConfig::BigQuery { .. }) => Destination::BigQuery(Box::new(
             connect_bigquery(connection, target.database.as_deref())?,
         )),
+        Some(connection @ ConnectionConfig::ClickHouse { .. }) => {
+            Destination::ClickHouse(Box::new(connect_clickhouse(connection)?))
+        }
         Some(ConnectionConfig::S3 {
             bucket,
             region,

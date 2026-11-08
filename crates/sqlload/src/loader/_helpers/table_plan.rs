@@ -622,7 +622,7 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
             let adapter = sql_adapter(warehouse);
             let mut statements = vec![
                 adapter.render_create_schema(&spec.destination),
-                adapter.render_create_table(&spec.destination, &table.schema.write_columns),
+                adapter.render_create_loaded_table(spec, &table.schema.write_columns),
             ];
             statements.extend(adapter.render_table_comment(&spec.destination, &spec.description));
             Some(statements)

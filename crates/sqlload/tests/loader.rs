@@ -32,6 +32,8 @@ mod test_postgres_cdc_files;
 mod test_postgres_reader;
 #[path = "loader/test_postgres_tls.rs"]
 mod test_postgres_tls;
+#[path = "loader/test_postgres_to_clickhouse.rs"]
+mod test_postgres_to_clickhouse;
 #[path = "loader/test_postgres_to_duckdb.rs"]
 mod test_postgres_to_duckdb;
 #[path = "loader/test_postgres_to_files.rs"]

@@ -545,6 +545,69 @@ next load drops what a failed run left after a day.
 values (arrays and records) do not load yet. Postgres change data capture into BigQuery is not
 available.
 
+### How rows reach ClickHouse (preview)
+
+A ClickHouse target loads into one ClickHouse server, version 25.3 or later, over its HTTP
+interface:
+
+```toml
+[connections.serving]
+kind = "clickhouse"
+host = "clickhouse.internal"
+password = "${ENV:CLICKHOUSE_PASSWORD}"
+# port = 8123                 # 8443 with secure = true
+# user = "default"
+# secure = true               # HTTPS
+
+[targets.serving]
+connection = "serving"
+loader_schema = "marts"       # a ClickHouse database
+```
+
+A schema is a ClickHouse database, so a ClickHouse target takes no `database`. Tables are created
+with the layout their settings give, using SQLBuild's ClickHouse names, per source or per table:
+
+```toml
+[sources.warehouse.tables."marts.orders"]
+partition_by = "toYYYYMM(order_date)"
+order_by = ["customer_id", "order_date"]   # default: the unique_key, else unsorted
+# engine = "ReplacingMergeTree(_sqlload_loaded_at)"   # default: MergeTree
+# primary_key = ["customer_id"]
+# table_settings = { index_granularity = 4096 }
+```
+
+Every loaded column is `Nullable`, so a table with a key gets `allow_nullable_key = 1` unless
+`table_settings` sets it. Only engines of the `MergeTree` family on a single server are taken.
+`plan` shows each column's type: `timestamp_tz` is `DateTime64(6, 'UTC')`, `timestamp_ntz`
+`DateTime64(6)`, `date` `Date32` (1900 to 2299; a date outside them fails the load), decimals keep
+their precision and scale, and JSON and times are text. A Python table can pin `native("JSON")` or
+`native("LowCardinality(String)")` on a text column to use those types. An existing table's narrower
+types (`Int32`, `UInt16`, `Float32`, `Date`, `DateTime`, `DateTime64(3)`) would wrap or cut wider
+values without an error, so `plan` reports them as incompatible rather than load into them.
+
+Layout settings apply when SQLLoad creates a table, and `--reload` keeps the table's layout: to lay
+an existing table out again, drop it and load. ClickHouse cannot change the type of a column in the
+sorting or partition key, so a key column whose source type widens fails the load.
+
+Rows go as Arrow over HTTP into a staging table (a build table for `replace`) and reach the table
+only when the load publishes them. ClickHouse has no transactions, so each publish is one swap,
+atomic in an `Atomic` database (ClickHouse's default). `replace` and `--reload` swap the build
+table in with `EXCHANGE TABLES`. In a database that cannot exchange tables (an `Ordinary` one) they
+swap with one `RENAME TABLE`, which ClickHouse does not make atomic: readers can briefly find no
+table, and a server failing mid-rename can leave the old table under the build table's name.
+`append` attaches the new rows' partitions. `merge` and `delete_insert` rewrite whole partitions: one partition is rebuilt beside
+the table and swapped in with `REPLACE PARTITION`, and several are rebuilt in a copy that
+hard-links the table's other parts, then exchanged in at once. In an `Atomic` database, a load
+killed at any point leaves the table as it was or fully published, and the next run converges. `merge` matches rows on `unique_key` exactly, so readers
+need no `FINAL`. It replaces whole rows, so a column the source no longer has is `NULL` on the rows
+it updates. Rows arrive by swapping parts, never by `INSERT`, so materialized views on a loaded
+table see none of them: build them from the table instead.
+
+A rewrite costs as much as the partitions it touches, and an unpartitioned table is one partition:
+partition large tables by the column new rows arrive on. Load each table from one `sqlload` process
+at a time. Clusters, replicated tables and Postgres change data capture into ClickHouse are not
+supported yet.
+
 ### How files reach DuckDB
 
 Parquet files in S3 or a local folder load into DuckDB directly: DuckDB reads them with

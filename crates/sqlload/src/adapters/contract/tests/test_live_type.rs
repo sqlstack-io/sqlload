@@ -144,6 +144,63 @@ fn given_a_reported_column_type_when_reading_it_back_then_it_maps_to_the_portabl
             warehouse: Warehouse::BigQuery,
             expected_type: ColumnType::Native("RECORD".to_owned()),
         },
+        LiveTypeTestCase {
+            description: "ClickHouse DateTime64 with a zone is timestamp_tz, under its Nullable wrapper",
+            live: live("Nullable(DateTime64(6, 'UTC'))", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::TimestampTz,
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse DateTime64 without a zone is timestamp_ntz",
+            live: live("DateTime64(6)", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::TimestampNtz,
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse Decimal64(4) is decimal(18,4)",
+            live: live("Nullable(Decimal64(4))", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Decimal {
+                precision: 18,
+                scale: 4,
+            },
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse LowCardinality(Nullable(String)) is text",
+            live: live("LowCardinality(Nullable(String))", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Text,
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse Int32 is narrower than int, so it stays native rather than wrap a wider value",
+            live: live("Nullable(Int32)", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Native("Nullable(Int32)".to_owned()),
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse UInt16 holds no negative smallint, so it stays native",
+            live: live("UInt16", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Native("UInt16".to_owned()),
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse Date holds only 1970 on, so it stays native rather than be a date",
+            live: live("Nullable(Date)", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Native("Nullable(Date)".to_owned()),
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse DateTime64(3) drops microseconds, so it stays native",
+            live: live("DateTime64(3, 'UTC')", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Native("DateTime64(3, 'UTC')".to_owned()),
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse Array passes through as native",
+            live: live("Array(Int64)", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Native("Array(Int64)".to_owned()),
+        },
     ];
     for test_case in test_cases {
         assert_eq!(

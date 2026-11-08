@@ -105,6 +105,30 @@ pub struct TableSpec {
     pub python: Option<PythonTable>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
+    /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).
+    pub layout: TableLayout,
+}
+
+/// A created table's layout, with SQLBuild's ClickHouse field names; every field unset by default.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TableLayout {
+    /// The table engine with its arguments.
+    pub engine: Option<String>,
+    /// Sorting key expressions.
+    pub order_by: Option<Vec<String>>,
+    /// The partitioning expression.
+    pub partition_by: Option<String>,
+    /// Primary key expressions, a prefix of the sorting key.
+    pub primary_key: Option<Vec<String>>,
+    /// Table settings by name.
+    pub table_settings: std::collections::BTreeMap<String, crate::project::models::LayoutSetting>,
+}
+
+impl TableLayout {
+    /// Whether no layout field is set.
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 /// A `postgres_cdc` table's stream: where it comes from and how its changes are applied.
