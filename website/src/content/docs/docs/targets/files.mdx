@@ -62,11 +62,13 @@ progress, and the run log of `state = "logged"` tables. Run one load at a time p
 ## Replacing a table
 
 In a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
-table folder, carry over the table's `_sqlload/` run log, then swap the two folders in one rename
+table folder, carry over every file of the table folder that the load doesn't replace (the
+`_sqlload/runs/` log, and any file you keep beside the data), then swap the two folders in one rename
 (`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
 reader sees the old files or the new ones, never both. Where the filesystem can't swap folders in one
 rename, SQLLoad moves the old folder aside first and warns, which leaves a moment with no folder. A
-hidden folder left by a stopped load is deleted by the next load.
+hidden folder left by a stopped or failed load is deleted by the next load. A table at the root of the
+folder connection has no folder beside it to swap, so it is replaced as in S3.
 
 In S3, `replace` writes the new files first, then deletes the older ones, so a reader in between sees
 both. `delete_insert` works this way in both stores, as the plan's `note` says.
@@ -83,9 +85,13 @@ csv = { delimiter = ",", header = true, quote = '"', null_value = "" }
 single_file = true
 ```
 
-Files are named `part-<load>-<n>.csv`, with `.gz` or `.zst` added when compressed. With
+Files are named `part-<load id>.<commit>-<n>.csv`, with `.gz` or `.zst` added when compressed. With
 `single_file = true` each table, or each partition, is one file named after the table folder, such
-as `orders/orders.csv.gz`; it is rewritten whole on each load, and `plan` commits it in one piece.
+as `orders/orders.csv.gz`. It is held in memory and written whole at the end of the load, which
+commits in one piece; a load that would hold more than 2 GiB fails instead. Outside the local
+`replace` swap, the file is overwritten in place, so a load that fails while writing several
+partitions can leave some partitions new and others old until it is rerun. A table whose columns
+grow partway through a load (a Python source adding a column) can't use `single_file`.
 
 Columns are written in the table's order, the loader's `_sqlload_load_id` and `_sqlload_loaded_at`
 last. Values are rendered the same way on every load:
@@ -99,7 +105,7 @@ last. Values are rendered the same way on every load:
 | `bool` | `true`, `false` |
 | `date` | `2026-11-08` |
 | `time` | `05:00:00.123456` |
-| `timestamp_tz` | In UTC: `2026-11-08T05:00:00.123456Z` |
+| `timestamp_tz` | In UTC: `2026-11-08T05:00:00.123456Z` (years outside 0 to 9999 as `+10000-…`) |
 | `timestamp_ntz` | `2026-11-08T05:00:00.123456` |
 | `json` | Compact JSON text: no whitespace outside strings, keys in their order |
 | `binary` | Lowercase hex |

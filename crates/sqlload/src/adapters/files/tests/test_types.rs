@@ -175,6 +175,8 @@ pub(crate) struct CsvRenderTestCase {
 pub(crate) struct CsvCompressionTestCase {
     pub(crate) description: &'static str,
     pub(crate) compression: OutputCompression,
+    /// Reads the file back as plain text.
+    pub(crate) decode: fn(&[u8]) -> Result<Vec<u8>, String>,
     /// Rows of text written, in batches of 10,000.
     pub(crate) rows: usize,
     /// The compressed file's first bytes: its format's magic number, or the header for plain text.
@@ -191,4 +193,12 @@ pub(crate) struct SwapFolderTestCase {
     pub(crate) staged: &'static [&'static str],
     /// Files in the table folder after the swap.
     pub(crate) expected_live: &'static [&'static str],
+}
+
+pub(crate) struct RemoveStagedTestCase {
+    pub(crate) description: &'static str,
+    /// Files below the table's parent folder before the cleanup.
+    pub(crate) before: &'static [&'static str],
+    /// Files below the parent folder after it.
+    pub(crate) expected_after: &'static [&'static str],
 }

@@ -34,8 +34,17 @@ pub const SECONDS_PER_DAY: i64 = 86_400;
 /// The folder below a table's folder holding one marker per load that has not finished.
 pub const PENDING_FOLDER: &str = "_sqlload/pending/";
 
+/// The most a `single_file` commit holds in memory across its open files (2 GiB); each file is stored in one put at the commit, well under S3's 5 GiB limit for one put.
+pub const SINGLE_FILE_MAX_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
 /// Marks the hidden folder a filesystem `replace` stages the table in, beside the table folder: `.<table folder>.sqlload-<load id>`.
 pub const STAGED_FOLDER_MARK: &str = ".sqlload-";
+
+/// The length of a load id, a hyphenated UUID, as staging folder names end with it.
+pub const LOAD_ID_LENGTH: usize = 36;
+
+/// Added to a staging folder's name for the old table while a filesystem without a one-rename swap moves it aside.
+pub const MOVED_ASIDE_SUFFIX: &str = "-old";
 
 /// The first line of a pending marker while the load writes its files.
 pub const PENDING_WRITING: &str = "writing";

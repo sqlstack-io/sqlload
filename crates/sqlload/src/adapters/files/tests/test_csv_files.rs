@@ -1,21 +1,17 @@
-use std::collections::HashMap;
-use std::io::Read;
 use std::sync::Arc;
 
 use arrow_array::{
     ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-    Int64Array, RecordBatch, StringArray, Time64MicrosecondArray, TimestampMicrosecondArray,
+    Int64Array, RecordBatch, StringArray, Time64MicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Schema};
-use flate2::read::GzDecoder;
 
-use crate::adapters::files::tests::helpers::csv_file;
+use crate::adapters::files::tests::helpers::{
+    column, csv_file, csv_text, gunzip, instants, json_column, plain_bytes, tab_separated, unzstd,
+};
 use crate::adapters::files::tests::test_types::{CsvCompressionTestCase, CsvRenderTestCase};
-use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::project::models::{CsvOutput, FilesFormat, OutputCompression, OutputEncoding};
 
-/// 2026-11-04 00:00:00.000001 UTC, in microseconds.
-const NOV_4_PLUS_1_US: i64 = 1_793_750_400_000_001;
 /// 2026-11-04 as days since 1970-01-01.
 const NOV_4_DAYS: i32 = 20_761;
 /// 01:02:03.000001 in microseconds.
@@ -27,63 +23,6 @@ const ZSTD_MAGIC: &[u8] = &[0x28, 0xb5, 0x2f, 0xfd];
 /// Text padding each row of the compression test to about 100 bytes.
 const PADDING: &str =
     "................................................................................";
-
-fn column(name: &str, array: ArrayRef) -> (Field, ArrayRef) {
-    (Field::new(name, array.data_type().clone(), true), array)
-}
-
-fn json_column(name: &str, values: Vec<Option<&str>>) -> (Field, ArrayRef) {
-    let field = Field::new(name, DataType::Utf8, true).with_metadata(HashMap::from([(
-        ARROW_TYPE_METADATA_KEY.to_owned(),
-        "json".to_owned(),
-    )]));
-    (field, Arc::new(StringArray::from(values)))
-}
-
-fn instants(zone: Option<&str>) -> ArrayRef {
-    Arc::new(
-        TimestampMicrosecondArray::from(vec![Some(NOV_4_PLUS_1_US), None])
-            .with_timezone_opt(zone.map(str::to_owned)),
-    )
-}
-
-fn tab_separated() -> CsvOutput {
-    CsvOutput {
-        delimiter: '\t',
-        header: false,
-        quote: '"',
-        null_value: "NULL".to_owned(),
-    }
-}
-
-fn csv_text(test_case: &CsvRenderTestCase) -> Result<String, String> {
-    let (fields, arrays): (Vec<Field>, Vec<ArrayRef>) = test_case.columns.iter().cloned().unzip();
-    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)
-        .map_err(|error| error.to_string())?;
-    let encoding = OutputEncoding {
-        format: FilesFormat::Csv,
-        csv: test_case.csv.clone(),
-        ..OutputEncoding::default()
-    };
-    let bytes = csv_file(&[batch], &encoding)?;
-    String::from_utf8(bytes).map_err(|error| error.to_string())
-}
-
-fn decompressed(compression: OutputCompression, bytes: &[u8]) -> Result<Vec<u8>, String> {
-    let mut text = Vec::new();
-    match compression {
-        OutputCompression::None => text.extend_from_slice(bytes),
-        OutputCompression::Gzip => {
-            GzDecoder::new(bytes)
-                .read_to_end(&mut text)
-                .map_err(|error| error.to_string())?;
-        }
-        OutputCompression::Zstd => {
-            text = zstd::decode_all(bytes).map_err(|error| error.to_string())?;
-        }
-    }
-    Ok(text)
-}
 
 #[test]
 fn given_typed_columns_when_writing_csv_then_each_value_renders_as_documented() {
@@ -234,24 +173,28 @@ fn given_a_compression_when_writing_csv_then_the_file_decompresses_to_the_plain_
         CsvCompressionTestCase {
             description: "uncompressed",
             compression: OutputCompression::None,
+            decode: plain_bytes,
             rows: 20_000,
             expected_magic: b"line\n",
         },
         CsvCompressionTestCase {
             description: "gzip",
             compression: OutputCompression::Gzip,
+            decode: gunzip,
             rows: 20_000,
             expected_magic: GZIP_MAGIC,
         },
         CsvCompressionTestCase {
             description: "zstd within one frame",
             compression: OutputCompression::Zstd,
+            decode: unzstd,
             rows: 20_000,
             expected_magic: ZSTD_MAGIC,
         },
         CsvCompressionTestCase {
             description: "zstd over several frames keeps the text after the last full frame",
             compression: OutputCompression::Zstd,
+            decode: unzstd,
             rows: 95_000,
             expected_magic: ZSTD_MAGIC,
         },
@@ -284,7 +227,7 @@ fn given_a_compression_when_writing_csv_then_the_file_decompresses_to_the_plain_
             test_case.description
         );
         assert_eq!(
-            decompressed(test_case.compression, &bytes)?,
+            (test_case.decode)(&bytes)?,
             expected_text.into_bytes(),
             "{}",
             test_case.description

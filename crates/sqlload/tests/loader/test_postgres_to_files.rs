@@ -502,6 +502,7 @@ fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_c
 -> Result<(), String> {
     let test_cases = [
         CsvTargetTestCase {
+            description: "gzip CSV replace in a directory swaps the new table in",
             scenario: FilesTargetScenarioTestCase {
                 description: "gzip CSV replace in a directory swaps the new table in",
                 store: local_store,
@@ -515,6 +516,7 @@ fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_c
             expected_keys: &["part-*.csv.gz"],
         },
         CsvTargetTestCase {
+            description: "zstd CSV delete_insert by day in S3 rewrites only the partitions it touches",
             scenario: FilesTargetScenarioTestCase {
                 description: "zstd CSV delete_insert by day in S3 rewrites only the partitions it touches",
                 store: seaweedfs_store,
@@ -531,6 +533,7 @@ fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_c
             ],
         },
         CsvTargetTestCase {
+            description: "a single file per partition keeps its name and is overwritten in S3",
             scenario: FilesTargetScenarioTestCase {
                 description: "a single file per partition keeps its name and is overwritten in S3",
                 store: seaweedfs_store,
@@ -544,6 +547,7 @@ fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_c
             expected_keys: &["day=2026-11-03/orders.csv", "day=2026-11-04/orders.csv"],
         },
         CsvTargetTestCase {
+            description: "a single-file replace in a directory is one file named after the table",
             scenario: FilesTargetScenarioTestCase {
                 description: "a single-file replace in a directory is one file named after the table",
                 store: local_store,
@@ -557,6 +561,7 @@ fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_c
             expected_keys: &["orders.csv.gz"],
         },
         CsvTargetTestCase {
+            description: "an append by a cursor needs footers, which CSV has not",
             scenario: FilesTargetScenarioTestCase {
                 description: "an append by a cursor needs footers, which CSV has not",
                 store: local_store,
@@ -598,13 +603,9 @@ fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_c
             assert_eq!(
                 summary, test_case.scenario.expected_files,
                 "{}",
-                test_case.scenario.description
+                test_case.description
             );
-            assert_eq!(
-                keys, test_case.expected_keys,
-                "{}",
-                test_case.scenario.description
-            );
+            assert_eq!(keys, test_case.expected_keys, "{}", test_case.description);
         }
         Ok(())
     })

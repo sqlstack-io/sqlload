@@ -26,8 +26,6 @@ use crate::adapters::files::main::close_writer::close_writer;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::open_writer::open_writer;
 use crate::adapters::files::main::partitions_finished::partitions_finished;
-use crate::adapters::files::main::remove_staged::remove_staged;
-use crate::adapters::files::main::staged_folder::staged_folder;
 use crate::adapters::files::main::swap_folder::swap_folder;
 use crate::adapters::files::main::write_rows::write_rows;
 use crate::adapters::files::models::FilesWriter;
@@ -208,10 +206,9 @@ impl Publisher {
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
                 let live = open_folder(&output.path.folder)?;
-                remove_staged(&output.path.folder).await;
                 let replaced = files_to_replace(&live, &table, output).await?;
                 let (folder, replaced, swap) =
-                    match staged_folder(&output.path.folder, &table.mode, &load_id) {
+                    match output.path.staged_folder(&table.mode, &load_id) {
                         Some(staged) => (
                             open_folder(&staged)?,
                             ReplacedFiles::default(),
@@ -1162,6 +1159,13 @@ impl Publisher {
         let Some(mut writer) = sink.writer.take() else {
             return Ok(());
         };
+        if writer.encoding.single_file && !(writer.open.is_empty() && writer.written.is_empty()) {
+            sink.writer = Some(writer);
+            return Err(LoaderError::Invalid(format!(
+                "{}: new columns appeared partway through the load, and single_file writes each file once, with one header; drop single_file, or have the source return every column from its first rows",
+                self.table.spec.destination.table
+            )));
+        }
         let cursor_column = self
             .table
             .spec
@@ -1221,13 +1225,12 @@ impl Publisher {
         Ok(())
     }
 
-    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored; a table staged beside its folder is deleted whole, and the next load deletes it if this fails.
+    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored; a table staged beside its folder is deleted whole by the next load. Outside such a folder, `single_file` names are the table's own, so files already put stay: deleting them would delete the table's data.
     pub(crate) async fn abandon_files(&mut self) {
         let Some(sink) = self.files.as_mut() else {
             return;
         };
-        if let Some(swap) = &sink.swap {
-            remove_staged(&swap.live.location).await;
+        if sink.swap.is_none() && sink.output.encoding.single_file {
             return;
         }
         let Some(writer) = sink.writer.take() else {

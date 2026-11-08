@@ -6,6 +6,7 @@ use chrono::NaiveDate;
 use parquet::arrow::ArrowWriter;
 
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::files::_helpers::layout::swap::{local_folder, staged_stem};
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::project::models::{OutputEncoding, WriteStrategy};
@@ -78,6 +79,18 @@ impl std::fmt::Display for PartitionFolder {
 pub struct TablePath {
     pub folder: Location,
     pub partition: Option<PartitionFolder>,
+}
+
+impl TablePath {
+    /// The hidden folder beside the table folder that a `replace` or `--reload` of a local directory writes the table into, to swap it in at commit: `.<table folder>.sqlload-<load id>/`; `None` for other write modes, other stores and a table at the directory's root.
+    pub fn staged_folder(&self, mode: &WriteMode, load_id: &str) -> Option<Location> {
+        let rewrites = matches!(mode, WriteMode::Replace | WriteMode::Recreate);
+        let (_, parent, name) = local_folder(&self.folder).filter(|_| rewrites)?;
+        Some(Location {
+            store: self.folder.store.clone(),
+            prefix: format!("{parent}{}{load_id}/", staged_stem(name)),
+        })
+    }
 }
 
 /// What a table's path template is filled with.

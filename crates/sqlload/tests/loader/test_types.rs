@@ -219,6 +219,7 @@ pub(crate) struct WrittenRun<'a> {
 
 /// Postgres into a files target, then those files through a files source into DuckDB, loaded twice.
 pub(crate) struct CsvTargetTestCase {
+    pub(crate) description: &'static str,
     pub(crate) scenario: FilesTargetScenarioTestCase,
     /// The data files left in the table folder, sorted, with each `part-<load>-<n>` name as `part-*`.
     pub(crate) expected_keys: &'static [&'static str],

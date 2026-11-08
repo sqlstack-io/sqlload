@@ -8,7 +8,7 @@ use crate::adapters::files::_helpers::write::data_files::{
 use crate::adapters::files::_helpers::write::spill::spill_order;
 use crate::adapters::files::_helpers::write::split::partition_rows;
 use crate::adapters::files::constants::{
-    FILE_MAX_BYTES, FILE_MAX_ROWS, OPEN_FILES_MAX, OPEN_FILES_MAX_BYTES,
+    FILE_MAX_BYTES, FILE_MAX_ROWS, OPEN_FILES_MAX, OPEN_FILES_MAX_BYTES, SINGLE_FILE_MAX_BYTES,
 };
 use crate::adapters::files::errors::FilesDestinationError;
 use crate::adapters::files::models::FilesWriter;
@@ -34,21 +34,27 @@ pub async fn write_rows(
     spill(writer, OPEN_FILES_MAX).await
 }
 
-/// Store the largest open files until at most `max_files` stay open, holding at most the memory cap; with `single_file` a file is never stored early, so more open files than the cap fail instead.
+/// Store the largest open files until at most `max_files` stay open, holding at most the memory cap; with `single_file` a file is never stored early, so more open files than the cap, or more than `SINGLE_FILE_MAX_BYTES` held, fail instead.
 async fn spill(
     writer: &mut FilesWriter,
     max_files: usize,
 ) -> Result<&mut FilesWriter, FilesDestinationError> {
     if writer.encoding.single_file {
-        return match writer.open.len() > max_files {
-            true => Err(FilesDestinationError::Write {
-                key: writer.folder.location.to_string(),
-                reason: format!(
-                    "single_file keeps one file open per partition, and this commit writes more than {OPEN_FILES_MAX} partitions; load fewer partitions at once (--start-cursor/--end-cursor) or drop single_file"
-                ),
-            }),
-            false => Ok(writer),
+        let held: usize = writer.open.values().map(open_bytes).sum();
+        let reason = match (writer.open.len() > max_files, held > SINGLE_FILE_MAX_BYTES) {
+            (true, _) => format!(
+                "single_file keeps one file open per partition, and this commit writes more than {OPEN_FILES_MAX} partitions; load fewer partitions at once (--start-cursor/--end-cursor) or drop single_file"
+            ),
+            (false, true) => format!(
+                "single_file holds each file in memory until the load commits, and this load passed {} GiB; compress it, partition it, or drop single_file",
+                SINGLE_FILE_MAX_BYTES / (1024 * 1024 * 1024)
+            ),
+            (false, false) => return Ok(writer),
         };
+        return Err(FilesDestinationError::Write {
+            key: writer.folder.location.to_string(),
+            reason,
+        });
     }
     let sizes: Vec<(String, usize)> = writer
         .open

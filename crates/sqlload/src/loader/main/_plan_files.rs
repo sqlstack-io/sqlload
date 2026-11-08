@@ -74,7 +74,7 @@ pub(in crate::loader) async fn plan_files_table(
         None => (None, WriteMode::Append, None),
     };
     let mode = captured_mode(spec, mode);
-    let notes = write_notes(&mode, &path.folder.store);
+    let notes = write_notes(&mode, &path.folder);
     let commits = commit_rule(&CommitRequest {
         spec,
         window: read.as_ref(),

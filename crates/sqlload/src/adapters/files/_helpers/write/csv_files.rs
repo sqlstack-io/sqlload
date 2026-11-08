@@ -38,9 +38,14 @@ pub(crate) fn csv_rows(batch: &RecordBatch, csv: &CsvOutput) -> Result<Vec<u8>, 
         .map(|(array, field)| column_text(array, field))
         .collect::<Result<_, String>>()?;
     let lines: String = (0..batch.num_rows())
-        .map(|row| csv_line(columns.iter().map(|column| &column[row]), csv))
+        .map(|row| row_line(&columns, row, csv))
         .collect();
     Ok(lines.into_bytes())
+}
+
+/// Row `row` of `columns` as one CSV line.
+fn row_line(columns: &[Vec<Option<String>>], row: usize, csv: &CsvOutput) -> String {
+    csv_line(columns.iter().map(|column| &column[row]), csv)
 }
 
 /// An empty CSV body, compressed as `compression` says.
@@ -116,24 +121,20 @@ fn column_text(array: &ArrayRef, field: &Field) -> Result<Vec<Option<String>>, S
         (DataType::Float64, _) => array
             .as_any()
             .downcast_ref::<Float64Array>()
-            .map(|values| values.iter().map(|value| value.map(float_text)).collect())
+            .map(|values| float_texts(values.iter()))
             .ok_or_else(|| format!("{}: not a float column", field.name()))?,
         (DataType::Float32, _) => array
             .as_any()
             .downcast_ref::<Float32Array>()
-            .map(|values| values.iter().map(|value| value.map(float_text)).collect())
+            .map(|values| float_texts(values.iter()))
             .ok_or_else(|| format!("{}: not a float column", field.name()))?,
-        (DataType::Utf8, true) => array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| format!("{}: not a text column", field.name()))?
-            .iter()
-            .map(|value| {
-                value
-                    .map(|value| compact_json(value, field.name()))
-                    .transpose()
-            })
-            .collect::<Result<_, String>>()?,
+        (DataType::Utf8, true) => json_texts(
+            array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| format!("{}: not a text column", field.name()))?,
+            field.name(),
+        )?,
         (DataType::Timestamp(unit, Some(zone)), _) if zone.as_ref() != UTC_ZONE => {
             let utc = DataType::Timestamp(*unit, Some(UTC_ZONE.into()));
             let in_utc = cast(array, &utc).map_err(|error| format!("{}: {error}", field.name()))?;
@@ -156,6 +157,29 @@ fn column_text(array: &ArrayRef, field: &Field) -> Result<Vec<Option<String>>, S
         }
     };
     Ok(texts)
+}
+
+/// Each float of a column as text.
+fn float_texts<F: Into<f64> + std::fmt::Display + Copy>(
+    values: impl Iterator<Item = Option<F>>,
+) -> Vec<Option<String>> {
+    values.map(|value| value.map(float_text)).collect()
+}
+
+/// Each JSON text of column `column`, compacted.
+fn json_texts(values: &StringArray, column: &str) -> Result<Vec<Option<String>>, String> {
+    values
+        .iter()
+        .map(|value| json_text(value, column))
+        .collect()
+}
+
+/// One JSON value compacted, `None` for NULL.
+fn json_text(value: Option<&str>, column: &str) -> Result<Option<String>, String> {
+    match value {
+        Some(text) => compact_json(text, column).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// A float in plain notation with the fewest digits that read back the same value, never an exponent; `NaN`, `Infinity` and `-Infinity` otherwise.

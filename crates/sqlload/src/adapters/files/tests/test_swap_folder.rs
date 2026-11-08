@@ -3,11 +3,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::files::main::remove_staged::remove_staged;
-use crate::adapters::files::main::staged_folder::staged_folder;
+use crate::adapters::files::main::repair_table::repair_table;
 use crate::adapters::files::main::swap_folder::swap_folder;
-use crate::adapters::files::tests::helpers::{block_on, local_files, watch_folder};
-use crate::adapters::files::tests::test_types::SwapFolderTestCase;
+use crate::adapters::files::models::TablePath;
+use crate::adapters::files::tests::helpers::{
+    NO_FOLDER, block_on, local_files, watch_folder, write_all,
+};
+use crate::adapters::files::tests::test_types::{RemoveStagedTestCase, SwapFolderTestCase};
 use crate::file_store::main::open_folder::open_folder;
 use crate::store_paths::models::{Location, StoreKind};
 
@@ -15,20 +17,6 @@ use crate::store_paths::models::{Location, StoreKind};
 const TABLE_PREFIX: &str = "app/orders/";
 /// Swaps per case, while another thread lists the table folder.
 const SWAPS: usize = 40;
-
-fn write_all(
-    root: &std::path::Path,
-    prefix: &str,
-    keys: &[&str],
-    body: &str,
-) -> Result<(), String> {
-    keys.iter().try_for_each(|key| {
-        let path = root.join(prefix).join(key);
-        std::fs::create_dir_all(path.parent().ok_or("no parent")?)
-            .and_then(|()| std::fs::write(&path, body))
-            .map_err(|error| error.to_string())
-    })
-}
 
 #[test]
 fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_files_and_the_rest_is_kept()
@@ -78,8 +66,13 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
             .collect();
         let stop = Arc::new(AtomicBool::new(false));
         let watcher = watch_folder(live_path.clone(), stop.clone());
-        let swapped: Result<(), String> = (0..SWAPS).try_for_each(|swap| {
-            let staged = staged_folder(&live, &WriteMode::Replace, &format!("load{swap}"))
+        let swapped: Result<(), String> = (0..SWAPS).try_for_each(|_| {
+            let path = TablePath {
+                folder: live.clone(),
+                partition: None,
+            };
+            let staged = path
+                .staged_folder(&WriteMode::Replace, &uuid::Uuid::new_v4().to_string())
                 .ok_or("no staging folder")?;
             write_all(directory.path(), &staged.prefix, test_case.staged, "new")?;
             let (live_folder, staged_folder) = (
@@ -95,19 +88,26 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
         stop.store(true, Ordering::Relaxed);
         let seen = watcher.join().map_err(|_| "the watcher panicked")?;
         swapped?;
+        let folder = open_folder(&live).map_err(|error| error.to_string())?;
         block_on(async {
-            remove_staged(&live).await;
-            Ok(())
+            repair_table(&folder, &[])
+                .await
+                .map_err(|error| error.to_string())
         })?;
         let old: Vec<String> = test_case
             .replaced
             .iter()
-            .map(|key| (*key).to_owned())
+            .copied()
+            .chain(test_case.live.is_empty().then_some(NO_FOLDER))
+            .map(str::to_owned)
             .collect();
         let new: Vec<String> = vec!["part-new-0.csv".to_owned()];
-        let allowed: BTreeSet<Vec<String>> = [old, new.clone()].into_iter().collect();
+        let mixed: Vec<&Vec<String>> = seen
+            .iter()
+            .filter(|names| *names != &new && !names.iter().all(|name| old.contains(name)))
+            .collect();
         assert!(
-            seen.is_subset(&allowed),
+            mixed.is_empty(),
             "{}: a reader saw {seen:?}",
             test_case.description
         );
@@ -126,6 +126,59 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
             local_files(&directory.path().join("app")).len(),
             test_case.expected_live.len(),
             "{}: nothing is left beside the table folder",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_folders_left_beside_a_table_when_repairing_then_staged_ones_go_and_a_moved_aside_table_comes_back()
+-> Result<(), String> {
+    let test_cases = [
+        RemoveStagedTestCase {
+            description: "a stopped load's staging folder is deleted, other folders that only look alike are kept",
+            before: &[
+                "orders/part-a-0.csv",
+                ".orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/part-b-0.csv",
+                ".orders.sqlload-x/keep.csv",
+                "orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/keep.csv",
+            ],
+            expected_after: &[
+                ".orders.sqlload-x/keep.csv",
+                "orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/keep.csv",
+                "orders/part-a-0.csv",
+            ],
+        },
+        RemoveStagedTestCase {
+            description: "a table moved aside by a stopped swap is put back, and the new one beside it deleted",
+            before: &[
+                ".orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11-old/part-a-0.csv",
+                ".orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11-old/_sqlload/runs/r1.json",
+                ".orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/part-b-0.csv",
+            ],
+            expected_after: &["orders/_sqlload/runs/r1.json", "orders/part-a-0.csv"],
+        },
+    ];
+    for test_case in test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        write_all(directory.path(), "app/", test_case.before, "x")?;
+        let live = Location {
+            store: StoreKind::Filesystem {
+                root: directory.path().display().to_string(),
+            },
+            prefix: TABLE_PREFIX.to_owned(),
+        };
+        let folder = open_folder(&live).map_err(|error| error.to_string())?;
+        block_on(async {
+            repair_table(&folder, &[])
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        assert_eq!(
+            local_files(&directory.path().join("app")),
+            test_case.expected_after,
+            "{}",
             test_case.description
         );
     }

@@ -1,11 +1,12 @@
 //! Describe how a write mode changes a files table.
 
 use crate::adapters::contract::models::WriteMode;
-use crate::store_paths::models::StoreKind;
+use crate::adapters::files::_helpers::layout::swap::local_folder;
+use crate::store_paths::models::Location;
 
-/// What `mode` does to the table's existing files in `store`, for `plan`.
-pub fn write_notes(mode: &WriteMode, store: &StoreKind) -> Vec<String> {
-    let local = matches!(store, StoreKind::Filesystem { .. });
+/// What `mode` does to the existing files of the table in `folder`, for `plan`.
+pub fn write_notes(mode: &WriteMode, folder: &Location) -> Vec<String> {
+    let local = local_folder(folder).is_some();
     match mode {
         WriteMode::Append => vec!["new files are added; existing files are never changed".to_owned()],
         WriteMode::Changes(_) => vec![
