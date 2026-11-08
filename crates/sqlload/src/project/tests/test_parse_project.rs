@@ -137,7 +137,7 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
         ParseProjectTestCase {
             description: "a files source reads its format, compression and CSV options; unset options keep their defaults",
             read: |project| format!("{:?}", project.sources["events"].files_encoding()),
-            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"] } }",
+            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"] }, record: None }",
         },
         ParseProjectTestCase {
             description: "a files source without settings reads Parquet",
@@ -324,7 +324,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "format settings are for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nformat = \"csv\"\n",
-            expected_message: "[sources.app] format, compression and csv are for kind = \"files\"",
+            expected_message: "[sources.app] format, compression, csv, shape and record_column are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "batch_interval is for postgres_cdc sources, never silently ignored",
@@ -355,6 +355,26 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "a malformed path template fails parsing, before any file is listed",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\npath_columns = \"{region/*\"\n",
             expected_message: "[sources.events] path_columns \"{region/*\": { in \"{region\" is never closed",
+        },
+        ParseProjectErrorTestCase {
+            description: "the record shape is for text files: Parquet files already have typed columns",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\nshape = \"record\"\n",
+            expected_message: "[sources.events] shape = \"record\" is for ndjson, json and csv files",
+        },
+        ParseProjectErrorTestCase {
+            description: "record_column without the record shape is never silently ignored",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\nformat = \"ndjson\"\nrecord_column = \"raw\"\n",
+            expected_message: "[sources.events] record_column is for shape = \"record\", which is not set",
+        },
+        ParseProjectErrorTestCase {
+            description: "the record column clashes with a constant column of another case",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\nformat = \"csv\"\nshape = \"record\"\nconstant_columns = { Record = \"x\" }\n",
+            expected_message: "[sources.events] column Record is in both record_column and constant_columns",
+        },
+        ParseProjectErrorTestCase {
+            description: "shape is for files sources",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshape = \"record\"\n",
+            expected_message: "[sources.app] format, compression, csv, shape and record_column are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "unmatched_paths without path_columns is never silently ignored",

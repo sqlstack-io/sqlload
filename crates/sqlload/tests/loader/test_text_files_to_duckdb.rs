@@ -77,6 +77,12 @@ const CSV_RUNS: &[TextFilesRun] = &[
 /// Rows, names in id order (the quoted delimiter kept), the newest timestamp as epoch seconds, the added column's sum, newest partition, and the pinned column's type.
 const CSV_CHECK: &str = "SELECT count(*) || ',' || string_agg(name, '|' ORDER BY id) || ',' || CAST(epoch(max(seen_at)) AS BIGINT) || ',' || sum(score) || ',' || max(day) || ',' || (SELECT typeof(id) FROM raw.scores LIMIT 1) FROM raw.scores";
 
+/// The table's columns, each record in load order, and the record column's type.
+const RECORD_CHECK: &str = "SELECT (SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_name = 'scores') || '|' || string_agg(day || ' ' || CAST(record AS VARCHAR), '|' ORDER BY day, _sqlload_source_row) || '|' || (SELECT typeof(record) FROM raw.scores LIMIT 1) FROM raw.scores";
+
+/// The table's columns and each line in load order.
+const LINE_CHECK: &str = "SELECT (SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_name = 'scores') || '|' || string_agg(CAST(line AS VARCHAR), '|' ORDER BY day, _sqlload_source_row) FROM raw.scores";
+
 /// A key the 10,000 sampled lines never have.
 const LATE_KEY: TextFile = TextFile {
     key: "part-0.ndjson.gz",
@@ -133,6 +139,22 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             runs: CSV_RUNS,
             check_query: CSV_CHECK,
             expected_result: "3,a|b, c|d,1793779200,7,2026-11-04,VARCHAR",
+        },
+        TextFilesScenarioTestCase {
+            description: "record shape, gzip NDJSON: each object whole in one JSON column beside its partition, a key added by a newer file kept without a new column",
+            store: local_store,
+            settings: "format = \"ndjson\"\nshape = \"record\"\nwrite_strategy = \"append\"\npartition_columns = { day = \"date\" }\n",
+            runs: NDJSON_RUNS,
+            check_query: RECORD_CHECK,
+            expected_result: "record,day,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at|2026-11-03 {\"id\":1,\"amount\":1.5,\"meta\":{\"tags\":[\"a\"],\"n\":1}}|2026-11-03 {\"id\":2,\"amount\":2,\"meta\":null}|2026-11-04 {\"id\":3,\"amount\":3.25,\"meta\":{\"tags\":[\"b\"]},\"extra\":\"x\"}|JSON",
+        },
+        TextFilesScenarioTestCase {
+            description: "record shape, zstd CSV from S3: each line an array of its fields as text, headers skipped unchecked",
+            store: seaweedfs_store,
+            settings: "format = \"csv\"\nshape = \"record\"\nrecord_column = \"line\"\nwrite_strategy = \"append\"\npartition_columns = { day = \"date\" }\n",
+            runs: CSV_RUNS,
+            check_query: LINE_CHECK,
+            expected_result: "line,day,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at|[\"1\",\"a\",\"2026-11-03T10:00:00Z\"]|[\"2\",\"b, c\",\"2026-11-03T11:00:00Z\"]|[\"2026-11-04T09:00:00+01:00\",\"3\",\"d\",\"7\"]",
         },
         TextFilesScenarioTestCase {
             description: "a malformed JSON line fails the plan with its file and line",

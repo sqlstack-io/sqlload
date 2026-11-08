@@ -22,6 +22,7 @@ use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
 use crate::files_source::_helpers::text::csv_records::{FirstRecord, QuoteTracker};
 use crate::files_source::_helpers::text::json_records::JsonSplitter;
+use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::models::{
@@ -62,6 +63,16 @@ pub(crate) fn csv_encoding(csv: CsvOptions) -> FilesEncoding {
         compression: Compression::Auto,
         csv,
         record: None,
+    }
+}
+
+/// `format` files read whole, one record each, into column `record`; CSV with `csv` options.
+pub(crate) fn record_encoding(format: SourceFormat, csv: CsvOptions) -> FilesEncoding {
+    FilesEncoding {
+        format,
+        compression: Compression::Auto,
+        csv,
+        record: Some(RECORD_COLUMN.to_owned()),
     }
 }
 

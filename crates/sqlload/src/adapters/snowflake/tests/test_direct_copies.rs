@@ -4,6 +4,14 @@ use crate::adapters::snowflake::tests::helpers::{
 };
 use crate::adapters::snowflake::tests::test_types::DirectCopiesTestCase;
 use crate::column_types::models::ColumnType;
+use crate::files_source::constants::RECORD_COLUMN;
+use crate::files_source::models::{CsvOptions, FilesEncoding, SourceFormat, StoredRead};
+
+const WHOLE_FILE: CopyValue = CopyValue::File {
+    file_type: None,
+    stored: StoredRead::Plain,
+    short: false,
+};
 
 const TWO_FILES: &str = "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"ID\", \"NAME\", \"DAY\", \"_SQLLOAD_SOURCE_FILE\", \"_SQLLOAD_SOURCE_VERSION\") FROM (SELECT CAST(GET($1, 'id') AS NUMBER(38,0)), CAST(GET($1, 'name') AS VARCHAR), CASE WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-03/part-0.parquet' THEN CAST('2026-11-03' AS DATE) WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-04/part-0.parquet' THEN CAST('2026-11-04' AS DATE) ELSE NULL END, CASE WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-03/part-0.parquet' THEN 's3://lake/raw/shop/orders/day=2026-11-03/part-0.parquet' WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-04/part-0.parquet' THEN 's3://lake/raw/shop/orders/day=2026-11-04/part-0.parquet' ELSE TO_VARCHAR(TO_NUMBER('sqlload: unexpected staged file ' || METADATA$FILENAME)) END, CASE WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-03/part-0.parquet' THEN 'etag-2026-11-03' WHEN METADATA$FILENAME = 'raw/shop/orders/day=2026-11-04/part-0.parquet' THEN 'etag-2026-11-04' ELSE NULL END FROM @\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"/shop/orders/) FILES = ('day=2026-11-03/part-0.parquet', 'day=2026-11-04/part-0.parquet') FILE_FORMAT = (TYPE = PARQUET USE_LOGICAL_TYPE = TRUE BINARY_AS_TEXT = FALSE) ON_ERROR = ABORT_STATEMENT FORCE = TRUE";
 
@@ -18,6 +26,8 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             ],
             columns: order_columns(),
             from: EXTERNAL,
+            encoding: FilesEncoding::default(),
+            header: &[],
             expected_copies: Ok((1, TWO_FILES)),
         },
         DirectCopiesTestCase {
@@ -29,6 +39,8 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
                 CopyValue::SourceFile,
             )],
             from: EXTERNAL,
+            encoding: FilesEncoding::default(),
+            header: &[],
             expected_copies: Ok((
                 1,
                 "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"_SQLLOAD_SOURCE_FILE\") FROM (SELECT CASE WHEN METADATA$FILENAME = 'raw/shop/orders/part-0.parquet' THEN 's3://lake/raw/shop/orders/part-0.parquet' ELSE TO_VARCHAR(TO_NUMBER('sqlload: unexpected staged file ' || METADATA$FILENAME)) END FROM @\"ANALYTICS\".\"RAW\".\"_SQLLOAD_STAGE\"/shop/orders/)",
@@ -39,6 +51,8 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             files: vec![("hour=x/part-0.parquet".to_owned(), "2026-11-04T10:00:00Z")],
             columns: vec![column("day", ColumnType::TimestampTz, CopyValue::Partition)],
             from: EXTERNAL,
+            encoding: FilesEncoding::default(),
+            header: &[],
             expected_copies: Ok((
                 1,
                 "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"DAY\") FROM (SELECT CASE WHEN METADATA$FILENAME = 'raw/shop/orders/hour=x/part-0.parquet' THEN CAST('2026-11-04 10:00:00.000000 +00:00' AS TIMESTAMP_TZ(9)) ELSE NULL END FROM",
@@ -49,6 +63,8 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             files: vec![("n=007/part-0.parquet".to_owned(), "007")],
             columns: vec![column("day", ColumnType::Int, CopyValue::Partition)],
             from: EXTERNAL,
+            encoding: FilesEncoding::default(),
+            header: &[],
             expected_copies: Ok((
                 1,
                 "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\" (\"DAY\") FROM (SELECT CASE WHEN METADATA$FILENAME = 'raw/shop/orders/n=007/part-0.parquet' THEN CAST('7' AS NUMBER(38,0)) ELSE NULL END FROM",
@@ -59,6 +75,8 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             files: vec![("day=soon/part-0.parquet".to_owned(), "soon")],
             columns: order_columns(),
             from: EXTERNAL,
+            encoding: FilesEncoding::default(),
+            header: &[],
             expected_copies: Err(
                 "partition column day of day=soon/part-0.parquet: \"soon\" does not convert to date",
             ),
@@ -68,6 +86,8 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             files: many_files(1001, 0),
             columns: order_columns(),
             from: EXTERNAL,
+            encoding: FilesEncoding::default(),
+            header: &[],
             expected_copies: Ok((2, "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\"")),
         },
         DirectCopiesTestCase {
@@ -75,6 +95,8 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             files: many_files(900, 400),
             columns: order_columns(),
             from: EXTERNAL,
+            encoding: FilesEncoding::default(),
+            header: &[],
             expected_copies: Ok((4, "COPY INTO \"ANALYTICS\".\"RAW\".\"SHOP__ORDERS\"")),
         },
         DirectCopiesTestCase {
@@ -82,6 +104,8 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             files: vec![("day=2026-11-04/part-0.parquet".to_owned(), "2026-11-04")],
             columns: order_columns(),
             from: INTERNAL,
+            encoding: FilesEncoding::default(),
+            header: &[],
             expected_copies: Ok((
                 1,
                 "WHEN METADATA$FILENAME = '@~/sqlload/L/00001/day=2026-11-04/part-0.parquet' THEN 's3://lake/other/day=2026-11-04/part-0.parquet' ELSE TO_VARCHAR(TO_NUMBER('sqlload: unexpected staged file ' || METADATA$FILENAME)) END",
@@ -92,14 +116,57 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             files: vec![("day=2026-11-04/part-0.parquet".to_owned(), "2026-11-04")],
             columns: order_columns(),
             from: INTERNAL,
+            encoding: FilesEncoding::default(),
+            header: &[],
             expected_copies: Ok((
                 1,
                 "FROM @~/sqlload/L/00001/) FILES = ('day=2026-11-04/part-0.parquet')",
             )),
         },
+        DirectCopiesTestCase {
+            description: "record shape, ndjson: each record itself, failing on one that is not an object",
+            files: vec![("part-0.ndjson".to_owned(), "2026-11-04")],
+            columns: vec![column(RECORD_COLUMN, ColumnType::Json, WHOLE_FILE)],
+            from: EXTERNAL,
+            encoding: FilesEncoding {
+                format: SourceFormat::Ndjson,
+                record: Some(RECORD_COLUMN.to_owned()),
+                ..FilesEncoding::default()
+            },
+            header: &[],
+            expected_copies: Ok((
+                1,
+                "(\"RECORD\") FROM (SELECT IFF(IS_OBJECT($1), $1, CAST(TO_VARCHAR(TO_NUMBER('sqlload: ' || METADATA$FILENAME || ' row ' || METADATA$FILE_ROW_NUMBER || ': the record is not a JSON object')) AS VARIANT)) FROM",
+            )),
+        },
+        DirectCopiesTestCase {
+            description: "record shape, csv: each line an array of its fields as strings, a NULL value as JSON null",
+            files: vec![("part-0.csv".to_owned(), "2026-11-04")],
+            columns: vec![column(RECORD_COLUMN, ColumnType::Json, WHOLE_FILE)],
+            from: EXTERNAL,
+            encoding: FilesEncoding {
+                format: SourceFormat::Csv,
+                csv: CsvOptions {
+                    null_values: vec!["NA".to_owned()],
+                    ..CsvOptions::default()
+                },
+                record: Some(RECORD_COLUMN.to_owned()),
+                ..FilesEncoding::default()
+            },
+            header: &["column_1", "column_2"],
+            expected_copies: Ok((
+                1,
+                "(SELECT ARRAY_CONSTRUCT(COALESCE(TO_VARIANT(NULLIF($1, 'NA')), PARSE_JSON('null')), COALESCE(TO_VARIANT(NULLIF($2, 'NA')), PARSE_JSON('null'))) FROM",
+            )),
+        },
     ];
     for test_case in test_cases {
-        let copies = direct_sql(&test_case.files, &test_case.columns, &test_case.from);
+        let copies = direct_sql(
+            &test_case.files,
+            &test_case.columns,
+            &test_case.from,
+            (&test_case.encoding, test_case.header),
+        );
         let (count, first) = copies.clone().unwrap_or_default();
         let (expected_count, expected_start) = test_case.expected_copies.unwrap_or_default();
         assert_eq!(count, expected_count, "{}", test_case.description);

@@ -46,6 +46,9 @@ pub(crate) struct DirectCopiesTestCase {
     pub(crate) files: Vec<(String, &'static str)>,
     pub(crate) columns: Vec<CopyColumn>,
     pub(crate) from: CopyFrom,
+    pub(crate) encoding: crate::files_source::models::FilesEncoding,
+    /// Every file's CSV column names, as `batch_headers` reads them.
+    pub(crate) header: &'static [&'static str],
     /// The number of statements and text the first holds (or the error text).
     pub(crate) expected_copies: Result<(usize, &'static str), &'static str>,
 }

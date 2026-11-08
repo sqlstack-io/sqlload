@@ -270,7 +270,7 @@ impl std::fmt::Display for FilesEncoding {
             (format, Compression::Zstd) => write!(formatter, "{format}, zstd"),
         }?;
         match &self.record {
-            Some(column) => write!(formatter, ", each record whole in {column}"),
+            Some(column) => write!(formatter, ", each record whole in column {column}"),
             None => Ok(()),
         }
     }

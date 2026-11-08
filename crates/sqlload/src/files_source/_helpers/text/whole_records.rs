@@ -7,7 +7,7 @@ use arrow_schema::{DataType, Field, Schema};
 
 use crate::files_source::_helpers::text::json_records::JsonRecord;
 
-/// `records` as one text column `column`, each object's compact JSON text (keys in file order, a key given twice once with its last value), and the line each starts on.
+/// `records` as one text column `column`, each object's compact JSON text (keys in file order, a key given twice once with its last value, where it last appears), and the line each starts on.
 pub(crate) fn json_records_batch(
     records: &[JsonRecord],
     column: &str,
