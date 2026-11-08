@@ -30,24 +30,21 @@ WHERE c.table_schema <> 'INFORMATION_SCHEMA' \
 ORDER BY c.table_schema, c.table_name, c.ordinal_position";
 
 /// The session database's tables, with each one's row count, size and comment; metadata only, so it needs no warehouse.
-pub const SHOW_TABLES_SQL: &str = "SHOW TABLES IN DATABASE";
+pub const SHOW_TABLES_SQL: &str = "SHOW TABLES IN DATABASE LIMIT 10000";
 
 /// The session database's views.
-pub const SHOW_VIEWS_SQL: &str = "SHOW VIEWS IN DATABASE";
+pub const SHOW_VIEWS_SQL: &str = "SHOW VIEWS IN DATABASE LIMIT 10000";
 
 /// The schema Snowflake's catalog views live in, which is never a source table.
 pub const CATALOG_SCHEMA: &str = "INFORMATION_SCHEMA";
 
-/// The most rows a `SHOW` command returns; a listing this long may be cut short.
+/// The most rows a `SHOW` command returns (more is an error without `LIMIT`); a listing this long may be cut short. Matches the `LIMIT` of [`SHOW_TABLES_SQL`] and [`SHOW_VIEWS_SQL`].
 pub const SHOW_ROWS_MAX: usize = 10_000;
 
 /// Up to this many matching tables are described one by one, a few at a time; more read [`CATALOG_SQL`] once, which costs over a second whatever the count.
 pub const DESCRIBED_TABLES_MAX: usize = 32;
 
-/// The SQL API error code for an object that does not exist or is not visible, as for a table dropped after it was listed.
-pub const MISSING_OBJECT: &str = "002003";
-
-/// `DESCRIBE` statements, and query tables being described, in flight at once.
+/// `DESCRIBE` statements in flight at once, and separately query tables being described.
 pub const PARALLEL_DESCRIBES: usize = 8;
 
 /// `information_schema.columns.is_nullable` for a column that cannot be NULL.

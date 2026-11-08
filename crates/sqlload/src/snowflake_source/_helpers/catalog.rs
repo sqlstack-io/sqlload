@@ -52,7 +52,7 @@ pub(crate) fn catalog_tables(
                 number(4).unwrap_or(38),
                 number(5).unwrap_or(0)
             ),
-            "TEXT" => match number(6) {
+            "TEXT" | "VARCHAR" => match number(6) {
                 Some(length) => format!("VARCHAR({length})"),
                 None => "VARCHAR".to_owned(),
             },
