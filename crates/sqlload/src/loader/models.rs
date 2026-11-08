@@ -13,7 +13,9 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::models::OpenFolder;
-use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, Footer, TextChecks};
+use crate::files_source::models::{
+    FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile, TextChecks,
+};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
@@ -608,6 +610,8 @@ pub struct FilesSink {
     pub writer: Option<FilesWriter>,
     /// Replaced files already dealt with by earlier commits: deleted, or overwritten by a file of the same name (`single_file`).
     pub deleted: std::collections::BTreeSet<String>,
+    /// Source files (of a files source) read since the last commit, which the next commit records.
+    pub reading: Vec<LoadedFile>,
     /// The load's claim on the table, refreshed in the background until `keeper`'s guard is dropped; it lives in the table's own folder, not a staged one.
     pub lease: crate::table_lease::models::Lease,
     /// The guard stopping the lease's renewal, and the renewal task.

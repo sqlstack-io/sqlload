@@ -56,8 +56,24 @@ diff --all-files` reads every file's footer to report files whose columns differ
 A [`postgres_cdc` source](/docs/sources/postgres-cdc/#into-parquet-files) loads into a files
 target as a changelog, adding files with each load.
 
+From 0.27.0 (not released yet), a [files source](/docs/sources/files/) loads into a files target.
+SQLLoad reads the source files and writes them out again, with `append`, `replace`, or
+`delete_insert` by a partition cursor. Each commit records the source files it loaded in
+`_sqlload/loaded/<commit>.json`. Under `append`, the next load skips those files and reads only
+new ones. With a partition cursor, `append` reads from the target's newest partition onward, so
+a late file added to an older partition isn't loaded. As for other targets, a source file
+rewritten in place fails the table until you reload the table with `--reload`, or use
+`delete_insert` on a partition cursor. A record counts only while the table still holds its
+commit's files: the files of a load that failed and was repaired load again, and the next load
+deletes records whose files are gone.
+
+The target folder can't be the source folder, or inside it or around it: a load would delete or
+read back its own source files, so `plan` blocks the table. A files source also can't load into a
+`single_file` target, as its one file carries no load id to record the source files against.
+
 SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: markers for loads in
-progress, and the run log of `state = "logged"` tables. Run one load at a time per files table.
+progress, the run log of `state = "logged"` tables, and the source files a files source's
+loads loaded. Run one load at a time per files table.
 
 From 0.27.0 (not released yet), SQLLoad enforces that rule. A load takes a lease on the table, a
 file in `_sqlload/lease/`, before it repairs or writes anything. It renews the lease every minute
@@ -135,7 +151,7 @@ need Parquet, and `single_file` doesn't take `append`; `plan` says so.
 
 ## Limitations
 
-- A files source can't load into a files target.
+- Before 0.27.0, a files source can't load into a files target.
 - The lease (from 0.27.0, not released yet) trusts the clocks of the machines that load, and
   needs a store that honours create-only writes, as a local folder and S3 (`If-None-Match: *`) do.
   A load paused for longer than its lease, or an S3-compatible store that ignores that header, can

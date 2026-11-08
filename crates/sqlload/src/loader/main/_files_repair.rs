@@ -5,6 +5,7 @@ use crate::adapters::files::main::read_table_state::read_table_state;
 use crate::adapters::files::main::repair_table::repair_table;
 use crate::adapters::files::models::{ReplaceRequest, ReplacedFiles, TableFiles, TablePath};
 use crate::column_types::models::ColumnType;
+use crate::file_store::main::delete_files::delete_files;
 use crate::file_store::models::OpenFolder;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{FilesOutput, TablePlan};
@@ -33,7 +34,7 @@ pub(in crate::loader) async fn files_to_replace(
     .map_err(LoaderError::Invalid)
 }
 
-/// The table's files once every unfinished load is repaired; an error if files are not where the path puts them. An empty listing is read again, as the repair may have put back a table a stopped swap moved aside.
+/// The table's files once every unfinished load is repaired and the records of loads it no longer holds are deleted; an error if files are not where the path puts them. An empty listing is read again, as the repair may have put back a table a stopped swap moved aside.
 async fn repaired_files(
     folder: &OpenFolder,
     path: &TablePath,
@@ -45,6 +46,7 @@ async fn repaired_files(
         true => state,
         false => read_table_state(folder, path, cursor_type).await?,
     };
+    delete_files(folder, &state.stale_loaded).await?;
     match state.listed.problems.first() {
         Some(problem) => Err(LoaderError::Invalid(problem.clone())),
         None => Ok(state.listed),

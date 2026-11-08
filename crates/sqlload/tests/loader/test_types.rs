@@ -239,6 +239,23 @@ pub(crate) struct WrittenRun<'a> {
     pub(crate) expected_plan: &'a str,
 }
 
+/// The source files a run adds, as `(relative key, bytes)`.
+pub(crate) type SourceFiles = fn() -> Result<Vec<(String, bytes::Bytes)>, String>;
+
+/// A files source loaded into a files target once per run.
+pub(crate) struct FilesToFilesTestCase {
+    pub(crate) description: &'static str,
+    /// The store and its connection TOML, given the S3 endpoint and a fresh temporary directory.
+    pub(crate) store:
+        fn(&str, &std::path::Path) -> (sqlload::store_paths::models::StoreKind, String),
+    /// TOML added to `[sources.orders]`; `PREFIX` is replaced by the case's own folder.
+    pub(crate) settings: &'static str,
+    /// The source files added before each run.
+    pub(crate) runs: &'static [SourceFiles],
+    /// After each run, the rows the target holds and how many loads wrote them, as `rows|loads`.
+    pub(crate) expected_held: &'static [&'static str],
+}
+
 /// Postgres into a files target, then those files through a files source into DuckDB, loaded twice.
 pub(crate) struct CsvTargetTestCase {
     pub(crate) description: &'static str,

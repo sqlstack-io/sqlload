@@ -39,13 +39,14 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Postgres changes (`postgres_cdc`) | Yes | Yes | No | No | No | Yes | Yes, as a changelog |
 | Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | ODBC (from 0.27.0) | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
-| Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | No |
+| Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | From 0.27.0 (not released yet), read and rewritten by SQLLoad |
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
-A files source into a files target is refused at `plan`. `merge` isn't available for files
-sources or files targets. Google Sheets tables reach every target through the same Arrow path;
-the tests load them into DuckDB.
+From 0.27.0 (not released yet), a files source loads into a files target, read and rewritten
+by SQLLoad. Before, `plan` refused it. `merge` isn't available for files sources or files
+targets. Google Sheets tables reach every target through the same Arrow path; the tests load
+them into DuckDB.
 
 These are the systems in the current release. Planned ones are on the [roadmap](/docs/roadmap/).
 

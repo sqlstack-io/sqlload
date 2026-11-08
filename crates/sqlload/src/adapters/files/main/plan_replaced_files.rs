@@ -1,7 +1,7 @@
 //! Work out which existing files a write replaces, before anything is written.
 
 use crate::adapters::contract::models::{ChangeApply, WriteMode};
-use crate::adapters::files::main::_partition_in_window::partition_in_window;
+use crate::adapters::files::_helpers::layout::partitions::partition_in_window;
 use crate::adapters::files::main::check_window::check_window;
 use crate::adapters::files::models::{ReplaceRequest, ReplacedFiles};
 

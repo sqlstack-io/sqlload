@@ -104,3 +104,22 @@ pub(crate) fn is_data_file(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();
     DATA_SUFFIXES.iter().any(|suffix| lower.ends_with(suffix))
 }
+
+/// Whether partition `value` lies in `from <= value < to` (each open when `None`).
+pub(crate) fn partition_in_window(
+    value: &str,
+    by: PartitionBy,
+    cursor_type: &ColumnType,
+    bounds: (Option<&str>, Option<&str>),
+) -> Result<bool, String> {
+    let key = partition_key(value, by, cursor_type)?;
+    let after_start = match bounds.0 {
+        Some(from) => key >= bound_key(from, by, cursor_type)?,
+        None => true,
+    };
+    let before_end = match bounds.1 {
+        Some(to) => key < bound_key(to, by, cursor_type)?,
+        None => true,
+    };
+    Ok(after_start && before_end)
+}
