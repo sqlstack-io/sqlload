@@ -10,6 +10,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Postgres | Tables, by `include` patterns | Binary `COPY` into Arrow, over TLS when the connection's `sslmode` asks |
 | Postgres changes (`postgres_cdc`) | Inserts, updates and deletes of tables, by `include` patterns | A snapshot, then a logical replication slot (`pgoutput`), in whole transactions. See [Postgres changes](/docs/sources/postgres-cdc/). |
 | Snowflake (from 0.26.0, not released yet) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad. See [Snowflake](/docs/sources/snowflake/). |
+| Databases with an ODBC driver (from 0.26.0, not released yet) | Tables and views, by `include` patterns, and query results | The driver, as Arrow, in builds with the `odbc` feature. See [ODBC](/docs/sources/odbc/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
 | Python | Dicts, Arrow data (pyarrow, polars, pandas), JSON and NDJSON bytes | The `sqlload` package, in process |
@@ -34,6 +35,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Postgres | Yes | Yes | Yes | Yes | Yes |
 | Postgres changes (`postgres_cdc`) | Yes | Yes | No | Yes | Yes, as a changelog |
 | Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes |
+| ODBC (from 0.26.0) | Yes | Yes | Yes | Yes | Yes |
 | Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet read by DuckDB | No |
 | Python | Yes | Yes | Yes | Yes | Yes |
 
@@ -48,6 +50,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 |--------|-----------------|
 | Postgres | Real Postgres in containers. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB, Snowflake and Databricks. |
 | DuckDB | Real, in process. |
+| ODBC | psqlODBC against real Postgres in containers. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |
 | Kafka | Redpanda in containers. |

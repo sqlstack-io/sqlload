@@ -91,6 +91,16 @@ role. AWS profiles and SSO aren't read.
 |-----|---------|
 | `root` | A folder on the machine SQLLoad runs on. |
 
+### `odbc`
+
+From 0.26.0 (not released yet). See [ODBC](/docs/sources/odbc/#connection).
+
+| Key | Meaning |
+|-----|---------|
+| `connection_string` | The driver's connection string. Use `${ENV:NAME}`. |
+| `dsn` | A data source name, instead of `connection_string`. |
+| `user`, `password` | With `dsn`, when the DSN doesn't hold them. |
+
 ### `http`
 
 For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach table functions as
@@ -118,14 +128,14 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 
 | Key | Applies to | Meaning |
 |-----|------------|---------|
-| `kind` | all | `postgres`, `postgres_cdc`, `snowflake` (from 0.26.0, not released yet) or `files`. Python sources are declared in Python. |
+| `kind` | all | `postgres`, `postgres_cdc`, `snowflake` (from 0.26.0, not released yet), `odbc` (from 0.26.0, not released yet) or `files`. Python sources are declared in Python. |
 | `connection` | all | The connection the source reads. |
 | `description` | all | The source's description; a files source's table description. |
 | `destination` | all | The target; `default_target` when omitted. |
 | `schema` | warehouse targets | The destination schema; the target's `loader_schema` when omitted. |
 | `table_name` | all | The destination name template, with `{source}`, `{schema}` and `{table}`. Default `{source}__{table}`, or `{source}` for files. |
 | `destination_path` | files targets | The folder template for this source's tables, overriding the target's `path`. |
-| `include`, `exclude` | postgres, postgres_cdc, snowflake | `schema.table` patterns to sync and to leave out. |
+| `include`, `exclude` | postgres, postgres_cdc, snowflake, odbc | `schema.table` patterns to sync and to leave out. |
 | `new_tables` | postgres | `sync` (default), `skip` or `fail`. See [Sources](/docs/sources/postgres/#choosing-tables). |
 | `cdc_mode` | postgres_cdc | `merge` (default) or `changelog`; a files target takes `changelog` only. See [Postgres changes](/docs/sources/postgres-cdc/#settings). |
 | `deletes` | postgres_cdc | `soft` (default) or `hard`; `merge` only. |
@@ -136,6 +146,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
 | `warehouse` | snowflake | From 0.26.0 (not released yet). The warehouse unloads run on; the connection's when omitted. |
 | `stage` | snowflake | From 0.26.0. Where unloads go: `{ url, storage_integration, region }` or `{ name }`; the user stage when omitted. See [Snowflake](/docs/sources/snowflake/#where-the-files-go). |
+| `max_text_size`, `max_binary_size` | odbc | From 0.26.0 (not released yet). The longest text and binary value a read holds, in bytes, for columns without a declared length. See [ODBC](/docs/sources/odbc/#value-sizes). |
 | `path` | files | The folder holding the files, relative to the connection. |
 | `format` | files | `parquet` (default), `ndjson`, `json` or `csv`. |
 | `compression` | files | `auto` (default), `none`, `gzip` or `zstd`. |
@@ -175,7 +186,7 @@ Only in a table entry:
 |-----|---------|
 | `description` | The table's description, which becomes its comment. |
 | `name` | The destination table name, overriding `table_name`. |
-| `sql` | From 0.26.0 (not released yet). A query whose rows are the table (snowflake sources); the entry's key is its name. |
+| `sql` | From 0.26.0 (not released yet). A query whose rows are the table (snowflake and odbc sources); the entry's key is its name. |
 | `columns` | Pinned column types, such as `{ total = "decimal(18,2)" }`. See [Types](/docs/types/). |
 | `mask` | Masked columns: `{ email = "hmac" }` or `"hash"`. |
 | `exclude_columns`, `allow_columns`, `destination_path` | As on the source, for this table. |
