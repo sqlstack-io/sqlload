@@ -2,7 +2,7 @@
 
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::project::models::Contract;
-use crate::schema_plan::_helpers::changes::{ColumnDecision, column_decision};
+use crate::schema_plan::_helpers::changes::{ColumnDecision, column_decision, live_column};
 use crate::schema_plan::constants::LOAD_ID_COLUMN;
 use crate::schema_plan::models::{
     Blocked, ColumnChange, ColumnOrigin, DesiredColumn, LiveColumn, SchemaPlan, SchemaRules,
@@ -45,9 +45,7 @@ pub fn plan_schema(
     let mut problems: Vec<String> = Vec::new();
     let mut fix_flag: Option<&'static str> = None;
     for column in kept {
-        let existing = live
-            .iter()
-            .find(|live| live.name.eq_ignore_ascii_case(&column.name));
+        let existing = live_column(live, &column.name, rules);
         let decision: ColumnDecision = column_decision(column, (existing, kept_as_is), rules);
         changes.extend(decision.change);
         warnings.extend(decision.warning);

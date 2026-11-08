@@ -41,7 +41,7 @@ WHERE n.nspname = $1 AND c.relname = $2 AND i.indisunique AND i.indisvalid AND i
 
 /// The foreign keys (of other tables, or the table itself) that reference a table: the referencing table, the constraint, what a delete does (`confdeltype`: `a` no action, `r` restrict, `c` cascade, `n` set null, `d` set default), and whether its check waits for the commit.
 pub const REFERENCES_SQL: &str = "
-SELECT format('%I.%I', rn.nspname, r.relname), con.conname::text, con.confdeltype::text, con.condeferred
+SELECT format('%I.%I', rn.nspname, r.relname), con.conname::text, con.confdeltype::text, con.condeferred, con.conrelid = con.confrelid
 FROM pg_catalog.pg_constraint con
 JOIN pg_catalog.pg_class r ON r.oid = con.conrelid
 JOIN pg_catalog.pg_namespace rn ON rn.oid = r.relnamespace

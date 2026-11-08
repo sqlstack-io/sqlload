@@ -348,6 +348,20 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             expected_warnings: 0,
         },
         PlanSchemaTestCase {
+            description: "a Postgres table with columns differing only in case loads into the one of exactly the stored name",
+            desired: vec![source("id", ColumnType::Int)],
+            live: Some(vec![
+                live("Id", ColumnType::Text),
+                live("id", ColumnType::Int),
+            ]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &["id"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
             description: "a Postgres table SQLLoad created (it has _sqlload_load_id) is widened as on any warehouse",
             desired: vec![source("amount", DECIMAL)],
             live: Some(vec![

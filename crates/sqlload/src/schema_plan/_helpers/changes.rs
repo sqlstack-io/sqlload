@@ -17,6 +17,21 @@ pub(crate) struct ColumnDecision {
     pub(crate) fix_flag: Option<&'static str>,
 }
 
+/// The live column for the desired column `name`: the one of exactly the name the warehouse stores, else one matching when case is ignored.
+pub(crate) fn live_column<'a>(
+    live: &'a [LiveColumn],
+    name: &str,
+    rules: SchemaRules,
+) -> Option<&'a LiveColumn> {
+    let stored = sql_adapter(rules.warehouse).stored_name(name);
+    live.iter()
+        .find(|column| column.name == stored)
+        .or_else(|| {
+            live.iter()
+                .find(|column| column.name.eq_ignore_ascii_case(name))
+        })
+}
+
 /// The decision for a desired column the live table lacks.
 pub(crate) fn missing_column(column: &DesiredColumn, rules: SchemaRules) -> ColumnDecision {
     let add = || ColumnChange::Add {

@@ -9,7 +9,7 @@ use crate::adapters::postgres::constants::{KEY_INDEX_SQL, REFERENCES_SQL};
 use crate::adapters::postgres::models::{PostgresDestination, PostgresSql};
 use crate::loader::errors::LoaderError;
 
-/// Why `mode` cannot run against the existing `table`, and what it may fail on: `merge` needs a unique index `ON CONFLICT` can use on exactly its key; `replace` and `delete_insert` delete rows, which a foreign key with `ON DELETE CASCADE`, `SET NULL` or `SET DEFAULT` would carry into its own table (refused), and one checked at once would refuse while its rows reference them (warned).
+/// Why `mode` cannot run against the existing `table`, and what it may fail on: `merge` needs a unique index `ON CONFLICT` can use on exactly its key; `replace` and `delete_insert` delete rows, which a foreign key with `ON DELETE CASCADE`, `SET NULL` or `SET DEFAULT` would carry into its own table (refused), and one checked at once (any `RESTRICT`) would refuse while its rows reference them (warned); a table's reference to itself only matters to `delete_insert`, since `replace` deletes every row.
 pub(in crate::adapters) async fn write_problems(
     destination: &PostgresDestination,
     table: &TableName,
@@ -70,7 +70,7 @@ async fn key_problem(
     }))
 }
 
-/// The foreign keys referencing `schema.name` that a write deleting its rows would carry into their tables (problems), or that would refuse it while their rows reference the rows it deletes (warnings).
+/// The foreign keys referencing `schema.name` that a write deleting its rows would carry into their tables (problems), or that would refuse it while their rows reference the rows it deletes (warnings); `replace` skips the table's own.
 async fn reference_problems(
     client: &Client,
     (schema, name): (&str, &str),
@@ -90,20 +90,22 @@ async fn reference_problems(
         let constraint: String = row.try_get(1).map_err(query_error)?;
         let action: String = row.try_get(2).map_err(query_error)?;
         let deferred: bool = row.try_get(3).map_err(query_error)?;
+        let own: bool = row.try_get(4).map_err(query_error)?;
         let carried = match action.as_str() {
             "c" => Some("ON DELETE CASCADE deletes"),
             "n" => Some("ON DELETE SET NULL changes"),
             "d" => Some("ON DELETE SET DEFAULT changes"),
             _ => None,
         };
-        match (carried, deferred) {
-            (Some(effect), _) => problems.push(format!(
+        match (carried, deferred, action.as_str(), own && matches!(mode, WriteMode::Replace)) {
+            (_, _, _, true) => {}
+            (Some(effect), _, _, _) => problems.push(format!(
                 "{referencing} references {schema}.{name} ({constraint}), and its {effect} its rows when {strategy} deletes the rows it replaces; SQLLoad refuses to change another table, so change the constraint's ON DELETE action, or load with merge"
             )),
-            (None, false) => warnings.push(format!(
+            (None, true, "a", _) => {}
+            (None, _, _, _) => warnings.push(format!(
                 "{referencing} references {schema}.{name} ({constraint}), so {strategy} fails while any of its rows reference a row it deletes"
             )),
-            (None, true) => {}
         }
     }
     Ok((problems, warnings))

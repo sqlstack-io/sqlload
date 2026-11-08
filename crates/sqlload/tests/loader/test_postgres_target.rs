@@ -170,6 +170,17 @@ fn given_postgres_tables_when_loading_repeatedly_into_a_postgres_target_then_eac
                 check_query: "SELECT string_agg(code || '@' || coalesce(CAST(price AS text), 'none'), ',') FROM mart.stores",
                 expected_result: "L1@none",
             },
+            PostgresTargetTestCase {
+                description: "replace into a table that references itself with ON DELETE CASCADE runs, since replace deletes every row and touches no other table",
+                source_change: "ALTER TABLE mart.stores DROP COLUMN price; ALTER TABLE mart.stores ADD COLUMN price numeric(8,2), ADD COLUMN parent varchar(5) REFERENCES mart.stores (code) ON DELETE CASCADE; UPDATE mart.stores SET parent = code;",
+                options: PlanOptions {
+                    select: vec!["stores".to_owned()],
+                    ..PlanOptions::default()
+                },
+                expected_load: "ok",
+                check_query: "SELECT string_agg(code || '@' || price || '@' || coalesce(parent, 'none'), ',') FROM mart.stores",
+                expected_result: "L1@1.25@none",
+            },
         ];
         for test_case in test_cases {
             client

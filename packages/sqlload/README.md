@@ -580,7 +580,8 @@ refused on Postgres targets.
 `replace` and `delete_insert` delete rows, so `plan` checks the foreign keys that reference the
 table. A foreign key with `ON DELETE CASCADE`, `SET NULL` or `SET DEFAULT` would change the
 referencing table, so `plan` fails and names it. Any other foreign key checked immediately makes
-the commit fail while referencing rows point at deleted ones, so `plan` warns about it.
+the commit fail while referencing rows point at deleted ones, so `plan` warns about it. A table's
+foreign key to itself does not stop `replace`, which deletes every row.
 
 A table SQLLoad did not create (it has no `_sqlload_load_id` column) is loaded as it is. SQLLoad
 never alters it:
@@ -593,6 +594,8 @@ never alters it:
 - Values convert to the table's column types as `INSERT` converts them. A narrower column that
   refuses what does not fit is allowed, such as a smaller integer, a shorter `varchar(n)` or a
   `numeric` with at least the source's digits after the point: a value too large fails the commit.
+  As in any Postgres `INSERT`, text over `n` characters only by trailing spaces loses those spaces,
+  and a `character(n)` column pads with spaces.
   A column that would round values, such as `real`, `timestamp(3)` or a `numeric` with fewer
   digits after the point, or one of another kind, fails `plan`.
 
