@@ -50,6 +50,7 @@ use crate::python_sources::types::PythonHost;
 use crate::python_sources::types::Streamed;
 use crate::row_batches::main::conform_batch::conform_batch;
 use crate::row_batches::main::flattened_columns::flattened_columns;
+use crate::row_batches::main::json_lists::json_lists;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::schema_plan::constants::LOAD_ID_COLUMN;
@@ -445,7 +446,7 @@ fn read_schema(table: &TablePlan) -> SchemaRef {
     Arc::new(Schema::new(fields))
 }
 
-/// `batch` with the target's columns (excluded columns dropped), each converted to its planned type; a value that does not convert is an error naming the column.
+/// `batch` with the target's columns (excluded columns dropped), each converted to its planned type (an array from the JSON text a list arrives as); a value that does not convert is an error naming the column.
 fn read_types(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch, LoaderError> {
     let strict = CastOptions {
         safe: false,
@@ -461,13 +462,20 @@ fn read_types(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch, Lo
                 .unwrap_or_else(|| {
                     arrow_array::new_null_array(field.data_type(), batch.num_rows())
                 });
-            cast_with_options(&column, field.data_type(), &strict).map_err(|error| {
-                LoaderError::Invalid(format!(
-                    "column {}: {error}; pin a type for {} in columns that holds every value",
-                    field.name(),
-                    field.name()
-                ))
-            })
+            match (field.data_type(), column.data_type()) {
+                (arrow_schema::DataType::List(_), arrow_schema::DataType::Utf8) => {
+                    json_lists(&column, field.data_type()).map_err(|error| {
+                        LoaderError::Invalid(format!("column {}: {error}", field.name()))
+                    })
+                }
+                _ => cast_with_options(&column, field.data_type(), &strict).map_err(|error| {
+                    LoaderError::Invalid(format!(
+                        "column {}: {error}; pin a type for {} in columns that holds every value",
+                        field.name(),
+                        field.name()
+                    ))
+                }),
+            }
         })
         .collect::<Result<_, LoaderError>>()?;
     let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));

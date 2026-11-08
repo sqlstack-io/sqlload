@@ -100,10 +100,52 @@ fn given_a_reported_column_type_when_reading_it_back_then_it_maps_to_the_portabl
             expected_type: ColumnType::TimestampTz,
         },
         LiveTypeTestCase {
-            description: "Databricks array<string> passes through as native",
+            description: "Databricks array<string> is an array of text",
             live: live("array<string>", None, None, None),
             warehouse: Warehouse::Databricks,
-            expected_type: ColumnType::Native("array<string>".to_owned()),
+            expected_type: ColumnType::Array(Box::new(ColumnType::Text)),
+        },
+        LiveTypeTestCase {
+            description: "Databricks array of maps passes through as native",
+            live: live("array<map<string,int>>", None, None, None),
+            warehouse: Warehouse::Databricks,
+            expected_type: ColumnType::Native("array<map<string,int>>".to_owned()),
+        },
+        LiveTypeTestCase {
+            description: "Postgres numeric(10,2)[] takes the element's precision and scale from its text",
+            live: live("numeric(10,2)[]", None, None, None),
+            warehouse: Warehouse::Postgres,
+            expected_type: ColumnType::Array(Box::new(ColumnType::Decimal {
+                precision: 10,
+                scale: 2,
+            })),
+        },
+        LiveTypeTestCase {
+            description: "Postgres timestamp with time zone[] is an array of instants",
+            live: live("timestamp with time zone[]", None, None, None),
+            warehouse: Warehouse::Postgres,
+            expected_type: ColumnType::Array(Box::new(ColumnType::TimestampTz)),
+        },
+        LiveTypeTestCase {
+            description: "DuckDB BIGINT[] is an array of int",
+            live: live("BIGINT[]", None, None, None),
+            warehouse: Warehouse::DuckDb,
+            expected_type: ColumnType::Array(Box::new(ColumnType::Int)),
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse Array(Nullable(Date32)) is an array of dates",
+            live: live("Array(Nullable(Date32))", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Array(Box::new(ColumnType::Date)),
+        },
+        LiveTypeTestCase {
+            description: "BigQuery reports a repeated NUMERIC's precision and scale on the column",
+            live: live("ARRAY<NUMERIC>", Some(10), Some(2), None),
+            warehouse: Warehouse::BigQuery,
+            expected_type: ColumnType::Array(Box::new(ColumnType::Decimal {
+                precision: 10,
+                scale: 2,
+            })),
         },
         LiveTypeTestCase {
             description: "BigQuery's legacy INTEGER is int",
@@ -196,7 +238,7 @@ fn given_a_reported_column_type_when_reading_it_back_then_it_maps_to_the_portabl
             expected_type: ColumnType::Native("DateTime64(3, 'UTC')".to_owned()),
         },
         LiveTypeTestCase {
-            description: "ClickHouse Array passes through as native",
+            description: "ClickHouse Array of elements that cannot be NULL passes through as native",
             live: live("Array(Int64)", None, None, None),
             warehouse: Warehouse::ClickHouse,
             expected_type: ColumnType::Native("Array(Int64)".to_owned()),

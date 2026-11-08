@@ -2,6 +2,8 @@
 mod flatten_batch;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_json_lists.rs"]
+mod json_lists;
 #[path = "tests/test_json_rows.rs"]
 mod json_rows;
 #[path = "tests/test_merge_schema.rs"]

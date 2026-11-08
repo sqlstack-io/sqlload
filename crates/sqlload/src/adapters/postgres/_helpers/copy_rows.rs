@@ -1,15 +1,18 @@
 //! Arrow batches as a binary `COPY` stream, in the types of the staging table's columns: the mirror of the Postgres source's reader.
 
+use arrow_array::builder::StringBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal128Type, Float64Type, Int16Type, Int64Type, Time64MicrosecondType,
     TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{DataType, TimeUnit};
 use bytes::{BufMut, Bytes, BytesMut};
 
+use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::ColumnType;
 use crate::postgres_source::constants::{
     COPY_SIGNATURE, COPY_TRAILER, NULL_FIELD_LENGTH, NUMERIC_DIGIT_WIDTH, NUMERIC_NEGATIVE,
@@ -59,7 +62,48 @@ fn wire(column_type: &ColumnType) -> (Wire, DataType) {
             DataType::Timestamp(TimeUnit::Microsecond, None),
         ),
         ColumnType::Binary => (Wire::Bytea, DataType::Binary),
+        ColumnType::Array(_) => (Wire::Text, DataType::Utf8),
     }
+}
+
+/// Each list of `array` (cast to `column_type`'s Arrow list first) as Postgres array input text, such as `{"1","2",NULL}`: every element quoted, with `"` and `\` escaped, NULL bare.
+fn array_literals(array: &ArrayRef, column_type: &ColumnType) -> Result<ArrayRef, String> {
+    let strict = CastOptions {
+        safe: false,
+        ..CastOptions::default()
+    };
+    let target = arrow_field("", column_type)
+        .ok_or("an array of this type has no Arrow form")?
+        .data_type()
+        .clone();
+    let lists = cast_with_options(array, &target, &strict).map_err(|error| error.to_string())?;
+    let lists = lists.as_list::<i32>();
+    let options = FormatOptions::default();
+    let mut texts = StringBuilder::with_capacity(lists.len(), lists.values().len() * 8);
+    for row in 0..lists.len() {
+        if lists.is_null(row) {
+            texts.append_null();
+            continue;
+        }
+        let values = lists.value(row);
+        let formatter = ArrayFormatter::try_new(values.as_ref(), &options)
+            .map_err(|error| error.to_string())?;
+        let elements: Vec<String> = (0..values.len())
+            .map(|position| match values.is_null(position) {
+                true => "NULL".to_owned(),
+                false => format!(
+                    "\"{}\"",
+                    formatter
+                        .value(position)
+                        .to_string()
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                ),
+            })
+            .collect();
+        texts.append_value(format!("{{{}}}", elements.join(",")));
+    }
+    Ok(std::sync::Arc::new(texts.finish()))
 }
 
 /// A `numeric` in Postgres's binary form: `value` scaled by `10^scale`, as base-10000 digits around the point.
@@ -191,7 +235,12 @@ fn wire_columns(
                 .map_err(|_| format!("column {} is not in the batch", column.name))?;
             let (wire, data_type) = wire(&column.column_type);
             let arrived = batch.column(index);
-            let cast = cast_with_options(arrived, &data_type, &options).map_err(|error| {
+            let cast = match &column.column_type {
+                ColumnType::Array(_) => array_literals(arrived, &column.column_type),
+                _ => cast_with_options(arrived, &data_type, &options)
+                    .map_err(|error| error.to_string()),
+            }
+            .map_err(|error| {
                 format!(
                     "column {} ({}) cannot be sent to Postgres as {}: {error}",
                     column.name,

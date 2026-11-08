@@ -150,6 +150,48 @@ fn given_a_portable_type_when_mapping_to_a_warehouse_then_the_sql_name_and_loss_
             expected_sql: "LowCardinality(String)",
             expected_lossy: false,
         },
+        WarehouseTypeTestCase {
+            description: "a DuckDB array is a list of its element type",
+            column_type: ColumnType::Array(Box::new(ColumnType::Int)),
+            warehouse: Warehouse::DuckDb,
+            expected_sql: "BIGINT[]",
+            expected_lossy: false,
+        },
+        WarehouseTypeTestCase {
+            description: "a Postgres array keeps its element's precision and scale",
+            column_type: ColumnType::Array(Box::new(decimal.clone())),
+            warehouse: Warehouse::Postgres,
+            expected_sql: "numeric(18,2)[]",
+            expected_lossy: false,
+        },
+        WarehouseTypeTestCase {
+            description: "a Databricks array carries its element's loss: a zoned timestamp is a UTC instant",
+            column_type: ColumnType::Array(Box::new(ColumnType::TimestampTz)),
+            warehouse: Warehouse::Databricks,
+            expected_sql: "ARRAY<TIMESTAMP>",
+            expected_lossy: true,
+        },
+        WarehouseTypeTestCase {
+            description: "a BigQuery array holds no NULLs",
+            column_type: ColumnType::Array(Box::new(decimal.clone())),
+            warehouse: Warehouse::BigQuery,
+            expected_sql: "ARRAY<NUMERIC(18,2)>",
+            expected_lossy: true,
+        },
+        WarehouseTypeTestCase {
+            description: "a ClickHouse array cannot be NULL itself, only its elements",
+            column_type: ColumnType::Array(Box::new(ColumnType::Text)),
+            warehouse: Warehouse::ClickHouse,
+            expected_sql: "Array(Nullable(String))",
+            expected_lossy: true,
+        },
+        WarehouseTypeTestCase {
+            description: "a Snowflake array holds its elements as JSON values",
+            column_type: ColumnType::Array(Box::new(decimal.clone())),
+            warehouse: Warehouse::Snowflake,
+            expected_sql: "ARRAY",
+            expected_lossy: true,
+        },
     ];
     for test_case in test_cases {
         let mapped =

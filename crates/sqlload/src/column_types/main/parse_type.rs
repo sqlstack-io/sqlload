@@ -1,5 +1,6 @@
 //! Parse a declared column type.
 
+use crate::column_types::_helpers::array::array_type;
 use crate::column_types::_helpers::destinations::{check_destinations, native_warnings};
 use crate::column_types::_helpers::names::resolve_name;
 use crate::column_types::_helpers::native::native_inner;
@@ -23,6 +24,9 @@ pub fn parse_type(text: &str, destinations: &[Warehouse]) -> Result<ParsedType, 
             written_as: None,
             warnings,
         });
+    }
+    if let Some(parsed) = array_type((written, destinations), parse_type) {
+        return parsed;
     }
     let syntax = split_type(written).map_err(malformed)?;
     let Some((column_type, kind)) = resolve_name(&syntax, written)? else {

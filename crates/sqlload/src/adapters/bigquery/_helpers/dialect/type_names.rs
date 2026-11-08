@@ -4,6 +4,7 @@ use crate::adapters::bigquery::constants::{
     NUMERIC_DEFAULT, NUMERIC_MAX_INTEGER_DIGITS, NUMERIC_MAX_SCALE,
 };
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
+use crate::column_types::main::array_element::array_element;
 use crate::column_types::models::{ColumnType, LiveColumnType, WarehouseType};
 
 /// A type BigQuery holds exactly.
@@ -60,6 +61,12 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
         ColumnType::Uuid => lossy("STRING", "stored as text"),
         ColumnType::Binary => exact("BYTES"),
         ColumnType::Native(name) => exact(name.clone()),
+        ColumnType::Array(element) => WarehouseType {
+            sql: format!("ARRAY<{}>", logical_type(element).sql),
+            lossy: Some(
+                "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load",
+            ),
+        },
     }
 }
 
@@ -89,6 +96,18 @@ fn string(live: &LiveColumnType) -> ColumnType {
 
 /// A column type as `tables.get` reports it (`INT64` or its legacy name `INTEGER`, `NUMERIC` with its precision and scale, `STRING` with its `maxLength`); a repeated or nested column, or a type with no portable name, has none.
 pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
+    let upper = live.data_type.trim().to_ascii_uppercase();
+    if let Some(element) = upper
+        .strip_prefix("ARRAY<")
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        let base = element.split('(').next().unwrap_or_default();
+        let element = portable_type(&LiveColumnType {
+            data_type: base.to_owned(),
+            ..array_element(live, element)
+        })?;
+        return Some(ColumnType::Array(Box::new(element)));
+    }
     Some(match live.data_type.to_ascii_uppercase().as_str() {
         "BOOL" | "BOOLEAN" => ColumnType::Bool,
         "INT64" | "INTEGER" => ColumnType::Int,

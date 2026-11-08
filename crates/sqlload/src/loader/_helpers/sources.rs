@@ -619,6 +619,11 @@ fn path_values(
     for (name, text) in &source.partition_columns {
         let parsed = parse_type(text, &[warehouse])
             .map_err(|error| LoaderError::Invalid(format!("partition column {name}: {error}")))?;
+        if matches!(parsed.column_type, ColumnType::Array(_)) {
+            return Err(LoaderError::Invalid(format!(
+                "partition column {name}: an array cannot come from a path"
+            )));
+        }
         types.push((name.clone(), parsed.column_type));
     }
     let template = source

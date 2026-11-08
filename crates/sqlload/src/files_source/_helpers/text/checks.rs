@@ -58,8 +58,9 @@ impl ColumnChecks {
 
 /// Whether a value of type `value_type` (`None` for NULL) fits a column inferred as `column_type`: it would not have changed the inferred type.
 pub(crate) fn value_fits(column_type: &ColumnType, value_type: Option<ColumnType>) -> bool {
-    value_type
-        .is_none_or(|value_type| combined_type(column_type.clone(), value_type) == *column_type)
+    value_type.is_none_or(|value_type| {
+        value_type == *column_type || combined_type(column_type.clone(), value_type) == *column_type
+    })
 }
 
 /// The error for a value that does not fit its inferred type.

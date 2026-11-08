@@ -789,6 +789,24 @@ const UNPINNED_JSON: [CdcStep; 1] = [step(
     (false, "streams json values as the source wrote them"),
 )];
 
+const ARRAY_SOURCE: &str = r#"
+[sources.listed]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.orders"]
+
+[sources.listed.tables."public.orders"]
+description = "Orders, with tags pinned as an array."
+columns = { tags = "array(text)" }
+"#;
+
+const PINNED_ARRAY: [CdcStep; 1] = [step(
+    "",
+    &["load", "listed"],
+    "",
+    (false, "streams text[] values as the source wrote them"),
+)];
+
 const NOT_OWNER_SOURCE: &str = r#"
 [connections.reader]
 kind = "postgres"
@@ -1303,6 +1321,15 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             extra_config: JSON_SOURCE,
             steps: &UNPINNED_JSON,
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'pages__pages'",
+            expected_result: "0",
+        },
+        CdcScenarioTestCase {
+            description: "an array column cannot be pinned as an array yet, since the stream sends Postgres array text; plan refuses it before any snapshot",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: ARRAY_SOURCE,
+            steps: &PINNED_ARRAY,
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'listed__orders'",
             expected_result: "0",
         },
         CdcScenarioTestCase {

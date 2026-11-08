@@ -25,7 +25,10 @@ pub(crate) fn column_type(cells: &[Cell]) -> (Option<ColumnType>, Vec<Option<i64
         let Some(value_type) = cell_type(cell, parsed.is_some()) else {
             continue;
         };
-        let merged = seen.map_or(value_type.clone(), |seen| merged_type(seen, value_type));
+        let merged = match seen {
+            Some(seen) => merged_type(seen, value_type),
+            None => value_type,
+        };
         match merged {
             ColumnType::Text => return (Some(ColumnType::Text), Vec::new()),
             ColumnType::TimestampTz => {

@@ -22,6 +22,8 @@ pub enum ColumnType {
     Binary,
     /// `native("...")`: passed through to the warehouse verbatim; never widened or coerced.
     Native(String),
+    /// `array(<scalar>)`: a list of one scalar type, NULL elements allowed; only ever pinned, never inferred.
+    Array(Box<ColumnType>),
 }
 
 impl std::fmt::Display for ColumnType {
@@ -42,6 +44,7 @@ impl std::fmt::Display for ColumnType {
             Self::Uuid => formatter.write_str("uuid"),
             Self::Binary => formatter.write_str("binary"),
             Self::Native(name) => write!(formatter, "native({name:?})"),
+            Self::Array(element) => write!(formatter, "array({element})"),
         }
     }
 }

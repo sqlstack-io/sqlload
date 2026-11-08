@@ -29,3 +29,15 @@ pub(crate) struct CopyRoundTripTestCase {
     /// `split: true` when the stream was cut into several pieces, then each column read back by the source's reader as `name = value|value`; or the error up to its first `: `.
     pub(crate) expected_result: Result<String, &'static str>,
 }
+
+pub(crate) struct ArrayTextTestCase {
+    pub(crate) description: &'static str,
+    /// Each array column's name, the staging table's type for it, and the lists the batch holds.
+    pub(crate) columns: Vec<(
+        &'static str,
+        crate::column_types::models::ColumnType,
+        arrow_array::ArrayRef,
+    )>,
+    /// The columns staged and read back as text, or the error up to its first `: `.
+    pub(crate) expected_text: Result<String, String>,
+}

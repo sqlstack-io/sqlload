@@ -6,12 +6,14 @@ use arrow_array::builder::{
     Int64Builder, StringBuilder, Time64MicrosecondBuilder, TimestampMicrosecondBuilder,
 };
 
+use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::ColumnType;
 use crate::postgres_source::_helpers::values::{
     read_date, read_f32, read_f64, read_i16, read_i32, read_i64, read_numeric, read_timestamp,
     read_uuid,
 };
 use crate::postgres_source::models::WireType;
+use crate::row_batches::main::json_lists::json_lists;
 
 /// An Arrow array under construction for one output column.
 pub(crate) enum ColumnBuilder {
@@ -29,6 +31,11 @@ pub(crate) enum ColumnBuilder {
     Time64(Time64MicrosecondBuilder),
     Timestamp(TimestampMicrosecondBuilder),
     Binary(BinaryBuilder),
+    /// An array read as its JSON text, converted to `list_type` when the batch is finished.
+    List {
+        texts: StringBuilder,
+        list_type: arrow_schema::DataType,
+    },
 }
 
 impl ColumnBuilder {
@@ -62,6 +69,13 @@ impl ColumnBuilder {
             ColumnType::Native(name) => {
                 return Err(format!("native({name:?}) has no Arrow representation"));
             }
+            ColumnType::Array(_) => Self::List {
+                texts: StringBuilder::new(),
+                list_type: arrow_field("", output)
+                    .ok_or("an array of this type has no Arrow form")?
+                    .data_type()
+                    .clone(),
+            },
         })
     }
 
@@ -101,6 +115,9 @@ impl ColumnBuilder {
                 builder.append_value(read_timestamp(bytes)?);
             }
             (Self::Binary(builder), WireType::Bytea) => builder.append_value(bytes),
+            (Self::List { texts, .. }, WireType::Text) => texts.append_value(
+                std::str::from_utf8(bytes).map_err(|_| "is not valid UTF-8".to_owned())?,
+            ),
             (_, wire) => return Err(format!("cannot store a {wire:?} value in this column")),
         }
         Ok(())
@@ -118,12 +135,13 @@ impl ColumnBuilder {
             Self::Time64(builder) => builder.append_null(),
             Self::Timestamp(builder) => builder.append_null(),
             Self::Binary(builder) => builder.append_null(),
+            Self::List { texts, .. } => texts.append_null(),
         }
     }
 
-    /// The finished array; the builder is empty afterwards.
-    pub(crate) fn finish(&mut self) -> ArrayRef {
-        match self {
+    /// The finished array; the builder is empty afterwards. An array's JSON text that does not convert to its list type is an error.
+    pub(crate) fn finish(&mut self) -> Result<ArrayRef, String> {
+        Ok(match self {
             Self::Bool(builder) => Arc::new(builder.finish()),
             Self::Int16(builder) => Arc::new(builder.finish()),
             Self::Int64(builder) => Arc::new(builder.finish()),
@@ -134,6 +152,10 @@ impl ColumnBuilder {
             Self::Time64(builder) => Arc::new(builder.finish()),
             Self::Timestamp(builder) => Arc::new(builder.finish()),
             Self::Binary(builder) => Arc::new(builder.finish()),
-        }
+            Self::List { texts, list_type } => {
+                let texts: ArrayRef = Arc::new(texts.finish());
+                json_lists(&texts, list_type)?
+            }
+        })
     }
 }

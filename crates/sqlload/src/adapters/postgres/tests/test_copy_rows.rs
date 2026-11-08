@@ -1,14 +1,18 @@
 use std::sync::Arc;
 
-use arrow_array::types::Decimal128Type;
+use arrow_array::types::{Decimal128Type, Int64Type};
 use arrow_array::{
     BinaryArray, BooleanArray, Date32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    PrimitiveArray, StringArray, Time64MicrosecondArray, TimestampMicrosecondArray,
+    ListArray, PrimitiveArray, StringArray, Time64MicrosecondArray, TimestampMicrosecondArray,
 };
 
 use crate::adapters::postgres::_helpers::copy_rows::numeric_bytes;
-use crate::adapters::postgres::tests::helpers::{numeric_wire, round_trip};
-use crate::adapters::postgres::tests::test_types::{CopyRoundTripTestCase, NumericTestCase};
+use crate::adapters::postgres::tests::helpers::{
+    numeric_wire, round_trip, staged_text, text_lists,
+};
+use crate::adapters::postgres::tests::test_types::{
+    ArrayTextTestCase, CopyRoundTripTestCase, NumericTestCase,
+};
 use crate::column_types::models::ColumnType;
 use crate::postgres_source::models::WireType;
 
@@ -224,6 +228,61 @@ fn given_decimals_when_encoding_numeric_then_digits_weight_and_sign_are_postgres
                 test_case.expected_sign,
                 test_case.scale
             ),
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_array_columns_when_staged_then_each_list_is_postgres_array_input_text() {
+    let test_cases = [
+        ArrayTextTestCase {
+            description: "every element quoted with quotes and backslashes escaped, a NULL element bare, a NULL array NULL",
+            columns: vec![
+                (
+                    "tags",
+                    ColumnType::Array(Box::new(ColumnType::Text)),
+                    Arc::new(text_lists(vec![
+                        Some(vec![Some("a\\b"), Some("say \"hi\""), Some("x,y"), None]),
+                        Some(vec![]),
+                        None,
+                    ])),
+                ),
+                (
+                    "ids",
+                    ColumnType::Array(Box::new(ColumnType::SmallInt)),
+                    Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                        Some(vec![Some(1), Some(-2)]),
+                        None,
+                        Some(vec![None]),
+                    ])),
+                ),
+            ],
+            expected_text: Ok([
+                "split: false; tags = {\"a\\\\b\",\"say \\\"hi\\\"\",\"x,y\",NULL}|{}|null",
+                "ids = {\"1\",\"-2\"}|null|{NULL}",
+            ]
+            .join("; ")),
+        },
+        ArrayTextTestCase {
+            description: "an element too large for the array's element type fails the batch, naming the column",
+            columns: vec![(
+                "ids",
+                ColumnType::Array(Box::new(ColumnType::SmallInt)),
+                Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                    Some(vec![Some(40_000)]),
+                ])),
+            )],
+            expected_text: Err(
+                "column ids (List(Int64)) cannot be sent to Postgres as array(smallint)".to_owned(),
+            ),
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            staged_text(&test_case.columns),
+            test_case.expected_text,
             "{}",
             test_case.description
         );
