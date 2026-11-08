@@ -6,6 +6,8 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
+from base64 import b64decode
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,6 +20,8 @@ import pytest
 ORDERS = [{"order_id": n, "status": "open" if n % 2 else "closed"} for n in range(1, 8)]
 ITEMS = {n: [{"order_id": n, "line": line} for line in range(n % 3)] for n in range(1, 8)}
 TOKEN = "s3cret-token"
+CLIENT_SECRET = "cl1ent-secret"
+REFRESH_TOKEN = "r3fresh-first"
 
 
 class Api(BaseHTTPRequestHandler):
@@ -30,7 +34,9 @@ class Api(BaseHTTPRequestHandler):
 		url = urlparse(self.path)
 		query = {key: values[0] for key, values in parse_qs(url.query).items()}
 		self.server.log.append((url.path, query, self.headers.get("Authorization")))  # type: ignore[attr-defined]
-		if TOKEN not in (self.headers.get("Authorization", "").removeprefix("Bearer "), query.get("key"), self.headers.get("X-Api-Key")):
+		bearer = self.headers.get("Authorization", "").removeprefix("Bearer ")
+		if TOKEN not in (bearer, query.get("key"), self.headers.get("X-Api-Key")) and not self.access_allowed(bearer):
+			self.server.refused += 1  # type: ignore[attr-defined]
 			return self.reply(401, {"message": f"bad token {self.headers.get('Authorization')}"})
 		route = {
 			"/v1/next": self.next_link,
@@ -51,6 +57,8 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/landed/": lambda query: self.reply(200, {"items": ORDERS[:3], "next": "more"}),
 			"/v1/landed/more": lambda query: self.reply(200, {"items": ORDERS[3:], "next": None}),
 			"/v1/sparse": self.sparse,
+			"/v1/slow": self.slow,
+			"/v1/whoami": lambda query: self.reply(400, {"message": f"you are {self.headers.get('Authorization')}"}),
 			"/v1/echo": lambda query: self.reply(400, {"message": f"version {self.headers.get('X-Version')} session {self.headers.get('X-Session-Id')} credential {self.headers.get('X-Credential')}"}),
 		}.get(url.path)
 		if route is not None:
@@ -60,6 +68,41 @@ class Api(BaseHTTPRequestHandler):
 			order = int(parts[3])
 			return self.reply(404, {}) if order == 4 else self.reply(200, {"items": ITEMS[order]})
 		return self.reply(404, {"message": "no route"})
+
+	def do_POST(self) -> None:
+		"""The OAuth2 token endpoint: `self.server.oauth` sets the lifetime, uses before revocation and rotation of tokens it issues."""
+		form = {key: values[0] for key, values in parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode()).items()}
+		basic = self.headers.get("Authorization", "")
+		client = b64decode(basic.removeprefix("Basic ")).decode().split(":", 1) if basic.startswith("Basic ") else [form.get("client_id"), form.get("client_secret")]
+		server = self.server
+		server.token_requests.append({**form, "client": client})  # type: ignore[attr-defined]
+		oauth = server.oauth  # type: ignore[attr-defined]
+		if client != ["app", CLIENT_SECRET] or form.get("grant_type") == "refresh_token" and form.get("refresh_token") != server.refresh_token:  # type: ignore[attr-defined]
+			return self.reply(401, {"error": "invalid_client", "error_description": f"unknown client {client} or refresh token"})
+		access = f"access-{len(server.token_requests)}"  # type: ignore[attr-defined]
+		server.tokens[access] = {"issued": time.monotonic(), "uses": 0}  # type: ignore[attr-defined]
+		body: dict[str, Any] = {"access_token": access, "token_type": "Bearer"}
+		if oauth.get("lifetime"):
+			body["expires_in"] = oauth["lifetime"]
+		if oauth.get("rotate"):
+			server.refresh_token = body["refresh_token"] = f"r3fresh-{len(server.token_requests) + 1}"  # type: ignore[attr-defined]
+		self.reply(200, body)
+
+	def access_allowed(self, bearer: str) -> bool:
+		"""Whether `bearer` is an access token the token endpoint issued that has neither expired nor been used up."""
+		issued = self.server.tokens.get(bearer)  # type: ignore[attr-defined]
+		oauth = self.server.oauth  # type: ignore[attr-defined]
+		if issued is None:
+			return False
+		issued["uses"] += 1
+		expired = oauth.get("lifetime") and time.monotonic() - issued["issued"] > oauth["lifetime"]
+		used_up = oauth.get("uses") and issued["uses"] > oauth["uses"]
+		return not (expired or used_up)
+
+	def slow(self, query: dict[str, str]) -> None:
+		time.sleep(0.5)
+		page = int(query["p"])
+		self.reply(200, {"items": ORDERS[page - 1 : page]})
 
 	def reply(self, status: int, body: Any, headers: dict[str, str] | None = None) -> None:
 		data = json.dumps(body).encode()
@@ -151,6 +194,11 @@ def api(elsewhere: ThreadingHTTPServer) -> Iterator[ThreadingHTTPServer]:
 	server = serve(Api)
 	server.log = []  # type: ignore[attr-defined]
 	server.flaky = 0  # type: ignore[attr-defined]
+	server.refused = 0  # type: ignore[attr-defined]
+	server.oauth = {}  # type: ignore[attr-defined]
+	server.tokens = {}  # type: ignore[attr-defined]
+	server.token_requests = []  # type: ignore[attr-defined]
+	server.refresh_token = REFRESH_TOKEN  # type: ignore[attr-defined]
 	host, port = elsewhere.server_address[:2]
 	server.other = f"http://localhost:{port}"  # type: ignore[attr-defined]
 	yield server
@@ -172,13 +220,16 @@ def make_project(tmp_path: Path, server: ThreadingHTTPServer, tables: str) -> Pa
 			kind = "http"
 			base_url = "http://{host}:{port}/v1"
 			token = "${{ENV:SHOP_TOKEN}}"
+			client_id = "app"
+			client_secret = "${{ENV:SHOP_CLIENT_SECRET}}"
+			refresh_token = "{REFRESH_TOKEN}"
 
 			[targets.dev]
 			connection = "wh"
 			loader_schema = "RAW"
 		""")
 	)
-	module = "import sqlload as sl\n\nshop = sl.source('shop', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=3)\n\n" + textwrap.dedent(tables)
+	module = f"import sqlload as sl\n\nTOKEN_URL = 'http://{host}:{port}/oauth/token'\nshop = sl.source('shop', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=3)\n\n" + textwrap.dedent(tables)
 	(tmp_path / "sources" / "shop.py").write_text(module)
 	return tmp_path
 
@@ -186,7 +237,7 @@ def make_project(tmp_path: Path, server: ThreadingHTTPServer, tables: str) -> Pa
 def sqlload(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
 	home = project / "home"
 	home.mkdir(exist_ok=True)
-	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "SHOP_TOKEN": TOKEN}
+	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "SHOP_TOKEN": TOKEN, "SHOP_CLIENT_SECRET": CLIENT_SECRET}
 	return subprocess.run(
 		[sys.executable, "-c", "from sqlload._cli import main; main()", *args], cwd=project, env=env, capture_output=True, text=True, timeout=120
 	)
@@ -365,3 +416,76 @@ def test_given_a_redirect_listed_in_on_status_when_loading_then_it_is_skipped_an
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert elsewhere.seen == []  # type: ignore[attr-defined]
+
+
+def oauth_project(tmp_path: Path, server: ThreadingHTTPServer, auth: str, job: str) -> Path:
+	tables = f"oauth = sl.http(shop, auth={auth})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return oauth.{job}\n"
+	return make_project(tmp_path, server, tables)
+
+
+def test_given_short_lived_tokens_when_pages_outlast_one_then_it_is_renewed_before_it_expires(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	api.oauth = {"lifetime": 2}  # type: ignore[attr-defined]
+	project = oauth_project(tmp_path, api, "sl.oauth2_client_credentials(TOKEN_URL, scope='orders:read')", "paginate('/slow', paginator=sl.page_number('p'), select='$.items')")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT order_id, status FROM "RAW".shop__t ORDER BY order_id') == ALL_ORDERS
+	assert api.refused == 0  # type: ignore[attr-defined]
+	assert len(api.token_requests) >= 2  # type: ignore[attr-defined]
+	assert {(request["grant_type"], request.get("scope")) for request in api.token_requests} == {("client_credentials", "orders:read")}  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+	("auth", "expected_grant"),
+	[
+		("sl.oauth2_client_credentials(TOKEN_URL)", [("client_credentials", None)] * 3),
+		("sl.oauth2_refresh_token(TOKEN_URL, client_auth='post')", [("refresh_token", REFRESH_TOKEN), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-3")]),
+	],
+	ids=["client-credentials", "refresh-token-rotated-client-in-form"],
+)
+def test_given_a_token_revoked_mid_pagination_when_the_api_answers_401_then_a_new_one_is_fetched_and_the_page_retried(
+	tmp_path: Path, api: ThreadingHTTPServer, auth: str, expected_grant: list[tuple[str, str | None]]
+) -> None:
+	api.oauth = {"uses": 3, "rotate": "refresh_token" in auth}  # type: ignore[attr-defined]
+	project = oauth_project(tmp_path, api, auth, "paginate('/offset', paginator=sl.offset(limit=1))")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT order_id, status FROM "RAW".shop__t ORDER BY order_id') == ALL_ORDERS
+	assert api.refused == 2  # type: ignore[attr-defined]
+	assert [(request["grant_type"], request.get("refresh_token")) for request in api.token_requests] == expected_grant  # type: ignore[attr-defined]
+	assert all(request["client"] == ["app", CLIENT_SECRET] for request in api.token_requests)  # type: ignore[attr-defined]
+	assert {auth for path, _, auth in api.log if path == "/v1/offset"} == {"Bearer access-1", "Bearer access-2", "Bearer access-3"}  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+	("auth", "job", "expected_text"),
+	[
+		(
+			"sl.oauth2_client_credentials(TOKEN_URL, client_auth='post')",
+			"paginate('/offset', paginator=sl.offset(limit=10))",
+			"/oauth/token (OAuth2 token): HTTP 401: invalid_client: unknown client ['app', '***'] or refresh token; check the connection's OAuth2 credentials",
+		),
+		(
+			"sl.oauth2_client_credentials('http://auth.example.com/token')",
+			"paginate('/offset', paginator=sl.offset(limit=10))",
+			"token_url http://auth.example.com/token must be https",
+		),
+		(
+			"sl.oauth2_client_credentials(TOKEN_URL)",
+			"paginate('/whoami', paginator=sl.single())",
+			'HTTP 400: {"message": "you are Bearer ***"}',
+		),
+	],
+	ids=["bad-client-secret", "http-token-url-elsewhere", "access-token-redacted"],
+)
+def test_given_an_oauth2_failure_when_loading_then_the_error_says_why_and_hides_every_secret(
+	tmp_path: Path, api: ThreadingHTTPServer, auth: str, job: str, expected_text: str
+) -> None:
+	project = oauth_project(tmp_path, api, auth, job)
+	if "invalid_client" in expected_text:
+		(project / "sqlload.toml").write_text((project / "sqlload.toml").read_text().replace("${ENV:SHOP_CLIENT_SECRET}", "wrong-secret"))
+	done = sqlload(project, "load")
+	output = done.stdout + done.stderr
+	assert done.returncode == 1
+	assert expected_text in output, output
+	assert not any(secret in output for secret in (CLIENT_SECRET, "wrong-secret", "access-1"))
+	assert all(path == "/v1/whoami" for path, _, _ in api.log)  # type: ignore[attr-defined]

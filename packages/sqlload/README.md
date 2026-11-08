@@ -76,8 +76,10 @@ def order_items(ctx):
 
 - The connection is `kind = "http"` with `base_url`, and `token` (for `sl.bearer()` and
   `sl.api_key(header=...)` or `sl.api_key(query=...)`) or `username` and `password` (for
-  `sl.basic()`), plus optional `headers`. Credentials go only to the connection's own scheme,
-  host and port, never to a next-page link elsewhere.
+  `sl.basic()`), or `client_id`, `client_secret` and `refresh_token` (for
+  `sl.oauth2_client_credentials(token_url)` and `sl.oauth2_refresh_token(token_url)`, which fetch
+  and renew short-lived access tokens), plus optional `headers`. Credentials go only to the
+  connection's own scheme, host and port, never to a next-page link elsewhere.
 - Every `paginate` names its paginator: `sl.single()`, `sl.next_link(pointer)`,
   `sl.link_header()`, `sl.offset(param, limit=...)`, `sl.page_number(param, start=1)` or
   `sl.cursor(pointer, param)`. Nothing is guessed.

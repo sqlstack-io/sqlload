@@ -9,6 +9,9 @@ pub const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// The longest wait a `Retry-After` header is obeyed for.
 pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
 
+/// The most time before an OAuth2 access token's expiry at which it is renewed; a short-lived token is renewed a tenth of its lifetime early.
+pub const MAX_TOKEN_RENEWAL_MARGIN: Duration = Duration::from_secs(60);
+
 /// Characters of a failed response's body shown in its error.
 pub const ERROR_EXCERPT_CHARS: usize = 300;
 

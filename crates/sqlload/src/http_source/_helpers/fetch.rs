@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::Url;
 use reqwest::header::{LINK, RETRY_AFTER};
 
-use crate::http::constants::{FIRST_SERVER_ERROR, TOO_MANY_REQUESTS};
+use crate::http::constants::{FIRST_SERVER_ERROR, TOO_MANY_REQUESTS, UNAUTHORIZED};
 use crate::http::models::RetryPolicy;
 use crate::http_source::_helpers::urls::{link_header_next, redacted, same_origin};
 use crate::http_source::constants::{
@@ -21,12 +21,26 @@ pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, S
         max_attempts: calls.retries + 1,
     };
     let mut attempt = 1;
+    let mut refused: Option<String> = None;
+    let mut renewed = false;
     loop {
         if let Some(limiter) = &calls.limiter {
             limiter.wait().await;
         }
-        match once(calls, url).await? {
+        let access = match &calls.endpoint.credential {
+            Credential::OAuth2(tokens) => Some(
+                tokens
+                    .access_token(&calls.http, calls.retries, refused.as_deref())
+                    .await?,
+            ),
+            _ => None,
+        };
+        match once(calls, url, access.as_deref(), !renewed).await? {
             Attempt::Done(fetched) => return Ok(fetched),
+            Attempt::Refused => {
+                refused = access;
+                renewed = true;
+            }
             Attempt::Retry { reason, .. } if attempt >= policy.max_attempts => {
                 return Err(format!("{reason} (after {} attempts)", policy.max_attempts));
             }
@@ -39,10 +53,16 @@ pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, S
     }
 }
 
-/// One try at `url`.
-async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
+/// One try at `url`, with the OAuth2 `access` token when the connection uses one; a 401 comes back as `Refused` while `may_renew`.
+async fn once(
+    calls: &Calls,
+    url: &Url,
+    access: Option<&str>,
+    may_renew: bool,
+) -> Result<Attempt, String> {
     let endpoint = &calls.endpoint;
-    let shown = redacted(&format!("GET {url}"), &endpoint.secrets);
+    let secrets = endpoint.current_secrets();
+    let shown = redacted(&format!("GET {url}"), &secrets);
     let own = same_origin(&endpoint.base_url, url);
     let mut request = calls.http.get(url.clone());
     for (name, value) in endpoint.headers.iter().filter(|_| own) {
@@ -51,6 +71,7 @@ async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
     request = match (&endpoint.credential, own) {
         (Credential::Header { name, value }, true) => request.header(name, value),
         (Credential::Query { name, value }, true) => request.query(&[(name, value)]),
+        (Credential::OAuth2(_), true) => request.bearer_auth(access.unwrap_or_default()),
         _ => request,
     };
     let response = match request.send().await {
@@ -86,7 +107,7 @@ async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
     };
     let skipped = calls.on_status.get(&status) == Some(&StatusAction::Skip);
     let excerpt = || {
-        redacted(&String::from_utf8_lossy(&body), &endpoint.secrets)
+        redacted(&String::from_utf8_lossy(&body), &secrets)
             .chars()
             .take(ERROR_EXCERPT_CHARS)
             .collect::<String>()
@@ -97,6 +118,7 @@ async fn once(calls: &Calls, url: &Url) -> Result<Attempt, String> {
             next_link,
             url: landed,
         })),
+        UNAUTHORIZED if may_renew && access.is_some() => Attempt::Refused,
         _ if skipped => Attempt::Done(None),
         300..=399 => {
             return Err(format!(
@@ -127,7 +149,7 @@ fn retry_after(response: &reqwest::Response) -> Option<Duration> {
 }
 
 /// `delay` scaled by a factor between 0.5 and 1, so retries of parallel requests spread out.
-fn jittered(delay: Duration) -> Duration {
+pub(crate) fn jittered(delay: Duration) -> Duration {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.subsec_micros());
@@ -135,7 +157,7 @@ fn jittered(delay: Duration) -> Duration {
 }
 
 /// A transport error without its URL, with the causes reqwest's own text leaves out.
-fn transport_text(error: reqwest::Error) -> String {
+pub(crate) fn transport_text(error: reqwest::Error) -> String {
     let error = error.without_url();
     let mut text = error.to_string();
     let mut cause = std::error::Error::source(&error);

@@ -193,6 +193,14 @@ pub enum ConnectionConfig {
         username: Option<String>,
         #[serde(default)]
         password: Option<crate::auth::models::Secret>,
+        /// For `sl.oauth2_client_credentials(...)`, and `sl.oauth2_refresh_token(...)` when the API wants the client too.
+        #[serde(default)]
+        client_id: Option<String>,
+        #[serde(default)]
+        client_secret: Option<crate::auth::models::Secret>,
+        /// For `sl.oauth2_refresh_token(...)`.
+        #[serde(default)]
+        refresh_token: Option<crate::auth::models::Secret>,
         #[serde(default)]
         headers: BTreeMap<String, String>,
     },
