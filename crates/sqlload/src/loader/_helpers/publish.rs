@@ -644,6 +644,16 @@ impl Publisher {
         let Some(source_files) = spec.files.as_ref() else {
             return Ok(BatchFooters::default());
         };
+        if source_files.encoding.record.is_some() {
+            let direct = self.table.files.is_some() && is_direct(self.table.route.as_ref());
+            return match (source_files.encoding.format, direct) {
+                (SourceFormat::Csv, true) => Ok(BatchFooters {
+                    headers: batch_headers(folder, files, &source_files.encoding).await?,
+                    ..BatchFooters::default()
+                }),
+                _ => Ok(BatchFooters::default()),
+            };
+        }
         let replaced: Vec<&str> = source_files
             .partition_types
             .iter()

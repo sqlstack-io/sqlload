@@ -1,5 +1,6 @@
 //! List a files source and work out its schema from Parquet footers or sampled JSON and CSV records.
 
+use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::models::OpenFolder;
 use crate::files_source::_helpers::plan::columns::{
@@ -13,7 +14,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::{
-    FilesEncoding, FilesTable, ListedFiles, PathValues, SourceFormat,
+    FilesEncoding, FilesTable, ListedFiles, PathValues, SourceFormat, StoredRead,
 };
 
 /// The `encoding` files under `folder` with their path `values`, and the schema of the newest ones without the loader's own columns, which this load fills; when a file's path lacks a value, only the listing and its problems, before any file is read.
@@ -39,6 +40,16 @@ pub async fn discover_files(
         .into_iter()
         .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
         .collect();
+    if let Some(record) = &encoding.record {
+        return Ok(FilesTable {
+            files: files.into_iter().map(|(data, _)| data).collect(),
+            columns: file_columns(vec![record_column(record)]),
+            problems,
+            skipped: listed.skipped,
+            unmatched: listed.unmatched,
+            dropped: Vec::new(),
+        });
+    }
     let text_format = encoding.format != SourceFormat::Parquet;
     let mut columns: Vec<SampledColumn> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
@@ -70,6 +81,16 @@ pub async fn discover_files(
         unmatched: listed.unmatched,
         dropped,
     })
+}
+
+/// The one `json` column a `shape = "record"` source loads each record into.
+fn record_column(name: &str) -> SampledColumn {
+    SampledColumn {
+        name: name.to_owned(),
+        column_type: Some(Ok(ColumnType::Json)),
+        direct_refusal: None,
+        stored_read: StoredRead::Plain,
+    }
 }
 
 /// The listed files `encoding` reads and `values` keeps, sorted by key, with their decompression; how many others were skipped; and a problem for each file whose path lacks a value.

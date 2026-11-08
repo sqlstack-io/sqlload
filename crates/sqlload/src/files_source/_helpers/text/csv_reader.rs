@@ -29,9 +29,27 @@ pub(crate) struct CsvReader {
 impl CsvReader {
     /// A reader positioned at the start of `bytes`, with the column names read from the header (or `column_1`, ... without one).
     pub(crate) async fn open(
-        mut bytes: BytesReader,
+        bytes: BytesReader,
         options: &CsvOptions,
         batch_rows: usize,
+    ) -> Result<Self, String> {
+        Self::open_as(bytes, (options, batch_rows), true).await
+    }
+
+    /// A reader of whole lines: a header is skipped but never checked, and columns are `column_1`, ... either way.
+    pub(crate) async fn open_lines(
+        bytes: BytesReader,
+        options: &CsvOptions,
+        batch_rows: usize,
+    ) -> Result<Self, String> {
+        Self::open_as(bytes, (options, batch_rows), false).await
+    }
+
+    /// A reader positioned at the start of `bytes`; with `named`, its columns are the header's names, checked.
+    pub(crate) async fn open_as(
+        mut bytes: BytesReader,
+        (options, batch_rows): (&CsvOptions, usize),
+        named: bool,
     ) -> Result<Self, String> {
         let delimiter = ascii(options.delimiter, "delimiter")?;
         let quote = ascii(options.quote, "quote")?;
@@ -44,7 +62,7 @@ impl CsvReader {
                 break (first, chunk.is_empty());
             }
         };
-        let names = column_names(first, options.header)?;
+        let names = column_names(first, options.header && named)?;
         let decoder = match names.is_empty() {
             true => None,
             false => Some(decoder(&names, options, batch_rows)?),
