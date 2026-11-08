@@ -64,3 +64,6 @@ pub const GREEN: &str = "\x1b[32m";
 pub const YELLOW: &str = "\x1b[33m";
 /// Back to plain text.
 pub const RESET: &str = "\x1b[0m";
+
+/// The host name that always means this machine: plain text to it never crosses a network.
+pub const LOCALHOST: &str = "localhost";

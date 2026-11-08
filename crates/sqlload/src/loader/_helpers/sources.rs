@@ -25,7 +25,9 @@ use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::{resolve_tables, source_target};
 use crate::loader::_helpers::specs::{missing_description, table_name};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
-use crate::loader::constants::{PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS};
+use crate::loader::constants::{
+    LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS,
+};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
     CommitRule, FilesSource, PlanOptions, ProjectPlan, ResolvedTables, SkippedTable, SourceEnd,
@@ -37,9 +39,10 @@ use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::main::cursor_end::cursor_end;
 use crate::postgres_source::main::read_catalog::read_catalog;
 use crate::postgres_source::models::{
-    CopyRequest, Encryption, PgType, PostgresAddress, PostgresTls, ReadColumn, SourceColumn,
-    SourceTable, SslMode, WireType,
+    CopyRequest, Encryption, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable,
+    SslMode, WireType,
 };
+use crate::project::main::postgres_address::postgres_address;
 use crate::project::models::{
     BatchStep, ConnectionConfig, NewTables, ProjectConfig, SourceConfig, SourceKind, TableOverride,
     WriteStrategy,
@@ -55,43 +58,8 @@ pub(crate) async fn connect_source(
     project: &ProjectConfig,
     source: &SourceConfig,
 ) -> Result<(Client, Encryption), LoaderError> {
-    Ok(connect_postgres(postgres_address(project, &source.connection)?).await?)
-}
-
-/// Where and how Postgres connection `name` connects.
-pub(crate) fn postgres_address<'a>(
-    project: &'a ProjectConfig,
-    name: &str,
-) -> Result<PostgresAddress<'a>, LoaderError> {
-    let Some(ConnectionConfig::Postgres {
-        host,
-        port,
-        user,
-        password,
-        database,
-        sslmode,
-        sslrootcert,
-        sslcert,
-        sslkey,
-    }) = project.connections.get(name)
-    else {
-        return Err(LoaderError::Invalid(format!(
-            "connection {name:?} is not a Postgres connection"
-        )));
-    };
-    Ok(PostgresAddress {
-        host,
-        port: *port,
-        user,
-        password: password.as_ref().map(|secret| secret.expose()),
-        database,
-        tls: PostgresTls {
-            mode: *sslmode,
-            root_cert: sslrootcert.as_deref(),
-            cert: sslcert.as_deref(),
-            key: sslkey.as_deref(),
-        },
-    })
+    let address = postgres_address(project, &source.connection).map_err(LoaderError::Invalid)?;
+    Ok(connect_postgres(address).await?)
 }
 
 /// The folder a files source reads: its `path` within its connection.
@@ -167,13 +135,18 @@ pub(crate) async fn source_tables(
 ) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>, Vec<String>), String>, LoaderError> {
     match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => {
-            let (client, encryption) = match connect_source(project, source).await {
-                Ok(connected) => connected,
-                Err(error) => return Ok(Err(error.to_string())),
+            let address = match postgres_address(project, &source.connection) {
+                Ok(address) => address,
+                Err(problem) => return Ok(Err(problem)),
             };
-            let warnings = plain_text_warning(project, (source_name, source), encryption)
-                .into_iter()
-                .collect();
+            let (client, encryption) = match connect_postgres(address.clone()).await {
+                Ok(connected) => connected,
+                Err(error) => return Ok(Err(LoaderError::from(error).to_string())),
+            };
+            let warnings: Vec<String> =
+                plain_text_warning((source_name, &source.connection), &address, encryption)
+                    .into_iter()
+                    .collect();
             Ok(
                 match read_catalog(&client, &source.include, &source.exclude).await {
                     Ok(discovered) => Ok((discovered, None, warnings)),
@@ -197,14 +170,13 @@ pub(crate) async fn source_tables(
     }
 }
 
-/// A warning when source `source_name` reads over the network in plain text because the server refused TLS under `sslmode = "prefer"`; none for a loopback or Unix socket host, whose traffic stays on the machine, or for an explicit `disable`.
+/// A warning when source `source_name` reads `address` over the network in plain text because the server refused TLS under `sslmode = "prefer"`; none for a loopback or Unix socket host, whose traffic stays on the machine, or for an explicit `disable`.
 fn plain_text_warning(
-    project: &ProjectConfig,
-    (source_name, source): (&str, &SourceConfig),
+    (source_name, connection): (&str, &str),
+    address: &PostgresAddress<'_>,
     encryption: Encryption,
 ) -> Option<String> {
-    let address = postgres_address(project, &source.connection).ok()?;
-    let local = address.host == "localhost"
+    let local = address.host == LOCALHOST
         || address.host.starts_with('/')
         || address
             .host
@@ -212,8 +184,8 @@ fn plain_text_warning(
             .is_ok_and(|ip| ip.is_loopback());
     (encryption == Encryption::None && address.tls.mode == SslMode::Prefer && !local).then(|| {
         format!(
-            "[sources.{source_name}] reads {}:{} in plain text: the server does not offer TLS, so sslmode = \"prefer\" fell back; set sslmode = \"require\" (or \"verify-full\") on connection {} to refuse plain text, or \"disable\" to accept it",
-            address.host, address.port, source.connection
+            "[sources.{source_name}] reads {}:{} in plain text: the server does not offer TLS, so sslmode = \"prefer\" fell back; set sslmode = \"require\" (or \"verify-full\") on connection {connection} to refuse plain text, or \"disable\" to accept it",
+            address.host, address.port
         )
     })
 }

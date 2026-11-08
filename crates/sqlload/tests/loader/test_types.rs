@@ -624,3 +624,64 @@ pub(crate) struct BigQueryOutcome {
     /// Storage Write API calls sent without a routing header.
     pub(crate) unrouted_calls: usize,
 }
+
+/// Which test server a TLS case connects to; its index in the case's list of ports.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TlsServer {
+    /// Refuses connections without TLS.
+    TlsOnly = 0,
+    /// Offers no TLS.
+    Plain = 1,
+}
+
+pub(crate) struct TlsDebugTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    pub(crate) host: &'static str,
+    pub(crate) user: &'static str,
+    /// TLS settings for the connection, `FILES` standing for the test certificates' folder.
+    pub(crate) settings: &'static str,
+    /// How `debug`'s source line starts: connected or failed.
+    pub(crate) expected_status: &'static str,
+    /// Text that line holds.
+    pub(crate) expected_text: &'static str,
+}
+
+pub(crate) struct PlanWarningTestCase {
+    pub(crate) description: &'static str,
+    /// The server's network address rather than a loopback one.
+    pub(crate) network: bool,
+    pub(crate) settings: &'static str,
+    pub(crate) expected_warning: bool,
+}
+
+pub(crate) struct RelayTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    pub(crate) host: &'static str,
+    pub(crate) mode: sqlload::postgres_source::models::SslMode,
+    /// A file in the test certificates' folder.
+    pub(crate) root_cert: Option<&'static str>,
+    /// Whether it opens a relay rather than leaving the client to connect directly or failing.
+    pub(crate) expected_relayed: bool,
+    /// Text of its error; empty when it opens.
+    pub(crate) expected_error: &'static str,
+}
+
+pub(crate) struct RelaySessionTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    pub(crate) host: &'static str,
+    pub(crate) mode: sqlload::postgres_source::models::SslMode,
+    /// The socket folder's permissions.
+    pub(crate) expected_folder_mode: u32,
+    /// Whether the folder still exists, and a second session can connect, once the first is taken.
+    pub(crate) expected_left: (bool, bool),
+}
+
+pub(crate) struct CdcTlsTestCase {
+    pub(crate) description: &'static str,
+    /// TLS settings for the connection, `FILES` standing for the test certificates' folder.
+    pub(crate) settings: &'static str,
+    pub(crate) expected_result: &'static str,
+}

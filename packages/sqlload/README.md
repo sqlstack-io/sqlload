@@ -204,6 +204,38 @@ source's tables exists in the destination, whichever tables are selected; tables
 count as approved. A table that did not load then (blocked by a problem, say) counts as new
 afterwards, so name it in `include`.
 
+## Postgres TLS
+
+A Postgres connection takes libpq's TLS settings, for `kind = "postgres"` and `"postgres_cdc"`
+sources alike (replication sessions included):
+
+```toml
+[connections.app_pg]
+kind = "postgres"
+host = "db.example.com"
+user = "loader"
+password = "${ENV:PGPASSWORD}"
+database = "app"
+sslmode = "verify-full"                # disable | prefer (default) | require | verify-ca | verify-full
+sslrootcert = "certs/db-ca.pem"        # CA certificates (PEM) to trust
+# sslcert = "certs/loader.pem"         # a client certificate, with sslkey
+# sslkey = "certs/loader.key"
+```
+
+- `prefer` uses TLS when the server offers it and plain text when it does not; `plan` warns when
+  that happens over the network (not for `localhost`, a loopback address or a Unix socket).
+  `require` refuses plain text but, like `prefer`, does not check the server's certificate unless
+  `sslrootcert` is set, when it checks the chain as `verify-ca` does. `verify-ca` checks that a
+  trusted CA signed the certificate; `verify-full` also checks that it names the host connected to.
+- Unlike libpq, `verify-ca` and `verify-full` without `sslrootcert` trust the public CA roots
+  built into SQLLoad, not the operating system's store or `~/.postgresql/root.crt`. Hosts whose
+  certificates come from a private CA, such as Amazon RDS and Aurora or a company CA, need
+  `sslrootcert` (for RDS, the region's bundle from AWS).
+- Paths are relative to the directory SQLLoad runs in. A copy URI takes the same settings as a
+  query: `postgresql://loader@db.example.com/app?sslmode=verify-full&sslrootcert=certs%2Fdb-ca.pem#public.accounts`.
+- `sqlload debug` shows what protects each Postgres source: `not encrypted`,
+  `TLS, certificate not checked`, `TLS, CA checked` or `TLS, CA and host name checked`.
+
 ## Postgres change data capture
 
 `kind = "postgres_cdc"` streams a Postgres database's changes from a logical replication slot

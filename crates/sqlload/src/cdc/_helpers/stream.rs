@@ -36,7 +36,6 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::StoredFile;
 use crate::files_source::main::read_footers::read_footers;
-use crate::loader::_helpers::sources::postgres_address;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::apply_project::apply_project;
@@ -52,6 +51,7 @@ use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::main::relay_tls::relay_tls;
 use crate::postgres_source::models::{CopyRequest, PostgresAddress, ReadColumn, SourceTable};
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
+use crate::project::main::postgres_address::postgres_address;
 use crate::project::models::{SourceConfig, TargetConfig};
 use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_PREFIX, CDC_UNCHANGED_COLUMN};
 
@@ -119,7 +119,7 @@ fn quoted(name: &str) -> String {
 impl CdcSource<'_> {
     /// The source's Postgres connection settings.
     fn address(&self) -> Result<PostgresAddress<'_>, LoaderError> {
-        postgres_address(self.run.project, &self.source.connection)
+        postgres_address(self.run.project, &self.source.connection).map_err(LoaderError::Invalid)
     }
 
     /// A control connection to the source.

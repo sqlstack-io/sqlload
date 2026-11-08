@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use rustls::ClientConfig;
-use rustls::pki_types::ServerName;
+use rustls::pki_types::{InvalidDnsNameError, ServerName};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::tls::{ChannelBinding, MakeTlsConnect, TlsConnect, TlsStream};
 use tokio_rustls::TlsConnector;
@@ -29,12 +29,11 @@ where
     type TlsConnect = Handshake;
     type Error = io::Error;
 
+    /// Called for every host before asking for TLS, a Unix socket with an empty `domain` included: a name that cannot be checked fails the handshake, should the server agree to one, not the connection.
     fn make_tls_connect(&mut self, domain: &str) -> Result<Handshake, io::Error> {
-        let name = ServerName::try_from(domain.to_owned())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         Ok(Handshake {
             connect: self.clone(),
-            name,
+            name: ServerName::try_from(domain.to_owned()),
         })
     }
 }
@@ -42,7 +41,7 @@ where
 /// The TLS handshake with one host.
 pub(crate) struct Handshake {
     connect: RustlsConnect,
-    name: ServerName<'static>,
+    name: Result<ServerName<'static>, InvalidDnsNameError>,
 }
 
 impl<S> TlsConnect<S> for Handshake
@@ -57,7 +56,10 @@ where
         let connector = TlsConnector::from(self.connect.config);
         let encrypted = self.connect.encrypted;
         Box::pin(async move {
-            let session = connector.connect(self.name, stream).await?;
+            let name = self
+                .name
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            let session = connector.connect(name, stream).await?;
             encrypted.store(true, Ordering::Relaxed);
             Ok(Encrypted(session))
         })
