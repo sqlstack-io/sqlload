@@ -112,7 +112,11 @@ const WRITE_VERBS: [&str; 7] = [
 
 /// Whether `statement` writes `target` (its qualified name, or its bare `name` as a rename may take it).
 pub(crate) fn writes(statement: &str, (target, name): (&str, &str)) -> bool {
-    statement.ends_with(&format!("RENAME TO {name}"))
+    let publishes = statement
+        .strip_prefix(crate::adapters::clickhouse::constants::PUBLISH_PREFIX)
+        .is_some_and(|step| step.contains(&format!("\"target\":\"{target}\"")));
+    publishes
+        || statement.ends_with(&format!("RENAME TO {name}"))
         || statement.ends_with(&format!("RENAME TO {target}"))
         || WRITE_VERBS.iter().any(|verb| {
             statement.starts_with(&format!("{verb} {target}"))

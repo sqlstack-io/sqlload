@@ -1,11 +1,13 @@
 //! One text value from a destination query.
 
 use crate::adapters::bigquery::main::session::_query_rows::query_rows as query_bigquery;
+use crate::adapters::clickhouse::main::session::_query_rows::query_rows as query_clickhouse;
 use crate::adapters::databricks::main::session::_query_rows::query_rows;
 use crate::adapters::dispatch::_helpers::no_sql::no_sql;
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_query_text::query_text as query_duckdb;
+use crate::adapters::postgres::main::session::_query_rows::query_rows as query_postgres;
 use crate::adapters::snowflake::main::session::_query_text::query_text as query_snowflake;
 use crate::loader::errors::LoaderError;
 
@@ -27,6 +29,17 @@ pub async fn single_text(
             .await?
             .into_iter()
             .next()
+            .flatten()),
+        Destination::Postgres(postgres) => Ok(query_postgres(postgres, &query)
+            .await?
+            .into_iter()
+            .next()
+            .flatten()),
+        Destination::ClickHouse(clickhouse) => Ok(query_clickhouse(clickhouse, &query)
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next())
             .flatten()),
         Destination::Files(_) => Err(no_sql()),
     }

@@ -35,6 +35,12 @@ fn given_text_when_quoting_a_literal_then_the_warehouse_reads_it_back_unchanged(
             warehouse: Warehouse::BigQuery,
             expected_literal: "'first\\r\\nsecond'",
         },
+        SqlLiteralTestCase {
+            description: "ClickHouse escapes backslashes and quotes with a backslash, reading a backslash as an escape",
+            text: "a\\'b",
+            warehouse: Warehouse::ClickHouse,
+            expected_literal: "'a\\\\\\'b'",
+        },
     ];
     for test_case in test_cases {
         assert_eq!(

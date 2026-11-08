@@ -28,6 +28,7 @@ use crate::adapters::contract::models::{
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::loader::errors::LoaderError;
+use crate::loader::models::{TableLayout, TableSpec};
 use crate::schema_plan::models::{ColumnChange, DesiredColumn, LiveColumn};
 
 /// What a warehouse's SQL looks like. Pure rendering, with no I/O; names follow sqlbuild's adapter contract.
@@ -43,6 +44,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// Whether a `postgres_cdc` source applying its changes by `apply` may load into the destination: every SQL warehouse its changes have been applied to live; a files target only as a changelog, having no tables to merge into.
     fn captures_changes(&self, apply: ChangeApply) -> bool {
         self.runs_sql() || apply == ChangeApply::Changelog
+    }
+
+    /// Whether SQLLoad never drops or recreates the warehouse's tables and never alters one it did not create: `replace` empties and refills the table in one transaction instead of swapping a new one in, `--reload` is refused, and an existing table without `_sqlload_load_id` is loaded as it is.
+    fn keeps_tables(&self) -> bool {
+        false
+    }
+
+    /// Whether a column SQLLoad keeps as it is (see [`keeps_tables`](SqlAdapter::keeps_tables)), of type `live`, takes every `desired` value exactly, or refuses one that does not fit rather than rounding it.
+    fn assigns_exactly(&self, desired: &ColumnType, live: &ColumnType) -> bool {
+        self.type_fit(desired, live) == TypeFit::Fits
     }
 
     /// Whether a `--reload` build table starts `LIKE` the table to keep its grants, and so keeps the live columns.
@@ -151,6 +162,22 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         create_table(self, table, columns)
     }
 
+    /// Problems with a table's layout settings (`engine`, `order_by`, `partition_by`, `primary_key`, `table_settings`), which only ClickHouse takes.
+    fn layout_problems(&self, layout: &TableLayout) -> Vec<String> {
+        match layout.is_empty() {
+            true => Vec::new(),
+            false => vec![format!(
+                "engine, order_by, partition_by, primary_key and table_settings lay out ClickHouse tables; {} tables take none",
+                self.warehouse()
+            )],
+        }
+    }
+
+    /// `CREATE TABLE IF NOT EXISTS` for a loaded table: the table `spec` names with `columns`, laid out as it says where the warehouse takes a layout.
+    fn render_create_loaded_table(&self, spec: &TableSpec, columns: &[DesiredColumn]) -> String {
+        self.render_create_table(&spec.destination, columns)
+    }
+
     /// `COMMENT ON TABLE`, giving `table` its description; none for a table without one.
     fn render_table_comment(&self, table: &TableName, description: &str) -> Option<String> {
         (!description.is_empty()).then(|| {
@@ -160,6 +187,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
                 self.render_loader_value_literal(description)
             )
         })
+    }
+
+    /// The statement creating the unique index a `merge` on `unique_key` needs, for a table SQLLoad creates; none where `merge` needs no index.
+    fn render_key_index(&self, _table: &TableName, _unique_key: &[String]) -> Option<String> {
+        None
     }
 
     /// The table kind a load's staging table is created as.
