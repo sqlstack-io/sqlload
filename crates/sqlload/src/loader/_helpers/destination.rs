@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
 use crate::adapters::files::main::newest_load_files::newest_load_files;
+use crate::adapters::files::constants::PARQUET_SUFFIX;
 use crate::adapters::files::main::table_path::table_path;
 use crate::adapters::files::models::{FilesDestination, TableFiles, TablePath, TablePathRequest};
 use crate::column_types::models::ColumnType;
@@ -110,7 +111,7 @@ pub(crate) async fn live_schema(
     let newest: Vec<StoredFile> = listed
         .partitions
         .last()
-        .map(|partition| newest_load_files(&partition.files))
+        .map(|partition| newest_load_files(&parquet_files(&partition.files)))
         .unwrap_or_default();
     if newest.len() > max_footer_reads {
         return Ok(Err(vec![format!(
@@ -135,4 +136,17 @@ pub(crate) async fn live_schema(
             .collect()
     });
     Ok(Ok(LiveFiles { footers, live }))
+}
+
+/// The Parquet files among `files`, whose footers hold their schema; CSV files have none.
+pub(crate) fn parquet_files(files: &[StoredFile]) -> Vec<StoredFile> {
+    files
+        .iter()
+        .filter(|file| {
+            file.relative_key
+                .to_ascii_lowercase()
+                .ends_with(PARQUET_SUFFIX)
+        })
+        .cloned()
+        .collect()
 }

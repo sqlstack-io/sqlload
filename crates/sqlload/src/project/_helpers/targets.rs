@@ -2,7 +2,7 @@ use crate::project::constants::{
     FILES_CONNECTION_KINDS, STAGE_NAME_PARTS, WAREHOUSE_CONNECTION_KINDS,
 };
 use crate::project::models::{
-    ConnectionConfig, LoadMethod, ProjectConfig, SourceConfig, TargetConfig,
+    ConnectionConfig, FilesFormat, LoadMethod, ProjectConfig, SourceConfig, TargetConfig,
 };
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
@@ -84,8 +84,12 @@ pub(crate) fn target_problems(
         )];
     };
     let kind = connection.kind();
-    let files_settings =
-        target.path.is_some() || target.format.is_some() || target.max_footer_reads.is_some();
+    let files_settings = target.path.is_some()
+        || target.format.is_some()
+        || target.max_footer_reads.is_some()
+        || target.compression.is_some()
+        || target.csv.is_some()
+        || target.single_file.is_some();
     let mut problems: Vec<String> = Vec::new();
     match (
         WAREHOUSE_CONNECTION_KINDS.contains(&kind),
@@ -97,7 +101,7 @@ pub(crate) fn target_problems(
             }
             if files_settings {
                 problems.push(format!(
-                    "{place} path, format and max_footer_reads are for targets on an s3 or filesystem connection"
+                    "{place} path, format, compression, csv, single_file and max_footer_reads are for targets on an s3 or filesystem connection"
                 ));
             }
         }
@@ -110,6 +114,7 @@ pub(crate) fn target_problems(
             if target.max_footer_reads == Some(0) {
                 problems.push(format!("{place} max_footer_reads must be at least 1"));
             }
+            problems.extend(csv_output_problems(&place, target));
         }
         (false, false) => problems.push(format!(
             "{place} connection {:?} is a {kind} connection; targets load into {} or write files to {}",
@@ -141,6 +146,43 @@ pub(crate) fn destination_kind_problems(
     if source.schema.is_some() && files_target {
         problems.push(format!(
             "{place} schema is for warehouse targets; a files target places tables with path or destination_path"
+        ));
+    }
+    problems
+}
+
+/// A files target's CSV settings that do not fit its format, or that would make a CSV file ambiguous.
+fn csv_output_problems(place: &str, target: &TargetConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    if target.format.unwrap_or_default() != FilesFormat::Csv {
+        if target.compression.is_some() || target.csv.is_some() {
+            problems.push(format!(
+                "{place} compression and csv are for format = \"csv\"; Parquet files compress inside the file"
+            ));
+        }
+        return problems;
+    }
+    let Some(csv) = &target.csv else {
+        return problems;
+    };
+    for (setting, character) in [("delimiter", csv.delimiter), ("quote", csv.quote)] {
+        if !character.is_ascii() || character == '\n' || character == '\r' {
+            problems.push(format!(
+                "{place} csv {setting} must be one ASCII character other than a line break, not {character:?}"
+            ));
+        }
+    }
+    if csv.delimiter == csv.quote {
+        problems.push(format!("{place} csv delimiter and quote must differ"));
+    }
+    if csv
+        .null_value
+        .chars()
+        .any(|character| [csv.delimiter, csv.quote, '\n', '\r'].contains(&character))
+    {
+        problems.push(format!(
+            "{place} csv null_value {:?} must not hold the delimiter, the quote or a line break, or it could not be told apart from a value",
+            csv.null_value
         ));
     }
     problems

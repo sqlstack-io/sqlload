@@ -17,7 +17,7 @@ use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, Footer, 
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, FilesFormat, NewTables, OnSchemaChange, Policy, ProjectConfig,
+    BatchStep, Contract, NewTables, OutputEncoding, OnSchemaChange, Policy, ProjectConfig,
     WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
@@ -275,7 +275,7 @@ pub struct RunEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilesOutput {
     pub path: TablePath,
-    pub format: FilesFormat,
+    pub encoding: OutputEncoding,
     /// Data files under the table's folder now.
     pub listed: usize,
     /// Footers read for the live schema (the newest partition's files).
@@ -462,6 +462,8 @@ pub enum WholeReason {
     AppendWithoutCursor,
     /// `batch_size = "none"`.
     Chosen,
+    /// `single_file`: each file is written once, whole.
+    SingleFile,
     /// The table cannot load, so it has no commits.
     Blocked,
 }

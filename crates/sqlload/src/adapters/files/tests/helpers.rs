@@ -4,7 +4,7 @@ use arrow_array::{Date32Array, Int64Array, RecordBatch, StringArray, TimestampMi
 use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use crate::adapters::files::_helpers::write::parquet_files::new_file;
+use crate::adapters::files::_helpers::write::data_files::{add_rows, finish_file, new_file};
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::{OpenFolder, StoredFile};
@@ -23,6 +23,7 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
 use crate::files_source::models::Footer;
+use crate::project::models::OutputEncoding;
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
@@ -141,14 +142,9 @@ pub(crate) fn text_footer(values: &[&str]) -> Result<Footer, String> {
         vec![Arc::new(StringArray::from(values.to_vec())) as arrow_array::ArrayRef],
     )
     .map_err(|error| error.to_string())?;
-    let mut file = new_file(&schema)?;
-    file.writer
-        .write(&batch)
-        .map_err(|error| error.to_string())?;
-    let bytes = file
-        .writer
-        .into_inner()
-        .map_err(|error| error.to_string())?;
+    let encoding = OutputEncoding::default();
+    let file = add_rows(new_file(&schema, &encoding)?, &batch, &encoding)?;
+    let bytes = finish_file(file)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))
         .map_err(|error| error.to_string())?;
     Ok(Footer {

@@ -215,6 +215,15 @@ pub struct TargetConfig {
     /// The format of the files written (files targets).
     #[serde(default)]
     pub format: Option<FilesFormat>,
+    /// How CSV files are compressed (files targets with `format = "csv"`).
+    #[serde(default)]
+    pub compression: Option<OutputCompression>,
+    /// How CSV files are written (files targets with `format = "csv"`).
+    #[serde(default)]
+    pub csv: Option<CsvOutput>,
+    /// One file per table, or per partition, with no size split, named after the table's folder (files targets).
+    #[serde(default)]
+    pub single_file: Option<bool>,
     /// The most Parquet footers `plan` reads for one table's schema (files targets).
     #[serde(default)]
     pub max_footer_reads: Option<usize>,
@@ -224,6 +233,16 @@ impl TargetConfig {
     /// The table folder template: as set, or `{source}/{table}/`.
     pub fn path_template(&self) -> &str {
         self.path.as_deref().unwrap_or(DEFAULT_DESTINATION_PATH)
+    }
+
+    /// How a files target writes its files, with defaults for what is not set.
+    pub fn output_encoding(&self) -> OutputEncoding {
+        OutputEncoding {
+            format: self.format.unwrap_or_default(),
+            compression: self.compression.unwrap_or_default(),
+            csv: self.csv.clone().unwrap_or_default(),
+            single_file: self.single_file.unwrap_or_default(),
+        }
     }
 
     /// The footer read cap: as set, or the default.
@@ -393,6 +412,51 @@ pub enum SourceKind {
 pub enum FilesFormat {
     #[default]
     Parquet,
+    Csv,
+}
+
+/// How a files target compresses CSV files; Parquet compresses inside the file (zstd).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputCompression {
+    #[default]
+    None,
+    Gzip,
+    Zstd,
+}
+
+/// How a files target writes CSV files.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CsvOutput {
+    /// The field separator, one ASCII character.
+    pub delimiter: char,
+    /// Whether the first line holds the column names.
+    pub header: bool,
+    /// The quote character, one ASCII character; a quote inside a quoted field is written twice.
+    pub quote: char,
+    /// What a NULL is written as, unquoted; a text value equal to it is quoted, so the two stay apart.
+    pub null_value: String,
+}
+
+impl Default for CsvOutput {
+    fn default() -> Self {
+        Self {
+            delimiter: ',',
+            header: true,
+            quote: '"',
+            null_value: String::new(),
+        }
+    }
+}
+
+/// How a files target writes its files.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OutputEncoding {
+    pub format: FilesFormat,
+    pub compression: OutputCompression,
+    pub csv: CsvOutput,
+    pub single_file: bool,
 }
 
 /// What to do with source tables that match `include` but were not seen before.

@@ -8,7 +8,7 @@ use parquet::arrow::ArrowWriter;
 use crate::adapters::contract::models::WriteMode;
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
-use crate::project::models::WriteStrategy;
+use crate::project::models::{OutputEncoding, WriteStrategy};
 use crate::schema_plan::models::DesiredColumn;
 use crate::store_paths::main::escape_partition_value::escape_partition_value;
 use crate::store_paths::main::unescape_partition_value::unescape_partition_value;
@@ -22,6 +22,8 @@ pub struct FilesDestination {
     pub store: StoreKind,
     /// The most footers `plan` reads for one table.
     pub max_footer_reads: usize,
+    /// The format and options of the files written.
+    pub encoding: OutputEncoding,
 }
 
 /// How a partition folder's value is taken from the cursor.
@@ -161,19 +163,37 @@ pub struct WriterRequest<'a> {
     pub file_id: &'a str,
     /// The load time as an ISO 8601 UTC timestamp, written to every row.
     pub loaded_at: &'a str,
+    pub encoding: &'a OutputEncoding,
 }
 
-/// A Parquet file being filled in memory.
+/// A file being filled in memory.
 #[derive(Debug)]
 pub struct OpenFile {
-    pub writer: ArrowWriter<Vec<u8>>,
+    pub body: FileBody,
     pub rows: usize,
+}
+
+/// A file's contents so far, in its format.
+#[derive(Debug)]
+pub enum FileBody {
+    Parquet(ArrowWriter<Vec<u8>>),
+    Csv(CsvOut),
+}
+
+/// CSV text written so far, compressed as it is written.
+#[derive(Debug)]
+pub enum CsvOut {
+    Plain(Vec<u8>),
+    Gzip(flate2::write::GzEncoder<Vec<u8>>),
+    /// zstd frames compressed so far, and text waiting for the next frame.
+    Zstd { done: Vec<u8>, pending: Vec<u8> },
 }
 
 /// A load's writer: one open file per partition, flushed to the store as files fill up.
 #[derive(Debug)]
 pub struct FilesWriter {
     pub folder: OpenFolder,
+    pub encoding: OutputEncoding,
     pub partition: Option<PartitionFolder>,
     pub cursor_column: Option<String>,
     pub schema: SchemaRef,

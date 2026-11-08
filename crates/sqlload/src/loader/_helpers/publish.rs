@@ -1049,6 +1049,7 @@ impl Publisher {
             load_id: &self.load_id,
             file_id: &file_id,
             loaded_at: &self.loaded_at,
+            encoding: &sink.output.encoding,
         })
         .map_err(LoaderError::Invalid)?;
         mark_pending(&sink.folder, &file_id, PendingPhase::Writing, (&[], None)).await?;
@@ -1071,12 +1072,13 @@ impl Publisher {
         let keep_schema = self.at_end && self.committed_rows == 0;
         close_writer(&mut writer, keep_schema).await?;
         let sink = self.sink()?;
-        let keys = commit_deletes(
+        let mut keys = commit_deletes(
             &sink.replaced,
             sink.output.path.partition.as_ref(),
             (&writer.partitions, last),
             &sink.deleted,
         );
+        keys.retain(|key| !writer.written.contains(key));
         let run = match &self.run {
             Some(_) => {
                 let mut record = self.record(self.waiting_rows)?;
@@ -1152,6 +1154,7 @@ impl Publisher {
             load_id: &self.load_id,
             file_id: &writer.file_id,
             loaded_at: &self.loaded_at,
+            encoding: &sink.output.encoding,
         });
         let closed = close_writer(&mut writer, false).await.map(|_| ());
         let schema = opened.map(|opened| opened.schema);

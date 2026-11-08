@@ -20,6 +20,7 @@ use sqlload::adapters::files::main::write_rows::write_rows;
 use sqlload::adapters::files::models::{TablePath, WriterRequest};
 use sqlload::column_types::models::ColumnType;
 use sqlload::file_store::models::OpenFolder;
+use sqlload::project::models::OutputEncoding;
 use sqlload::files_source::main::discover_files::discover_files;
 use sqlload::files_source::main::read_files::read_files;
 use sqlload::files_source::models::{
@@ -177,6 +178,7 @@ fn write_parquet((runtime, folder, columns, batch): ParquetInput) -> (u64, Vec<S
         load_id: "20261105T000000Z",
         file_id: "20261105T000000Z",
         loaded_at: "2026-11-05T00:00:00Z",
+        encoding: &OutputEncoding::default(),
     };
     let mut writer = open_writer(request).unwrap_or_else(|error| panic!("{error}"));
     runtime.block_on(async {

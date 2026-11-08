@@ -53,12 +53,14 @@ pub async fn connect_destination(
                 endpoint: endpoint.clone(),
             },
             max_footer_reads: target.footer_read_limit(),
+            encoding: target.output_encoding(),
         })),
         Some(ConnectionConfig::Filesystem { root }) => {
             Destination::Files(Box::new(FilesDestination {
                 connection: target.connection.clone(),
                 store: StoreKind::Filesystem { root: root.clone() },
                 max_footer_reads: target.footer_read_limit(),
+            encoding: target.output_encoding(),
             }))
         }
         Some(other) => {

@@ -16,7 +16,7 @@ pub fn open_writer(request: WriterRequest<'_>) -> Result<FilesWriter, String> {
         .map(|column| {
             arrow_field(&column.name, &column.column_type).ok_or_else(|| {
                 format!(
-                    "{} is {}, which Parquet files cannot hold; pin a portable type",
+                    "{} is {}, which files targets cannot write; pin a portable type",
                     column.name, column.column_type
                 )
             })
@@ -27,6 +27,7 @@ pub fn open_writer(request: WriterRequest<'_>) -> Result<FilesWriter, String> {
         .map_err(|error| format!("load time {:?}: {error}", request.loaded_at))?;
     Ok(FilesWriter {
         folder: request.folder,
+        encoding: request.encoding.clone(),
         partition: request.path.partition.clone(),
         cursor_column: request.cursor_column.map(str::to_owned),
         schema: Arc::new(Schema::new(fields)),

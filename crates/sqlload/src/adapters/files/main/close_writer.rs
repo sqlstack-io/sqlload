@@ -1,6 +1,6 @@
 //! Store a load's last open files.
 
-use crate::adapters::files::_helpers::write::parquet_files::{new_file, next_key, store_file};
+use crate::adapters::files::_helpers::write::data_files::{new_file, next_key, store_file};
 use crate::adapters::files::errors::FilesDestinationError;
 use crate::adapters::files::models::FilesWriter;
 
@@ -16,7 +16,7 @@ pub async fn close_writer(
         writer.written.push(key);
     }
     if keep_schema && writer.written.is_empty() && writer.partition.is_none() {
-        let file = new_file(&writer.schema).map_err(|reason| FilesDestinationError::Write {
+        let file = new_file(&writer.schema, &writer.encoding).map_err(|reason| FilesDestinationError::Write {
             key: writer.folder.location.to_string(),
             reason,
         })?;
