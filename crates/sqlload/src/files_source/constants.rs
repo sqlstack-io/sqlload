@@ -45,8 +45,8 @@ pub const SCHEMA_SAMPLE_FILES: usize = 20;
 /// Footers kept from `plan`'s schema samples for the load's batches, across every source of a process.
 pub const SAMPLED_FOOTERS_KEPT: usize = 1024;
 
-/// Bytes read from the end of a Parquet file for its footer, so one request holds the metadata of most files (a larger footer takes a second request).
-pub const FOOTER_PREFETCH_BYTES: usize = 64 * 1024;
+/// Bytes read from the end of a Parquet file for its footer: one request holds a typical footer, and stays within a new connection's first TCP window (a larger read costs round trips on a distant store); a larger footer takes a second request.
+pub const FOOTER_PREFETCH_BYTES: usize = 8 * 1024;
 
 /// Parquet footers (or CSV header lines) read at once, at plan and for each batch.
 pub const CONCURRENT_FOOTER_READS: usize = 16;
