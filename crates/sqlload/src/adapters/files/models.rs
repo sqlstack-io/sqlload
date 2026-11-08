@@ -176,7 +176,7 @@ pub struct OpenFile {
 /// A file's contents so far, in its format.
 #[derive(Debug)]
 pub enum FileBody {
-    Parquet(ArrowWriter<Vec<u8>>),
+    Parquet(Box<ArrowWriter<Vec<u8>>>),
     Csv(CsvOut),
 }
 

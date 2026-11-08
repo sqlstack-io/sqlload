@@ -26,10 +26,10 @@ pub(crate) fn new_file(schema: &SchemaRef, encoding: &OutputEncoding) -> Result<
                 .set_statistics_truncate_length(None)
                 .set_column_index_truncate_length(None)
                 .build();
-            FileBody::Parquet(
+            FileBody::Parquet(Box::new(
                 ArrowWriter::try_new(Vec::new(), schema.clone(), Some(properties))
                     .map_err(|error| error.to_string())?,
-            )
+            ))
         }
         FilesFormat::Csv => {
             let out = new_csv(encoding.compression);
