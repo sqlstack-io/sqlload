@@ -123,7 +123,7 @@ fn given_a_pull_stopped_at_every_statement_when_it_runs_again_then_the_table_was
         let project = described_project(&clickhouse_files_project(
             &endpoint,
             clickhouse.port,
-            ("stops", "stops"),
+            ("pull_stops", "stops"),
         ))
         .await?;
         let destinations = connect_targets(&project)
@@ -134,7 +134,7 @@ fn given_a_pull_stopped_at_every_statement_when_it_runs_again_then_the_table_was
             description: "the window rereads from the day before the newest, so each run rebuilds October (keeping the 30th's rows) and November at once",
             table: "events",
             options: select_only("events"),
-            query: "SELECT arrayStringConcat(arraySort(groupArray(toString(id))), ',') FROM stops.events",
+            query: "SELECT arrayStringConcat(arraySort(groupArray(toString(id))), ',') FROM pull_stops.events",
             states: [
                 ("2026-10-31=100,2026-11-01=200", "100,200,50"),
                 ("2026-10-31=101,2026-11-01=201", "101,201,50"),
@@ -142,10 +142,14 @@ fn given_a_pull_stopped_at_every_statement_when_it_runs_again_then_the_table_was
             expected_minimum_stops: 8,
         }];
         for test_case in &test_cases {
-            let unstopped =
-                run_clickhouse_stops(&project, &destinations, &set_state, ("stops", test_case))
-                    .await
-                    .map_err(|error| format!("{}: {error}", test_case.description))?;
+            let unstopped = run_clickhouse_stops(
+                &project,
+                &destinations,
+                &set_state,
+                ("pull_stops", test_case),
+            )
+            .await
+            .map_err(|error| format!("{}: {error}", test_case.description))?;
             assert!(
                 unstopped.is_some_and(|stops| stops >= test_case.expected_minimum_stops),
                 "{}: a run finished unstopped after {unstopped:?} stop points",
