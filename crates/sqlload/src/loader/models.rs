@@ -21,12 +21,13 @@ use crate::project::models::{
     WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
-use crate::routing::models::Route;
+use crate::routing::models::{Route, Store};
 use crate::run_log::main::finished_record::finished_record;
 use crate::run_log::main::later_cursor::later_cursor;
 use crate::run_log::main::next_stamp::next_stamp;
 use crate::run_log::models::{RunOutcome, RunRecord, UnreadableRecord};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan};
+use crate::snowflake_source::models::SnowflakeReader;
 use crate::store_paths::models::Location;
 
 /// Where a setting's value came from, for `plan`.
@@ -53,6 +54,10 @@ pub struct CursorSpec {
     pub column: String,
     pub start: Option<String>,
     pub lookback: Option<Duration>,
+    /// Read only cursor values before now plus this (`lookahead`).
+    pub lookahead: Option<Duration>,
+    /// `lookback_from = "now"`: incremental runs read from now minus `lookback`, not from the destination's maximum minus it.
+    pub from_now: bool,
     /// `append_cursor_inclusive`: `append` reads from the destination's maximum itself (true) rather than after it; a first run reads from `cursor_start` inclusively either way.
     pub inclusive: bool,
 }
@@ -105,8 +110,27 @@ pub struct TableSpec {
     pub python: Option<PythonTable>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
+    /// How a warehouse source's table is read; `None` for other sources.
+    pub warehouse_source: Option<WarehouseSource>,
     /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).
     pub layout: TableLayout,
+}
+
+/// A warehouse source's table: the query behind it, if any, and the route its warehouse reads it by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WarehouseSource {
+    /// The source's kind as written, such as `snowflake`.
+    pub system: &'static str,
+    /// The query whose rows are the table; `None` reads the table itself.
+    pub sql: Option<String>,
+    pub route: WarehouseRoute,
+}
+
+/// How a warehouse source's rows leave the warehouse; each warehouse chooses its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WarehouseRoute {
+    /// The warehouse writes Parquet into `store`, which SQLLoad reads back and removes; `stage` says why there, for `plan`.
+    Unload { store: Store, stage: String },
 }
 
 /// A created table's layout, with SQLBuild's ClickHouse field names; every field unset by default.
@@ -576,6 +600,8 @@ pub enum SourceReader {
     /// The client, and the connections that help it read a large table in parallel.
     Postgres(tokio_postgres::Client, Vec<tokio_postgres::Client>),
     Files(OpenFolder),
+    /// A warehouse source that unloads its tables.
+    Snowflake(Box<SnowflakeReader>),
 }
 
 /// What decides one files table's cursor window.

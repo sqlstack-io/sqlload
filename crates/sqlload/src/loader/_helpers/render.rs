@@ -11,7 +11,7 @@ use crate::loader::_helpers::table_plan::is_direct;
 use crate::loader::constants::{LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN};
 use crate::loader::models::{
     CommitRule, FilesOutput, PlanDetail, PlanItem, PlanView, ProjectPlan, PythonTable, SourceEnd,
-    TablePlan, WholeReason,
+    TablePlan, WarehouseRoute, WarehouseSource, WholeReason,
 };
 use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
@@ -294,6 +294,21 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let source = match (&spec.files, &spec.python) {
         (Some(files), _) => format!("files  {}  {}", files.location, files.encoding),
         (None, Some(python)) => format!("python  {} ({})", python.module, spec.source_name),
+        (None, None) if spec.warehouse_source.is_some() => {
+            let read = spec
+                .warehouse_source
+                .as_ref()
+                .map_or("", |source| source.system);
+            let what = match spec
+                .warehouse_source
+                .as_ref()
+                .and_then(|source| source.sql.as_ref())
+            {
+                Some(_) => format!("query {}", spec.source_table.name),
+                None => spec.source_table.qualified_name(),
+            };
+            format!("{read}  {}  {what}", spec.source_name)
+        }
         (None, None) => match &spec.cdc {
             Some(cdc) => format!(
                 "postgres_cdc  {}  {}  slot {}",
@@ -395,11 +410,19 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             .as_ref()
             .map(|route| detail("route", route_text(table, route))),
     );
+    if let Some(WarehouseSource {
+        route: WarehouseRoute::Unload { stage, .. },
+        ..
+    }) = &spec.warehouse_source
+    {
+        details.push(detail("stage", stage.as_str()));
+    }
     if let Some(reason) = table
         .route
         .as_ref()
         .filter(|_| {
-            table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref())
+            (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
+                || spec.warehouse_source.is_some()
         })
         .map(|route| route.reason.clone())
     {

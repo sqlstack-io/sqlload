@@ -23,6 +23,7 @@ fn text_column(name: &str) -> SourceColumn {
         pg_type: PgType::Other,
         column_type: Ok(ColumnType::Text),
         nullable: true,
+        source_spelling: None,
     }
 }
 

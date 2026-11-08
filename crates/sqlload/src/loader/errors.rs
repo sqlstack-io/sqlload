@@ -5,6 +5,7 @@ use crate::file_store::errors::StoreError;
 use crate::files_source::errors::FilesError;
 use crate::http::errors::ApiError;
 use crate::postgres_source::errors::PostgresError;
+use crate::snowflake_source::errors::SnowflakeSourceError;
 
 /// Why planning or loading failed outside any one table's own problems.
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +19,8 @@ pub enum LoaderError {
     Snowflake(#[from] ApiError),
     #[error(transparent)]
     Files(#[from] FilesError),
+    #[error(transparent)]
+    WarehouseSource(#[from] SnowflakeSourceError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]

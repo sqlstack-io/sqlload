@@ -42,6 +42,12 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             "--reload rewrites every file, so it takes no --start-cursor/--end-cursor".to_owned(),
         );
     }
+    if cursor.lookahead.is_some() || cursor.from_now {
+        return Err(
+            "lookahead and lookback_from = \"now\" apply to database and warehouse targets; a files target's window follows its newest partition"
+                .to_owned(),
+        );
+    }
     let flag = |value: &Option<String>| {
         value
             .as_deref()
