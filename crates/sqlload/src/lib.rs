@@ -33,6 +33,7 @@ pub mod parquet_parts;
 pub mod planning;
 pub mod postgres_source;
 pub mod project;
+pub mod publish_checks;
 pub mod python_sources;
 pub mod routing;
 pub mod row_batches;

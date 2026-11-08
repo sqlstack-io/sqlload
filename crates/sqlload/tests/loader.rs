@@ -42,6 +42,8 @@ mod test_postgres_to_clickhouse;
 mod test_postgres_to_duckdb;
 #[path = "loader/test_postgres_to_files.rs"]
 mod test_postgres_to_files;
+#[path = "loader/test_publish_checks.rs"]
+mod test_publish_checks;
 #[path = "loader/test_snowflake_routes.rs"]
 mod test_snowflake_routes;
 #[path = "loader/test_text_files_to_duckdb.rs"]

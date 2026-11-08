@@ -194,6 +194,34 @@ timestamp_ntz → timestamp_tz instead, shown in `plan`, and never to float, tex
 that rebuilds the table still needs `--allow-type-change-rebuild`. A type pinned in `columns`
 widens the table as before.
 
+## Checks before publish
+
+A table's `checks` run on the rows a load has staged, before they reach the table:
+
+```toml
+[sources.app.tables."public.customers"]
+checks = { unique = ["customer_id"], not_null = ["customer_id", "email"], min_rows = 1, max_row_drop = "20%" }
+```
+
+- `unique`: no two rows share these columns' values. Rows with a NULL in them are skipped, as in
+  SQL; add the columns to `not_null` to forbid NULLs too.
+- `not_null`: none of these columns holds a NULL.
+- `min_rows`: at least this many rows are loaded.
+- `max_row_drop`: the table loses at most this share of its rows, compared with what it holds now.
+
+A failed check fails the table with the counts and up to five repeated keys, and the commit
+publishes none of its rows: the table keeps what it held and the staging table is dropped. A check
+listed in `warn = ["max_row_drop"]` only logs its failure. Each commit is checked by itself, so a
+load that commits batch by batch (`append`, `merge`, `delete_insert`) checks each batch, and a
+failing batch leaves the batches committed before it in place; `min_rows` and `max_row_drop`
+describe the whole table, so only `replace`, which commits once, takes them.
+
+Columns the checks name must be loaded columns, matched ignoring case. A source can set `checks`
+for all its tables; a table's own `checks` replaces the source's whole block, as other settings
+do. Python tables take the same setting. Tables with checks always stage their rows, so a files
+source's direct load goes through SQLLoad instead, which `plan` warns about. Files targets and
+`postgres_cdc` sources take no checks.
+
 ## New tables
 
 With `new_tables = "skip"`, a table that appears after the source's first load loads only once

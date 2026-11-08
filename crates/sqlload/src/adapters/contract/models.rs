@@ -173,3 +173,14 @@ pub struct DirectBatch<'a> {
     /// The files' own folder, which `copy_to_internal_stage` uploads them from.
     pub source_folder: Option<&'a OpenFolder>,
 }
+
+/// A query a check before publish runs on a relation; each returns its values as text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckQuery<'a> {
+    /// One text value: how many rows the relation holds, then how many of them have no value in each of these columns, separated by commas (one scan).
+    Counts(&'a [String]),
+    /// How many values of these columns more than one row holds, skipping rows with a NULL in them.
+    Duplicates(&'a [String]),
+    /// Up to five of those values, in order, each as its columns' text joined by `, `.
+    DuplicateExamples(&'a [String]),
+}
