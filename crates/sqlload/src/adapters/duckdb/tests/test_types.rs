@@ -9,6 +9,12 @@ pub(crate) struct PullInsertTestCase {
     pub(crate) expected_sql: &'static str,
 }
 
+pub(crate) struct ReservedNameTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) column: &'static str,
+    pub(crate) expected_refused: bool,
+}
+
 pub(crate) struct UnloadedInsertTestCase {
     pub(crate) description: &'static str,
     /// The timestamp, the timestamp with time zone and the time, as whole microseconds.
