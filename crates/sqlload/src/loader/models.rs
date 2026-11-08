@@ -108,6 +108,8 @@ pub struct TableSpec {
     pub flatten: Vec<String>,
     /// The table function behind a Python table; `None` for declarative sources.
     pub python: Option<PythonTable>,
+    /// What a Google Sheets table reads; `None` for other sources.
+    pub sheet: Option<crate::sheets_source::models::SheetRead>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
     /// How a warehouse source's table is read; `None` for other sources.
@@ -591,6 +593,8 @@ pub enum SourceReader {
     Files(OpenFolder),
     /// A warehouse source that unloads its tables.
     Snowflake(Box<SnowflakeReader>),
+    /// A Google Sheets client and the spreadsheet it reads.
+    Sheets(crate::sheets_source::models::SheetsClient, String),
 }
 
 /// What decides one files table's cursor window.

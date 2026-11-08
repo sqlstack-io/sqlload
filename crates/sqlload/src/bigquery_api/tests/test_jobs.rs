@@ -6,6 +6,7 @@ use serde_json::json;
 use crate::bigquery_api::_helpers::jobs::{JobState, column_names, job_state, page_rows};
 use crate::bigquery_api::_helpers::requests::google_error;
 use crate::bigquery_api::_helpers::token::signed_assertion;
+use crate::bigquery_api::constants::SCOPE;
 use crate::bigquery_api::main::parse_key::parse_key;
 use crate::bigquery_api::tests::test_types::{
     GoogleErrorTestCase, JobAnswerTestCase, KeyFileTestCase,
@@ -134,7 +135,7 @@ fn given_a_service_account_key_file_when_signing_then_the_assertion_asks_for_big
         let mut file = test_case.fields.clone();
         file["private_key"] = json!(pem.as_str());
         let claims = parse_key(&file.to_string())
-            .and_then(|key| signed_assertion(&key, 1000))
+            .and_then(|key| signed_assertion(&key, SCOPE, 1000))
             .map_err(|error| error.to_string())
             .and_then(|assertion| {
                 let payload = assertion.split('.').nth(1).unwrap_or_default();

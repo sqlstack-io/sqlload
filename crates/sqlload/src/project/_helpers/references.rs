@@ -9,7 +9,8 @@ use crate::project::constants::{
     TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
-    CdcDeletes, CdcMode, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind,
+    CdcDeletes, CdcMode, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableSettings,
+    WriteStrategy,
 };
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
@@ -48,6 +49,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         SourceKind::Snowflake => "snowflake",
         SourceKind::Files => "s3 or filesystem",
         SourceKind::Python => "any",
+        SourceKind::GoogleSheets => "google_sheets",
     };
     match project.connections.get(&source.connection) {
         None if source.connection.is_empty() && source.kind == SourceKind::Python => {}
@@ -106,6 +108,7 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::Files => "files",
         SourceKind::Snowflake => "snowflake",
         SourceKind::Python => "python",
+        SourceKind::GoogleSheets => "google_sheets",
     }
 }
 
@@ -168,6 +171,15 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if source.kind == SourceKind::Snowflake {
         problems.extend(unload_stage_problems(place, source));
     }
+    let sheets_only = source.spreadsheet_id.is_some()
+        || !source.ranges.is_empty()
+        || sheet_settings(source)
+            .any(|settings| settings.header.is_some() || settings.header_row.is_some());
+    if sheets_only && source.kind != SourceKind::GoogleSheets {
+        problems.push(format!(
+            "{place} spreadsheet_id, ranges, header and header_row are for kind = \"google_sheets\""
+        ));
+    }
     match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake => {
             if source.include.is_empty() && !queries {
@@ -186,25 +198,7 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
                     "{place} table_name {template:?} must contain {TABLE_PLACEHOLDER}, or every table gets the same name"
                 ));
             }
-            if source.path.is_some()
-                || !source.partition_columns.is_empty()
-                || source.path_columns.is_some()
-                || source.unmatched_paths.is_some()
-                || !source.constant_columns.is_empty()
-                || source.copy_to_internal_stage
-            {
-                problems.push(format!(
-                    "{place} path, partition_columns, path_columns, unmatched_paths, constant_columns and copy_to_internal_stage are for kind = \"files\""
-                ));
-            }
-            if source.format != SourceFormat::Parquet
-                || source.compression.is_some()
-                || source.csv.is_some()
-            {
-                problems.push(format!(
-                    "{place} format, compression and csv are for kind = \"files\""
-                ));
-            }
+            problems.extend(files_only_problems(place, source));
         }
         SourceKind::Files => {
             if source.path.is_none() {
@@ -215,6 +209,15 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
             problems.extend(encoding_problems(place, source));
             problems.extend(path_value_problems(place, source));
+        }
+        SourceKind::GoogleSheets => {
+            if source.ranges.len() != 1 && !template.contains(TABLE_PLACEHOLDER) {
+                problems.push(format!(
+                    "{place} table_name {template:?} must contain {TABLE_PLACEHOLDER}, or every table gets the same name"
+                ));
+            }
+            problems.extend(files_only_problems(place, source));
+            problems.extend(sheets_problems(place, source));
         }
         SourceKind::Python => {
             if source.tables.len() > 1 && !template.contains(TABLE_PLACEHOLDER) {
@@ -255,6 +258,66 @@ fn unload_stage_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         _ => problems.push(format!(
             "{place} takes either url and storage_integration (an S3 folder) or name (an existing stage)"
         )),
+    }
+    problems
+}
+
+/// The settings only a files source takes, set on a source of another kind.
+fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    if source.path.is_some()
+        || !source.partition_columns.is_empty()
+        || source.path_columns.is_some()
+        || source.unmatched_paths.is_some()
+        || !source.constant_columns.is_empty()
+        || source.copy_to_internal_stage
+    {
+        problems.push(format!(
+            "{place} path, partition_columns, path_columns, unmatched_paths, constant_columns and copy_to_internal_stage are for kind = \"files\""
+        ));
+    }
+    if source.format != SourceFormat::Parquet
+        || source.compression.is_some()
+        || source.csv.is_some()
+    {
+        problems.push(format!(
+            "{place} format, compression and csv are for kind = \"files\""
+        ));
+    }
+    problems
+}
+
+/// A source's settings and each of its tables'.
+fn sheet_settings(source: &SourceConfig) -> impl Iterator<Item = &TableSettings> {
+    std::iter::once(&source.defaults).chain(source.tables.values().map(|table| &table.settings))
+}
+
+/// What a `google_sheets` source needs and cannot take: a spreadsheet, and no cursor, since a sheet has no column to read after.
+fn sheets_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    if source
+        .spreadsheet_id
+        .as_deref()
+        .is_none_or(|id| id.trim().is_empty())
+    {
+        problems.push(format!("{place} kind = \"google_sheets\" needs a spreadsheet_id, the ID in the spreadsheet's URL"));
+    }
+    if !source.include.is_empty() || !source.exclude.is_empty() {
+        problems.push(format!("{place} include and exclude are not for kind = \"google_sheets\"; name its tables in ranges"));
+    }
+    for settings in sheet_settings(source) {
+        if settings.cursor_column.is_some()
+            || settings.batch_size.is_some()
+            || settings.write_strategy == Some(WriteStrategy::DeleteInsert)
+        {
+            problems.push(format!(
+                "{place} a sheet has no cursor, so cursor_column, batch_size and write_strategy = \"delete_insert\" do not apply; use replace (the default), merge on a unique_key, or append"
+            ));
+            break;
+        }
+    }
+    if sheet_settings(source).any(|settings| settings.header_row == Some(0)) {
+        problems.push(format!("{place} header_row counts from 1"));
     }
     problems
 }

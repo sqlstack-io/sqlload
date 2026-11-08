@@ -38,6 +38,7 @@ pub mod routing;
 pub mod row_batches;
 pub mod run_log;
 pub mod schema_plan;
+pub mod sheets_source;
 pub mod similar_names;
 pub mod snowflake_source;
 pub mod sql_api;
