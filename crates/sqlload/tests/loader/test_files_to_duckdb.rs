@@ -59,6 +59,46 @@ const APPEND_CHECK: &str = "SELECT count(*) || ',' || count(DISTINCT _sqlload_so
 const NO_TABLE: &str =
     "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'";
 
+const EU_NOV_3: ParquetFile = ParquetFile {
+    key: "eu/2026-11-03_scores.parquet",
+    ids: &[1, 2],
+    score: 1.0,
+    extra: None,
+};
+/// A compact date in the file name, stored as an ISO date.
+const EU_NOV_4: ParquetFile = ParquetFile {
+    key: "eu/20261104_scores.parquet",
+    ids: &[3],
+    score: 1.0,
+    extra: None,
+};
+const EU_NOV_4_REWRITTEN: ParquetFile = ParquetFile {
+    key: "eu/20261104_scores.parquet",
+    ids: &[3, 4],
+    score: 2.0,
+    extra: None,
+};
+/// A file outside the template's layout.
+const NOTES: ParquetFile = ParquetFile {
+    key: "notes/readme.parquet",
+    ids: &[9],
+    score: 9.0,
+    extra: None,
+};
+
+const PATH_RUNS: &[FilesRun] = &[
+    FilesRun {
+        files: &[EU_NOV_3, EU_NOV_4],
+        expected_error: "",
+    },
+    FilesRun {
+        files: &[EU_NOV_4_REWRITTEN],
+        expected_error: "",
+    },
+];
+const PATH_CHECK: &str = "SELECT string_agg(id || ':' || score || ':' || region || ':' || day || ':' || shop || ':' || day_count || ':' || as_of, ',' ORDER BY id) FROM raw.scores";
+const PATH_RESULT: &str = "1:1.0:eu:2026-11-03:main:1:2026-11-08,2:1.0:eu:2026-11-03:main:1:2026-11-08,3:2.0:eu:2026-11-04:main:1:2026-11-08,4:2.0:eu:2026-11-04:main:1:2026-11-08";
+
 #[test]
 fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_load_once()
 -> Result<(), String> {
@@ -254,6 +294,92 @@ fn given_a_table_from_before_source_rows_when_loading_again_then_the_column_is_a
                     .await?
                     .as_deref(),
                 Some(test_case.expected_rows),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_files_in_plain_folders_when_path_columns_capture_a_date_then_delete_insert_replaces_by_it()
+-> Result<(), String> {
+    let test_cases = [
+        FilesScenarioTestCase {
+            description: "DuckDB reads the files itself, with the captured and constant values as literals",
+            store: local_store,
+            settings: concat!(
+                "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\n",
+                "path_columns = \"{region}/{day:date}_*.parquet\"\nconstant_columns = { shop = \"main\", day_count = 1, as_of = 2026-11-08 }\n",
+            ),
+            runs: PATH_RUNS,
+            check_query: PATH_CHECK,
+            expected_result: PATH_RESULT,
+        },
+        FilesScenarioTestCase {
+            description: "SQLLoad's reader from S3 fills the same values",
+            store: seaweedfs_store,
+            settings: concat!(
+                "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\ntest_loader_route = true\n",
+                "path_columns = \"{region}/{day:date}_*.parquet\"\nconstant_columns = { shop = \"main\", day_count = 1, as_of = 2026-11-08 }\n",
+            ),
+            runs: PATH_RUNS,
+            check_query: PATH_CHECK,
+            expected_result: PATH_RESULT,
+        },
+        FilesScenarioTestCase {
+            description: "a file outside the template fails the plan and nothing loads",
+            store: local_store,
+            settings: concat!(
+                "write_strategy = \"append\"\n",
+                "path_columns = \"{region}/{day:date}_*.parquet\"\nconstant_columns = { shop = \"main\", day_count = 1, as_of = 2026-11-08 }\n",
+            ),
+            runs: &[FilesRun {
+                files: &[EU_NOV_3, NOTES],
+                expected_error: "notes/readme.parquet does not match path_columns",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        FilesScenarioTestCase {
+            description: "a constant cannot be the cursor: it is the same in every file",
+            store: local_store,
+            settings: concat!(
+                "write_strategy = \"delete_insert\"\ncursor_column = \"shop\"\n",
+                "path_columns = \"{region}/{day:date}_*.parquet\"\nconstant_columns = { shop = \"main\", day_count = 1, as_of = 2026-11-08 }\n",
+            ),
+            runs: &[FilesRun {
+                files: &[EU_NOV_3],
+                expected_error: "cursor_column shop is a constant column",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        FilesScenarioTestCase {
+            description: "unmatched_paths = skip leaves it out",
+            store: local_store,
+            settings: concat!(
+                "write_strategy = \"append\"\nunmatched_paths = \"skip\"\n",
+                "path_columns = \"{region}/{day:date}_*.parquet\"\nconstant_columns = { shop = \"main\", day_count = 1, as_of = 2026-11-08 }\n",
+            ),
+            runs: &[FilesRun {
+                files: &[EU_NOV_3, NOTES],
+                expected_error: "",
+            }],
+            check_query: PATH_CHECK,
+            expected_result: "1:1.0:eu:2026-11-03:main:1:2026-11-08,2:1.0:eu:2026-11-03:main:1:2026-11-08",
+        },
+    ];
+    run_async(async {
+        let server = start_seaweedfs().await?;
+        create_bucket(&server, "example-bucket-test").await?;
+        for test_case in test_cases {
+            let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let result = run_files_scenario(&server.endpoint, directory.path(), &test_case).await;
+            assert_eq!(
+                result?.as_deref(),
+                Some(test_case.expected_result),
                 "{}",
                 test_case.description
             );

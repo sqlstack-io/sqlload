@@ -284,6 +284,21 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
         RouteTestCase {
+            description: "path_columns captures and constant_columns load directly, as each file's literals",
+            stage: MANAGED,
+            settings: "write_strategy = \"append\"\npath_columns = \"day=*/part-{part:int}.parquet\"\nconstant_columns = { shop = \"main\", as_of = 2026-11-08 }",
+            files: RouteFiles::Bucket,
+            prepare: integration,
+            expected_plan: &[PULLS],
+            expected_sent: &[
+                "METADATA$FILENAME = 'src/day=2026-11-01/part-00001.parquet' THEN CAST('1' AS NUMBER(38,0))",
+                "THEN CAST('main' AS VARCHAR)",
+                "THEN CAST('2026-11-08' AS DATE)",
+            ],
+            expected_unsent: &["/_sqlload/"],
+            ..BASE
+        },
+        RouteTestCase {
             description: "a column the newest files hold as nanoseconds loads directly, kept whole",
             stage: MANAGED,
             settings: DIRECT,

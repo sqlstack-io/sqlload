@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use crate::config::main::interpolate_toml::interpolate_toml;
 use crate::project::_helpers::python_checks::{checked_python_sources, with_python_sources};
 use crate::project::_helpers::references::reference_problems;
+use crate::project::_helpers::serde_values::typed_constants;
 use crate::project::errors::ProjectError;
 use crate::project::models::ProjectConfig;
 use crate::python_sources::main::connection_settings::connection_settings;
@@ -24,7 +25,8 @@ pub fn parse_python_project(
         .collect();
     let declared =
         checked_python_sources(&value, python, &modules).map_err(ProjectError::Invalid)?;
-    let value = interpolate_toml(value, lookup).map_err(ProjectError::Interpolation)?;
+    let value =
+        typed_constants(interpolate_toml(value, lookup).map_err(ProjectError::Interpolation)?);
     let settings = connection_settings(&value);
     let mut project: ProjectConfig = with_python_sources(value, &declared)
         .try_into()
