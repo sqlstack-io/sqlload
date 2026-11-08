@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use futures_util::StreamExt;
 use tokio::sync::RwLock;
 
 use crate::file_store::main::delete_files::delete_files;
@@ -8,7 +9,9 @@ use crate::file_store::main::read_file::read_file;
 use crate::file_store::models::OpenFolder;
 use crate::http::errors::ApiError;
 use crate::project::models::UnloadStage;
-use crate::snowflake_source::constants::{EXPIRED_CREDENTIALS, INTERNAL_STAGE, USER_STAGE_FOLDER};
+use crate::snowflake_source::constants::{
+    EXPIRED_CREDENTIALS, INTERNAL_STAGE, PARALLEL_FILE_DOWNLOADS, USER_STAGE_FOLDER,
+};
 use crate::snowflake_source::errors::SnowflakeSourceError;
 use crate::snowflake_source::models::{SnowflakeReader, UnloadFolder};
 use crate::sql_api::main::execute_sql::execute_sql;
@@ -191,6 +194,30 @@ impl Unloaded {
             }
         }
     }
+
+    /// Download every file, decrypted, into local folder `into`, several at a time; each file's name there, in file order.
+    pub(crate) async fn download(
+        &self,
+        reader: &SnowflakeReader,
+        into: &std::path::Path,
+    ) -> Result<Vec<String>, SnowflakeSourceError> {
+        let names: Vec<String> = (0..self.len())
+            .map(|index| format!("{index:05}.parquet"))
+            .collect();
+        let mut fetched = futures_util::stream::iter(0..self.len())
+            .map(|index| async move { (index, self.fetch(reader, index).await) })
+            .buffer_unordered(PARALLEL_FILE_DOWNLOADS);
+        while let Some((index, bytes)) = fetched.next().await {
+            let path = into.join(&names[index]);
+            tokio::fs::write(&path, bytes?)
+                .await
+                .map_err(|error| SnowflakeSourceError::File {
+                    file: self.name(index),
+                    reason: format!("cannot write {}: {error}", path.display()),
+                })?;
+        }
+        Ok(names)
+    }
 }
 
 /// Where to fetch internal-stage file `key` from and its key material, issuing `GET` again when the credentials expire within the margin or `renew` asks (S3 refused them).
@@ -265,6 +292,29 @@ pub(crate) async fn unloaded_files(
                 folder: opened,
                 files,
             })
+        }
+    }
+}
+
+/// Where the destination reads `folder`'s files: the S3 folder itself, or for an internal stage a new local temporary folder to download them into, removed when the returned handle drops.
+pub(crate) fn destination_folder(
+    folder: &UnloadFolder,
+) -> Result<(Location, Option<tempfile::TempDir>), SnowflakeSourceError> {
+    match folder {
+        UnloadFolder::External { folder, .. } => Ok((folder.clone(), None)),
+        UnloadFolder::Internal { .. } => {
+            let local = tempfile::tempdir().map_err(|error| {
+                SnowflakeSourceError::Invalid(format!(
+                    "cannot create a local temporary folder for the unloaded files: {error}"
+                ))
+            })?;
+            let location = Location {
+                store: StoreKind::Filesystem {
+                    root: local.path().to_string_lossy().into_owned(),
+                },
+                prefix: String::new(),
+            };
+            Ok((location, Some(local)))
         }
     }
 }

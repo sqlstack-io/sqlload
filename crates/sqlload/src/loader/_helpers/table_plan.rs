@@ -802,6 +802,11 @@ pub(crate) fn pulls_unloaded(route: Option<&Route>) -> bool {
         matches!(
             route.steps.as_slice(),
             [Step::Unload(_), Step::DestinationPulls(_)]
+                | [
+                    Step::Unload(_),
+                    Step::CopyFiles(Store::Local(_)),
+                    Step::DestinationPulls(_)
+                ]
         )
     })
 }

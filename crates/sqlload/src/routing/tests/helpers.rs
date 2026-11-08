@@ -76,6 +76,16 @@ pub(crate) fn clickhouse_destination() -> WriterAccepts {
     }
 }
 
+/// DuckDB: takes Arrow, and reads Parquet itself from S3 or a local folder.
+pub(crate) fn duckdb_destination() -> WriterAccepts {
+    WriterAccepts {
+        arrow: true,
+        pulls_from: vec![object_store("s3://"), Store::Local(String::new())],
+        pull_formats: vec![FileFormat::Parquet],
+        ..WriterAccepts::default()
+    }
+}
+
 /// A local directory: writes Parquet from Arrow, downloads from the lake, and fetches from the user stage.
 pub(crate) fn local_destination() -> WriterAccepts {
     WriterAccepts {

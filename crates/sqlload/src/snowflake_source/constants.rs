@@ -19,6 +19,9 @@ pub const USER_STAGE_FOLDER: &str = "@~/sqlload_unload/";
 /// Unloaded files downloaded at once.
 pub const PARALLEL_DOWNLOADS: usize = 8;
 
+/// Unloaded files downloaded at once to a local folder, which holds them on disk rather than in memory, so more go at once than into Arrow.
+pub const PARALLEL_FILE_DOWNLOADS: usize = 16;
+
 /// The session schema; tables are always named with their schema.
 pub const SESSION_SCHEMA: &str = "PUBLIC";
 
