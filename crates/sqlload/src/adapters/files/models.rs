@@ -282,6 +282,10 @@ pub struct TableState {
     pub listed: TableFiles,
     pub pending: Vec<PendingLoad>,
     pub exists: bool,
+    /// Source files loads from a files source loaded, whose commits' files the table still holds.
+    pub loaded: Vec<crate::files_source::models::LoadedFile>,
+    /// Keys of load records none of whose commits' files the table holds any more.
+    pub stale_loaded: Vec<String>,
 }
 
 /// The files a write replaces, worked out before anything is written.
@@ -315,6 +319,8 @@ pub struct FolderClaim {
     pub template: String,
     /// The source table's schema.
     pub schema: String,
+    /// The folder a files source reads the table from; `None` for other sources.
+    pub source: Option<Location>,
 }
 
 /// What decides the files a write replaces.

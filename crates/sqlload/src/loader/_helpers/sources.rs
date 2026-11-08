@@ -818,12 +818,21 @@ pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Ve
 pub(crate) struct FilesPlanRequest<'a> {
     pub(crate) spec: &'a TableSpec,
     pub(crate) files: &'a FilesSource,
-    pub(crate) destination: &'a Destination,
+    pub(crate) loaded: LoadedSource<'a>,
     pub(crate) live: Option<&'a [LiveColumn]>,
     pub(crate) read_columns: &'a [ReadColumn],
     pub(crate) written: &'a [String],
     pub(crate) bounds: (Option<&'a str>, Option<&'a str>),
     pub(crate) options: &'a PlanOptions,
+}
+
+/// Where an `append` finds the source files already loaded.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LoadedSource<'a> {
+    /// The warehouse table's `_sqlload_source_file` values.
+    Query(&'a Destination),
+    /// A files target's records of what its loads loaded.
+    Recorded(&'a [LoadedFile]),
 }
 
 /// A row of the loaded-files query: `file|version`, or just the file when `versioned` is false.
@@ -979,19 +988,22 @@ pub(crate) async fn plan_files(
     let live_has = |column: &str| live_has(request.live, column);
     let loaded: Vec<LoadedFile> =
         match skips_loaded && live_has(SOURCE_FILE_COLUMN) && !request.options.reload {
-            true => {
-                let version = live_has(SOURCE_VERSION_COLUMN).then_some(SOURCE_VERSION_COLUMN);
-                let query = sql_adapter(spec.warehouse).render_loaded_files_query(
-                    &spec.destination,
-                    SOURCE_FILE_COLUMN,
-                    version,
-                );
-                text_values(request.destination, query)
-                    .await?
-                    .into_iter()
-                    .map(|text| loaded_file(text, version.is_some()))
-                    .collect()
-            }
+            true => match request.loaded {
+                LoadedSource::Query(destination) => {
+                    let version = live_has(SOURCE_VERSION_COLUMN).then_some(SOURCE_VERSION_COLUMN);
+                    let query = sql_adapter(spec.warehouse).render_loaded_files_query(
+                        &spec.destination,
+                        SOURCE_FILE_COLUMN,
+                        version,
+                    );
+                    text_values(destination, query)
+                        .await?
+                        .into_iter()
+                        .map(|text| loaded_file(text, version.is_some()))
+                        .collect()
+                }
+                LoadedSource::Recorded(recorded) => recorded.to_vec(),
+            },
             false => Vec::new(),
         };
     let location = request.files.location.to_string();

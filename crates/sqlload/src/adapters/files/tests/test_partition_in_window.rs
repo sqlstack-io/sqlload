@@ -1,4 +1,4 @@
-use crate::adapters::files::main::_partition_in_window::partition_in_window;
+use crate::adapters::files::_helpers::layout::partitions::partition_in_window;
 use crate::adapters::files::models::PartitionBy;
 use crate::adapters::files::tests::test_types::PartitionInWindowTestCase;
 use crate::column_types::models::ColumnType;

@@ -1,5 +1,7 @@
 use crate::command::tests::helpers::{debug_without_host, run_without_host};
-use crate::command::tests::test_types::{LoaderCommandTestCase, PlanFailureTestCase};
+use crate::command::tests::test_types::{
+    FolderOverlapTestCase, LoaderCommandTestCase, PlanFailureTestCase,
+};
 
 const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 const NO_LOAD_METHOD: &str = "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
@@ -78,4 +80,52 @@ fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_e
             test_case.description
         );
     }
+}
+
+#[test]
+fn given_a_files_source_into_a_files_target_when_planning_then_an_overlapping_folder_or_single_file_is_blocked()
+-> Result<(), String> {
+    let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let day = root.path().join("data/orders/day=2026-11-01");
+    std::fs::create_dir_all(&day).map_err(|error| error.to_string())?;
+    std::fs::write(day.join("a.csv"), "id\n1\n").map_err(|error| error.to_string())?;
+    let test_cases = [
+        FolderOverlapTestCase {
+            description: "a target folder that is the source folder is blocked",
+            target_path: "data/{table}/",
+            single_file: false,
+            expected_problem: "which overlaps the folder it reads from",
+            expected_exit: "exit 1",
+        },
+        FolderOverlapTestCase {
+            description: "a target folder beside the source folder plans",
+            target_path: "out/{table}/",
+            single_file: false,
+            expected_problem: "",
+            expected_exit: "exit 0",
+        },
+        FolderOverlapTestCase {
+            description: "single_file has no load id to record the source files against",
+            target_path: "out/{table}/",
+            single_file: true,
+            expected_problem: "single_file can't record which source files",
+            expected_exit: "exit 1",
+        },
+    ];
+    for test_case in test_cases {
+        let project = format!(
+            "[connections.lake]\nkind = \"filesystem\"\nroot = \"{}\"\n[targets.lake]\nconnection = \"lake\"\npath = \"{}\"\nsingle_file = {}\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"data/orders/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\npartition_columns = {{ day = \"date\" }}\n",
+            root.path().display(),
+            test_case.target_path,
+            test_case.single_file
+        );
+        let output = run_without_host(&project, &["plan"]);
+        assert!(
+            output.contains(test_case.expected_problem)
+                && output.ends_with(test_case.expected_exit),
+            "{}: {output}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

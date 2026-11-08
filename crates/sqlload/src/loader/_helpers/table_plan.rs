@@ -19,7 +19,7 @@ use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::main::session::write_problems::write_problems;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::output_problems::output_problems;
-use crate::adapters::files::models::{OutputCheck, TablePath};
+use crate::adapters::files::models::{OutputCheck, PartitionBy, TablePath};
 use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
@@ -32,12 +32,11 @@ use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::python::with_live_columns;
-use crate::loader::_helpers::sources::FilesPlanRequest;
 use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
-use crate::loader::_helpers::sources::with_live_types;
+use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, with_live_types};
 use crate::loader::constants::CHECKS_LOADER_WARNING;
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
@@ -62,6 +61,7 @@ use crate::project::models::BatchStep;
 use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
+use crate::project::models::{FilesFormat, OutputEncoding};
 use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -589,7 +589,7 @@ async fn plan_table_once(
             let request = FilesPlanRequest {
                 spec,
                 files,
-                destination,
+                loaded: LoadedSource::Query(destination),
                 live: live.as_deref(),
                 read_columns: &read_columns,
                 written: &written,
@@ -1297,4 +1297,39 @@ pub(crate) fn captured_columns(
         None => read,
     };
     (schema, read)
+}
+
+/// Why the table cannot be written in the target's format: a `postgres_cdc` table and an `append` cursor by `{cursor:date}` read their position from Parquet statistics, which CSV files lack; `single_file` names each file after its table, so `append` would overwrite it and a files source could not record the files it read against a load id.
+pub(crate) fn encoding_problems(
+    spec: &TableSpec,
+    path: &TablePath,
+    encoding: &OutputEncoding,
+) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let csv = encoding.format == FilesFormat::Csv;
+    if csv && spec.cdc.is_some() {
+        problems.push(
+            "postgres_cdc reads its position back from Parquet statistics, so it writes files targets as Parquet; drop format = \"csv\"".to_owned(),
+        );
+    }
+    let by_date = path
+        .partition
+        .as_ref()
+        .is_some_and(|partition| partition.by == PartitionBy::Date);
+    if csv && spec.strategy == WriteStrategy::Append && spec.cursor.is_some() && by_date {
+        problems.push(
+            "append by a {cursor:date} partition reads the newest files' maximum from Parquet statistics, which CSV files lack; partition by {cursor}, or use delete_insert or replace".to_owned(),
+        );
+    }
+    if encoding.single_file && spec.files.is_some() {
+        problems.push(
+            "single_file can't record which source files a load from a files source read, as its file carries no load id; drop single_file".to_owned(),
+        );
+    }
+    if encoding.single_file && spec.strategy == WriteStrategy::Append {
+        problems.push(
+            "single_file names each file after its table, so append would overwrite the last one; use replace or delete_insert, or drop single_file".to_owned(),
+        );
+    }
+    problems
 }

@@ -110,7 +110,7 @@ pub(crate) async fn described_project(text: &str) -> Result<ProjectConfig, Strin
 }
 
 /// Plan, apply and load once: the rendered plan, or the error text when any step fails.
-async fn run_once(
+pub(crate) async fn run_once(
     project_text: &str,
     destinations: &BTreeMap<String, Destination>,
     options: &PlanOptions,

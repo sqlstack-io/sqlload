@@ -31,6 +31,12 @@ pub const UTC_SUFFIX: &str = "+00";
 /// Seconds in a day, to turn Parquet date statistics (days since 1970) into dates.
 pub const SECONDS_PER_DAY: i64 = 86_400;
 
+/// The folder below a table's folder holding, per commit of a files source's load, the source files whose rows that commit's files hold.
+pub const LOADED_FOLDER: &str = "_sqlload/loaded/";
+
+/// The suffix of a commit's record in [`LOADED_FOLDER`], which no data file has.
+pub const LOADED_SUFFIX: &str = ".json";
+
 /// The folder below a table's folder holding one marker per load that has not finished.
 pub const PENDING_FOLDER: &str = "_sqlload/pending/";
 
@@ -60,6 +66,9 @@ pub const OPEN_FILE_OVERHEAD_BYTES: usize = 1024 * 1024;
 
 /// The start of a pending marker line holding a run record (keys never start with `@`).
 pub const PENDING_RUN_PREFIX: &str = "@run\t";
+
+/// Records of loaded source files read at once while planning.
+pub const RECORD_READS: usize = 16;
 
 /// The file name suffix of the CSV files written, before any compression suffix.
 pub const CSV_SUFFIX: &str = ".csv";

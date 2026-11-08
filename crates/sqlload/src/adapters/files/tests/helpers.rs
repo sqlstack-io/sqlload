@@ -109,6 +109,7 @@ pub(crate) fn claim(name: &str, store: StoreKind, prefix: &str, schema: &str) ->
         folder: location(store, prefix),
         template: "{source}/{table}/".to_owned(),
         schema: schema.to_owned(),
+        source: None,
     }
 }
 
