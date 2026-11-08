@@ -42,6 +42,13 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             .find(|column| column.name == name)
             .map_or(ColumnType::Text, |column| column.column_type.clone())
     };
+    let compared = |name: &str| {
+        let column = adapter.render_identifier(name);
+        match column_type(name) {
+            ColumnType::Text | ColumnType::Varchar(_) => adapter.render_binary_text(&column),
+            _ => column,
+        }
+    };
     let delete = match request.mode {
         WriteMode::Recreate => {
             return adapter.render_replace_table_from_relation(request, &source, &values);
@@ -71,7 +78,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
                 .collect();
             Some(format!(
                 "DELETE FROM {target} WHERE {} IN ({})",
-                adapter.render_identifier(cursor_column),
+                compared(cursor_column),
                 listed.join(", ")
             ))
         }
@@ -84,7 +91,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             let sql_type = adapter
                 .render_loader_logical_type(&column_type(cursor_column))
                 .sql;
-            let column = adapter.render_identifier(cursor_column);
+            let column = compared(cursor_column);
             let bounds: Vec<String> = [(from, ">="), (to, "<")]
                 .into_iter()
                 .filter_map(|(bound, operator)| {

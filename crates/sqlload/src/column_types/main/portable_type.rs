@@ -55,12 +55,7 @@ pub fn portable_type(field: &Field) -> Result<ColumnType, String> {
         | DataType::LargeList(_)
         | DataType::FixedSizeList(_, _)
         | DataType::Struct(_)
-        | DataType::Map(_, _) => {
-            return Err(format!(
-                "nested type {} is not loadable from files yet; add the column to exclude_columns",
-                field.data_type()
-            ));
-        }
+        | DataType::Map(_, _) => ColumnType::Json,
         DataType::Dictionary(_, value) => {
             return portable_type(&Field::new(field.name(), value.as_ref().clone(), true));
         }

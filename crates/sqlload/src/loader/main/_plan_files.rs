@@ -22,6 +22,8 @@ use crate::loader::models::{
 };
 use crate::project::models::FilesFormat;
 use crate::schema_plan::models::{LiveColumn, SchemaPlan};
+use crate::table_lease::main::lease_holder::lease_holder;
+use crate::table_lease::main::lease_now::lease_now;
 
 /// One table's plan against the files already in its folder.
 pub(in crate::loader) async fn plan_files_table(
@@ -157,7 +159,7 @@ async fn planned_read(
     })
 }
 
-/// The table's context, or its blocked plan (marked existing when its folder holds data files).
+/// The table's context, or its blocked plan (marked existing when its folder holds data files), blocked too while another load holds its lease.
 async fn files_context(
     spec: &TableSpec,
     destination: &FilesDestination,
@@ -177,6 +179,7 @@ async fn files_context(
     let folder = open_folder(&path.folder)?;
     let state = read_table_state(&folder, &path, cursor_type.as_ref()).await?;
     problems.extend(state.listed.problems.clone());
+    problems.extend(lease_holder(&folder, lease_now()).await?);
     if !problems.is_empty() {
         return Ok(Err(TablePlan {
             exists: state.exists,

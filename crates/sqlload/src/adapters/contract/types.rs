@@ -368,6 +368,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         }
     }
 
+    /// Text `expression` compared bytewise (in code point order), whatever collation its column or database has, as the source's cursor filter and SQLLoad itself compare text cursors.
+    fn render_binary_text(&self, expression: &str) -> String {
+        expression.to_owned()
+    }
+
     /// A query for a cursor's maximum and how to read it; `None` if a lookback needs a time column.
     fn render_max_cursor(&self, request: &CursorQuery<'_>) -> Option<CursorRead> {
         cursor_query(self, request)

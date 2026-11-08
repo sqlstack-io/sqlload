@@ -9,6 +9,15 @@ pub const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// The longest wait a `Retry-After` header is obeyed for.
 pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
 
+/// The most time before an OAuth2 access token's expiry at which it is renewed; a short-lived token is renewed a tenth of its lifetime early.
+pub const MAX_TOKEN_RENEWAL_MARGIN: Duration = Duration::from_secs(60);
+
+/// The longest lifetime an OAuth2 access token is taken to have, whatever its `expires_in` says.
+pub const MAX_TOKEN_LIFETIME: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
+/// How old an OAuth2 access token must be before a 401 that `on_status` skips renews it: younger tokens are taken as valid and the 401 as the API's answer, so a run of skipped 401s costs at most one token request per this long.
+pub const SKIPPED_REFUSAL_RENEWAL_AGE: Duration = Duration::from_secs(30);
+
 /// Characters of a failed response's body shown in its error.
 pub const ERROR_EXCERPT_CHARS: usize = 300;
 

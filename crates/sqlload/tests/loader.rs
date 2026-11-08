@@ -12,6 +12,8 @@ mod files_helpers;
 mod helpers;
 #[path = "loader/postgres/helpers.rs"]
 mod postgres_helpers;
+#[path = "loader/sheets/helpers.rs"]
+mod sheets_helpers;
 #[path = "loader/test_batched_loads.rs"]
 mod test_batched_loads;
 #[path = "loader/test_bigquery_loads.rs"]
@@ -50,6 +52,8 @@ mod test_postgres_to_duckdb;
 mod test_postgres_to_files;
 #[path = "loader/test_publish_checks.rs"]
 mod test_publish_checks;
+#[path = "loader/test_sheets_to_duckdb.rs"]
+mod test_sheets_to_duckdb;
 #[path = "loader/test_snowflake_routes.rs"]
 mod test_snowflake_routes;
 #[path = "loader/test_text_files_to_duckdb.rs"]

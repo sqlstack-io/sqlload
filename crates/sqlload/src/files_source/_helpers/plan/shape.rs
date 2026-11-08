@@ -1,15 +1,19 @@
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, Int64Array, RecordBatch, StringArray, new_null_array};
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow_select::concat::concat;
 
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+    MAX_TEXT_ARRAY_BYTES, NESTED_JSON_SLICE_ROWS, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN,
+    SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::errors::ShapeError;
 use crate::files_source::models::DataFile;
+use crate::row_batches::main::normalise_batch::normalise_batch;
 use crate::schema_plan::models::DesiredColumn;
 
 /// The Arrow schema of the batches handed on: one field per output column, at nanoseconds for the `nanos` columns.
@@ -85,6 +89,7 @@ fn shape_column(
     let constant = constants.iter().find(|(key, _)| key == field.name());
     let source: ArrayRef = match (constant, batch.column_by_name(field.name())) {
         (Some((_, value)), _) => Arc::new(StringArray::from(vec![*value; rows])),
+        (None, Some(column)) if nested(column.data_type()) => json_text(field.name(), column)?,
         (None, Some(column)) => column.clone(),
         (None, None) => return Ok(new_null_array(field.data_type(), rows)),
     };
@@ -100,6 +105,54 @@ fn shape_column(
             field.data_type()
         ),
     })
+}
+
+/// Whether a column of `data_type` holds lists, structs or maps, which load as JSON.
+fn nested(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(..)
+            | DataType::Struct(_)
+            | DataType::Map(..)
+    )
+}
+
+/// Nested column `name` as JSON text: a list as an array, a struct as an object with its fields in order, a map as an object keyed by each key's text. Written a slice of rows at a time, so a batch whose text would pass the 2 GiB one text array holds fails by name instead of overflowing.
+fn json_text(name: &str, column: &ArrayRef) -> Result<ArrayRef, ShapeError> {
+    let failed = |reason: String| ShapeError {
+        row: None,
+        reason: format!("{name}: cannot convert to JSON: {reason}"),
+    };
+    let mut slices: Vec<ArrayRef> = Vec::new();
+    let mut bytes: usize = 0;
+    let mut start = 0;
+    while start < column.len() {
+        let rows = NESTED_JSON_SLICE_ROWS.min(column.len() - start);
+        let batch = RecordBatch::try_from_iter([(name, column.slice(start, rows))])
+            .map_err(|error| failed(error.to_string()))?;
+        let text = normalise_batch(&batch).map_err(failed)?.column(0).clone();
+        bytes += text.as_string::<i32>().values().len();
+        if bytes > MAX_TEXT_ARRAY_BYTES {
+            return Err(ShapeError {
+                row: Some(start),
+                reason: format!(
+                    "{name}: this batch's values pass 2 GiB as JSON text; leave the column out with exclude_columns"
+                ),
+            });
+        }
+        slices.push(text);
+        start += rows;
+    }
+    match slices.as_slice() {
+        [] => Ok(new_null_array(&DataType::Utf8, 0)),
+        [one] => Ok(one.clone()),
+        _ => {
+            let parts: Vec<&dyn Array> = slices.iter().map(AsRef::as_ref).collect();
+            concat(&parts).map_err(|error| failed(error.to_string()))
+        }
+    }
 }
 
 /// The first value of `source` that does not convert to `data_type`.

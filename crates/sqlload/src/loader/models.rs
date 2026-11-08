@@ -110,6 +110,8 @@ pub struct TableSpec {
     pub flatten: Vec<String>,
     /// The table function behind a Python table; `None` for declarative sources.
     pub python: Option<PythonTable>,
+    /// What a Google Sheets table reads; `None` for other sources.
+    pub sheet: Option<crate::sheets_source::models::SheetRead>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
     /// The checks its staged rows must pass before they are published (the table's own, else its source's).
@@ -587,6 +589,10 @@ pub struct FilesSink {
     pub deleted: std::collections::BTreeSet<String>,
     /// Source files (of a files source) read since the last commit, which the next commit records.
     pub reading: Vec<LoadedFile>,
+    /// The load's claim on the table, refreshed in the background until `keeper`'s guard is dropped.
+    pub lease: crate::table_lease::models::Lease,
+    /// The guard stopping the lease's renewal, and the renewal task.
+    pub keeper: Option<(tokio_util::sync::DropGuard, tokio::task::JoinHandle<()>)>,
 }
 
 /// A connected source, ready to read.
@@ -597,6 +603,8 @@ pub enum SourceReader {
     Files(OpenFolder),
     /// A warehouse source that unloads its tables.
     Snowflake(Box<SnowflakeReader>),
+    /// A Google Sheets client and the spreadsheet it reads.
+    Sheets(crate::sheets_source::models::SheetsClient, String),
 }
 
 /// What decides one files table's cursor window.
