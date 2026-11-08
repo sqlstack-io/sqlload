@@ -793,3 +793,14 @@ pub(crate) struct SheetsRefusalTestCase {
     /// Text the refusal holds.
     pub(crate) expected_output: &'static str,
 }
+
+pub(crate) struct S3ProfileTestCase {
+    pub(crate) description: &'static str,
+    /// The `s3` connection's `profile`.
+    pub(crate) profile: &'static str,
+    /// The `sqlload` command run, with no AWS keys in its environment.
+    pub(crate) command: &'static str,
+    /// Text its output must contain.
+    pub(crate) expected_text: &'static str,
+    pub(crate) expected_ok: bool,
+}

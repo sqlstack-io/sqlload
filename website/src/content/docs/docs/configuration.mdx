@@ -96,9 +96,22 @@ See [ClickHouse](/docs/targets/clickhouse/).
 | `bucket` | The bucket. |
 | `region` | The bucket's region. |
 | `endpoint` | A custom S3-compatible endpoint. |
+| `profile` | From 0.27.0 (not released yet). The profile of the AWS shared credentials file to take keys from. Default: `AWS_PROFILE`, else `default`. |
 
-Credentials come from `AWS_*` environment variables, web identity, or the instance or container
-role. AWS profiles and SSO aren't read.
+SQLLoad takes the first credentials it finds, in this order:
+
+1. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (with `AWS_SESSION_TOKEN`) in the environment.
+2. From 0.27.0 (not released yet), keys in the shared credentials file (`AWS_SHARED_CREDENTIALS_FILE`,
+   default `~/.aws/credentials`), under the connection's `profile`, else `AWS_PROFILE`, else
+   `default`.
+3. Web identity.
+4. The instance or container role.
+
+From 0.27.0 (not released yet), a profile you name, with `profile` or `AWS_PROFILE`, must have
+`aws_access_key_id` and `aws_secret_access_key` in that file; otherwise the connection fails rather
+than trying the next source. SSO, assumed roles and `credential_process` in `~/.aws/config` aren't
+read. Also from 0.27.0, `sqlload debug` shows where each S3 connection's keys come from, never the
+keys.
 
 SQLLoad removes files in bulk, up to 1,000 per request. For an S3-compatible store without bulk
 delete, set `AWS_DISABLE_BULK_DELETE=true`: SQLLoad then deletes each file with its own request.

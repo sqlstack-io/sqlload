@@ -48,5 +48,9 @@ pub fn direct_blocked(
     if covering.is_none() && !files.copy_to_internal_stage {
         return None;
     }
-    direct_check(spec, (read, read.files.as_slice(), &[]), covering)
+    direct_check(
+        spec,
+        (read, read.files.as_slice(), &[]),
+        covering.map(AsRef::as_ref),
+    )
 }

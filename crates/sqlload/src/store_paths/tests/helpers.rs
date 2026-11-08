@@ -6,5 +6,6 @@ pub(crate) fn bucket(name: &str) -> Option<StoreKind> {
         bucket: name.to_owned(),
         region: Some("eu-west-2".to_owned()),
         endpoint: None,
+        profile: None,
     })
 }

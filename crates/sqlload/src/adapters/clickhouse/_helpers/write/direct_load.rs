@@ -35,6 +35,7 @@ impl ClickHouseWriter {
             bucket,
             region,
             endpoint,
+            profile,
         } = &source.location.store
         else {
             return Ok(None);
@@ -47,7 +48,17 @@ impl ClickHouseWriter {
             )));
         }
         self.settle_rows().await?;
-        let builder = s3_builder(bucket, region.as_deref(), endpoint.as_deref());
+        let builder = s3_builder(
+            bucket,
+            region.as_deref(),
+            endpoint.as_deref(),
+            profile.as_deref(),
+        )
+        .map_err(|error| {
+            LoaderError::Invalid(format!(
+                "cannot sign ClickHouse's reads of s3://{bucket}/: {error}"
+            ))
+        })?;
         let setting = |key: AmazonS3ConfigKey| builder.get_config_value(&key);
         let region = setting(AmazonS3ConfigKey::Region);
         let endpoint =

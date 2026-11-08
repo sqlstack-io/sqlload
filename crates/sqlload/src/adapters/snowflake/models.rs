@@ -42,7 +42,7 @@ pub enum ForcedStage {
     Streaming,
     Insert,
     Internal { name: String },
-    External(ExternalStage),
+    External(Box<ExternalStage>),
 }
 
 /// An S3 external stage.
@@ -69,7 +69,7 @@ pub enum StageObject {
 /// How one table's rows reach Snowflake, as its plan chose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StageRoute {
-    External(ExternalStage),
+    External(Box<ExternalStage>),
     Internal {
         name: String,
     },

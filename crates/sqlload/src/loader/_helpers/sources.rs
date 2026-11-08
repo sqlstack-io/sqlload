@@ -93,10 +93,12 @@ pub(crate) fn files_location(
             bucket,
             region,
             endpoint,
+            profile,
         }) => StoreKind::S3 {
             bucket: bucket.clone(),
             region: region.clone(),
             endpoint: endpoint.clone(),
+            profile: profile.clone(),
         },
         Some(ConnectionConfig::Filesystem { root }) => StoreKind::Filesystem { root: root.clone() },
         _ => {

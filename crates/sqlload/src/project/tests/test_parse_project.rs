@@ -324,6 +324,11 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.app] sql is for kind = \"snowflake\" and kind = \"odbc\"",
         },
         ParseProjectErrorTestCase {
+            description: "an empty AWS profile is never read as a profile named \"\"",
+            text: "[connections.lake]\nkind = \"s3\"\nbucket = \"b\"\nprofile = \"\"\n",
+            expected_message: "[connections.lake] profile is empty; omit it",
+        },
+        ParseProjectErrorTestCase {
             description: "an odbc connection needs a connection string or a DSN",
             text: "[connections.erp]\nkind = \"odbc\"\n",
             expected_message: "[connections.erp] needs connection_string, or dsn",
