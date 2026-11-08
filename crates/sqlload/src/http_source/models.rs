@@ -100,6 +100,76 @@ pub enum Auth {
     },
     /// `username` and `password`.
     Basic,
+    /// An access token from `token_url` for the connection's `client_id` and `client_secret`.
+    Oauth2ClientCredentials(OAuth2Spec),
+    /// An access token from `token_url` for the connection's `refresh_token`.
+    Oauth2RefreshToken(OAuth2Spec),
+}
+
+/// Where an OAuth2 access token comes from and how the client authenticates there.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OAuth2Spec {
+    pub token_url: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub client_auth: ClientAuth,
+}
+
+/// How the client's id and secret reach the token endpoint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientAuth {
+    /// HTTP basic auth, which every OAuth2 server must accept.
+    #[default]
+    Basic,
+    /// Form fields `client_id` and `client_secret`.
+    Post,
+}
+
+/// The form an OAuth2 token request posts, and the access token it last returned.
+#[derive(Debug)]
+pub struct TokenSource {
+    pub token_url: reqwest::Url,
+    /// `grant_type` and its fields, plus the client's fields under `client_auth = "post"`.
+    pub form: Vec<(String, String)>,
+    /// `client_id` and `client_secret` for basic client auth, form-encoded as RFC 6749 asks.
+    pub basic: Option<(String, String)>,
+    pub state: tokio::sync::Mutex<TokenState>,
+    /// Every secret of the token flow, including each access token issued, for redaction.
+    pub secrets: Mutex<Vec<String>>,
+}
+
+/// The current access token, when it was issued and should be replaced, and a rotated refresh token.
+#[derive(Debug, Default)]
+pub struct TokenState {
+    pub access: Option<String>,
+    pub issued_at: Option<Instant>,
+    pub renew_at: Option<Instant>,
+    pub refresh_token: Option<String>,
+}
+
+/// The grant an OAuth2 auth uses, with the connection's settings it needs.
+#[derive(Debug, Clone)]
+pub enum Grant {
+    ClientCredentials {
+        client_id: String,
+        client_secret: String,
+    },
+    RefreshToken {
+        refresh_token: String,
+        /// `client_id` and `client_secret`, when the connection has them.
+        client: (Option<String>, Option<String>),
+    },
+}
+
+/// What a token response issued.
+#[derive(Debug, Clone)]
+pub struct Issued {
+    pub access: String,
+    /// When after issue to renew it; `None` keeps it until a 401.
+    pub renew_after: Option<Duration>,
+    pub refresh_token: Option<String>,
 }
 
 /// How the next page is found; always named, never guessed.
@@ -162,11 +232,19 @@ pub struct Endpoint {
 }
 
 /// Credentials ready to attach to a request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Credential {
     None,
-    Header { name: String, value: String },
-    Query { name: String, value: String },
+    Header {
+        name: String,
+        value: String,
+    },
+    Query {
+        name: String,
+        value: String,
+    },
+    /// `Authorization: Bearer <access token>`, the token fetched and renewed for the run.
+    OAuth2(std::sync::Arc<TokenSource>),
 }
 
 /// Requests spaced `interval` apart, shared across jobs.
@@ -191,6 +269,8 @@ pub struct Calls {
 pub enum Attempt {
     /// The body, or `None` when `on_status` skips the status.
     Done(Option<Fetched>),
+    /// A 401 to an OAuth2 access token: renew the token and try once more.
+    Refused,
     /// A failure worth retrying, after `after` when the server said.
     Retry {
         reason: String,

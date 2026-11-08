@@ -12,6 +12,8 @@ mod helpers;
 mod loader_columns;
 #[path = "tests/test_merge_columns.rs"]
 mod merge_columns;
+#[path = "tests/test_nested_parquet.rs"]
+mod nested_parquet;
 #[path = "tests/test_path_columns.rs"]
 mod path_columns;
 #[path = "tests/test_read_text_files.rs"]

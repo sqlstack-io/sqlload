@@ -83,6 +83,30 @@ def basic() -> Auth:
 	return Auth({"kind": "basic"})
 
 
+def oauth2_client_credentials(token_url: str, *, scope: str | None = None, client_auth: str = "basic") -> Auth:
+	"""`Authorization: Bearer <access token>`, the token `token_url` issues for the connection's `client_id` and `client_secret`.
+
+	The token is fetched once per run, renewed before it expires and once after a 401. `client_auth` is `"basic"`
+	(HTTP basic auth at the token URL) or `"post"` (`client_id` and `client_secret` as form fields).
+	"""
+	return Auth(_oauth2("oauth2_client_credentials", token_url, scope, client_auth))
+
+
+def oauth2_refresh_token(token_url: str, *, scope: str | None = None, client_auth: str = "basic") -> Auth:
+	"""`Authorization: Bearer <access token>`, the token `token_url` issues for the connection's `refresh_token`.
+
+	The connection's `client_id` and `client_secret` go along when it has them. A refresh token the server rotates is
+	used for the rest of the run but not saved, so the next run starts from the connection's `refresh_token` again.
+	"""
+	return Auth(_oauth2("oauth2_refresh_token", token_url, scope, client_auth))
+
+
+def _oauth2(kind: str, token_url: str, scope: str | None, client_auth: str) -> dict[str, Any]:
+	if client_auth not in ("basic", "post"):
+		raise ValueError(f'client_auth must be "basic" or "post", not {client_auth!r}')
+	return {"kind": kind, "token_url": token_url, "scope": scope, "client_auth": client_auth}
+
+
 def _param_text(value: Any) -> str:
 	"""A request parameter JSON has no form for, such as a `datetime` cursor value: ISO text for dates and times, else `str()`."""
 	isoformat = getattr(value, "isoformat", None)

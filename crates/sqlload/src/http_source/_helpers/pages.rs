@@ -29,7 +29,7 @@ pub(crate) async fn paginate(
     let mut seen: HashSet<Url> = HashSet::new();
     let mut previous: Option<u64> = None;
     for step in 1_u64.. {
-        let shown = redacted(&format!("GET {url}"), &calls.endpoint.secrets);
+        let shown = redacted(&format!("GET {url}"), &calls.endpoint.current_secrets());
         if !seen.insert(url.clone()) {
             return Err(format!(
                 "{shown}: the paginator came back to a page it already read; check its pointer or parameter"

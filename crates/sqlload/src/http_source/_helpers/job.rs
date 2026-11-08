@@ -9,6 +9,7 @@ use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::task::JoinSet;
 
 use crate::http_source::_helpers::endpoint::{endpoint, interval, shared_limiter};
+use crate::http_source::_helpers::oauth::token_url;
 use crate::http_source::_helpers::pages::paginate;
 use crate::http_source::_helpers::selector::{selected_rows, selector};
 use crate::http_source::_helpers::urls::{filled_path, placeholders};
@@ -20,7 +21,7 @@ use std::time::Duration;
 use crate::http::main::install_tls_provider::install_tls_provider;
 use crate::http_source::constants::{JOB_THREADS, MAX_REDIRECTS, PAGES_AHEAD};
 use crate::http_source::models::{
-    Calls, FanOut, FieldSpec, HttpJob, HttpPage, KeyFeed, Over, Paginator, Request, Selector,
+    Auth, Calls, FanOut, FieldSpec, HttpJob, HttpPage, KeyFeed, Over, Paginator, Request, Selector,
     StatusAction,
 };
 
@@ -82,6 +83,12 @@ fn request_problems(request: &Request) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     problems.extend(selector(request.select.as_deref()).err());
     problems.extend(paginator_problem(&request.paginator));
+    problems.extend(match &request.client.auth {
+        Auth::Oauth2ClientCredentials(spec) | Auth::Oauth2RefreshToken(spec) => {
+            token_url(spec).err()
+        }
+        Auth::None | Auth::Bearer | Auth::ApiKey { .. } | Auth::Basic => None,
+    });
     problems.extend(
         request
             .client
