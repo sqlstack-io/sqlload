@@ -720,3 +720,67 @@ pub struct FileSchema {
     pub key: String,
     pub columns: Vec<LiveColumn>,
 }
+
+/// An `apply` or `load` to report as JSON: what it applied and loaded, and when it started and how long it took.
+#[derive(Debug, Clone, Copy)]
+pub struct RunReport<'a> {
+    /// `apply` or `load`.
+    pub command: &'static str,
+    /// The `created ...` and `altered ...` lines `apply` returned.
+    pub applied: &'a [String],
+    pub outcomes: &'a [TableOutcome],
+    pub started: chrono::DateTime<chrono::Utc>,
+    pub elapsed: std::time::Duration,
+}
+
+/// What `apply --json` and `load --json` print, in this field order.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RunResult {
+    pub schema_version: u32,
+    /// `apply` or `load`.
+    pub command: &'static str,
+    /// Whether every selected table planned, and every table loaded.
+    pub ok: bool,
+    pub started_at: String,
+    pub finished_at: String,
+    pub duration_seconds: f64,
+    pub summary: RunSummary,
+    pub plan: PlanView,
+    /// Objects created, altered or recreated, by `apply` and by Python tables' loads.
+    pub objects: Vec<ObjectChange>,
+    pub tables: Vec<TableResult>,
+}
+
+/// A run's counts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RunSummary {
+    pub created: usize,
+    pub altered: usize,
+    pub recreated: usize,
+    pub loaded: usize,
+    pub failed: usize,
+    pub rows: u64,
+}
+
+/// An object a run created, altered or recreated.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ObjectChange {
+    pub action: &'static str,
+    pub name: String,
+    pub detail: String,
+}
+
+/// A table's load in a run's result.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct TableResult {
+    pub table: String,
+    pub source: Option<String>,
+    pub target: Option<String>,
+    pub write_strategy: Option<String>,
+    /// `loaded` or `failed`.
+    pub status: &'static str,
+    pub rows: Option<u64>,
+    pub duration_seconds: f64,
+    pub note: Option<String>,
+    pub error: Option<String>,
+}

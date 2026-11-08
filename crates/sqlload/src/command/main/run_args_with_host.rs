@@ -30,7 +30,7 @@ where
         }
     };
     init_logging(cli.log_format);
-    let json = matches!(&cli.command, Command::Plan(args) if args.json);
+    let json = matches!(&cli.command, Command::Plan(args) | Command::Apply(args) | Command::Load(args) if args.json);
     let copies = matches!(&cli.command, Command::Copy(_));
     let text = match config_text(&cli.config, copies) {
         Ok(text) => text,
@@ -72,7 +72,7 @@ where
     }
 }
 
-/// Report a failure and return exit code 1: as one JSON error on stdout under `plan --json`, so its output always parses, else as `error:` on stderr.
+/// Report a failure and return exit code 1: as one JSON error on stdout under `--json`, so its output always parses, else as `error:` on stderr.
 fn failed(json: bool, code: &str, message: &str) -> u8 {
     match json {
         true => print_lines(vec![json_error(code, message)], true),

@@ -35,7 +35,7 @@ All three take the same options.
 | `--yes` | Rebuild with `--reload` or `--resnapshot` without asking. Needed when not on a terminal. |
 | `--allow-type-change-rebuild` | Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would block. |
 | `--concurrency <N>` | The most tables loading at once. Default: the project's `concurrency`, else 4. |
-| `--json` | `plan` only: print the plan as one JSON document. |
+| `--json` | Print one JSON document on standard output. For `plan`, the plan. For `apply` and `load` (from 0.27.0, not released yet), the result: see [Results as JSON](#results-as-json). |
 
 ## Reading a plan
 
@@ -106,3 +106,74 @@ loaded   raw.app__customers  50 rows  0.0s
 
 ✓ Completed  1 loaded, 50 rows, 0.1s
 ```
+
+## Results as JSON
+
+From 0.27.0 (not released yet), `apply --json` and `load --json` print one JSON document on
+standard output when they finish, for scripts and orchestrators. Logs stay on standard error. The
+exit code is the same as without `--json`.
+
+```console
+$ sqlload load --json
+{
+  "schema_version": 1,
+  "command": "load",
+  "ok": false,
+  "started_at": "2026-11-08T16:33:56.655Z",
+  "finished_at": "2026-11-08T16:33:56.731Z",
+  "duration_seconds": 0.076,
+  "summary": {
+    "created": 1,
+    "altered": 0,
+    "recreated": 0,
+    "loaded": 1,
+    "failed": 1,
+    "rows": 1200
+  },
+  "plan": { "ok": true, "summary": "2 selected, 2 objects to create, 2 to load", … },
+  "objects": [
+    { "action": "created", "name": "raw.shop__orders", "detail": "4 columns" }
+  ],
+  "tables": [
+    {
+      "table": "raw.shop__orders",
+      "source": "shop",
+      "target": "dev",
+      "write_strategy": "replace",
+      "status": "loaded",
+      "rows": 1200,
+      "duration_seconds": 0.032,
+      "note": null,
+      "error": null
+    },
+    {
+      "table": "raw.shop__refunds",
+      "source": "shop",
+      "target": "dev",
+      "write_strategy": "replace",
+      "status": "failed",
+      "rows": null,
+      "duration_seconds": 0.009,
+      "note": null,
+      "error": "RuntimeError: the API returned 503 (File \"sources/shop.py\", line 14, in refunds)"
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `schema_version` | `1`. New fields can appear without a change; it changes only when a field changes meaning or goes away. |
+| `command` | `apply` or `load`. |
+| `ok` | Whether every selected table planned and loaded: `true` exactly when the exit code is 0. |
+| `summary` | Objects `created`, `altered` and `recreated`; tables `loaded` and `failed`; `rows` loaded. |
+| `plan` | The same document `plan --json` prints. Tables a plan error left out are in its `errors`, and tables with nothing to load in `skipped`. |
+| `objects` | Each object created, altered or recreated, by `apply` or by a Python table's load. |
+| `tables` | Each table loaded: its `status` (`loaded` or `failed`), `rows`, `duration_seconds`, a `note` (the cursor window it read, or that its table waits for first data), and the `error` when it failed. `apply` loads nothing, so its list is empty. |
+
+When the run can't start (the configuration doesn't parse, a connection fails), standard output
+holds one error document instead, the same as `plan --json`'s:
+`{"error": {"code": "config", "message": "…", "help": "…"}}`. `code` is `config` for the
+configuration, else the command's name.
+
+`--reload` and `--resnapshot` need `--yes` with `--json`, as there is no prompt to answer.
