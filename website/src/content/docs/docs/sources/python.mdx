@@ -149,6 +149,7 @@ Unknown settings raise `TypeError` when the module is imported.
 |---------|----|---------|
 | `write_strategy`, `unique_key`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings). |
 | `contract`, `on_schema_change`, `auto_widen`, `type_change_rebuild` | source or table | See [Contracts](/docs/concepts/contracts/). |
+| `checks` | source or table | Checks on the staged rows, such as `{"unique": ["order_id"]}`. See [Checks before publish](/docs/concepts/checks/). |
 | `allow_empty` | source or table | Let `replace` empty a table when the function yields no rows. |
 | `state` | source or table | `"logged"` to keep a position in `ctx.state`. See [Logged state](/docs/concepts/cursors/#logged-state). |
 | `columns` | table | Pinned column types, such as `{"total": "decimal(18,2)"}`. |
@@ -325,16 +326,57 @@ loaded   raw.shop__orders       5 rows  1.0s
 | `sl.bearer()` | `Authorization: Bearer <token>`, the connection's `token`. |
 | `sl.api_key(header=...)` or `sl.api_key(query=...)` | The `token` in that header or query parameter. |
 | `sl.basic()` | Basic auth with the connection's `username` and `password`. |
+| `sl.oauth2_client_credentials(token_url, *, scope=None, client_auth="basic")` | From 0.27.0 (not released yet). `Authorization: Bearer <access token>`, with the token `token_url` issues for the connection's `client_id` and `client_secret`. See [OAuth2](#oauth2). |
+| `sl.oauth2_refresh_token(token_url, *, scope=None, client_auth="basic")` | From 0.27.0 (not released yet). The same, with the token issued for the connection's `refresh_token`. The connection's `client_id` and `client_secret` go along when it has them. |
 
 - Every `paginate` names its paginator; nothing is guessed.
 - Credentials go only to the connection's own scheme, host and port, never to a next-page link
-  elsewhere.
+  elsewhere. The one exception is OAuth2: the client secret and refresh token go to its `token_url`.
 - Transport errors, 429 and 5xx are retried with backoff and jitter, honouring `Retry-After`.
   Another status fails, unless `on_status` maps it to `"skip"`.
 - The job is checked before any request. Errors name the request, the status and the start of the
   body, with the connection's secrets replaced by `***`.
 - A job's rows never come back into Python. Reading a row from a job fails (rule
   `python_row_loop`); filter rows downstream.
+
+### OAuth2
+
+From 0.27.0 (not released yet). For APIs that issue short-lived access tokens:
+
+```toml
+[connections.erp]
+kind = "http"
+base_url = "https://api.example.com/v2"
+client_id = "loader"
+client_secret = "${ENV:ERP_CLIENT_SECRET}"
+```
+
+```python
+erp = sl.source("erp", connection="erp")
+api = sl.http(
+    erp,
+    auth=sl.oauth2_client_credentials(
+        "https://auth.example.com/oauth/token", scope="accounts:read"
+    ),
+)
+```
+
+- The token is fetched once per run and shared by every job on the connection with the same auth.
+  It is renewed before it expires (by `expires_in`), and once more when the API answers 401; the
+  request is then retried with the new token. When `on_status` maps 401 to `"skip"`, a 401 renews
+  the token only if it is over 30 seconds old; otherwise the request is skipped.
+- `client_auth="basic"` sends `client_id` and `client_secret` to the token URL with HTTP basic
+  auth, the method RFC 6749 requires servers to support. As the RFC asks, both are form-encoded
+  first, so a secret with characters such as `+` or `/` reaches the server encoded. Use `"post"`
+  for a server that rejects that, or that wants them as form fields.
+- The client secret and refresh token go only to `token_url`, which must be `https` (`http` only on
+  `localhost`). Access tokens go only to the connection's own origin, like every other credential.
+- Token errors name the token URL, the status and the server's `error` and `error_description`.
+  The client secret, refresh token and every access token are shown as `***`.
+- When the server rotates the refresh token, SQLLoad uses the new one for the rest of the run but
+  does not save it, so each run starts from the connection's `refresh_token`. An API that revokes
+  the old refresh token on rotation therefore fails on the next run; use client credentials there
+  when the API offers them.
 
 ## Logged state
 

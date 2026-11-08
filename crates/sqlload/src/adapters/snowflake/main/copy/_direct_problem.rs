@@ -14,6 +14,7 @@ pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<Str
         return Some(format!("the files are outside the stage url {stage_url}"));
     }
     if check.stage_url.is_none()
+        && !check.whole
         && matches!(check.format, SourceFormat::Json | SourceFormat::Ndjson)
     {
         return Some(

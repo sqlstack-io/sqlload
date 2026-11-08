@@ -40,6 +40,8 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "format",
     "compression",
     "csv",
+    "shape",
+    "record_column",
     "destination_path",
     "partition_columns",
     "path_columns",
@@ -58,6 +60,8 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "batch_interval",
     "warehouse",
     "stage",
+    "max_text_size",
+    "max_binary_size",
     "spreadsheet_id",
     "ranges",
 ];

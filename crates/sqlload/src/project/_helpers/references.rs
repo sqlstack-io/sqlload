@@ -1,6 +1,7 @@
+use crate::files_source::constants::LOADER_COLUMNS;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
-use crate::files_source::models::SourceFormat;
+use crate::files_source::models::{RecordShape, SourceFormat};
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
@@ -34,9 +35,46 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
             .values()
             .any(|target| target.connection == *name);
         problems.extend(stage_problems(name, connection, targeted));
+        problems.extend(odbc_connection_problems(name, connection));
     }
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));
+    }
+    problems
+}
+
+/// Why an `odbc` connection cannot connect: it needs exactly one of `connection_string` and `dsn`; `user` and `password` go with `dsn`; and `dsn` and `user` are written unbraced, as driver managers read them, so they cannot hold `;`, `{` or `}`.
+fn odbc_connection_problems(name: &str, connection: &ConnectionConfig) -> Vec<String> {
+    let ConnectionConfig::Odbc {
+        connection_string,
+        dsn,
+        user,
+        password,
+    } = connection
+    else {
+        return Vec::new();
+    };
+    let place = format!("[connections.{name}]");
+    let mut problems: Vec<String> = Vec::new();
+    match (connection_string.is_some(), dsn.is_some()) {
+        (false, false) => problems.push(format!("{place} needs connection_string, or dsn")),
+        (true, true) => problems.push(format!(
+            "{place} takes connection_string or dsn, not both"
+        )),
+        (true, false) if user.is_some() || password.is_some() => problems.push(format!(
+            "{place} user and password go with dsn; with connection_string, put them in it (UID=...;PWD=...)"
+        )),
+        _ => {}
+    }
+    let unbraced = [dsn.as_deref(), user.as_deref()];
+    if unbraced
+        .into_iter()
+        .flatten()
+        .any(|value| value.contains([';', '{', '}']))
+    {
+        problems.push(format!(
+            "{place} dsn and user cannot contain ';', '{{' or '}}'; use connection_string instead"
+        ));
     }
     problems
 }
@@ -47,6 +85,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     let expected = match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => "postgres",
         SourceKind::Snowflake => "snowflake",
+        SourceKind::Odbc => "odbc",
         SourceKind::Files => "s3 or filesystem",
         SourceKind::Python => "any",
         SourceKind::GoogleSheets => "google_sheets",
@@ -107,6 +146,7 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::PostgresCdc => "postgres_cdc",
         SourceKind::Files => "files",
         SourceKind::Snowflake => "snowflake",
+        SourceKind::Odbc => "odbc",
         SourceKind::Python => "python",
         SourceKind::GoogleSheets => "google_sheets",
     }
@@ -161,11 +201,23 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         problems.extend(cdc_problems(place, source));
     }
     let queries = source.tables.values().any(|table| table.sql.is_some());
+    if !matches!(source.kind, SourceKind::Snowflake | SourceKind::Odbc) && queries {
+        problems.push(format!(
+            "{place} sql is for kind = \"snowflake\" and kind = \"odbc\""
+        ));
+    }
     if source.kind != SourceKind::Snowflake
-        && (queries || source.warehouse.is_some() || source.stage.is_some())
+        && (source.warehouse.is_some() || source.stage.is_some())
     {
         problems.push(format!(
-            "{place} sql, warehouse and stage are for kind = \"snowflake\""
+            "{place} warehouse and stage are for kind = \"snowflake\""
+        ));
+    }
+    if source.kind != SourceKind::Odbc
+        && (source.max_text_size.is_some() || source.max_binary_size.is_some())
+    {
+        problems.push(format!(
+            "{place} max_text_size and max_binary_size are for kind = \"odbc\""
         ));
     }
     if source.kind == SourceKind::Snowflake {
@@ -181,10 +233,13 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         ));
     }
     match source.kind {
-        SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake => {
+        SourceKind::Postgres
+        | SourceKind::PostgresCdc
+        | SourceKind::Snowflake
+        | SourceKind::Odbc => {
             if source.include.is_empty() && !queries {
                 let tables = match source.kind {
-                    SourceKind::Snowflake => {
+                    SourceKind::Snowflake | SourceKind::Odbc => {
                         "; list tables in include, or give a table a sql query"
                     }
                     _ => "",
@@ -279,9 +334,11 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if source.format != SourceFormat::Parquet
         || source.compression.is_some()
         || source.csv.is_some()
+        || source.shape != RecordShape::Columns
+        || source.record_column.is_some()
     {
         problems.push(format!(
-            "{place} format, compression and csv are for kind = \"files\""
+            "{place} format, compression, csv, shape and record_column are for kind = \"files\""
         ));
     }
     problems
@@ -347,6 +404,9 @@ fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         ),
         Some(Err(problem)) => problems.push(format!("{place} {problem}")),
     }
+    if let Some(record) = &source.files_encoding().record {
+        names.push((record.clone(), "record_column"));
+    }
     match constant_columns(&source.constant_columns, &[]) {
         Ok(constants) => names.extend(
             constants
@@ -371,6 +431,43 @@ fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
 /// Settings that do not fit a files source's format.
 fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
+    match (source.shape, source.format, &source.record_column) {
+        (RecordShape::Record, SourceFormat::Parquet, _) => problems.push(format!(
+            "{place} shape = \"record\" is for ndjson, json and csv files; Parquet files already have typed columns"
+        )),
+        (RecordShape::Columns, _, Some(_)) => problems.push(format!(
+            "{place} record_column is for shape = \"record\", which is not set"
+        )),
+        (_, _, Some(name)) if name.trim().is_empty() => {
+            problems.push(format!("{place} record_column must not be empty"));
+        }
+        (_, _, Some(name))
+            if LOADER_COLUMNS
+                .iter()
+                .any(|loader| loader.eq_ignore_ascii_case(name)) =>
+        {
+            problems.push(format!(
+                "{place} record_column {name} is a column SQLLoad adds itself; choose another name"
+            ));
+        }
+        _ => {}
+    }
+    if let Some(record) = &source.files_encoding().record {
+        for (table, overrides) in &source.tables {
+            let pinned: Vec<&str> = overrides
+                .columns
+                .keys()
+                .map(String::as_str)
+                .filter(|name| name != record)
+                .collect();
+            if !pinned.is_empty() {
+                problems.push(format!(
+                    "{place} shape = \"record\" loads each record into one json column, {record}, so [tables.{table}] columns cannot pin {}",
+                    pinned.join(", ")
+                ));
+            }
+        }
+    }
     if source.format == SourceFormat::Parquet && source.compression.is_some() {
         problems.push(format!(
             "{place} compression is for ndjson, json and csv files; Parquet files compress inside the file"

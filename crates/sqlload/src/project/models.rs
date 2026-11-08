@@ -5,8 +5,9 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::config::models::AuthConfig;
+use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::models::{
-    Compression, CsvOptions, FilesEncoding, SourceFormat, UnmatchedPaths,
+    Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
 };
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
@@ -183,6 +184,17 @@ pub enum ConnectionConfig {
         /// The database file; `:memory:` for an in-memory database.
         database: String,
     },
+    /// A database reached through an ODBC driver: a connection string, or a DSN with an optional user and password.
+    Odbc {
+        #[serde(default)]
+        connection_string: Option<crate::auth::models::Secret>,
+        #[serde(default)]
+        dsn: Option<String>,
+        #[serde(default)]
+        user: Option<String>,
+        #[serde(default)]
+        password: Option<crate::auth::models::Secret>,
+    },
     /// Google Sheets, read with a service-account key: at most one of the three key settings, or the key file `GOOGLE_APPLICATION_CREDENTIALS` names.
     GoogleSheets {
         /// A path to the key file.
@@ -208,6 +220,14 @@ pub enum ConnectionConfig {
         username: Option<String>,
         #[serde(default)]
         password: Option<crate::auth::models::Secret>,
+        /// For `sl.oauth2_client_credentials(...)`, and `sl.oauth2_refresh_token(...)` when the API wants the client too.
+        #[serde(default)]
+        client_id: Option<String>,
+        #[serde(default)]
+        client_secret: Option<crate::auth::models::Secret>,
+        /// For `sl.oauth2_refresh_token(...)`.
+        #[serde(default)]
+        refresh_token: Option<crate::auth::models::Secret>,
         #[serde(default)]
         headers: BTreeMap<String, String>,
     },
@@ -225,6 +245,7 @@ impl ConnectionConfig {
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",
             Self::Filesystem { .. } => "filesystem",
+            Self::Odbc { .. } => "odbc",
             Self::GoogleSheets { .. } => "google_sheets",
             Self::Http { .. } => "http",
         }
@@ -308,6 +329,12 @@ pub struct SourceConfig {
     /// How CSV files are written (files sources with `format = "csv"`).
     #[serde(default)]
     pub csv: Option<CsvOptions>,
+    /// Typed columns (default), or each JSON object or CSV line whole in one `json` column (files sources with a text format).
+    #[serde(default)]
+    pub shape: RecordShape,
+    /// The column `shape = "record"` loads each record into; `record` when omitted.
+    #[serde(default)]
+    pub record_column: Option<String>,
     /// The folder template for this source's tables in a files target, overriding the target's `path`.
     #[serde(default)]
     pub destination_path: Option<String>,
@@ -368,6 +395,12 @@ pub struct SourceConfig {
     /// Where a `snowflake` source unloads: an external stage, or the user stage `@~` when omitted.
     #[serde(default)]
     pub stage: Option<UnloadStage>,
+    /// The largest text value an `odbc` source's reads hold, in bytes; unbounded columns (`TEXT`, `VARCHAR(MAX)`) need it.
+    #[serde(default)]
+    pub max_text_size: Option<usize>,
+    /// The largest binary value an `odbc` source's reads hold, in bytes.
+    #[serde(default)]
+    pub max_binary_size: Option<usize>,
 }
 
 /// Where a `snowflake` source's unloads go: an S3 URL with a storage integration, or an existing stage by name.
@@ -411,11 +444,14 @@ pub enum CdcDeletes {
 }
 
 impl SourceConfig {
-    /// Whether the source finds its tables in a database's catalog with `include` patterns (`postgres`, `postgres_cdc` or `snowflake`).
+    /// Whether the source finds its tables in a database's catalog with `include` patterns (`postgres`, `postgres_cdc`, `snowflake` or `odbc`).
     pub fn discovers_tables(&self) -> bool {
         matches!(
             self.kind,
-            SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake
+            SourceKind::Postgres
+                | SourceKind::PostgresCdc
+                | SourceKind::Snowflake
+                | SourceKind::Odbc
         )
     }
 
@@ -425,6 +461,11 @@ impl SourceConfig {
             format: self.format,
             compression: self.compression.unwrap_or_default(),
             csv: self.csv.clone().unwrap_or_default(),
+            record: (self.shape == RecordShape::Record).then(|| {
+                self.record_column
+                    .clone()
+                    .unwrap_or_else(|| RECORD_COLUMN.to_owned())
+            }),
         }
     }
 
@@ -437,6 +478,7 @@ impl SourceConfig {
                 SourceKind::Postgres
                 | SourceKind::PostgresCdc
                 | SourceKind::Snowflake
+                | SourceKind::Odbc
                 | SourceKind::Python,
             ) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
@@ -456,6 +498,8 @@ pub enum SourceKind {
     Files,
     /// Snowflake tables and queries, unloaded as Parquet and read back.
     Snowflake,
+    /// Tables and queries of a database with an ODBC driver, read into Arrow.
+    Odbc,
     /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
     Python,
     /// Tabs or ranges of a Google Sheets spreadsheet, one table each.

@@ -275,7 +275,14 @@ pub(crate) fn build_spec(
             rule: sheet_rule(context.source, &table.name),
         }),
         cdc,
-        warehouse_source: warehouse_source(context.source, overrides),
+        warehouse_source: match context.source.kind {
+            SourceKind::Odbc => Some(WarehouseSource {
+                system: "odbc",
+                sql: overrides.sql.clone(),
+                route: WarehouseRoute::Query,
+            }),
+            _ => warehouse_source(context.source, overrides),
+        },
         layout,
     })
 }
@@ -403,7 +410,7 @@ pub(crate) fn missing_description(
         SourceKind::GoogleSheets => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.{qualified}], or under [sources.{source_name}] for every table"
         ),
-        SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake => format!(
+        SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake | SourceKind::Odbc => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
         ),
     };

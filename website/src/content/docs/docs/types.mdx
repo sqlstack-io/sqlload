@@ -1,6 +1,6 @@
 ---
 title: "Types"
-description: "SQLLoad's portable column types, how each maps to Snowflake, Databricks, BigQuery, DuckDB and Parquet, and how source types are read."
+description: "SQLLoad's portable column types, how each maps to Snowflake, Databricks, BigQuery, ClickHouse, Postgres, DuckDB and Parquet, and how source types are read."
 ---
 
 SQLLoad reasons about columns in a small set of portable types. You write them in `columns`, `plan`
@@ -15,34 +15,40 @@ columns = { total = "decimal(18,2)", closes_at = "timestamp_tz" }
 
 ## Portable types
 
-| Type | Snowflake | Databricks | BigQuery | DuckDB | Parquet (Arrow) |
-|------|-----------|------------|----------|--------|-----------------|
-| `bool` | `BOOLEAN` | `BOOLEAN` | `BOOL` | `BOOLEAN` | `Boolean` |
-| `smallint` | `NUMBER(38,0)` ¹ | `SMALLINT` | `INT64` ¹ | `SMALLINT` | `Int16` |
-| `int` (64-bit) | `NUMBER(38,0)` | `BIGINT` | `INT64` | `BIGINT` | `Int64` |
-| `decimal(p,s)` | `NUMBER(p,s)` | `DECIMAL(p,s)` | `NUMERIC(p,s)` ² | `DECIMAL(p,s)` | `Decimal128(p,s)` |
-| `float` (64-bit) | `FLOAT` | `DOUBLE` | `FLOAT64` | `DOUBLE` | `Float64` |
-| `text` | `VARCHAR` | `STRING` | `STRING` | `VARCHAR` | `Utf8` |
-| `varchar(n)` | `VARCHAR(n)` | `STRING` ¹ | `STRING(n)` | `VARCHAR` ¹ | `Utf8` |
-| `date` | `DATE` | `DATE` | `DATE` | `DATE` | `Date32` |
-| `time` | `TIME(9)` | `STRING` ¹ | `TIME` | `TIME` | `Time64` |
-| `timestamp_tz` | `TIMESTAMP_TZ(9)` | `TIMESTAMP` ¹ | `TIMESTAMP` ¹ | `TIMESTAMP WITH TIME ZONE` ¹ | `Timestamp(UTC)` |
-| `timestamp_ntz` | `TIMESTAMP_NTZ(9)` | `TIMESTAMP_NTZ` | `DATETIME` | `TIMESTAMP` | `Timestamp` |
-| `json` | `VARIANT` | `VARIANT` | `JSON` | `JSON` | `Utf8` |
-| `uuid` | `VARCHAR(36)` ¹ | `STRING` ¹ | `STRING` ¹ | `UUID` | `Utf8` |
-| `binary` | `BINARY` | `BINARY` | `BYTES` | `BLOB` | `Binary` |
-| `native("...")` | passed through | passed through | passed through | passed through | not available |
-| `array(T)` ³ | `ARRAY` ¹ | `ARRAY<T>` | `ARRAY<T>` ¹ | `T[]` | `List(T)` |
+| Type | Snowflake | Databricks | BigQuery | ClickHouse | Postgres | DuckDB | Parquet (Arrow) |
+|------|-----------|------------|----------|------------|----------|--------|-----------------|
+| `bool` | `BOOLEAN` | `BOOLEAN` | `BOOL` | `Bool` | `boolean` | `BOOLEAN` | `Boolean` |
+| `smallint` | `NUMBER(38,0)` ¹ | `SMALLINT` | `INT64` ¹ | `Int16` | `smallint` | `SMALLINT` | `Int16` |
+| `int` (64-bit) | `NUMBER(38,0)` | `BIGINT` | `INT64` | `Int64` | `bigint` | `BIGINT` | `Int64` |
+| `decimal(p,s)` | `NUMBER(p,s)` | `DECIMAL(p,s)` | `NUMERIC(p,s)` ² | `Decimal(p, s)` | `numeric(p,s)` | `DECIMAL(p,s)` | `Decimal128(p,s)` |
+| `float` (64-bit) | `FLOAT` | `DOUBLE` | `FLOAT64` | `Float64` | `double precision` | `DOUBLE` | `Float64` |
+| `text` | `VARCHAR` | `STRING` | `STRING` | `String` | `text` | `VARCHAR` | `Utf8` |
+| `varchar(n)` | `VARCHAR(n)` | `STRING` ¹ | `STRING(n)` | `String` ¹ | `varchar(n)` | `VARCHAR` ¹ | `Utf8` |
+| `date` | `DATE` | `DATE` | `DATE` | `Date32` ¹ | `date` | `DATE` | `Date32` |
+| `time` | `TIME(9)` | `STRING` ¹ | `TIME` | `String` ¹ | `time` | `TIME` | `Time64` |
+| `timestamp_tz` | `TIMESTAMP_TZ(9)` | `TIMESTAMP` ¹ | `TIMESTAMP` ¹ | `DateTime64(6, 'UTC')` ¹ | `timestamptz` ¹ | `TIMESTAMP WITH TIME ZONE` ¹ | `Timestamp(UTC)` |
+| `timestamp_ntz` | `TIMESTAMP_NTZ(9)` | `TIMESTAMP_NTZ` | `DATETIME` | `DateTime64(6)` ¹ | `timestamp` | `TIMESTAMP` | `Timestamp` |
+| `json` | `VARIANT` | `VARIANT` | `JSON` | `String` ¹ | `jsonb` ¹ | `JSON` | `Utf8` |
+| `uuid` | `VARCHAR(36)` ¹ | `STRING` ¹ | `STRING` ¹ | `UUID` | `uuid` | `UUID` | `Utf8` |
+| `binary` | `BINARY` | `BINARY` | `BYTES` | `String` | `bytea` | `BLOB` | `Binary` |
+| `native("...")` | passed through | passed through | passed through | passed through | passed through | passed through | not available |
+| `array(T)` ³ | `ARRAY` ¹ | `ARRAY<T>` | `ARRAY<T>` ¹ | `Array(T)` ¹ | `T[]` | `T[]` | `List(T)` |
 
 ¹ Held with a loss, which `plan` notes: Snowflake stores `smallint` as a 38-digit integer and `uuid`
 as text; Databricks doesn't enforce `varchar` lengths, stores `time` and `uuid` as text, and keeps
 `timestamp_tz` as an instant without its offset; BigQuery stores `smallint` as a 64-bit integer,
-`uuid` as text, and `timestamp_tz` as a UTC instant without its offset; DuckDB doesn't enforce
-`varchar` lengths, and stores `timestamp_tz` as a UTC instant without its offset.
+`uuid` as text, and `timestamp_tz` as a UTC instant without its offset; ClickHouse doesn't enforce
+`varchar` lengths, stores `time` and `json` as text, keeps `timestamp_tz` as a UTC instant without
+its offset, shows `timestamp_ntz` in the server's time zone, and holds dates and timestamps from
+1900 to 2299; Postgres keeps `timestamp_tz` as a UTC instant without its offset, and its `jsonb`
+keeps neither key order nor duplicate keys; DuckDB doesn't enforce `varchar` lengths, and stores
+`timestamp_tz` as a UTC instant without its offset.
 
 ² `BIGNUMERIC(p,s)` for more than 29 digits before the point or a scale over 9.
 
 ³ From 0.27.0 (not released yet). See [Arrays](#arrays).
+
+Every ClickHouse column is `Nullable`, such as `Nullable(Int64)`.
 
 `native("GEOGRAPHY")` passes a warehouse-only type through unchanged. SQLLoad doesn't widen or
 convert such columns.
@@ -69,6 +75,7 @@ Each destination stores an array in its own array type:
 | DuckDB, Postgres | `T[]` | Nothing; NULL arrays, empty arrays and NULL elements stay apart. |
 | Databricks | `ARRAY<T>` | Nothing. |
 | Parquet | `List(T)` | Nothing. |
+| ClickHouse | `Array(Nullable(T))` | NULL arrays: a NULL array loads as an empty one. |
 | BigQuery | `ARRAY<T>` | NULLs: a NULL array loads as an empty one, and a NULL element fails the load. `array(timestamp_tz)` is refused; use `array(timestamp_ntz)`. |
 | Snowflake | `ARRAY` | Typed elements: each one is a JSON value, so decimals, dates, timestamps and uuids are strings, such as `"1.50"`. |
 

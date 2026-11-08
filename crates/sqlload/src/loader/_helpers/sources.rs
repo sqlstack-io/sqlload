@@ -146,6 +146,7 @@ pub(crate) async fn open_source(
             snowflake_session(project, source)?,
             source.stage.clone(),
         )?))),
+        SourceKind::Odbc => Ok(open_odbc(project, source)?),
         SourceKind::Python => Err(LoaderError::Invalid(
             "a Python source is read by calling its table functions".to_owned(),
         )),
@@ -216,12 +217,92 @@ pub(crate) async fn source_tables(
                 },
             )
         }
+        SourceKind::Odbc => {
+            let queries: Vec<(String, String)> = source
+                .tables
+                .iter()
+                .filter_map(|(name, table)| Some((name.clone(), table.sql.clone()?)))
+                .collect();
+            Ok(discover_odbc(project, source, &queries)
+                .await
+                .map(|discovered| (discovered, None, Vec::new())))
+        }
         SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
         SourceKind::GoogleSheets => Ok(match sheets_tables(project, source).await {
             Ok((tables, warnings)) => Ok((tables, None, warnings)),
             Err(error) => Err(error.to_string()),
         }),
     }
+}
+
+/// An `odbc` source's reader, for its connection's settings and the source's value caps.
+#[cfg(feature = "odbc")]
+pub(crate) fn odbc_source_reader(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+) -> Result<crate::odbc_source::models::OdbcReader, LoaderError> {
+    let Some(ConnectionConfig::Odbc {
+        connection_string,
+        dsn,
+        user,
+        password,
+    }) = project.connections.get(&source.connection)
+    else {
+        return Err(LoaderError::Invalid(format!(
+            "connection {:?} is not an odbc connection",
+            source.connection
+        )));
+    };
+    let limits = crate::odbc_source::models::ValueLimits {
+        max_text_size: source.max_text_size,
+        max_binary_size: source.max_binary_size,
+    };
+    crate::odbc_source::main::odbc_reader::odbc_reader(
+        (connection_string.as_ref(), dsn.as_deref()),
+        (user.as_deref(), password.as_ref()),
+        limits,
+    )
+    .map_err(LoaderError::Invalid)
+}
+
+#[cfg(feature = "odbc")]
+fn open_odbc(project: &ProjectConfig, source: &SourceConfig) -> Result<SourceReader, LoaderError> {
+    Ok(SourceReader::Odbc(Box::new(odbc_source_reader(
+        project, source,
+    )?)))
+}
+
+#[cfg(not(feature = "odbc"))]
+fn open_odbc(_: &ProjectConfig, _: &SourceConfig) -> Result<SourceReader, LoaderError> {
+    Err(LoaderError::Invalid(
+        crate::loader::constants::NO_ODBC.to_owned(),
+    ))
+}
+
+/// An `odbc` source's tables, or why they cannot be listed.
+#[cfg(feature = "odbc")]
+async fn discover_odbc(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+    queries: &[(String, String)],
+) -> Result<Vec<SourceTable>, String> {
+    let reader = odbc_source_reader(project, source).map_err(|error| error.to_string())?;
+    crate::odbc_source::main::read_catalog::read_catalog(
+        &reader,
+        (&source.include, &source.exclude),
+        queries,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "odbc"))]
+async fn discover_odbc(
+    _: &ProjectConfig,
+    _: &SourceConfig,
+    _: &[(String, String)],
+) -> Result<Vec<SourceTable>, String> {
+    Err(crate::loader::constants::NO_ODBC.to_owned())
 }
 
 /// A Sheets client for a `google_sheets` source's connection, with the key it names (or `GOOGLE_APPLICATION_CREDENTIALS`'s), and the spreadsheet it reads.
@@ -1023,6 +1104,22 @@ pub(crate) async fn read_source(
                 batch_rows: SOURCE_BATCH_ROWS,
             };
             Ok(unload_rows(snowflake, &request, on_batch).await?)
+        }
+        #[cfg(feature = "odbc")]
+        (SourceReader::Odbc(reader), _) => {
+            let filter = part.filter.or_else(|| table.source_filter.clone());
+            let request = crate::odbc_source::models::OdbcReadRequest {
+                table: &table.spec.source_table,
+                sql: table
+                    .spec
+                    .warehouse_source
+                    .as_ref()
+                    .and_then(|source| source.sql.as_deref()),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+                batch_rows: SOURCE_BATCH_ROWS,
+            };
+            Ok(crate::odbc_source::main::read_rows::read_rows(reader, &request, on_batch).await?)
         }
         (SourceReader::Sheets(client, spreadsheet_id), _) => {
             let batch = sheet_rows(client, spreadsheet_id, table).await?;

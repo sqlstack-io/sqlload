@@ -2,11 +2,12 @@ use arrow_array::{Array, RecordBatch, StringArray};
 
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
-use crate::files_source::_helpers::text::bytes_reader::open_bytes;
+use crate::files_source::_helpers::text::bytes_reader::{BytesReader, open_bytes};
 use crate::files_source::_helpers::text::checks::{ColumnChecks, misfit, value_fits};
 use crate::files_source::_helpers::text::csv_reader::CsvReader;
 use crate::files_source::_helpers::text::inference::csv_value_type;
 use crate::files_source::_helpers::text::json_reader::{JsonReader, records_batch};
+use crate::files_source::_helpers::text::whole_records::{csv_lines_batch, json_records_batch};
 use crate::files_source::models::{Codec, FilesRead, SourceFormat};
 
 /// The reader behind a [`TextReader`].
@@ -18,6 +19,17 @@ enum Records {
         batch_rows: usize,
     },
     Csv(Box<CsvReader>),
+    /// `shape = "record"`: each object whole in column `column`.
+    JsonWhole {
+        reader: JsonReader,
+        column: String,
+        batch_rows: usize,
+    },
+    /// `shape = "record"`: each line whole in column `column`.
+    CsvWhole {
+        reader: Box<CsvReader>,
+        column: String,
+    },
 }
 
 /// Reads a JSON or CSV file as batches of text columns, which the shape step converts to the planned types.
@@ -36,24 +48,19 @@ impl TextReader {
     ) -> Result<Self, String> {
         let checks = ColumnChecks::new(request)?;
         let bytes = open_bytes(folder, file, codec).await?;
-        let records = match request.encoding.format {
-            SourceFormat::Csv => {
-                let reader =
-                    CsvReader::open(bytes, &request.encoding.csv, request.batch_rows).await?;
-                for name in reader.names() {
-                    checks.check_name("header", name, 1)?;
-                }
-                Records::Csv(Box::new(reader))
-            }
-            format => Records::Json {
+        let records = match (request.encoding.format, &request.encoding.record) {
+            (SourceFormat::Csv, Some(column)) => Records::CsvWhole {
+                reader: Box::new(
+                    CsvReader::open_lines(bytes, &request.encoding.csv, request.batch_rows).await?,
+                ),
+                column: column.clone(),
+            },
+            (format, Some(column)) => Records::JsonWhole {
                 reader: JsonReader::new(bytes, format == SourceFormat::Ndjson),
-                columns: request
-                    .columns
-                    .iter()
-                    .map(|column| (column.name.clone(), column.column_type.clone()))
-                    .collect(),
+                column: column.clone(),
                 batch_rows: request.batch_rows,
             },
+            (format, None) => typed_records(bytes, format, (request, &checks)).await?,
         };
         Ok(Self { records, checks })
     }
@@ -72,6 +79,24 @@ impl TextReader {
                     false => records_batch(&records, columns, &self.checks).map(Some),
                 }
             }
+            Records::JsonWhole {
+                reader,
+                column,
+                batch_rows,
+            } => {
+                let records = reader.next_records(*batch_rows).await?;
+                match records.is_empty() {
+                    true => Ok(None),
+                    false => json_records_batch(&records, column).map(Some),
+                }
+            }
+            Records::CsvWhole { reader, column } => {
+                let Some((batch, first)) = reader.next_batch().await? else {
+                    return Ok(None);
+                };
+                let lines: Vec<u64> = (first..first + batch.num_rows() as u64).collect();
+                Ok(Some((csv_lines_batch(&batch, column)?, lines)))
+            }
             Records::Csv(reader) => {
                 let Some((batch, first)) = reader.next_batch().await? else {
                     return Ok(None);
@@ -82,6 +107,32 @@ impl TextReader {
             }
         }
     }
+}
+
+/// The reader of a JSON or CSV file's typed columns, producing `request`'s columns (JSON) or the file's own (CSV); a CSV header the source lacks is an error.
+async fn typed_records(
+    bytes: BytesReader,
+    format: SourceFormat,
+    (request, checks): (&FilesRead, &ColumnChecks),
+) -> Result<Records, String> {
+    Ok(match format {
+        SourceFormat::Csv => {
+            let reader = CsvReader::open(bytes, &request.encoding.csv, request.batch_rows).await?;
+            for name in reader.names() {
+                checks.check_name("header", name, 1)?;
+            }
+            Records::Csv(Box::new(reader))
+        }
+        format => Records::Json {
+            reader: JsonReader::new(bytes, format == SourceFormat::Ndjson),
+            columns: request
+                .columns
+                .iter()
+                .map(|column| (column.name.clone(), column.column_type.clone()))
+                .collect(),
+            batch_rows: request.batch_rows,
+        },
+    })
 }
 
 /// An error naming the first CSV value of an inferred column that is not what sampling would have inferred.

@@ -30,6 +30,7 @@ pub(in crate::adapters) fn direct_check(
         stage_url: stage.map(|stage| &stage.location),
         source: &source.location,
         format: source.encoding.format,
+        whole: source.encoding.record.is_some(),
         files,
         columns: &copy_columns(spec, read),
         refused: &all_refused,
