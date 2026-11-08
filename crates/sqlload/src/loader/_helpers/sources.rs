@@ -68,8 +68,9 @@ use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::SESSION_SCHEMA;
 use crate::snowflake_source::main::connect_snowflake_source::connect_snowflake_source;
 use crate::snowflake_source::main::read_catalog::read_catalog as read_snowflake_catalog;
+use crate::snowflake_source::main::unload_files::unload_files;
 use crate::snowflake_source::main::unload_rows::unload_rows;
-use crate::snowflake_source::models::UnloadRequest;
+use crate::snowflake_source::models::{UnloadRequest, UnloadedFiles};
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
@@ -113,8 +114,10 @@ pub(crate) fn files_location(
 /// The Postgres connections a table's read uses: several for a large Postgres table read whole and in no order (windows and cursor-ordered reads keep one connection).
 pub(crate) fn source_readers(table: &TablePlan) -> usize {
     let whole = matches!(table.commits, CommitRule::Size | CommitRule::Whole(_));
-    let postgres =
-        table.spec.python.is_none() && table.spec.files.is_none() && table.spec.sheet.is_none();
+    let postgres = table.spec.python.is_none()
+        && table.spec.files.is_none()
+        && table.spec.sheet.is_none()
+        && table.spec.warehouse_source.is_none();
     match whole && postgres && table.spec.source_table.estimated_bytes >= PARALLEL_READ_MIN_BYTES {
         true => PARALLEL_READERS,
         false => 1,
@@ -1087,17 +1090,7 @@ pub(crate) async fn read_source(
         }
         (SourceReader::Snowflake(snowflake), _) => {
             let filter = part.filter.or_else(|| table.source_filter.clone());
-            let request = UnloadRequest {
-                table: &table.spec.source_table,
-                sql: table
-                    .spec
-                    .warehouse_source
-                    .as_ref()
-                    .and_then(|source| source.sql.as_deref()),
-                columns: &table.read_columns,
-                filter: filter.as_deref(),
-                batch_rows: SOURCE_BATCH_ROWS,
-            };
+            let request = unload_request(table, filter.as_deref());
             Ok(unload_rows(snowflake, &request, on_batch).await?)
         }
         #[cfg(feature = "odbc")]
@@ -1127,6 +1120,38 @@ pub(crate) async fn read_source(
             "{}: a files source has no files planned",
             table.spec.source_table.qualified_name()
         ))),
+    }
+}
+
+/// Unload `part` of `table`'s data from `reader` and pass the files to `load`, which has the destination read them itself; the files are removed afterwards.
+pub(crate) async fn unload_source<T>(
+    reader: &SourceReader,
+    table: &TablePlan,
+    part: ReadPart,
+    load: impl AsyncFnOnce(&UnloadedFiles) -> Result<T, LoaderError>,
+) -> Result<T, LoaderError> {
+    let SourceReader::Snowflake(snowflake) = reader else {
+        return Err(LoaderError::Invalid(format!(
+            "{}: only a warehouse source unloads files",
+            table.spec.source_table.qualified_name()
+        )));
+    };
+    let filter = part.filter.or_else(|| table.source_filter.clone());
+    unload_files(snowflake, &unload_request(table, filter.as_deref()), load).await
+}
+
+/// What one unload of `table` reads: its table or query, its read columns, and `filter`.
+fn unload_request<'a>(table: &'a TablePlan, filter: Option<&'a str>) -> UnloadRequest<'a> {
+    UnloadRequest {
+        table: &table.spec.source_table,
+        sql: table
+            .spec
+            .warehouse_source
+            .as_ref()
+            .and_then(|source| source.sql.as_deref()),
+        columns: &table.read_columns,
+        filter,
+        batch_rows: SOURCE_BATCH_ROWS,
     }
 }
 

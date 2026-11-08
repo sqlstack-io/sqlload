@@ -2,8 +2,11 @@
 
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
+use crate::adapters::duckdb::constants::UTC_OFFSET;
 use crate::adapters::duckdb::models::DuckDbSql;
+use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
+use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
 use crate::schema_plan::models::DesiredColumn;
 
@@ -86,4 +89,70 @@ fn values_row(file: &PulledFile) -> String {
         ));
     }
     format!("({})", row.join(", "))
+}
+
+/// `INSERT INTO into` every one of `columns` from a warehouse's unloaded Parquet files at `urls`: a column of `read` from the files, turned back from whole microseconds where it is read as a time or timestamp, then cast to its type, exactly whatever the session's time zone; the load id and load time are the batch's; any other column is NULL.
+pub(crate) fn unloaded_insert(
+    into: &TableName,
+    (columns, read): (&[DesiredColumn], &[ReadColumn]),
+    urls: &[String],
+    (load_id, loaded_at): (&str, &str),
+) -> String {
+    let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
+    let identifier = |name: &str| DuckDbSql.render_identifier(name);
+    let values: Vec<String> = columns
+        .iter()
+        .map(
+            |column| match column_value(column, read, (load_id, loaded_at)) {
+                Some(value) => format!(
+                    "CAST({value} AS {})",
+                    DuckDbSql
+                        .render_loader_logical_type(&column.column_type)
+                        .sql
+                ),
+                None => "NULL".to_owned(),
+            },
+        )
+        .collect();
+    let targets: Vec<String> = columns
+        .iter()
+        .map(|column| identifier(&column.name))
+        .collect();
+    let urls: Vec<String> = urls.iter().map(|url| literal(url)).collect();
+    format!(
+        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], hive_partitioning = false) AS f",
+        DuckDbSql.render_qualified_name(into),
+        targets.join(", "),
+        values.join(", "),
+        urls.join(", ")
+    )
+}
+
+/// Where an unloaded batch's `column` comes from: the batch's load id or load time, or the files' column of `read` it is, before its cast; `None` when the files lack it.
+fn column_value(
+    column: &DesiredColumn,
+    read: &[ReadColumn],
+    (load_id, loaded_at): (&str, &str),
+) -> Option<String> {
+    match column.name.as_str() {
+        LOAD_ID_COLUMN => Some(DuckDbSql.render_loader_value_literal(load_id)),
+        LOADED_AT_COLUMN => Some(DuckDbSql.render_loader_value_literal(loaded_at)),
+        name => read
+            .iter()
+            .find(|read| read.name == name)
+            .map(|read| unloaded_value(&read.output, &DuckDbSql.render_identifier(name))),
+    }
+}
+
+/// File column `quoted` as the value it was unloaded from: a time or timestamp from its whole microseconds, anything else as it is. A timestamp with time zone goes through its UTC text with an explicit offset, the one conversion that is exact both with ICU loaded (whatever the session's time zone) and without it.
+fn unloaded_value(output: &ColumnType, quoted: &str) -> String {
+    let timestamp = format!("make_timestamp(CAST(f.{quoted} AS BIGINT))");
+    match output {
+        ColumnType::TimestampNtz => timestamp,
+        ColumnType::TimestampTz => {
+            format!("CAST(CAST({timestamp} AS VARCHAR) || '{UTC_OFFSET}' AS TIMESTAMPTZ)")
+        }
+        ColumnType::Time => format!("CAST({timestamp} AS TIME)"),
+        _ => format!("f.{quoted}"),
+    }
 }
