@@ -59,3 +59,9 @@ pub const MAX_DIRECT_DECIMAL_PRECISION: u8 = 38;
 
 /// The decimal digits of a second a nanosecond time or timestamp holds; a live column with fewer gets values cut to microseconds.
 pub const NANOSECOND_SCALE: u8 = 9;
+
+/// A `path_columns` segment matching any number of folders.
+pub const ANY_FOLDERS: &str = "**";
+
+/// The type of a `path_columns` capture that names none.
+pub const DEFAULT_CAPTURE_TYPE: &str = "text";

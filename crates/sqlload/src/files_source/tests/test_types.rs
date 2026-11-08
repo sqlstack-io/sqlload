@@ -1,5 +1,7 @@
 use crate::column_types::models::ColumnType;
-use crate::files_source::models::{Codec, Compression, FilesEncoding, SourceFormat};
+use crate::files_source::models::{
+    Codec, Compression, FilesEncoding, SourceFormat, UnmatchedPaths,
+};
 
 pub(crate) struct SelectFilesTestCase {
     pub(crate) description: &'static str,
@@ -138,4 +140,31 @@ pub(crate) struct StoredRefusalTestCase {
     pub(crate) message: Option<&'static str>,
     /// How a stage read returns the column, or why it is refused.
     pub(crate) expected_read: Result<crate::files_source::models::StoredRead, &'static str>,
+}
+
+pub(crate) struct PathColumnsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) template: &'static str,
+    pub(crate) unmatched: UnmatchedPaths,
+    pub(crate) key: &'static str,
+    /// The file's values as `name=value` joined by `,`; `None` when the file is skipped.
+    pub(crate) expected_values: Option<&'static str>,
+    /// The start of the file's problem; empty for none.
+    pub(crate) expected_problem: &'static str,
+}
+
+pub(crate) struct PathTemplateErrorTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) template: &'static str,
+    pub(crate) expected_error: &'static str,
+}
+
+pub(crate) struct ConstantColumnsTestCase {
+    pub(crate) description: &'static str,
+    /// The constants as TOML.
+    pub(crate) toml: &'static str,
+    /// Each column as `name:type=value` joined by `,`, when they type.
+    pub(crate) expected_columns: Option<&'static str>,
+    /// The start of the error; empty for none.
+    pub(crate) expected_error: &'static str,
 }

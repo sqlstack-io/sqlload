@@ -23,7 +23,7 @@ use sqlload::file_store::models::OpenFolder;
 use sqlload::files_source::main::discover_files::discover_files;
 use sqlload::files_source::main::read_files::read_files;
 use sqlload::files_source::models::{
-    BatchFooters, FilesEncoding, FilesRead, SourceFormat, TextChecks,
+    BatchFooters, FilesEncoding, FilesRead, PathValues, SourceFormat, TextChecks,
 };
 use sqlload::parquet_parts::main::finish_part::finish_part;
 use sqlload::parquet_parts::main::write_part::write_part;
@@ -242,7 +242,7 @@ fn text_files_infer_and_read(input: TextInput) -> u64 {
 
 fn infer_and_read((runtime, folder, encoding): TextInput) -> u64 {
     runtime.block_on(async {
-        let table = discover_files(&folder, &[], &encoding)
+        let table = discover_files(&folder, &PathValues::default(), &encoding)
             .await
             .unwrap_or_else(|error| panic!("{error}"));
         let columns: Vec<DesiredColumn> = table

@@ -25,8 +25,8 @@ use crate::files_source::_helpers::text::json_records::JsonSplitter;
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::models::{
-    BatchFooters, Compression, CsvOptions, FilesEncoding, FilesRead, FilesTable, SourceFormat,
-    TextChecks,
+    BatchFooters, Compression, CsvOptions, FilesEncoding, FilesRead, FilesTable, PathValues,
+    SourceFormat, TextChecks,
 };
 use crate::files_source::tests::test_types::{
     ReadTextFilesTestCase, SplitJsonTestCase, TrackCsvTestCase,
@@ -143,11 +143,11 @@ async fn discover_and_read(
     folder: &OpenFolder,
     test_case: &ReadTextFilesTestCase,
 ) -> Result<String, String> {
-    let table = discover_files(folder, &[], &test_case.encoding)
+    let table = discover_files(folder, &PathValues::default(), &test_case.encoding)
         .await
         .map_err(|error| error.to_string())?;
     write_files(folder, test_case.unsampled).await?;
-    let listed = discover_files(folder, &[], &test_case.encoding)
+    let listed = discover_files(folder, &PathValues::default(), &test_case.encoding)
         .await
         .map_err(|error| error.to_string())?;
     let pinned = test_case.pinned;
@@ -275,7 +275,7 @@ async fn break_footer_and_read(folder: &OpenFolder, reuse: bool) -> Result<Strin
         .await
         .map_err(|error| error.to_string())?;
     let encoding = FilesEncoding::default();
-    let listed = discover_files(folder, &[], &encoding)
+    let listed = discover_files(folder, &PathValues::default(), &encoding)
         .await
         .map_err(|error| error.to_string())?;
     let footers = crate::files_source::main::batch_footers::batch_footers(folder, &listed.files)

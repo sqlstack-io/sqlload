@@ -144,6 +144,8 @@ pub struct FilesSource {
     pub table: FilesTable,
     /// Declared partition columns and their types, by name; a file column of the same name is replaced by the path's value.
     pub partition_types: Vec<(String, ColumnType)>,
+    /// The partition columns that are `constant_columns`, the same in every file.
+    pub constants: Vec<String>,
     pub encoding: FilesEncoding,
     /// Column names and patterns JSON and CSV reads check keys and headers against.
     pub checks: TextChecks,

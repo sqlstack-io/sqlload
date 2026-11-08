@@ -5,7 +5,9 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::config::models::AuthConfig;
-use crate::files_source::models::{Compression, CsvOptions, FilesEncoding, SourceFormat};
+use crate::files_source::models::{
+    Compression, CsvOptions, FilesEncoding, SourceFormat, UnmatchedPaths,
+};
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
@@ -279,6 +281,15 @@ pub struct SourceConfig {
     /// Hive `key=value` folders loaded as typed columns (files sources).
     #[serde(default)]
     pub partition_columns: BTreeMap<String, String>,
+    /// A template over each file's key below `path` whose `{name:type}` captures load as typed columns (files sources).
+    #[serde(default)]
+    pub path_columns: Option<String>,
+    /// What a file whose key does not match `path_columns` does: fail `plan` (default) or be skipped.
+    #[serde(default)]
+    pub unmatched_paths: Option<UnmatchedPaths>,
+    /// Columns with the same value in every row, typed by their TOML values (files sources).
+    #[serde(default)]
+    pub constant_columns: BTreeMap<String, toml::Value>,
     /// For files no external stage of the warehouse can read: download them and upload them unchanged to the user stage `@~`, where the warehouse loads them itself (much slower than an external stage; files sources).
     #[serde(default)]
     pub copy_to_internal_stage: bool,

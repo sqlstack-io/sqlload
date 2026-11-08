@@ -1327,7 +1327,10 @@ pub(crate) async fn partition_values(
     let folder = open_folder(table).map_err(|error| error.to_string())?;
     let files = discover_files(
         &folder,
-        &[column.to_owned()],
+        &sqlload::files_source::models::PathValues {
+            partition_columns: vec![column.to_owned()],
+            ..Default::default()
+        },
         &sqlload::files_source::models::FilesEncoding::default(),
     )
     .await

@@ -1,5 +1,5 @@
 use crate::files_source::main::discover_files::discover_files;
-use crate::files_source::models::{CsvOptions, SourceFormat};
+use crate::files_source::models::{CsvOptions, PathValues, SourceFormat};
 use crate::files_source::tests::helpers::{
     block_on, column_list, csv_encoding, encoding, folder_with,
 };
@@ -137,7 +137,7 @@ fn given_json_and_csv_files_when_discovering_then_types_are_inferred_conservativ
     for test_case in test_cases {
         let found = block_on(async {
             let (folder, root) = folder_with(test_case.files).await?;
-            let table = discover_files(&folder, &[], &test_case.encoding)
+            let table = discover_files(&folder, &PathValues::default(), &test_case.encoding)
                 .await
                 .map_err(|error| error.to_string());
             let _ = std::fs::remove_dir_all(&root);
@@ -195,7 +195,7 @@ fn given_files_of_other_formats_when_discovering_then_they_are_counted_as_skippe
     for test_case in test_cases {
         let counts = block_on(async {
             let (folder, root) = folder_with(test_case.files).await?;
-            let table = discover_files(&folder, &[], &test_case.encoding)
+            let table = discover_files(&folder, &PathValues::default(), &test_case.encoding)
                 .await
                 .map_err(|error| error.to_string());
             let _ = std::fs::remove_dir_all(&root);
