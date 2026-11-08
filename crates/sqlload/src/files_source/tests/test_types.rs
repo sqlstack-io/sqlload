@@ -108,14 +108,6 @@ pub(crate) struct BatchFootersTestCase {
     pub(crate) expected_outcome: &'static str,
 }
 
-pub(crate) struct SampledFootersTestCase {
-    pub(crate) description: &'static str,
-    /// How many times the batch's footers are read after `plan`, the file's footer broken in between.
-    pub(crate) batch_reads: usize,
-    /// The rows the last read's footers hold, or `failed`.
-    pub(crate) expected_outcome: &'static str,
-}
-
 pub(crate) struct DirectRefusalTestCase {
     pub(crate) description: &'static str,
     pub(crate) data_type: arrow_schema::DataType,
