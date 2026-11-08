@@ -14,7 +14,7 @@ use crate::loader::_helpers::sources::{
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
-use crate::loader::models::{PlanOptions, ProjectPlan, TablePlan, TableSpec};
+use crate::loader::models::{FilesSource, PlanOptions, ProjectPlan, TablePlan, TableSpec};
 use crate::project::models::ProjectConfig;
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
@@ -39,7 +39,7 @@ pub async fn plan_project(
         plan.problems.extend(resolved.problems);
         plan.warnings.extend(resolved.warnings);
         plan.skipped.extend(resolved.skipped);
-        claims.extend(folder_claims(&resolved.specs, destinations));
+        claims.extend(folder_claims(&resolved.specs, files.as_ref(), destinations));
         names.extend(resolved.specs.iter().map(|spec| {
             (
                 spec.destination.table.clone(),
@@ -75,14 +75,15 @@ pub async fn plan_project(
     Ok(block_conflicts(plan, &claims, options))
 }
 
-/// The folders files tables write to, whether or not they are selected; warehouse tables and paths that do not resolve claim none.
+/// The folders files tables write to, whether or not they are selected, with the folder their files source (`files`) reads; warehouse tables and paths that do not resolve claim none.
 fn folder_claims(
     specs: &[TableSpec],
+    files: Option<&FilesSource>,
     destinations: &BTreeMap<String, Destination>,
 ) -> Vec<FolderClaim> {
     let mut claims: Vec<FolderClaim> = Vec::new();
     for spec in specs {
-        let Some(files) = destinations.get(&spec.target).and_then(files_destination) else {
+        let Some(target) = destinations.get(&spec.target).and_then(files_destination) else {
             continue;
         };
         let name = format!(
@@ -90,14 +91,14 @@ fn folder_claims(
             spec.source_name,
             spec.source_table.qualified_name()
         );
-        if let Ok(path) = table_folder(spec, files) {
+        if let Ok(path) = table_folder(spec, target) {
             claims.push(FolderClaim {
                 id: name.clone(),
                 name,
                 folder: path.folder,
                 template: spec.destination_path.clone().unwrap_or_default(),
                 schema: spec.source_table.schema.clone(),
-                source: spec.files.as_ref().map(|files| files.location.clone()),
+                source: files.map(|files| files.location.clone()),
             });
         }
     }

@@ -79,3 +79,32 @@ fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_e
         );
     }
 }
+
+#[test]
+fn given_a_files_source_into_a_files_target_when_planning_then_a_target_folder_overlapping_the_source_folder_is_blocked()
+-> Result<(), String> {
+    let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let day = root.path().join("data/orders/day=2026-11-01");
+    std::fs::create_dir_all(&day).map_err(|error| error.to_string())?;
+    std::fs::write(day.join("a.csv"), "id\n1\n").map_err(|error| error.to_string())?;
+    let test_cases = [
+        ("data/{table}/", "which overlaps the folder it reads from"),
+        ("out/{table}/", ""),
+    ];
+    for (target_path, expected_problem) in test_cases {
+        let project = format!(
+            "[connections.lake]\nkind = \"filesystem\"\nroot = \"{}\"\n[targets.lake]\nconnection = \"lake\"\npath = \"{target_path}\"\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"data/orders/\"\nformat = \"csv\"\npartition_columns = {{ day = \"date\" }}\n",
+            root.path().display()
+        );
+        let output = run_without_host(&project, &["plan"]);
+        assert!(
+            output.contains(expected_problem)
+                && output.ends_with(match expected_problem.is_empty() {
+                    true => "exit 0",
+                    false => "exit 1",
+                }),
+            "{target_path}: {output}"
+        );
+    }
+    Ok(())
+}
