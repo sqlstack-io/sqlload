@@ -1,3 +1,4 @@
+pub mod append_answer;
 pub mod append_rows;
 pub mod arrow_request;
 pub mod batch_commit_write_streams;

@@ -4044,6 +4044,8 @@ name = "sqlload-testkit"
 version = "0.23.0"
 dependencies = [
  "arrow-array",
+ "arrow-cast",
+ "arrow-ipc",
  "axum",
  "bytes",
  "flate2",
@@ -4056,6 +4058,8 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-util",
+ "tonic",
+ "tonic-prost",
  "uuid",
 ]
 

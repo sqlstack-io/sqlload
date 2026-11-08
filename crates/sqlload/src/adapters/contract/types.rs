@@ -40,11 +40,6 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         true
     }
 
-    /// Whether `load` may write rows into the destination yet; one that may not still plans, applies and diffs, and `load` refuses before applying anything.
-    fn loads_rows(&self) -> bool {
-        true
-    }
-
     /// Whether a `postgres_cdc` source applying its changes by `apply` may load into the destination: every SQL warehouse its changes have been applied to live; a files target only as a changelog, having no tables to merge into.
     fn captures_changes(&self, apply: ChangeApply) -> bool {
         self.runs_sql() || apply == ChangeApply::Changelog

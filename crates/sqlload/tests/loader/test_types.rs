@@ -580,12 +580,47 @@ pub(crate) struct WriteApiOutcome {
     pub(crate) rows: String,
 }
 
-/// `sqlload load` from a files source into a live BigQuery target, which cannot take rows yet.
-pub(crate) struct LiveRefusedLoadTestCase {
+/// One load of files into a live BigQuery dataset.
+pub(crate) struct LiveBigQueryLoadTestCase {
     pub(crate) description: &'static str,
-    pub(crate) expected_succeeded: bool,
-    /// Text the output must hold.
-    pub(crate) expected_refusal: &'static str,
-    /// How many datasets named for the load exist after it.
-    pub(crate) expected_datasets: &'static str,
+    pub(crate) source: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: RouteFileSet,
+    /// Rows in the table afterwards.
+    pub(crate) expected_rows: &'static str,
+}
+
+/// One load of files into a fresh fake BigQuery project.
+pub(crate) struct BigQueryLoadTestCase {
+    pub(crate) description: &'static str,
+    /// TOML added to `[sources.orders]`.
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: RouteFileSet,
+    /// What the fake refuses or holds before the load.
+    pub(crate) prepare: fn(&sqlload_testkit::fake_bigquery::models::FakeBigQuery),
+    /// Text the load error must contain; empty when the run must succeed.
+    pub(crate) expected_error: &'static str,
+    /// Text some statement sent must contain.
+    pub(crate) expected_sent: &'static [&'static str],
+    /// Text no statement sent may contain.
+    pub(crate) expected_unsent: &'static [&'static str],
+    /// Rows in `raw.orders` afterwards; `None` when the fake cannot apply the write.
+    pub(crate) expected_rows: Option<usize>,
+    /// The tables each Storage Write API commit went into, in order.
+    pub(crate) expected_commits: &'static [&'static str],
+}
+
+/// What a load into the fake BigQuery did.
+#[derive(Debug, Default)]
+pub(crate) struct BigQueryOutcome {
+    pub(crate) error: String,
+    pub(crate) plan: String,
+    pub(crate) sent: Vec<String>,
+    pub(crate) rows: usize,
+    /// Each commit's table, the load's staging names cut to `orders__sqlload_staging_`.
+    pub(crate) commits: Vec<String>,
+    /// Staging or build tables left in `raw`.
+    pub(crate) staged: Vec<String>,
+    /// Storage Write API calls sent without a routing header.
+    pub(crate) unrouted_calls: usize,
 }

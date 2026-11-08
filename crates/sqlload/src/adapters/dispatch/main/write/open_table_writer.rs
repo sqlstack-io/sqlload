@@ -1,5 +1,6 @@
 //! Open a table's write session on its destination.
 
+use crate::adapters::bigquery::models::BigQueryWriter;
 use crate::adapters::databricks::models::DatabricksWriter;
 use crate::adapters::dispatch::models::{Destination, Writer};
 #[cfg(feature = "duckdb")]
@@ -43,9 +44,12 @@ pub fn open_table_writer(
             staged: Vec::new(),
             uploads: tokio::task::JoinSet::new(),
         }))),
-        Destination::BigQuery(_) => Err(LoaderError::Invalid(
-            "loading into BigQuery is not available yet: its Storage Write API writer is still being built".to_owned(),
-        )),
+        Destination::BigQuery(bigquery) => Ok(Writer::BigQuery(Box::new(BigQueryWriter {
+            destination: (**bigquery).clone(),
+            parent: String::new(),
+            streams: Vec::new(),
+            requests_sent: 0,
+        }))),
         Destination::Files(_) => Ok(Writer::Files(ParquetFiles)),
     }
 }

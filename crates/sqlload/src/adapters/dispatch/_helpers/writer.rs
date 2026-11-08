@@ -14,6 +14,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.writes_directly(),
             Writer::Snowflake(writer) => writer.writes_directly(),
             Writer::Databricks(writer) => writer.writes_directly(),
+            Writer::BigQuery(writer) => writer.writes_directly(),
             Writer::Files(writer) => writer.writes_directly(),
         }
     }
@@ -28,6 +29,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.write_batch(target, batch).await,
             Writer::Snowflake(writer) => writer.write_batch(target, batch).await,
             Writer::Databricks(writer) => writer.write_batch(target, batch).await,
+            Writer::BigQuery(writer) => writer.write_batch(target, batch).await,
             Writer::Files(writer) => writer.write_batch(target, batch).await,
         }
     }
@@ -38,6 +40,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.staged_bytes(),
             Writer::Snowflake(writer) => writer.staged_bytes(),
             Writer::Databricks(writer) => writer.staged_bytes(),
+            Writer::BigQuery(writer) => writer.staged_bytes(),
             Writer::Files(writer) => writer.staged_bytes(),
         }
     }
@@ -48,6 +51,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.finish_files(target).await,
             Writer::Snowflake(writer) => writer.finish_files(target).await,
             Writer::Databricks(writer) => writer.finish_files(target).await,
+            Writer::BigQuery(writer) => writer.finish_files(target).await,
             Writer::Files(writer) => writer.finish_files(target).await,
         }
     }
@@ -58,6 +62,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.load_batch(target).await,
             Writer::Snowflake(writer) => writer.load_batch(target).await,
             Writer::Databricks(writer) => writer.load_batch(target).await,
+            Writer::BigQuery(writer) => writer.load_batch(target).await,
             Writer::Files(writer) => writer.load_batch(target).await,
         }
     }
@@ -68,6 +73,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.next_batch(),
             Writer::Snowflake(writer) => writer.next_batch(),
             Writer::Databricks(writer) => writer.next_batch(),
+            Writer::BigQuery(writer) => writer.next_batch(),
             Writer::Files(writer) => writer.next_batch(),
         }
     }
@@ -78,6 +84,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.settle_rows().await,
             Writer::Snowflake(writer) => writer.settle_rows().await,
             Writer::Databricks(writer) => writer.settle_rows().await,
+            Writer::BigQuery(writer) => writer.settle_rows().await,
             Writer::Files(writer) => writer.settle_rows().await,
         }
     }
@@ -88,6 +95,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.reopen_rows(),
             Writer::Snowflake(writer) => writer.reopen_rows(),
             Writer::Databricks(writer) => writer.reopen_rows(),
+            Writer::BigQuery(writer) => writer.reopen_rows(),
             Writer::Files(writer) => writer.reopen_rows(),
         }
     }
@@ -98,6 +106,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.rollback_batch().await,
             Writer::Snowflake(writer) => writer.rollback_batch().await,
             Writer::Databricks(writer) => writer.rollback_batch().await,
+            Writer::BigQuery(writer) => writer.rollback_batch().await,
             Writer::Files(writer) => writer.rollback_batch().await,
         }
     }
@@ -108,6 +117,7 @@ impl TableWriter for Writer {
             Writer::DuckDb(writer) => writer.remove_batch_files(target).await,
             Writer::Snowflake(writer) => writer.remove_batch_files(target).await,
             Writer::Databricks(writer) => writer.remove_batch_files(target).await,
+            Writer::BigQuery(writer) => writer.remove_batch_files(target).await,
             Writer::Files(writer) => writer.remove_batch_files(target).await,
         }
     }
