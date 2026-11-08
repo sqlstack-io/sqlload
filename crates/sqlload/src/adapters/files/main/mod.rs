@@ -1,4 +1,3 @@
-pub(in crate::adapters) mod _partition_in_window;
 pub mod check_window;
 pub mod clear_pending;
 pub mod close_writer;
@@ -14,6 +13,7 @@ pub mod partitions_finished;
 pub mod plan_replaced_files;
 pub mod read_table_state;
 pub mod repair_table;
+pub mod swap_folder;
 pub mod table_path;
 pub mod write_loaded_files;
 pub mod write_notes;

@@ -3,10 +3,13 @@ use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
+use crate::files_target_helpers::data_keys;
 use crate::helpers::{
     local_store, partition_values, run_async, run_files_target_scenario, seaweedfs_store,
 };
-use crate::test_types::{FilesTargetRun, FilesTargetScenarioTestCase, RoundTripTestCase};
+use crate::test_types::{
+    CsvTargetTestCase, FilesTargetRun, FilesTargetScenarioTestCase, RoundTripTestCase,
+};
 
 const ORDERS: &str = "CREATE TABLE public.orders (id int8 PRIMARY KEY, name text, qty int4, placed_at timestamptz NOT NULL);
 INSERT INTO public.orders VALUES (1, 'a', 1, '2026-11-03 10:00:00+00'), (2, 'b', 2, '2026-11-04 10:00:00+00');";
@@ -47,6 +50,28 @@ const REPLACE_RUNS: &[FilesTargetRun] = &[
         expected_plan: "then every older file in the folder is deleted; not atomic",
         ..OK
     },
+];
+
+const SWAPPED_IN: FilesTargetRun = FilesTargetRun {
+    source_change: "DELETE FROM public.orders WHERE id = 1; UPDATE public.orders SET name = 'b2' WHERE id = 2;",
+    expected_plan: "then the two folders are swapped in one rename and the old one is deleted",
+    ..OK
+};
+
+const LOCAL_REPLACE_RUNS: &[FilesTargetRun] = &[
+    FilesTargetRun {
+        expected_plan: "schema  first files, 6 columns",
+        ..OK
+    },
+    SWAPPED_IN,
+];
+
+const CSV_REPLACE_RUNS: &[FilesTargetRun] = &[
+    FilesTargetRun {
+        expected_plan: "csv (gzip)",
+        ..OK
+    },
+    SWAPPED_IN,
 ];
 
 const DELETE_INSERT_RUNS: &[FilesTargetRun] = &[
@@ -144,12 +169,12 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1+run2 2:b,3:c",
         },
         FilesTargetScenarioTestCase {
-            description: "replace in a directory writes the new set and deletes the old files",
+            description: "replace in a directory swaps the new table in and deletes the old files",
             store: local_store,
             setup: ORDERS,
             target_settings: "",
             settings: "",
-            runs: REPLACE_RUNS,
+            runs: LOCAL_REPLACE_RUNS,
             check_column: "name",
             expected_files: "- run2 2:b2",
         },
@@ -503,6 +528,120 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
                 "{}",
                 test_case.description
             );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_csv_that_reads_back()
+-> Result<(), String> {
+    let test_cases = [
+        CsvTargetTestCase {
+            description: "gzip CSV replace in a directory swaps the new table in",
+            scenario: FilesTargetScenarioTestCase {
+                description: "gzip CSV replace in a directory swaps the new table in",
+                store: local_store,
+                setup: ORDERS,
+                target_settings: "format = \"csv\"\ncompression = \"gzip\"",
+                settings: "",
+                runs: CSV_REPLACE_RUNS,
+                check_column: "name",
+                expected_files: "- run2 2:b2",
+            },
+            expected_keys: &["part-*.csv.gz"],
+        },
+        CsvTargetTestCase {
+            description: "zstd CSV delete_insert by day in S3 rewrites only the partitions it touches",
+            scenario: FilesTargetScenarioTestCase {
+                description: "zstd CSV delete_insert by day in S3 rewrites only the partitions it touches",
+                store: seaweedfs_store,
+                setup: ORDERS,
+                target_settings: "format = \"csv\"\ncompression = \"zstd\"",
+                settings: DELETE_INSERT_BY_DAY,
+                runs: DELETE_INSERT_RUNS,
+                check_column: "name",
+                expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run2 2:b2,3:c",
+            },
+            expected_keys: &[
+                "day=2026-11-03/part-*.csv.zst",
+                "day=2026-11-04/part-*.csv.zst",
+            ],
+        },
+        CsvTargetTestCase {
+            description: "a single file per partition keeps its name and is overwritten in S3",
+            scenario: FilesTargetScenarioTestCase {
+                description: "a single file per partition keeps its name and is overwritten in S3",
+                store: seaweedfs_store,
+                setup: ORDERS,
+                target_settings: "format = \"csv\"\nsingle_file = true",
+                settings: DELETE_INSERT_BY_DAY,
+                runs: DELETE_INSERT_RUNS,
+                check_column: "name",
+                expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run2 2:b2,3:c",
+            },
+            expected_keys: &["day=2026-11-03/orders.csv", "day=2026-11-04/orders.csv"],
+        },
+        CsvTargetTestCase {
+            description: "a single-file replace in a directory is one file named after the table",
+            scenario: FilesTargetScenarioTestCase {
+                description: "a single-file replace in a directory is one file named after the table",
+                store: local_store,
+                setup: ORDERS,
+                target_settings: "format = \"csv\"\ncompression = \"gzip\"\nsingle_file = true",
+                settings: "",
+                runs: CSV_REPLACE_RUNS,
+                check_column: "name",
+                expected_files: "- run2 2:b2",
+            },
+            expected_keys: &["orders.csv.gz"],
+        },
+        CsvTargetTestCase {
+            description: "an append by a cursor needs footers, which CSV has not",
+            scenario: FilesTargetScenarioTestCase {
+                description: "an append by a cursor needs footers, which CSV has not",
+                store: local_store,
+                setup: ORDERS,
+                target_settings: "format = \"csv\"",
+                settings: APPEND_BY_DAY,
+                runs: &[FilesTargetRun {
+                    expected_error: "reads the newest files' maximum from Parquet statistics, which CSV files lack",
+                    ..OK
+                }],
+                check_column: "name",
+                expected_files: "",
+            },
+            expected_keys: &[],
+        },
+    ];
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        let server = start_seaweedfs().await?;
+        create_bucket(&server, "example-bucket-test").await?;
+        for test_case in &test_cases {
+            let directory =
+                std::env::temp_dir().join(format!("sqlload-lake-{}", uuid::Uuid::new_v4()));
+            let result = async {
+                let (summary, table) = run_files_target_scenario(
+                    &client,
+                    postgres.port,
+                    &server.endpoint,
+                    &directory,
+                    &test_case.scenario,
+                )
+                .await?;
+                Ok::<(String, Vec<String>), String>((summary, data_keys(&table).await?))
+            }
+            .await;
+            let _ = std::fs::remove_dir_all(&directory);
+            let (summary, keys) = result?;
+            assert_eq!(
+                summary, test_case.scenario.expected_files,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(keys, test_case.expected_keys, "{}", test_case.description);
         }
         Ok(())
     })

@@ -6,6 +6,7 @@ use crate::adapters::files::tests::helpers::{
     block_on, day_columns, days_batch, orders_path, scratch_folder,
 };
 use crate::adapters::files::tests::test_types::WriteRowsTestCase;
+use crate::project::models::OutputEncoding;
 
 #[test]
 fn given_one_batch_with_many_partitions_when_writing_then_open_files_stay_under_the_cap()
@@ -36,6 +37,7 @@ fn given_one_batch_with_many_partitions_when_writing_then_open_files_stay_under_
             load_id: "load",
             file_id: "load",
             loaded_at: "2026-11-04T00:00:00.000000Z",
+            encoding: &OutputEncoding::default(),
         })?;
         let batch = days_batch(test_case.partitions)?;
         block_on(async {

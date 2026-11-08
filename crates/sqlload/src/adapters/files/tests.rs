@@ -1,5 +1,7 @@
 #[path = "tests/test_check_window.rs"]
 mod check_window;
+#[path = "tests/test_csv_files.rs"]
+mod csv_files;
 #[path = "tests/test_cursor_maximum.rs"]
 mod cursor_maximum;
 #[path = "tests/test_fit_live_types.rs"]
@@ -28,6 +30,8 @@ mod replaced_files;
 mod spill_order;
 #[path = "tests/test_split_batch.rs"]
 mod split_batch;
+#[path = "tests/test_swap_folder.rs"]
+mod swap_folder;
 #[path = "tests/test_table_path.rs"]
 mod table_path;
 #[path = "tests/test_types.rs"]

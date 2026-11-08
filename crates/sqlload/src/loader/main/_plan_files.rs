@@ -11,7 +11,7 @@ use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, plan_file
 use crate::loader::_helpers::table_plan::{CommitRequest, Window, commit_rule};
 use crate::loader::_helpers::table_plan::{
     blocked_plan, blocked_table, captured_columns, captured_mode, captured_problems, check_output,
-    desired_columns, read_columns, read_window,
+    desired_columns, encoding_problems, read_columns, read_window,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
@@ -20,7 +20,6 @@ use crate::loader::models::{
     CommitRule, FilesContext, FilesOutput, FilesWindowRequest, LiveFiles, PlanOptions, TablePlan,
     TableSpec, WholeReason,
 };
-use crate::project::models::FilesFormat;
 use crate::schema_plan::models::{LiveColumn, SchemaPlan};
 use crate::table_lease::main::lease_holder::lease_holder;
 use crate::table_lease::main::lease_now::lease_now;
@@ -71,7 +70,7 @@ pub(in crate::loader) async fn plan_files_table(
         None => (None, WriteMode::Append, None),
     };
     let mode = captured_mode(spec, mode);
-    let notes = write_notes(&mode);
+    let notes = write_notes(&mode, &path.folder);
     let commits = commit_rule(&CommitRequest {
         spec,
         window: read.as_ref(),
@@ -81,6 +80,7 @@ pub(in crate::loader) async fn plan_files_table(
         mode: &mode,
     });
     let commits = match commits {
+        Ok(_) if destination.encoding.single_file => CommitRule::Whole(WholeReason::SingleFile),
         Ok(commits) => commits,
         Err(problem) => {
             if schema.blocked.is_none() {
@@ -107,7 +107,7 @@ pub(in crate::loader) async fn plan_files_table(
         planned_stage: None,
         output: Some(FilesOutput {
             path,
-            format: FilesFormat::Parquet,
+            encoding: destination.encoding.clone(),
             listed: state.listed.keys().len(),
             footers_read: footers.len(),
             max_footer_reads: destination.max_footer_reads,
@@ -176,6 +176,7 @@ async fn files_context(
     };
     let (cursor_type, mut problems) = check_output(spec, &path, &desired);
     problems.extend(captured_problems(spec, &path, options));
+    problems.extend(encoding_problems(spec, &path, &destination.encoding));
     let folder = open_folder(&path.folder)?;
     let state = read_table_state(&folder, &path, cursor_type.as_ref()).await?;
     problems.extend(state.listed.problems.clone());

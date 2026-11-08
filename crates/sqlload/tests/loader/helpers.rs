@@ -23,6 +23,7 @@ use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
+use crate::files_target_helpers::file_batches;
 use crate::test_types::{
     BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesScenario,
     FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks,
@@ -1147,16 +1148,14 @@ async fn written_rows(table: &Location, column: &str) -> Result<Vec<WrittenRow>,
         let bytes = read_file(&folder, &file.relative_key)
             .await
             .map_err(|error| error.to_string())?;
-        let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(bytes)
-            .and_then(|builder| builder.build())
-            .map_err(|error| error.to_string())?;
+        let reader = file_batches(&file.relative_key, bytes)?;
         let partition = file
             .relative_key
             .rsplit_once('/')
             .map_or("-", |(partition, _)| partition)
             .to_owned();
         for batch in reader {
-            let batch = [batch.map_err(|error| error.to_string())?];
+            let batch = [batch];
             let count = batch[0].num_rows();
             let ids = column_values(&batch, "id")?;
             let values = batch[0]

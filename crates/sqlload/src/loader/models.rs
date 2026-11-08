@@ -19,7 +19,7 @@ use crate::files_source::models::{
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, FilesFormat, NewTables, OnSchemaChange, Policy, ProjectConfig,
+    BatchStep, Contract, NewTables, OnSchemaChange, OutputEncoding, Policy, ProjectConfig,
     TableChecks, WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
@@ -331,7 +331,7 @@ pub struct RunEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilesOutput {
     pub path: TablePath,
-    pub format: FilesFormat,
+    pub encoding: OutputEncoding,
     /// Data files under the table's folder now.
     pub listed: usize,
     /// Footers read for the live schema (the newest partition's files).
@@ -518,6 +518,8 @@ pub enum WholeReason {
     AppendWithoutCursor,
     /// `batch_size = "none"`.
     Chosen,
+    /// `single_file`: each file is written once, whole.
+    SingleFile,
     /// The table cannot load, so it has no commits.
     Blocked,
 }
@@ -587,14 +589,23 @@ pub struct FilesSink {
     pub folder: OpenFolder,
     pub replaced: ReplacedFiles,
     pub writer: Option<FilesWriter>,
-    /// Replaced files already deleted by earlier commits.
+    /// Replaced files already dealt with by earlier commits: deleted, or overwritten by a file of the same name (`single_file`).
     pub deleted: std::collections::BTreeSet<String>,
     /// Source files (of a files source) read since the last commit, which the next commit records.
     pub reading: Vec<LoadedFile>,
-    /// The load's claim on the table, refreshed in the background until `keeper`'s guard is dropped.
+    /// The load's claim on the table, refreshed in the background until `keeper`'s guard is dropped; it lives in the table's own folder, not a staged one.
     pub lease: crate::table_lease::models::Lease,
     /// The guard stopping the lease's renewal, and the renewal task.
     pub keeper: Option<(tokio_util::sync::DropGuard, tokio::task::JoinHandle<()>)>,
+    /// Set when the load writes the whole table into a hidden folder beside it (`folder`) and swaps it in at commit.
+    pub swap: Option<FolderSwap>,
+}
+
+/// The table folder a staged table replaces, and the files of it the load replaces; every other file, the lease among them, is carried over.
+#[derive(Debug)]
+pub struct FolderSwap {
+    pub live: OpenFolder,
+    pub replaced: std::collections::BTreeSet<String>,
 }
 
 /// A connected source, ready to read.

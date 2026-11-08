@@ -257,6 +257,13 @@ pub(crate) struct FilesToFilesTestCase {
 }
 
 /// Postgres into a files target, then those files through a files source into DuckDB, loaded twice.
+pub(crate) struct CsvTargetTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) scenario: FilesTargetScenarioTestCase,
+    /// The data files left in the table folder, sorted, with each `part-<load>-<n>` name as `part-*`.
+    pub(crate) expected_keys: &'static [&'static str],
+}
+
 pub(crate) struct MetadataRoundTripTestCase {
     pub(crate) description: &'static str,
     /// SQL creating `public.orders`.

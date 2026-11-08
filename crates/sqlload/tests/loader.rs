@@ -8,6 +8,8 @@ mod clickhouse_helpers;
 mod databricks_helpers;
 #[path = "loader/files/helpers.rs"]
 mod files_helpers;
+#[path = "loader/files_target/helpers.rs"]
+mod files_target_helpers;
 #[path = "loader/helpers.rs"]
 mod helpers;
 #[cfg(feature = "odbc")]

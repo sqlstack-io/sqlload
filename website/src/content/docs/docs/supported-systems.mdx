@@ -28,8 +28,8 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ClickHouse (preview) | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. See [ClickHouse](/docs/targets/clickhouse/). |
 | Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
-| Parquet files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed. |
-| Parquet files in a local folder | As for S3 | As for S3 |
+| Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or, from 0.27.0 (not released yet), CSV: plain, gzip or zstd. |
+| Parquet or CSV files in a local folder | As for S3; from 0.27.0, `replace` swaps the folder in one rename | As for S3 |
 
 ## Source and destination combinations
 
