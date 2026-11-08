@@ -95,6 +95,7 @@ use crate::schema_plan::models::LiveColumn;
 use crate::store_paths::models::Location;
 use crate::table_lease::constants::LEASE_REFRESH;
 use crate::table_lease::main::keep_lease::keep_lease;
+use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::release_lease::release_lease;
 use crate::table_lease::main::take_lease::take_lease;
 use crate::table_lease::models::Lease;
@@ -212,7 +213,7 @@ impl Publisher {
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
                 let folder = open_folder(&output.path.folder)?;
-                let lease = take_lease(&folder, &load_id, chrono::Utc::now())
+                let lease = take_lease(&folder, &load_id, lease_now())
                     .await?
                     .map_err(LoaderError::Invalid)?;
                 let replaced = match files_to_replace(&folder, &table, output).await {
@@ -1271,7 +1272,7 @@ async fn replace_files(
     file_id: &str,
     (keys, run): (&[String], Option<&PendingRun>),
 ) -> Result<(), LoaderError> {
-    keep_lease(folder, lease, chrono::Utc::now())
+    keep_lease(folder, lease, lease_now())
         .await?
         .map_err(LoaderError::Invalid)?;
     mark_pending(folder, file_id, PendingPhase::Replacing, (keys, run)).await?;
@@ -1302,7 +1303,7 @@ fn keep_in_background(
                 () = stopped.cancelled() => return,
                 () = tokio::time::sleep(LEASE_REFRESH) => {}
             }
-            match keep_lease(&folder, &lease, chrono::Utc::now()).await {
+            match keep_lease(&folder, &lease, lease_now()).await {
                 Ok(Ok(())) => {}
                 Ok(Err(lost)) => {
                     tracing::warn!(folder = %folder.location, "{lost}");
