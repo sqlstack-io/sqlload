@@ -9,23 +9,29 @@ use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::config::models::{DestinationConfig, DestinationKind};
 use crate::file_store::main::open_folder::open_folder;
 use crate::files_source::constants::{
     NANOSECOND_SCALE, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
     VERSION_SEPARATOR,
 };
+use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::discover_files::discover_files;
+use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
 use crate::files_source::models::{
     BatchFooters, DataFile, FileColumn, FileSelection, FilesRead, FilesTable, LoadedFile,
-    SourceFormat, StoredRead, TextChecks,
+    PathValues, SourceFormat, StoredRead, TextChecks,
 };
 use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::{resolve_tables, source_target};
 use crate::loader::_helpers::specs::{missing_description, table_name};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
-use crate::loader::constants::{PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS};
+use crate::loader::constants::{
+    KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, RELOAD_FIX,
+    SOURCE_BATCH_ROWS,
+};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
     CommitRule, FilesSource, PlanOptions, ProjectPlan, ResolvedTables, SkippedTable, SourceEnd,
@@ -37,8 +43,10 @@ use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::main::cursor_end::cursor_end;
 use crate::postgres_source::main::read_catalog::read_catalog;
 use crate::postgres_source::models::{
-    CopyRequest, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable, WireType,
+    CopyRequest, Encryption, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable,
+    SslMode, WireType,
 };
+use crate::project::main::postgres_address::postgres_address;
 use crate::project::models::{
     BatchStep, ConnectionConfig, NewTables, ProjectConfig, SourceConfig, SourceKind, TableOverride,
     WriteStrategy,
@@ -46,34 +54,20 @@ use crate::project::models::{
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::similar_names::main::close_name::close_name;
 use crate::similar_names::main::nearest_name::nearest_name;
+use crate::snowflake_source::constants::SESSION_SCHEMA;
+use crate::snowflake_source::main::connect_snowflake_source::connect_snowflake_source;
+use crate::snowflake_source::main::read_catalog::read_catalog as read_snowflake_catalog;
+use crate::snowflake_source::main::unload_rows::unload_rows;
+use crate::snowflake_source::models::UnloadRequest;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// A client for a source's Postgres connection.
+/// A client for a source's Postgres connection, and what protects it.
 pub(crate) async fn connect_source(
     project: &ProjectConfig,
     source: &SourceConfig,
-) -> Result<Client, LoaderError> {
-    let Some(ConnectionConfig::Postgres {
-        host,
-        port,
-        user,
-        password,
-        database,
-    }) = project.connections.get(&source.connection)
-    else {
-        return Err(LoaderError::Invalid(format!(
-            "connection {:?} is not a Postgres connection",
-            source.connection
-        )));
-    };
-    let address = PostgresAddress {
-        host,
-        port: *port,
-        user,
-        password: password.as_ref().map(|secret| secret.expose()),
-        database,
-    };
+) -> Result<(Client, Encryption), LoaderError> {
+    let address = postgres_address(project, &source.connection).map_err(LoaderError::Invalid)?;
     Ok(connect_postgres(address).await?)
 }
 
@@ -123,11 +117,11 @@ pub(crate) async fn open_source(
 ) -> Result<SourceReader, LoaderError> {
     match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => {
-            let client = connect_source(project, source).await?;
+            let (client, _) = connect_source(project, source).await?;
             let mut helpers = Vec::with_capacity(readers.saturating_sub(1));
             for _ in 1..readers {
                 match connect_source(project, source).await {
-                    Ok(helper) => helpers.push(helper),
+                    Ok((helper, _)) => helpers.push(helper),
                     Err(_) => break,
                 }
             }
@@ -136,27 +130,39 @@ pub(crate) async fn open_source(
         SourceKind::Files => Ok(SourceReader::Files(open_folder(&files_location(
             project, source,
         )?)?)),
+        SourceKind::Snowflake => Ok(SourceReader::Snowflake(Box::new(connect_snowflake_source(
+            snowflake_session(project, source)?,
+            source.stage.clone(),
+        )?))),
         SourceKind::Python => Err(LoaderError::Invalid(
             "a Python source is read by calling its table functions".to_owned(),
         )),
     }
 }
 
-/// A source's tables, and its files for a files source; `Ok(Err(problem))` when they cannot be found, including when a Postgres source cannot be reached or its `include`/`exclude` patterns are invalid.
+/// A source's tables, its files for a files source, and warnings about reaching it; `Ok(Err(problem))` when they cannot be found, including when a Postgres source cannot be reached or its `include`/`exclude` patterns are invalid.
 pub(crate) async fn source_tables(
     project: &ProjectConfig,
     source_name: &str,
     source: &SourceConfig,
-) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>), String>, LoaderError> {
+) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>, Vec<String>), String>, LoaderError> {
     match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => {
-            let client = match connect_source(project, source).await {
-                Ok(client) => client,
-                Err(error) => return Ok(Err(error.to_string())),
+            let address = match postgres_address(project, &source.connection) {
+                Ok(address) => address,
+                Err(problem) => return Ok(Err(problem)),
             };
+            let (client, encryption) = match connect_postgres(address.clone()).await {
+                Ok(connected) => connected,
+                Err(error) => return Ok(Err(LoaderError::from(error).to_string())),
+            };
+            let warnings: Vec<String> =
+                plain_text_warning((source_name, &source.connection), &address, encryption)
+                    .into_iter()
+                    .collect();
             Ok(
                 match read_catalog(&client, &source.include, &source.exclude).await {
-                    Ok(discovered) => Ok((discovered, None)),
+                    Ok(discovered) => Ok((discovered, None, warnings)),
                     Err(error) => Err(LoaderError::from(error).to_string()),
                 },
             )
@@ -168,13 +174,88 @@ pub(crate) async fn source_tables(
             };
             Ok(
                 match discover_files_table(project, source_name, source, warehouse).await {
-                    Ok((table, files)) => Ok((vec![table], Some(files))),
+                    Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
                     Err(error) => Err(error.to_string()),
                 },
             )
         }
-        SourceKind::Python => Ok(Ok((python_tables(source), None))),
+        SourceKind::Snowflake => {
+            let reader = match snowflake_session(project, source)
+                .and_then(|session| Ok(connect_snowflake_source(session, None)?))
+            {
+                Ok(reader) => reader,
+                Err(error) => return Ok(Err(error.to_string())),
+            };
+            let queries: Vec<(String, String)> = source
+                .tables
+                .iter()
+                .filter_map(|(name, table)| Some((name.clone(), table.sql.clone()?)))
+                .collect();
+            Ok(
+                match read_snowflake_catalog(&reader, (&source.include, &source.exclude), &queries)
+                    .await
+                {
+                    Ok(discovered) => Ok((discovered, None, Vec::new())),
+                    Err(error) => Err(error.to_string()),
+                },
+            )
+        }
+        SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
     }
+}
+
+/// A warning when source `source_name` reads `address` over the network in plain text because the server refused TLS under `sslmode = "prefer"`; none for a loopback or Unix socket host, whose traffic stays on the machine, or for an explicit `disable`.
+fn plain_text_warning(
+    (source_name, connection): (&str, &str),
+    address: &PostgresAddress<'_>,
+    encryption: Encryption,
+) -> Option<String> {
+    let local = address.host == LOCALHOST
+        || address.host.starts_with('/')
+        || address
+            .host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    (encryption == Encryption::None && address.tls.mode == SslMode::Prefer && !local).then(|| {
+        format!(
+            "[sources.{source_name}] reads {}:{} in plain text: the server does not offer TLS, so sslmode = \"prefer\" fell back; set sslmode = \"require\" (or \"verify-full\") on connection {connection} to refuse plain text, or \"disable\" to accept it",
+            address.host, address.port
+        )
+    })
+}
+
+/// The session a `snowflake` source reads in: its connection's account, credentials, role and database, on the source's `warehouse` or else the connection's.
+fn snowflake_session(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+) -> Result<DestinationConfig, LoaderError> {
+    let Some(ConnectionConfig::Snowflake {
+        account,
+        user,
+        auth,
+        role,
+        warehouse,
+        database,
+        base_url,
+        ..
+    }) = project.connections.get(&source.connection)
+    else {
+        return Err(LoaderError::Invalid(format!(
+            "connection {:?} is not a snowflake connection",
+            source.connection
+        )));
+    };
+    Ok(DestinationConfig {
+        kind: DestinationKind::Snowflake,
+        account: account.clone(),
+        user: user.clone(),
+        auth: auth.clone(),
+        role: role.clone(),
+        warehouse: source.warehouse.clone().or_else(|| warehouse.clone()),
+        database: database.clone(),
+        schema: SESSION_SCHEMA.to_owned(),
+        base_url: base_url.clone(),
+    })
 }
 
 /// A files source as one source table (file columns, partition columns, the source-file column), and its files.
@@ -186,13 +267,54 @@ pub(crate) async fn discover_files_table(
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
-    let partition_names: Vec<String> = source.partition_columns.keys().cloned().collect();
+    let (values, _) = path_values(source, warehouse)?;
     let encoding = source.files_encoding();
-    let table = discover_files(&folder, &partition_names, &encoding).await?;
+    let table = discover_files(&folder, &values, &encoding).await?;
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
     }
     files_source_parts(source_name, source, warehouse, (location, table))
+}
+
+/// What a files source fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then `constant_columns`.
+fn path_values(
+    source: &SourceConfig,
+    warehouse: Warehouse,
+) -> Result<(PathValues, Vec<(String, ColumnType)>), LoaderError> {
+    let mut types: Vec<(String, ColumnType)> = Vec::new();
+    for (name, text) in &source.partition_columns {
+        let parsed = parse_type(text, &[warehouse])
+            .map_err(|error| LoaderError::Invalid(format!("partition column {name}: {error}")))?;
+        types.push((name.clone(), parsed.column_type));
+    }
+    let template = source
+        .path_columns
+        .as_deref()
+        .map(|text| path_template(text, &[warehouse]))
+        .transpose()
+        .map_err(LoaderError::Invalid)?;
+    types.extend(
+        template
+            .iter()
+            .flat_map(|template| template.captures.clone()),
+    );
+    let constants =
+        constant_columns(&source.constant_columns, &[warehouse]).map_err(LoaderError::Invalid)?;
+    let values = PathValues {
+        partition_columns: source.partition_columns.keys().cloned().collect(),
+        template,
+        unmatched: source.unmatched_paths.unwrap_or_default(),
+        constants: constants
+            .iter()
+            .map(|(name, _, text)| (name.clone(), text.clone()))
+            .collect(),
+    };
+    types.extend(
+        constants
+            .into_iter()
+            .map(|(name, column_type, _)| (name, column_type)),
+    );
+    Ok((values, types))
 }
 
 /// A files source's table and files from the files found: the file columns, partition columns and source-file columns as one source table.
@@ -203,12 +325,7 @@ pub(crate) fn files_source_parts(
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let encoding = source.files_encoding();
-    let mut partition_types: Vec<(String, ColumnType)> = Vec::new();
-    for (name, text) in &source.partition_columns {
-        let parsed = parse_type(text, &[warehouse])
-            .map_err(|error| LoaderError::Invalid(format!("partition column {name}: {error}")))?;
-        partition_types.push((name.clone(), parsed.column_type));
-    }
+    let (values, partition_types) = path_values(source, warehouse)?;
     let added: Vec<&str> = partition_types
         .iter()
         .map(|(name, _)| name.as_str())
@@ -255,6 +372,7 @@ pub(crate) fn files_source_parts(
             pg_type: PgType::Other,
             column_type,
             nullable: true,
+            source_spelling: None,
         })
         .collect();
     let checks = TextChecks {
@@ -291,6 +409,7 @@ pub(crate) fn files_source_parts(
             location,
             table,
             partition_types,
+            constants: values.constants.into_iter().map(|(name, _)| name).collect(),
             encoding,
             checks,
             notes,
@@ -465,6 +584,14 @@ fn fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> Option<i64> {
         .filter(|digits| *digits < i64::from(NANOSECOND_SCALE))
 }
 
+/// How to give a table with rows a column a load needs, on `warehouse`.
+pub(crate) fn column_fix(warehouse: Warehouse) -> &'static str {
+    match sql_adapter(warehouse).keeps_tables() {
+        true => KEPT_TABLES_COLUMN_FIX,
+        false => RELOAD_FIX,
+    }
+}
+
 /// The files to read, or why the table cannot be loaded.
 pub(crate) async fn plan_files(
     request: &FilesPlanRequest<'_>,
@@ -481,12 +608,23 @@ pub(crate) async fn plan_files(
             Some((name, column_type)) => Some((name.as_str(), column_type)),
             None => {
                 return Ok(Err(format!(
-                    "cursor_column {} must be one of the partition_columns for a files source",
+                    "cursor_column {} must be one of the partition_columns or path_columns for a files source",
                     cursor.column
                 )));
             }
         },
     };
+    if let Some((name, _)) = cursor
+        && request
+            .files
+            .constants
+            .iter()
+            .any(|constant| constant == name)
+    {
+        return Ok(Err(format!(
+            "cursor_column {name} is a constant column, the same in every file, so it cannot pick the files to read; use a partition_columns or path_columns column"
+        )));
+    }
     if spec.strategy == WriteStrategy::Merge {
         return Ok(Err(
             "merge is not supported for files sources yet (loaded files would be re-read once their rows are updated); use delete_insert on a partition cursor, or append".to_owned(),
@@ -499,7 +637,8 @@ pub(crate) async fn plan_files(
         && !request.options.reload
     {
         return Ok(Err(format!(
-            "the table has no {SOURCE_FILE_COLUMN} column, so append cannot tell which files are loaded and would load them all again; run it once with --reload"
+            "the table has no {SOURCE_FILE_COLUMN} column, so append cannot tell which files are loaded and would load them all again; {}",
+            column_fix(spec.warehouse)
         )));
     }
     if skips_loaded
@@ -629,6 +768,21 @@ pub(crate) async fn read_source(
             };
             Ok(read_files(folder, &read, &part.footers, on_batch).await?)
         }
+        (SourceReader::Snowflake(snowflake), _) => {
+            let filter = part.filter.or_else(|| table.source_filter.clone());
+            let request = UnloadRequest {
+                table: &table.spec.source_table,
+                sql: table
+                    .spec
+                    .warehouse_source
+                    .as_ref()
+                    .and_then(|source| source.sql.as_deref()),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+                batch_rows: SOURCE_BATCH_ROWS,
+            };
+            Ok(unload_rows(snowflake, &request, on_batch).await?)
+        }
         (SourceReader::Files(_), None) => Err(LoaderError::Invalid(format!(
             "{}: a files source has no files planned",
             table.spec.source_table.qualified_name()
@@ -674,7 +828,7 @@ pub(crate) async fn source_ends(
             continue;
         };
         if client.is_none() {
-            client = Some(connect_source(project, source).await?);
+            client = Some(connect_source(project, source).await?.0);
         }
         let Some(connected) = &client else {
             continue;
@@ -731,7 +885,7 @@ pub(crate) async fn scoped_tables(
     (project, options): (&ProjectConfig, &PlanOptions),
     (source_name, source): (&str, &SourceConfig),
 ) -> Result<Result<(ResolvedTables, Option<FilesSource>), Vec<String>>, LoaderError> {
-    let (discovered, files) = match source_tables(project, source_name, source).await? {
+    let (discovered, files, warnings) = match source_tables(project, source_name, source).await? {
         Ok(found) => found,
         Err(problem) => {
             let in_scope = source_in_scope((project, options), (source_name, source), None);
@@ -742,8 +896,9 @@ pub(crate) async fn scoped_tables(
         }
     };
     let mut resolved = resolve_tables(project, source_name, &discovered);
-    if !source_in_scope((project, options), (source_name, source), Some(&discovered)) {
-        resolved.problems.clear();
+    match source_in_scope((project, options), (source_name, source), Some(&discovered)) {
+        true => resolved.warnings = warnings,
+        false => resolved.problems.clear(),
     }
     Ok(Ok((resolved, files)))
 }

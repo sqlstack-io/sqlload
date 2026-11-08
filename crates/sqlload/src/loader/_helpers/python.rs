@@ -15,6 +15,7 @@ use crate::loader::_helpers::publish::staged_columns;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
 use crate::loader::_helpers::run_log::run_entry;
+use crate::loader::_helpers::table_plan::append_problem;
 use crate::loader::_helpers::table_plan::replan_columns;
 use crate::loader::_helpers::table_plan::schema_statements;
 use crate::loader::constants::EMPTY_REPLACE_PROBLEM;
@@ -38,8 +39,10 @@ use crate::postgres_source::models::PgType;
 use crate::postgres_source::models::SourceColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::constants::FILES_CONNECTION_KINDS;
+use crate::project::models::CheckName;
 use crate::project::models::ProjectConfig;
 use crate::project::models::SourceConfig;
+use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::python_sources::models::CursorRead;
 use crate::python_sources::models::TableRead;
 use crate::python_sources::types::BatchStream;
@@ -288,10 +291,9 @@ pub(crate) async fn refuse_emptying(
             single_text(destination, query).await?.is_some()
         }
     };
-    let name = sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination);
     match has_rows {
         true => Err(LoaderError::Invalid(
-            EMPTY_REPLACE_PROBLEM.replace("{table}", &name),
+            EMPTY_REPLACE_PROBLEM.replace("{table}", &table.outcome_name()),
         )),
         false => Ok(()),
     }
@@ -372,6 +374,7 @@ fn python_column(name: &str, column_type: ColumnType) -> SourceColumn {
         pg_type: PgType::Other,
         column_type: Ok(column_type),
         nullable: true,
+        source_spelling: None,
     }
 }
 
@@ -606,6 +609,7 @@ impl PythonFeed {
             refuse_emptying(load.table, load.destination).await?;
         }
         if self.publisher.is_none() && self.rows == 0 && !load.table.exists && declared == 0 {
+            empty_problem(load.table)?;
             let run = run_entry(
                 load,
                 load.table,
@@ -830,6 +834,21 @@ impl PythonFeed {
     }
 }
 
+/// Fail a table whose function yielded no rows when its `min_rows` check needs some (unless the check only warns).
+fn empty_problem(table: &TablePlan) -> Result<(), LoaderError> {
+    let minimum = table.spec.checks.as_ref().and_then(|checks| {
+        checks
+            .min_rows
+            .filter(|minimum| *minimum > 0 && !checks.warn.contains(&CheckName::MinRows))
+    });
+    match minimum {
+        Some(minimum) => Err(LoaderError::Invalid(format!(
+            "checks.min_rows failed: 0 row(s) staged, fewer than the {minimum} required; nothing was published"
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// `planned` with its columns planned again for those `data` has (`known` being the live columns when they need no read); everything else stays as planned before the read, so it matches what the function was asked for.
 async fn replan(
     load: &PythonLoad<'_>,
@@ -876,6 +895,33 @@ async fn replan(
         load.options,
     )
     .await?;
+    let cursor_type = columns.spec.cursor.as_ref().and_then(|cursor| {
+        columns
+            .schema
+            .write_columns
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
+            .map(|column| &column.column_type)
+    });
+    if let Some(problem) = append_problem(&columns.spec, cursor_type) {
+        return Err(LoaderError::Invalid(problem));
+    }
+    let loaded: Vec<String> = columns
+        .schema
+        .write_columns
+        .iter()
+        .map(|column| column.name.clone())
+        .chain(data.null_columns.iter().cloned())
+        .collect();
+    let problems: Vec<String> = columns
+        .spec
+        .checks
+        .iter()
+        .flat_map(|checks| check_column_problems(checks, &loaded))
+        .collect();
+    if !problems.is_empty() {
+        return Err(LoaderError::Invalid(problems.join("; ")));
+    }
     Ok(TablePlan {
         spec: columns.spec,
         read_columns: columns.read_columns,

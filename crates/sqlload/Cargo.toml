@@ -76,6 +76,7 @@ tokio = { workspace = true, features = ["io-util"] }
 pgwire-replication.workspace = true
 prost.workspace = true
 tokio-postgres.workspace = true
+tokio-rustls.workspace = true
 tokio-util = { workspace = true, features = ["io"] }
 tonic.workspace = true
 tonic-prost.workspace = true
@@ -86,6 +87,7 @@ tower-service.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true
+webpki-roots.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true

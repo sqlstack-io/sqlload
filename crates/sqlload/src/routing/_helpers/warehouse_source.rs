@@ -22,17 +22,18 @@ pub(crate) fn should_unload(reader: &ReaderOffer, read_via: ReadVia) -> Result<b
     }
 }
 
-/// Unload the source to Parquet, letting the destination load it directly when it can reach the files.
+/// Unload the source to Parquet, letting the destination load it directly when it can reach the files and nothing needs SQLLoad to read them (masking, checks).
 pub(crate) fn unload_route(
     reader: &ReaderOffer,
     writer: &WriterAccepts,
     overrides: RouteOverrides,
 ) -> Result<Route, RouteError> {
     let stores = ordered_stores(&reader.unload_to, overrides.stage)?;
-    if let Some(store) = stores
-        .iter()
-        .find(|store| destination_pulls(writer, store, FileFormat::Parquet))
-    {
+    if let Some(store) = stores.iter().find(|store| {
+        reader.direct_blocked.is_none()
+            && reader.needs_loader.is_none()
+            && destination_pulls(writer, store, FileFormat::Parquet)
+    }) {
         let files = FileSet {
             store: store.clone(),
             format: FileFormat::Parquet,
@@ -56,6 +57,13 @@ pub(crate) fn unload_route(
         ],
         writer,
         overrides.stage,
-        &format!("unloaded to {store} and read back, because the destination cannot reach it"),
+        &match &reader.direct_blocked {
+            Some(reason) => {
+                format!("unloaded to {store} and read back by SQLLoad, because {reason}")
+            }
+            None => format!(
+                "unloaded to {store} and read back, because the destination cannot reach it"
+            ),
+        },
     )
 }

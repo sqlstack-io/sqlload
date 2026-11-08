@@ -45,3 +45,11 @@ pub(crate) struct SequenceIdsTestCase {
     pub(crate) each: usize,
     pub(crate) expected_unique: usize,
 }
+
+pub(crate) struct StageDownloadsTestCase {
+    pub(crate) description: &'static str,
+    /// A `GET` response's `data`.
+    pub(crate) response: &'static str,
+    /// Each file's key and the query its key belongs to, or the error.
+    pub(crate) expected_files: Result<Vec<(&'static str, &'static str)>, &'static str>,
+}

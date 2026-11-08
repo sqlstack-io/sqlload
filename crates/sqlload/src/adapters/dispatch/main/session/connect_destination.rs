@@ -1,12 +1,14 @@
 //! Open the destination one target uses.
 
 use crate::adapters::bigquery::main::session::_connect_bigquery::connect_bigquery;
+use crate::adapters::clickhouse::main::session::_connect_clickhouse::connect_clickhouse;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::databricks::main::session::_connect_databricks::connect_databricks;
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_open_duckdb::open_duckdb;
 use crate::adapters::files::models::FilesDestination;
+use crate::adapters::postgres::main::session::_open_postgres::open_postgres;
 use crate::adapters::snowflake::main::session::_connect_snowflake::connect_snowflake;
 use crate::adapters::snowflake::main::stage::_forced_stage::forced_stage;
 use crate::adapters::snowflake::models::SnowflakeAccount;
@@ -41,25 +43,18 @@ pub async fn connect_destination(
         Some(connection @ ConnectionConfig::BigQuery { .. }) => Destination::BigQuery(Box::new(
             connect_bigquery(connection, target.database.as_deref())?,
         )),
-        Some(ConnectionConfig::S3 {
-            bucket,
-            region,
-            endpoint,
-        }) => Destination::Files(Box::new(FilesDestination {
-            connection: target.connection.clone(),
-            store: StoreKind::S3 {
-                bucket: bucket.clone(),
-                region: region.clone(),
-                endpoint: endpoint.clone(),
-            },
-            max_footer_reads: target.footer_read_limit(),
-        })),
-        Some(ConnectionConfig::Filesystem { root }) => {
-            Destination::Files(Box::new(FilesDestination {
-                connection: target.connection.clone(),
-                store: StoreKind::Filesystem { root: root.clone() },
-                max_footer_reads: target.footer_read_limit(),
-            }))
+        Some(ConnectionConfig::Postgres { .. }) => Destination::Postgres(Box::new(open_postgres(
+            project,
+            &target.connection,
+            target.database.as_deref(),
+        )?)),
+        Some(connection @ ConnectionConfig::ClickHouse { .. }) => {
+            Destination::ClickHouse(Box::new(connect_clickhouse(connection)?))
+        }
+        Some(connection @ (ConnectionConfig::S3 { .. } | ConnectionConfig::Filesystem { .. })) => {
+            files(connection, target).ok_or_else(|| {
+                LoaderError::Invalid(format!("target {name:?}: its connection holds no files"))
+            })?
         }
         Some(other) => {
             return Err(LoaderError::Invalid(format!(
@@ -75,6 +70,31 @@ pub async fn connect_destination(
         }
     };
     Ok(destination)
+}
+
+/// The files destination of `target`, from its `s3` or `filesystem` connection; `None` for another kind.
+fn files(
+    connection: &ConnectionConfig,
+    target: &crate::project::models::TargetConfig,
+) -> Option<Destination> {
+    let store = match connection {
+        ConnectionConfig::S3 {
+            bucket,
+            region,
+            endpoint,
+        } => StoreKind::S3 {
+            bucket: bucket.clone(),
+            region: region.clone(),
+            endpoint: endpoint.clone(),
+        },
+        ConnectionConfig::Filesystem { root } => StoreKind::Filesystem { root: root.clone() },
+        _ => return None,
+    };
+    Some(Destination::Files(Box::new(FilesDestination {
+        connection: target.connection.clone(),
+        store,
+        max_footer_reads: target.footer_read_limit(),
+    })))
 }
 
 /// The Snowflake destination of target `name`, from its `snowflake` connection.

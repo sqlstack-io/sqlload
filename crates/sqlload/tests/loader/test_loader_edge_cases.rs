@@ -8,6 +8,7 @@ const OK: ScenarioRun = ScenarioRun {
     source_change: "",
     destination_change: "",
     expected_error: "",
+    expected_plan: "",
     reload: false,
     window: (None, None),
     settings: "",
@@ -43,29 +44,65 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "1=5.00,2=2.00 staging:0",
         },
         ScenarioTestCase {
-            description: "append_cursor_inclusive = false skips rows equal to the maximum",
+            description: "append reads after an integer cursor's maximum: the first run includes cursor_start, a re-run with no change loads nothing, a new row loads once",
             setup: "CREATE TABLE public.ticks (seq int8, note text);
                     INSERT INTO public.ticks VALUES (1, 'a'), (2, 'b');",
-            settings: "write_strategy = \"append\"\ncursor_column = \"seq\"\nappend_cursor_inclusive = false\n[sources.app.tables.\"public.ticks\"]\n",
+            settings: "write_strategy = \"append\"\ncursor_column = \"seq\"\ncursor_start = \"1\"\n[sources.app.tables.\"public.ticks\"]\n",
             runs: &[
+                OK,
                 OK,
                 ScenarioRun {
                     source_change: "INSERT INTO public.ticks VALUES (3, 'c');",
-                    destination_change: "",
                     ..OK
                 },
+                OK,
             ],
             check_query: "SELECT string_agg(seq || note, ',' ORDER BY seq) FROM raw.app__ticks",
             expected_result: "1a,2b,3c",
         },
         ScenarioTestCase {
-            description: "append with the default inclusive cursor re-reads rows on the boundary",
+            description: "append reads after a timestamp cursor's maximum: a re-run with no change loads nothing, a new row loads once",
+            setup: "CREATE TABLE public.ticks (at timestamptz, note text);
+                    INSERT INTO public.ticks VALUES ('2026-11-01 10:00:00+00', 'a'), ('2026-11-01 11:00:00+00', 'b');",
+            settings: "write_strategy = \"append\"\ncursor_column = \"at\"\n[sources.app.tables.\"public.ticks\"]\n",
+            runs: &[
+                OK,
+                OK,
+                ScenarioRun {
+                    source_change: "INSERT INTO public.ticks VALUES ('2026-11-01 11:00:01+00', 'c');",
+                    ..OK
+                },
+                OK,
+            ],
+            check_query: "SELECT string_agg(note, ',' ORDER BY note) FROM raw.app__ticks",
+            expected_result: "a,b,c",
+        },
+        ScenarioTestCase {
+            description: "append_cursor_inclusive = true opts back into re-reading the maximum, and plan warns that each run appends it again",
             setup: "CREATE TABLE public.ticks (seq int8, note text);
                     INSERT INTO public.ticks VALUES (1, 'a'), (2, 'b');",
-            settings: "write_strategy = \"append\"\ncursor_column = \"seq\"\n[sources.app.tables.\"public.ticks\"]\n",
-            runs: &[OK, OK],
+            settings: "write_strategy = \"append\"\ncursor_column = \"seq\"\nappend_cursor_inclusive = true\n[sources.app.tables.\"public.ticks\"]\n",
+            runs: &[
+                ScenarioRun {
+                    expected_plan: "append_cursor_inclusive = true reads from the maximum seq itself, so every run appends the rows at that value again",
+                    ..OK
+                },
+                OK,
+            ],
             check_query: "SELECT string_agg(seq || note, ',' ORDER BY seq) FROM raw.app__ticks",
             expected_result: "1a,2b,2b",
+        },
+        ScenarioTestCase {
+            description: "append with a date cursor is refused, pointing to delete_insert",
+            setup: "CREATE TABLE public.days (day date, total int4);
+                    INSERT INTO public.days VALUES ('2026-11-01', 1);",
+            settings: "write_strategy = \"append\"\ncursor_column = \"day\"\n[sources.app.tables.\"public.days\"]\n",
+            runs: &[ScenarioRun {
+                expected_error: "write_strategy = \"append\" cannot follow the date cursor day: rows added later to its last day would be lost (or, with append_cursor_inclusive = true, the whole day appended again on every run); use delete_insert",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
         },
         ScenarioTestCase {
             description: "append with lookback is rejected before anything runs",

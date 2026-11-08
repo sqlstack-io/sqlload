@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::adapters::files::main::fit_live_types::fit_live_types;
-use crate::loader::_helpers::table_plan::blocked_plan;
+use crate::loader::_helpers::table_plan::{append_problem, blocked_plan, inclusive_append_warning};
 use crate::loader::models::{PlanOptions, TableSpec};
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::{DesiredColumn, LiveColumn, SchemaPlan, SchemaRules, TableAction};
@@ -67,6 +67,26 @@ pub(in crate::loader) fn files_schema(
                 "cursor_column {name} is not written to the files (excluded, not in the enforced contract, or ignored by on_schema_change)"
             )])
         }
+        (true, _) => append_checked(spec, desired, schema),
         _ => schema,
     }
+}
+
+/// `schema` blocked when `append` cannot follow the table's cursor, or warned when it re-reads the maximum (see [`append_problem`]).
+fn append_checked(
+    spec: &TableSpec,
+    desired: &[DesiredColumn],
+    mut schema: SchemaPlan,
+) -> SchemaPlan {
+    let cursor_type = spec.cursor.as_ref().and_then(|cursor| {
+        desired
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
+            .map(|column| &column.column_type)
+    });
+    if let Some(problem) = append_problem(spec, cursor_type) {
+        return blocked_plan(vec![problem]);
+    }
+    schema.warnings.extend(inclusive_append_warning(spec));
+    schema
 }

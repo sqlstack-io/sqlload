@@ -59,3 +59,21 @@ pub const MAX_DIRECT_DECIMAL_PRECISION: u8 = 38;
 
 /// The decimal digits of a second a nanosecond time or timestamp holds; a live column with fewer gets values cut to microseconds.
 pub const NANOSECOND_SCALE: u8 = 9;
+
+/// A `path_columns` segment matching any number of folders.
+pub const ANY_FOLDERS: &str = "**";
+
+/// The type of a `path_columns` capture that names none.
+pub const DEFAULT_CAPTURE_TYPE: &str = "text";
+
+/// How a captured or constant date is stored.
+pub const NORMAL_DATE: &str = "%Y-%m-%d";
+
+/// How a captured or constant time is stored.
+pub const NORMAL_TIME: &str = "%H:%M:%S%.6f";
+
+/// How a captured or constant timestamp without a zone is stored.
+pub const NORMAL_TIMESTAMP: &str = "%Y-%m-%d %H:%M:%S%.6f";
+
+/// How a captured or constant timestamp with a zone is stored: in UTC, the offset right after the time, which every destination reads.
+pub const NORMAL_TIMESTAMP_TZ: &str = "%Y-%m-%dT%H:%M:%S%.6f%:z";

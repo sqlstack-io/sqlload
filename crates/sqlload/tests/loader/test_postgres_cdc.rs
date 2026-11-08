@@ -30,8 +30,8 @@ INSERT INTO public.items VALUES (1, 'one'), (2, 'two');
 
 pub(crate) const CHANGES: &str = CDC_CHANGES;
 
-const MERGED_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders) || ' | ' || (SELECT string_agg(id || ':' || name || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__items)";
-const MERGED_RESULT: &str = "1:10:9600:{a,b}:update:false,2:2:1:{c}:delete:true,3:3:1:-:snapshot:false,4:4:1:{\"x y\",z}:insert:false | 1:one!:update,2:two:snapshot,3:three:insert";
+pub(crate) const MERGED_QUERY: &str = "SELECT (SELECT string_agg(id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.app__orders) || ' | ' || (SELECT string_agg(id || ':' || name || ':' || _sqlload_op, ',' ORDER BY id) FROM raw.app__items)";
+pub(crate) const MERGED_RESULT: &str = "1:10:9600:{a,b}:update:false,2:2:1:{c}:delete:true,3:3:1:-:snapshot:false,4:4:1:{\"x y\",z}:insert:false | 1:one!:update,2:two:snapshot,3:three:insert";
 
 /// [`MERGED_QUERY`] in Databricks SQL.
 const LIVE_MERGED_QUERY: &str = "SELECT (SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || qty || ':' || length(big) || ':' || COALESCE(tags, '-') || ':' || _sqlload_op || ':' || CAST(_sqlload_deleted_at IS NOT NULL AS STRING)))), r -> r.t), ',') FROM {schema}.app__orders) || ' | ' || (SELECT array_join(transform(array_sort(collect_list(named_struct('k', id, 't', id || ':' || name || ':' || _sqlload_op))), r -> r.t), ',') FROM {schema}.app__items)";

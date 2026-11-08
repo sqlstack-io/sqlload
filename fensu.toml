@@ -31,6 +31,31 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/postgres/main/start_postgres_tls.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/clickhouse/main/start_clickhouse.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/clickhouse/main/run_client.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload/src/adapters/clickhouse/main/session/stop_after.rs"
+reason = "Test-only stop (container-tests feature) used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSS130"
+path = "crates/sqlload/src/adapters/clickhouse/_helpers/session/stops.rs"
+reason = "Test-only stop (container-tests feature, absent from released builds): integration tests arm it across the loader's calls, which pass no test state through."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/configs/main/streaming_config.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
 
@@ -123,6 +148,12 @@ reason = "Entry used by the hot-path benchmarks (crates/sqlload-benches/benches)
 rule = "FPRSN003"
 path = "crates/sqlload/src/files_source/_helpers/parquet/object_reader.rs"
 reason = "get_bytes, get_byte_ranges and get_metadata are parquet's AsyncFileReader trait methods."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSS120"
+path = "crates/sqlload/src/postgres_source/_helpers/tls.rs"
+symbols = ["Unchecked::verify_server_cert", "AnyHost::verify_server_cert"]
+reason = "rustls's ServerCertVerifier trait fixes this method's parameters."
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSS120"

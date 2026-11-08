@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
-use crate::project::constants::WHOLE_BATCH;
+use crate::project::constants::{MAX_PERCENT, WHOLE_BATCH};
 use crate::project::models::BatchStep;
 
 /// Deserialize an optional duration written as text such as `1h` or `2d`.
@@ -61,4 +61,53 @@ pub(crate) fn deserialize_optional_keys<'de, D: Deserializer<'de>>(
             OneOrMany::Many(keys) => keys,
         }),
     )
+}
+
+/// Each source's `constant_columns` dates and times as `{ value, type }`: deserializing turns a TOML date or time into a plain string, which would load as text.
+pub(crate) fn typed_constants(mut value: toml::Value) -> toml::Value {
+    let Some(toml::Value::Table(sources)) = value.get_mut("sources") else {
+        return value;
+    };
+    for (_, source) in sources.iter_mut() {
+        let Some(toml::Value::Table(constants)) = source.get_mut("constant_columns") else {
+            continue;
+        };
+        for (_, constant) in constants.iter_mut() {
+            let toml::Value::Datetime(datetime) = constant else {
+                continue;
+            };
+            let written = match (datetime.date, datetime.time, datetime.offset) {
+                (Some(_), None, _) => "date",
+                (Some(_), Some(_), Some(_)) => "timestamp_tz",
+                (Some(_), Some(_), None) => "timestamp_ntz",
+                (None, _, _) => "time",
+            };
+            *constant = toml::Value::Table(toml::Table::from_iter([
+                (
+                    "value".to_owned(),
+                    toml::Value::String(datetime.to_string()),
+                ),
+                ("type".to_owned(), toml::Value::String(written.to_owned())),
+            ]));
+        }
+    }
+    value
+}
+
+/// Deserialize an optional percentage written as text such as `"20%"`: a whole number from 0 to 100.
+pub(crate) fn deserialize_optional_percent<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u8>, D::Error> {
+    let Some(text) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    let parsed = text
+        .strip_suffix('%')
+        .map(|number| number.trim().parse::<u8>());
+    match parsed {
+        Some(Ok(percent)) if percent <= MAX_PERCENT => Ok(Some(percent)),
+        _ => Err(serde::de::Error::custom(format!(
+            "{text:?} is not a percentage; write a whole number from 0 to {MAX_PERCENT} followed by %, such as \"20%\""
+        ))),
+    }
 }

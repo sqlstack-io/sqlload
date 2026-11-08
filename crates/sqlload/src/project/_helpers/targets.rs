@@ -1,5 +1,6 @@
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, STAGE_NAME_PARTS, WAREHOUSE_CONNECTION_KINDS,
+    CLICKHOUSE_CONNECTION_KIND, FILES_CONNECTION_KINDS, STAGE_NAME_PARTS,
+    WAREHOUSE_CONNECTION_KINDS,
 };
 use crate::project::models::{
     ConnectionConfig, LoadMethod, ProjectConfig, SourceConfig, TargetConfig,
@@ -7,8 +8,12 @@ use crate::project::models::{
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// Problems with where a warehouse connection stages files: a Databricks `volume` must be `catalog.schema.volume`; a Snowflake `load_method` is required, and an `external_stage` needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing one).
-pub(crate) fn stage_problems(name: &str, connection: &ConnectionConfig) -> Vec<String> {
+/// Problems with where a warehouse connection stages files: a Databricks `volume` must be `catalog.schema.volume`; a Snowflake `load_method` is required when a target loads into the connection (`targeted`), and an `external_stage` needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing one).
+pub(crate) fn stage_problems(
+    name: &str,
+    connection: &ConnectionConfig,
+    targeted: bool,
+) -> Vec<String> {
     let load_method = match connection {
         ConnectionConfig::Snowflake { load_method, .. } => load_method,
         ConnectionConfig::Databricks { volume, .. } => {
@@ -22,6 +27,9 @@ pub(crate) fn stage_problems(name: &str, connection: &ConnectionConfig) -> Vec<S
         _ => return Vec::new(),
     };
     let Some(load_method) = load_method else {
+        if !targeted {
+            return Vec::new();
+        }
         return vec![format!(
             "connection {name}: load_method is required: how should data get into Snowflake? Fix: add one of these to [connections.{name}]:\nload_method = {{ type = \"external_stage\", url = \"s3://...\", storage_integration = \"...\" }}   (fastest)\nload_method = {{ type = \"internal_user_stage\" }}   (no setup)"
         )];
@@ -94,6 +102,11 @@ pub(crate) fn target_problems(
         (true, _) => {
             if target.loader_schema.is_none() {
                 problems.push(format!("{place} needs a loader_schema"));
+            }
+            if kind == CLICKHOUSE_CONNECTION_KIND && target.database.is_some() {
+                problems.push(format!(
+                    "{place} loads into ClickHouse, which has no level above its databases: drop database and name the ClickHouse database in loader_schema"
+                ));
             }
             if files_settings {
                 problems.push(format!(

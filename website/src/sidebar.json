@@ -16,6 +16,7 @@
 			},
 			"docs/sources/postgres",
 			"docs/sources/postgres-cdc",
+			"docs/sources/snowflake",
 			"docs/sources/files",
 			"docs/sources/python",
 			"docs/sources/logged-state"
@@ -30,6 +31,7 @@
 			},
 			"docs/targets/snowflake",
 			"docs/targets/databricks",
+			"docs/targets/bigquery",
 			"docs/targets/duckdb",
 			"docs/targets/files"
 		]

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.25.0](https://github.com/sqlstack-io/sqlload/compare/v0.24.0...v0.25.0) (2026-11-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **loader:** `append` with a cursor reads after the destination's maximum (`>`) instead of from it (`>=`), so re-runs no longer append the rows at the maximum again. Set `append_cursor_inclusive = true` to keep the old read. `append` with a `date` cursor is now refused; use `delete_insert` or `merge`. Python table functions see `ctx.cursor_inclusive = False` on re-runs.
+
+### Features
+
+* **postgres:** TLS for Postgres sources and replication ([#105](https://github.com/sqlstack-io/sqlload/issues/105)) ([d4d7b16](https://github.com/sqlstack-io/sqlload/commit/d4d7b16100c3ee8322b22b5b15f17231141f3ce3))
+
+
+### Bug Fixes
+
+* **loader:** append reads after the cursor's maximum by default ([#106](https://github.com/sqlstack-io/sqlload/issues/106)) ([00e8632](https://github.com/sqlstack-io/sqlload/commit/00e8632f49a148c96f25618d4547bfc30774c446))
+* **python:** name a files-target table by its folder when refusing to empty it ([#102](https://github.com/sqlstack-io/sqlload/issues/102)) ([ce22a00](https://github.com/sqlstack-io/sqlload/commit/ce22a007b726824333f15ace5ddce02c49cd725e))
+
+
+### Documentation
+
+* document the BigQuery target and 0.24.0 ([#103](https://github.com/sqlstack-io/sqlload/issues/103)) ([91e911a](https://github.com/sqlstack-io/sqlload/commit/91e911aedd5a09ce1905f55cf23ae3dffe9abb4b))
+
 ## [0.24.0](https://github.com/sqlstack-io/sqlload/compare/v0.23.0...v0.24.0) (2026-11-08)
 
 

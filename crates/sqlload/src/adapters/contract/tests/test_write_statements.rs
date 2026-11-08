@@ -11,6 +11,8 @@ const SF_SWAP_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGI
 
 const BQ_INSERT: &str = "INSERT INTO `raw`.`app__accounts` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, PARSE_JSON(`profile`), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`";
 
+const CH_DELTA_INSERT: &str = "INSERT INTO `raw`.`app__accounts__sqlload_staging_load1_swap` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, CAST(`profile` AS Nullable(String)), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`";
+
 const DB_INSERT: &str = "INSERT INTO `raw`.`app__accounts` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, parse_json(`profile`), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`";
 
 #[test]
@@ -177,6 +179,49 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             mode: WriteMode::Replace,
             expected_statements: &[
                 "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, PARSE_JSON(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE THEN DELETE",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert on ClickHouse converts the staged rows into a delta in the table's shape, then publishes its partitions, replacing the window's rows",
+            warehouse: Warehouse::ClickHouse,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "updated_at".to_owned(),
+                from: Some("2026-11-04 09:00:00.000000+00".to_owned()),
+                to: Some("2026-11-05 09:00:00.000000+00".to_owned()),
+                values: Vec::new(),
+            },
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
+                "CREATE TABLE `raw`.`app__accounts__sqlload_staging_load1_swap` AS `raw`.`app__accounts`",
+                CH_DELTA_INSERT,
+                "-- sqlload publish {\"Partitions\":{\"target\":\"`raw`.`app__accounts`\",\"delta\":\"`raw`.`app__accounts__sqlload_staging_load1_swap`\",\"copy\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy`\",\"aside\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy_aside`\",\"displaced\":\"`updated_at` >= parseDateTime64BestEffort('2026-11-04 09:00:00.000000+00', 6, 'UTC') AND `updated_at` < parseDateTime64BestEffort('2026-11-05 09:00:00.000000+00', 6, 'UTC')\"}}",
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "merge on ClickHouse replaces the table's rows whose key the delta holds, partition by partition",
+            warehouse: Warehouse::ClickHouse,
+            mode: WriteMode::Merge {
+                unique_key: vec!["id".to_owned()],
+            },
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
+                "CREATE TABLE `raw`.`app__accounts__sqlload_staging_load1_swap` AS `raw`.`app__accounts`",
+                CH_DELTA_INSERT,
+                "-- sqlload publish {\"Partitions\":{\"target\":\"`raw`.`app__accounts`\",\"delta\":\"`raw`.`app__accounts__sqlload_staging_load1_swap`\",\"copy\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy`\",\"aside\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy_aside`\",\"displaced\":\"(`id`) IN (SELECT `id` FROM `raw`.`app__accounts__sqlload_staging_load1_swap`)\"}}",
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "replace from staged rows on ClickHouse exchanges the delta in whole",
+            warehouse: Warehouse::ClickHouse,
+            mode: WriteMode::Replace,
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
+                "CREATE TABLE `raw`.`app__accounts__sqlload_staging_load1_swap` AS `raw`.`app__accounts`",
+                CH_DELTA_INSERT,
+                "-- sqlload publish {\"Exchange\":{\"target\":\"`raw`.`app__accounts`\",\"build\":\"`raw`.`app__accounts__sqlload_staging_load1_swap`\",\"aside\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_aside`\"}}",
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
             ],
         },
     ];

@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use serde::Deserialize;
+
 use crate::column_types::models::ColumnType;
 
 /// One column of a source table, as the catalog describes it.
@@ -11,6 +15,8 @@ pub struct SourceColumn {
     /// The portable type it maps to, or why it has none (then a type must be pinned).
     pub column_type: Result<ColumnType, String>,
     pub nullable: bool,
+    /// The name as the source's own SQL spells it, when it differs from `name` (a Snowflake upper-case name loads in lower case).
+    pub source_spelling: Option<String>,
 }
 
 /// One source table or view, as the catalog describes it.
@@ -102,6 +108,60 @@ pub struct PostgresAddress<'a> {
     pub user: &'a str,
     pub password: Option<&'a str>,
     pub database: &'a str,
+    pub tls: PostgresTls<'a>,
+}
+
+/// How a connection uses TLS, under libpq's names.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PostgresTls<'a> {
+    pub mode: SslMode,
+    /// The CA certificates (PEM) to trust instead of the public roots built into SQLLoad; with `require` it also turns on chain checks, as in libpq.
+    pub root_cert: Option<&'a Path>,
+    /// A client certificate chain (PEM), with `key`.
+    pub cert: Option<&'a Path>,
+    /// The client certificate's private key (PEM).
+    pub key: Option<&'a Path>,
+}
+
+/// libpq's `sslmode`: whether to encrypt and what to check of the server's certificate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SslMode {
+    /// Plain text only.
+    Disable,
+    /// TLS when the server offers it, plain text otherwise; the certificate is not checked.
+    #[default]
+    Prefer,
+    /// TLS or no connection; the certificate is not checked (unless a root certificate is set).
+    Require,
+    /// TLS, with a certificate signed by a trusted CA.
+    VerifyCa,
+    /// TLS, with a certificate signed by a trusted CA for the host connected to.
+    VerifyFull,
+}
+
+/// What protects a connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encryption {
+    /// Plain text.
+    None,
+    /// TLS, without checking the server's certificate.
+    Unchecked,
+    /// TLS, with a certificate signed by a trusted CA.
+    CaChecked,
+    /// TLS, with a certificate signed by a trusted CA for the host connected to.
+    HostChecked,
+}
+
+impl std::fmt::Display for Encryption {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::None => "not encrypted",
+            Self::Unchecked => "TLS, certificate not checked",
+            Self::CaChecked => "TLS, CA checked",
+            Self::HostChecked => "TLS, CA and host name checked",
+        })
+    }
 }
 
 /// What to read from one table.

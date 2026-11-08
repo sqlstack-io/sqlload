@@ -41,7 +41,9 @@ pub(crate) fn resolve_tables(
         };
         match resolve_table(&context, table, &overrides) {
             Ok(Ok(mut spec)) => {
-                spec.approved = !source.reads_postgres() || source.include.contains(&qualified);
+                let query = overrides.sql.is_some();
+                spec.approved =
+                    !source.discovers_tables() || query || source.include.contains(&qualified);
                 resolved.specs.push(spec);
             }
             Ok(Err(reason)) => resolved.skipped.push(SkippedTable {

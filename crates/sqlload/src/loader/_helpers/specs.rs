@@ -6,14 +6,19 @@ use crate::cdc::constants::{
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
-use crate::loader::models::{CdcSpec, CursorSpec, SettingOrigin, TableSpec};
+use crate::loader::models::{
+    CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
+};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
-    CdcDeletes, CdcMode, MaskMethod, SourceConfig, SourceKind, StateMode, TableOverride,
-    TableSettings, WriteStrategy,
+    CdcDeletes, CdcMode, LookbackFrom, MaskMethod, SourceConfig, SourceKind, StateMode,
+    TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
+use crate::publish_checks::main::check_problems::check_problems;
+use crate::routing::models::Store;
 use crate::similar_names::main::nearest_name::nearest_name;
+use crate::snowflake_source::constants::USER_STAGE_FOLDER;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
 use std::collections::BTreeMap;
 
@@ -151,6 +156,12 @@ pub(crate) fn build_spec(
         ),
     };
     problems.extend(column_reference_problems(table, overrides));
+    let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
+    problems.extend(
+        checks
+            .iter()
+            .flat_map(|checks| check_problems(checks, (strategy, context.target.path.is_some()))),
+    );
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
@@ -185,6 +196,8 @@ pub(crate) fn build_spec(
         );
     }
     problems.extend(flatten_problems(context, overrides));
+    let layout = table_layout(settings, defaults);
+    problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -239,6 +252,7 @@ pub(crate) fn build_spec(
             .is_some_and(|(value, _)| value == StateMode::Logged),
         approved: false,
         new_tables: context.source.new_tables,
+        checks,
         files: None,
         destination_path: context.target.path.as_ref().map(|target_path| {
             overrides
@@ -249,7 +263,57 @@ pub(crate) fn build_spec(
         }),
         python: None,
         cdc,
+        warehouse_source: warehouse_source(context.source, overrides),
+        layout,
     })
+}
+
+/// How a `snowflake` source's table is read: unloaded to the source's `stage`, or to the user stage when it sets none.
+fn warehouse_source(source: &SourceConfig, overrides: &TableOverride) -> Option<WarehouseSource> {
+    (source.kind == SourceKind::Snowflake).then(|| {
+        let (store, stage) = match &source.stage {
+            Some(UnloadStage {
+                url: Some(url),
+                storage_integration: Some(integration),
+                ..
+            }) => (
+                Store::ObjectStore(url.clone()),
+                format!(
+                    "external: Snowflake writes to {url} through storage integration {integration}, and SQLLoad reads the files there and removes them after the read"
+                ),
+            ),
+            Some(UnloadStage {
+                name: Some(name), ..
+            }) => (
+                Store::ObjectStore(format!("@{name}")),
+                format!(
+                    "stage {name}: Snowflake writes the files there, and SQLLoad reads them and removes them after the read"
+                ),
+            ),
+            _ => (
+                Store::InternalStage(USER_STAGE_FOLDER.to_owned()),
+                "internal: no stage is set, so Snowflake writes to your user stage, and SQLLoad fetches the files in parallel, decrypts them and removes them after the read".to_owned(),
+            ),
+        };
+        WarehouseSource {
+            system: "snowflake",
+            sql: overrides.sql.clone(),
+            route: WarehouseRoute::Unload { store, stage },
+        }
+    })
+}
+
+/// The table's layout, each field layered table over source; `table_settings` merged, the table's value winning per setting.
+fn table_layout(table: &TableSettings, source: &TableSettings) -> TableLayout {
+    let mut table_settings = source.table_settings.clone().unwrap_or_default();
+    table_settings.extend(table.table_settings.clone().unwrap_or_default());
+    TableLayout {
+        engine: layered(&table.engine, &source.engine).map(|(value, _)| value),
+        order_by: layered(&table.order_by, &source.order_by).map(|(value, _)| value),
+        partition_by: layered(&table.partition_by, &source.partition_by).map(|(value, _)| value),
+        primary_key: layered(&table.primary_key, &source.primary_key).map(|(value, _)| value),
+        table_settings,
+    }
 }
 
 /// A `postgres_cdc` source's stream settings, with the default slot and publication names.
@@ -306,7 +370,7 @@ pub(crate) fn missing_description(
     let qualified = table.qualified_name();
     let entry = source.tables.get(&qualified);
     let written =
-        !source.reads_postgres() || entry.is_some() || source.include.contains(&qualified);
+        !source.discovers_tables() || entry.is_some() || source.include.contains(&qualified);
     let described = [
         entry.and_then(|entry| entry.description.as_deref()),
         source
@@ -324,7 +388,7 @@ pub(crate) fn missing_description(
         SourceKind::Files => {
             format!("no description; add description = \"...\" under [sources.{source_name}]")
         }
-        SourceKind::Postgres | SourceKind::PostgresCdc => format!(
+        SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
         ),
     };
@@ -483,11 +547,14 @@ pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<Cu
         column,
         start: layered(&table.cursor_start, &source.cursor_start).map(|(value, _)| value),
         lookback: layered(&table.lookback, &source.lookback).map(|(value, _)| value),
+        lookahead: layered(&table.lookahead, &source.lookahead).map(|(value, _)| value),
+        from_now: layered(&table.lookback_from, &source.lookback_from)
+            .is_some_and(|(value, _)| value == LookbackFrom::Now),
         inclusive: layered(
             &table.append_cursor_inclusive,
             &source.append_cursor_inclusive,
         )
-        .is_none_or(|(value, _)| value),
+        .is_some_and(|(value, _)| value),
     })
 }
 
@@ -522,6 +589,12 @@ pub(crate) fn strategy_problems(
             "write_strategy = \"delete_insert\" replaces a cursor range, so it needs a cursor_column".to_owned(),
         ),
         _ => {}
+    }
+    if let Some(cursor) = cursor.filter(|cursor| cursor.from_now && cursor.lookback.is_none()) {
+        problems.push(format!(
+            "lookback_from = \"now\" counts lookback back from now, so {} needs a lookback",
+            cursor.column
+        ));
     }
     problems
 }

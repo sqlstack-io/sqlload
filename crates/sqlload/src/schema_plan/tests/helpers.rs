@@ -45,3 +45,11 @@ pub(crate) fn snowflake_rules() -> SchemaRules {
         auto_widen: false,
     }
 }
+
+/// Postgres, a warehouse that keeps tables SQLLoad did not create as they are, with every default policy.
+pub(crate) fn postgres_rules() -> SchemaRules {
+    SchemaRules {
+        warehouse: Warehouse::Postgres,
+        ..snowflake_rules()
+    }
+}

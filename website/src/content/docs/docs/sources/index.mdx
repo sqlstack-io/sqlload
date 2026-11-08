@@ -1,14 +1,15 @@
 ---
 title: "Sources"
-description: "Postgres tables, Postgres changes, files in S3 or a folder, and Python sources: the kinds of source and the settings they share."
+description: "Postgres tables, Postgres changes, Snowflake tables and queries, files in S3 or a folder, and Python sources: the kinds of source and the settings they share."
 ---
 
-A source is where data comes from. SQLLoad has four kinds:
+A source is where data comes from. SQLLoad has five kinds:
 
 | `kind` | Reads | Tables | Declared in |
 |--------|-------|--------|-------------|
 | [`postgres`](/docs/sources/postgres/) | Tables of a Postgres database, with binary `COPY` | One per matching source table | `sqlload.toml` |
 | [`postgres_cdc`](/docs/sources/postgres-cdc/) | A Postgres database's inserts, updates and deletes, from a logical replication slot, after a first snapshot | One per matching source table | `sqlload.toml` |
+| [`snowflake`](/docs/sources/snowflake/) | From 0.26.0 (not released yet). Tables and views of a Snowflake database, and query results, unloaded as Parquet | One per matching table, and one per query | `sqlload.toml` |
 | [`files`](/docs/sources/files/) | Parquet, CSV, JSON or NDJSON files in S3 or a local folder | One per source | `sqlload.toml` |
 | [Python](/docs/sources/python/) | Whatever a Python function yields: dicts, Arrow data, JSON bytes, HTTP jobs | One per decorated function | Python, under `python_paths` |
 
@@ -22,6 +23,8 @@ Each kind has its own page:
 - [Postgres](/docs/sources/postgres/): choosing tables and columns, masking, and how tables are read.
 - [Postgres changes](/docs/sources/postgres-cdc/): streaming changes from a replication slot into
   DuckDB, Snowflake, Databricks or Parquet files, on a schedule or continuously, and what to watch on the server.
+- [Snowflake](/docs/sources/snowflake/), from 0.26.0 (not released yet): choosing tables, query tables, read windows around the
+  time of the run, and where unloaded files go.
 - [Files](/docs/sources/files/): formats, partitions, which files load, and files the destination
   reads itself.
 - [Python](/docs/sources/python/): any API, SaaS or custom source as a table, including REST APIs

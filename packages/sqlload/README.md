@@ -194,6 +194,34 @@ timestamp_ntz → timestamp_tz instead, shown in `plan`, and never to float, tex
 that rebuilds the table still needs `--allow-type-change-rebuild`. A type pinned in `columns`
 widens the table as before.
 
+## Checks before publish
+
+A table's `checks` run on the rows a load has staged, before they reach the table:
+
+```toml
+[sources.app.tables."public.customers"]
+checks = { unique = ["customer_id"], not_null = ["customer_id", "email"], min_rows = 1, max_row_drop = "20%" }
+```
+
+- `unique`: no two rows share these columns' values. Rows with a NULL in them are skipped, as in
+  SQL; add the columns to `not_null` to forbid NULLs too.
+- `not_null`: none of these columns holds a NULL.
+- `min_rows`: at least this many rows are loaded.
+- `max_row_drop`: the table loses at most this share of its rows, compared with what it holds now.
+
+A failed check fails the table with the counts and up to five repeated keys, and the commit
+publishes none of its rows: the table keeps what it held and the staging table is dropped. A check
+listed in `warn = ["max_row_drop"]` only logs its failure. Each commit is checked by itself, so a
+load that commits batch by batch (`append`, `merge`, `delete_insert`) checks each batch, and a
+failing batch leaves the batches committed before it in place; `min_rows` and `max_row_drop`
+describe the whole table, so only `replace`, which commits once, takes them.
+
+Columns the checks name must be loaded columns, matched ignoring case. A source can set `checks`
+for all its tables; a table's own `checks` replaces the source's whole block, as other settings
+do. Python tables take the same setting. Tables with checks always stage their rows, so a files
+source's direct load goes through SQLLoad instead, which `plan` warns about. Files targets and
+`postgres_cdc` sources take no checks.
+
 ## New tables
 
 With `new_tables = "skip"`, a table that appears after the source's first load loads only once
@@ -203,6 +231,48 @@ With `new_tables = "skip"`, a table that appears after the source's first load l
 source's tables exists in the destination, whichever tables are selected; tables present then
 count as approved. A table that did not load then (blocked by a problem, say) counts as new
 afterwards, so name it in `include`.
+
+## Postgres TLS
+
+A Postgres connection takes libpq's TLS settings, for `kind = "postgres"` and `"postgres_cdc"`
+sources (replication sessions included) and Postgres targets alike:
+
+```toml
+[connections.app_pg]
+kind = "postgres"
+host = "db.example.com"
+user = "loader"
+password = "${ENV:PGPASSWORD}"
+database = "app"
+sslmode = "verify-full"                # disable | prefer (default) | require | verify-ca | verify-full
+sslrootcert = "certs/db-ca.pem"        # CA certificates (PEM) to trust
+# sslcert = "certs/loader.pem"         # a client certificate, with sslkey
+# sslkey = "certs/loader.key"
+```
+
+- `prefer` uses TLS when the server offers it and plain text when it does not; `plan` warns when
+  that happens over the network (not for `localhost`, a loopback address or a Unix socket).
+  `require` refuses plain text but, like `prefer`, does not check the server's certificate unless
+  `sslrootcert` is set, when it checks the chain as `verify-ca` does. `verify-ca` checks that a
+  trusted CA signed the certificate; `verify-full` also checks that it names the host connected to.
+- Unlike libpq, `verify-ca` and `verify-full` without `sslrootcert` trust the public CA roots
+  built into SQLLoad, not the operating system's store or `~/.postgresql/root.crt`. Hosts whose
+  certificates come from a private CA, such as Amazon RDS and Aurora or a company CA, need
+  `sslrootcert` (for RDS, the region's bundle from AWS).
+- Certificate checks follow the web's rules, which are stricter than libpq's in two ways.
+  `verify-full` matches the host only against the certificate's subject alternative names,
+  never its common name. A self-signed server certificate marked as a CA (as
+  `openssl req -x509` makes by default) cannot be its own `sslrootcert`: sign the server
+  certificate with a separate CA and give that CA instead.
+- As in libpq, `prefer` connects in plain text when the server refuses TLS or the TLS handshake
+  fails, SCRAM authentication over TLS binds to the server's certificate, and a Unix socket host
+  never uses TLS. Binding stops an attacker who only relays the password exchange, not one who
+  changes how the client signs in; only `verify-full` (or `verify-ca` on a private network) keeps
+  a man in the middle out.
+- Paths are relative to the directory SQLLoad runs in. A copy URI takes the same settings as a
+  query: `postgresql://loader@db.example.com/app?sslmode=verify-full&sslrootcert=certs%2Fdb-ca.pem#public.accounts`.
+- `sqlload debug` shows what protects each Postgres source and target: `not encrypted`,
+  `TLS, certificate not checked`, `TLS, CA checked` or `TLS, CA and host name checked`.
 
 ## Postgres change data capture
 
@@ -502,6 +572,134 @@ next load drops what a failed run left after a day.
 `replace` keeps the table's description but not its partitioning, clustering or labels. Nested
 values (arrays and records) do not load yet. Postgres change data capture into BigQuery is not
 available.
+
+### How rows reach Postgres
+
+A Postgres target uses a `kind = "postgres"` connection, the same as a Postgres source, so the
+[TLS settings](#postgres-tls) apply to it too. The target's `database` overrides the connection's:
+
+```toml
+[connections.app_db]
+kind = "postgres"
+host = "db.example.com"
+user = "loader"
+password = "${ENV:PGPASSWORD}"
+database = "app"
+sslmode = "verify-full"
+
+[targets.app]
+connection = "app_db"
+loader_schema = "reporting"
+```
+
+Each table loads on a session of its own. Batches go by binary `COPY` into a temporary staging
+table on that session. The role needs `TEMPORARY` on the database (every role has it by default),
+the rights to write the tables it loads, and `CREATE` on the schema for tables SQLLoad creates.
+SQLLoad creates a missing schema, which needs `CREATE` on the database; an existing schema needs
+nothing more. Each commit then applies the write strategy in one transaction: `append` inserts, `delete_insert` deletes the window and inserts, and `merge` is
+`INSERT ... ON CONFLICT (unique_key) DO UPDATE`. A failed commit rolls back and leaves the table as
+it was. A run that dies takes its temporary table with it.
+
+`replace` empties the table with `DELETE` and refills it from the staging table in one
+transaction. The table is never dropped or recreated, so it keeps its grants, indexes, defaults,
+triggers and the views that depend on it. Readers see the old rows until the commit. `--reload` is
+refused on Postgres targets.
+
+`replace` and `delete_insert` delete rows, so `plan` checks the foreign keys that reference the
+table. A foreign key with `ON DELETE CASCADE`, `SET NULL` or `SET DEFAULT` would change the
+referencing table, so `plan` fails and names it. Any other foreign key checked immediately makes
+the commit fail while referencing rows point at deleted ones, so `plan` warns about it. A table's
+foreign key to itself does not stop `replace`, which deletes every row.
+
+A table SQLLoad did not create (it has no `_sqlload_load_id` column) is loaded as it is. SQLLoad
+never alters it:
+
+- It loads only the source columns the table has. `plan` warns about the others, or fails with
+  `on_schema_change = "fail"`. The table's other columns get their defaults.
+- The `_sqlload_*` columns are not added.
+- A source column loads into the table's column of exactly the name Postgres stores; one that
+  matches only when case is ignored fails `plan`.
+- Values convert to the table's column types as `INSERT` converts them. A narrower column that
+  refuses what does not fit is allowed, such as a smaller integer, a shorter `varchar(n)` or a
+  `numeric` with at least the source's digits after the point: a value too large fails the commit.
+  As in any Postgres `INSERT`, text over `n` characters only by trailing spaces loses those spaces,
+  and a `character(n)` column pads with spaces.
+  A column that would round values, such as `real`, `timestamp(3)` or a `numeric` with fewer
+  digits after the point, or one of another kind, fails `plan`.
+
+`merge` needs a valid, non-deferrable unique index or constraint on exactly the `unique_key`
+columns. SQLLoad creates
+one on tables it creates; on other tables `plan` fails until one exists. A key repeated within one
+commit fails that commit.
+
+Types map as `plan` shows: `timestamp_tz` as `timestamptz`, `decimal(p,s)` as `numeric(p,s)`,
+`json` (and Postgres arrays, which arrive as JSON) as `jsonb`, `binary` as `bytea`. `jsonb` keeps
+neither key order nor duplicate keys. Postgres change data capture into a Postgres target is not
+available. `debug` shows the target's user, database, server version and what protects the
+connection.
+
+### How rows reach ClickHouse (preview)
+
+A ClickHouse target loads into one ClickHouse server, version 25.3 or later, over its HTTP
+interface:
+
+```toml
+[connections.serving]
+kind = "clickhouse"
+host = "clickhouse.internal"
+password = "${ENV:CLICKHOUSE_PASSWORD}"
+# port = 8123                 # 8443 with secure = true
+# user = "default"
+# secure = true               # HTTPS
+
+[targets.serving]
+connection = "serving"
+loader_schema = "marts"       # a ClickHouse database
+```
+
+A schema is a ClickHouse database, so a ClickHouse target takes no `database`. Tables are created
+with the layout their settings give, using SQLBuild's ClickHouse names, per source or per table:
+
+```toml
+[sources.warehouse.tables."marts.orders"]
+partition_by = "toYYYYMM(order_date)"
+order_by = ["customer_id", "order_date"]   # default: the unique_key, else unsorted
+# engine = "ReplacingMergeTree(_sqlload_loaded_at)"   # default: MergeTree
+# primary_key = ["customer_id"]
+# table_settings = { index_granularity = 4096 }
+```
+
+Every loaded column is `Nullable`, so a table with a key gets `allow_nullable_key = 1` unless
+`table_settings` sets it. Only engines of the `MergeTree` family on a single server are taken.
+`plan` shows each column's type: `timestamp_tz` is `DateTime64(6, 'UTC')`, `timestamp_ntz`
+`DateTime64(6)`, `date` `Date32` (1900 to 2299; a date outside them fails the load), decimals keep
+their precision and scale, and JSON and times are text. A Python table can pin `native("JSON")` or
+`native("LowCardinality(String)")` on a text column to use those types. An existing table's narrower
+types (`Int32`, `UInt16`, `Float32`, `Date`, `DateTime`, `DateTime64(3)`) would wrap or cut wider
+values without an error, so `plan` reports them as incompatible rather than load into them.
+
+Layout settings apply when SQLLoad creates a table, and `--reload` keeps the table's layout: to lay
+an existing table out again, drop it and load. ClickHouse cannot change the type of a column in the
+sorting or partition key, so a key column whose source type widens fails the load.
+
+Rows go as Arrow over HTTP into a staging table (a build table for `replace`) and reach the table
+only when the load publishes them. ClickHouse has no transactions, so each publish is one swap,
+atomic in an `Atomic` database (ClickHouse's default). `replace` and `--reload` swap the build
+table in with `EXCHANGE TABLES`. In a database that cannot exchange tables (an `Ordinary` one) they
+swap with one `RENAME TABLE`, which ClickHouse does not make atomic: readers can briefly find no
+table, and a server failing mid-rename can leave the old table under the build table's name.
+`append` attaches the new rows' partitions. `merge` and `delete_insert` rewrite whole partitions: one partition is rebuilt beside
+the table and swapped in with `REPLACE PARTITION`, and several are rebuilt in a copy that
+hard-links the table's other parts, then exchanged in at once. In an `Atomic` database, a load
+killed at any point leaves the table as it was or fully published, and the next run converges. `merge` matches rows on `unique_key` exactly, so readers
+need no `FINAL`. It replaces whole rows, so a column the source no longer has is `NULL` on the rows
+it updates. Rows arrive by swapping parts, never by `INSERT`, so materialized views on a loaded
+table see none of them: build them from the table instead.
+
+A rewrite costs as much as the partitions it touches, and an unpartitioned table is one partition:
+partition large tables by the column new rows arrive on. Load each table from one `sqlload` process
+at a time. Clusters, replicated tables and Postgres change data capture into ClickHouse are not
+supported yet.
 
 ### How files reach DuckDB
 

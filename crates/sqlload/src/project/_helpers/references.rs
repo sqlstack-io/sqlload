@@ -1,13 +1,18 @@
+use crate::files_source::main::constant_columns::constant_columns;
+use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::SourceFormat;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, TABLE_PLACEHOLDER,
+    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, STAGE_NAME_PARTS,
+    TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
     CdcDeletes, CdcMode, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind,
 };
+use crate::store_paths::main::resolve_location::resolve_location;
+use crate::store_paths::models::{Location, StoreKind};
 
 /// Problems with names one section uses to refer to another.
 pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
@@ -23,7 +28,11 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
         problems.extend(target_problems(project, name, target));
     }
     for (name, connection) in &project.connections {
-        problems.extend(stage_problems(name, connection));
+        let targeted = project
+            .targets
+            .values()
+            .any(|target| target.connection == *name);
+        problems.extend(stage_problems(name, connection, targeted));
     }
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));
@@ -36,6 +45,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     let place = source_place(project, name);
     let expected = match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => "postgres",
+        SourceKind::Snowflake => "snowflake",
         SourceKind::Files => "s3 or filesystem",
         SourceKind::Python => "any",
     };
@@ -94,6 +104,7 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::Postgres => "postgres",
         SourceKind::PostgresCdc => "postgres_cdc",
         SourceKind::Files => "files",
+        SourceKind::Snowflake => "snowflake",
         SourceKind::Python => "python",
     }
 }
@@ -146,10 +157,29 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if source.kind == SourceKind::PostgresCdc {
         problems.extend(cdc_problems(place, source));
     }
+    let queries = source.tables.values().any(|table| table.sql.is_some());
+    if source.kind != SourceKind::Snowflake
+        && (queries || source.warehouse.is_some() || source.stage.is_some())
+    {
+        problems.push(format!(
+            "{place} sql, warehouse and stage are for kind = \"snowflake\""
+        ));
+    }
+    if source.kind == SourceKind::Snowflake {
+        problems.extend(unload_stage_problems(place, source));
+    }
     match source.kind {
-        SourceKind::Postgres | SourceKind::PostgresCdc => {
-            if source.include.is_empty() {
-                problems.push(format!("{place} include is empty, so it selects no tables"));
+        SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake => {
+            if source.include.is_empty() && !queries {
+                let tables = match source.kind {
+                    SourceKind::Snowflake => {
+                        "; list tables in include, or give a table a sql query"
+                    }
+                    _ => "",
+                };
+                problems.push(format!(
+                    "{place} include is empty, so it selects no tables{tables}"
+                ));
             }
             if !template.contains(TABLE_PLACEHOLDER) {
                 problems.push(format!(
@@ -158,10 +188,13 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
             if source.path.is_some()
                 || !source.partition_columns.is_empty()
+                || source.path_columns.is_some()
+                || source.unmatched_paths.is_some()
+                || !source.constant_columns.is_empty()
                 || source.copy_to_internal_stage
             {
                 problems.push(format!(
-                    "{place} path, partition_columns and copy_to_internal_stage are for kind = \"files\""
+                    "{place} path, partition_columns, path_columns, unmatched_paths, constant_columns and copy_to_internal_stage are for kind = \"files\""
                 ));
             }
             if source.format != SourceFormat::Parquet
@@ -181,6 +214,7 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
                 problems.push(format!("{place} include and exclude are for database sources; a files source is one table"));
             }
             problems.extend(encoding_problems(place, source));
+            problems.extend(path_value_problems(place, source));
         }
         SourceKind::Python => {
             if source.tables.len() > 1 && !template.contains(TABLE_PLACEHOLDER) {
@@ -188,6 +222,84 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
                     "{place} table_name {template:?} must contain {TABLE_PLACEHOLDER}, or every table gets the same name"
                 ));
             }
+        }
+    }
+    problems
+}
+
+/// Problems with a `snowflake` source's `stage`: an S3 `url` with its `storage_integration`, or an existing stage's `name`, not both.
+fn unload_stage_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let Some(stage) = &source.stage else {
+        return Vec::new();
+    };
+    let place = format!("{place} stage");
+    let mut problems: Vec<String> = Vec::new();
+    match (&stage.url, &stage.storage_integration, &stage.name) {
+        (Some(url), Some(_), None) => match resolve_location(None, url) {
+            Ok(Location {
+                store: StoreKind::S3 { .. },
+                ..
+            }) => {}
+            Ok(_) => problems.push(format!("{place} url {url:?} must be an s3:// URL")),
+            Err(error) => problems.push(format!("{place} url {url:?}: {error}")),
+        },
+        (Some(_), None, None) => problems.push(format!(
+            "{place} url needs the storage_integration Snowflake writes to it with"
+        )),
+        (None, None, Some(name))
+            if name.split('.').filter(|part| !part.is_empty()).count() != STAGE_NAME_PARTS =>
+        {
+            problems.push(format!("{place} name {name:?} must be DATABASE.SCHEMA.STAGE"));
+        }
+        (None, None, Some(_)) => {}
+        _ => problems.push(format!(
+            "{place} takes either url and storage_integration (an S3 folder) or name (an existing stage)"
+        )),
+    }
+    problems
+}
+
+/// A files source's `path_columns` and `constant_columns` that do not parse, and a column any two of them and `partition_columns` both fill.
+fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let mut names: Vec<(String, &str)> = source
+        .partition_columns
+        .keys()
+        .map(|name| (name.clone(), "partition_columns"))
+        .collect();
+    match source
+        .path_columns
+        .as_deref()
+        .map(|text| path_template(text, &[]))
+    {
+        None if source.unmatched_paths.is_some() => problems.push(format!(
+            "{place} unmatched_paths is for path_columns, which is not set"
+        )),
+        None => {}
+        Some(Ok(template)) => names.extend(
+            template
+                .captures
+                .into_iter()
+                .map(|(name, _)| (name, "path_columns")),
+        ),
+        Some(Err(problem)) => problems.push(format!("{place} {problem}")),
+    }
+    match constant_columns(&source.constant_columns, &[]) {
+        Ok(constants) => names.extend(
+            constants
+                .into_iter()
+                .map(|(name, _, _)| (name, "constant_columns")),
+        ),
+        Err(problem) => problems.push(format!("{place} {problem}")),
+    }
+    for (index, (name, setting)) in names.iter().enumerate() {
+        if let Some((_, first)) = names[..index]
+            .iter()
+            .find(|(seen, _)| seen.eq_ignore_ascii_case(name))
+        {
+            problems.push(format!(
+                "{place} column {name} is in both {first} and {setting}; give it one source"
+            ));
         }
     }
     problems
@@ -233,9 +345,10 @@ fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             || settings.cursor_column.is_some()
             || settings.batch_size.is_some()
             || settings.state.is_some()
+            || settings.checks.is_some()
         {
             problems.push(format!(
-                "{place} kind = \"postgres_cdc\" writes every captured change, so it takes no write_strategy, cursor_column, batch_size or state; choose cdc_mode = \"merge\" or \"changelog\""
+                "{place} kind = \"postgres_cdc\" writes every captured change, so it takes no write_strategy, cursor_column, batch_size, state or checks; choose cdc_mode = \"merge\" or \"changelog\""
             ));
             break;
         }

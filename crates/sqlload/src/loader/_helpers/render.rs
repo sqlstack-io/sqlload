@@ -11,7 +11,7 @@ use crate::loader::_helpers::table_plan::is_direct;
 use crate::loader::constants::{LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN};
 use crate::loader::models::{
     CommitRule, FilesOutput, PlanDetail, PlanItem, PlanView, ProjectPlan, PythonTable, SourceEnd,
-    TablePlan, WholeReason,
+    TablePlan, WarehouseRoute, WarehouseSource, WholeReason,
 };
 use crate::project::models::BatchStep;
 use crate::project::models::FilesFormat;
@@ -196,11 +196,18 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .unwrap_or(0)
         + 3;
     let from_path = |name: &str| {
-        table.spec.files.as_ref().is_some_and(|files| {
-            files
-                .partition_types
-                .iter()
-                .any(|(partition, _)| partition == name)
+        table.spec.files.as_ref().map_or("", |files| {
+            match (
+                files.constants.iter().any(|constant| constant == name),
+                files
+                    .partition_types
+                    .iter()
+                    .any(|(partition, _)| partition == name),
+            ) {
+                (true, _) => "  (constant)",
+                (false, true) => "  (from the path)",
+                (false, false) => "",
+            }
         })
     };
     let mut details: Vec<PlanDetail> = data
@@ -211,8 +218,8 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
                 column.column_type == ColumnType::Uuid,
                 from_path(&column.name),
             ) {
-                (_, true) => "  (from the path)",
-                (true, false) if rendered.sql.starts_with("VARCHAR") => "  (stored as text)",
+                (_, path) if !path.is_empty() => path,
+                (true, _) if rendered.sql.starts_with("VARCHAR") => "  (stored as text)",
                 _ => "",
             };
             detail(
@@ -287,6 +294,21 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let source = match (&spec.files, &spec.python) {
         (Some(files), _) => format!("files  {}  {}", files.location, files.encoding),
         (None, Some(python)) => format!("python  {} ({})", python.module, spec.source_name),
+        (None, None) if spec.warehouse_source.is_some() => {
+            let read = spec
+                .warehouse_source
+                .as_ref()
+                .map_or("", |source| source.system);
+            let what = match spec
+                .warehouse_source
+                .as_ref()
+                .and_then(|source| source.sql.as_ref())
+            {
+                Some(_) => format!("query {}", spec.source_table.name),
+                None => spec.source_table.qualified_name(),
+            };
+            format!("{read}  {}  {what}", spec.source_name)
+        }
         (None, None) => match &spec.cdc {
             Some(cdc) => format!(
                 "postgres_cdc  {}  {}  slot {}",
@@ -319,6 +341,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                         source.encoding
                     ),
                 };
+                let unmatched = match source.table.unmatched {
+                    0 => String::new(),
+                    count => format!(", {count} skipped (paths that do not match path_columns)"),
+                };
                 let fresh = match table.mode {
                     WriteMode::Recreate | WriteMode::Replace => "to read",
                     _ => "new",
@@ -326,7 +352,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 detail(
                     "files",
                     format!(
-                        "{} {fresh} of {} listed{skipped}",
+                        "{} {fresh} of {} listed{skipped}{unmatched}",
                         thousands(read.files.len() as u64),
                         thousands(source.table.files.len() as u64)
                     ),
@@ -384,11 +410,19 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             .as_ref()
             .map(|route| detail("route", route_text(table, route))),
     );
+    if let Some(WarehouseSource {
+        route: WarehouseRoute::Unload { stage, .. },
+        ..
+    }) = &spec.warehouse_source
+    {
+        details.push(detail("stage", stage.as_str()));
+    }
     if let Some(reason) = table
         .route
         .as_ref()
         .filter(|_| {
-            table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref())
+            (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
+                || spec.warehouse_source.is_some()
         })
         .map(|route| route.reason.clone())
     {
@@ -499,6 +533,9 @@ fn batch_line(table: &TablePlan) -> String {
                 },
                 thousands(MAX_BATCH_FILES as u64)
             )
+        }
+        (_, true) if sql_adapter(spec.warehouse).keeps_tables() => {
+            "about 1 GB at a time into a staging table, then the table emptied and refilled in one transaction".to_owned()
         }
         (_, true) if sends_rows(table.stage.as_ref()) => {
             "about 1 GB at a time into a staging table, copied and swapped in once at the end"

@@ -235,7 +235,7 @@ A table function receives a `sl.Context`:
 |-----------|---------|
 | `ctx.cursor_value` | Where to read from: the destination's maximum minus `lookback`, `cursor_start`, or `--start-cursor`. `None` reads everything. |
 | `ctx.cursor_end` | Where the window ends, with `batch_size` or `--end-cursor`. |
-| `ctx.cursor_column`, `ctx.cursor_inclusive` | The cursor column, and whether the read includes `cursor_value`. |
+| `ctx.cursor_column`, `ctx.cursor_inclusive` | The cursor column, and whether the read includes `cursor_value`. `False` when `append` reads after the destination's maximum. |
 | `ctx.is_reload` | `True` under `--reload`. |
 | `ctx.state` | The logged position, with `state="logged"`. Assign it to move the position. |
 | `ctx.connection` | The source's connection settings, as a mapping. `ctx.connection("name")` gives another connection's, except connections a target writes to. |

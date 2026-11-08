@@ -20,6 +20,28 @@ pub(crate) struct SplitReadTestCase {
     pub(crate) expected_copies: i64,
 }
 
+pub(crate) struct TargetTlsTestCase {
+    pub(crate) description: &'static str,
+    /// TLS settings for the connection, `FILES` standing for the test certificates' folder.
+    pub(crate) settings: &'static str,
+    /// What `debug` says protects the target's connection.
+    pub(crate) expected_debug: &'static str,
+    /// The loaded table's codes.
+    pub(crate) expected_result: &'static str,
+}
+
+pub(crate) struct PostgresTargetTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run in the test database before this load.
+    pub(crate) source_change: &'static str,
+    pub(crate) options: sqlload::loader::models::PlanOptions,
+    /// `ok`, or a part of the plan's or the load's error.
+    pub(crate) expected_load: &'static str,
+    /// A query on the target and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 pub(crate) struct LoadRunTestCase {
     pub(crate) description: &'static str,
     /// SQL run in Postgres before this load.
@@ -37,6 +59,8 @@ pub(crate) struct ScenarioRun {
     pub(crate) destination_change: &'static str,
     /// Text the plan or load error must contain; empty when the run must succeed.
     pub(crate) expected_error: &'static str,
+    /// Text the rendered plan of a run that succeeds must contain, such as a warning.
+    pub(crate) expected_plan: &'static str,
     /// `--reload`.
     pub(crate) reload: bool,
     /// `--start-cursor-*` and `--end-cursor-*`.
@@ -215,6 +239,9 @@ pub(crate) struct WrittenRun<'a> {
     pub(crate) expected_plan: &'a str,
 }
 
+/// The source files a run adds, as `(relative key, bytes)`.
+pub(crate) type SourceFiles = fn() -> Result<Vec<(String, bytes::Bytes)>, String>;
+
 /// A files source loaded into a files target once per run.
 pub(crate) struct FilesToFilesTestCase {
     pub(crate) description: &'static str,
@@ -224,7 +251,7 @@ pub(crate) struct FilesToFilesTestCase {
     /// TOML added to `[sources.orders]`; `PREFIX` is replaced by the case's own folder.
     pub(crate) settings: &'static str,
     /// The source files added before each run.
-    pub(crate) runs: &'static [fn() -> Result<Vec<(String, bytes::Bytes)>, String>],
+    pub(crate) runs: &'static [SourceFiles],
     /// After each run, the rows the target holds and how many loads wrote them, as `rows|loads`.
     pub(crate) expected: &'static [&'static str],
 }
@@ -637,4 +664,89 @@ pub(crate) struct BigQueryOutcome {
     pub(crate) staged: Vec<String>,
     /// Storage Write API calls sent without a routing header.
     pub(crate) unrouted_calls: usize,
+}
+
+/// Which test server a TLS case connects to; its index in the case's list of ports.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TlsServer {
+    /// Refuses connections without TLS.
+    TlsOnly = 0,
+    /// Offers no TLS.
+    Plain = 1,
+}
+
+pub(crate) struct TlsDebugTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    pub(crate) host: &'static str,
+    pub(crate) user: &'static str,
+    /// TLS settings for the connection, `FILES` standing for the test certificates' folder.
+    pub(crate) settings: &'static str,
+    /// How `debug`'s source line starts: connected or failed.
+    pub(crate) expected_status: &'static str,
+    /// Text that line holds.
+    pub(crate) expected_text: &'static str,
+}
+
+/// Where a plan-warning case reaches its server; its index in the case's list of addresses.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PlanAddress {
+    /// The plain server on a loopback address.
+    Loopback = 0,
+    /// The plain server on its network address.
+    Network = 1,
+    /// The TLS-only server on its network address.
+    TlsNetwork = 2,
+}
+
+pub(crate) struct PlanWarningTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) address: PlanAddress,
+    pub(crate) settings: &'static str,
+    pub(crate) expected_warning: bool,
+}
+
+pub(crate) struct RelayTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    pub(crate) host: &'static str,
+    pub(crate) mode: sqlload::postgres_source::models::SslMode,
+    /// A file in the test certificates' folder.
+    pub(crate) root_cert: Option<&'static str>,
+    /// Whether it opens a relay rather than leaving the client to connect directly or failing.
+    pub(crate) expected_relayed: bool,
+    /// Text of its error; empty when it opens.
+    pub(crate) expected_error: &'static str,
+}
+
+pub(crate) struct RelaySessionTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    pub(crate) host: &'static str,
+    pub(crate) mode: sqlload::postgres_source::models::SslMode,
+    /// The socket folder's permissions.
+    pub(crate) expected_folder_mode: u32,
+    /// Whether the folder still exists, and a second session can connect, once the first is taken.
+    pub(crate) expected_left: (bool, bool),
+}
+
+pub(crate) struct CdcTlsTestCase {
+    pub(crate) description: &'static str,
+    /// TLS settings for the connection, `FILES` standing for the test certificates' folder.
+    pub(crate) settings: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
+/// A ClickHouse load stopped at every statement in turn, its source switching between two states.
+pub(crate) struct StoppedLoadTestCase {
+    pub(crate) description: &'static str,
+    /// The destination table, whose statements stop.
+    pub(crate) table: &'static str,
+    /// The options of every load after the first.
+    pub(crate) options: sqlload::loader::models::PlanOptions,
+    /// The table's state as one text.
+    pub(crate) query: &'static str,
+    /// Each source state: the SQL setting it up, and the query's text once it is loaded.
+    pub(crate) states: [(&'static str, &'static str); 2],
+    pub(crate) expected_minimum_stops: usize,
 }

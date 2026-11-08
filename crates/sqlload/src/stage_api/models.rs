@@ -3,7 +3,7 @@ use crate::auth::models::Authenticator;
 use crate::auth::models::Secret;
 use crate::config::models::DestinationConfig;
 use crate::http::errors::ApiError;
-use crate::stage_api::_helpers::stage_response::parse_stage_info;
+use crate::stage_api::_helpers::stage_response::{parse_stage_downloads, parse_stage_info};
 use crate::stage_api::constants::{QUERY_IN_PROGRESS, SESSION_EXPIRED};
 use crate::time_text::main::now_ms::now_ms;
 use serde_json::{Value, json};
@@ -78,6 +78,22 @@ impl ObjectTarget {
 pub struct StageInfo {
     pub target: ObjectTarget,
     pub credentials_expire_ms: Option<i64>,
+    pub encryption: EncryptionMaterial,
+}
+
+/// The files a `GET` names in an internal stage folder, and where they are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageDownloads {
+    pub target: ObjectTarget,
+    /// When the target's temporary credentials expire, in milliseconds since the epoch.
+    pub credentials_expire_ms: Option<i64>,
+    pub files: Vec<StageFile>,
+}
+
+/// One internal-stage file: its key under the target's bucket and the material its file key is wrapped with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageFile {
+    pub key: String,
     pub encryption: EncryptionMaterial,
 }
 
@@ -179,6 +195,14 @@ impl DriverSession {
         );
         let data = self.query(&statement).await?;
         parse_stage_info(&data).map_err(ApiError::Protocol)
+    }
+
+    /// The files under internal stage folder `stage_path` (such as `@~/folder/`), with their S3 location, temporary credentials and keys, from a `GET` that downloads nothing.
+    pub async fn stage_downloads(&self, stage_path: &str) -> Result<StageDownloads, ApiError> {
+        let data = self
+            .query(&format!("GET {stage_path} 'file:///sqlload/download/'"))
+            .await?;
+        parse_stage_downloads(&data).map_err(ApiError::Protocol)
     }
 
     /// Run `statement` in this session, whose temporary tables later statements see.

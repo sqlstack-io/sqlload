@@ -1,3 +1,12 @@
+/// Why `--reload` is refused where SQLLoad never drops or recreates tables.
+pub const KEPT_TABLES_RELOAD_PROBLEM: &str = "--reload drops and recreates the table, which SQLLoad never does on a Postgres target; write_strategy = \"replace\" empties and refills it in one transaction instead";
+
+/// How to add a column a load needs to a table that has rows, where `--reload` would rebuild it.
+pub const RELOAD_FIX: &str = "run it once with --reload";
+
+/// The same on a Postgres target, which never drops and recreates a table.
+pub const KEPT_TABLES_COLUMN_FIX: &str = "SQLLoad never drops and recreates a Postgres table (--reload), so add the column with ALTER TABLE, then empty the table or fill the column, and load again";
+
 /// Rows per batch read from a database source.
 pub const SOURCE_BATCH_ROWS: usize = 65_536;
 
@@ -64,3 +73,12 @@ pub const GREEN: &str = "\x1b[32m";
 pub const YELLOW: &str = "\x1b[33m";
 /// Back to plain text.
 pub const RESET: &str = "\x1b[0m";
+
+/// The host name that always means this machine: plain text to it never crosses a network.
+pub const LOCALHOST: &str = "localhost";
+
+/// Why a warehouse source's unloaded files go through SQLLoad rather than straight into the destination.
+pub const UNLOADED_TIMES: &str = "the warehouse writes times and timestamps as whole microseconds (its Parquet writer keeps only milliseconds), which SQLLoad turns back into them";
+
+/// The plan warning for a files table whose checks pull its files through SQLLoad instead of the destination's own read.
+pub const CHECKS_LOADER_WARNING: &str = "checks run on rows SQLLoad stages, so every file goes through the loader rather than the destination's own read, which is slower; without checks the table stays on the direct route.";

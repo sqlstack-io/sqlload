@@ -105,6 +105,7 @@ jobs:
           docker pull redpandadata/redpanda:v25.1.4
           docker pull postgres:17-alpine
           docker pull chrislusf/seaweedfs:3.97
+          docker pull clickhouse/clickhouse-server:25.8
       # Compiles first, so the test step's timeout measures the tests alone.
       - name: Build container tests
         run: cargo test -p sqlload --features container-tests --test exporter --test loader --no-run --quiet
@@ -191,6 +192,11 @@ jobs:
         with:
           shared-key: perf
       - run: make clean-partial-duckdb-sources
+      # A runner an earlier run downloaded comes back from the cache without a cargo install record,
+      # so setup-gungraun's `cargo install` fallback (used when the download fails) stops on
+      # "already exists"; removing it lets every install strategy put the right version back.
+      - name: Remove the cached gungraun-runner
+        run: rm -f "${CARGO_HOME:-${HOME}/.cargo}/bin/gungraun-runner"
       - uses: gungraun/setup-gungraun@v1
       - name: Benchmark the merge base
         if: github.event_name == 'pull_request'

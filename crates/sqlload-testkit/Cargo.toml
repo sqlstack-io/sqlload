@@ -16,10 +16,12 @@ axum.workspace = true
 bytes.workspace = true
 flate2.workspace = true
 parquet = { workspace = true, features = ["json"] }
+rcgen.workspace = true
 rdkafka.workspace = true
 rsa = { workspace = true, features = ["getrandom"] }
 serde_json.workspace = true
 sqlload = { workspace = true, default-features = true }
+tempfile.workspace = true
 testcontainers.workspace = true
 tonic = { workspace = true, features = ["server", "router"] }
 tonic-prost.workspace = true

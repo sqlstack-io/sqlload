@@ -16,7 +16,7 @@ stopped part-way resumes; in 0.18.0, both needed `--resnapshot`. `load --follow`
 streaming, is in 0.20.0 and later, and files targets in 0.21.0 and later. From 0.22.0,
 `--reload` refuses captured tables on every target (see [Reloading](#reloading)); before, a
 warehouse target accepted it but didn't rebuild the tables. Databricks targets are in 0.23.0
-and later.
+and later. From 0.24.0, a load into a files target names each table by its folder.
 
 ## Requirements
 
@@ -27,8 +27,11 @@ and later.
   tables and has `CREATE` on the database. Otherwise, create one as the tables' owner and name it
   with `publication`; SQLLoad then only checks it.
 - **Every table** has a primary key and a replica identity other than `NOTHING`.
+- **TLS**, when the server needs it, is set on the connection as for any Postgres source, and
+  covers the replication session too. See [TLS](/docs/sources/postgres/#tls).
 - **The target** is DuckDB, Snowflake, Databricks (see [Into Databricks](#into-databricks)), or a
-  files target with `cdc_mode = "changelog"` (see [Into Parquet files](#into-parquet-files)).
+  files target with `cdc_mode = "changelog"` (see [Into Parquet files](#into-parquet-files)). A
+  BigQuery target is refused at `plan`.
 
 ## Set up a source
 
@@ -407,10 +410,27 @@ $ sqlload plan
     └── note    each batch of changes adds new files; a snapshot copy (the first load, a table joining the source, or --resnapshot) writes its files, then deletes every older file in the folder
 ```
 
-Every load adds Parquet files to the folder of each table it changed. A snapshot copy (the first
-load, a table joining the source, or `--resnapshot`) writes its files, then deletes the folder's
-older ones. After the first load and the insert, update and delete from
-[step 4](#4-load-the-changes), read the folder with DuckDB:
+Every load adds Parquet files to the folder of each table it changed, and names each table by its
+folder. A snapshot copy (the first load, a table joining the source, or `--resnapshot`) writes its
+files, then deletes the folder's older ones. The first load, then the insert, update and delete
+from [step 4](#4-load-the-changes):
+
+```console
+$ sqlload load
+…
+loaded   lake/app/customers/  50 rows  0.2s
+loaded   lake/app/orders/     1,000 rows  0.2s
+
+✓ Completed  2 loaded, 1,050 rows, 0.2s
+$ sqlload load
+…
+loaded   lake/app/customers/  0 rows  0.3s
+loaded   lake/app/orders/     3 rows  0.3s
+
+✓ Completed  2 loaded, 3 rows, 0.3s
+```
+
+Then read the folder with DuckDB:
 
 ```sql
 SELECT order_id, status, _sqlload_op
@@ -730,6 +750,14 @@ A table without a primary key:
 Errors (1)
 └── public.events
     └── reason  public.events has no primary key; kind = "postgres_cdc" captures tables with one in this release (publishing a table without a replica identity makes Postgres refuse its updates and deletes); add a primary key, or exclude it
+```
+
+A BigQuery target:
+
+```console
+Errors (1)
+└── public.customers, public.orders
+    └── reason  kind = "postgres_cdc" loads into DuckDB, Snowflake and Databricks targets, and into files targets as a changelog, in this release; not BigQuery
 ```
 
 A files target with `merge`, or a `{cursor}` path: see [Into Parquet files](#into-parquet-files).

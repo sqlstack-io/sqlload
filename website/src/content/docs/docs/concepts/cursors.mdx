@@ -20,12 +20,13 @@ $ sqlload load app__orders
 | `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. |
 | `cursor_start` | Where the first run starts, when the table is empty. Without it, the first run reads everything. |
 | `lookback` | Read this far before the maximum, such as `"1h"` or `"2d"`, to pick up late rows. Date and timestamp cursors only; a date cursor moves back by whole days. Not with `append`. |
-| `append_cursor_inclusive` | `true` (default) reads from the maximum itself; `false` reads strictly after it. See [append](/docs/concepts/write-strategies/#append). |
+| `append_cursor_inclusive` | `false` (default) reads strictly after the maximum; `true` reads from the maximum itself, inserting its rows again on every run. See [append](/docs/concepts/write-strategies/#append). |
 
 Where the read starts, in order:
 
 1. `--start-cursor`, when given.
-2. The destination's maximum of `cursor_column`, minus `lookback`.
+2. The destination's maximum of `cursor_column`, minus `lookback`. `append` reads strictly after
+   it; `plan` still prints it as `from` the maximum.
 3. `cursor_start`, when the table is empty.
 4. Otherwise, everything.
 

@@ -1,0 +1,150 @@
+---
+title: "Snowflake"
+description: "Load Snowflake tables and query results: choosing tables, query tables, read windows around now, and where unloaded files go."
+---
+
+From sqlload 0.26.0, which isn't released yet, a Snowflake source loads tables and views of one
+database, and the results of queries you write.
+Snowflake unloads each read as Parquet with `COPY INTO`, and SQLLoad reads the files and loads
+them into the source's target.
+
+```toml
+[connections.warehouse]
+kind = "snowflake"
+account = "myorg-myaccount"
+user = "loader"
+auth = { method = "pat", token = "${ENV:SNOWFLAKE_TOKEN}" }
+warehouse = "LOAD_WH"
+database = "ANALYTICS"
+
+[sources.shop]
+kind = "snowflake"
+connection = "warehouse"
+description = "Order tables of the shop's warehouse."
+include = ["SHOP.ORDERS"]
+
+[sources.shop.tables."SHOP.ORDERS"]
+description = "Orders, one row per order."
+cursor_column = "order_date"
+write_strategy = "delete_insert"
+lookback = "7d"
+lookahead = "7d"
+lookback_from = "now"
+
+[sources.shop.tables.big_orders]
+description = "Orders of 500 or more."
+sql = "SELECT ORDER_ID, CUSTOMER_ID, PLACED_AT, TOTAL FROM SHOP.ORDERS WHERE TOTAL >= 500"
+```
+
+A connection that only a source reads needs no `load_method`. Set one when a target loads into
+the same connection.
+
+```console
+$ sqlload plan
+Plan ready  2 selected, 2 objects to create, 2 to load
+
+Objects (2)                                         sqlload apply
+├── raw.shop__orders                                create table
+│   ├── order_id    int             -> BIGINT
+│   ├── customer_id int             -> BIGINT
+│   ├── order_date  date            -> DATE
+│   ├── placed_at   timestamp_tz    -> TIMESTAMP WITH TIME ZONE
+│   ├── total       decimal(12,2)   -> DECIMAL(12,2)
+│   ├── items       json            -> JSON
+│   └── + _sqlload_load_id, _loaded_at
+└── raw.shop__big_orders                            create table
+    …
+
+Loads (2)                                           sqlload load
+├── shop__orders                                    delete_insert (cursor: order_date)
+│   ├── source  snowflake  shop  SHOP.ORDERS
+│   ├── route   unload Parquet to internal stage @~/sqlload_unload/ -> read parquet into Arrow -> DuckDB takes Arrow
+│   ├── stage   internal: no stage is set, so Snowflake writes to your user stage, and SQLLoad fetches the files in parallel, decrypts them and removes them after the read
+│   ├── …
+│   └── cursor  order_date from 2026-11-01 (now minus lookback 7days), below 2026-11-16 (now plus lookahead 7days)
+└── shop__big_orders                                replace
+    ├── source  snowflake  shop  query big_orders
+    …
+```
+
+## Choosing tables
+
+`include` and `exclude` are `SCHEMA.TABLE` patterns of the connection's database, matched without
+regard to case (`*` matches any text). Views match too. A `[sources.shop.tables."SCHEMA.TABLE"]`
+entry sets options for one table; on its own, it doesn't add the table. Write its key as Snowflake
+stores the name, normally in upper case.
+
+A source needs at least one `include` pattern or one query table.
+
+Snowflake stores unquoted names in upper case. A column such as `ORDER_ID` loads as `order_id`.
+A name created in quotes with other characters, such as `"OrderId"`, loads exactly as written.
+
+## Query tables
+
+A table entry with `sql` is a query table: its rows are the query's result, and the entry's key is
+its name. SQLLoad reads the query's columns at `plan` without reading any rows.
+
+`cursor_column` names a column of the query's result. SQLLoad wraps the query and filters on the
+cursor outside it, so the query itself needs no placeholder.
+
+## Read windows
+
+A table with a `cursor_column` reads from the destination's maximum, less any `lookback`. Two
+settings move the window to the time of the run instead:
+
+| Setting | Effect |
+|---------|--------|
+| `lookback_from = "now"` | Start `lookback` before now, not before the destination's maximum. Needs a `lookback`. |
+| `lookahead` | Read only cursor values before now plus this. A date cursor reads up to and including today plus that many days. |
+
+`lookback = "7d"`, `lookahead = "7d"` and `lookback_from = "now"` read from 7 days ago to 7 days
+ahead on every run, which suits tables whose rows change for a while and include future dates.
+Use `write_strategy = "delete_insert"` with them, so each run replaces the whole window.
+
+Days are counted in UTC. The first run reads the same window. `--start-cursor` and `--end-cursor`
+override it for one run. `--reload` rebuilds the table from `cursor_start`, or from the first row,
+up to the lookahead. A files target takes neither setting: its window follows its newest
+partition.
+
+## Where the files go
+
+| `stage` | Snowflake writes to | SQLLoad reads with |
+|---------|---------------------|--------------------|
+| Omitted | A folder of your user stage, `@~/sqlload_unload/` | The temporary credentials Snowflake hands out, several files at a time |
+| `{ url = "s3://example-bucket/unload/", storage_integration = "S3_UNLOAD", region = "eu-west-2" }` | That S3 folder, through the storage integration | The S3 credentials in its environment |
+| `{ name = "ANALYTICS.SHOP.UNLOAD_STAGE" }` | That stage, internal or external on S3 | As for the rows above |
+
+The user stage and other internal stages work on Snowflake accounts hosted on AWS. A named internal
+stage must use Snowflake's default client-side encryption; one created with
+`ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')` is refused when the table loads.
+
+Each read unloads into a folder of its own, which SQLLoad removes after the read, when the read
+fails too. A read fails when the files hold a different number of rows than `COPY INTO` reports.
+A run that is killed can leave its folder behind; remove such folders with `REMOVE`, or with a
+lifecycle rule on the bucket.
+
+With an external stage, SQLLoad needs to list, read and delete objects under the folder. The
+storage integration must allow Snowflake to write there.
+
+## Permissions
+
+The role needs `USAGE` on the warehouse, database and schemas, and `SELECT` on the tables and
+views. An external stage given by `url` also needs `USAGE` on the storage integration; one given by
+`name` needs `USAGE` on the stage, or `READ` and `WRITE` on an internal one.
+
+## Types
+
+| Snowflake | Loads as |
+|-----------|----------|
+| `NUMBER(p,0)`, p up to 18 | `int` |
+| `NUMBER(p,s)` otherwise, including `INTEGER` (`NUMBER(38,0)`) | `decimal(p,s)` |
+| `FLOAT` | `float` |
+| `VARCHAR(n)`; default length | `varchar(n)`; `text` |
+| `BOOLEAN`, `DATE`, `TIME`, `BINARY` | `bool`, `date`, `time`, `binary` |
+| `TIMESTAMP_NTZ` | `timestamp_ntz` |
+| `TIMESTAMP_TZ`, `TIMESTAMP_LTZ` | `timestamp_tz`, the instant in UTC |
+| `VARIANT`, `OBJECT`, `ARRAY` | `json` |
+
+Times and timestamps keep their microseconds. Other types, such as `GEOGRAPHY`, need a pinned type,
+such as `columns = { area = "text" }`. Pin `int` on an `INTEGER` column whose values fit 64 bits,
+such as `columns = { order_id = "int" }`. See [Types](/docs/types/).

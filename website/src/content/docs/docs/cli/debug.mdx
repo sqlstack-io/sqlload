@@ -13,7 +13,18 @@ sqlload debug [--no-connection]
 $ sqlload debug
 ok    config  2 connections, 1 targets, 1 sources
 ok    target local  DuckDB v2.0.0
-ok    source app  postgres@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2)
+ok    source app  loader@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2), TLS, CA and host name checked
+```
+
+A Postgres source's line ends with what protects the connection: `not encrypted`,
+`TLS, certificate not checked`, `TLS, CA checked` or `TLS, CA and host name checked`. See
+[TLS](/docs/sources/postgres/#tls). A source that can't connect prints `fail` with the reason, and
+`debug` exits 1:
+
+```console
+$ sqlload debug
+…
+fail  source app  cannot connect to Postgres at db.example.com:5432/postgres: error performing TLS handshake: invalid peer certificate: UnknownIssuer
 ```
 
 | Option | Meaning |

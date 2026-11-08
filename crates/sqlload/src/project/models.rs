@@ -5,10 +5,13 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::config::models::AuthConfig;
-use crate::files_source::models::{Compression, CsvOptions, FilesEncoding, SourceFormat};
+use crate::files_source::models::{
+    Compression, CsvOptions, FilesEncoding, SourceFormat, UnmatchedPaths,
+};
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
+    deserialize_optional_percent,
 };
 use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
@@ -128,6 +131,21 @@ pub enum ConnectionConfig {
         #[serde(default)]
         storage_url: Option<String>,
     },
+    /// A ClickHouse server, reached over its HTTP interface.
+    #[serde(rename = "clickhouse")]
+    ClickHouse {
+        host: String,
+        /// 8123, or 8443 with `secure = true`, when omitted.
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default = "defaults::clickhouse_user")]
+        user: String,
+        #[serde(default)]
+        password: Option<crate::auth::models::Secret>,
+        /// HTTPS instead of HTTP.
+        #[serde(default)]
+        secure: bool,
+    },
     Postgres {
         host: String,
         #[serde(default = "defaults::postgres_port")]
@@ -136,6 +154,18 @@ pub enum ConnectionConfig {
         #[serde(default)]
         password: Option<crate::auth::models::Secret>,
         database: String,
+        /// Whether to use TLS and what to check, as libpq's `sslmode`; `prefer` by default.
+        #[serde(default)]
+        sslmode: crate::postgres_source::models::SslMode,
+        /// CA certificates (PEM) to trust instead of the built-in public roots.
+        #[serde(default)]
+        sslrootcert: Option<PathBuf>,
+        /// A client certificate (PEM), with `sslkey`.
+        #[serde(default)]
+        sslcert: Option<PathBuf>,
+        /// The client certificate's private key (PEM).
+        #[serde(default)]
+        sslkey: Option<PathBuf>,
     },
     /// An S3 bucket; credentials come from `AWS_*` environment variables, web identity, or the instance/container role (AWS profiles and SSO are not read yet).
     S3 {
@@ -175,6 +205,7 @@ impl ConnectionConfig {
             Self::Snowflake { .. } => "snowflake",
             Self::Databricks { .. } => "databricks",
             Self::BigQuery { .. } => "bigquery",
+            Self::ClickHouse { .. } => "clickhouse",
             Self::Postgres { .. } => "postgres",
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",
@@ -267,6 +298,15 @@ pub struct SourceConfig {
     /// Hive `key=value` folders loaded as typed columns (files sources).
     #[serde(default)]
     pub partition_columns: BTreeMap<String, String>,
+    /// A template over each file's key below `path` whose `{name:type}` captures load as typed columns (files sources).
+    #[serde(default)]
+    pub path_columns: Option<String>,
+    /// What a file whose key does not match `path_columns` does: fail `plan` (default) or be skipped.
+    #[serde(default)]
+    pub unmatched_paths: Option<UnmatchedPaths>,
+    /// Columns with the same value in every row, typed by their TOML values (files sources).
+    #[serde(default)]
+    pub constant_columns: BTreeMap<String, toml::Value>,
     /// For files no external stage of the warehouse can read: download them and upload them unchanged to the user stage `@~`, where the warehouse loads them itself (much slower than an external stage; files sources).
     #[serde(default)]
     pub copy_to_internal_stage: bool,
@@ -300,6 +340,30 @@ pub struct SourceConfig {
     /// How often `load --follow` writes the changes it has read (`postgres_cdc`); 10 seconds when omitted.
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub batch_interval: Option<Duration>,
+    /// The warehouse a `snowflake` source's unloads run on; the connection's when omitted.
+    #[serde(default)]
+    pub warehouse: Option<String>,
+    /// Where a `snowflake` source unloads: an external stage, or the user stage `@~` when omitted.
+    #[serde(default)]
+    pub stage: Option<UnloadStage>,
+}
+
+/// Where a `snowflake` source's unloads go: an S3 URL with a storage integration, or an existing stage by name.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnloadStage {
+    /// The S3 folder, `s3://bucket/prefix/`, unloaded to through `storage_integration`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// The storage integration Snowflake writes to `url` with.
+    #[serde(default)]
+    pub storage_integration: Option<String>,
+    /// An existing stage, `DATABASE.SCHEMA.STAGE`: external on S3, or internal.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The bucket's region, for SQLLoad's own reads of an external stage.
+    #[serde(default)]
+    pub region: Option<String>,
 }
 
 /// How a `postgres_cdc` source writes its changes.
@@ -325,9 +389,12 @@ pub enum CdcDeletes {
 }
 
 impl SourceConfig {
-    /// Whether the source reads a Postgres database's tables (`postgres` or `postgres_cdc`).
-    pub fn reads_postgres(&self) -> bool {
-        matches!(self.kind, SourceKind::Postgres | SourceKind::PostgresCdc)
+    /// Whether the source finds its tables in a database's catalog with `include` patterns (`postgres`, `postgres_cdc` or `snowflake`).
+    pub fn discovers_tables(&self) -> bool {
+        matches!(
+            self.kind,
+            SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake
+        )
     }
 
     /// How a files source's files are encoded, with defaults for what is not set.
@@ -343,9 +410,13 @@ impl SourceConfig {
     pub fn table_name_template(&self) -> &str {
         match (&self.table_name, self.kind) {
             (Some(template), _) => template,
-            (None, SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Python) => {
-                DEFAULT_TABLE_NAME
-            }
+            (
+                None,
+                SourceKind::Postgres
+                | SourceKind::PostgresCdc
+                | SourceKind::Snowflake
+                | SourceKind::Python,
+            ) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
         }
     }
@@ -360,6 +431,8 @@ pub enum SourceKind {
     PostgresCdc,
     /// Existing files in an object store or directory.
     Files,
+    /// Snowflake tables and queries, unloaded as Parquet and read back.
+    Snowflake,
     /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
     Python,
 }
@@ -395,6 +468,12 @@ pub struct TableSettings {
     pub cursor_start: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub lookback: Option<Duration>,
+    /// Read only cursor values before now plus this (a date cursor: up to and including today plus this many days).
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub lookahead: Option<Duration>,
+    /// What `lookback` counts back from on incremental runs: the destination's maximum (default) or now.
+    #[serde(default)]
+    pub lookback_from: Option<LookbackFrom>,
     #[serde(default)]
     pub append_cursor_inclusive: Option<bool>,
     #[serde(default)]
@@ -418,6 +497,75 @@ pub struct TableSettings {
     /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones; `"none"` commits the whole read once.
     #[serde(default, deserialize_with = "deserialize_optional_batch")]
     pub batch_size: Option<BatchStep>,
+    /// Checks the staged rows must pass before they are published.
+    #[serde(default)]
+    pub checks: Option<TableChecks>,
+    /// The table engine a created table gets (ClickHouse), with its arguments.
+    #[serde(default)]
+    pub engine: Option<String>,
+    /// The sorting key a created table gets (ClickHouse): an expression or a list of them.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub order_by: Option<Vec<String>>,
+    /// The partitioning expression a created table gets (ClickHouse).
+    #[serde(default)]
+    pub partition_by: Option<String>,
+    /// The primary key a created table gets (ClickHouse), a prefix of `order_by`.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub primary_key: Option<Vec<String>>,
+    /// Table settings a created table gets (ClickHouse), by name.
+    #[serde(default)]
+    pub table_settings: Option<BTreeMap<String, LayoutSetting>>,
+}
+
+/// A table setting's value in a ClickHouse layout.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum LayoutSetting {
+    Bool(bool),
+    Integer(i64),
+    Text(String),
+}
+
+/// Checks on a table's staged rows, run before each commit publishes them; any failure fails the table and publishes nothing, unless the check is listed in `warn`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TableChecks {
+    /// No two staged rows share these columns' values (rows with a NULL in them are skipped, as in SQL).
+    #[serde(default)]
+    pub unique: Option<Vec<String>>,
+    /// None of these columns holds a NULL.
+    #[serde(default)]
+    pub not_null: Vec<String>,
+    /// The load stages at least this many rows (`replace` only).
+    #[serde(default)]
+    pub min_rows: Option<u64>,
+    /// The table loses at most this percentage of its rows (`replace` only), written as `"20%"`.
+    #[serde(default, deserialize_with = "deserialize_optional_percent")]
+    pub max_row_drop: Option<u8>,
+    /// The checks that only log a failure rather than failing the table.
+    #[serde(default)]
+    pub warn: Vec<CheckName>,
+}
+
+/// A check in `checks`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckName {
+    Unique,
+    NotNull,
+    MinRows,
+    MaxRowDrop,
+}
+
+/// What a cursor's `lookback` counts back from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LookbackFrom {
+    /// The destination's cursor maximum.
+    #[default]
+    Destination,
+    /// The time the run plans (a date cursor: today, UTC), for a fixed rolling window.
+    Now,
 }
 
 /// One table's settings: everything a source can set, plus what only a table can.
@@ -433,6 +581,9 @@ pub struct TableOverride {
     /// The folder template in a files target, overriding the source's `destination_path`.
     #[serde(default)]
     pub destination_path: Option<String>,
+    /// A query whose rows are the table (`snowflake` sources); the table's key is then its name.
+    #[serde(default)]
+    pub sql: Option<String>,
     /// Pinned column types, by column name.
     #[serde(default)]
     pub columns: BTreeMap<String, String>,

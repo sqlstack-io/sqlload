@@ -36,6 +36,9 @@ Each connection has a `kind`.
 | `user` | required | |
 | `password` | none | Use `${ENV:NAME}`. |
 | `database` | required | |
+| `sslmode` | `prefer` | `disable`, `prefer`, `require`, `verify-ca` or `verify-full`, as in libpq. See [TLS](/docs/sources/postgres/#tls). |
+| `sslrootcert` | none | CA certificates (PEM) to trust, instead of the public roots built into SQLLoad. |
+| `sslcert`, `sslkey` | none | A client certificate and its private key (PEM). Set both or neither. |
 
 ### `snowflake`
 
@@ -47,7 +50,23 @@ Each connection has a `kind`.
 | `role` | none | |
 | `warehouse` | none | |
 | `database` | required | |
-| `load_method` | required | How data gets into Snowflake. See [Load methods](/docs/targets/snowflake/). |
+| `load_method` | required for targets | How data gets into Snowflake. From 0.26.0, a connection only a source reads needs none. See [Load methods](/docs/targets/snowflake/). |
+
+### `databricks`
+
+| Key | Meaning |
+|-----|---------|
+| `host`, `client_id`, `client_secret`, `warehouse_id`, `catalog`, `volume` | See [Databricks](/docs/targets/databricks/#connection). All required. |
+
+### `bigquery`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `location` | required | Where query jobs run and datasets are created, such as `EU`. |
+| `service_account_key` | required | The service account key file's JSON text. Use `${ENV:NAME}`. |
+| `project` | the key's project | The project tables load into and jobs run in. |
+
+See [BigQuery](/docs/targets/bigquery/).
 
 ### `duckdb`
 
@@ -88,8 +107,8 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 
 | Key | Applies to | Meaning |
 |-----|------------|---------|
-| `connection` | all | A `snowflake`, `duckdb`, `s3` or `filesystem` connection. |
-| `loader_schema` | warehouses, required | The schema for tables whose source sets no `schema`. |
+| `connection` | all | A `snowflake`, `databricks`, `bigquery`, `duckdb`, `s3` or `filesystem` connection. |
+| `loader_schema` | warehouses, required | The schema for tables whose source sets no `schema`; a BigQuery target's dataset. |
 | `database` | warehouses | Overrides the connection's database. |
 | `path` | files | Each table's folder template, with `{source}`, `{schema}`, `{table}`, `{cursor}` and `{cursor:date}`. Default `{source}/{table}/`. |
 | `format` | files | `parquet`, the default and only format. |
@@ -99,14 +118,14 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 
 | Key | Applies to | Meaning |
 |-----|------------|---------|
-| `kind` | all | `postgres`, `postgres_cdc` or `files`. Python sources are declared in Python. |
+| `kind` | all | `postgres`, `postgres_cdc`, `snowflake` (from 0.26.0, not released yet) or `files`. Python sources are declared in Python. |
 | `connection` | all | The connection the source reads. |
 | `description` | all | The source's description; a files source's table description. |
 | `destination` | all | The target; `default_target` when omitted. |
 | `schema` | warehouse targets | The destination schema; the target's `loader_schema` when omitted. |
 | `table_name` | all | The destination name template, with `{source}`, `{schema}` and `{table}`. Default `{source}__{table}`, or `{source}` for files. |
 | `destination_path` | files targets | The folder template for this source's tables, overriding the target's `path`. |
-| `include`, `exclude` | postgres, postgres_cdc | `schema.table` patterns to sync and to leave out. |
+| `include`, `exclude` | postgres, postgres_cdc, snowflake | `schema.table` patterns to sync and to leave out. |
 | `new_tables` | postgres | `sync` (default), `skip` or `fail`. See [Sources](/docs/sources/postgres/#choosing-tables). |
 | `cdc_mode` | postgres_cdc | `merge` (default) or `changelog`; a files target takes `changelog` only. See [Postgres changes](/docs/sources/postgres-cdc/#settings). |
 | `deletes` | postgres_cdc | `soft` (default) or `hard`; `merge` only. |
@@ -115,11 +134,16 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `exclude_columns`, `allow_columns` | all | Column patterns to leave out, and to keep anyway. |
 | `skip_tables_with_columns` | postgres | Leave out tables with a column matching one of these patterns. |
 | `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
+| `warehouse` | snowflake | From 0.26.0 (not released yet). The warehouse unloads run on; the connection's when omitted. |
+| `stage` | snowflake | From 0.26.0. Where unloads go: `{ url, storage_integration, region }` or `{ name }`; the user stage when omitted. See [Snowflake](/docs/sources/snowflake/#where-the-files-go). |
 | `path` | files | The folder holding the files, relative to the connection. |
 | `format` | files | `parquet` (default), `ndjson`, `json` or `csv`. |
 | `compression` | files | `auto` (default), `none`, `gzip` or `zstd`. |
 | `csv` | files | `{ delimiter, header, quote, null_values }`; defaults `","`, `true`, `'"'`, `[""]`. |
 | `partition_columns` | files | Hive `key=value` folders as typed columns, such as `{ dt = "date" }`. |
+| `path_columns` | files | From 0.26.0 (not released yet). A path template whose captures load as typed columns, such as `"{region}/{day:date}/*"`. See [Columns from paths](/docs/sources/files/#columns-from-paths). |
+| `unmatched_paths` | files | From 0.26.0. `fail` (default) or `skip`: what a file whose path doesn't match `path_columns` does. |
+| `constant_columns` | files | From 0.26.0. The same value in every row, such as `{ region = "eu" }`, typed by its TOML value or `{ value, type }`. |
 | `copy_to_internal_stage` | files into Snowflake | Upload files no external stage covers to `@~`. Much slower. |
 | `[sources.NAME.tables."schema.table"]` | all | Per-table settings. A files source's table is named after the source. |
 
@@ -136,7 +160,9 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `cursor_column` | none | The column runs continue from. See [Cursors](/docs/concepts/cursors/). |
 | `cursor_start` | none | Where the first run starts. |
 | `lookback` | none | Read this far before the maximum, such as `"2h"`. |
-| `append_cursor_inclusive` | `true` | Whether `append` reads from the maximum itself. |
+| `lookback_from` | `destination` | From 0.26.0 (not released yet). `destination` (the destination's maximum) or `now`: what `lookback` counts back from. See [Read windows](/docs/sources/snowflake/#read-windows). |
+| `lookahead` | none | From 0.26.0. Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. |
+| `append_cursor_inclusive` | `false` | Whether `append` reads from the maximum itself (inserting its rows again) rather than after it. |
 | `batch_size` | none | Commit one cursor window at a time: a duration (`"1d"`) or an integer step, or `"none"`. |
 | `contract` | `none` | `none` or `enforced`. See [Contracts](/docs/concepts/contracts/). |
 | `on_schema_change` | `append_new_columns` | `append_new_columns`, `ignore` or `fail`. |
@@ -149,6 +175,7 @@ Only in a table entry:
 |-----|---------|
 | `description` | The table's description, which becomes its comment. |
 | `name` | The destination table name, overriding `table_name`. |
+| `sql` | From 0.26.0 (not released yet). A query whose rows are the table (snowflake sources); the entry's key is its name. |
 | `columns` | Pinned column types, such as `{ total = "decimal(18,2)" }`. See [Types](/docs/types/). |
 | `mask` | Masked columns: `{ email = "hmac" }` or `"hash"`. |
 | `exclude_columns`, `allow_columns`, `destination_path` | As on the source, for this table. |

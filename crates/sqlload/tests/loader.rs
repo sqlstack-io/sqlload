@@ -6,6 +6,8 @@ mod bigquery_helpers;
 mod databricks_helpers;
 #[path = "loader/helpers.rs"]
 mod helpers;
+#[path = "loader/postgres/helpers.rs"]
+mod postgres_helpers;
 #[path = "loader/test_batched_loads.rs"]
 mod test_batched_loads;
 #[path = "loader/test_bigquery_loads.rs"]
@@ -30,10 +32,18 @@ mod test_postgres_cdc;
 mod test_postgres_cdc_files;
 #[path = "loader/test_postgres_reader.rs"]
 mod test_postgres_reader;
+#[path = "loader/test_postgres_target.rs"]
+mod test_postgres_target;
+#[path = "loader/test_postgres_tls.rs"]
+mod test_postgres_tls;
+#[path = "loader/test_postgres_to_clickhouse.rs"]
+mod test_postgres_to_clickhouse;
 #[path = "loader/test_postgres_to_duckdb.rs"]
 mod test_postgres_to_duckdb;
 #[path = "loader/test_postgres_to_files.rs"]
 mod test_postgres_to_files;
+#[path = "loader/test_publish_checks.rs"]
+mod test_publish_checks;
 #[path = "loader/test_snowflake_routes.rs"]
 mod test_snowflake_routes;
 #[path = "loader/test_text_files_to_duckdb.rs"]

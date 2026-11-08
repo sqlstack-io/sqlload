@@ -1,11 +1,15 @@
 #[path = "tests/test_build_table.rs"]
 mod build_table;
+#[path = "tests/test_check_query.rs"]
+mod check_query;
 #[path = "tests/test_commit_statements.rs"]
 mod commit_statements;
 #[path = "tests/test_contract.rs"]
 mod contract;
 #[path = "tests/test_cursor_bound.rs"]
 mod cursor_bound;
+#[path = "tests/test_cursor_from_now.rs"]
+mod cursor_from_now;
 #[path = "tests/test_cursor_text.rs"]
 mod cursor_text;
 #[path = "tests/helpers.rs"]
