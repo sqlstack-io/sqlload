@@ -3,7 +3,7 @@
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::files::main::read_table_state::read_table_state;
 use crate::adapters::files::main::write_notes::write_notes;
-use crate::adapters::files::models::FilesDestination;
+use crate::adapters::files::models::{FilesDestination, PartitionBy, TablePath};
 use crate::file_store::main::open_folder::open_folder;
 use crate::loader::_helpers::destination::{live_schema, table_folder};
 use crate::loader::_helpers::table_plan::{CommitRequest, commit_rule};
@@ -18,7 +18,7 @@ use crate::loader::models::{
     CommitRule, FilesContext, FilesOutput, FilesWindowRequest, LiveFiles, PlanOptions, TablePlan,
     TableSpec, WholeReason,
 };
-use crate::project::models::FilesFormat;
+use crate::project::models::{FilesFormat, OutputEncoding, WriteStrategy};
 use crate::table_lease::main::lease_holder::lease_holder;
 use crate::table_lease::main::lease_now::lease_now;
 
@@ -76,7 +76,7 @@ pub(in crate::loader) async fn plan_files_table(
         None => (None, WriteMode::Append, None),
     };
     let mode = captured_mode(spec, mode);
-    let notes = write_notes(&mode);
+    let notes = write_notes(&mode, &path.folder);
     let commits = commit_rule(&CommitRequest {
         spec,
         window: read.as_ref(),
@@ -86,6 +86,7 @@ pub(in crate::loader) async fn plan_files_table(
         mode: &mode,
     });
     let commits = match commits {
+        Ok(_) if destination.encoding.single_file => CommitRule::Whole(WholeReason::SingleFile),
         Ok(commits) => commits,
         Err(problem) => {
             if schema.blocked.is_none() {
@@ -112,7 +113,7 @@ pub(in crate::loader) async fn plan_files_table(
         planned_stage: None,
         output: Some(FilesOutput {
             path,
-            format: FilesFormat::Parquet,
+            encoding: destination.encoding.clone(),
             listed: state.listed.keys().len(),
             footers_read: footers.len(),
             max_footer_reads: destination.max_footer_reads,
@@ -145,6 +146,7 @@ async fn files_context(
     };
     let (cursor_type, mut problems) = check_output(spec, &path, &desired);
     problems.extend(captured_problems(spec, &path, options));
+    problems.extend(encoding_problems(spec, &path, &destination.encoding));
     let folder = open_folder(&path.folder)?;
     let state = read_table_state(&folder, &path, cursor_type.as_ref()).await?;
     problems.extend(state.listed.problems.clone());
@@ -163,4 +165,30 @@ async fn files_context(
         folder,
         state,
     }))
+}
+
+/// Why the table cannot be written in the target's format: a `postgres_cdc` table and an `append` cursor by `{cursor:date}` read their position from Parquet statistics, which CSV files lack; `single_file` names each file after its table, so `append` would overwrite it.
+fn encoding_problems(spec: &TableSpec, path: &TablePath, encoding: &OutputEncoding) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let csv = encoding.format == FilesFormat::Csv;
+    if csv && spec.cdc.is_some() {
+        problems.push(
+            "postgres_cdc reads its position back from Parquet statistics, so it writes files targets as Parquet; drop format = \"csv\"".to_owned(),
+        );
+    }
+    let by_date = path
+        .partition
+        .as_ref()
+        .is_some_and(|partition| partition.by == PartitionBy::Date);
+    if csv && spec.strategy == WriteStrategy::Append && spec.cursor.is_some() && by_date {
+        problems.push(
+            "append by a {cursor:date} partition reads the newest files' maximum from Parquet statistics, which CSV files lack; partition by {cursor}, or use delete_insert or replace".to_owned(),
+        );
+    }
+    if encoding.single_file && spec.strategy == WriteStrategy::Append {
+        problems.push(
+            "single_file names each file after its table, so append would overwrite the last one; use replace or delete_insert, or drop single_file".to_owned(),
+        );
+    }
+    problems
 }

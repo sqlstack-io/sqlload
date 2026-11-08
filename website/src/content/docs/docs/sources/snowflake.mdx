@@ -3,7 +3,7 @@ title: "Snowflake"
 description: "Load Snowflake tables and query results: choosing tables, query tables, read windows around now, and where unloaded files go."
 ---
 
-From sqlload 0.26.0, which isn't released yet, a Snowflake source loads tables and views of one
+From sqlload 0.26.0, a Snowflake source loads tables and views of one
 database, and the results of queries you write.
 Snowflake unloads each read as Parquet with `COPY INTO`, and SQLLoad reads the files and loads
 them into the source's target. From 0.27.0 (not released yet), a DuckDB target reads them from S3

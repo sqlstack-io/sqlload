@@ -190,6 +190,8 @@ pub struct DirectCheck<'a> {
     pub stage_url: Option<&'a Location>,
     pub source: &'a Location,
     pub format: SourceFormat,
+    /// Whether each record loads whole (`shape = "record"`), so no key is sampled.
+    pub whole: bool,
     pub files: &'a [DataFile],
     pub columns: &'a [CopyColumn],
     /// Columns the files hold in a way a direct `COPY` does not load exactly, and how.

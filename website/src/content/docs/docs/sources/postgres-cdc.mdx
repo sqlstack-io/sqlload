@@ -31,7 +31,7 @@ and later. From 0.24.0, a load into a files target names each table by its folde
   covers the replication session too. See [TLS](/docs/sources/postgres/#tls).
 - **The target** is DuckDB, Snowflake, Databricks (see [Into Databricks](#into-databricks)), or a
   files target with `cdc_mode = "changelog"` (see [Into Parquet files](#into-parquet-files)). A
-  BigQuery target is refused at `plan`.
+  BigQuery, ClickHouse or Postgres target is refused at `plan`.
 
 ## Set up a source
 
@@ -757,7 +757,7 @@ A BigQuery target:
 ```console
 Errors (1)
 └── public.customers, public.orders
-    └── reason  kind = "postgres_cdc" loads into DuckDB, Snowflake and Databricks targets, and into files targets as a changelog, in this release; not BigQuery
+    └── reason  kind = "postgres_cdc" loads into DuckDB, Snowflake and Databricks targets, and into files targets as a changelog, in this release; not BigQuery or ClickHouse
 ```
 
 A files target with `merge`, or a `{cursor}` path: see [Into Parquet files](#into-parquet-files).

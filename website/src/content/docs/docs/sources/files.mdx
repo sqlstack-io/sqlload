@@ -29,8 +29,10 @@ cursor_column = "dt"
 | `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`. |
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
 | `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … |
+| `shape` | From 0.27.0 (not released yet). `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
+| `record_column` | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
-| `path_columns` | From 0.26.0 (not released yet). A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
+| `path_columns` | From 0.26.0. A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
 | `unmatched_paths` | From 0.26.0. What a file whose path doesn't match `path_columns` does: `fail` (default) fails `plan` and names it, `skip` leaves it out. |
 | `constant_columns` | From 0.26.0. Columns with the same value in every row, such as `{ region = "eu", as_of = 2026-11-08 }`. See [Columns from paths](#columns-from-paths). |
 | `copy_to_internal_stage` | Snowflake only: upload files no external stage covers to the user stage. See [Load methods](/docs/targets/snowflake/#files-into-snowflake). |
@@ -77,7 +79,7 @@ conversion differs. In Snowflake, where files under an external stage or copied 
 
 ## Columns from paths
 
-From sqlload 0.26.0, which isn't released yet, values can come from folder and file names that
+From sqlload 0.26.0, values can come from folder and file names that
 aren't `key=value` folders. `path_columns` is a template over each file's path below `path`:
 
 ```toml
@@ -126,6 +128,35 @@ it; a constant can't. A column in the files with the same name is replaced. Dest
 read the files themselves still do: SQLLoad writes each file's values into the `COPY` or
 `read_parquet` as literals. A column can come from only one of `partition_columns`, `path_columns` and
 `constant_columns`, ignoring case.
+
+## Whole records
+
+From sqlload 0.27.0, which isn't released yet, `shape = "record"` loads each record whole into one
+`json` column instead of typed columns, to land data as it is and parse it in the destination:
+
+```toml
+[sources.events]
+kind = "files"
+connection = "lake"
+path = "events/"
+format = "ndjson"
+shape = "record"
+record_column = "payload"
+partition_columns = { dt = "date" }
+```
+
+- **JSON and NDJSON**: each object as JSON. A key given twice keeps its last value. A record that
+  isn't an object fails the load and names its file and line.
+- **CSV**: each line as a JSON array of its fields as strings, such as `["1", "a,b", null]`. A field
+  matching `null_values` is `null`. With `header = true`, each file's first line is skipped without
+  being checked, so files with different headers load together. Every line needs as many fields as
+  the file's first line.
+
+Nothing is sampled and the columns never change: new keys and fields arrive inside the record, so
+the source's tables pin no other `columns`, and `record_column` can't be a name SQLLoad adds itself.
+Partition, path and constant columns and the `_sqlload_source_*` columns load beside it as usual.
+The column is `json` in every destination (`VARIANT` in Snowflake), and Snowflake still reads the
+files itself, also from `copy_to_internal_stage`. Parquet files already have typed columns, so they can't use `shape = "record"`.
 
 ## Files the destination reads itself
 

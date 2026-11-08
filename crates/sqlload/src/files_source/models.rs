@@ -247,6 +247,17 @@ pub struct FilesEncoding {
     pub format: SourceFormat,
     pub compression: Compression,
     pub csv: CsvOptions,
+    /// With `shape = "record"`, the one column each JSON object or CSV line loads into whole; `None` for typed columns.
+    pub record: Option<String>,
+}
+
+/// How a JSON or CSV source's records load: as typed columns sampled from them, or each whole in one `json` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordShape {
+    #[default]
+    Columns,
+    Record,
 }
 
 impl std::fmt::Display for FilesEncoding {
@@ -257,6 +268,10 @@ impl std::fmt::Display for FilesEncoding {
             (format, Compression::None) => write!(formatter, "{format}, uncompressed"),
             (format, Compression::Gzip) => write!(formatter, "{format}, gzip"),
             (format, Compression::Zstd) => write!(formatter, "{format}, zstd"),
+        }?;
+        match &self.record {
+            Some(column) => write!(formatter, ", each record whole in column {column}"),
+            None => Ok(()),
         }
     }
 }
