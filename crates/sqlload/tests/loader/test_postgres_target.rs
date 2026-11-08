@@ -128,7 +128,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_a_postgres_target_then_eac
                     select: vec!["accounts".to_owned()],
                     ..PlanOptions::default()
                 },
-                expected_load: "merge upserts with INSERT ... ON CONFLICT (id), which needs a unique index or constraint on exactly those columns, and mart.accounts has none",
+                expected_load: "merge upserts with INSERT ... ON CONFLICT (id), which needs a valid, non-deferrable unique index or constraint on exactly those columns, and mart.accounts has none",
                 check_query: "SELECT CAST(count(*) AS text) FROM mart.accounts",
                 expected_result: "3",
             },
@@ -139,6 +139,36 @@ fn given_postgres_tables_when_loading_repeatedly_into_a_postgres_target_then_eac
                 expected_load: "ok",
                 check_query: "SELECT CAST(count(*) AS text) FROM pg_class WHERE relpersistence = 't' AND relname LIKE '%sqlload_staging%'",
                 expected_result: "0",
+            },
+            PostgresTargetTestCase {
+                description: "a table of the user's own named like an old staging table survives a load, since Postgres staging tables are temporary",
+                source_change: "CREATE TABLE mart.stores__sqlload_staging_20200101000000_keep (x int);",
+                options: PlanOptions::default(),
+                expected_load: "ok",
+                check_query: "SELECT CAST(count(*) AS text) FROM pg_tables WHERE schemaname = 'mart' AND tablename = 'stores__sqlload_staging_20200101000000_keep'",
+                expected_result: "1",
+            },
+            PostgresTargetTestCase {
+                description: "replace into a table another table references with ON DELETE CASCADE is refused at plan, so the other table keeps its rows",
+                source_change: "ALTER TABLE mart.stores ADD CONSTRAINT stores_code_key UNIQUE (code); CREATE TABLE mart.store_orders (code varchar(5) REFERENCES mart.stores (code) ON DELETE CASCADE); INSERT INTO mart.store_orders VALUES ('L1');",
+                options: PlanOptions {
+                    select: vec!["stores".to_owned()],
+                    ..PlanOptions::default()
+                },
+                expected_load: "mart.store_orders references mart.stores (store_orders_code_fkey), and its ON DELETE CASCADE deletes its rows when replace deletes the rows it replaces",
+                check_query: "SELECT (SELECT string_agg(code, ',') FROM mart.store_orders) || ' ' || (SELECT string_agg(code, ',') FROM mart.stores)",
+                expected_result: "L1 L1",
+            },
+            PostgresTargetTestCase {
+                description: "a column of a table SQLLoad did not create that would round the source's values is refused at plan",
+                source_change: "DROP TABLE mart.store_orders; ALTER TABLE public.stores ADD COLUMN price numeric(8,2); UPDATE public.stores SET price = 1.25; ALTER TABLE mart.stores ADD COLUMN price numeric(8,1);",
+                options: PlanOptions {
+                    select: vec!["stores".to_owned()],
+                    ..PlanOptions::default()
+                },
+                expected_load: "price is decimal(8,1) in the table, which SQLLoad did not create and does not alter, and decimal(8,2) values would not all load exactly there",
+                check_query: "SELECT string_agg(code || '@' || coalesce(CAST(price AS text), 'none'), ',') FROM mart.stores",
+                expected_result: "L1@none",
             },
         ];
         for test_case in test_cases {

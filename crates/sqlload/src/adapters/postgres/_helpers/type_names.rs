@@ -63,15 +63,21 @@ fn decimal(live: &LiveColumnType) -> Option<ColumnType> {
         u8::try_from(precision),
         u8::try_from(live.scale.unwrap_or(0)),
     ) {
-        (Ok(precision), Ok(scale)) if precision <= MAX_DECIMAL_PRECISION => {
+        (Ok(precision), Ok(scale)) if precision <= MAX_DECIMAL_PRECISION && scale <= precision => {
             Some(ColumnType::Decimal { precision, scale })
         }
         _ => None,
     }
 }
 
-/// A type as `format_type` prints it, such as `numeric(18,2)`, `character varying(20)` or `timestamp(3) with time zone`; `None` for types with no portable equivalent (arrays, enums, `json`, `interval` and so on).
+/// A type as `format_type` prints it, such as `numeric(18,2)`, `character varying(20)` or `timestamp(3) with time zone`; `None` for types with no portable equivalent (arrays, enums, `json`, `real`, `interval`, times holding fewer than six digits after the second, and so on).
 pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
+    let fewer_digits = live.data_type.starts_with("time")
+        && live.data_type.contains('(')
+        && !live.data_type.contains("(6)");
+    if fewer_digits {
+        return None;
+    }
     let base: String = live
         .data_type
         .split('(')
@@ -90,7 +96,7 @@ pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
         "smallint" => ColumnType::SmallInt,
         "integer" | "bigint" => ColumnType::Int,
         "numeric" => decimal(live)?,
-        "real" | "double precision" => ColumnType::Float,
+        "double precision" => ColumnType::Float,
         "text" => ColumnType::Text,
         "character varying" | "character" => bounded(live.char_length),
         "date" => ColumnType::Date,

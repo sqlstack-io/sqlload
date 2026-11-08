@@ -22,6 +22,7 @@ pub(in crate::adapters) fn open_postgres(
         connection: connection.to_owned(),
         database: database.map(str::to_owned),
         session: Arc::default(),
+        reconnects: true,
         ddl: Arc::default(),
     })
 }

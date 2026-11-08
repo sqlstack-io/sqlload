@@ -99,12 +99,15 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
             ],
         },
         RenderedTestCase {
-            description: "the schema is created in the session's database, which is never named",
+            description: "the schema is created in the session's database, which is never named, and only when it is missing, so an existing schema needs no CREATE on the database",
             rendered: vec![adapter.render_create_schema(&TableName {
                 database: Some("mart".to_owned()),
+                schema: "O'Neil".to_owned(),
                 ..orders()
             })],
-            expected_statements: &["CREATE SCHEMA IF NOT EXISTS \"app\""],
+            expected_statements: &[
+                "DO $sqlload$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = 'O''Neil') THEN CREATE SCHEMA \"O'Neil\"; END IF; END $sqlload$",
+            ],
         },
     ];
     for test_case in test_cases {

@@ -121,12 +121,17 @@ pub(crate) fn numeric_bytes(value: i128, scale: u8) -> Vec<u8> {
     bytes
 }
 
-/// Field `row` of `array`, appended to `out` with its length; `-1` for NULL.
-fn put_field(out: &mut BytesMut, (array, wire): (&ArrayRef, Wire), row: usize) {
+/// Field `row` of `array`, appended to `out` with its length; `-1` for NULL. A date or time before Postgres's range fails.
+fn put_field(
+    out: &mut BytesMut,
+    (array, wire): (&ArrayRef, Wire),
+    row: usize,
+) -> Result<(), String> {
     if array.is_null(row) {
         out.put_i32(NULL_FIELD_LENGTH);
-        return;
+        return Ok(());
     }
+    let out_of_range = || format!("row {row}: the value is out of Postgres's range");
     let mut fixed = |bytes: &[u8]| {
         out.put_i32(i32::try_from(bytes.len()).unwrap_or(i32::MAX));
         out.put_slice(bytes);
@@ -143,7 +148,12 @@ fn put_field(out: &mut BytesMut, (array, wire): (&ArrayRef, Wire), row: usize) {
         Wire::Text => fixed(array.as_string::<i32>().value(row).as_bytes()),
         Wire::Bytea => fixed(array.as_binary::<i32>().value(row)),
         Wire::Date => fixed(
-            &(array.as_primitive::<Date32Type>().value(row) - POSTGRES_EPOCH_DAYS).to_be_bytes(),
+            &array
+                .as_primitive::<Date32Type>()
+                .value(row)
+                .checked_sub(POSTGRES_EPOCH_DAYS)
+                .ok_or_else(out_of_range)?
+                .to_be_bytes(),
         ),
         Wire::Time => fixed(
             &array
@@ -152,10 +162,15 @@ fn put_field(out: &mut BytesMut, (array, wire): (&ArrayRef, Wire), row: usize) {
                 .to_be_bytes(),
         ),
         Wire::Timestamp => fixed(
-            &(array.as_primitive::<TimestampMicrosecondType>().value(row) - POSTGRES_EPOCH_MICROS)
+            &array
+                .as_primitive::<TimestampMicrosecondType>()
+                .value(row)
+                .checked_sub(POSTGRES_EPOCH_MICROS)
+                .ok_or_else(out_of_range)?
                 .to_be_bytes(),
         ),
     }
+    Ok(())
 }
 
 /// `batch`'s fields named by `columns`, in their order and cast to the types they travel as, with how each travels; a field `batch` lacks, or a value that does not fit its column, is an error, never a silent NULL. Fields not among `columns` are left out.
@@ -205,8 +220,9 @@ pub(crate) fn copy_chunks(
     out.put_i32(0);
     for row in 0..batch.num_rows() {
         out.put_i16(count);
-        for (array, wire) in &fields {
-            put_field(&mut out, (array, *wire), row);
+        for ((array, wire), column) in fields.iter().zip(columns) {
+            put_field(&mut out, (array, *wire), row)
+                .map_err(|reason| format!("column {}: {reason}", column.name))?;
         }
         if out.len() >= chunk_bytes {
             chunks.push(out.split().freeze());

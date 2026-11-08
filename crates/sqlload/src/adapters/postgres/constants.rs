@@ -25,15 +25,34 @@ pub const COPY_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 pub const NO_INTERNAL_STAGE_COPY: &str =
     "copy_to_internal_stage is for Snowflake targets; Postgres takes the rows by binary COPY";
 
-/// Whether a table has a unique index `ON CONFLICT` can use for a key: not partial, on plain columns, whose key columns are exactly `$3` (sorted by byte order).
+/// Whether a table has a unique index `ON CONFLICT` can use for a key: valid, checked immediately, not partial, on plain columns, whose key columns are exactly `$3` (sorted by byte order).
 pub const KEY_INDEX_SQL: &str = "
 SELECT count(*)
 FROM pg_catalog.pg_index i
 JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = $1 AND c.relname = $2 AND i.indisunique AND i.indpred IS NULL AND i.indexprs IS NULL
+WHERE n.nspname = $1 AND c.relname = $2 AND i.indisunique AND i.indisvalid AND i.indimmediate
+  AND i.indpred IS NULL AND i.indexprs IS NULL
   AND ARRAY(
     SELECT a.attname::text FROM pg_catalog.pg_attribute a
     WHERE a.attrelid = i.indrelid AND a.attnum = ANY ((i.indkey::int2[])[0:i.indnkeyatts - 1])
     ORDER BY a.attname COLLATE \"C\"
   ) = $3::text[]";
+
+/// The foreign keys (of other tables, or the table itself) that reference a table: the referencing table, the constraint, what a delete does (`confdeltype`: `a` no action, `r` restrict, `c` cascade, `n` set null, `d` set default), and whether its check waits for the commit.
+pub const REFERENCES_SQL: &str = "
+SELECT format('%I.%I', rn.nspname, r.relname), con.conname::text, con.confdeltype::text, con.condeferred
+FROM pg_catalog.pg_constraint con
+JOIN pg_catalog.pg_class r ON r.oid = con.conrelid
+JOIN pg_catalog.pg_namespace rn ON rn.oid = r.relnamespace
+JOIN pg_catalog.pg_class c ON c.oid = con.confrelid
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE con.contype = 'f' AND con.conparentid = 0
+  AND n.nspname = $1 AND c.relname = $2
+ORDER BY 1, 2";
+
+/// The dollar quote around the block that creates a missing schema.
+pub const BLOCK_QUOTE: &str = "$sqlload$";
+
+/// A `numeric` column without a precision, which holds any decimal exactly.
+pub const UNBOUNDED_NUMERIC: &str = "numeric";

@@ -556,7 +556,7 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
-        let _held = match self.at_end {
+        let _held = match self.at_end && !sql_adapter(warehouse).keeps_tables() {
             true => ddl_guard(&self.destination).await,
             false => None,
         };

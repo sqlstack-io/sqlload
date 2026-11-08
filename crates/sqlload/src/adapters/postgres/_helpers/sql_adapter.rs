@@ -6,9 +6,9 @@ use crate::adapters::contract::models::{
 };
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::postgres::_helpers::type_names::{logical_type, portable_type, staging_type};
-use crate::adapters::postgres::constants::TEMPORARY_SCHEMA;
+use crate::adapters::postgres::constants::{BLOCK_QUOTE, TEMPORARY_SCHEMA, UNBOUNDED_NUMERIC};
 use crate::adapters::postgres::models::PostgresSql;
-use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
+use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::schema_plan::models::DesiredColumn;
 
 /// Whether `name` is how an unquoted name is written on the warehouses that fold to upper case (`ORDER_ID`): Postgres stores it folded to lower case, as it would unquoted.
@@ -47,6 +47,24 @@ impl SqlAdapter for PostgresSql {
         portable_type(live).unwrap_or_else(|| ColumnType::Native(live.data_type.clone()))
     }
 
+    /// Also a narrower integer, a shorter `varchar`, or a `numeric` with no fewer digits after the point: Postgres refuses a value those cannot hold rather than rounding it.
+    fn assigns_exactly(&self, desired: &ColumnType, live: &ColumnType) -> bool {
+        let integer = matches!(desired, ColumnType::SmallInt | ColumnType::Int);
+        match (desired, live) {
+            _ if self.type_fit(desired, live) == TypeFit::Fits => true,
+            (_, ColumnType::SmallInt | ColumnType::Int | ColumnType::Decimal { .. }) if integer => {
+                true
+            }
+            (ColumnType::Text | ColumnType::Varchar(_), ColumnType::Varchar(_)) => true,
+            (ColumnType::Decimal { scale: from, .. }, ColumnType::Decimal { scale: to, .. }) => {
+                from <= to
+            }
+            (ColumnType::Decimal { .. }, ColumnType::Native(name)) => name == UNBOUNDED_NUMERIC,
+            (_, ColumnType::Native(name)) if integer => name == UNBOUNDED_NUMERIC,
+            _ => false,
+        }
+    }
+
     /// `ALTER COLUMN ... TYPE` changes any column in place (rewriting it where it must).
     fn widens_in_place(&self, _live: &ColumnType, _target: &ColumnType) -> bool {
         true
@@ -68,19 +86,18 @@ impl SqlAdapter for PostgresSql {
         )
     }
 
+    /// `CREATE SCHEMA IF NOT EXISTS` needs `CREATE` on the database even when the schema exists, so the schema is created only when it is missing. A name holding the block's quote tag falls back to the plain statement.
     fn render_create_schema(&self, table: &TableName) -> String {
+        let create = format!("CREATE SCHEMA {}", self.render_identifier(&table.schema));
+        if table.schema.contains(BLOCK_QUOTE) {
+            return format!(
+                "CREATE SCHEMA IF NOT EXISTS {}",
+                self.render_identifier(&table.schema)
+            );
+        }
         format!(
-            "CREATE SCHEMA IF NOT EXISTS {}",
-            self.render_identifier(&table.schema)
-        )
-    }
-
-    /// The session's own `information_schema`, which lists only its database's tables.
-    fn list_staging_relations_sql(&self, table: &TableName, _database: Option<&str>) -> String {
-        format!(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = {} AND {}",
+            "DO {BLOCK_QUOTE} BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = {}) THEN {create}; END IF; END {BLOCK_QUOTE}",
             self.render_loader_value_literal(&self.stored_name(&table.schema)),
-            self.render_staging_filter(&format!("{STAGING_SUFFIX}_"))
         )
     }
 

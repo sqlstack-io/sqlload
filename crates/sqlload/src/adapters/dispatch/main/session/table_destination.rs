@@ -18,6 +18,7 @@ pub fn table_destination(destination: &Destination) -> Result<Destination, Loade
         Destination::Postgres(postgres) => {
             let mut own = (**postgres).clone();
             own.session = std::sync::Arc::default();
+            own.reconnects = false;
             Ok(Destination::Postgres(Box::new(own)))
         }
         other => Ok(other.clone()),

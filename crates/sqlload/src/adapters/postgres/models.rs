@@ -23,6 +23,8 @@ pub struct PostgresDestination {
             )>,
         >,
     >,
+    /// Whether a closed session is opened again: the shared one is; a table's own is not, since its temporary staging table went with it.
+    pub reconnects: bool,
     /// Held while a load's tables change the schema, one at a time.
     pub ddl: Arc<tokio::sync::Mutex<()>>,
 }

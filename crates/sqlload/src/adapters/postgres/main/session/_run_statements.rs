@@ -1,5 +1,6 @@
 //! Run SQL statements in order.
 
+use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::adapters::postgres::_helpers::session::{query_error, session};
 use crate::adapters::postgres::models::PostgresDestination;
 use crate::loader::errors::LoaderError;
@@ -16,10 +17,17 @@ pub(in crate::adapters) async fn run_statements(
     let Some((client, _)) = held.as_ref() else {
         return Ok(());
     };
+    let mut in_transaction = false;
     for statement in statements {
         tracing::debug!(%statement, "running on Postgres");
+        in_transaction = match statement.as_str() {
+            BEGIN_STATEMENT => true,
+            COMMIT_STATEMENT => false,
+            _ => in_transaction,
+        };
         if let Err(error) = client.batch_execute(statement).await {
-            if !client.is_closed()
+            if in_transaction
+                && !client.is_closed()
                 && let Err(rollback) = client.batch_execute("ROLLBACK").await
             {
                 tracing::warn!(error = %rollback, "cannot roll back after a failed statement");

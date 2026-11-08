@@ -183,17 +183,32 @@ pub(crate) fn column_decision(
     }
 }
 
-/// The decision for a column of a table SQLLoad did not create, on a warehouse that keeps such tables as they are: written when the table's column can take its values by an assignment cast (a value that does not fit then fails the commit, changing nothing), never widened.
+/// The decision for a column of a table SQLLoad did not create, on a warehouse that keeps such tables as they are: written when the table's column of exactly the name the warehouse stores takes every value exactly, or refuses one that does not fit (failing the commit, which changes nothing); never widened, and never written where a value could be rounded.
 fn existing_as_is(column: &DesiredColumn, live: &LiveColumn, rules: SchemaRules) -> ColumnDecision {
-    match sql_adapter(rules.warehouse).type_fit(&column.column_type, &live.column_type) {
-        TypeFit::Incompatible => ColumnDecision {
-            problem: Some(mismatch(column, live)),
-            ..ColumnDecision::default()
-        },
-        TypeFit::Fits | TypeFit::WidenInPlace(_) | TypeFit::NeedsRebuild(_) => ColumnDecision {
-            write: true,
-            ..ColumnDecision::default()
-        },
+    let adapter = sql_adapter(rules.warehouse);
+    let stored = adapter.stored_name(&column.name);
+    let problem = match (
+        live.name == stored,
+        adapter.assigns_exactly(&column.column_type, &live.column_type),
+    ) {
+        (false, _) => format!(
+            "{} matches the table's column {} only when case is ignored, and the table's column names are case-sensitive; rename one of them, or exclude {}",
+            column.name, live.name, column.name
+        ),
+        (true, false) => format!(
+            "{} is {} in the table, which SQLLoad did not create and does not alter, and {} values would not all load exactly there; change the column's type, or exclude it",
+            live.name, live.column_type, column.column_type
+        ),
+        (true, true) => {
+            return ColumnDecision {
+                write: true,
+                ..ColumnDecision::default()
+            };
+        }
+    };
+    ColumnDecision {
+        problem: Some(problem),
+        ..ColumnDecision::default()
     }
 }
 

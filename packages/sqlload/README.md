@@ -566,8 +566,9 @@ loader_schema = "reporting"
 
 Each table loads on a session of its own. Batches go by binary `COPY` into a temporary staging
 table on that session. The role needs `TEMPORARY` on the database (every role has it by default),
-the rights to write the tables it loads, and `CREATE` on the schema for tables SQLLoad creates. Each commit then applies the write strategy in
-one transaction: `append` inserts, `delete_insert` deletes the window and inserts, and `merge` is
+the rights to write the tables it loads, and `CREATE` on the schema for tables SQLLoad creates.
+SQLLoad creates a missing schema, which needs `CREATE` on the database; an existing schema needs
+nothing more. Each commit then applies the write strategy in one transaction: `append` inserts, `delete_insert` deletes the window and inserts, and `merge` is
 `INSERT ... ON CONFLICT (unique_key) DO UPDATE`. A failed commit rolls back and leaves the table as
 it was. A run that dies takes its temporary table with it.
 
@@ -576,17 +577,27 @@ transaction. The table is never dropped or recreated, so it keeps its grants, in
 triggers and the views that depend on it. Readers see the old rows until the commit. `--reload` is
 refused on Postgres targets.
 
+`replace` and `delete_insert` delete rows, so `plan` checks the foreign keys that reference the
+table. A foreign key with `ON DELETE CASCADE`, `SET NULL` or `SET DEFAULT` would change the
+referencing table, so `plan` fails and names it. Any other foreign key checked immediately makes
+the commit fail while referencing rows point at deleted ones, so `plan` warns about it.
+
 A table SQLLoad did not create (it has no `_sqlload_load_id` column) is loaded as it is. SQLLoad
 never alters it:
 
 - It loads only the source columns the table has. `plan` warns about the others, or fails with
   `on_schema_change = "fail"`. The table's other columns get their defaults.
 - The `_sqlload_*` columns are not added.
-- Values convert to the table's column types as `INSERT` converts them. A value that does not fit,
-  such as text longer than a `varchar(n)`, fails the commit. A column whose type cannot hold the
-  source's fails `plan`.
+- A source column loads into the table's column of exactly the name Postgres stores; one that
+  matches only when case is ignored fails `plan`.
+- Values convert to the table's column types as `INSERT` converts them. A narrower column that
+  refuses what does not fit is allowed, such as a smaller integer, a shorter `varchar(n)` or a
+  `numeric` with at least the source's digits after the point: a value too large fails the commit.
+  A column that would round values, such as `real`, `timestamp(3)` or a `numeric` with fewer
+  digits after the point, or one of another kind, fails `plan`.
 
-`merge` needs a unique index or constraint on exactly the `unique_key` columns. SQLLoad creates
+`merge` needs a valid, non-deferrable unique index or constraint on exactly the `unique_key`
+columns. SQLLoad creates
 one on tables it creates; on other tables `plan` fails until one exists. A key repeated within one
 commit fails that commit.
 

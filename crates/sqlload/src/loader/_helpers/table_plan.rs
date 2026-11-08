@@ -10,9 +10,9 @@ use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
 use crate::adapters::dispatch::main::route::route_warning::route_warning;
 use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
-use crate::adapters::dispatch::main::session::key_problem::key_problem;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
+use crate::adapters::dispatch::main::session::write_problems::write_problems;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::output_problems::output_problems;
 use crate::adapters::files::models::{OutputCheck, TablePath};
@@ -513,10 +513,12 @@ async fn plan_table_once(
     schema.warnings.extend(resnapshot_warning(spec, options));
     let mode = captured_mode(spec, mode);
     let exists = live.is_some();
-    if let (None, WriteMode::Merge { unique_key }, true) = (&schema.blocked, &mode, exists)
-        && let Some(problem) = key_problem(destination, &spec.destination, unique_key).await?
-    {
-        schema = blocked_plan(vec![problem]);
+    if schema.blocked.is_none() && exists {
+        let (problems, warnings) = write_problems(destination, &spec.destination, &mode).await?;
+        schema.warnings.extend(warnings);
+        if !problems.is_empty() {
+            schema = blocked_plan(problems);
+        }
     }
     let chosen = match &schema.blocked {
         None => {

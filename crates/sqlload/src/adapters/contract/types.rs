@@ -50,6 +50,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         false
     }
 
+    /// Whether a column SQLLoad keeps as it is (see [`keeps_tables`](SqlAdapter::keeps_tables)), of type `live`, takes every `desired` value exactly, or refuses one that does not fit rather than rounding it.
+    fn assigns_exactly(&self, desired: &ColumnType, live: &ColumnType) -> bool {
+        self.type_fit(desired, live) == TypeFit::Fits
+    }
+
     /// Whether a `--reload` build table starts `LIKE` the table to keep its grants, and so keeps the live columns.
     fn builds_like_target(&self) -> bool {
         false
