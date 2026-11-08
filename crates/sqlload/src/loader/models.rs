@@ -581,6 +581,9 @@ pub struct FilesSink {
     pub writer: Option<FilesWriter>,
     /// Replaced files already deleted by earlier commits.
     pub deleted: std::collections::BTreeSet<String>,
+    /// The load's claim on the table, refreshed in the background until `keeper` is dropped.
+    pub lease: crate::table_lease::models::Lease,
+    pub keeper: Option<tokio_util::sync::DropGuard>,
 }
 
 /// A connected source, ready to read.

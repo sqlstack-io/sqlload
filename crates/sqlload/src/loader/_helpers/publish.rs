@@ -91,6 +91,11 @@ use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
 use crate::store_paths::models::Location;
+use crate::table_lease::constants::LEASE_REFRESH;
+use crate::table_lease::main::keep_lease::keep_lease;
+use crate::table_lease::main::release_lease::release_lease;
+use crate::table_lease::main::take_lease::take_lease;
+use crate::table_lease::models::Lease;
 use crate::time_text::main::now_utc_text::now_utc_text;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
@@ -104,6 +109,7 @@ use bytes::Bytes;
 use chrono::DateTime;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use crate::loader::_helpers::table_plan::is_direct;
 
@@ -204,13 +210,25 @@ impl Publisher {
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
                 let folder = open_folder(&output.path.folder)?;
-                let replaced = files_to_replace(&folder, &table, output).await?;
+                let lease = take_lease(&folder, &load_id, chrono::Utc::now())
+                    .await?
+                    .map_err(LoaderError::Invalid)?;
+                let replaced = match files_to_replace(&folder, &table, output).await {
+                    Ok(replaced) => replaced,
+                    Err(error) => {
+                        give_back(&folder, &lease).await;
+                        return Err(error);
+                    }
+                };
+                let keeper = keep_in_background(&folder, &lease);
                 Some(FilesSink {
                     output: output.clone(),
                     folder,
                     replaced,
                     writer: None,
                     deleted: BTreeSet::new(),
+                    lease,
+                    keeper: Some(keeper),
                 })
             }
             (false, None) => {
@@ -396,6 +414,10 @@ impl Publisher {
     /// Drop the staging table and its swap table, and the staged files of a batch that did not load; best effort, after success or failure.
     pub(crate) async fn close(&mut self) {
         self.abandon_files().await;
+        if let Some(sink) = self.files.as_mut() {
+            sink.keeper = None;
+            give_back(&sink.folder, &sink.lease).await;
+        }
         self.writer.rollback_batch().await;
         let warehouse = self.table.spec.warehouse;
         if let Some(staging) = &self.staging {
@@ -1094,8 +1116,8 @@ impl Publisher {
             None => None,
         };
         let sink = self.sink()?;
-        let folder = sink.folder.clone();
-        replace_files(&folder, &writer.file_id, (&keys, run.as_ref())).await?;
+        let (folder, lease) = (sink.folder.clone(), sink.lease.clone());
+        replace_files((&folder, &lease), &writer.file_id, (&keys, run.as_ref())).await?;
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
         }
@@ -1192,7 +1214,8 @@ impl Publisher {
             return Ok(());
         }
         let file_id = format!("{}.{:05}", self.load_id, self.commits + 1);
-        replace_files(&sink.folder.clone(), &file_id, (&keys, None)).await?;
+        let (folder, lease) = (sink.folder.clone(), sink.lease.clone());
+        replace_files((&folder, &lease), &file_id, (&keys, None)).await?;
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
         }
@@ -1222,12 +1245,15 @@ impl Publisher {
     }
 }
 
-/// Record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
+/// Once the load still holds the table's lease (extending it), record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
 async fn replace_files(
-    folder: &OpenFolder,
+    (folder, lease): (&OpenFolder, &Lease),
     file_id: &str,
     (keys, run): (&[String], Option<&PendingRun>),
 ) -> Result<(), LoaderError> {
+    keep_lease(folder, lease, chrono::Utc::now())
+        .await?
+        .map_err(LoaderError::Invalid)?;
     mark_pending(folder, file_id, PendingPhase::Replacing, (keys, run)).await?;
     if let Some(run) = run {
         let records = OpenFolder {
@@ -1241,4 +1267,36 @@ async fn replace_files(
     }
     delete_files(folder, keys).await?;
     Ok(clear_pending(folder, file_id).await?)
+}
+
+/// Refresh `lease` every `LEASE_REFRESH` until the returned guard is dropped; a refresh that fails only warns, as the next commit checks the lease again before it deletes anything.
+fn keep_in_background(folder: &OpenFolder, lease: &Lease) -> tokio_util::sync::DropGuard {
+    let stop = CancellationToken::new();
+    let (stopped, folder, lease) = (stop.clone(), folder.clone(), lease.clone());
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = stopped.cancelled() => return,
+                () = tokio::time::sleep(LEASE_REFRESH) => {}
+            }
+            match keep_lease(&folder, &lease, chrono::Utc::now()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(lost)) => {
+                    tracing::warn!(folder = %folder.location, "{lost}");
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, folder = %folder.location, "cannot refresh the table's lease; retrying");
+                }
+            }
+        }
+    });
+    stop.drop_guard()
+}
+
+/// Release `lease` after the load, best effort: one left behind expires on its own.
+async fn give_back(folder: &OpenFolder, lease: &Lease) {
+    if let Err(error) = release_lease(folder, lease).await {
+        tracing::warn!(%error, folder = %folder.location, "cannot release the table's lease; it expires on its own");
+    }
 }
