@@ -31,6 +31,8 @@ sasl = ["rdkafka/sasl"]
 container-tests = []
 # DuckDB as a loader destination, compiled from the bundled source (cached in CI after the first build).
 duckdb = ["dep:duckdb"]
+# ODBC sources, through the system driver manager (unixODBC, iODBC or Windows).
+odbc = ["dep:arrow-odbc"]
 
 [dependencies]
 aes.workspace = true
@@ -38,6 +40,7 @@ arrow-array = { workspace = true, features = ["chrono-tz"] }
 arrow-cast.workspace = true
 arrow-csv.workspace = true
 arrow-ipc.workspace = true
+arrow-odbc = { workspace = true, optional = true }
 arrow-ord.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true

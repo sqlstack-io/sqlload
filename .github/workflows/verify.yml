@@ -73,6 +73,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.9"
+      - name: Install unixODBC and the PostgreSQL ODBC driver
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq unixodbc-dev odbc-postgresql
       - run: make check-ci
       - run: make test-unit
       # Builds the sqlload extension (crates/sqlload-python) in the same target directory, so the
@@ -106,9 +108,11 @@ jobs:
           docker pull postgres:17-alpine
           docker pull chrislusf/seaweedfs:3.97
           docker pull clickhouse/clickhouse-server:25.8
+      - name: Install unixODBC and the PostgreSQL ODBC driver
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq unixodbc-dev odbc-postgresql
       # Compiles first, so the test step's timeout measures the tests alone.
       - name: Build container tests
-        run: cargo test -p sqlload --features container-tests --test exporter --test loader --no-run --quiet
+        run: cargo test -p sqlload --features container-tests,odbc --test exporter --test loader --no-run --quiet
       - name: Install gdb for stall dumps
         continue-on-error: true
         run: command -v gdb || (sudo apt-get update -qq && sudo apt-get install -y -qq gdb)

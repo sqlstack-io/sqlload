@@ -319,9 +319,29 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "unknown variant `avro`",
         },
         ParseProjectErrorTestCase {
-            description: "a query table is for snowflake sources",
+            description: "a query table is for snowflake and odbc sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\nsql = \"SELECT 1\"\n",
-            expected_message: "[sources.app] sql, warehouse and stage are for kind = \"snowflake\"",
+            expected_message: "[sources.app] sql is for kind = \"snowflake\" and kind = \"odbc\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "an odbc connection needs a connection string or a DSN",
+            text: "[connections.erp]\nkind = \"odbc\"\n",
+            expected_message: "[connections.erp] needs connection_string, or dsn",
+        },
+        ParseProjectErrorTestCase {
+            description: "an odbc connection takes one of them",
+            text: "[connections.erp]\nkind = \"odbc\"\nconnection_string = \"Driver=X\"\ndsn = \"erp\"\n",
+            expected_message: "[connections.erp] takes connection_string or dsn, not both",
+        },
+        ParseProjectErrorTestCase {
+            description: "user and password beside a connection string are never silently ignored",
+            text: "[connections.erp]\nkind = \"odbc\"\nconnection_string = \"Driver=X\"\nuser = \"u\"\n",
+            expected_message: "[connections.erp] user and password go with dsn",
+        },
+        ParseProjectErrorTestCase {
+            description: "a DSN name is written unbraced, so it cannot hold a separator",
+            text: "[connections.erp]\nkind = \"odbc\"\ndsn = \"erp;Server=x\"\n",
+            expected_message: "[connections.erp] dsn and user cannot contain",
         },
         ParseProjectErrorTestCase {
             description: "a snowflake source selects tables or has a query table",
