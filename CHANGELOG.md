@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.24.0](https://github.com/sqlstack-io/sqlload/compare/v0.23.0...v0.24.0) (2026-11-08)
+
+
+### Features
+
+* **bigquery:** load rows through the Storage Write API ([#100](https://github.com/sqlstack-io/sqlload/issues/100)) ([d4565d9](https://github.com/sqlstack-io/sqlload/commit/d4565d9e7939ba6d9d92b7b0b53741872d9b857d))
+* **bigquery:** plan, apply and diff BigQuery targets, with the Storage Write API transport ([#98](https://github.com/sqlstack-io/sqlload/issues/98)) ([314c555](https://github.com/sqlstack-io/sqlload/commit/314c55521d487440c08da5d1faa7338566630e25))
+
+
+### Bug Fixes
+
+* **cdc:** name files-target tables by their folder in the load tally ([#101](https://github.com/sqlstack-io/sqlload/issues/101)) ([c9cc953](https://github.com/sqlstack-io/sqlload/commit/c9cc9539122e039c03ae39e88a55662f0750438e))
+
+
+### Documentation
+
+* document Postgres CDC into Databricks in 0.23.0 ([#97](https://github.com/sqlstack-io/sqlload/issues/97)) ([9fcd64f](https://github.com/sqlstack-io/sqlload/commit/9fcd64ff1d2f141e4aa806fc42218b1c4d02d843))
+
 ## [0.23.0](https://github.com/sqlstack-io/sqlload/compare/v0.22.0...v0.23.0) (2026-11-07)
 
 
