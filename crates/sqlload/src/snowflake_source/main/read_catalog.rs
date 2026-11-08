@@ -3,7 +3,6 @@
 use futures_util::{StreamExt, TryStreamExt};
 use globset::GlobSet;
 
-use crate::http::errors::ApiError;
 use crate::postgres_source::models::SourceTable;
 use crate::snowflake_source::_helpers::catalog::{
     catalog_tables, described_columns, listed_tables, table_matcher,
@@ -11,8 +10,7 @@ use crate::snowflake_source::_helpers::catalog::{
 use crate::snowflake_source::_helpers::type_map::quote_identifier;
 use crate::snowflake_source::_helpers::unload_query::subquery;
 use crate::snowflake_source::constants::{
-    CATALOG_SQL, DESCRIBED_TABLES_MAX, MISSING_OBJECT, PARALLEL_DESCRIBES, SHOW_TABLES_SQL,
-    SHOW_VIEWS_SQL,
+    CATALOG_SQL, DESCRIBED_TABLES_MAX, PARALLEL_DESCRIBES, SHOW_TABLES_SQL, SHOW_VIEWS_SQL,
 };
 use crate::snowflake_source::errors::SnowflakeSourceError;
 use crate::snowflake_source::models::SnowflakeReader;
@@ -42,7 +40,7 @@ pub async fn read_catalog(
     Ok(tables)
 }
 
-/// The matching tables, listed with `SHOW` and described a few at a time, which takes no warehouse and is quicker than the catalog views; many matching tables read the catalog views once instead. A table dropped between listing and describing is left out, as the catalog views would.
+/// The matching tables, listed with `SHOW` and described a few at a time, which takes no warehouse and is quicker than the catalog views; many matching tables read the catalog views once instead.
 async fn matching_tables(
     reader: &SnowflakeReader,
     include: &GlobSet,
@@ -59,26 +57,25 @@ async fn matching_tables(
             return Ok(catalog_tables(&rows, include, exclude));
         }
     };
-    let described: Vec<Option<SourceTable>> = futures_util::stream::iter(listed)
+    futures_util::stream::iter(listed)
         .map(|mut table| async move {
             let statement = format!(
                 "DESCRIBE TABLE {}.{}",
                 quote_identifier(&table.schema),
                 quote_identifier(&table.name)
             );
-            match execute_sql(&reader.sql, &statement).await {
-                Ok(rows) => {
-                    table.columns = described_columns(&rows);
-                    Ok(Some(table))
-                }
-                Err(ApiError::Status { code, .. }) if code == MISSING_OBJECT => Ok(None),
-                Err(error) => Err(error),
+            table.columns = described_columns(&execute_sql(&reader.sql, &statement).await?);
+            match table.columns.is_empty() {
+                true => Err(SnowflakeSourceError::Invalid(format!(
+                    "{}.{} has no columns, as for a view whose underlying table was dropped",
+                    table.schema, table.name
+                ))),
+                false => Ok(table),
             }
         })
         .buffered(PARALLEL_DESCRIBES)
         .try_collect()
-        .await?;
-    Ok(described.into_iter().flatten().collect())
+        .await
 }
 
 /// Query table `name`: its columns as Snowflake describes the result of `sql`, without reading rows.
