@@ -375,6 +375,32 @@ pub(crate) fn read_window(spec: &TableSpec, window: &Window) -> Option<ReadWindo
     })
 }
 
+/// Why `--reload` cannot run for `spec`: a CDC table's, or one on a warehouse that keeps tables, which never drops and recreates one.
+fn reload_refusal(spec: &TableSpec, options: &PlanOptions) -> Option<&'static str> {
+    match (spec.cdc.is_some(), options.reload) {
+        (true, true) => Some(CDC_RELOAD_PROBLEM),
+        (false, true) if sql_adapter(spec.warehouse).keeps_tables() => {
+            Some(KEPT_TABLES_RELOAD_PROBLEM)
+        }
+        _ => None,
+    }
+}
+
+/// `schema` with what stops or endangers writing `mode` into the existing table: blocked by its problems, with its warnings added.
+async fn checked_writes(
+    destination: &Destination,
+    spec: &TableSpec,
+    mode: &WriteMode,
+    mut schema: SchemaPlan,
+) -> Result<SchemaPlan, LoaderError> {
+    let (problems, warnings) = write_problems(destination, &spec.destination, mode).await?;
+    schema.warnings.extend(warnings);
+    Ok(match problems.is_empty() {
+        true => schema,
+        false => blocked_plan(problems),
+    })
+}
+
 async fn plan_table_once(
     spec: &TableSpec,
     destination: &Destination,
@@ -384,14 +410,7 @@ async fn plan_table_once(
         return plan_files_table(spec, files, options).await;
     }
     let live = live_columns(destination, &spec.destination).await?;
-    let refusal = match (spec.cdc.is_some(), options.reload) {
-        (true, true) => Some(CDC_RELOAD_PROBLEM),
-        (false, true) if sql_adapter(spec.warehouse).keeps_tables() => {
-            Some(KEPT_TABLES_RELOAD_PROBLEM)
-        }
-        _ => None,
-    };
-    if let Some(refusal) = refusal {
+    if let Some(refusal) = reload_refusal(spec, options) {
         return Ok(TablePlan {
             exists: live.is_some(),
             live,
@@ -546,11 +565,7 @@ async fn plan_table_once(
     let mode = captured_mode(spec, mode);
     let exists = live.is_some();
     if schema.blocked.is_none() && exists {
-        let (problems, warnings) = write_problems(destination, &spec.destination, &mode).await?;
-        schema.warnings.extend(warnings);
-        if !problems.is_empty() {
-            schema = blocked_plan(problems);
-        }
+        schema = checked_writes(destination, spec, &mode, schema).await?;
     }
     let chosen = match &schema.blocked {
         None => {
