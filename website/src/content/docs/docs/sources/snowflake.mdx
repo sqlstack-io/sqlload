@@ -6,7 +6,8 @@ description: "Load Snowflake tables and query results: choosing tables, query ta
 From sqlload 0.26.0, which isn't released yet, a Snowflake source loads tables and views of one
 database, and the results of queries you write.
 Snowflake unloads each read as Parquet with `COPY INTO`, and SQLLoad reads the files and loads
-them into the source's target, or a DuckDB target reads them from S3 itself.
+them into the source's target. From 0.27.0 (not released yet), a DuckDB target reads them from S3
+itself.
 
 ```toml
 [connections.warehouse]
@@ -128,7 +129,7 @@ storage integration must allow Snowflake to write there.
 
 ### DuckDB reads the files itself
 
-With a stage given by `url` and a DuckDB target, DuckDB reads the unloaded files from S3 itself,
+From 0.27.0 (not released yet). With a stage given by `url` and a DuckDB target, DuckDB reads the unloaded files from S3 itself,
 so no rows pass through SQLLoad. `plan` shows it in the route:
 
 ```text
