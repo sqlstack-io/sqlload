@@ -28,6 +28,7 @@ use crate::files_source::models::FilesRead;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::FilesPlanRequest;
+use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
@@ -502,7 +503,8 @@ async fn plan_table_once(
         cursor_name.filter(|_| lacks_cursor && restart_duplicates && schema.blocked.is_none())
     {
         schema = blocked_plan(vec![format!(
-            "the table has no {name} column yet, so this load would read every row again and duplicate the rows already there; run it once with --reload"
+            "the table has no {name} column yet, so this load would read every row again and duplicate the rows already there; {}",
+            column_fix(spec.warehouse)
         )]);
     }
     if let Some(problem) = append_problem(spec, cursor_type).filter(|_| schema.blocked.is_none()) {

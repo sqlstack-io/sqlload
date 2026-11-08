@@ -181,6 +181,17 @@ fn given_postgres_tables_when_loading_repeatedly_into_a_postgres_target_then_eac
                 check_query: "SELECT string_agg(code || '@' || price || '@' || coalesce(parent, 'none'), ',') FROM mart.stores",
                 expected_result: "L1@1.25@none",
             },
+            PostgresTargetTestCase {
+                description: "append into a table without its cursor column is refused with advice a Postgres target can follow, not --reload",
+                source_change: "ALTER TABLE mart.visits DROP COLUMN at;",
+                options: PlanOptions {
+                    select: vec!["visits".to_owned()],
+                    ..PlanOptions::default()
+                },
+                expected_load: "the table has no at column yet, so this load would read every row again and duplicate the rows already there; SQLLoad never drops and recreates a Postgres table (--reload), so add the column with ALTER TABLE",
+                check_query: "SELECT CAST(count(*) AS text) FROM mart.visits",
+                expected_result: "2",
+            },
         ];
         for test_case in test_cases {
             client
