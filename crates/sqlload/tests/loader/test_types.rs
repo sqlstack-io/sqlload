@@ -782,3 +782,25 @@ pub(crate) struct FilesPullTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// One load of a Google Sheets project against the fake API.
+pub(crate) struct SheetsLoadTestCase {
+    pub(crate) description: &'static str,
+    /// The spreadsheet's tabs for this load.
+    pub(crate) tabs: fn() -> Vec<sqlload_testkit::fake_sheets::models::FakeTab>,
+    /// How many reads the fake refuses with 401 first.
+    pub(crate) refused_reads: usize,
+    /// Text the load's output holds.
+    pub(crate) expected_output: &'static str,
+    pub(crate) query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
+/// A google_sheets source `plan` refuses.
+pub(crate) struct SheetsRefusalTestCase {
+    pub(crate) description: &'static str,
+    /// The source's TOML, added to the test project.
+    pub(crate) source: &'static str,
+    /// Text the refusal holds.
+    pub(crate) expected_output: &'static str,
+}
