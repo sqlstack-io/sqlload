@@ -2,13 +2,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::adapters::files::_helpers::layout::loaded::{
-    is_loaded_record, loaded_folder, parse_loaded,
-};
+use crate::adapters::files::_helpers::layout::loaded::loaded_records;
 use crate::adapters::files::_helpers::layout::loads::load_id_of;
 use crate::adapters::files::_helpers::layout::markers::{parse_marker, pending_folder};
 use crate::adapters::files::_helpers::layout::partitions::group_partitions;
-use crate::adapters::files::constants::LOADED_FOLDER;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
 use crate::adapters::files::errors::FilesDestinationError;
 use crate::adapters::files::models::{PendingLoad, PendingPhase, TablePath, TableState};
@@ -16,7 +13,6 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::models::{OpenFolder, StoredFile};
-use crate::files_source::models::LoadedFile;
 
 /// The table's files grouped by partition (oldest first), without the files repairing an unfinished load deletes, and those loads.
 pub async fn read_table_state(
@@ -65,31 +61,7 @@ pub async fn read_table_state(
         .iter()
         .filter_map(|file| load_id_of(&file.relative_key).map(str::to_owned))
         .collect();
-    let mut loaded: Vec<LoadedFile> = Vec::new();
-    let mut stale_loaded: Vec<String> = Vec::new();
-    let records = loaded_folder(folder);
-    for record in list_files(&records)
-        .await?
-        .into_iter()
-        .filter(|file| is_loaded_record(&file.relative_key))
-    {
-        let text = read_file(&records, &record.relative_key).await?;
-        let entries = parse_loaded(&String::from_utf8_lossy(&text)).map_err(|reason| {
-            FilesDestinationError::Write {
-                key: format!("{}{}", records.location, record.relative_key),
-                reason,
-            }
-        })?;
-        let held: Vec<LoadedFile> = entries
-            .into_iter()
-            .filter(|(commit, _)| commits.contains(commit))
-            .map(|(_, file)| file)
-            .collect();
-        if held.is_empty() {
-            stale_loaded.push(format!("{LOADED_FOLDER}{}", record.relative_key));
-        }
-        loaded.extend(held);
-    }
+    let (loaded, stale_loaded) = loaded_records(folder, &commits).await?;
     Ok(TableState {
         listed: group_partitions(kept, path, cursor_type),
         pending,

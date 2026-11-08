@@ -53,11 +53,19 @@ diff --all-files` reads every file's footer to report files whose columns differ
 A [`postgres_cdc` source](/docs/sources/postgres-cdc/#into-parquet-files) loads into a files
 target as a changelog, adding files with each load.
 
+From 0.27.0 (not released yet), a [files source](/docs/sources/files/) loads into a files target.
+SQLLoad reads the source files and writes them out again, with `append`, `replace`, or
+`delete_insert` by a partition cursor. Under `append`, each load records the source files it
+loaded in `_sqlload/loaded/<load id>.json`, so the next load reads only new or changed files. A
+record counts only while the table still holds that load's files, so a `replace`, or a load
+that failed and was repaired, frees its files to load again.
+
 SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: markers for loads in
-progress, and the run log of `state = "logged"` tables. Run one load at a time per files table.
+progress, the run log of `state = "logged"` tables, and the source files a files source's
+loads loaded. Run one load at a time per files table.
 
 ## Limitations
 
-- A files source can't load into a files target.
+- Before 0.27.0, a files source can't load into a files target.
 - `replace` and `delete_insert` write the new files first, then delete the older ones. A reader in
   between sees both, as the plan's `note` says.

@@ -29,10 +29,10 @@ use tokio_postgres::Client;
 
 use crate::test_types::{
     BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesScenario,
-    FilesScenarioTestCase, FilesTargetScenarioTestCase, FilesToFilesTestCase,
-    LargePartitionTestCase, LiveDatabricks, MetadataRoundTripTestCase, ParquetFile, RouteFiles,
-    RouteOutcome, RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase, StoppedLoadTestCase,
-    TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
+    FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks,
+    MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome, RouteTestCase,
+    ScenarioTestCase, SourceRowUpgradeTestCase, StoppedLoadTestCase, TextFilesScenarioTestCase,
+    WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -113,7 +113,7 @@ pub(crate) async fn described_project(text: &str) -> Result<ProjectConfig, Strin
 }
 
 /// Plan, apply and load once: the rendered plan, or the error text when any step fails.
-async fn run_once(
+pub(crate) async fn run_once(
     project_text: &str,
     destinations: &BTreeMap<String, Destination>,
     options: &PlanOptions,
@@ -311,72 +311,6 @@ pub(crate) async fn run_scenario(
     single_text(duckdb, test_case.check_query.to_owned())
         .await
         .map_err(|error| error.to_string())
-}
-
-/// Load the case's files source into a files target once per run, adding that run's source files first; after each run, the rows the target holds and how many loads wrote them, as `rows|loads`.
-pub(crate) async fn run_files_to_files(
-    endpoint: &str,
-    directory: &std::path::Path,
-    test_case: &FilesToFilesTestCase,
-) -> Result<Vec<String>, String> {
-    let (store, connection) = (test_case.store)(endpoint, directory);
-    let prefix = format!("f2f-{}/", uuid::Uuid::new_v4());
-    let source = open_folder(&Location {
-        store: store.clone(),
-        prefix: format!("{prefix}src/"),
-    })
-    .map_err(|error| error.to_string())?;
-    let output = open_folder(&Location {
-        store,
-        prefix: format!("{prefix}out/"),
-    })
-    .map_err(|error| error.to_string())?;
-    let text = format!(
-        "[connections.files]\n{connection}\n\n[targets.lake]\nconnection = \"files\"\npath = \"{prefix}out/{{table}}/\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"{prefix}src/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
-        test_case
-            .settings
-            .replace("PREFIX", prefix.trim_end_matches('/'))
-    );
-    let project = described_project(&text).await?;
-    let destinations = connect_targets(&project)
-        .await
-        .map_err(|error| error.to_string())?;
-    let mut held: Vec<String> = Vec::new();
-    for files in test_case.runs {
-        for (key, body) in files()? {
-            write_file(&source, &key, body)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        run_once(&text, &destinations, &PlanOptions::default())
-            .await
-            .map_err(|error| format!("{}: {error}", test_case.description))?;
-        let mut batches: Vec<RecordBatch> = Vec::new();
-        for file in list_files(&output)
-            .await
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .filter(|file| file.relative_key.ends_with(".parquet"))
-        {
-            let bytes = read_file(&output, &file.relative_key)
-                .await
-                .map_err(|error| error.to_string())?;
-            let reader =
-                parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(bytes)
-                    .and_then(|builder| builder.build())
-                    .map_err(|error| error.to_string())?;
-            for batch in reader {
-                batches.push(batch.map_err(|error| error.to_string())?);
-            }
-        }
-        let loads: std::collections::BTreeSet<String> =
-            column_values(&batches, "_sqlload_load_id")?
-                .into_iter()
-                .collect();
-        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
-        held.push(format!("{rows}|{}", loads.len()));
-    }
-    Ok(held)
 }
 
 /// A local directory store, and its `[connections.files]` TOML.

@@ -1,4 +1,9 @@
+use std::collections::BTreeSet;
+
 use crate::adapters::files::constants::{LOADED_FOLDER, LOADED_SUFFIX};
+use crate::adapters::files::errors::FilesDestinationError;
+use crate::file_store::main::list_files::list_files;
+use crate::file_store::main::read_file::read_file;
 use crate::file_store::models::OpenFolder;
 use crate::files_source::models::LoadedFile;
 use crate::store_paths::models::Location;
@@ -40,4 +45,37 @@ pub(crate) fn parse_loaded(text: &str) -> Result<Vec<(String, LoadedFile)>, Stri
         .into_iter()
         .map(|[commit, name, version]| (commit, LoadedFile { name, version }))
         .collect())
+}
+
+/// The source files recorded below `folder` whose commit the table still holds (one of `commits`), and the records left holding none (keys below `folder`), which repair deletes.
+pub(crate) async fn loaded_records(
+    folder: &OpenFolder,
+    commits: &BTreeSet<String>,
+) -> Result<(Vec<LoadedFile>, Vec<String>), FilesDestinationError> {
+    let mut loaded: Vec<LoadedFile> = Vec::new();
+    let mut stale: Vec<String> = Vec::new();
+    let records = loaded_folder(folder);
+    for record in list_files(&records)
+        .await?
+        .into_iter()
+        .filter(|file| is_loaded_record(&file.relative_key))
+    {
+        let text = read_file(&records, &record.relative_key).await?;
+        let entries = parse_loaded(&String::from_utf8_lossy(&text)).map_err(|reason| {
+            FilesDestinationError::Write {
+                key: format!("{}{}", records.location, record.relative_key),
+                reason,
+            }
+        })?;
+        let held: Vec<LoadedFile> = entries
+            .into_iter()
+            .filter(|(commit, _)| commits.contains(commit))
+            .map(|(_, file)| file)
+            .collect();
+        if held.is_empty() {
+            stale.push(format!("{LOADED_FOLDER}{}", record.relative_key));
+        }
+        loaded.extend(held);
+    }
+    Ok((loaded, stale))
 }
