@@ -93,7 +93,7 @@ role. AWS profiles and SSO aren't read.
 
 ### `odbc`
 
-From 0.26.0 (not released yet). See [ODBC](/docs/sources/odbc/#connection).
+From 0.27.0 (not released yet). See [ODBC](/docs/sources/odbc/#connection).
 
 | Key | Meaning |
 |-----|---------|
@@ -128,7 +128,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 
 | Key | Applies to | Meaning |
 |-----|------------|---------|
-| `kind` | all | `postgres`, `postgres_cdc`, `snowflake` (from 0.26.0, not released yet), `odbc` (from 0.26.0, not released yet) or `files`. Python sources are declared in Python. |
+| `kind` | all | `postgres`, `postgres_cdc`, `snowflake` (from 0.26.0, not released yet), `odbc` (from 0.27.0, not released yet) or `files`. Python sources are declared in Python. |
 | `connection` | all | The connection the source reads. |
 | `description` | all | The source's description; a files source's table description. |
 | `destination` | all | The target; `default_target` when omitted. |
@@ -146,7 +146,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
 | `warehouse` | snowflake | From 0.26.0 (not released yet). The warehouse unloads run on; the connection's when omitted. |
 | `stage` | snowflake | From 0.26.0. Where unloads go: `{ url, storage_integration, region }` or `{ name }`; the user stage when omitted. See [Snowflake](/docs/sources/snowflake/#where-the-files-go). |
-| `max_text_size`, `max_binary_size` | odbc | From 0.26.0 (not released yet). The longest text and binary value a read holds, in bytes; caps every text and binary column. See [ODBC](/docs/sources/odbc/#value-sizes). |
+| `max_text_size`, `max_binary_size` | odbc | From 0.27.0 (not released yet). The longest text and binary value a read holds, in bytes; caps every text and binary column. See [ODBC](/docs/sources/odbc/#value-sizes). |
 | `path` | files | The folder holding the files, relative to the connection. |
 | `format` | files | `parquet` (default), `ndjson`, `json` or `csv`. |
 | `compression` | files | `auto` (default), `none`, `gzip` or `zstd`. |
@@ -186,7 +186,7 @@ Only in a table entry:
 |-----|---------|
 | `description` | The table's description, which becomes its comment. |
 | `name` | The destination table name, overriding `table_name`. |
-| `sql` | From 0.26.0 (not released yet). A query whose rows are the table (snowflake and odbc sources); the entry's key is its name. |
+| `sql` | A query whose rows are the table (snowflake sources from 0.26.0; odbc sources from 0.27.0, not released yet); the entry's key is its name. |
 | `columns` | Pinned column types, such as `{ total = "decimal(18,2)" }`. See [Types](/docs/types/). |
 | `mask` | Masked columns: `{ email = "hmac" }` or `"hash"`. |
 | `exclude_columns`, `allow_columns`, `destination_path` | As on the source, for this table. |
