@@ -38,8 +38,10 @@ Postgres sources and targets compare with `COLLATE "C"`, and Snowflake with `utf
 each side used its own collation. A linguistic one, such as `en_US` or a case-insensitive ICU
 collation, could then read rows again on every run.
 
-- An index on a text cursor only speeds up the read and the destination's maximum when it
-  uses the same order. On Postgres, create it as `CREATE INDEX ... (event_key COLLATE "C")`.
+- Postgres stops using a plain index on a text cursor for the read, the destination's
+  maximum and `delete_insert`'s deletes, unless the column is already `COLLATE "C"`. Create the
+  index as `CREATE INDEX ... (event_key COLLATE "C")`. On Snowflake, a cursor column declared
+  with another collation may prune fewer micro-partitions.
 - If an existing table's keys only increase in a linguistic order (`apple1`, `Banana2`,
   `cherry3`, `Date4`), code point order puts some new keys below the maximum, so they are not
   read. Use keys that increase in either order, such as zero-padded numbers, ULIDs or ISO
