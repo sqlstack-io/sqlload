@@ -47,6 +47,15 @@ pub(in crate::loader) async fn check_source(
                 .and_then(|row| row.first().cloned().flatten())
                 .unwrap_or_default())
         }
+        #[cfg(feature = "odbc")]
+        SourceKind::Odbc => {
+            let reader = crate::loader::_helpers::sources::odbc_source_reader(project, source)?;
+            Ok(crate::odbc_source::main::describe_source::describe_source(&reader).await?)
+        }
+        #[cfg(not(feature = "odbc"))]
+        SourceKind::Odbc => Err(LoaderError::Invalid(
+            crate::loader::constants::NO_ODBC.to_owned(),
+        )),
         SourceKind::Files => {
             let folder = open_folder(&files_location(project, source)?)?;
             let entries = probe_folder(&folder).await?;

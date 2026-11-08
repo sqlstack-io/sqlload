@@ -46,6 +46,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     let expected = match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => "postgres",
         SourceKind::Snowflake => "snowflake",
+        SourceKind::Odbc => "odbc",
         SourceKind::Files => "s3 or filesystem",
         SourceKind::Python => "any",
     };
@@ -105,6 +106,7 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::PostgresCdc => "postgres_cdc",
         SourceKind::Files => "files",
         SourceKind::Snowflake => "snowflake",
+        SourceKind::Odbc => "odbc",
         SourceKind::Python => "python",
     }
 }
@@ -158,21 +160,36 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         problems.extend(cdc_problems(place, source));
     }
     let queries = source.tables.values().any(|table| table.sql.is_some());
+    if !matches!(source.kind, SourceKind::Snowflake | SourceKind::Odbc) && queries {
+        problems.push(format!(
+            "{place} sql is for kind = \"snowflake\" and kind = \"odbc\""
+        ));
+    }
     if source.kind != SourceKind::Snowflake
-        && (queries || source.warehouse.is_some() || source.stage.is_some())
+        && (source.warehouse.is_some() || source.stage.is_some())
     {
         problems.push(format!(
-            "{place} sql, warehouse and stage are for kind = \"snowflake\""
+            "{place} warehouse and stage are for kind = \"snowflake\""
+        ));
+    }
+    if source.kind != SourceKind::Odbc
+        && (source.max_text_size.is_some() || source.max_binary_size.is_some())
+    {
+        problems.push(format!(
+            "{place} max_text_size and max_binary_size are for kind = \"odbc\""
         ));
     }
     if source.kind == SourceKind::Snowflake {
         problems.extend(unload_stage_problems(place, source));
     }
     match source.kind {
-        SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake => {
+        SourceKind::Postgres
+        | SourceKind::PostgresCdc
+        | SourceKind::Snowflake
+        | SourceKind::Odbc => {
             if source.include.is_empty() && !queries {
                 let tables = match source.kind {
-                    SourceKind::Snowflake => {
+                    SourceKind::Snowflake | SourceKind::Odbc => {
                         "; list tables in include, or give a table a sql query"
                     }
                     _ => "",

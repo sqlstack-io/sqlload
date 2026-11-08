@@ -21,6 +21,9 @@ pub enum LoaderError {
     Files(#[from] FilesError),
     #[error(transparent)]
     WarehouseSource(#[from] SnowflakeSourceError),
+    #[cfg(feature = "odbc")]
+    #[error(transparent)]
+    Odbc(#[from] crate::odbc_source::errors::OdbcSourceError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]

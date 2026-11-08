@@ -131,6 +131,8 @@ pub struct WarehouseSource {
 pub enum WarehouseRoute {
     /// The warehouse writes Parquet into `store`, which SQLLoad reads back and removes; `stage` says why there, for `plan`.
     Unload { store: Store, stage: String },
+    /// SQLLoad runs the query and reads its rows as Arrow.
+    Query,
 }
 
 /// A created table's layout, with SQLBuild's ClickHouse field names; every field unset by default.
@@ -591,6 +593,9 @@ pub enum SourceReader {
     Files(OpenFolder),
     /// A warehouse source that unloads its tables.
     Snowflake(Box<SnowflakeReader>),
+    /// A database read through its ODBC driver.
+    #[cfg(feature = "odbc")]
+    Odbc(Box<crate::odbc_source::models::OdbcReader>),
 }
 
 /// What decides one files table's cursor window.

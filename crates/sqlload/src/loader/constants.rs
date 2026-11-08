@@ -79,3 +79,6 @@ pub const LOCALHOST: &str = "localhost";
 
 /// Why a warehouse source's unloaded files go through SQLLoad rather than straight into the destination.
 pub const UNLOADED_TIMES: &str = "the warehouse writes times and timestamps as whole microseconds (its Parquet writer keeps only milliseconds), which SQLLoad turns back into them";
+
+/// Why an `odbc` source cannot be read by this build.
+pub const NO_ODBC: &str = "this build of SQLLoad has no ODBC support; build it with the odbc feature (cargo install sqlload --features odbc)";
