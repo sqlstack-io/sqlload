@@ -39,11 +39,13 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
     match load_one(&run, &table).await {
         Ok((name, loaded)) => TableOutcome {
             table: name,
+            origin: Some(table.origin()),
             loaded: Ok(loaded),
             elapsed: started.elapsed(),
         },
         Err(error) => TableOutcome {
             table: table.outcome_name(),
+            origin: Some(table.origin()),
             loaded: Err(error.to_string()),
             elapsed: started.elapsed(),
         },
@@ -114,6 +116,7 @@ impl<'a> TableQueue<'a> {
             index,
             outcome.unwrap_or_else(|reason| TableOutcome {
                 table: table.outcome_name(),
+                origin: Some(table.origin()),
                 loaded: Err(reason),
                 elapsed: std::time::Duration::ZERO,
             }),

@@ -368,6 +368,15 @@ impl ProjectPlan {
 }
 
 impl TablePlan {
+    /// Where the table comes from and goes, and how it is written, for its outcome.
+    pub fn origin(&self) -> OutcomeOrigin {
+        OutcomeOrigin {
+            source: self.spec.source_name.clone(),
+            target: self.spec.target.clone(),
+            strategy: self.spec.strategy,
+        }
+    }
+
     /// The name the table's load is reported under: its folder in a files target, which has no schema, and its display name elsewhere.
     pub fn outcome_name(&self) -> String {
         let adapter = sql_adapter(self.spec.warehouse);
@@ -434,8 +443,18 @@ pub struct SharedRun {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableOutcome {
     pub table: String,
+    /// The table's source, target and write strategy; `None` for a failure of no one table (a `load --follow` with none).
+    pub origin: Option<OutcomeOrigin>,
     pub loaded: Result<TableLoaded, String>,
     pub elapsed: std::time::Duration,
+}
+
+/// Where a loaded table comes from and goes, and how it is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutcomeOrigin {
+    pub source: String,
+    pub target: String,
+    pub strategy: WriteStrategy,
 }
 
 /// What a table's load did: rows written, schema changes made on the way (Python tables), and a remark for the `loaded` line.

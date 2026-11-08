@@ -907,11 +907,15 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
             }
         })
         .collect();
-    let tables: Vec<TableResult> = outcomes
-        .iter()
-        .map(|outcome| table_result(plan, outcome))
-        .collect();
-    let actions = |action: &str| objects.iter().filter(|o| o.action == action).count();
+    let tables: Vec<TableResult> = outcomes.iter().map(table_result).collect();
+    let actions = |action: &str| {
+        objects
+            .iter()
+            .filter(|object| object.action == action)
+            .map(|object| object.name.as_str())
+            .collect::<std::collections::BTreeSet<&str>>()
+            .len()
+    };
     let statuses = |status: &str| tables.iter().filter(|t| t.status == status).count();
     let summary = RunSummary {
         created: actions("created"),
@@ -937,22 +941,20 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
     }
 }
 
-/// `outcome` with its table's source, target and write strategy from `plan`.
-fn table_result(plan: &ProjectPlan, outcome: &TableOutcome) -> TableResult {
-    let spec = plan
-        .tables
-        .iter()
-        .find(|table| table.outcome_name() == outcome.table)
-        .map(|table| &table.spec);
+/// `outcome` as `--json` reports it.
+fn table_result(outcome: &TableOutcome) -> TableResult {
     let (status, rows, note, error) = match &outcome.loaded {
         Ok(loaded) => ("loaded", Some(loaded.rows), loaded.note.clone(), None),
         Err(reason) => ("failed", None, None, Some(reason.clone())),
     };
     TableResult {
         table: outcome.table.clone(),
-        source: spec.map(|spec| spec.source_name.clone()),
-        target: spec.map(|spec| spec.target.clone()),
-        write_strategy: spec.map(|spec| spec.strategy.to_string()),
+        source: outcome.origin.as_ref().map(|origin| origin.source.clone()),
+        target: outcome.origin.as_ref().map(|origin| origin.target.clone()),
+        write_strategy: outcome
+            .origin
+            .as_ref()
+            .map(|origin| origin.strategy.to_string()),
         status,
         rows,
         duration_seconds: seconds(outcome.elapsed),

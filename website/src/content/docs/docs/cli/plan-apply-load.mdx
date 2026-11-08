@@ -155,7 +155,7 @@ $ sqlload load --json
       "rows": null,
       "duration_seconds": 0.009,
       "note": null,
-      "error": "RuntimeError: the API returned 503 (File \"sources/shop.py\", line 14, in refunds)"
+      "error": "RuntimeError: the API returned 503 (File \"/srv/project/sources/shop.py\", line 14, in refunds)"
     }
   ]
 }
@@ -166,10 +166,10 @@ $ sqlload load --json
 | `schema_version` | `1`. New fields can appear without a change; it changes only when a field changes meaning or goes away. |
 | `command` | `apply` or `load`. |
 | `ok` | Whether every selected table planned and loaded: `true` exactly when the exit code is 0. |
-| `summary` | Objects `created`, `altered` and `recreated`; tables `loaded` and `failed`; `rows` loaded. |
+| `summary` | How many objects were `created`, `altered` and `recreated` (each object once, however many changes it had); tables `loaded` and `failed`; `rows` loaded. |
 | `plan` | The same document `plan --json` prints. Tables a plan error left out are in its `errors`, and tables with nothing to load in `skipped`. |
-| `objects` | Each object created, altered or recreated, by `apply` or by a Python table's load. |
-| `tables` | Each table loaded: its `status` (`loaded` or `failed`), `rows`, `duration_seconds`, a `note` (the cursor window it read, or that its table waits for first data), and the `error` when it failed. `apply` loads nothing, so its list is empty. |
+| `objects` | One entry per change to a table or stage, by `apply` or during a load: its `action` (`created`, `altered` or `recreated`), its `name` and the `detail`. A table that gains two columns has two `altered` entries. |
+| `tables` | Each table loaded: its `status` (`loaded` or `failed`), `rows`, `duration_seconds`, a `note` (the cursor window it read, or that its table waits for first data), and the `error` when it failed. `source`, `target` and `write_strategy` are `null` only for a `load --follow` that failed before any table. `apply` loads nothing, so its list is empty. |
 
 When the run can't start (the configuration doesn't parse, a connection fails), standard output
 holds one error document instead, the same as `plan --json`'s:
