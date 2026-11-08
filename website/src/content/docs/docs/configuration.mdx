@@ -36,6 +36,21 @@ Each connection has a `kind`.
 | `user` | required | |
 | `password` | none | Use `${ENV:NAME}`. |
 | `database` | required | |
+| `sslmode` | `prefer` | `disable`, `prefer`, `require`, `verify-ca` or `verify-full`, as in libpq. |
+| `sslrootcert` | built-in public roots | CA certificates (PEM) to trust. |
+| `sslcert`, `sslkey` | none | A client certificate and its key (PEM), set together. |
+| `ssh` | none | A bastion to reach `host` through. See [SSH tunnels](/docs/sources/postgres/#ssh-tunnels). |
+
+The `ssh` table:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `host` | required | The bastion. |
+| `port` | 22 | |
+| `user` | required | |
+| `private_key_file` | ssh-agent | The private key to sign in with. `~/` is the home folder. Without it, SQLLoad tries each key ssh-agent holds. |
+| `private_key_passphrase` | none | Use `${ENV:NAME}`. |
+| `known_hosts` | `~/.ssh/known_hosts` | The file the bastion's host key must be listed in. |
 
 ### `snowflake`
 

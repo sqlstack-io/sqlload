@@ -103,6 +103,37 @@ mask = { email = "hmac" }
 be recovered. Use `hmac` for personal data. A masked column can't be the `cursor_column` or part of
 the `unique_key`.
 
+## SSH tunnels
+
+When the database is reachable only through a bastion host, give the connection an `ssh` table.
+`host` and `port` are then the database as the bastion sees it.
+
+```toml
+[connections.app]
+kind = "postgres"
+host = "db.internal"
+port = 5432
+user = "loader"
+password = "${ENV:APP_DB_PASSWORD}"
+database = "shop"
+ssh = { host = "bastion.example.com", user = "deploy", private_key_file = "~/.ssh/id_ed25519" }
+```
+
+- SQLLoad opens the tunnel itself, with no `ssh` program needed. It keeps one session to the
+  bastion per run, shared by every table, and closes it when the run ends. It opens no local
+  port, so other processes on the machine can't use the tunnel.
+- It signs in with `private_key_file` (with `private_key_passphrase` if the key has one), or with
+  each key ssh-agent holds when no file is set. Passwords aren't supported.
+- The bastion's host key must be in `known_hosts` (`~/.ssh/known_hosts` by default). An unknown or
+  changed key fails with its SHA256 fingerprint and the fix; a key is never accepted on first use.
+- TLS still runs end to end with the database, so `verify-full` checks the database's own name.
+- Keepalives every 15 seconds hold idle tunnels open through long reads and `load --follow`.
+  When the tunnel drops, the table fails with an error that names the tunnel. A
+  `postgres_cdc` source resumes from its slot on the next run.
+- `sqlload debug` says which hop failed: the tunnel, or the database through it. `plan` shows the
+  route on each table's `source` line, for example `via ssh deploy@bastion.example.com:22`.
+- Postgres connections only for now. Copy URIs, jump chains and `~/.ssh/config` aren't read.
+
 ## How Postgres is read
 
 SQLLoad reads each table with binary `COPY` into Arrow. A table whose `cursor_column` leads an

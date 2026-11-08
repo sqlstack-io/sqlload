@@ -1,9 +1,11 @@
 //! Connect to Postgres.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio_postgres::config::SslMode as ClientSslMode;
+use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config};
 
 use crate::postgres_source::_helpers::rustls_connect::RustlsConnect;
@@ -12,8 +14,10 @@ use crate::postgres_source::_helpers::tls::{certificate_check, client_config};
 use crate::postgres_source::constants::SESSION_OPTIONS;
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::{Encryption, PostgresAddress, SslMode};
+use crate::ssh_tunnel::main::open_channel::open_channel;
+use crate::ssh_tunnel::models::TunnelStream;
 
-/// An open client, and what protects it; the connection runs on its own task until the client is dropped. As in libpq, `prefer` connects in plain text when the server refuses TLS or the handshake fails, and a Unix socket never uses TLS.
+/// An open client, and what protects it; the connection runs on its own task until the client is dropped. As in libpq, `prefer` connects in plain text when the server refuses TLS or the handshake fails, and a Unix socket never uses TLS. Through a bastion, TLS still runs end to end with the database and `verify-full` checks the database's own host name.
 pub async fn connect_postgres(
     address: PostgresAddress<'_>,
 ) -> Result<(Client, Encryption), PostgresError> {
@@ -33,33 +37,67 @@ pub async fn connect_postgres(
             ClientSslMode::Require
         }
     };
-    let connected = client_settings(&address, mode).connect(tls.clone()).await;
+    let connected = attempt(&address, mode, tls.clone()).await;
     let fall_back = mode == ClientSslMode::Prefer && tls.refused.load(Ordering::Relaxed);
-    let connected = match (connected, fall_back) {
-        (Err(_), true) => {
-            client_settings(&address, ClientSslMode::Disable)
-                .connect(tls.clone())
-                .await
-        }
+    let client = match (connected, fall_back) {
+        (Err(_), true) => attempt(&address, ClientSslMode::Disable, tls.clone()).await,
         (connected, _) => connected,
-    };
-    let (client, connection) = connected.map_err(|source| PostgresError::Connect {
-        address: shown,
-        source,
-    })?;
-    tokio::spawn(async move {
-        if let Err(error) = connection.await {
-            tracing::warn!(
-                reason = %server_reason(&error),
-                "Postgres connection closed with an error"
-            );
-        }
-    });
+    }?;
     let encryption = match tls.encrypted.load(Ordering::Relaxed) {
         true => certificate_check(&address.tls),
         false => Encryption::None,
     };
     Ok((client, encryption))
+}
+
+/// One try at a client for `address` with TLS mode `mode`, directly or through its bastion; its connection runs on its own task.
+async fn attempt(
+    address: &PostgresAddress<'_>,
+    mode: ClientSslMode,
+    mut tls: RustlsConnect,
+) -> Result<Client, PostgresError> {
+    let settings = client_settings(address, mode);
+    let shown = format!("{}:{}/{}", address.host, address.port, address.database);
+    let failed = |source| match address.ssh {
+        Some(tunnel) => PostgresError::Connect {
+            address: format!("{shown} via {}", tunnel.route()),
+            source,
+        },
+        None => PostgresError::Connect {
+            address: shown.clone(),
+            source,
+        },
+    };
+    let Some(tunnel) = address.ssh else {
+        let (client, connection) = settings.connect(tls).await.map_err(failed)?;
+        tokio::spawn(watch(connection));
+        return Ok(client);
+    };
+    let stream = open_channel(tunnel, address.host, address.port).await?;
+    let handshake = MakeTlsConnect::<TunnelStream>::make_tls_connect(&mut tls, address.host)
+        .map_err(|error| PostgresError::Tls {
+            address: shown.clone(),
+            reason: error.to_string(),
+        })?;
+    let (client, connection) = settings
+        .connect_raw(stream, handshake)
+        .await
+        .map_err(failed)?;
+    tokio::spawn(watch(connection));
+    Ok(client)
+}
+
+/// Run `connection` until its client is dropped, logging how it ended if it failed.
+async fn watch<F>(connection: F)
+where
+    F: Future<Output = Result<(), tokio_postgres::Error>>,
+{
+    if let Err(error) = connection.await {
+        tracing::warn!(
+            reason = %server_reason(&error),
+            "Postgres connection closed with an error"
+        );
+    }
 }
 
 /// The client's settings for `address`, with TLS mode `mode`.

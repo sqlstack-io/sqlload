@@ -11,23 +11,52 @@ use crate::postgres_source::_helpers::tls::client_config;
 use crate::postgres_source::constants::{RELAY_ACCEPT_TIMEOUT, SSL_REQUEST};
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::{PostgresAddress, SslMode};
+use crate::ssh_tunnel::main::open_channel::open_channel;
 
-/// When `address` may use TLS: a private socket folder whose `.s.PGSQL.<port>` socket carries the next session opened on it to the server, encrypted, or in plain text when the server refuses TLS under `prefer` (one connection either way, so the server logs no abandoned one). `None` to connect directly: `sslmode = "disable"`, a Unix socket host, or a failed handshake under `prefer`, which libpq also retries in plain text.
+/// When `address` may use TLS or goes through a bastion: a private socket folder whose `.s.PGSQL.<port>` socket carries the next session opened on it to the server, encrypted, or in plain text when the server refuses TLS under `prefer` (one connection either way, so the server logs no abandoned one). `None` to connect directly: `sslmode = "disable"`, a Unix socket host, or a failed handshake under `prefer`, which libpq also retries in plain text. Through a bastion it never connects directly: that retry opens a fresh channel.
 pub async fn relay_tls(address: &PostgresAddress<'_>) -> Result<Option<String>, PostgresError> {
-    if address.tls.mode == SslMode::Disable || address.host.starts_with('/') {
+    let failed = |reason: String| PostgresError::Tls {
+        address: format!("{}:{}/{}", address.host, address.port, address.database),
+        reason,
+    };
+    if address.host.starts_with('/') {
         return Ok(None);
     }
+    let Some(tunnel) = address.ssh else {
+        if address.tls.mode == SslMode::Disable {
+            return Ok(None);
+        }
+        let server = TcpStream::connect((address.host, address.port))
+            .await
+            .map_err(|error| failed(error.to_string()))?;
+        server
+            .set_nodelay(true)
+            .map_err(|error| failed(error.to_string()))?;
+        return negotiate(server, address).await;
+    };
+    let server = open_channel(tunnel, address.host, address.port).await?;
+    if address.tls.mode != SslMode::Disable
+        && let Some(relayed) = negotiate(server, address).await?
+    {
+        return Ok(Some(relayed));
+    }
+    let server = open_channel(tunnel, address.host, address.port).await?;
+    Ok(Some(relay(server, address.port).map_err(failed)?))
+}
+
+/// Ask `server` for TLS and relay the session it allows; `None` when the handshake failed under `prefer`.
+async fn negotiate<S>(
+    mut server: S,
+    address: &PostgresAddress<'_>,
+) -> Result<Option<String>, PostgresError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let failed = |reason: String| PostgresError::Tls {
         address: format!("{}:{}/{}", address.host, address.port, address.database),
         reason,
     };
     let config = client_config(&address.tls).map_err(failed)?;
-    let mut server = TcpStream::connect((address.host, address.port))
-        .await
-        .map_err(|error| failed(error.to_string()))?;
-    server
-        .set_nodelay(true)
-        .map_err(|error| failed(error.to_string()))?;
     server
         .write_all(&SSL_REQUEST)
         .await

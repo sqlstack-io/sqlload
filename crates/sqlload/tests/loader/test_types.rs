@@ -695,3 +695,25 @@ pub(crate) struct CdcTlsTestCase {
     pub(crate) settings: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// A `debug` case through the SSH bastion.
+pub(crate) struct SshDebugTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    /// The database port as the bastion sees it; 5432 reaches the server.
+    pub(crate) port: u16,
+    pub(crate) user: &'static str,
+    /// The connection's TLS and `ssh` settings: `FILES` stands for the test certificates' folder, `KEYS` for the bastion's key files, `SSH_PORT` for its port.
+    pub(crate) settings: &'static str,
+    pub(crate) expected_status: &'static str,
+    pub(crate) expected_text: &'static str,
+}
+
+/// A `postgres_cdc` case through the SSH bastion.
+pub(crate) struct CdcSshTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) server: TlsServer,
+    /// As in [`SshDebugTestCase::settings`].
+    pub(crate) settings: &'static str,
+    pub(crate) expected_result: &'static str,
+}

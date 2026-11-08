@@ -30,6 +30,8 @@ mod test_postgres_cdc;
 mod test_postgres_cdc_files;
 #[path = "loader/test_postgres_reader.rs"]
 mod test_postgres_reader;
+#[path = "loader/test_postgres_ssh.rs"]
+mod test_postgres_ssh;
 #[path = "loader/test_postgres_tls.rs"]
 mod test_postgres_tls;
 #[path = "loader/test_postgres_to_duckdb.rs"]

@@ -301,6 +301,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             ),
         },
     };
+    let source = match &spec.tunnel {
+        Some(route) => format!("{source}  via {route}"),
+        None => source,
+    };
     let mut details = vec![detail("source", source)];
     details.extend(
         spec.python

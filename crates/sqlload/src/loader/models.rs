@@ -105,6 +105,8 @@ pub struct TableSpec {
     pub python: Option<PythonTable>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
+    /// The bastion a Postgres source is reached through, as `ssh user@host:port`.
+    pub tunnel: Option<String>,
 }
 
 /// A `postgres_cdc` table's stream: where it comes from and how its changes are applied.

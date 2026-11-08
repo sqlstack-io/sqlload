@@ -148,6 +148,9 @@ pub enum ConnectionConfig {
         /// The client certificate's private key (PEM).
         #[serde(default)]
         sslkey: Option<PathBuf>,
+        /// A bastion to reach `host` through, over SSH.
+        #[serde(default)]
+        ssh: Option<crate::ssh_tunnel::models::SshTunnel>,
     },
     /// An S3 bucket; credentials come from `AWS_*` environment variables, web identity, or the instance/container role (AWS profiles and SSO are not read yet).
     S3 {

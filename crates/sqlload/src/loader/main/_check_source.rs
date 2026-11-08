@@ -4,9 +4,9 @@ use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::probe_folder::probe_folder;
 use crate::loader::_helpers::sources::{connect_source, files_location};
 use crate::loader::errors::LoaderError;
-use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
+use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig, SourceKind};
 
-/// What source `source` reads as, or why it cannot connect; for Postgres, what protects the connection.
+/// What source `source` reads as, or why it cannot connect; for Postgres, what protects the connection and the bastion it goes through (a failure names the hop: the SSH tunnel, or the database via it).
 pub(in crate::loader) async fn check_source(
     project: &ProjectConfig,
     source: &SourceConfig,
@@ -23,8 +23,14 @@ pub(in crate::loader) async fn check_source(
                 .await
                 .map_err(|error| LoaderError::Invalid(format!("cannot query Postgres: {error}")))?;
             let answer: String = row.get(0);
+            let route = match project.connections.get(&source.connection) {
+                Some(ConnectionConfig::Postgres { ssh: Some(tunnel), .. }) => {
+                    format!(", via {}", tunnel.route())
+                }
+                _ => String::new(),
+            };
             Ok(format!(
-                "{}, {encryption}",
+                "{}, {encryption}{route}",
                 answer.split(" on ").next().unwrap_or_default()
             ))
         }

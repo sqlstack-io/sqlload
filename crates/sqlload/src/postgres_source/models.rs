@@ -107,6 +107,8 @@ pub struct PostgresAddress<'a> {
     pub password: Option<&'a str>,
     pub database: &'a str,
     pub tls: PostgresTls<'a>,
+    /// The bastion `host` is reached through; `host` and `port` are then as the bastion sees them.
+    pub ssh: Option<&'a crate::ssh_tunnel::models::SshTunnel>,
 }
 
 /// How a connection uses TLS, under libpq's names.

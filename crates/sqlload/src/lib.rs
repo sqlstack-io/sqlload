@@ -40,6 +40,7 @@ pub mod run_log;
 pub mod schema_plan;
 pub mod similar_names;
 pub mod sql_api;
+pub mod ssh_tunnel;
 pub mod stage_api;
 pub mod status;
 pub mod store_paths;

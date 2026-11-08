@@ -12,3 +12,4 @@ pub mod postgres;
 pub mod records;
 pub mod redpanda;
 pub mod seaweedfs;
+pub mod ssh;
