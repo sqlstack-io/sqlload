@@ -26,6 +26,7 @@ use crate::adapters::files::main::close_writer::close_writer;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::open_writer::open_writer;
 use crate::adapters::files::main::partitions_finished::partitions_finished;
+use crate::adapters::files::main::swap_folder::swap_folder;
 use crate::adapters::files::main::write_rows::write_rows;
 use crate::adapters::files::models::FilesWriter;
 use crate::adapters::files::models::PartitionFolder;
@@ -72,6 +73,7 @@ use crate::loader::main::_files_repair::files_to_replace;
 use crate::loader::models::CommitRange;
 use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
+use crate::loader::models::FolderSwap;
 use crate::loader::models::Publisher;
 use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
@@ -212,18 +214,34 @@ impl Publisher {
         let load_id = uuid::Uuid::new_v4().to_string();
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
-                let folder = open_folder(&output.path.folder)?;
-                let lease = take_lease(&folder, &load_id, lease_now())
+                let live = open_folder(&output.path.folder)?;
+                let staged = output
+                    .path
+                    .staged_folder(&table.mode, &load_id)
+                    .map(|staged| open_folder(&staged))
+                    .transpose()?;
+                let lease = take_lease(&live, &load_id, lease_now())
                     .await?
                     .map_err(LoaderError::Invalid)?;
-                let replaced = match files_to_replace(&folder, &table, output).await {
+                let replaced = match files_to_replace(&live, &table, output).await {
                     Ok(replaced) => replaced,
                     Err(error) => {
-                        give_back(&folder, &lease).await;
+                        give_back(&live, &lease).await;
                         return Err(error);
                     }
                 };
-                let keeper = keep_in_background(&folder, &lease);
+                let keeper = keep_in_background(&live, &lease);
+                let (folder, replaced, swap) = match staged {
+                    Some(staged) => (
+                        staged,
+                        ReplacedFiles::default(),
+                        Some(FolderSwap {
+                            live,
+                            replaced: replaced.keys(&BTreeSet::new()).into_iter().collect(),
+                        }),
+                    ),
+                    None => (live, replaced, None),
+                };
                 Some(FilesSink {
                     output: output.clone(),
                     folder,
@@ -232,6 +250,7 @@ impl Publisher {
                     deleted: BTreeSet::new(),
                     lease,
                     keeper: Some(keeper),
+                    swap,
                 })
             }
             (false, None) => {
@@ -425,7 +444,7 @@ impl Publisher {
                     tracing::warn!(%error, "the lease's renewal task failed");
                 }
             }
-            give_back(&sink.folder, &sink.lease).await;
+            give_back(leased_folder(sink), &sink.lease).await;
         }
         self.writer.rollback_batch().await;
         let warehouse = self.table.spec.warehouse;
@@ -1105,6 +1124,7 @@ impl Publisher {
             load_id: &self.load_id,
             file_id: &file_id,
             loaded_at: &self.loaded_at,
+            encoding: &sink.output.encoding,
         })
         .map_err(LoaderError::Invalid)?;
         mark_pending(&sink.folder, &file_id, PendingPhase::Writing, (&[], None)).await?;
@@ -1127,18 +1147,19 @@ impl Publisher {
         let keep_schema = self.at_end && self.committed_rows == 0;
         close_writer(&mut writer, keep_schema).await?;
         let sink = self.sink()?;
-        let keys = commit_deletes(
+        let mut keys = commit_deletes(
             &sink.replaced,
             sink.output.path.partition.as_ref(),
             (&writer.partitions, last),
             &sink.deleted,
         );
+        keys.retain(|key| !writer.written.contains(key));
         let run = match &self.run {
             Some(_) => {
                 let mut record = self.record(self.waiting_rows)?;
                 record.files = writer.written.clone();
                 Some(PendingRun {
-                    prefix: runs_location(&self.sink()?.output.path.folder).prefix,
+                    prefix: runs_location(&self.sink()?.folder.location).prefix,
                     name: record_object_name(&record),
                     json: serde_json::to_string(&record)
                         .map_err(|error| LoaderError::Invalid(error.to_string()))?,
@@ -1148,9 +1169,19 @@ impl Publisher {
         };
         let sink = self.sink()?;
         let (folder, lease) = (sink.folder.clone(), sink.lease.clone());
-        replace_files((&folder, &lease), &writer.file_id, (&keys, run.as_ref())).await?;
+        let table_folder = leased_folder(sink).clone();
+        replace_files(
+            (&folder, (&table_folder, &lease)),
+            &writer.file_id,
+            (&keys, run.as_ref()),
+        )
+        .await?;
+        if let Some(swap) = self.sink()?.swap.as_ref().filter(|_| last) {
+            swap_folder(&swap.live, &folder, &swap.replaced).await?;
+        }
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
+            sink.deleted.extend(writer.written.iter().cloned());
         }
         self.committed_rows += self.waiting_rows;
         self.waiting_rows = 0;
@@ -1194,6 +1225,13 @@ impl Publisher {
         let Some(mut writer) = sink.writer.take() else {
             return Ok(());
         };
+        if writer.encoding.single_file && !(writer.open.is_empty() && writer.written.is_empty()) {
+            sink.writer = Some(writer);
+            return Err(LoaderError::Invalid(format!(
+                "{}: new columns appeared partway through the load, and single_file writes each file once, with one header; drop single_file, or have the source return every column from its first rows",
+                self.table.spec.destination.table
+            )));
+        }
         let cursor_column = self
             .table
             .spec
@@ -1208,6 +1246,7 @@ impl Publisher {
             load_id: &self.load_id,
             file_id: &writer.file_id,
             loaded_at: &self.loaded_at,
+            encoding: &sink.output.encoding,
         });
         let closed = close_writer(&mut writer, false).await.map(|_| ());
         let schema = opened.map(|opened| opened.schema);
@@ -1246,18 +1285,22 @@ impl Publisher {
         }
         let file_id = format!("{}.{:05}", self.load_id, self.commits + 1);
         let (folder, lease) = (sink.folder.clone(), sink.lease.clone());
-        replace_files((&folder, &lease), &file_id, (&keys, None)).await?;
+        let table_folder = leased_folder(sink).clone();
+        replace_files((&folder, (&table_folder, &lease)), &file_id, (&keys, None)).await?;
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
         }
         Ok(())
     }
 
-    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored.
+    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored; a table staged beside its folder is deleted whole by the next load. Outside such a folder, `single_file` names are the table's own, so files already put stay: deleting them would delete the table's data.
     pub(crate) async fn abandon_files(&mut self) {
         let Some(sink) = self.files.as_mut() else {
             return;
         };
+        if sink.swap.is_none() && sink.output.encoding.single_file {
+            return;
+        }
         let Some(writer) = sink.writer.take() else {
             return;
         };
@@ -1276,13 +1319,13 @@ impl Publisher {
     }
 }
 
-/// Once the load still holds the table's lease (extending it), record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
+/// Once the load still holds the table's lease in `table_folder` (extending it), record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
 async fn replace_files(
-    (folder, lease): (&OpenFolder, &Lease),
+    (folder, (table_folder, lease)): (&OpenFolder, (&OpenFolder, &Lease)),
     file_id: &str,
     (keys, run): (&[String], Option<&PendingRun>),
 ) -> Result<(), LoaderError> {
-    keep_lease(folder, lease, lease_now())
+    keep_lease(table_folder, lease, lease_now())
         .await?
         .map_err(LoaderError::Invalid)?;
     mark_pending(folder, file_id, PendingPhase::Replacing, (keys, run)).await?;
@@ -1326,6 +1369,11 @@ fn keep_in_background(
         }
     });
     (stop.drop_guard(), renewal)
+}
+
+/// The table's own folder, where its lease lives: the live folder, also while the load writes a staged one.
+fn leased_folder(sink: &FilesSink) -> &OpenFolder {
+    sink.swap.as_ref().map_or(&sink.folder, |swap| &swap.live)
 }
 
 /// Release `lease` after the load, best effort: one left behind expires on its own.
