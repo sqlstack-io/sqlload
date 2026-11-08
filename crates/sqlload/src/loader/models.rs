@@ -108,6 +108,8 @@ pub struct TableSpec {
     pub flatten: Vec<String>,
     /// The table function behind a Python table; `None` for declarative sources.
     pub python: Option<PythonTable>,
+    /// What a Google Sheets table reads; `None` for other sources.
+    pub sheet: Option<crate::sheets_source::models::SheetRead>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
     /// The checks its staged rows must pass before they are published (the table's own, else its source's).
@@ -598,6 +600,8 @@ pub enum SourceReader {
     /// A database read through its ODBC driver.
     #[cfg(feature = "odbc")]
     Odbc(Box<crate::odbc_source::models::OdbcReader>),
+    /// A Google Sheets client and the spreadsheet it reads.
+    Sheets(crate::sheets_source::models::SheetsClient, String),
 }
 
 /// What decides one files table's cursor window.

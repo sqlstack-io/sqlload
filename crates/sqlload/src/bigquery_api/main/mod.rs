@@ -4,6 +4,8 @@ pub mod arrow_request;
 pub mod batch_commit_write_streams;
 pub mod create_write_stream;
 pub mod finalize_write_stream;
+pub mod google_answer;
+pub mod google_token;
 pub mod parse_key;
 pub mod run_query;
 pub mod table_metadata;

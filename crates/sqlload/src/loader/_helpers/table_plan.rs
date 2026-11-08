@@ -34,6 +34,7 @@ use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
+use crate::loader::_helpers::sources::with_live_types;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
 use crate::loader::constants::{
     CHECKS_LOADER_WARNING, ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES,
@@ -192,7 +193,9 @@ pub(crate) async fn plan_table(
         ));
     }
     let plan = plan_table_once(spec, destination, options).await?;
-    let mut plan = match with_live_columns(spec, plan.live.as_deref()) {
+    let augmented = with_live_columns(spec, plan.live.as_deref())
+        .or_else(|| with_live_types(spec, plan.live.as_deref()));
+    let mut plan = match augmented {
         Some(augmented) => plan_table_once(&augmented, destination, options).await?,
         None => plan,
     };
@@ -230,7 +233,9 @@ pub(crate) async fn replan_columns(
         }
         (None, _) => live_columns(destination, &spec.destination).await?,
     };
-    let spec = with_live_columns(spec, live.as_deref()).unwrap_or_else(|| spec.clone());
+    let spec = with_live_columns(spec, live.as_deref())
+        .or_else(|| with_live_types(spec, live.as_deref()))
+        .unwrap_or_else(|| spec.clone());
     let read = read_columns(&spec).map_err(|problems| LoaderError::Invalid(problems.join("; ")))?;
     let desired = desired_columns(&spec, &read);
     let schema = match files_destination(destination) {
@@ -289,6 +294,7 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
         (None, None) if spec.warehouse_source.is_some() => {
             unload_read_columns(&selected_columns(spec), &spec.pinned)
         }
+        (None, None) if spec.sheet.is_some() => files_read_columns(spec),
         (None, None) => {
             let selected = selected_columns(spec);
             let mut read = plan_read(&selected, &spec.pinned)?;

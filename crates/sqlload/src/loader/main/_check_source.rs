@@ -2,10 +2,13 @@
 
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::probe_folder::probe_folder;
-use crate::loader::_helpers::sources::{connect_source, files_location, open_source};
+use crate::loader::_helpers::sources::{
+    connect_source, files_location, open_source, sheets_reader,
+};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::SourceReader;
 use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
+use crate::sheets_source::main::tab_ranges::tab_ranges;
 use crate::sql_api::main::execute_sql::execute_sql;
 
 /// What source `source` reads as, or why it cannot connect; for Postgres, what protects the connection.
@@ -56,6 +59,15 @@ pub(in crate::loader) async fn check_source(
         SourceKind::Odbc => Err(LoaderError::Invalid(
             crate::loader::constants::NO_ODBC.to_owned(),
         )),
+        SourceKind::GoogleSheets => {
+            let (client, spreadsheet_id) = sheets_reader(project, source)?;
+            let (title, tabs) = tab_ranges(&client, &spreadsheet_id).await?;
+            Ok(format!(
+                "{title:?} reads as {} ({} tabs)",
+                client.account(),
+                tabs.len()
+            ))
+        }
         SourceKind::Files => {
             let folder = open_folder(&files_location(project, source)?)?;
             let entries = probe_folder(&folder).await?;

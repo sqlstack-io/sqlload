@@ -1,9 +1,9 @@
 ---
 title: "Sources"
-description: "Postgres tables, Postgres changes, Snowflake tables and queries, ODBC databases, files in S3 or a folder, and Python sources: the kinds of source and the settings they share."
+description: "Postgres tables, Postgres changes, Snowflake tables and queries, ODBC databases, files in S3 or a folder, Google Sheets, and Python sources: the kinds of source and the settings they share."
 ---
 
-A source is where data comes from. SQLLoad has six kinds:
+A source is where data comes from. SQLLoad has seven kinds:
 
 | `kind` | Reads | Tables | Declared in |
 |--------|-------|--------|-------------|
@@ -12,6 +12,7 @@ A source is where data comes from. SQLLoad has six kinds:
 | [`snowflake`](/docs/sources/snowflake/) | From 0.26.0 (not released yet). Tables and views of a Snowflake database, and query results, unloaded as Parquet | One per matching table, and one per query | `sqlload.toml` |
 | [`odbc`](/docs/sources/odbc/) | From 0.26.0 (not released yet). Tables, views and query results of any database with an ODBC driver, read as Arrow | One per matching table, and one per query | `sqlload.toml` |
 | [`files`](/docs/sources/files/) | Parquet, CSV, JSON or NDJSON files in S3 or a local folder | One per source | `sqlload.toml` |
+| [`google_sheets`](/docs/sources/google-sheets/) | From 0.26.0 (not released yet). Tabs or ranges of a Google Sheets spreadsheet, typed | One per tab or range | `sqlload.toml` |
 | [Python](/docs/sources/python/) | Whatever a Python function yields: dicts, Arrow data, JSON bytes, HTTP jobs | One per decorated function | Python, under `python_paths` |
 
 Every source loads into a target: its `destination`, or the project's `default_target`. Settings
@@ -30,5 +31,6 @@ Each kind has its own page:
   query tables and value sizes.
 - [Files](/docs/sources/files/): formats, partitions, which files load, and files the destination
   reads itself.
+- [Google Sheets](/docs/sources/google-sheets/): tabs and ranges, headers, and how cells are typed.
 - [Python](/docs/sources/python/): any API, SaaS or custom source as a table, including REST APIs
   that run entirely in Rust.
