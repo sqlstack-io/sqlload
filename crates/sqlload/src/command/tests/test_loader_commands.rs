@@ -83,7 +83,7 @@ fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_e
 }
 
 #[test]
-fn given_a_files_source_into_a_files_target_when_planning_then_a_target_folder_overlapping_the_source_folder_is_blocked()
+fn given_a_files_source_into_a_files_target_when_planning_then_an_overlapping_folder_or_single_file_is_blocked()
 -> Result<(), String> {
     let root = tempfile::tempdir().map_err(|error| error.to_string())?;
     let day = root.path().join("data/orders/day=2026-11-01");
@@ -93,21 +93,31 @@ fn given_a_files_source_into_a_files_target_when_planning_then_a_target_folder_o
         FolderOverlapTestCase {
             description: "a target folder that is the source folder is blocked",
             target_path: "data/{table}/",
+            single_file: false,
             expected_problem: "which overlaps the folder it reads from",
             expected_exit: "exit 1",
         },
         FolderOverlapTestCase {
             description: "a target folder beside the source folder plans",
             target_path: "out/{table}/",
+            single_file: false,
             expected_problem: "",
             expected_exit: "exit 0",
+        },
+        FolderOverlapTestCase {
+            description: "single_file has no load id to record the source files against",
+            target_path: "out/{table}/",
+            single_file: true,
+            expected_problem: "single_file can't record which source files",
+            expected_exit: "exit 1",
         },
     ];
     for test_case in test_cases {
         let project = format!(
-            "[connections.lake]\nkind = \"filesystem\"\nroot = \"{}\"\n[targets.lake]\nconnection = \"lake\"\npath = \"{}\"\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"data/orders/\"\nformat = \"csv\"\npartition_columns = {{ day = \"date\" }}\n",
+            "[connections.lake]\nkind = \"filesystem\"\nroot = \"{}\"\n[targets.lake]\nconnection = \"lake\"\npath = \"{}\"\nsingle_file = {}\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"data/orders/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\npartition_columns = {{ day = \"date\" }}\n",
             root.path().display(),
-            test_case.target_path
+            test_case.target_path,
+            test_case.single_file
         );
         let output = run_without_host(&project, &["plan"]);
         assert!(

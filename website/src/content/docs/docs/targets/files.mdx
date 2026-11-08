@@ -68,7 +68,8 @@ commit's files: the files of a load that failed and was repaired load again, and
 deletes records whose files are gone.
 
 The target folder can't be the source folder, or inside it or around it: a load would delete or
-read back its own source files, so `plan` blocks the table.
+read back its own source files, so `plan` blocks the table. A files source also can't load into a
+`single_file` target, as its one file carries no load id to record the source files against.
 
 SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: markers for loads in
 progress, the run log of `state = "logged"` tables, and the source files a files source's

@@ -39,6 +39,8 @@ pub(crate) struct FolderOverlapTestCase {
     pub(crate) description: &'static str,
     /// The files target's `path` template, below the root the source reads `data/orders/` from.
     pub(crate) target_path: &'static str,
+    /// Whether the target writes one file per table.
+    pub(crate) single_file: bool,
     /// Text the plan must contain; empty for none.
     pub(crate) expected_problem: &'static str,
     /// The last line: `exit 0` or `exit 1`.

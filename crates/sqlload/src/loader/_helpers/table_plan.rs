@@ -1289,7 +1289,7 @@ pub(crate) fn captured_columns(
     (schema, read)
 }
 
-/// Why the table cannot be written in the target's format: a `postgres_cdc` table and an `append` cursor by `{cursor:date}` read their position from Parquet statistics, which CSV files lack; `single_file` names each file after its table, so `append` would overwrite it.
+/// Why the table cannot be written in the target's format: a `postgres_cdc` table and an `append` cursor by `{cursor:date}` read their position from Parquet statistics, which CSV files lack; `single_file` names each file after its table, so `append` would overwrite it and a files source could not record the files it read against a load id.
 pub(crate) fn encoding_problems(
     spec: &TableSpec,
     path: &TablePath,
@@ -1309,6 +1309,11 @@ pub(crate) fn encoding_problems(
     if csv && spec.strategy == WriteStrategy::Append && spec.cursor.is_some() && by_date {
         problems.push(
             "append by a {cursor:date} partition reads the newest files' maximum from Parquet statistics, which CSV files lack; partition by {cursor}, or use delete_insert or replace".to_owned(),
+        );
+    }
+    if encoding.single_file && spec.files.is_some() {
+        problems.push(
+            "single_file can't record which source files a load from a files source read, as its file carries no load id; drop single_file".to_owned(),
         );
     }
     if encoding.single_file && spec.strategy == WriteStrategy::Append {
