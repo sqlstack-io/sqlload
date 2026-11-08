@@ -1,5 +1,11 @@
-use crate::file_store::_helpers::aws_keys::{key_source, profile_credentials};
-use crate::file_store::tests::test_types::{KeySourceTestCase, ProfileCredentialsTestCase};
+use object_store::aws::AmazonS3ConfigKey;
+
+use crate::auth::models::Secret;
+use crate::file_store::_helpers::aws_keys::{key_source, keyed_builder, profile_credentials};
+use crate::file_store::tests::test_types::{
+    KeySourceTestCase, KeyedBuilderTestCase, ProfileCredentialsTestCase,
+};
+use crate::stage_api::models::AwsCredentials;
 
 const FILE: &str = "[default]\naws_access_key_id = AKIADEFAULT\naws_secret_access_key = secret-a\n\n[temporary]\naws_access_key_id=ASIATEMP\naws_secret_access_key=secret-b\naws_session_token=token\n[empty]\naws_access_key_id =\n";
 
@@ -89,6 +95,13 @@ fn given_keys_in_the_environment_or_a_shared_file_when_choosing_an_s3_clients_ke
             expected_text: "for AWS profile temporary",
         },
         KeySourceTestCase {
+            description: "only a key ID in the environment is not a pair, so the file's keys are used",
+            profile: None,
+            credentials_file: "credentials",
+            variables: &[("AWS_ACCESS_KEY_ID", "AKIAENV")],
+            expected_text: "credentials, profile default",
+        },
+        KeySourceTestCase {
             description: "no file and no named profile go on down the chain",
             profile: None,
             credentials_file: "missing",
@@ -120,4 +133,61 @@ fn given_keys_in_the_environment_or_a_shared_file_when_choosing_an_s3_clients_ke
         );
     }
     Ok(())
+}
+
+#[test]
+fn given_aws_variables_and_the_chains_keys_when_building_an_s3_client_then_only_the_chains_keys_reach_it()
+ {
+    let test_cases = [
+        KeyedBuilderTestCase {
+            description: "a leftover session token is dropped when the keys come from the file",
+            variables: &[
+                ("AWS_SESSION_TOKEN", "STALE"),
+                ("AWS_ACCESS_KEY_ID", "AKIAENV"),
+                ("AWS_REGION", "eu-west-2"),
+            ],
+            keys: Some(("AKIAFILE", None)),
+            expected_config: [Some("AKIAFILE"), None, Some("eu-west-2")],
+        },
+        KeyedBuilderTestCase {
+            description: "the chosen keys keep their own session token",
+            variables: &[("AWS_TOKEN", "STALE")],
+            keys: Some(("ASIAFILE", Some("fresh"))),
+            expected_config: [Some("ASIAFILE"), Some("fresh"), None],
+        },
+        KeyedBuilderTestCase {
+            description: "with no static keys, partial or empty ones in the environment are not used",
+            variables: &[
+                ("AWS_ACCESS_KEY_ID", "AKIAPARTIAL"),
+                ("AWS_SECRET_ACCESS_KEY", ""),
+                ("AWS_REGION", ""),
+            ],
+            keys: None,
+            expected_config: [None, None, None],
+        },
+    ];
+    for test_case in &test_cases {
+        let variables = test_case
+            .variables
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()));
+        let keys = test_case.keys.map(|(key_id, token)| AwsCredentials {
+            key_id: key_id.to_owned(),
+            secret: Secret("secret".to_owned()),
+            session_token: token.map(|token| Secret(token.to_owned())),
+        });
+        let builder = keyed_builder(variables, keys);
+        let found = [
+            AmazonS3ConfigKey::AccessKeyId,
+            AmazonS3ConfigKey::Token,
+            AmazonS3ConfigKey::Region,
+        ]
+        .map(|key| builder.get_config_value(&key));
+        assert_eq!(
+            found.each_ref().map(Option::as_deref),
+            test_case.expected_config,
+            "{}",
+            test_case.description
+        );
+    }
 }

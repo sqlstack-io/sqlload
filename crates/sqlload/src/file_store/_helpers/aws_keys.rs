@@ -1,13 +1,15 @@
 //! Where SQLLoad's S3 clients get their keys: the environment, the AWS shared credentials file, or the rest of the chain.
 
+use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+
 use crate::auth::models::Secret;
 use crate::stage_api::models::AwsCredentials;
 
 /// Where an S3 client's keys come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KeySource {
-    /// `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
-    Environment,
+    /// `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN` when set.
+    Environment { keys: AwsCredentials },
     /// A profile of the shared credentials file.
     File {
         path: String,
@@ -22,9 +24,17 @@ impl KeySource {
     /// Where the keys come from, for `sqlload debug`; never the keys themselves.
     pub(crate) fn describe(&self) -> String {
         match self {
-            Self::Environment => "AWS_ACCESS_KEY_ID in the environment".to_owned(),
+            Self::Environment { .. } => "AWS_ACCESS_KEY_ID in the environment".to_owned(),
             Self::File { path, profile, .. } => format!("{path}, profile {profile}"),
             Self::Chain => "web identity or the instance or container role".to_owned(),
+        }
+    }
+
+    /// The static keys chosen; `None` leaves the rest of the chain to the client.
+    pub(crate) fn keys(self) -> Option<AwsCredentials> {
+        match self {
+            Self::Environment { keys } | Self::File { keys, .. } => Some(keys),
+            Self::Chain => None,
         }
     }
 }
@@ -34,8 +44,17 @@ pub(crate) fn key_source(
     profile: Option<&str>,
     variable: &dyn Fn(&str) -> Option<String>,
 ) -> Result<KeySource, String> {
-    if variable("AWS_ACCESS_KEY_ID").is_some() && variable("AWS_SECRET_ACCESS_KEY").is_some() {
-        return Ok(KeySource::Environment);
+    if let (Some(key_id), Some(secret)) = (
+        variable("AWS_ACCESS_KEY_ID"),
+        variable("AWS_SECRET_ACCESS_KEY"),
+    ) {
+        return Ok(KeySource::Environment {
+            keys: AwsCredentials {
+                key_id,
+                secret: Secret(secret),
+                session_token: variable("AWS_SESSION_TOKEN").map(Secret),
+            },
+        });
     }
     let named = profile
         .map(str::to_owned)
@@ -103,6 +122,38 @@ pub(crate) fn profile_credentials(text: &str, profile: &str) -> Option<AwsCreden
         secret: Secret(secret?),
         session_token: session_token.map(Secret),
     })
+}
+
+/// An S3 client builder with the `AWS_*` settings among `variables` except keys and session tokens (empty values skipped), and `keys` when the chain chose static ones; without them the client goes on to web identity or the instance or container role, so a leftover or partial key in the environment never reaches a request.
+pub(crate) fn keyed_builder(
+    variables: impl IntoIterator<Item = (String, String)>,
+    keys: Option<AwsCredentials>,
+) -> AmazonS3Builder {
+    let mut builder = AmazonS3Builder::new();
+    for (name, value) in variables {
+        if !name.starts_with("AWS_") || value.is_empty() {
+            continue;
+        }
+        match name.to_ascii_lowercase().parse::<AmazonS3ConfigKey>() {
+            Ok(
+                AmazonS3ConfigKey::AccessKeyId
+                | AmazonS3ConfigKey::SecretAccessKey
+                | AmazonS3ConfigKey::Token,
+            )
+            | Err(_) => {}
+            Ok(key) => builder = builder.with_config(key, value),
+        }
+    }
+    let Some(keys) = keys else {
+        return builder;
+    };
+    builder = builder
+        .with_access_key_id(keys.key_id)
+        .with_secret_access_key(keys.secret.0);
+    match keys.session_token {
+        Some(token) => builder.with_token(token.0),
+        None => builder,
+    }
 }
 
 /// `name`'s value in the process environment, when set and not empty.

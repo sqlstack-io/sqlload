@@ -17,3 +17,13 @@ pub(crate) struct KeySourceTestCase {
     /// Text where the keys come from, or the error, must contain.
     pub(crate) expected_text: &'static str,
 }
+
+pub(crate) struct KeyedBuilderTestCase {
+    pub(crate) description: &'static str,
+    /// The process environment.
+    pub(crate) variables: &'static [(&'static str, &'static str)],
+    /// The static keys the chain chose, with their session token.
+    pub(crate) keys: Option<(&'static str, Option<&'static str>)>,
+    /// The client's key ID, session token and region.
+    pub(crate) expected_config: [Option<&'static str>; 3],
+}

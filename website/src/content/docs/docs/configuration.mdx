@@ -107,10 +107,11 @@ SQLLoad takes the first credentials it finds, in this order:
 3. Web identity.
 4. The instance or container role.
 
-A profile you name, with `profile` or `AWS_PROFILE`, must have `aws_access_key_id` and
-`aws_secret_access_key` in that file; otherwise the connection fails rather than trying the next
-source. SSO, assumed roles and `credential_process` in `~/.aws/config` aren't read.
-`sqlload debug` shows where each S3 connection's keys come from, never the keys.
+From 0.27.0 (not released yet), a profile you name, with `profile` or `AWS_PROFILE`, must have
+`aws_access_key_id` and `aws_secret_access_key` in that file; otherwise the connection fails rather
+than trying the next source. SSO, assumed roles and `credential_process` in `~/.aws/config` aren't
+read. Also from 0.27.0, `sqlload debug` shows where each S3 connection's keys come from, never the
+keys.
 
 ### `filesystem`
 
