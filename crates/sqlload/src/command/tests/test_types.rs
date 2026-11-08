@@ -34,10 +34,3 @@ pub(crate) struct PaintTestCase {
     pub(crate) line: &'static str,
     pub(crate) expected_line: &'static str,
 }
-
-pub(crate) struct UnloadableTestCase {
-    pub(crate) description: &'static str,
-    /// Each unblocked table's warehouse and target.
-    pub(crate) tables: &'static [(crate::column_types::models::Warehouse, &'static str)],
-    pub(crate) expected_problem: Option<&'static str>,
-}

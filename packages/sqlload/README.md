@@ -476,7 +476,7 @@ stored as text, and `TIMESTAMP` keeps the instant but not the offset. JSON loads
 Added columns use one `ADD COLUMNS`. Widening a type uses Delta's type widening where it applies
 and rewrites the table where it does not, such as an integer becoming a float.
 
-### BigQuery (preview)
+### How rows reach BigQuery (preview)
 
 A BigQuery target signs in with a service account's key file:
 
@@ -488,11 +488,20 @@ service_account_key = "${ENV:BIGQUERY_KEY_JSON}"  # the key file's JSON text
 # project = "my-project"                         # defaults to the key's project
 ```
 
-`debug`, `plan`, `apply` and `contract diff` work against it: `apply` creates datasets and tables
-and changes columns. `load` does not write rows into BigQuery yet: when any selected table loads
-into BigQuery, `load` fails after planning, before it applies or loads anything, even for
-tables going to other targets. Leave the BigQuery tables out with `--exclude` to load the rest.
-Postgres change data capture into BigQuery is not available.
+The service account needs to create datasets and tables and run query jobs in the project
+(`BigQuery Data Editor` and `BigQuery Job User`).
+
+Rows go through the Storage Write API as Arrow, never into the table itself: each batch streams
+into a staging table (a build table for `replace`) named for the load, through pending streams
+that are finalized and committed together, so no reader sees part of a batch. A query job then
+moves the rows: one `INSERT` for `append`, one `MERGE` for `delete_insert` and `merge`, and
+`CREATE OR REPLACE TABLE ... AS SELECT` for `replace`. Each statement is its own job and commits on
+its own; the run record commits after it. The staging table is dropped when the load ends, and the
+next load drops what a failed run left after a day.
+
+`replace` keeps the table's description but not its partitioning, clustering or labels. Nested
+values (arrays and records) do not load yet. Postgres change data capture into BigQuery is not
+available.
 
 ### How files reach DuckDB
 

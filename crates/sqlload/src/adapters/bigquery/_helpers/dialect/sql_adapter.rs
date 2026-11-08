@@ -17,11 +17,6 @@ impl SqlAdapter for BigQuerySql {
         Warehouse::BigQuery
     }
 
-    /// Not yet: rows load once the Storage Write API writer exists.
-    fn loads_rows(&self) -> bool {
-        false
-    }
-
     /// Not yet: a later release applies changes to BigQuery once a live round has run them.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false

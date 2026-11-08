@@ -20,8 +20,16 @@ use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::write_file::write_file;
 use sqlload::store_paths::models::{Location, StoreKind};
 
-use crate::helpers::{run_sqlload, two_days};
-use crate::test_types::{LiveBigQuery, LiveWriteApiTestCase, WriteApiOutcome};
+use sqlload::adapters::dispatch::main::session::single_text::single_text;
+use sqlload::loader::main::connect_targets::connect_targets;
+use sqlload::loader::models::PlanOptions;
+
+use crate::helpers::{described_project, plan_apply_load};
+use crate::test_types::{
+    BigQueryLoadTestCase, BigQueryOutcome, LiveBigQuery, LiveBigQueryLoadTestCase,
+    LiveWriteApiTestCase, WriteApiOutcome,
+};
+use sqlload_testkit::fake_bigquery::models::FakeBigQuery;
 
 /// The key's project and the dataset the live BigQuery tests use; `Ok(None)` when `SQLLOAD_BIGQUERY_DATASET` is unset, which skips them.
 pub(crate) fn live_bigquery() -> Result<Option<LiveBigQuery>, String> {
@@ -238,69 +246,150 @@ pub(crate) async fn stream_into_live_table(
     Ok(outcome)
 }
 
-/// Run `sqlload load --yes` on a project loading two days of files from `directory` into the dataset `<dataset>_load`, dropped before and after: whether it succeeded, its output, and how many datasets of that name existed after it.
-pub(crate) async fn refused_live_load(
-    client: &BigQueryClient,
-    live: &LiveBigQuery,
+/// Load `load`'s files (written once, so a second load of the same source finds them unchanged) into the live dataset `<dataset>_load`: the load's error (empty when it succeeded), the table's row count, and the staging or build tables left in the dataset.
+pub(crate) async fn run_live_bigquery(
     directory: &std::path::Path,
-) -> Result<(bool, String, String), String> {
+    live: &LiveBigQuery,
+    load: &LiveBigQueryLoadTestCase,
+) -> Result<(String, Option<String>, Option<String>), String> {
+    let root = directory.display().to_string();
+    let source = open_folder(&Location {
+        store: StoreKind::Filesystem { root: root.clone() },
+        prefix: format!("{}/", load.source),
+    })
+    .map_err(|error| error.to_string())?;
+    let written = directory.join(load.source).exists();
+    for (key, body) in (load.file_set)()?.into_iter().filter(|_| !written) {
+        write_file(&source, &key, body)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     let dataset = format!("{}_load", live.dataset);
-    run_query(
-        client,
-        &format!(
-            "DROP SCHEMA IF EXISTS `{}`.`{dataset}` CASCADE",
+    let text = format!(
+        "[connections.bq]\nkind = \"bigquery\"\nproject = \"{}\"\nlocation = \"{}\"\nservice_account_key = '''{}'''\n\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[targets.dev]\nconnection = \"bq\"\nloader_schema = \"{dataset}\"\n\n[sources.{}]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"{}/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
+        live.project, live.location, live.key, load.source, load.source, load.settings
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (_, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev target".to_owned())?;
+    let rows = single_text(
+        destination,
+        format!(
+            "SELECT CAST(COUNT(*) AS STRING) FROM `{}`.`{dataset}`.`{}`",
+            live.project, load.source
+        ),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let staged = single_text(
+        destination,
+        format!(
+            "SELECT CAST(COUNT(*) AS STRING) FROM `{}`.`{dataset}`.INFORMATION_SCHEMA.TABLES WHERE table_name LIKE '%sqlload_staging%'",
             live.project
         ),
     )
     .await
     .map_err(|error| error.to_string())?;
+    Ok((outcome.err().unwrap_or_default(), rows, staged))
+}
+
+pub(crate) fn nothing_in_bigquery(_: &FakeBigQuery) {}
+
+pub(crate) fn append_refused(fake: &FakeBigQuery) {
+    fake.state
+        .lock()
+        .refused_appends
+        .push_back("Field id is required but has no value".to_owned());
+}
+
+pub(crate) fn commit_refused(fake: &FakeBigQuery) {
+    fake.state
+        .lock()
+        .refused_commits
+        .push_back("Stream is in an invalid state.".to_owned());
+}
+
+pub(crate) fn token_expired(fake: &FakeBigQuery) {
+    fake.state.lock().refuse_requests = 1;
+}
+
+/// `raw.orders` as an earlier load left it, before the files gained `score`.
+pub(crate) fn orders_without_score(fake: &FakeBigQuery) {
+    fake.place_table(
+        "raw.orders",
+        &[
+            ("id", "INT64"),
+            ("day", "DATE"),
+            ("_sqlload_load_id", "STRING"),
+            ("_sqlload_loaded_at", "TIMESTAMP"),
+        ],
+    );
+}
+
+/// A staging table a failed run left in January, which the next load drops.
+pub(crate) fn stale_staging(fake: &FakeBigQuery) {
+    fake.place_table(
+        "raw.orders__sqlload_staging_20260101000000_deadbeef",
+        &[("id", "INT64")],
+    );
+}
+
+/// Load the case's files into a fresh fake BigQuery project; what was sent and committed, and the staging tables left.
+pub(crate) async fn run_bigquery(
+    directory: &std::path::Path,
+    test_case: &BigQueryLoadTestCase,
+) -> Result<BigQueryOutcome, String> {
+    let fake =
+        sqlload_testkit::fake_bigquery::main::start_fake_bigquery::start_fake_bigquery().await?;
+    (test_case.prepare)(&fake);
     let root = directory.display().to_string();
     let source = open_folder(&Location {
         store: StoreKind::Filesystem { root: root.clone() },
         prefix: "src/".to_owned(),
     })
     .map_err(|error| error.to_string())?;
-    for (key, body) in two_days()? {
+    for (key, body) in (test_case.file_set)()? {
         write_file(&source, &key, body)
             .await
             .map_err(|error| error.to_string())?;
     }
-    let config = directory.join("sqlload.toml");
-    std::fs::write(
-        &config,
-        format!(
-            "[connections.bq]\nkind = \"bigquery\"\nlocation = \"{}\"\nservice_account_key = \"${{ENV:GCP_BQ_SANDBOX_SA_KEY}}\"\n\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[targets.dev]\nconnection = \"bq\"\nloader_schema = \"{dataset}\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n",
-            live.location
-        ),
-    )
-    .map_err(|error| error.to_string())?;
-    let (succeeded, output) = run_sqlload(&config, &["load", "--yes"], ("", ""))?;
-    let datasets = run_query(
-        client,
-        &format!(
-            "SELECT CAST(COUNT(*) AS STRING) FROM `region-{}`.INFORMATION_SCHEMA.SCHEMATA WHERE schema_name = '{dataset}'",
-            live.location
-        ),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    run_query(
-        client,
-        &format!(
-            "DROP SCHEMA IF EXISTS `{}`.`{dataset}` CASCADE",
-            live.project
-        ),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    Ok((
-        succeeded,
-        output,
-        datasets
-            .rows
-            .into_iter()
-            .next()
-            .and_then(|row| row.into_iter().next().flatten())
-            .unwrap_or_default(),
-    ))
+    let text = format!(
+        "[connections.bq]\nkind = \"bigquery\"\nlocation = \"EU\"\nservice_account_key = \'\'\'{}\'\'\'\nbase_url = \"{}\"\nstorage_url = \"{}\"\n\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[targets.dev]\nconnection = \"bq\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\n{}\n",
+        fake.key_json, fake.base_url, fake.storage_url, test_case.settings
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (plan, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let rows = fake.rows("raw.orders").len();
+    let staged: Vec<String> = fake
+        .tables_in("raw")
+        .into_iter()
+        .filter(|table| table.contains("sqlload_staging"))
+        .collect();
+    let state = fake.state.lock();
+    Ok(BigQueryOutcome {
+        error: outcome.err().unwrap_or_default(),
+        plan,
+        sent: state.statements.clone(),
+        rows,
+        commits: state
+            .commits
+            .iter()
+            .map(|(table, _)| {
+                table.split_once("__sqlload_staging_").map_or_else(
+                    || table.clone(),
+                    |(name, _)| format!("{name}__sqlload_staging_"),
+                )
+            })
+            .collect(),
+        staged,
+        unrouted_calls: state.unrouted_calls,
+    })
 }
