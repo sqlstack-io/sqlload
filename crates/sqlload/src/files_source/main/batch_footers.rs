@@ -6,12 +6,12 @@ use futures_util::{StreamExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 
 use crate::file_store::models::OpenFolder;
-use crate::files_source::_helpers::parquet::footers::object_reader;
+use crate::files_source::_helpers::parquet::footers::{object_reader, take_sampled_footer};
 use crate::files_source::constants::CONCURRENT_FOOTER_READS;
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::{BatchFooters, DataFile};
 
-/// Each of `files`' footers, by relative key, read once and a few at a time; reading the files reuses them, so nothing reads a footer twice.
+/// Each of `files`' footers, by relative key: the one `plan` sampled, else read, a few at a time; reading the files reuses them, so nothing reads a footer twice.
 pub async fn batch_footers(
     folder: &OpenFolder,
     files: &[DataFile],
@@ -32,6 +32,9 @@ async fn read_footer(
     data: &DataFile,
 ) -> Result<(String, ArrowReaderMetadata), FilesError> {
     let key = &data.file.relative_key;
+    if let Some(footer) = take_sampled_footer(folder, &data.file) {
+        return Ok((key.clone(), footer));
+    }
     let mut reader = object_reader(folder, &data.file);
     ArrowReaderMetadata::load_async(&mut reader, ArrowReaderOptions::new())
         .await
