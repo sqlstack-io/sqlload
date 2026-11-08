@@ -3,6 +3,7 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::table_lease::_helpers::text::{lease_folder, lease_generation, parse_lease};
+use crate::table_lease::constants::LEASE_DURATION;
 use crate::table_lease::errors::LeaseError;
 use crate::table_lease::models::Lease;
 
@@ -44,4 +45,29 @@ pub(crate) async fn newest_lease(folder: &OpenFolder) -> Result<(u64, Option<Lea
         return Ok((highest, Some(lease)));
     }
     Ok((highest, None))
+}
+
+/// `lease`'s file as it is now when it is still the newest generation and `lease`'s load holds it (refreshed or not); otherwise why the load lost the table.
+pub(crate) async fn own_lease(
+    folder: &OpenFolder,
+    lease: &Lease,
+) -> Result<Result<Lease, String>, LeaseError> {
+    let (highest, newest) = newest_lease(folder).await?;
+    match newest {
+        Some(current)
+            if highest == lease.generation
+                && current.generation == lease.generation
+                && current.load_id == lease.load_id =>
+        {
+            Ok(Ok(current))
+        }
+        newest => Ok(Err(format!(
+            "lost the table's lease to {}, as it was not refreshed for {} minutes; stopped before deleting any files",
+            newest.map_or_else(
+                || "another load".to_owned(),
+                |newer| format!("load {}", newer.load_id)
+            ),
+            LEASE_DURATION.as_secs() / 60
+        ))),
+    }
 }

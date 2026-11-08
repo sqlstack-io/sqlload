@@ -12,7 +12,7 @@ use crate::table_lease::constants::LEASE_DURATION;
 use crate::table_lease::errors::LeaseError;
 use crate::table_lease::models::Lease;
 
-/// Take the table in `folder` for `load_id` at `now`: the lease, or why another load holds it. The newest lease must have expired (or be gone); the next generation is created only if absent, so of two loads taking it at once one wins and the other is refused. The expired generation it replaces is then deleted, best effort.
+/// Take the table in `folder` for `load_id` at `now`: the lease, or why another load holds it. The newest lease must have expired (or be gone); the next generation is created only if absent, so of two loads taking it at once one wins and the other is refused (a put retried after it landed finds this load's own lease, and keeps it). The expired generation it replaces is then deleted, best effort.
 pub async fn take_lease(
     folder: &OpenFolder,
     load_id: &str,
@@ -32,6 +32,11 @@ pub async fn take_lease(
     let key = lease_key(lease.generation);
     if !create_file(&leases, &key, Bytes::from(lease_text(&lease))).await? {
         let (_, winner) = newest_lease(folder).await?;
+        if let Some(own) = winner.as_ref().filter(|winner| {
+            winner.generation == lease.generation && winner.load_id == lease.load_id
+        }) {
+            return Ok(Ok(own.clone()));
+        }
         return Ok(Err(winner.map_or_else(
             || "another load took the table at the same moment; retry".to_owned(),
             |winner| lease_refusal(&winner),

@@ -415,7 +415,12 @@ impl Publisher {
     pub(crate) async fn close(&mut self) {
         self.abandon_files().await;
         if let Some(sink) = self.files.as_mut() {
-            sink.keeper = None;
+            if let Some((stop, renewal)) = sink.keeper.take() {
+                drop(stop);
+                if let Err(error) = renewal.await {
+                    tracing::warn!(%error, "the lease's renewal task failed");
+                }
+            }
             give_back(&sink.folder, &sink.lease).await;
         }
         self.writer.rollback_batch().await;
@@ -1269,11 +1274,14 @@ async fn replace_files(
     Ok(clear_pending(folder, file_id).await?)
 }
 
-/// Refresh `lease` every `LEASE_REFRESH` until the returned guard is dropped; a refresh that fails only warns, as the next commit checks the lease again before it deletes anything.
-fn keep_in_background(folder: &OpenFolder, lease: &Lease) -> tokio_util::sync::DropGuard {
+/// Refresh `lease` every `LEASE_REFRESH` until the returned guard is dropped, and the task doing it, which a release awaits so no refresh in flight extends the lease after it; a refresh that fails only warns, as the next commit checks the lease again before it deletes anything.
+fn keep_in_background(
+    folder: &OpenFolder,
+    lease: &Lease,
+) -> (tokio_util::sync::DropGuard, tokio::task::JoinHandle<()>) {
     let stop = CancellationToken::new();
     let (stopped, folder, lease) = (stop.clone(), folder.clone(), lease.clone());
-    tokio::spawn(async move {
+    let renewal = tokio::spawn(async move {
         loop {
             tokio::select! {
                 () = stopped.cancelled() => return,
@@ -1291,12 +1299,12 @@ fn keep_in_background(folder: &OpenFolder, lease: &Lease) -> tokio_util::sync::D
             }
         }
     });
-    stop.drop_guard()
+    (stop.drop_guard(), renewal)
 }
 
 /// Release `lease` after the load, best effort: one left behind expires on its own.
 async fn give_back(folder: &OpenFolder, lease: &Lease) {
-    if let Err(error) = release_lease(folder, lease).await {
+    if let Err(error) = release_lease(folder, lease, chrono::Utc::now()).await {
         tracing::warn!(%error, folder = %folder.location, "cannot release the table's lease; it expires on its own");
     }
 }

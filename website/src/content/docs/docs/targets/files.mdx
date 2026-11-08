@@ -66,8 +66,8 @@ the table is being loaded by load 3f9c… (started 2026-11-08 09:00:00 UTC, leas
 ```
 
 A lease lasts 10 minutes, so a load that crashed holds the table until then. The next load
-then repairs what it left. A load that finds a newer lease before deleting older files has
-lost the table, and stops without deleting them.
+then repairs what it left. Before deleting older files, a load checks that it still holds the
+lease. If its lease lapsed, or another load took the table, it stops without deleting them.
 
 ## Limitations
 
@@ -75,6 +75,7 @@ lost the table, and stops without deleting them.
 - The lease (from 0.27.0, not released yet) trusts the clocks of the machines that load, and
   needs a store that honours create-only writes, as a local folder and S3 (`If-None-Match: *`) do.
   A load paused for longer than its lease, or an S3-compatible store that ignores that header, can
-  still let two loads write one table.
+  still let two loads write one table. With `AWS_CONDITIONAL_PUT=disabled`, loads into S3 fail
+  instead.
 - `replace` and `delete_insert` write the new files first, then delete the older ones. A reader in
   between sees both, as the plan's `note` says.

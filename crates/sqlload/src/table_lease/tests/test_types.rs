@@ -14,10 +14,12 @@ pub(crate) struct KeepLeaseTestCase {
     pub(crate) description: &'static str,
     /// How many minutes ago `A` took the lease.
     pub(crate) taken_minutes_ago: i64,
-    /// Whether `B` then takes the table now (only possible once `A`'s lease expired).
-    pub(crate) superseded: bool,
-    /// `kept until +<minutes from now>`, or the start of why `A` must stop.
+    /// The loads that then take the table now, in order (only possible once the newest lease expired), and whether each releases it at once.
+    pub(crate) others: &'static [(&'static str, bool)],
+    /// `kept: <who holds the table 9 minutes from now>`, or the start of why `A` must stop.
     pub(crate) expected_outcome: &'static str,
+    /// The start of who holds the table once `A` releases its lease (`free` when nobody does).
+    pub(crate) expected_after_release: &'static str,
 }
 
 /// Two loads taking one free table at the same moment, again and again.

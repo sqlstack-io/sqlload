@@ -31,10 +31,10 @@ fn given_earlier_loads_when_a_load_takes_a_files_table_then_it_waits_for_a_live_
             expected_outcome: "taken 2; files 00000000000000000002",
         },
         TakeLeaseTestCase {
-            description: "a released lease frees the table at once",
+            description: "a released lease frees the table at once, and the next load takes the next generation, never one used before",
             earlier: &[("A", 1)],
             released: 1,
-            expected_outcome: "taken 1; files 00000000000000000001",
+            expected_outcome: "taken 2; files 00000000000000000002",
         },
         TakeLeaseTestCase {
             description: "only the newest generation counts: A's expired lease taken over by a live C still refuses B",
@@ -52,7 +52,7 @@ fn given_earlier_loads_when_a_load_takes_a_files_table_then_it_waits_for_a_live_
                 leases.push(taken(&folder, load, minutes_before(now, *minutes)).await?);
             }
             for lease in leases.iter().take(test_case.released) {
-                release_lease(&folder, lease)
+                release_lease(&folder, lease, now)
                     .await
                     .map_err(|error| error.to_string())?;
             }
