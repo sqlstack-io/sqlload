@@ -145,7 +145,7 @@ pub(crate) fn column_list(table: &FilesTable) -> String {
 }
 
 /// Discover the test case's files, add its unsampled files, and read them all with the found columns (pinned types win); the rows as `|`-separated values (`NULL` for NULL), one per line.
-pub(crate) async fn read_rows(test_case: &ReadTextFilesTestCase) -> Result<String, String> {
+pub(crate) async fn read_rows(test_case: &ReadTextFilesTestCase<'_>) -> Result<String, String> {
     let (folder, root) = folder_with(test_case.files).await?;
     let result = discover_and_read(&folder, test_case).await;
     let _ = std::fs::remove_dir_all(&root);
@@ -154,7 +154,7 @@ pub(crate) async fn read_rows(test_case: &ReadTextFilesTestCase) -> Result<Strin
 
 async fn discover_and_read(
     folder: &OpenFolder,
-    test_case: &ReadTextFilesTestCase,
+    test_case: &ReadTextFilesTestCase<'_>,
 ) -> Result<String, String> {
     let table = discover_files(folder, &PathValues::default(), &test_case.encoding)
         .await
@@ -494,4 +494,31 @@ pub(crate) fn timestamp(
     zone: Option<&str>,
 ) -> arrow_schema::DataType {
     arrow_schema::DataType::Timestamp(unit, zone.map(std::sync::Arc::from))
+}
+
+/// The portable type `footer_columns` reads for the one column of a Parquet file written with a column of `written`.
+pub(crate) fn footer_column_type(written: &DataType) -> Result<String, String> {
+    let column = arrow_array::new_null_array(written, 1);
+    let batch =
+        RecordBatch::try_from_iter([("values", column)]).map_err(|error| error.to_string())?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    let read = ArrowReaderMetadata::load(&Bytes::from(buffer), ArrowReaderOptions::new())
+        .map_err(|error| error.to_string())?;
+    let footer = crate::files_source::models::Footer {
+        relative_key: "part.parquet".to_owned(),
+        schema: read.schema().clone(),
+        metadata: read.metadata().clone(),
+    };
+    let (columns, _) =
+        crate::files_source::main::footer_columns::footer_columns(std::slice::from_ref(&footer));
+    let column = columns.first().ok_or("no column read")?;
+    column
+        .column_type
+        .as_ref()
+        .map(ToString::to_string)
+        .map_err(Clone::clone)
 }

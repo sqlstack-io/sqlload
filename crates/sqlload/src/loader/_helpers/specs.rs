@@ -70,7 +70,7 @@ pub(crate) fn column_selection(
     })
 }
 
-/// The table's pinned column types, parsed for `warehouse`.
+/// The table's pinned column types, parsed for `warehouse`; a type the warehouse cannot load yet is a problem.
 pub(crate) fn pinned_types(
     overrides: &TableOverride,
     warehouse: Warehouse,
@@ -80,6 +80,11 @@ pub(crate) fn pinned_types(
     for (column, text) in &overrides.columns {
         match parse_type(text, &[warehouse]) {
             Ok(parsed) => {
+                problems.extend(
+                    sql_adapter(warehouse)
+                        .type_problem(&parsed.column_type)
+                        .map(|problem| format!("column {column}: {problem}")),
+                );
                 pinned.insert(column.clone(), parsed.column_type);
             }
             Err(error) => problems.push(format!("column {column}: {error}")),

@@ -13,6 +13,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::errors::ShapeError;
 use crate::files_source::models::DataFile;
+use crate::row_batches::main::json_lists::json_lists;
 use crate::row_batches::main::normalise_batch::normalise_batch;
 use crate::schema_plan::models::DesiredColumn;
 
@@ -89,10 +90,40 @@ fn shape_column(
     let constant = constants.iter().find(|(key, _)| key == field.name());
     let source: ArrayRef = match (constant, batch.column_by_name(field.name())) {
         (Some((_, value)), _) => Arc::new(StringArray::from(vec![*value; rows])),
-        (None, Some(column)) if nested(column.data_type()) => json_text(field.name(), column)?,
+        (None, Some(column)) if nested(column.data_type()) && !is_list(field) => {
+            json_text(field.name(), column)?
+        }
         (None, Some(column)) => column.clone(),
         (None, None) => return Ok(new_null_array(field.data_type(), rows)),
     };
+    if is_list(field) && matches!(source.data_type(), DataType::Utf8) {
+        return json_lists(&source, field.data_type()).map_err(|reason| ShapeError {
+            row: None,
+            reason: format!(
+                "{}: cannot convert to {}: {reason}",
+                field.name(),
+                field.data_type()
+            ),
+        });
+    }
+    if is_list(field)
+        && !matches!(
+            source.data_type(),
+            DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(..)
+                | DataType::Null
+        )
+    {
+        return Err(ShapeError {
+            row: None,
+            reason: format!(
+                "{}: is {} in the files, which is neither a list nor JSON text, so it does not load as an array",
+                field.name(),
+                source.data_type()
+            ),
+        });
+    }
     let strict = CastOptions {
         safe: false,
         ..CastOptions::default()
@@ -105,6 +136,11 @@ fn shape_column(
             field.data_type()
         ),
     })
+}
+
+/// Whether `field` is an `array(...)` column's list.
+fn is_list(field: &Field) -> bool {
+    matches!(field.data_type(), DataType::List(_))
 }
 
 /// Whether a column of `data_type` holds lists, structs or maps, which load as JSON.

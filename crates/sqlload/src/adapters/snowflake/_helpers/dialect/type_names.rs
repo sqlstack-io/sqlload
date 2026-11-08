@@ -38,6 +38,10 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
         ColumnType::Uuid => lossy("VARCHAR(36)", "stored as text"),
         ColumnType::Binary => exact("BINARY"),
         ColumnType::Native(name) => exact(name.clone()),
+        ColumnType::Array(_) => lossy(
+            "ARRAY",
+            "elements are held as JSON values: numbers, booleans and text as themselves, decimals, dates and timestamps as text",
+        ),
     }
 }
 

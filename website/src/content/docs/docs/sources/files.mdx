@@ -77,6 +77,10 @@ conversion differs. In Snowflake, where files under an external stage or copied 
 `copy_to_internal_stage` only load directly, such a column still fails `plan`, so leave it out with
 `exclude_columns`.
 
+From 0.27.0 (not released yet), pin a list column, or a JSON array in a CSV or JSON file, as
+[`array(T)`](/docs/types/#arrays) to load it as an array instead, such as
+`columns = { tags = "array(text)" }`.
+
 ## Columns from paths
 
 From sqlload 0.26.0, values can come from folder and file names that

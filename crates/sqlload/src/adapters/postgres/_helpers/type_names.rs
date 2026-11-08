@@ -1,6 +1,7 @@
 //! Postgres's spelling of each portable type, and the way back from what its catalog prints.
 
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
+use crate::column_types::main::array_element::array_element;
 use crate::column_types::models::{ColumnType, LiveColumnType, WarehouseType};
 
 /// A type Postgres holds exactly.
@@ -43,15 +44,24 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
         ColumnType::Uuid => exact("uuid"),
         ColumnType::Binary => exact("bytea"),
         ColumnType::Native(name) => exact(name.clone()),
+        ColumnType::Array(element) => {
+            let element = logical_type(element);
+            WarehouseType {
+                sql: format!("{}[]", element.sql),
+                lossy: element.lossy,
+            }
+        }
     }
 }
 
 /// The type a staging column has: what the binary `COPY` sends, so text for JSON, UUIDs, bounded text and native types, which the write converts.
 pub(crate) fn staging_type(column_type: &ColumnType) -> String {
     match column_type {
-        ColumnType::Json | ColumnType::Uuid | ColumnType::Varchar(_) | ColumnType::Native(_) => {
-            logical_type(&ColumnType::Text).sql
-        }
+        ColumnType::Json
+        | ColumnType::Uuid
+        | ColumnType::Varchar(_)
+        | ColumnType::Native(_)
+        | ColumnType::Array(_) => logical_type(&ColumnType::Text).sql,
         other => logical_type(other).sql,
     }
 }
@@ -70,8 +80,12 @@ fn decimal(live: &LiveColumnType) -> Option<ColumnType> {
     }
 }
 
-/// A type as `format_type` prints it, such as `numeric(18,2)`, `character varying(20)` or `timestamp(3) with time zone`; `None` for types with no portable equivalent (arrays, enums, `json`, `real`, `interval`, times holding fewer than six digits after the second, and so on).
+/// A type as `format_type` prints it, such as `numeric(18,2)`, `character varying(20)` or `timestamp(3) with time zone`; a one-dimensional array as `bigint[]`; `None` for types with no portable equivalent (arrays of other types, enums, `json`, `real`, `interval`, times holding fewer than six digits after the second, and so on).
 pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
+    if let Some(element) = live.data_type.trim().strip_suffix("[]") {
+        let element = portable_type(&array_element(live, element))?;
+        return Some(ColumnType::Array(Box::new(element)));
+    }
     let fewer_digits = live.data_type.starts_with("time")
         && live.data_type.contains('(')
         && !live.data_type.contains("(6)");

@@ -89,3 +89,11 @@ pub(crate) struct StepFailureTestCase {
     /// Whether the chain moves on past the step.
     pub(crate) expected_unusable: bool,
 }
+
+pub(crate) struct ListsAsJsonTestCase {
+    pub(crate) description: &'static str,
+    /// The float lists, one per row; `None` is a NULL list or a NULL element.
+    pub(crate) rows: Vec<Option<Vec<Option<f64>>>>,
+    /// Each row's JSON text joined by `|`, or the error.
+    pub(crate) expected_text: Result<&'static str, &'static str>,
+}

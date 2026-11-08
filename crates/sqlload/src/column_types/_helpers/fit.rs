@@ -26,6 +26,9 @@ pub(crate) fn holds(live: &ColumnType, desired: &ColumnType) -> bool {
         (ColumnType::Native(live), ColumnType::Native(desired)) => {
             live.eq_ignore_ascii_case(desired)
         }
+        (ColumnType::Array(live), ColumnType::Array(desired)) => {
+            live == desired || holds(live, desired)
+        }
         _ => false,
     }
 }

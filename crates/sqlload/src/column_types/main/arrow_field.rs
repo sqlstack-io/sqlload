@@ -1,10 +1,11 @@
 //! Map a column type to the Arrow field batches carry it in.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, TimeUnit};
 
-use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
+use crate::column_types::constants::{ARRAY_ITEM, ARROW_TYPE_METADATA_KEY};
 use crate::column_types::models::ColumnType;
 
 /// The nullable Arrow field for column `name`; `None` for `native` types, which have no portable representation.
@@ -26,6 +27,7 @@ pub fn arrow_field(name: &str, column_type: &ColumnType) -> Option<Field> {
         ColumnType::TimestampNtz => DataType::Timestamp(TimeUnit::Microsecond, None),
         ColumnType::Binary => DataType::Binary,
         ColumnType::Native(_) => return None,
+        ColumnType::Array(element) => DataType::List(Arc::new(arrow_field(ARRAY_ITEM, element)?)),
     };
     let field = Field::new(name, data_type, true);
     Some(match column_type {

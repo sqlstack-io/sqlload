@@ -332,3 +332,22 @@ pub(crate) fn api_status(status: u16, code: &str) -> ApiError {
         message: "m".to_owned(),
     }
 }
+
+/// Float lists as `lists_as_json` stages them for Snowflake: each row's JSON text joined by `|` (`null` for NULL), or the error.
+pub(crate) fn staged_float_lists(rows: Vec<Option<Vec<Option<f64>>>>) -> Result<String, String> {
+    let lists =
+        arrow_array::ListArray::from_iter_primitive::<arrow_array::types::Float64Type, _, _>(rows);
+    let batch = arrow_array::RecordBatch::try_from_iter([(
+        "ratios",
+        std::sync::Arc::new(lists) as arrow_array::ArrayRef,
+    )])
+    .map_err(|error| error.to_string())?;
+    let staged = crate::adapters::snowflake::_helpers::write::table_writer::lists_as_json(batch)?;
+    let options = arrow_cast::display::FormatOptions::default().with_null("null");
+    let formatter = arrow_cast::display::ArrayFormatter::try_new(staged.column(0), &options)
+        .map_err(|error| error.to_string())?;
+    Ok((0..staged.num_rows())
+        .map(|row| formatter.value(row).to_string())
+        .collect::<Vec<_>>()
+        .join("|"))
+}

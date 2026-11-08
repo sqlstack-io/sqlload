@@ -187,3 +187,29 @@ pub(crate) fn flattened(test_case: &FlattenBatchTestCase) -> Result<String, Stri
         .collect();
     flatten_batch(batch, &flatten).map(|batch| render(&batch))
 }
+
+/// `texts` converted by [`json_lists`](crate::row_batches::main::json_lists::json_lists) to lists of `element`, joined by `|` with NULL as `null`; an error up to its first `: `.
+pub(crate) fn shown_json_lists(
+    texts: &[Option<&str>],
+    element: &crate::column_types::models::ColumnType,
+) -> Result<String, String> {
+    let texts: arrow_array::ArrayRef =
+        std::sync::Arc::new(arrow_array::StringArray::from(texts.to_vec()));
+    let list_type = crate::column_types::main::arrow_field::arrow_field(
+        "",
+        &crate::column_types::models::ColumnType::Array(Box::new(element.clone())),
+    )
+    .ok_or("no Arrow list type")?
+    .data_type()
+    .clone();
+    let cut = |error: String| error.split(": ").next().unwrap_or_default().to_owned();
+    let lists =
+        crate::row_batches::main::json_lists::json_lists(&texts, &list_type).map_err(cut)?;
+    let options = arrow_cast::display::FormatOptions::default().with_null("null");
+    let formatter = arrow_cast::display::ArrayFormatter::try_new(lists.as_ref(), &options)
+        .map_err(|error| error.to_string())?;
+    Ok((0..lists.len())
+        .map(|row| formatter.value(row).to_string())
+        .collect::<Vec<_>>()
+        .join("|"))
+}

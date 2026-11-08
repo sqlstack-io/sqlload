@@ -65,7 +65,7 @@ fn captured_values(
             let raw = unescape_partition_value(group.map_or("", |group| group.as_str()));
             let value = normalised(&raw, column_type).map_err(|reason| {
                 format!(
-                    "{relative_key}: path column {name} is {raw:?}, which is not a {column_type}: {reason}"
+                    "{relative_key}: path column {name} is {raw:?}, which does not convert to {column_type}: {reason}"
                 )
             })?;
             Ok((name.clone(), value))
@@ -84,6 +84,9 @@ pub(crate) fn normalised(value: &str, column_type: &ColumnType) -> Result<String
         safe: false,
         ..CastOptions::default()
     };
+    if matches!(column_type, ColumnType::Array(_)) {
+        return Err("an array cannot come from a path or be a constant".to_owned());
+    }
     let cast = cast_with_options(&source, field.data_type(), &strict)
         .map_err(|error| error.to_string())?;
     if cast.is_null(0) {

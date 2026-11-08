@@ -1,6 +1,7 @@
 //! DuckDB's spelling of each portable type, and the way back from what it reports.
 
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
+use crate::column_types::main::array_element::array_element;
 use crate::column_types::models::{ColumnType, LiveColumnType, WarehouseType};
 
 /// A type DuckDB holds exactly.
@@ -40,6 +41,13 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
         ColumnType::Uuid => exact("UUID"),
         ColumnType::Binary => exact("BLOB"),
         ColumnType::Native(name) => exact(name.clone()),
+        ColumnType::Array(element) => {
+            let element = logical_type(element);
+            WarehouseType {
+                sql: format!("{}[]", element.sql),
+                lossy: element.lossy,
+            }
+        }
     }
 }
 
@@ -59,6 +67,10 @@ fn decimal(live: &LiveColumnType) -> Option<ColumnType> {
 
 /// A DuckDB `information_schema.columns` type, such as `DECIMAL(18,2)` or `TIMESTAMP WITH TIME ZONE`.
 pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
+    if let Some(element) = live.data_type.trim().strip_suffix("[]") {
+        let element = portable_type(&array_element(live, element))?;
+        return Some(ColumnType::Array(Box::new(element)));
+    }
     let upper = live.data_type.to_ascii_uppercase();
     let base = upper.split('(').next().unwrap_or_default().trim();
     Some(match base {

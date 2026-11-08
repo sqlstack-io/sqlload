@@ -6,6 +6,8 @@ mod direct_refusal;
 mod discover_text_files;
 #[path = "tests/test_file_selection.rs"]
 mod file_selection;
+#[path = "tests/test_footer_columns.rs"]
+mod footer_columns;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_loader_columns.rs"]

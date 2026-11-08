@@ -91,3 +91,32 @@ pub(crate) fn decoded_ids(
         ids.len()
     ))
 }
+
+/// A list of `decimal(10,2)` values per row, given as hundredths; `None` is a NULL list or a NULL element.
+pub(crate) fn decimal_lists(
+    rows: Vec<Option<Vec<Option<i128>>>>,
+) -> Result<arrow_array::ListArray, String> {
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+    let lists =
+        arrow_array::ListArray::from_iter_primitive::<arrow_array::types::Decimal128Type, _, _>(
+            rows,
+        );
+    let values = lists
+        .values()
+        .as_primitive::<arrow_array::types::Decimal128Type>()
+        .clone()
+        .with_precision_and_scale(10, 2)
+        .map_err(|error| error.to_string())?;
+    arrow_array::ListArray::try_new(
+        std::sync::Arc::new(arrow_schema::Field::new(
+            "item",
+            values.data_type().clone(),
+            true,
+        )),
+        lists.offsets().clone(),
+        std::sync::Arc::new(values),
+        lists.nulls().cloned(),
+    )
+    .map_err(|error| error.to_string())
+}
