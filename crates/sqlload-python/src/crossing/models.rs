@@ -1,3 +1,4 @@
+use sqlload::row_batches::models::ProjectionRules;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -42,6 +43,21 @@ pub struct CrossingOptions {
 pub struct ReadContext {
     pub flatten: Vec<String>,
     pub connections: serde_json::Map<String, serde_json::Value>,
+    /// The table's cursor column, which projected JSON rows must keep.
+    pub cursor_column: Option<String>,
+    /// The table's masked columns, which `keep_record` must not carry.
+    pub masked: Vec<String>,
+}
+
+impl ReadContext {
+    /// What the table asks of projected rows.
+    pub fn rules(&self) -> ProjectionRules<'_> {
+        ProjectionRules {
+            cursor_column: self.cursor_column.as_deref(),
+            flatten: &self.flatten,
+            masked: &self.masked,
+        }
+    }
 }
 
 /// A crossing thread that can be made to panic for tests.
