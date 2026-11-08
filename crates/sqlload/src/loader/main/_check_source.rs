@@ -18,29 +18,7 @@ pub(in crate::loader) async fn check_source(
 ) -> Result<String, LoaderError> {
     match source.kind {
         SourceKind::Python => Ok(format!("{} Python tables", source.tables.len())),
-        SourceKind::Postgres | SourceKind::PostgresCdc => {
-            let (client, encryption) = connect_source(project, source).await?;
-            let row = client
-                .query_one(
-                    "SELECT current_user || '@' || current_database() || ', ' || version()",
-                    &[],
-                )
-                .await
-                .map_err(|error| LoaderError::Invalid(format!("cannot query Postgres: {error}")))?;
-            let answer: String = row.get(0);
-            let route = match project.connections.get(&source.connection) {
-                Some(ConnectionConfig::Postgres {
-                    ssh: Some(tunnel), ..
-                }) => {
-                    format!(", via {}", tunnel.route())
-                }
-                _ => String::new(),
-            };
-            Ok(format!(
-                "{}, {encryption}{route}",
-                answer.split(" on ").next().unwrap_or_default()
-            ))
-        }
+        SourceKind::Postgres | SourceKind::PostgresCdc => check_postgres(project, source).await,
         SourceKind::Snowflake => {
             let SourceReader::Snowflake(snowflake) = open_source(project, source, 1).await? else {
                 return Err(LoaderError::Invalid(
@@ -85,4 +63,32 @@ pub(in crate::loader) async fn check_source(
             ))
         }
     }
+}
+
+/// Who `source` connects to Postgres as, what protects the connection, and the bastion it goes through.
+async fn check_postgres(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+) -> Result<String, LoaderError> {
+    let (client, encryption) = connect_source(project, source).await?;
+    let row = client
+        .query_one(
+            "SELECT current_user || '@' || current_database() || ', ' || version()",
+            &[],
+        )
+        .await
+        .map_err(|error| LoaderError::Invalid(format!("cannot query Postgres: {error}")))?;
+    let answer: String = row.get(0);
+    let route = match project.connections.get(&source.connection) {
+        Some(ConnectionConfig::Postgres {
+            ssh: Some(tunnel), ..
+        }) => {
+            format!(", via {}", tunnel.route())
+        }
+        _ => String::new(),
+    };
+    Ok(format!(
+        "{}, {encryption}{route}",
+        answer.split(" on ").next().unwrap_or_default()
+    ))
 }
