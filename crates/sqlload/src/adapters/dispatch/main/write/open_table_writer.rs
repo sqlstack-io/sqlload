@@ -1,6 +1,7 @@
 //! Open a table's write session on its destination.
 
 use crate::adapters::bigquery::models::BigQueryWriter;
+use crate::adapters::clickhouse::models::ClickHouseWriter;
 use crate::adapters::databricks::models::DatabricksWriter;
 use crate::adapters::dispatch::models::{Destination, Writer};
 #[cfg(feature = "duckdb")]
@@ -49,6 +50,11 @@ pub fn open_table_writer(
             parent: String::new(),
             streams: Vec::new(),
             requests_sent: 0,
+        }))),
+        Destination::ClickHouse(clickhouse) => Ok(Writer::ClickHouse(Box::new(ClickHouseWriter {
+            destination: (**clickhouse).clone(),
+            pending: Default::default(),
+            sending: None,
         }))),
         Destination::Files(_) => Ok(Writer::Files(ParquetFiles)),
     }

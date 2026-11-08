@@ -6,7 +6,7 @@ use crate::cdc::constants::{
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
-use crate::loader::models::{CdcSpec, CursorSpec, SettingOrigin, TableSpec};
+use crate::loader::models::{CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
@@ -185,6 +185,8 @@ pub(crate) fn build_spec(
         );
     }
     problems.extend(flatten_problems(context, overrides));
+    let layout = table_layout(settings, defaults);
+    problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -250,7 +252,21 @@ pub(crate) fn build_spec(
         }),
         python: None,
         cdc,
+        layout,
     })
+}
+
+/// The table's layout, each field layered table over source; `table_settings` merged, the table's value winning per setting.
+fn table_layout(table: &TableSettings, source: &TableSettings) -> TableLayout {
+    let mut table_settings = source.table_settings.clone().unwrap_or_default();
+    table_settings.extend(table.table_settings.clone().unwrap_or_default());
+    TableLayout {
+        engine: layered(&table.engine, &source.engine).map(|(value, _)| value),
+        order_by: layered(&table.order_by, &source.order_by).map(|(value, _)| value),
+        partition_by: layered(&table.partition_by, &source.partition_by).map(|(value, _)| value),
+        primary_key: layered(&table.primary_key, &source.primary_key).map(|(value, _)| value),
+        table_settings,
+    }
 }
 
 /// A `postgres_cdc` source's stream settings, with the default slot and publication names.

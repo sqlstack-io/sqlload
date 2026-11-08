@@ -105,6 +105,7 @@ jobs:
           docker pull redpandadata/redpanda:v25.1.4
           docker pull postgres:17-alpine
           docker pull chrislusf/seaweedfs:3.97
+          docker pull clickhouse/clickhouse-server:25.8
       # Compiles first, so the test step's timeout measures the tests alone.
       - name: Build container tests
         run: cargo test -p sqlload --features container-tests --test exporter --test loader --no-run --quiet

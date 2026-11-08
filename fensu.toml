@@ -47,8 +47,28 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/clickhouse/main/start_clickhouse.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/ssh/main/behind_bastion.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/clickhouse/main/run_client.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload/src/adapters/clickhouse/main/session/stop_after.rs"
+reason = "Test-only stop (container-tests feature) used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSS130"
+path = "crates/sqlload/src/adapters/clickhouse/_helpers/session/stops.rs"
+reason = "Test-only stop (container-tests feature, absent from released builds): integration tests arm it across the loader's calls, which pass no test state through."
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
