@@ -18,7 +18,7 @@ use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
     BatchStep, Contract, FilesFormat, NewTables, OnSchemaChange, Policy, ProjectConfig,
-    WriteStrategy,
+    TableChecks, WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};
@@ -112,6 +112,8 @@ pub struct TableSpec {
     pub sheet: Option<crate::sheets_source::models::SheetRead>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
+    /// The checks its staged rows must pass before they are published (the table's own, else its source's).
+    pub checks: Option<TableChecks>,
     /// How a warehouse source's table is read; `None` for other sources.
     pub warehouse_source: Option<WarehouseSource>,
     /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).

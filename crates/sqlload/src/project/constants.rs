@@ -13,6 +13,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "auto_widen",
     "type_change_rebuild",
     "batch_size",
+    "checks",
     "engine",
     "order_by",
     "partition_by",
@@ -145,3 +146,6 @@ pub const MAX_POSTGRES_NAME_BYTES: usize = 63;
 
 /// The shortest `batch_interval` a `postgres_cdc` source takes.
 pub const MIN_BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The largest percentage a setting such as `max_row_drop` takes.
+pub const MAX_PERCENT: u8 = 100;

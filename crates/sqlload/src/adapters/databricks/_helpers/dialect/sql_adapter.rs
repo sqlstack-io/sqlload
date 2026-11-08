@@ -111,6 +111,10 @@ impl SqlAdapter for DatabricksSql {
         true
     }
 
+    fn render_text_cast(&self, expression: &str) -> String {
+        format!("CAST({expression} AS STRING)")
+    }
+
     fn render_cursor_text(&self, column: &str, value: CursorValue) -> String {
         match value {
             CursorValue::EpochMicros { zoned: true } => {
