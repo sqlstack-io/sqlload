@@ -59,11 +59,24 @@ target as a changelog, adding files with each load.
 SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: markers for loads in
 progress, and the run log of `state = "logged"` tables. Run one load at a time per files table.
 
+From 0.27.0 (not released yet), SQLLoad enforces that rule. A load takes a lease on the table, a
+file in `_sqlload/lease/`, before it repairs or writes anything. It renews the lease every minute
+and releases it when it finishes. While another load holds a live lease, `plan` blocks the table
+and `load` refuses it:
+
+```text
+the table is being loaded by load 3f9c… (started 2026-11-08 09:00:00 UTC, lease until 2026-11-08 09:10:00 UTC); retry once it finishes
+```
+
+A lease lasts 10 minutes, so a load that crashed holds the table until then. The next load
+then repairs what it left. Before deleting older files, a load checks that it still holds the
+lease. If its lease lapsed, or another load took the table, it stops without deleting them.
+
 ## Replacing a table
 
 From sqlload 0.27.0, which isn't released yet: in a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
 table folder, carry over every file of the table folder that the load doesn't replace (the
-`_sqlload/runs/` log, and any file you keep beside the data), then swap the two folders in one rename
+`_sqlload/runs/` log, the load's lease, and any file you keep beside the data), then swap the two folders in one rename
 (`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
 reader sees the old files or the new ones, never both. Where the filesystem can't swap folders in one
 rename, SQLLoad moves the old folder aside first and warns, which leaves a moment with no folder. A
@@ -123,3 +136,10 @@ need Parquet, and `single_file` doesn't take `append`; `plan` says so.
 ## Limitations
 
 - A files source can't load into a files target.
+- The lease (from 0.27.0, not released yet) trusts the clocks of the machines that load, and
+  needs a store that honours create-only writes, as a local folder and S3 (`If-None-Match: *`) do.
+  A load paused for longer than its lease, or an S3-compatible store that ignores that header, can
+  still let two loads write one table. With `AWS_CONDITIONAL_PUT=disabled`, loads into S3 fail
+  instead.
+- `replace` and `delete_insert` write the new files first, then delete the older ones. A reader in
+  between sees both, as the plan's `note` says.

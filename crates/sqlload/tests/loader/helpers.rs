@@ -1691,6 +1691,15 @@ pub(crate) const fn crashed_files_batch(crash_at: &'static str) -> [CdcStep; 5] 
     ]
 }
 
+/// Runs of `sqlload` that stopped without releasing their files tables' leases (crashed or killed); each later run's lease clock is that many lease lengths ahead, as if the stopped runs' leases had run out.
+static STOPPED_RUNS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// The lease clock offset for the next run (see [`STOPPED_RUNS`]), counting it as stopped when `stops`: 11 minutes, longer than a lease, per earlier stopped run.
+fn lease_offset(stops: bool) -> String {
+    let earlier = STOPPED_RUNS.fetch_add(i64::from(stops), std::sync::atomic::Ordering::SeqCst);
+    (earlier * 660).to_string()
+}
+
 /// Run the `sqlload` executable on `config` with `args`, stopping itself at `crash_at` and keeping at most `spill_bytes` of changes in memory when set; whether it succeeded, and its output.
 pub(crate) fn run_sqlload(
     config: &std::path::Path,
@@ -1704,6 +1713,10 @@ pub(crate) fn run_sqlload(
         .args(args)
         .env("SQLLOAD_TEST_CRASH_AT", crash_at)
         .env("SQLLOAD_TEST_SPILL_BYTES", spill_bytes)
+        .env(
+            "SQLLOAD_TEST_LEASE_OFFSET_SECONDS",
+            lease_offset(!crash_at.is_empty()),
+        )
         .output()
         .map_err(|error| error.to_string())?;
     let text = format!(
@@ -1726,6 +1739,7 @@ pub(crate) fn spawn_sqlload(
         .arg("--no-color")
         .args(args)
         .env("SQLLOAD_TEST_CRASH_AT", crash_at)
+        .env("SQLLOAD_TEST_LEASE_OFFSET_SECONDS", lease_offset(true))
         .env("NO_COLOR", "1")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

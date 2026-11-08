@@ -587,11 +587,15 @@ pub struct FilesSink {
     pub writer: Option<FilesWriter>,
     /// Replaced files already dealt with by earlier commits: deleted, or overwritten by a file of the same name (`single_file`).
     pub deleted: std::collections::BTreeSet<String>,
+    /// The load's claim on the table, refreshed in the background until `keeper`'s guard is dropped; it lives in the table's own folder, not a staged one.
+    pub lease: crate::table_lease::models::Lease,
+    /// The guard stopping the lease's renewal, and the renewal task.
+    pub keeper: Option<(tokio_util::sync::DropGuard, tokio::task::JoinHandle<()>)>,
     /// Set when the load writes the whole table into a hidden folder beside it (`folder`) and swaps it in at commit.
     pub swap: Option<FolderSwap>,
 }
 
-/// The table folder a staged table replaces, and the files of it the load replaces; every other file is carried over.
+/// The table folder a staged table replaces, and the files of it the load replaces; every other file, the lease among them, is carried over.
 #[derive(Debug)]
 pub struct FolderSwap {
     pub live: OpenFolder,

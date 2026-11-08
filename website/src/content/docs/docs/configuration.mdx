@@ -101,6 +101,8 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `base_url` | The API's base URL. |
 | `token` | For `sl.bearer()` and `sl.api_key(...)`. |
 | `username`, `password` | For `sl.basic()`. |
+| `client_id`, `client_secret` | From 0.27.0 (not released yet). For `sl.oauth2_client_credentials(...)`, and for `sl.oauth2_refresh_token(...)` when the API wants the client too. |
+| `refresh_token` | From 0.27.0 (not released yet). For `sl.oauth2_refresh_token(...)`. |
 | `headers` | Headers sent with every request. |
 
 ## Targets

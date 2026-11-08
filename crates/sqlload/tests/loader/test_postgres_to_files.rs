@@ -348,6 +348,41 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1+run2 2:b,3:c",
         },
         FilesTargetScenarioTestCase {
+            description: "a load holding a live lease is running, not dead: the table is refused and its files kept; once its lease expires, the next load repairs it and loads",
+            store: local_store,
+            setup: ORDERS,
+            target_settings: "",
+            settings: APPEND_BY_DAY,
+            runs: &[
+                OK,
+                FilesTargetRun {
+                    source_change: "INSERT INTO public.orders VALUES (3, 'c', 3, '2026-11-04 12:00:00+00');",
+                    leftovers: &[
+                        (
+                            "_sqlload/lease/00000000000000000001",
+                            "running\t2026-11-08T09:00:00+00:00\t2099-01-01T00:00:00+00:00",
+                        ),
+                        ("_sqlload/pending/running", "writing"),
+                    ],
+                    expected_error: "the table is being loaded by load running (started 2026-11-08 09:00:00 UTC, lease until 2099-01-01 00:00:00 UTC); retry once it finishes",
+                    ..OK
+                },
+                FilesTargetRun {
+                    leftovers: &[
+                        (
+                            "_sqlload/lease/00000000000000000001",
+                            "running\t2026-11-08T09:00:00+00:00\t2026-11-08T09:10:00+00:00",
+                        ),
+                        ("day=2026-11-04/part-running-0.parquet", "half a file"),
+                    ],
+                    expected_plan: "cleanup load running stopped while writing; load deletes its 1 files first",
+                    ..OK
+                },
+            ],
+            check_column: "name",
+            expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1+run3 2:b,3:c",
+        },
+        FilesTargetScenarioTestCase {
             description: "a failed write keeps its marker, and the next load repairs it by load id",
             store: local_store,
             setup: "CREATE TABLE public.orders (id int8 PRIMARY KEY, name text, placed_at timestamptz);
