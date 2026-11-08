@@ -69,10 +69,21 @@ impl SqlAdapter for SnowflakeSql {
         format!("{}.{}", table.schema, table.table).to_ascii_uppercase()
     }
 
+    /// JSON and arrays are staged as their JSON text, UUIDs as text.
+    fn render_staging_type(&self, column_type: &ColumnType) -> String {
+        match column_type {
+            ColumnType::Json | ColumnType::Uuid | ColumnType::Array(_) => {
+                self.render_loader_logical_type(&ColumnType::Text).sql
+            }
+            other => self.render_loader_logical_type(other).sql,
+        }
+    }
+
     fn render_source_expression_cast(&self, name: &str, column_type: &ColumnType) -> String {
         let column = self.render_identifier(name);
         match column_type {
             ColumnType::Json => format!("PARSE_JSON({column})"),
+            ColumnType::Array(_) => format!("CAST(PARSE_JSON({column}) AS ARRAY)"),
             ColumnType::Uuid => format!(
                 "CAST({column} AS {})",
                 self.render_loader_logical_type(column_type).sql

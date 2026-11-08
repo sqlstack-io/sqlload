@@ -111,6 +111,7 @@ pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
     if let Some(element) = text
         .strip_prefix("Array(")
         .and_then(|rest| rest.strip_suffix(')'))
+        .filter(|element| element.starts_with("Nullable("))
     {
         let element = portable_type(&array_element(live, element))?;
         return Some(ColumnType::Array(Box::new(element)));

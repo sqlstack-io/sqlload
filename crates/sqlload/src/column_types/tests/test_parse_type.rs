@@ -29,6 +29,25 @@ fn given_a_valid_type_when_parsing_then_it_maps_onto_the_portable_vocabulary() {
             expected_warnings: 0,
         },
         ParseTypeTestCase {
+            description: "an array of a scalar type",
+            text: "array(int)",
+            destinations: MIXED,
+            expected_type: ColumnType::Array(Box::new(ColumnType::Int)),
+            expected_written_as: None,
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "an array's element takes arguments of its own and any case, reported as written",
+            text: "ARRAY( Numeric(10, 2) )",
+            destinations: MIXED,
+            expected_type: ColumnType::Array(Box::new(ColumnType::Decimal {
+                precision: 10,
+                scale: 2,
+            })),
+            expected_written_as: Some("ARRAY( Numeric(10, 2) )"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
             description: "a standard SQL name is accepted for any destination and reported",
             text: "BIGINT",
             destinations: MIXED,
@@ -168,6 +187,24 @@ fn given_an_invalid_type_when_parsing_then_the_error_explains_the_fix() {
             text: "timestamp_tzz",
             destinations: MIXED,
             expected_message: "did you mean \"timestamp_tz\"",
+        },
+        ParseTypeErrorTestCase {
+            description: "an array holds scalars only, not json",
+            text: "array(json)",
+            destinations: MIXED,
+            expected_message: "cannot hold json elements",
+        },
+        ParseTypeErrorTestCase {
+            description: "arrays do not nest",
+            text: "array(array(int))",
+            destinations: MIXED,
+            expected_message: "cannot hold array(int) elements",
+        },
+        ParseTypeErrorTestCase {
+            description: "an array's element type is checked like any type",
+            text: "array(intt)",
+            destinations: MIXED,
+            expected_message: "its element type: unknown column type \"intt\"",
         },
         ParseTypeErrorTestCase {
             description: "a bare timestamp is ambiguous",

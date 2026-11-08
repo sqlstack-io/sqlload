@@ -132,7 +132,7 @@ pub(crate) fn column_list(table: &FilesTable) -> String {
 }
 
 /// Discover the test case's files, add its unsampled files, and read them all with the found columns (pinned types win); the rows as `|`-separated values (`NULL` for NULL), one per line.
-pub(crate) async fn read_rows(test_case: &ReadTextFilesTestCase) -> Result<String, String> {
+pub(crate) async fn read_rows(test_case: &ReadTextFilesTestCase<'_>) -> Result<String, String> {
     let (folder, root) = folder_with(test_case.files).await?;
     let result = discover_and_read(&folder, test_case).await;
     let _ = std::fs::remove_dir_all(&root);
@@ -141,7 +141,7 @@ pub(crate) async fn read_rows(test_case: &ReadTextFilesTestCase) -> Result<Strin
 
 async fn discover_and_read(
     folder: &OpenFolder,
-    test_case: &ReadTextFilesTestCase,
+    test_case: &ReadTextFilesTestCase<'_>,
 ) -> Result<String, String> {
     let table = discover_files(folder, &PathValues::default(), &test_case.encoding)
         .await

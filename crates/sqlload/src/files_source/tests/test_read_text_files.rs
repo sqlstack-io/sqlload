@@ -6,6 +6,12 @@ use crate::files_source::tests::test_types::ReadTextFilesTestCase;
 #[test]
 fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_name_the_line()
 -> Result<(), String> {
+    let list_pins = [
+        ("at", ColumnType::Array(Box::new(ColumnType::TimestampTz))),
+        ("n", ColumnType::Array(Box::new(ColumnType::SmallInt))),
+    ];
+    let int_pins = [("n", ColumnType::Array(Box::new(ColumnType::Int)))];
+    let text_pins = [("tags", ColumnType::Array(Box::new(ColumnType::Text)))];
     let test_cases = [
         ReadTextFilesTestCase {
             description: "ndjson: nested values stay JSON text with keys in source order, missing keys and nulls are NULL, blank lines are skipped",
@@ -299,6 +305,38 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             exclude: &[],
             pinned: &[],
             expected_rows: Ok("1"),
+        },
+        ReadTextFilesTestCase {
+            description: "a JSON array pinned as an array loads as a list, each element converted strictly; a JSON null element is NULL",
+            encoding: encoding(SourceFormat::Ndjson),
+            files: &[(
+                "a.ndjson",
+                "{\"id\":1,\"at\":[\"2026-11-08T10:00:00+01:00\",null],\"n\":[1,2]}\n{\"id\":2,\"at\":[],\"n\":null}\n",
+            )],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &list_pins,
+            expected_rows: Ok("1|[2026-11-08T09:00:00Z, NULL]|[1, 2]\n2|[]|NULL"),
+        },
+        ReadTextFilesTestCase {
+            description: "an array element that does not convert fails the load instead of loading NULL",
+            encoding: encoding(SourceFormat::Ndjson),
+            files: &[("a.ndjson", "{\"n\":[1,2.5]}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &int_pins,
+            expected_rows: Err(
+                "n: cannot convert to List(Int64): an element does not convert to List(Int64)",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "a CSV field holding a JSON array loads as an array",
+            encoding: encoding(SourceFormat::Csv),
+            files: &[("a.csv", "id,tags\n1,\"[\"\"a\"\",\"\"b\"\"]\"\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &text_pins,
+            expected_rows: Ok("1|[a, b]"),
         },
     ];
     for test_case in test_cases {

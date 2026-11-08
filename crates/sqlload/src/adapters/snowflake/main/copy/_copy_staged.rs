@@ -47,7 +47,7 @@ pub(in crate::adapters) fn copy_staged(request: &CopyStaged<'_>) -> Vec<String> 
         .collect()
 }
 
-/// A column read from a staged file: JSON, which the files hold as text, parsed; anything else cast to its type.
+/// A column read from a staged file: JSON and arrays, which the files hold as JSON text, parsed; anything else cast to its type.
 fn staged_value(column: &DesiredColumn) -> String {
     let snowflake = Warehouse::Snowflake;
     let field = format!(
@@ -56,6 +56,7 @@ fn staged_value(column: &DesiredColumn) -> String {
     );
     match column.column_type {
         ColumnType::Json => format!("PARSE_JSON(CAST({field} AS VARCHAR))"),
+        ColumnType::Array(_) => format!("CAST(PARSE_JSON(CAST({field} AS VARCHAR)) AS ARRAY)"),
         _ => format!(
             "CAST({field} AS {})",
             sql_adapter(snowflake)

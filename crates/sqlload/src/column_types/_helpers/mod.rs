@@ -1,3 +1,4 @@
+pub(crate) mod array;
 pub(crate) mod destinations;
 pub(crate) mod fit;
 pub(crate) mod names;

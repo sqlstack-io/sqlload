@@ -84,6 +84,9 @@ pub(crate) fn normalised(value: &str, column_type: &ColumnType) -> Result<String
         safe: false,
         ..CastOptions::default()
     };
+    if matches!(column_type, ColumnType::Array(_)) {
+        return Err("an array cannot come from a path or be a constant".to_owned());
+    }
     let cast = cast_with_options(&source, field.data_type(), &strict)
         .map_err(|error| error.to_string())?;
     if cast.is_null(0) {

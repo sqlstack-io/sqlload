@@ -40,7 +40,7 @@ pub(crate) struct DiscoverTextFilesTestCase {
     pub(crate) expected_problems: &'static str,
 }
 
-pub(crate) struct ReadTextFilesTestCase {
+pub(crate) struct ReadTextFilesTestCase<'a> {
     pub(crate) description: &'static str,
     pub(crate) encoding: FilesEncoding,
     pub(crate) files: &'static [(&'static str, &'static str)],
@@ -49,7 +49,7 @@ pub(crate) struct ReadTextFilesTestCase {
     /// `exclude_columns` patterns.
     pub(crate) exclude: &'static [&'static str],
     /// Types pinned over the inferred ones, by column name.
-    pub(crate) pinned: &'static [(&'static str, ColumnType)],
+    pub(crate) pinned: &'a [(&'static str, ColumnType)],
     /// Every row read, as `|`-separated values (`NULL` for NULL) without the source-file columns, one per line; or the error text.
     pub(crate) expected_rows: Result<&'static str, &'static str>,
 }
