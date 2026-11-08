@@ -29,8 +29,8 @@ cursor_column = "dt"
 | `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`. |
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
 | `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … |
-| `shape` | From 0.26.0 (not released yet). `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
-| `record_column` | From 0.26.0. The column `shape = "record"` loads into; `record` when omitted. |
+| `shape` | From 0.27.0 (not released yet). `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
+| `record_column` | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
 | `path_columns` | From 0.26.0 (not released yet). A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
 | `unmatched_paths` | From 0.26.0. What a file whose path doesn't match `path_columns` does: `fail` (default) fails `plan` and names it, `skip` leaves it out. |
@@ -122,7 +122,7 @@ read the files themselves still do: SQLLoad writes each file's values into the `
 
 ## Whole records
 
-From sqlload 0.26.0, which isn't released yet, `shape = "record"` loads each record whole into one
+From sqlload 0.27.0, which isn't released yet, `shape = "record"` loads each record whole into one
 `json` column instead of typed columns, to land data as it is and parse it in the destination:
 
 ```toml

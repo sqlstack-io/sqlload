@@ -140,8 +140,8 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `format` | files | `parquet` (default), `ndjson`, `json` or `csv`. |
 | `compression` | files | `auto` (default), `none`, `gzip` or `zstd`. |
 | `csv` | files | `{ delimiter, header, quote, null_values }`; defaults `","`, `true`, `'"'`, `[""]`. |
-| `shape` | files | From 0.26.0 (not released yet). `columns` (default) or `record`: each JSON object or CSV line whole in one `json` column. See [Whole records](/docs/sources/files/#whole-records). |
-| `record_column` | files | From 0.26.0. The column `shape = "record"` loads into; `record` when omitted. |
+| `shape` | files | From 0.27.0 (not released yet). `columns` (default) or `record`: each JSON object or CSV line whole in one `json` column. See [Whole records](/docs/sources/files/#whole-records). |
+| `record_column` | files | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | files | Hive `key=value` folders as typed columns, such as `{ dt = "date" }`. |
 | `path_columns` | files | From 0.26.0 (not released yet). A path template whose captures load as typed columns, such as `"{region}/{day:date}/*"`. See [Columns from paths](/docs/sources/files/#columns-from-paths). |
 | `unmatched_paths` | files | From 0.26.0. `fail` (default) or `skip`: what a file whose path doesn't match `path_columns` does. |
