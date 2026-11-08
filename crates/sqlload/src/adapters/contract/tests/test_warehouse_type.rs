@@ -119,6 +119,37 @@ fn given_a_portable_type_when_mapping_to_a_warehouse_then_the_sql_name_and_loss_
             expected_sql: "STRING(10)",
             expected_lossy: false,
         },
+        WarehouseTypeTestCase {
+            description: "ClickHouse keeps a decimal's precision and scale, as a Nullable column",
+            column_type: ColumnType::Decimal {
+                precision: 38,
+                scale: 9,
+            },
+            warehouse: Warehouse::ClickHouse,
+            expected_sql: "Nullable(Decimal(38, 9))",
+            expected_lossy: false,
+        },
+        WarehouseTypeTestCase {
+            description: "ClickHouse stores timestamp_tz as a UTC DateTime64 in microseconds, the offset not kept",
+            column_type: ColumnType::TimestampTz,
+            warehouse: Warehouse::ClickHouse,
+            expected_sql: "Nullable(DateTime64(6, 'UTC'))",
+            expected_lossy: true,
+        },
+        WarehouseTypeTestCase {
+            description: "ClickHouse has no time type, so a time is its text",
+            column_type: ColumnType::Time,
+            warehouse: Warehouse::ClickHouse,
+            expected_sql: "Nullable(String)",
+            expected_lossy: true,
+        },
+        WarehouseTypeTestCase {
+            description: "a ClickHouse native type is used as written, so LowCardinality and JSON stay opt-in",
+            column_type: ColumnType::Native("LowCardinality(String)".to_owned()),
+            warehouse: Warehouse::ClickHouse,
+            expected_sql: "LowCardinality(String)",
+            expected_lossy: false,
+        },
     ];
     for test_case in test_cases {
         let mapped =
