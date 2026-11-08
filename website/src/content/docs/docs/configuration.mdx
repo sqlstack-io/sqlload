@@ -39,9 +39,9 @@ Each connection has a `kind`.
 | `sslmode` | `prefer` | `disable`, `prefer`, `require`, `verify-ca` or `verify-full`, as in libpq. |
 | `sslrootcert` | built-in public roots | CA certificates (PEM) to trust. |
 | `sslcert`, `sslkey` | none | A client certificate and its key (PEM), set together. |
-| `ssh` | none | A bastion to reach `host` through. See [SSH tunnels](/docs/sources/postgres/#ssh-tunnels). |
+| `ssh` | none | From 0.27.0 (not released yet). A bastion to reach `host` through. See [SSH tunnels](/docs/sources/postgres/#ssh-tunnels). |
 
-The `ssh` table:
+The `ssh` table, from 0.27.0 (not released yet):
 
 | Key | Default | Meaning |
 |-----|---------|---------|
