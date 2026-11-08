@@ -35,6 +35,7 @@ use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
+use crate::loader::constants::SNOWFLAKE_SOURCE;
 use crate::loader::constants::{
     CHECKS_LOADER_WARNING, ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES,
 };
@@ -515,10 +516,7 @@ async fn plan_table_once(
         live.iter()
             .any(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
     });
-    let cursor_expression = read_columns
-        .iter()
-        .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
-        .map(|column| source_cursor(spec, &column.expression, cursor_type));
+    let cursor_expression = source_cursor(spec, &read_columns, cursor_type);
     let lacks_cursor =
         live.is_some() && cursor_name.is_some() && !cursor_in_table && !options.reload;
     let restart_duplicates = match spec.strategy {
@@ -895,25 +893,28 @@ fn write_mode(
     }
 }
 
-/// A text cursor's source `expression` as its filter compares it: bytewise, in code point order, as the destination's maximum is read (`render_binary_text`), whatever collation the source column has; any other cursor, and a source no filter reaches, as it is.
+/// The source expression of `spec`'s cursor among `read_columns`, as its filter compares it: a text cursor bytewise, in code point order, as the destination's maximum is read (`render_binary_text`), whatever collation the source column has; any other cursor, and a source no filter reaches, as it is. `None` when the cursor is not read.
 pub(crate) fn source_cursor(
     spec: &TableSpec,
-    expression: &str,
+    read_columns: &[ReadColumn],
     cursor_type: Option<&ColumnType>,
-) -> String {
-    let text = matches!(
-        cursor_type,
-        Some(ColumnType::Text | ColumnType::Varchar(_))
-    );
-    match (text, &spec.warehouse_source) {
+) -> Option<String> {
+    let name = spec.cursor.as_ref()?.column.as_str();
+    let expression = read_columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(name))?
+        .expression
+        .as_str();
+    let text = matches!(cursor_type, Some(ColumnType::Text | ColumnType::Varchar(_)));
+    Some(match (text, &spec.warehouse_source) {
         (false, _) => expression.to_owned(),
-        (true, Some(source)) if source.system == "snowflake" => {
+        (true, Some(source)) if source.system == SNOWFLAKE_SOURCE => {
             format!("COLLATE({expression}, 'utf8')")
         }
         (true, Some(_)) => expression.to_owned(),
         (true, None) if spec.python.is_some() || spec.files.is_some() => expression.to_owned(),
         (true, None) => format!("{expression} COLLATE \"C\""),
-    }
+    })
 }
 
 /// `"column" >= 'from' AND "column" < 'to'` for Postgres, from the bounds that are set.

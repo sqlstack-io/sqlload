@@ -32,6 +32,13 @@ Where the read starts, in order:
 
 `plan` says which one applies, on the table's `cursor` line.
 
+From 0.27.0 (not released yet), text cursors compare by Unicode code point on both sides,
+whatever collation the source column or the destination uses, so `'B1'` comes before `'a9'`.
+Postgres sources and targets compare with `COLLATE "C"`, and Snowflake with `utf8`. Otherwise a
+case-insensitive source collation could read rows again on every run. BigQuery and Databricks
+compare by code point unless a dataset or schema sets a default collation, which SQLLoad doesn't
+override.
+
 ## Backfilling a range
 
 `--start-cursor` and `--end-cursor` read a range instead, from the start up to but not including the

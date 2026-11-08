@@ -19,6 +19,10 @@ INSERT INTO public.accounts VALUES
 INSERT INTO public.events VALUES (1, 'open', '2026-11-01 09:00:00+00'), (2, 'close', '2026-11-02 09:00:00+00');
 INSERT INTO public.visits VALUES (1, '2026-11-01 09:00:00+00');
 INSERT INTO public.stores VALUES ('L1', 'Leeds', 1), ('Y1', 'York', 2);
+CREATE TABLE public.keys_src (id int8, k text COLLATE \"und-x-icu\" NOT NULL);
+CREATE TABLE public.keys_dst (id int8, k text NOT NULL);
+INSERT INTO public.keys_src VALUES (1, 'B1'), (2, 'a9');
+INSERT INTO public.keys_dst VALUES (1, 'B1'), (2, 'a9');
 CREATE SCHEMA mart;
 CREATE TABLE mart.stores (id bigserial PRIMARY KEY, code varchar(5) NOT NULL, city text, note text DEFAULT 'none');
 CREATE VIEW mart.store_codes AS SELECT code, city FROM mart.stores;
@@ -191,6 +195,17 @@ fn given_postgres_tables_when_loading_repeatedly_into_a_postgres_target_then_eac
                 expected_load: "the table has no at column yet, so this load would read every row again and duplicate the rows already there; SQLLoad never drops and recreates a Postgres table (--reload), so add the column with ALTER TABLE",
                 check_query: "SELECT CAST(count(*) AS text) FROM mart.visits",
                 expected_result: "2",
+            },
+            PostgresTargetTestCase {
+                description: "a text cursor compares by code point on both sides whatever their collations ('B1' < 'a9'): an ICU source column is filtered bytewise, and an ICU target column's maximum is read bytewise, so neither append reads a row again",
+                source_change: "ALTER TABLE mart.keys_dst ALTER COLUMN k TYPE text COLLATE \"und-x-icu\"; INSERT INTO public.keys_src VALUES (3, 'c1'); INSERT INTO public.keys_dst VALUES (3, 'c1');",
+                options: PlanOptions {
+                    select: vec!["keys_src".to_owned(), "keys_dst".to_owned()],
+                    ..PlanOptions::default()
+                },
+                expected_load: "ok",
+                check_query: "SELECT (SELECT string_agg(k, ',' ORDER BY id) FROM mart.keys_src) || ' / ' || (SELECT string_agg(k, ',' ORDER BY id) FROM mart.keys_dst)",
+                expected_result: "B1,a9,c1 / B1,a9,c1",
             },
         ];
         for test_case in test_cases {

@@ -62,12 +62,8 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
         .and_then(|partition| partition.value.as_deref())
         .filter(|_| !options.reload);
     let column = cursor.column.as_str();
-    let expression = request
-        .read_columns
-        .iter()
-        .find(|read| read.name == column)
-        .map_or(column, |read| read.expression.as_str());
-    let expression = source_cursor(spec, expression, Some(cursor_type));
+    let expression = source_cursor(spec, request.read_columns, Some(cursor_type))
+        .unwrap_or_else(|| column.to_owned());
     let mut data_maximum: Option<String> = None;
     let (from, to, note, operator) = match spec.strategy {
         WriteStrategy::DeleteInsert => {
