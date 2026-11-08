@@ -276,8 +276,8 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     },
                 ],
                 expected_outcomes: &[
-                    "ok => 2,3,4,5 | batch   3 windows of 2, one commit each, up to the source's maximum 5 (read at plan)",
-                    "ok => 2,3,4,5,6,7 | batch   2 windows of 2, one commit each, up to the source's maximum 7 (read at plan)",
+                    "ok => 1,2,3,4,5 | batch   3 windows of 2, one commit each, up to the source's maximum 5 (read at plan)",
+                    "ok => 1,2,3,4,5,6,7 | batch   2 windows of 2, one commit each, up to the source's maximum 7 (read at plan)",
                 ],
             },
             BatchedScenarioTestCase {
