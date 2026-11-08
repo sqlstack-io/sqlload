@@ -58,6 +58,8 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "batch_interval",
     "warehouse",
     "stage",
+    "max_text_size",
+    "max_binary_size",
     "spreadsheet_id",
     "ranges",
 ];

@@ -281,6 +281,18 @@ pub(crate) async fn replan_columns(
 pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     match (&spec.files, &spec.python) {
         (Some(_), _) | (_, Some(_)) => files_read_columns(spec),
+        #[cfg(feature = "odbc")]
+        (None, None)
+            if spec
+                .warehouse_source
+                .as_ref()
+                .is_some_and(|source| source.route == WarehouseRoute::Query) =>
+        {
+            crate::odbc_source::main::read_columns::read_columns(
+                &selected_columns(spec),
+                &spec.pinned,
+            )
+        }
         (None, None) if spec.warehouse_source.is_some() => {
             unload_read_columns(&selected_columns(spec), &spec.pinned)
         }
@@ -753,7 +765,11 @@ fn reader_offer(
             route: WarehouseRoute::Unload { store, .. },
             ..
         }) => vec![store.clone()],
-        None => Vec::new(),
+        Some(WarehouseSource {
+            route: WarehouseRoute::Query,
+            ..
+        })
+        | None => Vec::new(),
     };
     let direct_blocked = match unload_to.is_empty() {
         true => direct_blocked,
