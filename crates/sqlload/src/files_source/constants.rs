@@ -42,6 +42,9 @@ pub const READ_CHUNK_BYTES: usize = 256 * 1024;
 /// Files sampled to work out the schema (their footers, or their first records): the newest by key, so recent schema changes are seen.
 pub const SCHEMA_SAMPLE_FILES: usize = 20;
 
+/// Bytes read from the end of a Parquet file for its footer: one request holds a typical footer, and stays within a new connection's first TCP window (a larger read costs round trips on a distant store); a larger footer takes a second request.
+pub const FOOTER_PREFETCH_BYTES: usize = 8 * 1024;
+
 /// Parquet footers (or CSV header lines) read at once, at plan and for each batch.
 pub const CONCURRENT_FOOTER_READS: usize = 16;
 

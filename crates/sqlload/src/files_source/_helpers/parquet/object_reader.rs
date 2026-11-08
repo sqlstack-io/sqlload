@@ -11,6 +11,8 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
+use crate::files_source::constants::FOOTER_PREFETCH_BYTES;
+
 /// Reads one Parquet file from an object store with range requests; its size is known from the listing.
 #[derive(Debug, Clone)]
 pub(crate) struct ObjectFileReader {
@@ -51,6 +53,7 @@ impl AsyncFileReader for ObjectFileReader {
         async move {
             let size = self.size;
             let metadata = ParquetMetaDataReader::new()
+                .with_prefetch_hint(Some(FOOTER_PREFETCH_BYTES))
                 .with_arrow_reader_options(options)
                 .load_and_finish(self, size)
                 .await?;
