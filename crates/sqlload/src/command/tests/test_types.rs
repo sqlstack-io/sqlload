@@ -34,3 +34,13 @@ pub(crate) struct PaintTestCase {
     pub(crate) line: &'static str,
     pub(crate) expected_line: &'static str,
 }
+
+pub(crate) struct FolderOverlapTestCase {
+    pub(crate) description: &'static str,
+    /// The files target's `path` template, below the root the source reads `data/orders/` from.
+    pub(crate) target_path: &'static str,
+    /// Text the plan must contain; empty for none.
+    pub(crate) expected_problem: &'static str,
+    /// The last line: `exit 0` or `exit 1`.
+    pub(crate) expected_exit: &'static str,
+}

@@ -1,5 +1,7 @@
 use crate::command::tests::helpers::{debug_without_host, run_without_host};
-use crate::command::tests::test_types::{LoaderCommandTestCase, PlanFailureTestCase};
+use crate::command::tests::test_types::{
+    FolderOverlapTestCase, LoaderCommandTestCase, PlanFailureTestCase,
+};
 
 const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 const NO_LOAD_METHOD: &str = "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
@@ -88,22 +90,31 @@ fn given_a_files_source_into_a_files_target_when_planning_then_a_target_folder_o
     std::fs::create_dir_all(&day).map_err(|error| error.to_string())?;
     std::fs::write(day.join("a.csv"), "id\n1\n").map_err(|error| error.to_string())?;
     let test_cases = [
-        ("data/{table}/", "which overlaps the folder it reads from"),
-        ("out/{table}/", ""),
+        FolderOverlapTestCase {
+            description: "a target folder that is the source folder is blocked",
+            target_path: "data/{table}/",
+            expected_problem: "which overlaps the folder it reads from",
+            expected_exit: "exit 1",
+        },
+        FolderOverlapTestCase {
+            description: "a target folder beside the source folder plans",
+            target_path: "out/{table}/",
+            expected_problem: "",
+            expected_exit: "exit 0",
+        },
     ];
-    for (target_path, expected_problem) in test_cases {
+    for test_case in test_cases {
         let project = format!(
-            "[connections.lake]\nkind = \"filesystem\"\nroot = \"{}\"\n[targets.lake]\nconnection = \"lake\"\npath = \"{target_path}\"\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"data/orders/\"\nformat = \"csv\"\npartition_columns = {{ day = \"date\" }}\n",
-            root.path().display()
+            "[connections.lake]\nkind = \"filesystem\"\nroot = \"{}\"\n[targets.lake]\nconnection = \"lake\"\npath = \"{}\"\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"data/orders/\"\nformat = \"csv\"\npartition_columns = {{ day = \"date\" }}\n",
+            root.path().display(),
+            test_case.target_path
         );
         let output = run_without_host(&project, &["plan"]);
         assert!(
-            output.contains(expected_problem)
-                && output.ends_with(match expected_problem.is_empty() {
-                    true => "exit 0",
-                    false => "exit 1",
-                }),
-            "{target_path}: {output}"
+            output.contains(test_case.expected_problem)
+                && output.ends_with(test_case.expected_exit),
+            "{}: {output}",
+            test_case.description
         );
     }
     Ok(())
