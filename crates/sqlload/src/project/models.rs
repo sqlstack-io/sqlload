@@ -128,6 +128,21 @@ pub enum ConnectionConfig {
         #[serde(default)]
         storage_url: Option<String>,
     },
+    /// A ClickHouse server, reached over its HTTP interface.
+    #[serde(rename = "clickhouse")]
+    ClickHouse {
+        host: String,
+        /// 8123, or 8443 with `secure = true`, when omitted.
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default = "defaults::clickhouse_user")]
+        user: String,
+        #[serde(default)]
+        password: Option<crate::auth::models::Secret>,
+        /// HTTPS instead of HTTP.
+        #[serde(default)]
+        secure: bool,
+    },
     Postgres {
         host: String,
         #[serde(default = "defaults::postgres_port")]
@@ -187,6 +202,7 @@ impl ConnectionConfig {
             Self::Snowflake { .. } => "snowflake",
             Self::Databricks { .. } => "databricks",
             Self::BigQuery { .. } => "bigquery",
+            Self::ClickHouse { .. } => "clickhouse",
             Self::Postgres { .. } => "postgres",
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",
@@ -430,6 +446,30 @@ pub struct TableSettings {
     /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones; `"none"` commits the whole read once.
     #[serde(default, deserialize_with = "deserialize_optional_batch")]
     pub batch_size: Option<BatchStep>,
+    /// The table engine a created table gets (ClickHouse), with its arguments.
+    #[serde(default)]
+    pub engine: Option<String>,
+    /// The sorting key a created table gets (ClickHouse): an expression or a list of them.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub order_by: Option<Vec<String>>,
+    /// The partitioning expression a created table gets (ClickHouse).
+    #[serde(default)]
+    pub partition_by: Option<String>,
+    /// The primary key a created table gets (ClickHouse), a prefix of `order_by`.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub primary_key: Option<Vec<String>>,
+    /// Table settings a created table gets (ClickHouse), by name.
+    #[serde(default)]
+    pub table_settings: Option<BTreeMap<String, LayoutSetting>>,
+}
+
+/// A table setting's value in a ClickHouse layout.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum LayoutSetting {
+    Bool(bool),
+    Integer(i64),
+    Text(String),
 }
 
 /// One table's settings: everything a source can set, plus what only a table can.

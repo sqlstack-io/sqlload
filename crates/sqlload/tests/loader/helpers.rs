@@ -133,11 +133,11 @@ pub(crate) async fn load_all(
     plan: &ProjectPlan,
     destinations: &BTreeMap<String, Destination>,
 ) -> Result<(), String> {
-    load_with(project, plan, destinations, &PlanOptions::default()).await
+    load_with_options(project, plan, destinations, &PlanOptions::default()).await
 }
 
 /// Load every table of `plan` with `options`; every failed table is in the error.
-async fn load_with(
+pub(crate) async fn load_with_options(
     project: &ProjectConfig,
     plan: &ProjectPlan,
     destinations: &BTreeMap<String, Destination>,
@@ -215,7 +215,7 @@ pub(crate) async fn run_batched(
         apply_project(&plan, &destinations)
             .await
             .map_err(|error| error.to_string())?;
-        let error = load_with(&project, &plan, &destinations, &options)
+        let error = load_with_options(&project, &plan, &destinations, &options)
             .await
             .err()
             .map_or_else(

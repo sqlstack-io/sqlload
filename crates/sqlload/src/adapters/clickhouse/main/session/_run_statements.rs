@@ -1,0 +1,70 @@
+//! Run SQL statements in order.
+
+use crate::adapters::clickhouse::_helpers::publish::{
+    PartitionPublish, delta_partitions_query, displaced_partitions_query, partition_statements,
+    with_delta,
+};
+use crate::adapters::clickhouse::_helpers::steps::{publish_step, run_step};
+use crate::adapters::clickhouse::main::session::_query_rows::query_rows;
+use crate::adapters::clickhouse::models::{ClickHouseDestination, PublishStep};
+use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
+use crate::http::errors::ApiError;
+
+/// Run `statements` one after another, each committing on its own (ClickHouse has no transactions, so `BEGIN` and `COMMIT` are refused); a publish step is carried out by asking the server which partitions it touches, then running the statements that swap them in (the copy they are rebuilt in is dropped if one fails).
+pub(in crate::adapters) async fn run_statements(
+    destination: &ClickHouseDestination,
+    statements: &[String],
+) -> Result<(), ApiError> {
+    if let Some(statement) = statements.iter().find(|statement| {
+        [BEGIN_STATEMENT, COMMIT_STATEMENT, "ROLLBACK"]
+            .contains(&statement.trim().to_ascii_uppercase().as_str())
+    }) {
+        return Err(ApiError::Protocol(format!(
+            "{statement} was sent to ClickHouse, which has no transactions"
+        )));
+    }
+    for statement in statements {
+        let Some(PublishStep::Partitions {
+            target,
+            delta,
+            copy,
+            aside,
+            displaced,
+        }) = publish_step(statement)?
+        else {
+            run_step(destination, statement).await?;
+            continue;
+        };
+        let partitions = |query: String| async move {
+            let rows = query_rows(destination, &query).await?;
+            Ok::<Vec<String>, ApiError>(
+                rows.into_iter()
+                    .filter_map(|row| row.into_iter().next().flatten())
+                    .collect(),
+            )
+        };
+        let displaced = displaced.map(|condition| with_delta(&condition, &delta));
+        let new = partitions(delta_partitions_query(&delta)).await?;
+        let replaced = match &displaced {
+            Some(condition) => partitions(displaced_partitions_query(&target, condition)).await?,
+            None => Vec::new(),
+        };
+        let publish = PartitionPublish {
+            target: &target,
+            delta: &delta,
+            copy: &copy,
+            aside: &aside,
+            displaced: displaced.as_deref(),
+        };
+        for step in partition_statements(&publish, (&new, &replaced)) {
+            if let Err(error) = run_step(destination, &step).await {
+                let drop = format!("DROP TABLE IF EXISTS {copy}");
+                if let Err(cleanup) = run_step(destination, &drop).await {
+                    tracing::warn!(error = %cleanup, "cannot drop the partition copy");
+                }
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}

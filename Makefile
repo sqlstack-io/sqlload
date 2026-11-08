@@ -29,7 +29,7 @@ clean-partial-duckdb-sources:
 		[ -d "$$dir" ] && [ ! -e "$$dir.complete" ] && echo "removing incomplete $$dir" && rm -rf "$$dir"; \
 	done; true
 
-# Needs Docker: Redpanda, Postgres and SeaweedFS (S3) containers, a local fake Snowflake, and DuckDB.
+# Needs Docker: Redpanda, Postgres, SeaweedFS (S3) and ClickHouse containers, a local fake Snowflake, and DuckDB.
 # The AWS variables are the test containers' credentials.
 test-containers:
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests --test exporter --quiet -- --test-threads=2
