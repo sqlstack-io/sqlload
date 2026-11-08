@@ -166,8 +166,8 @@ A table function is a generator (or returns an iterable). It can yield, in any m
 |-------|---------|
 | A dict, or a list of dicts | Rows, typed like JSON. |
 | Arrow data: a pyarrow table or batch, a polars or pandas DataFrame | Rows, keeping their Arrow types. |
-| `sl.json(data, path=None)` | Rows from a JSON document: an array of objects (at a dotted `path`, such as `"data.items"`), or objects. Parsed in Rust. |
-| `sl.ndjson(data)` | Rows from newline-delimited JSON. Parsed in Rust. |
+| `sl.json(data, path=None, *, fields=None, keep_record=None)` | Rows from a JSON document: an array of objects (at a dotted `path`, such as `"data.items"`), or objects. Parsed in Rust. See [Fields](#fields) for `fields` and `keep_record`. |
+| `sl.ndjson(data, *, fields=None, keep_record=None)` | Rows from newline-delimited JSON. Parsed in Rust. |
 | An `sl.http` job | Rows the job fetches, entirely in Rust. See [HTTP APIs](#http-apis). |
 | `sl.checkpoint(position)` | A logged position covering the rows yielded before it. |
 
@@ -227,6 +227,50 @@ Each listed object is expanded exactly one level. Objects not listed, such as `l
 JSON; never flatten maps whose keys are data. Lists are never expanded. A missing or null object
 leaves its columns NULL, and new keys become new columns under `on_schema_change`. The load fails
 when a listed value arrives as a scalar or a list.
+
+### Fields
+
+From 0.27.0 (not released yet). Without `fields`, each key of a JSON row object loads as a column
+under its own name, as written: a key `updated-at` makes a column `updated-at`, which the
+destination quotes, so queries must quote it too. `fields` loads only the values it names, under
+the names it gives. It works on `sl.json`, `sl.ndjson`, and an `sl.http` job's `paginate` and
+`fan_out`, all in Rust:
+
+```python
+@shop.table(
+    description="Accounts.",
+    write_strategy="merge",
+    unique_key="id",
+    cursor_column="updated_at",
+    columns={"updated_at": "timestamp_tz"},
+)
+def accounts(ctx):
+    return api.paginate(
+        "/accounts",
+        paginator=sl.offset(limit=50),
+        select="$.items",
+        fields={
+            "id": sl.field("$.id", required=True),
+            "account_code": "$.code",
+            "updated_at": "$.updated-at",
+            "city": "$.address.city",
+        },
+        keep_record="raw_json",
+    )
+```
+
+- A path is `$` followed by keys, such as `$.address.city`. A key may hold any character but `.`.
+  `$` alone is the whole object.
+- A missing key, or a path that runs through a value that isn't an object, loads NULL.
+  `sl.field(path, required=True)` fails the table instead, naming the row and the path.
+- `keep_record` adds the whole row object as a JSON column. It needs `fields`, and its name can't
+  be a field's. A table with a `mask` refuses it, because the record would carry the masked values.
+- Types are inferred as for any JSON. Pin them with the table's `columns`, which `plan` shows.
+  `columns`, `flatten` and `mask` name the projected columns, not the source's keys.
+- A table with a `cursor_column` must load it, as a field, as `keep_record`, or as a column that
+  flattening a field makes. A job whose `fields` leave it out fails before any request; `sl.json`
+  and `sl.ndjson` data fails before it is parsed.
+- A fan-out's `over` picks keys with its `select` and takes no `fields`.
 
 ## The context
 
@@ -308,8 +352,8 @@ loaded   raw.shop__orders       5 rows  1.0s
 | Function | Meaning |
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
-| `api.paginate(path, *, paginator, params=None, select=None, on_status=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list of values. |
+| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0, not released yet) pick and rename each row's values; see [Fields](#fields). |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0 (not released yet). `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list of values. |
 
 | Paginator | Next page |
 |-----------|-----------|

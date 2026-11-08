@@ -11,6 +11,7 @@ use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::flatten_batch::flatten_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
 use sqlload::row_batches::main::normalise_batch::normalise_batch;
+use sqlload::row_batches::main::projection_problem::projection_problem;
 use sqlload::row_batches::models::{JsonLayout, JsonRead};
 
 use crate::crossing::errors::CrossError;
@@ -191,6 +192,13 @@ impl Output {
                 open = self.send(batch, started);
             }
             Crossed::Json { bytes, read } => {
+                if let Some(problem) = read
+                    .projection
+                    .as_ref()
+                    .and_then(|projection| projection_problem(projection, self.context.rules()))
+                {
+                    return Err(CrossError::Data(problem));
+                }
                 let mut started = started;
                 json_rows(&bytes, &read, &mut |columns| {
                     let batch = flatten_batch(&columns_batch(columns)?, &self.context.flatten)?;
@@ -239,25 +247,31 @@ impl Output {
     fn http(&self, definition: &str) -> Result<bool, CrossError> {
         let mut open = true;
         let mut failed: Option<String> = None;
-        run_http_job(definition, &self.context.connections, |page| {
-            let read = JsonRead {
-                layout: JsonLayout::Document,
-                path: page.path.clone(),
-                batch_rows: usize::MAX,
-            };
-            let parsed = json_rows(&page.bytes, &read, &mut |columns| {
-                let batch = flatten_batch(&columns_batch(columns)?, &self.context.flatten)?;
-                open = open && self.send(batch, Instant::now());
-                match open {
-                    true => Ok(()),
-                    false => Err("the consumer stopped reading".to_owned()),
+        run_http_job(
+            definition,
+            &self.context.connections,
+            self.context.rules(),
+            |page| {
+                let read = JsonRead {
+                    layout: JsonLayout::Document,
+                    path: page.path.clone(),
+                    batch_rows: usize::MAX,
+                    projection: page.projection.clone(),
+                };
+                let parsed = json_rows(&page.bytes, &read, &mut |columns| {
+                    let batch = flatten_batch(&columns_batch(columns)?, &self.context.flatten)?;
+                    open = open && self.send(batch, Instant::now());
+                    match open {
+                        true => Ok(()),
+                        false => Err("the consumer stopped reading".to_owned()),
+                    }
+                });
+                if let (Err(reason), true) = (parsed, open) {
+                    failed = Some(format!("{}: {reason}", page.source));
                 }
-            });
-            if let (Err(reason), true) = (parsed, open) {
-                failed = Some(format!("{}: {reason}", page.source));
-            }
-            open && failed.is_none()
-        })
+                open && failed.is_none()
+            },
+        )
         .map_err(CrossError::Data)?;
         match failed {
             Some(reason) => Err(CrossError::Data(reason)),

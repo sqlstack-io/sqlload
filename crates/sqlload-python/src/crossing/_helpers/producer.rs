@@ -126,6 +126,7 @@ impl<'py> Producer<'py> {
                 layout: json.layout,
                 path: json.path.clone(),
                 batch_rows: self.options.batch_rows,
+                projection: json.projection.clone(),
             };
             let bytes = json.bytes.clone_ref(self.py);
             return Ok(self.flush()? && self.send(Crossed::Json { bytes, read })?);
@@ -191,6 +192,7 @@ impl<'py> Producer<'py> {
                     layout: JsonLayout::Document,
                     path: None,
                     batch_rows: usize::MAX,
+                    projection: None,
                 },
             },
             None => Crossed::Columns(walk_rows(rows, &self.dispatch.flatten)?),

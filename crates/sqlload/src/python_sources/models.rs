@@ -30,6 +30,8 @@ pub struct TableRead {
     pub is_reload: bool,
     /// Top-level objects the crossing expands one level into `<object>__<key>` columns.
     pub flatten: Vec<String>,
+    /// Columns loaded masked.
+    pub masked: Vec<String>,
 }
 
 /// The cursor window a table function may use to read only new data.
