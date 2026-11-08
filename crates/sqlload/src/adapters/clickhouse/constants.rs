@@ -60,3 +60,11 @@ pub const ORDERED_READ_SETTINGS: &str =
 /// Shown for `copy_to_internal_stage` on a ClickHouse target.
 pub const NO_INTERNAL_STAGE_COPY: &str =
     "copy_to_internal_stage is for Snowflake targets; ClickHouse takes the rows as Arrow over HTTP";
+
+/// The query parameters a pull's `s3()` takes its credentials from.
+pub const KEY_ID_PARAMETER: &str = "sqlload_key_id";
+pub const SECRET_PARAMETER: &str = "sqlload_secret";
+pub const TOKEN_PARAMETER: &str = "sqlload_token";
+
+/// The multipart boundary of a request that sends query parameters beside its SQL.
+pub const FORM_BOUNDARY: &str = "sqlload-form-7c1e0b2f9a4d";

@@ -156,7 +156,7 @@ pub(crate) async fn run_clickhouse_stops(
 /// The bucket the ClickHouse pull tests read Parquet from.
 pub(crate) const PULL_BUCKET: &str = "example-bucket-test";
 
-/// Files sources in `endpoint`'s bucket under `prefix`, loaded into the test ClickHouse's `schema` database: daily event folders reread from a day before the newest, and times of day, which ClickHouse cannot read from Parquet exactly.
+/// Files sources in `endpoint`'s bucket under `prefix`, loaded into the test ClickHouse's `schema` database: daily event folders reread from a day before the newest, times of day, which ClickHouse cannot read from Parquet exactly, and folders of a small count.
 pub(crate) fn clickhouse_files_project(
     endpoint: &str,
     clickhouse_port: u16,
@@ -198,6 +198,14 @@ description = "Times of day."
 connection = "lake"
 path = "{prefix}/clocks/"
 write_strategy = "replace"
+
+[sources.counts]
+kind = "files"
+description = "Events in folders by a small count."
+connection = "lake"
+path = "{prefix}/counts/"
+write_strategy = "replace"
+partition_columns = {{ n = "smallint" }}
 "#
     )
 }

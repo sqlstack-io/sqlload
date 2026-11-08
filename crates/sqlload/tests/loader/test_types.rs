@@ -723,8 +723,8 @@ pub(crate) struct EventsFile {
 pub(crate) struct FilesPullTestCase {
     pub(crate) description: &'static str,
     pub(crate) files: Vec<EventsFile>,
-    /// Text the plan holds.
-    pub(crate) expected_plan: &'static str,
+    /// Text the plan holds, or the error the load fails with.
+    pub(crate) expected_plan: Result<&'static str, &'static str>,
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }

@@ -3,7 +3,7 @@
 use object_store::aws::AmazonS3ConfigKey;
 
 use crate::adapters::clickhouse::_helpers::dialect::pull::{
-    PullCredentials, PulledFile, object_url, pull_insert,
+    PullCredentials, PulledFile, credential_parameters, object_url, pull_insert,
 };
 use crate::adapters::clickhouse::_helpers::session::http::written_rows;
 use crate::adapters::clickhouse::main::plan::_direct_problem::direct_problem;
@@ -15,9 +15,11 @@ use crate::adapters::contract::types::{SqlAdapter, TableWriter};
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::s3_builder::s3_builder;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
+use crate::files_source::main::normal_value::normal_value;
 use crate::files_source::models::DataFile;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::FilesSource;
+use crate::schema_plan::models::DesiredColumn;
 use crate::store_paths::models::StoreKind;
 
 impl ClickHouseWriter {
@@ -46,26 +48,37 @@ impl ClickHouseWriter {
         }
         self.settle_rows().await?;
         let builder = s3_builder(bucket, region.as_deref(), endpoint.as_deref());
-        let region = builder.get_config_value(&AmazonS3ConfigKey::Region);
-        let endpoint = builder.get_config_value(&AmazonS3ConfigKey::Endpoint);
+        let setting = |key: AmazonS3ConfigKey| builder.get_config_value(&key);
+        let region = setting(AmazonS3ConfigKey::Region);
+        let endpoint =
+            setting(AmazonS3ConfigKey::S3Endpoint).or(setting(AmazonS3ConfigKey::Endpoint));
+        let in_endpoint = endpoint.is_some()
+            && setting(AmazonS3ConfigKey::VirtualHostedStyleRequest).as_deref() == Some("true");
+        let unsigned = setting(AmazonS3ConfigKey::SkipSignature).as_deref() == Some("true");
         let unreadable = |error: String| {
             LoaderError::Invalid(format!(
                 "cannot sign ClickHouse's reads of s3://{bucket}/: {error}"
             ))
         };
-        let store = builder
-            .build()
-            .map_err(|error| unreadable(error.to_string()))?;
-        let credential = store
-            .credentials()
-            .get_credential()
-            .await
-            .map_err(|error| unreadable(error.to_string()))?;
-        let credentials = PullCredentials {
-            key_id: credential.key_id.clone(),
-            secret: credential.secret_key.clone(),
-            token: credential.token.clone(),
+        let credentials = match unsigned {
+            true => None,
+            false => {
+                let store = builder
+                    .build()
+                    .map_err(|error| unreadable(error.to_string()))?;
+                let credential = store
+                    .credentials()
+                    .get_credential()
+                    .await
+                    .map_err(|error| unreadable(error.to_string()))?;
+                Some(PullCredentials {
+                    key_id: credential.key_id.clone(),
+                    secret: credential.secret_key.clone(),
+                    token: credential.token.clone(),
+                })
+            }
         };
+        let parameters = credential_parameters(credentials.as_ref());
         let target = &batch.target;
         let (into, columns) = match (target.staging, target.builds) {
             (Some(staging), false) => (staging, target.columns),
@@ -80,16 +93,20 @@ impl ClickHouseWriter {
         let mut rows = 0;
         for data in batch.files {
             let key = format!("{}{}", source.location.prefix, data.file.relative_key);
-            let url = object_url((bucket, &key), region.as_deref(), endpoint.as_deref())
-                .map_err(LoaderError::Invalid)?;
-            let file = pulled_file(source, data, url, batch);
+            let url = object_url(
+                (bucket, &key),
+                region.as_deref(),
+                (endpoint.as_deref(), in_endpoint),
+            )
+            .map_err(LoaderError::Invalid)?;
+            let file = pulled_file(source, data, url, (batch, columns))?;
             let insert = pull_insert(
                 &into,
                 (columns, &sql_type),
-                (&file, &credentials),
+                (&file, credentials.as_ref()),
                 (target.load_id, batch.loaded_at),
             );
-            rows += written_rows(&self.destination, &insert)
+            rows += written_rows(&self.destination, &insert, &parameters)
                 .await
                 .map_err(|error| LoaderError::Invalid(format!("{key}: {error}")))?;
         }
@@ -103,13 +120,13 @@ impl ClickHouseWriter {
     }
 }
 
-/// What ClickHouse reads for `data`, at `url`: the read columns its own footer holds, and the values SQLLoad gives every row of it.
+/// What ClickHouse reads for `data`, at `url`: the read columns its own footer holds, and the values SQLLoad gives every row of it, each path value converted to its column's type as SQLLoad's reader would (so ClickHouse's own casts, which wrap and roll over instead of failing, never see it); `Err` names a value that does not convert.
 fn pulled_file(
     source: &FilesSource,
     data: &DataFile,
     url: String,
-    batch: &DirectBatch<'_>,
-) -> PulledFile {
+    (batch, columns): (&DirectBatch<'_>, &[DesiredColumn]),
+) -> Result<PulledFile, LoaderError> {
     let mut in_file: Vec<String> = Vec::new();
     if let Some(footer) = batch.footers.parquet.get(&data.file.relative_key) {
         in_file.extend(
@@ -133,11 +150,26 @@ fn pulled_file(
             .iter()
             .find(|(partition, _)| partition == name)
             .map(|(_, value)| value.clone());
+        let column_type = columns
+            .iter()
+            .find(|column| column.name == *name)
+            .map(|column| &column.column_type);
+        let value = match (value, column_type) {
+            (Some(value), Some(column_type)) => {
+                Some(normal_value(&value, column_type).map_err(|reason| {
+                    LoaderError::Invalid(format!(
+                        "{}: {name} = {value:?} does not load as {column_type}: {reason}",
+                        data.file.relative_key
+                    ))
+                })?)
+            }
+            (value, _) => value,
+        };
         constants.push((name.clone(), value));
     }
-    PulledFile {
+    Ok(PulledFile {
         url,
         in_file,
         constants,
-    }
+    })
 }

@@ -1,7 +1,9 @@
 //! The statement that has ClickHouse read a files table's Parquet file from S3 itself.
 
 use crate::adapters::clickhouse::_helpers::dialect::write::typed_literal;
-use crate::adapters::clickhouse::constants::ORDERED_READ_SETTINGS;
+use crate::adapters::clickhouse::constants::{
+    KEY_ID_PARAMETER, ORDERED_READ_SETTINGS, SECRET_PARAMETER, TOKEN_PARAMETER,
+};
 use crate::adapters::clickhouse::models::ClickHouseSql;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
@@ -37,11 +39,37 @@ impl std::fmt::Debug for PullCredentials {
 /// How a pull types each column it inserts: the staging table's type, or the build table's.
 pub(crate) type SqlTypeOf<'a> = &'a dyn Fn(&ColumnType) -> String;
 
-/// `INSERT INTO into` every one of `columns` (each typed by `sql_type`) from `file`, read by ClickHouse's `s3()` with `credentials`. A column takes the file's constant when it has one of that name, the file's own column when its footer holds it, and NULL otherwise; `_sqlload_source_row` numbers the file's rows from 1 in stored order (read by one thread, in order); the load id and load time are the batch's. Binary columns go through `substring`, which keeps a fixed-size value's trailing zero bytes that a cast to `String` drops.
+/// The query parameters a pull's statement names its credentials by, with their values: sent beside the SQL, never in it, so no statement text, log or error echo holds them.
+pub(crate) fn credential_parameters(
+    credentials: Option<&PullCredentials>,
+) -> Vec<(String, String)> {
+    let Some(credentials) = credentials else {
+        return Vec::new();
+    };
+    let mut parameters = vec![
+        (
+            format!("param_{KEY_ID_PARAMETER}"),
+            credentials.key_id.clone(),
+        ),
+        (
+            format!("param_{SECRET_PARAMETER}"),
+            credentials.secret.clone(),
+        ),
+    ];
+    parameters.extend(
+        credentials
+            .token
+            .clone()
+            .map(|token| (format!("param_{TOKEN_PARAMETER}"), token)),
+    );
+    parameters
+}
+
+/// `INSERT INTO into` every one of `columns` (each typed by `sql_type`) from `file`, read by ClickHouse's `s3()` signed with `credentials` (named as [query parameters](credential_parameters)), or unsigned (`NOSIGN`) when there are none. A column takes the file's constant when it has one of that name, the file's own column when its footer holds it, and NULL otherwise; `_sqlload_source_row` numbers the file's rows from 1 in stored order (read by one thread, in order); the load id and load time are the batch's. Binary columns go through `substring`, which keeps a fixed-size value's trailing zero bytes that a cast to `String` drops.
 pub(crate) fn pull_insert(
     into: &str,
     (columns, sql_type): (&[DesiredColumn], SqlTypeOf<'_>),
-    (file, credentials): (&PulledFile, &PullCredentials),
+    (file, credentials): (&PulledFile, Option<&PullCredentials>),
     (load_id, loaded_at): (&str, &str),
 ) -> String {
     let literal = |text: &str| ClickHouseSql.render_loader_value_literal(text);
@@ -71,12 +99,20 @@ pub(crate) fn pull_insert(
         .iter()
         .map(|column| identifier(&column.name))
         .collect();
-    let mut signed = vec![
-        literal(&file.url),
-        literal(&credentials.key_id),
-        literal(&credentials.secret),
-    ];
-    signed.extend(credentials.token.as_deref().map(literal));
+    let parameter = |name: &str| format!("{{{name}:String}}");
+    let mut signed = vec![literal(&file.url)];
+    match credentials {
+        Some(credentials) => {
+            signed.extend([parameter(KEY_ID_PARAMETER), parameter(SECRET_PARAMETER)]);
+            signed.extend(
+                credentials
+                    .token
+                    .as_ref()
+                    .map(|_| parameter(TOKEN_PARAMETER)),
+            );
+        }
+        None => signed.push("NOSIGN".to_owned()),
+    }
     signed.push(literal("Parquet"));
     let numbered = columns
         .iter()
@@ -93,30 +129,26 @@ pub(crate) fn pull_insert(
     )
 }
 
-/// The HTTP URL ClickHouse reads `key` of `bucket` at: under `endpoint` by path when the S3 connection names one, otherwise on AWS by virtual host, in `region` when known. Each path segment is percent-encoded, which ClickHouse decodes before signing.
+/// The HTTP URL ClickHouse reads `key` of `bucket` at: under `endpoint` by path when there is one (or with the bucket already in it, `in_endpoint`, for virtual-hosted requests to a custom endpoint), otherwise on AWS, in `region` when known, by virtual host unless the bucket's name holds a dot, which AWS's certificate does not cover. Each path segment is percent-encoded, which ClickHouse decodes before signing.
 pub(crate) fn object_url(
     (bucket, key): (&str, &str),
     region: Option<&str>,
-    endpoint: Option<&str>,
+    (endpoint, in_endpoint): (Option<&str>, bool),
 ) -> Result<String, String> {
-    let (base, segments): (String, Vec<&str>) = match (endpoint, region) {
-        (Some(endpoint), _) => (
-            endpoint.trim_end_matches('/').to_owned(),
-            std::iter::once(bucket).chain(key.split('/')).collect(),
-        ),
-        (None, Some(region)) => (
-            format!("https://{bucket}.s3.{region}.amazonaws.com"),
-            key.split('/').collect(),
-        ),
-        (None, None) => (
-            format!("https://{bucket}.s3.amazonaws.com"),
-            key.split('/').collect(),
-        ),
+    let aws = match region {
+        Some(region) => format!("s3.{region}.amazonaws.com"),
+        None => "s3.amazonaws.com".to_owned(),
     };
+    let (base, by_path): (String, bool) = match endpoint {
+        Some(endpoint) => (endpoint.trim_end_matches('/').to_owned(), !in_endpoint),
+        None if bucket.contains('.') => (format!("https://{aws}"), true),
+        None => (format!("https://{bucket}.{aws}"), false),
+    };
+    let bucket_segment = by_path.then_some(bucket);
     let mut url = reqwest::Url::parse(&base).map_err(|error| format!("{base}: {error}"))?;
     url.path_segments_mut()
         .map_err(|()| format!("{base} cannot hold a path"))?
         .pop_if_empty()
-        .extend(segments);
+        .extend(bucket_segment.into_iter().chain(key.split('/')));
     Ok(url.to_string())
 }

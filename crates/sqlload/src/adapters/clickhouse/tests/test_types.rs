@@ -44,13 +44,20 @@ pub(crate) struct PublishStepTestCase {
 pub(crate) struct PullInsertTestCase {
     pub(crate) description: &'static str,
     pub(crate) columns: Vec<crate::schema_plan::models::DesiredColumn>,
+    /// Whether the read is signed (with a session token), or unsigned for a public bucket.
+    pub(crate) signed: bool,
+    /// The query parameters sent beside the statement.
+    pub(crate) expected_parameters: &'static [(&'static str, &'static str)],
     pub(crate) expected_insert: &'static str,
 }
 
 pub(crate) struct ObjectUrlTestCase {
     pub(crate) description: &'static str,
+    pub(crate) bucket: &'static str,
     pub(crate) region: Option<&'static str>,
     pub(crate) endpoint: Option<&'static str>,
+    /// Whether requests to the endpoint are virtual-hosted, the bucket already in it.
+    pub(crate) in_endpoint: bool,
     pub(crate) key: &'static str,
     pub(crate) expected_url: &'static str,
 }

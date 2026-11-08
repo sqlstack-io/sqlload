@@ -51,15 +51,22 @@ fn given_parquet_in_s3_when_loading_into_clickhouse_then_clickhouse_reads_the_fi
                         ids: 9001..=9002,
                         note: None,
                     },
+                    EventsFile {
+                        key: "counts/n=7/a.parquet",
+                        ids: 1..=1,
+                        note: None,
+                    },
                 ],
-                expected_plan: "route   ClickHouse reads directly from s3://example-bucket-test/pulls/events/ (nothing through the loader)",
+                expected_plan: Ok(
+                    "route   ClickHouse reads directly from s3://example-bucket-test/pulls/events/ (nothing through the loader)",
+                ),
                 check_query: EVENTS,
                 expected_result: "5002|0|00010000|2|2026-10-30@s3://example-bucket-test/pulls/events/day=2026-10-30/part one.parquet,2026-11-01@s3://example-bucket-test/pulls/events/day=2026-11-01/b.parquet",
             },
             FilesPullTestCase {
                 description: "a time column, which ClickHouse reads from Parquet as a timestamp, goes through SQLLoad and loads as its text",
                 files: Vec::new(),
-                expected_plan: "route   read parquet into Arrow -> ClickHouse takes Arrow",
+                expected_plan: Ok("route   read parquet into Arrow -> ClickHouse takes Arrow"),
                 check_query: "SELECT arrayStringConcat(groupArray(t), ',') FROM raw.clocks",
                 expected_result: "13:04:05.123456",
             },
@@ -70,26 +77,40 @@ fn given_parquet_in_s3_when_loading_into_clickhouse_then_clickhouse_reads_the_fi
                     ids: 9003..=9003,
                     note: Some("c"),
                 }],
-                expected_plan: "",
+                expected_plan: Ok(""),
                 check_query: "SELECT toString(count()) || '|' || arrayStringConcat(arraySort(groupArray(toString(id))), ',') FROM raw.events WHERE day = '2026-11-01'",
                 expected_result: "3|9001,9002,9003",
             },
             FilesPullTestCase {
                 description: "the other day's rows are kept",
                 files: Vec::new(),
-                expected_plan: "",
+                expected_plan: Ok(""),
                 check_query: "SELECT toString(count()) FROM raw.events",
                 expected_result: "5003",
+            },
+            FilesPullTestCase {
+                description: "a folder value too large for its smallint fails the load as SQLLoad's reader would, rather than ClickHouse wrapping it, and the table keeps its rows",
+                files: vec![EventsFile {
+                    key: "counts/n=70000/b.parquet",
+                    ids: 1..=1,
+                    note: None,
+                }],
+                expected_plan: Err("n = \"70000\" does not load as smallint"),
+                check_query: "SELECT arrayStringConcat(groupArray(toString(n)), ',') FROM raw.counts",
+                expected_result: "7",
             },
         ];
         for test_case in test_cases {
             put_events(&folder, &test_case.files).await?;
-            let plan = plan_apply_load_with(&project, &destinations, &PlanOptions::default())
-                .await
-                .map_err(|error| format!("{}: {error}", test_case.description))?;
+            let outcome =
+                plan_apply_load_with(&project, &destinations, &PlanOptions::default()).await;
+            let seen = outcome.as_deref().map_err(String::as_str);
             assert!(
-                plan.contains(test_case.expected_plan),
-                "{}: {plan}",
+                seen.is_ok() == test_case.expected_plan.is_ok()
+                    && seen
+                        .unwrap_or_else(|error| error)
+                        .contains(test_case.expected_plan.unwrap_or_else(|error| error)),
+                "{}: {seen:?}",
                 test_case.description
             );
             assert_eq!(
