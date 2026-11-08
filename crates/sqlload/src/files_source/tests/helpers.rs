@@ -51,6 +51,7 @@ pub(crate) fn encoding(format: SourceFormat) -> FilesEncoding {
         format,
         compression: Compression::Auto,
         csv: CsvOptions::default(),
+        record: None,
     }
 }
 
@@ -60,6 +61,7 @@ pub(crate) fn csv_encoding(csv: CsvOptions) -> FilesEncoding {
         format: SourceFormat::Csv,
         compression: Compression::Auto,
         csv,
+        record: None,
     }
 }
 

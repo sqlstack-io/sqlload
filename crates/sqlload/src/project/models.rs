@@ -5,8 +5,9 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::config::models::AuthConfig;
+use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::models::{
-    Compression, CsvOptions, FilesEncoding, SourceFormat, UnmatchedPaths,
+    Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
 };
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
@@ -291,6 +292,12 @@ pub struct SourceConfig {
     /// How CSV files are written (files sources with `format = "csv"`).
     #[serde(default)]
     pub csv: Option<CsvOptions>,
+    /// Typed columns (default), or each JSON object or CSV line whole in one `json` column (files sources with a text format).
+    #[serde(default)]
+    pub shape: RecordShape,
+    /// The column `shape = "record"` loads each record into; `record` when omitted.
+    #[serde(default)]
+    pub record_column: Option<String>,
     /// The folder template for this source's tables in a files target, overriding the target's `path`.
     #[serde(default)]
     pub destination_path: Option<String>,
@@ -402,6 +409,11 @@ impl SourceConfig {
             format: self.format,
             compression: self.compression.unwrap_or_default(),
             csv: self.csv.clone().unwrap_or_default(),
+            record: (self.shape == RecordShape::Record).then(|| {
+                self.record_column
+                    .clone()
+                    .unwrap_or_else(|| RECORD_COLUMN.to_owned())
+            }),
         }
     }
 

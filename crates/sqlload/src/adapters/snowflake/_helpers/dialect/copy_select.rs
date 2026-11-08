@@ -99,6 +99,9 @@ fn column_value(
     };
     let inferred = request.inferred.contains(&column.name);
     Ok(match &column.value {
+        CopyValue::File { .. } if request.encoding.record.is_some() => {
+            record_value(request, header)
+        }
         CopyValue::File { .. } if request.encoding.format == SourceFormat::Csv => {
             match header
                 .unwrap_or_default()
@@ -152,6 +155,24 @@ fn column_value(
             "NULL".to_owned(),
         )?,
     })
+}
+
+/// The whole record of a `shape = "record"` read: a JSON record itself, or a CSV line as an array of its `header`'s fields as strings, a NULL field (see `csv_field`) as JSON `null`.
+fn record_value(request: &DirectCopy<'_>, header: Option<&[String]>) -> String {
+    match request.encoding.format {
+        SourceFormat::Csv => {
+            let fields: Vec<String> = (1..=header.unwrap_or_default().len())
+                .map(|position| {
+                    format!(
+                        "COALESCE(TO_VARIANT({}), PARSE_JSON('null'))",
+                        csv_field(position, &request.encoding.csv.null_values)
+                    )
+                })
+                .collect();
+            format!("ARRAY_CONSTRUCT({})", fields.join(", "))
+        }
+        _ => "$1".to_owned(),
+    }
 }
 
 /// The file's value of partition column `column`, cast to its type; `NULL` when its path has none.

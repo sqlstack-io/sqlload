@@ -12,6 +12,9 @@ pub const SOURCE_ROW_COLUMN: &str = "_sqlload_source_row";
 /// Separates a file name from its version in the loaded-files query; versions never contain it.
 pub const VERSION_SEPARATOR: char = '|';
 
+/// The column a `shape = "record"` source loads each record into, unless `record_column` names another.
+pub const RECORD_COLUMN: &str = "record";
+
 /// The file name suffix of Parquet data files.
 pub const PARQUET_SUFFIX: &str = ".parquet";
 
