@@ -59,7 +59,7 @@ fn decimal(live: &LiveColumnType) -> Option<ColumnType> {
     }
 }
 
-/// A Snowflake `INFORMATION_SCHEMA.COLUMNS` type.
+/// A Snowflake `INFORMATION_SCHEMA.COLUMNS` type. `ARRAY` stays native, so a pinned array fits the `ARRAY` column it created but not a `VARIANT` json one.
 pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
     Some(match live.data_type.to_ascii_uppercase().as_str() {
         "NUMBER" | "DECIMAL" | "NUMERIC" => match decimal(live)? {
@@ -82,7 +82,8 @@ pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
         "TIME" => ColumnType::Time,
         "TIMESTAMP_NTZ" => ColumnType::TimestampNtz,
         "TIMESTAMP_TZ" => ColumnType::TimestampTz,
-        "VARIANT" | "OBJECT" | "ARRAY" => ColumnType::Json,
+        "VARIANT" | "OBJECT" => ColumnType::Json,
+        "ARRAY" => return None,
         "BINARY" => ColumnType::Binary,
         _ => return None,
     })

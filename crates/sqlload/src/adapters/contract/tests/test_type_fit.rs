@@ -1,4 +1,4 @@
-use crate::adapters::contract::tests::helpers::decimal;
+use crate::adapters::contract::tests::helpers::{decimal, live};
 use crate::adapters::contract::tests::test_types::TypeFitTestCase;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, TypeFit, Warehouse};
@@ -109,6 +109,20 @@ fn given_a_desired_and_live_type_when_comparing_then_the_needed_change_is_named(
             desired: ColumnType::Native("LowCardinality(String)".to_owned()),
             live: ColumnType::Int,
             warehouse: Warehouse::ClickHouse,
+            expected_fit: TypeFit::Incompatible,
+        },
+        TypeFitTestCase {
+            description: "a Snowflake array pin fits the ARRAY column it created",
+            desired: ColumnType::Array(Box::new(ColumnType::Int)),
+            live: sql_adapter(Warehouse::Snowflake).live_type(&live("ARRAY", None, None, None)),
+            warehouse: Warehouse::Snowflake,
+            expected_fit: TypeFit::Fits,
+        },
+        TypeFitTestCase {
+            description: "a Snowflake array pin does not fit a VARIANT json column",
+            desired: ColumnType::Array(Box::new(ColumnType::Int)),
+            live: sql_adapter(Warehouse::Snowflake).live_type(&live("VARIANT", None, None, None)),
+            warehouse: Warehouse::Snowflake,
             expected_fit: TypeFit::Incompatible,
         },
     ];

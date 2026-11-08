@@ -61,6 +61,9 @@ From 0.27.0. `array(T)` is a list of values of one portable type, such as
 `json` or other types are refused.
 
 An array column is always one you pin in `columns`. Without a pin, lists still load as `json`.
+Pinning an array over a column that already holds `json` fails `plan` on every destination, as
+for any type the column can't hold. From 0.28.0 (not released yet), that includes a Snowflake
+`VARIANT` column; recreate it with `--reload`.
 
 ```toml
 [sources.app.tables."public.items"]
