@@ -80,7 +80,7 @@ where
 pub(crate) struct Encrypted<S>(RustlsStream<S>);
 
 impl<S: AsyncRead + AsyncWrite + Unpin> TlsStream for Encrypted<S> {
-    /// `tls-server-end-point`, so SCRAM authentication fails through a man in the middle even when the certificate is not checked, as libpq's default `channel_binding = prefer` does; none when the certificate's hash is not one Postgres binds to.
+    /// `tls-server-end-point`, as libpq's default `channel_binding = prefer` sends, so an attacker who only relays SCRAM fails even when the certificate is not checked (one who changes how the client signs in does not; only `verify-full` stops that); none when the certificate's hash is not one this binds to.
     fn channel_binding(&self) -> ChannelBinding {
         self.0
             .get_ref()

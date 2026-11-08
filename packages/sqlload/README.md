@@ -237,8 +237,10 @@ sslrootcert = "certs/db-ca.pem"        # CA certificates (PEM) to trust
   `openssl req -x509` makes by default) cannot be its own `sslrootcert`: sign the server
   certificate with a separate CA and give that CA instead.
 - As in libpq, `prefer` connects in plain text when the server refuses TLS or the TLS handshake
-  fails, SCRAM authentication over TLS binds to the server's certificate (so a man in the middle
-  fails even when the certificate is not checked), and a Unix socket host never uses TLS.
+  fails, SCRAM authentication over TLS binds to the server's certificate, and a Unix socket host
+  never uses TLS. Binding stops an attacker who only relays the password exchange, not one who
+  changes how the client signs in; only `verify-full` (or `verify-ca` on a private network) keeps
+  a man in the middle out.
 - Paths are relative to the directory SQLLoad runs in. A copy URI takes the same settings as a
   query: `postgresql://loader@db.example.com/app?sslmode=verify-full&sslrootcert=certs%2Fdb-ca.pem#public.accounts`.
 - `sqlload debug` shows what protects each Postgres source: `not encrypted`,
