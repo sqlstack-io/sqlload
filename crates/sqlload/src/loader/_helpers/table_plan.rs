@@ -10,6 +10,7 @@ use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
 use crate::adapters::dispatch::main::route::route_warning::route_warning;
 use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
+use crate::adapters::dispatch::main::session::key_problem::key_problem;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::models::Destination;
@@ -31,6 +32,7 @@ use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
+use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
@@ -354,11 +356,18 @@ async fn plan_table_once(
         return plan_files_table(spec, files, options).await;
     }
     let live = live_columns(destination, &spec.destination).await?;
-    if spec.cdc.is_some() && options.reload {
+    let refusal = match (spec.cdc.is_some(), options.reload) {
+        (true, true) => Some(CDC_RELOAD_PROBLEM),
+        (false, true) if sql_adapter(spec.warehouse).keeps_tables() => {
+            Some(KEPT_TABLES_RELOAD_PROBLEM)
+        }
+        _ => None,
+    };
+    if let Some(refusal) = refusal {
         return Ok(TablePlan {
             exists: live.is_some(),
             live,
-            ..blocked_table(spec, vec![CDC_RELOAD_PROBLEM.to_owned()])
+            ..blocked_table(spec, vec![refusal.to_owned()])
         });
     }
     let read_columns = match read_columns(spec) {
@@ -504,6 +513,11 @@ async fn plan_table_once(
     schema.warnings.extend(resnapshot_warning(spec, options));
     let mode = captured_mode(spec, mode);
     let exists = live.is_some();
+    if let (None, WriteMode::Merge { unique_key }, true) = (&schema.blocked, &mode, exists)
+        && let Some(problem) = key_problem(destination, &spec.destination, unique_key).await?
+    {
+        schema = blocked_plan(vec![problem]);
+    }
     let chosen = match &schema.blocked {
         None => {
             let direct_append = mode == WriteMode::Append && !spec.logged;
@@ -592,6 +606,9 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
                 adapter.render_create_schema(&spec.destination),
                 adapter.render_create_table(&spec.destination, &table.schema.write_columns),
             ];
+            if let WriteMode::Merge { unique_key } = &table.mode {
+                statements.extend(adapter.render_key_index(&spec.destination, unique_key));
+            }
             statements.extend(adapter.render_table_comment(&spec.destination, &spec.description));
             Some(statements)
         }

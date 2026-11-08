@@ -4,6 +4,7 @@ use crate::adapters::bigquery::constants::NO_INTERNAL_STAGE_COPY as BIGQUERY_NO_
 use crate::adapters::databricks::constants::NO_INTERNAL_STAGE_COPY;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_direct_problem::direct_problem;
+use crate::adapters::postgres::constants::NO_INTERNAL_STAGE_COPY as POSTGRES_NO_INTERNAL_STAGE_COPY;
 use crate::adapters::snowflake::main::copy::_direct_check::direct_check;
 use crate::adapters::snowflake::main::copy::_stage_covers::stage_covers;
 use crate::adapters::snowflake::models::StageRoute;
@@ -21,6 +22,7 @@ pub fn direct_blocked(
     let refused = match spec.warehouse {
         Warehouse::Databricks => Some(NO_INTERNAL_STAGE_COPY),
         Warehouse::BigQuery => Some(BIGQUERY_NO_INTERNAL_STAGE_COPY),
+        Warehouse::Postgres => Some(POSTGRES_NO_INTERNAL_STAGE_COPY),
         _ => None,
     };
     if let Some(refused) = refused {

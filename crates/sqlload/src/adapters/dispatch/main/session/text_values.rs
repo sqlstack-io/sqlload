@@ -6,6 +6,7 @@ use crate::adapters::dispatch::_helpers::no_sql::no_sql;
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_query_texts::query_texts as query_duckdb_texts;
+use crate::adapters::postgres::main::session::_query_rows::query_rows as query_postgres;
 use crate::adapters::snowflake::main::session::query_texts::query_texts as query_snowflake_texts;
 use crate::loader::errors::LoaderError;
 
@@ -24,6 +25,11 @@ pub async fn text_values(
             .flatten()
             .collect()),
         Destination::BigQuery(bigquery) => Ok(query_bigquery(bigquery, &query)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect()),
+        Destination::Postgres(postgres) => Ok(query_postgres(postgres, &query)
             .await?
             .into_iter()
             .flatten()

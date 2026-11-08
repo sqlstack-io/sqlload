@@ -17,6 +17,9 @@ pub fn connection_warehouse(connection: &ConnectionConfig) -> Option<(Warehouse,
         ConnectionConfig::S3 { .. } | ConnectionConfig::Filesystem { .. } => {
             Some((Warehouse::Parquet, None))
         }
-        ConnectionConfig::Postgres { .. } | ConnectionConfig::Http { .. } => None,
+        ConnectionConfig::Postgres { database, .. } => {
+            Some((Warehouse::Postgres, Some(database.clone())))
+        }
+        ConnectionConfig::Http { .. } => None,
     }
 }

@@ -315,9 +315,9 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.app] path, partition_columns and copy_to_internal_stage are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
-            description: "a target cannot load into a source database",
-            text: "[targets.other]\nconnection = \"pg\"\nloader_schema = \"RAW\"\n",
-            expected_message: "is a postgres connection; targets load into snowflake, databricks, bigquery, duckdb or write files to s3 or filesystem",
+            description: "a target cannot load into an HTTP API",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\n[targets.other]\nconnection = \"api\"\nloader_schema = \"RAW\"\n",
+            expected_message: "is a http connection; targets load into snowflake, databricks, bigquery, duckdb, postgres or write files to s3 or filesystem",
         },
         ParseProjectErrorTestCase {
             description: "destination_path needs a files target",

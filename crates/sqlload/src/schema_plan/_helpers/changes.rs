@@ -1,6 +1,6 @@
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, TypeFit};
-use crate::project::models::{OnSchemaChange, Policy};
+use crate::project::models::{Contract, OnSchemaChange, Policy};
 use crate::schema_plan::constants::ALLOW_REBUILD_FLAG;
 use crate::schema_plan::models::{
     ColumnChange, ColumnOrigin, DesiredColumn, LiveColumn, SchemaRules,
@@ -167,4 +167,53 @@ fn mismatch(column: &DesiredColumn, live: &LiveColumn) -> String {
         "{} is {} in the table but {} in the source; {fix}",
         live.name, live.column_type, column.column_type
     )
+}
+
+/// The decision for `column`, given the live table's column of its name (`None` when it lacks one); `kept_as_is` when the table is one SQLLoad did not create on a warehouse that keeps such tables as they are.
+pub(crate) fn column_decision(
+    column: &DesiredColumn,
+    (existing, kept_as_is): (Option<&LiveColumn>, bool),
+    rules: SchemaRules,
+) -> ColumnDecision {
+    match (existing, kept_as_is) {
+        (Some(live), true) => existing_as_is(column, live, rules),
+        (None, true) => missing_as_is(column, rules),
+        (Some(live), false) => existing_column(column, live, rules),
+        (None, false) => missing_column(column, rules),
+    }
+}
+
+/// The decision for a column of a table SQLLoad did not create, on a warehouse that keeps such tables as they are: written when the table's column can take its values by an assignment cast (a value that does not fit then fails the commit, changing nothing), never widened.
+fn existing_as_is(column: &DesiredColumn, live: &LiveColumn, rules: SchemaRules) -> ColumnDecision {
+    match sql_adapter(rules.warehouse).type_fit(&column.column_type, &live.column_type) {
+        TypeFit::Incompatible => ColumnDecision {
+            problem: Some(mismatch(column, live)),
+            ..ColumnDecision::default()
+        },
+        TypeFit::Fits | TypeFit::WidenInPlace(_) | TypeFit::NeedsRebuild(_) => ColumnDecision {
+            write: true,
+            ..ColumnDecision::default()
+        },
+    }
+}
+
+/// The decision for a column a table SQLLoad did not create lacks: never added; the `_sqlload_*` columns are left out quietly, a source column with a warning, unless the contract or `on_schema_change = "fail"` needs it.
+fn missing_as_is(column: &DesiredColumn, rules: SchemaRules) -> ColumnDecision {
+    let place = format!(
+        "{} is not in the table, which SQLLoad did not create and does not alter",
+        column.name
+    );
+    match (column.origin, rules.contract, rules.on_schema_change) {
+        (ColumnOrigin::Metadata, _, _) => ColumnDecision::default(),
+        (ColumnOrigin::Pinned, Contract::Enforced, _) | (_, _, OnSchemaChange::Fail) => {
+            ColumnDecision {
+                problem: Some(format!("{place}; add it to the table, or exclude it")),
+                ..ColumnDecision::default()
+            }
+        }
+        _ => ColumnDecision {
+            warning: Some(format!("{place}, so it is not loaded")),
+            ..ColumnDecision::default()
+        },
+    }
 }

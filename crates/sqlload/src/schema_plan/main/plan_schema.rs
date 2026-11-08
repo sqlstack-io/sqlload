@@ -1,7 +1,9 @@
 //! Decide a table's schema changes for one load.
 
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::project::models::Contract;
-use crate::schema_plan::_helpers::changes::{ColumnDecision, existing_column, missing_column};
+use crate::schema_plan::_helpers::changes::{ColumnDecision, column_decision};
+use crate::schema_plan::constants::LOAD_ID_COLUMN;
 use crate::schema_plan::models::{
     Blocked, ColumnChange, ColumnOrigin, DesiredColumn, LiveColumn, SchemaPlan, SchemaRules,
     TableAction,
@@ -34,6 +36,10 @@ pub fn plan_schema(
             blocked: None,
         };
     };
+    let owned = live
+        .iter()
+        .any(|live| live.name.eq_ignore_ascii_case(LOAD_ID_COLUMN));
+    let kept_as_is = !owned && sql_adapter(rules.warehouse).keeps_tables();
     let mut changes: Vec<ColumnChange> = Vec::new();
     let mut write_columns: Vec<DesiredColumn> = Vec::new();
     let mut problems: Vec<String> = Vec::new();
@@ -42,10 +48,7 @@ pub fn plan_schema(
         let existing = live
             .iter()
             .find(|live| live.name.eq_ignore_ascii_case(&column.name));
-        let decision: ColumnDecision = match existing {
-            Some(live) => existing_column(column, live, rules),
-            None => missing_column(column, rules),
-        };
+        let decision: ColumnDecision = column_decision(column, (existing, kept_as_is), rules);
         changes.extend(decision.change);
         warnings.extend(decision.warning);
         problems.extend(decision.problem);

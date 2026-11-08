@@ -207,7 +207,7 @@ afterwards, so name it in `include`.
 ## Postgres TLS
 
 A Postgres connection takes libpq's TLS settings, for `kind = "postgres"` and `"postgres_cdc"`
-sources alike (replication sessions included):
+sources (replication sessions included) and Postgres targets alike:
 
 ```toml
 [connections.app_pg]
@@ -243,7 +243,7 @@ sslrootcert = "certs/db-ca.pem"        # CA certificates (PEM) to trust
   a man in the middle out.
 - Paths are relative to the directory SQLLoad runs in. A copy URI takes the same settings as a
   query: `postgresql://loader@db.example.com/app?sslmode=verify-full&sslrootcert=certs%2Fdb-ca.pem#public.accounts`.
-- `sqlload debug` shows what protects each Postgres source: `not encrypted`,
+- `sqlload debug` shows what protects each Postgres source and target: `not encrypted`,
   `TLS, certificate not checked`, `TLS, CA checked` or `TLS, CA and host name checked`.
 
 ## Postgres change data capture
@@ -544,6 +544,57 @@ next load drops what a failed run left after a day.
 `replace` keeps the table's description but not its partitioning, clustering or labels. Nested
 values (arrays and records) do not load yet. Postgres change data capture into BigQuery is not
 available.
+
+### How rows reach Postgres
+
+A Postgres target uses a `kind = "postgres"` connection, the same as a Postgres source, so the
+[TLS settings](#postgres-tls) apply to it too. The target's `database` overrides the connection's:
+
+```toml
+[connections.app_db]
+kind = "postgres"
+host = "db.example.com"
+user = "loader"
+password = "${ENV:PGPASSWORD}"
+database = "app"
+sslmode = "verify-full"
+
+[targets.app]
+connection = "app_db"
+loader_schema = "reporting"
+```
+
+Each table loads on a session of its own. Batches go by binary `COPY` into a temporary staging
+table on that session. The role needs `TEMPORARY` on the database (every role has it by default),
+the rights to write the tables it loads, and `CREATE` on the schema for tables SQLLoad creates. Each commit then applies the write strategy in
+one transaction: `append` inserts, `delete_insert` deletes the window and inserts, and `merge` is
+`INSERT ... ON CONFLICT (unique_key) DO UPDATE`. A failed commit rolls back and leaves the table as
+it was. A run that dies takes its temporary table with it.
+
+`replace` empties the table with `DELETE` and refills it from the staging table in one
+transaction. The table is never dropped or recreated, so it keeps its grants, indexes, defaults,
+triggers and the views that depend on it. Readers see the old rows until the commit. `--reload` is
+refused on Postgres targets.
+
+A table SQLLoad did not create (it has no `_sqlload_load_id` column) is loaded as it is. SQLLoad
+never alters it:
+
+- It loads only the source columns the table has. `plan` warns about the others, or fails with
+  `on_schema_change = "fail"`. The table's other columns get their defaults.
+- The `_sqlload_*` columns are not added.
+- Values convert to the table's column types as `INSERT` converts them. A value that does not fit,
+  such as text longer than a `varchar(n)`, fails the commit. A column whose type cannot hold the
+  source's fails `plan`.
+
+`merge` needs a unique index or constraint on exactly the `unique_key` columns. SQLLoad creates
+one on tables it creates; on other tables `plan` fails until one exists. A key repeated within one
+commit fails that commit.
+
+Types map as `plan` shows: `timestamp_tz` as `timestamptz`, `decimal(p,s)` as `numeric(p,s)`,
+`json` (and Postgres arrays, which arrive as JSON) as `jsonb`, `binary` as `bytea`. `jsonb` keeps
+neither key order nor duplicate keys. Postgres change data capture into a Postgres target is not
+available. `debug` shows the target's user, database, server version and what protects the
+connection.
 
 ### How files reach DuckDB
 

@@ -3,6 +3,7 @@ use crate::adapters::databricks::models::{DatabricksDestination, DatabricksWrite
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::models::{DuckDbDestination, DuckDbWriter};
 use crate::adapters::files::models::{FilesDestination, ParquetFiles};
+use crate::adapters::postgres::models::{PostgresDestination, PostgresWriter};
 use crate::adapters::snowflake::models::{SnowflakeDestination, SnowflakeWriter};
 
 /// An open destination.
@@ -13,6 +14,7 @@ pub enum Destination {
     Snowflake(Box<SnowflakeDestination>),
     Databricks(Box<DatabricksDestination>),
     BigQuery(Box<BigQueryDestination>),
+    Postgres(Box<PostgresDestination>),
     /// Parquet files in an s3 or filesystem connection.
     Files(Box<FilesDestination>),
 }
@@ -25,5 +27,6 @@ pub enum Writer {
     Snowflake(Box<SnowflakeWriter>),
     Databricks(Box<DatabricksWriter>),
     BigQuery(Box<BigQueryWriter>),
+    Postgres(Box<PostgresWriter>),
     Files(ParquetFiles),
 }

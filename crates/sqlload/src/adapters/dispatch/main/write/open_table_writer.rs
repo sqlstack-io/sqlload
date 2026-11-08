@@ -6,6 +6,7 @@ use crate::adapters::dispatch::models::{Destination, Writer};
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::models::DuckDbWriter;
 use crate::adapters::files::models::ParquetFiles;
+use crate::adapters::postgres::models::PostgresWriter;
 use crate::adapters::snowflake::models::{SnowflakeWriter, StageRoute};
 use crate::file_store::main::open_folder::open_folder;
 use crate::loader::errors::LoaderError;
@@ -49,6 +50,9 @@ pub fn open_table_writer(
             parent: String::new(),
             streams: Vec::new(),
             requests_sent: 0,
+        }))),
+        Destination::Postgres(postgres) => Ok(Writer::Postgres(Box::new(PostgresWriter {
+            destination: (**postgres).clone(),
         }))),
         Destination::Files(_) => Ok(Writer::Files(ParquetFiles)),
     }

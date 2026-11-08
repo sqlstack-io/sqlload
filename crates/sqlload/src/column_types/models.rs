@@ -55,6 +55,7 @@ pub enum Warehouse {
     Parquet,
     Databricks,
     BigQuery,
+    Postgres,
 }
 
 impl std::fmt::Display for Warehouse {
@@ -65,6 +66,7 @@ impl std::fmt::Display for Warehouse {
             Self::Parquet => "Parquet files",
             Self::Databricks => "Databricks",
             Self::BigQuery => "BigQuery",
+            Self::Postgres => "Postgres",
         })
     }
 }

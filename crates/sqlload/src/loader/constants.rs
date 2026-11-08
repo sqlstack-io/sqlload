@@ -1,3 +1,6 @@
+/// Why `--reload` is refused where SQLLoad never drops or recreates tables.
+pub const KEPT_TABLES_RELOAD_PROBLEM: &str = "--reload drops and recreates the table, which SQLLoad never does on a Postgres target; write_strategy = \"replace\" empties and refills it in one transaction instead";
+
 /// Rows per batch read from a database source.
 pub const SOURCE_BATCH_ROWS: usize = 65_536;
 

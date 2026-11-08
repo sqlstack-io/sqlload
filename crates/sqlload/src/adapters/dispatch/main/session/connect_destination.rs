@@ -7,6 +7,7 @@ use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_open_duckdb::open_duckdb;
 use crate::adapters::files::models::FilesDestination;
+use crate::adapters::postgres::main::session::_open_postgres::open_postgres;
 use crate::adapters::snowflake::main::session::_connect_snowflake::connect_snowflake;
 use crate::adapters::snowflake::main::stage::_forced_stage::forced_stage;
 use crate::adapters::snowflake::models::SnowflakeAccount;
@@ -41,6 +42,11 @@ pub async fn connect_destination(
         Some(connection @ ConnectionConfig::BigQuery { .. }) => Destination::BigQuery(Box::new(
             connect_bigquery(connection, target.database.as_deref())?,
         )),
+        Some(ConnectionConfig::Postgres { .. }) => Destination::Postgres(Box::new(open_postgres(
+            project,
+            &target.connection,
+            target.database.as_deref(),
+        )?)),
         Some(ConnectionConfig::S3 {
             bucket,
             region,

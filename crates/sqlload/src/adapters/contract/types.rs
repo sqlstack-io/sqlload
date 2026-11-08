@@ -45,6 +45,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         self.runs_sql() || apply == ChangeApply::Changelog
     }
 
+    /// Whether SQLLoad never drops or recreates the warehouse's tables and never alters one it did not create: `replace` empties and refills the table in one transaction instead of swapping a new one in, `--reload` is refused, and an existing table without `_sqlload_load_id` is loaded as it is.
+    fn keeps_tables(&self) -> bool {
+        false
+    }
+
     /// Whether a `--reload` build table starts `LIKE` the table to keep its grants, and so keeps the live columns.
     fn builds_like_target(&self) -> bool {
         false
@@ -150,6 +155,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
                 self.render_loader_value_literal(description)
             )
         })
+    }
+
+    /// The statement creating the unique index a `merge` on `unique_key` needs, for a table SQLLoad creates; none where `merge` needs no index.
+    fn render_key_index(&self, _table: &TableName, _unique_key: &[String]) -> Option<String> {
+        None
     }
 
     /// The table kind a load's staging table is created as.
