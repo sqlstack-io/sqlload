@@ -312,7 +312,7 @@ pub(crate) async fn nested_parquet_column(name: &str) -> Result<(String, String)
     result
 }
 
-/// The nested test file's columns: `tags` (list of text), `point` (struct), `attrs` (map of text to int) and `grid` (list of lists).
+/// The nested test file's columns: `tags` (list of text), `point` (struct), `attrs` (map of text to int), `grid` (list of lists), `opt` (a struct with a field of Arrow's NULL type, as pyarrow writes one always None) and `codes` (a list of dictionary-encoded ints).
 fn nested_batch() -> Result<RecordBatch, String> {
     use arrow_array::builder::{Int64Builder, ListBuilder, MapBuilder, StringBuilder};
     use arrow_array::{ArrayRef, Float64Array, Int32Array, StructArray};
@@ -345,7 +345,32 @@ fn nested_batch() -> Result<RecordBatch, String> {
     grid.append(true);
     grid.values().append_null();
     grid.append(true);
+    let opt = StructArray::from(vec![
+        (
+            Arc::new(Field::new("a", DataType::Null, true)),
+            arrow_array::new_null_array(&DataType::Null, 3),
+        ),
+        (
+            Arc::new(Field::new("b", DataType::Int64, true)),
+            Arc::new(arrow_array::Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+        ),
+    ]);
+    let mut plain_codes = ListBuilder::new(Int64Builder::new());
+    plain_codes.append_value([Some(5), Some(7)]);
+    plain_codes.append_value([Some(5)]);
+    plain_codes.append_value(Vec::<Option<i64>>::new());
+    let codes = arrow_cast::cast(
+        &plain_codes.finish(),
+        &DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64)),
+            true,
+        ))),
+    )
+    .map_err(|error| error.to_string())?;
     RecordBatch::try_from_iter([
+        ("opt", Arc::new(opt) as ArrayRef),
+        ("codes", codes),
         ("tags", Arc::new(tags.finish()) as ArrayRef),
         ("point", Arc::new(point) as ArrayRef),
         ("attrs", Arc::new(attrs.finish()) as ArrayRef),

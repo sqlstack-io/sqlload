@@ -170,9 +170,11 @@ pub(crate) struct ConstantColumnsTestCase {
 }
 
 pub(crate) struct NestedParquetTestCase {
+    /// What the case checks.
     pub(crate) description: &'static str,
     /// The column of `nested_parquet_column`'s file read.
     pub(crate) column: &'static str,
+    /// The column's planned type.
     pub(crate) expected_type: &'static str,
     /// Each row's value, `|`-separated (`NULL` for NULL).
     pub(crate) expected_values: &'static str,
