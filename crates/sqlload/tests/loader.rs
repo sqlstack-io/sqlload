@@ -2,6 +2,8 @@
 
 #[path = "loader/bigquery/helpers.rs"]
 mod bigquery_helpers;
+#[path = "loader/clickhouse/helpers.rs"]
+mod clickhouse_helpers;
 #[path = "loader/databricks/helpers.rs"]
 mod databricks_helpers;
 #[path = "loader/helpers.rs"]
@@ -20,6 +22,8 @@ mod test_debug_project;
 mod test_file_store;
 #[path = "loader/test_files_round_trip.rs"]
 mod test_files_round_trip;
+#[path = "loader/test_files_to_clickhouse.rs"]
+mod test_files_to_clickhouse;
 #[path = "loader/test_files_to_duckdb.rs"]
 mod test_files_to_duckdb;
 #[path = "loader/test_loader_edge_cases.rs"]
