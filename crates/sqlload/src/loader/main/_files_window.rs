@@ -8,7 +8,7 @@ use crate::adapters::files::main::cursor_maximum::cursor_maximum;
 use crate::adapters::files::main::partition_window::partition_window;
 use crate::adapters::files::models::{PartitionBy, PartitionWindowRequest};
 use crate::column_types::models::ColumnType;
-use crate::loader::_helpers::table_plan::{Window, source_filter};
+use crate::loader::_helpers::table_plan::{Window, source_cursor, source_filter};
 use crate::loader::constants::{EXCLUSIVE_BOUND, INCLUSIVE_BOUND};
 use crate::loader::models::FilesWindowRequest;
 use crate::project::models::WriteStrategy;
@@ -62,15 +62,8 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
         .and_then(|partition| partition.value.as_deref())
         .filter(|_| !options.reload);
     let column = cursor.column.as_str();
-    let expression = request
-        .read_columns
-        .iter()
-        .find(|read| read.name == column)
-        .map_or(column, |read| read.expression.as_str());
-    let expression = match cursor_type {
-        ColumnType::Text | ColumnType::Varchar(_) => format!("{expression} COLLATE \"C\""),
-        _ => expression.to_owned(),
-    };
+    let expression = source_cursor(spec, request.read_columns, Some(cursor_type))
+        .unwrap_or_else(|| column.to_owned());
     let mut data_maximum: Option<String> = None;
     let (from, to, note, operator) = match spec.strategy {
         WriteStrategy::DeleteInsert => {

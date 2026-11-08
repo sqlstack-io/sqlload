@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, HashMap};
 
 use arrow_array::RecordBatch;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
-use sqlload::adapters::clickhouse::main::session::stop_after::stop_after;
 use sqlload::adapters::dispatch::main::session::execute::execute;
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::adapters::dispatch::models::Destination;
@@ -20,9 +19,6 @@ use sqlload::loader::models::{LoadRun, PlanOptions, ProjectPlan};
 use sqlload::project::main::parse_project::parse_project;
 use sqlload::project::models::ProjectConfig;
 use sqlload::store_paths::models::{Location, StoreKind};
-use sqlload_testkit::clickhouse::constants::{
-    PASSWORD as CLICKHOUSE_PASSWORD, USER as CLICKHOUSE_USER,
-};
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
@@ -32,8 +28,8 @@ use crate::test_types::{
     BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesScenario,
     FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks,
     MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome, RouteTestCase,
-    ScenarioTestCase, SourceRowUpgradeTestCase, StoppedLoadTestCase, TextFilesScenarioTestCase,
-    WrittenPartition, WrittenRow, WrittenRun,
+    ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase, WrittenPartition,
+    WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -1820,139 +1816,4 @@ pub(crate) async fn bridge_address(
         .await
         .map(|ip| ip.to_string())
         .map_err(|error| error.to_string())
-}
-
-/// A project reading the test Postgres into the test ClickHouse's `schema` database, with `tables` (source and table settings) appended.
-pub(crate) fn clickhouse_project(
-    postgres_port: u16,
-    clickhouse_port: u16,
-    schema: &str,
-    tables: &str,
-) -> String {
-    format!(
-        r#"
-[connections.app_pg]
-kind = "postgres"
-host = "127.0.0.1"
-port = {postgres_port}
-user = "sqlload"
-password = "sqlload"
-database = "app"
-
-[connections.serving]
-kind = "clickhouse"
-host = "127.0.0.1"
-port = {clickhouse_port}
-user = "{CLICKHOUSE_USER}"
-password = "{CLICKHOUSE_PASSWORD}"
-
-[targets.dev]
-connection = "serving"
-loader_schema = "{schema}"
-
-[sources.app]
-kind = "postgres"
-connection = "app_pg"
-include = ["public.*"]
-{tables}
-"#
-    )
-}
-
-/// Plan, apply and load `options`' selection; the plan's text, or why it failed.
-pub(crate) async fn plan_apply_load_with(
-    project: &ProjectConfig,
-    destinations: &BTreeMap<String, Destination>,
-    options: &PlanOptions,
-) -> Result<String, String> {
-    let plan = plan_project(project, destinations, options)
-        .await
-        .map_err(|error| error.to_string())?;
-    let (lines, ok) = render_plan(&plan);
-    let text = lines.join("\n");
-    ok.then_some(()).ok_or_else(|| text.clone())?;
-    apply_project(&plan, destinations)
-        .await
-        .map_err(|error| error.to_string())?;
-    load_with_options(project, &plan, destinations, options).await?;
-    Ok(text)
-}
-
-/// Options selecting only `table`.
-pub(crate) fn select_only(table: &str) -> PlanOptions {
-    PlanOptions {
-        select: vec![table.to_owned()],
-        ..PlanOptions::default()
-    }
-}
-
-/// `query`'s single text on `serving`, empty when it returns none.
-pub(crate) async fn read_text(serving: &Destination, query: &str) -> Result<String, String> {
-    Ok(single_text(serving, query.to_owned())
-        .await
-        .map_err(|error| error.to_string())?
-        .unwrap_or_default())
-}
-
-/// How many stop points a stopped-load test tries; more than any of its loads' statements.
-const STOP_POINTS: usize = 30;
-
-/// Load `test_case.table` into the ClickHouse target `dev` (in `database`) once, then, for each N below `STOP_POINTS`, switch its source to the other state and load it with ClickHouse's statements for it stopped from the Nth on: after each stop the table must hold the old or the new state, and the rerun the new one. Returns the first N whose run was never stopped, once every statement ran.
-pub(crate) async fn run_clickhouse_stops(
-    project: &ProjectConfig,
-    destinations: &BTreeMap<String, Destination>,
-    client: &Client,
-    (database, test_case): (&str, &StoppedLoadTestCase),
-) -> Result<Option<usize>, String> {
-    let serving = destinations
-        .get("dev")
-        .ok_or_else(|| "no ClickHouse destination".to_owned())?;
-    // The stop matches the table's qualified name, which its staging, delta and copy tables start with; a database of the test's own keeps it out of tests running at the same time.
-    let stopped_name = format!("`{database}`.`{}", test_case.table);
-    let [first, _] = test_case.states;
-    client
-        .batch_execute(first.0)
-        .await
-        .map_err(|error| error.to_string())?;
-    plan_apply_load_with(project, destinations, &select_only(test_case.table)).await?;
-    assert_eq!(
-        read_text(serving, test_case.query).await?,
-        first.1,
-        "{}: the first load",
-        test_case.description
-    );
-    let mut unstopped = None;
-    for stops in 0..STOP_POINTS {
-        let (change, expected) = test_case.states[(stops + 1) % 2];
-        let current = test_case.states[stops % 2].1;
-        client
-            .batch_execute(change)
-            .await
-            .map_err(|error| error.to_string())?;
-        stop_after(&stopped_name, Some(stops));
-        let stopped = plan_apply_load_with(project, destinations, &test_case.options).await;
-        stop_after(&stopped_name, None);
-        let seen = read_text(serving, test_case.query).await?;
-        assert!(
-            seen == current || seen == expected,
-            "{}: a run stopped after {stops} statements left the table half published: {seen}",
-            test_case.description
-        );
-        assert!(
-            stopped.is_err() || seen == expected,
-            "{}: the run that was never stopped left {seen}",
-            test_case.description
-        );
-        unstopped = unstopped.or(stopped.is_ok().then_some(stops));
-        plan_apply_load_with(project, destinations, &test_case.options)
-            .await
-            .map_err(|error| format!("the rerun after {stops}: {error}"))?;
-        assert_eq!(
-            read_text(serving, test_case.query).await?,
-            expected,
-            "{}: the rerun after a stop at {stops} statements",
-            test_case.description
-        );
-    }
-    Ok(unstopped)
 }

@@ -6,6 +6,7 @@ use crate::cdc::constants::{
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
+use crate::loader::constants::SNOWFLAKE_SOURCE;
 use crate::loader::models::{
     CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
 };
@@ -296,7 +297,7 @@ fn warehouse_source(source: &SourceConfig, overrides: &TableOverride) -> Option<
             ),
         };
         WarehouseSource {
-            system: "snowflake",
+            system: SNOWFLAKE_SOURCE,
             sql: overrides.sql.clone(),
             route: WarehouseRoute::Unload { store, stage },
         }

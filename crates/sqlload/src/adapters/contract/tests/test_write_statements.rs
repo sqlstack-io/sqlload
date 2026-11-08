@@ -51,6 +51,54 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             ],
         },
         WriteStatementsTestCase {
+            description: "a text cursor's window is deleted by code point on Snowflake, whatever the column's collation",
+            warehouse: Warehouse::Snowflake,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "code".to_owned(),
+                from: Some("B1".to_owned()),
+                to: Some("a9".to_owned()),
+                values: Vec::new(),
+            },
+            expected_statements: &[
+                "BEGIN",
+                "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" WHERE COLLATE(\"CODE\", 'utf8') >= CAST('B1' AS VARCHAR) AND COLLATE(\"CODE\", 'utf8') < CAST('a9' AS VARCHAR)",
+                SF_INSERT,
+                "COMMIT",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "a text cursor's listed values are deleted by code point on Postgres",
+            warehouse: Warehouse::Postgres,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "code".to_owned(),
+                from: None,
+                to: None,
+                values: vec!["B1".to_owned()],
+            },
+            expected_statements: &[
+                "BEGIN",
+                "DELETE FROM \"raw\".\"app__accounts\" WHERE \"code\" COLLATE \"C\" IN (CAST('B1' AS text))",
+                "INSERT INTO \"raw\".\"app__accounts\" (\"id\", \"profile\", \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\") SELECT \"id\", CAST(\"profile\" AS jsonb), \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\" FROM \"pg_temp\".\"app__accounts__sqlload_staging_load1\"",
+                "COMMIT",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "a text cursor's window on DuckDB, which compares bytewise already, is deleted as it is",
+            warehouse: Warehouse::DuckDb,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: "code".to_owned(),
+                from: Some("B1".to_owned()),
+                to: None,
+                values: Vec::new(),
+            },
+            expected_statements: &[
+                "BEGIN",
+                "DELETE FROM \"raw\".\"app__accounts\" WHERE \"code\" >= CAST('B1' AS VARCHAR)",
+                DUCK_INSERT,
+                "COMMIT",
+            ],
+        },
+        WriteStatementsTestCase {
             description: "replace on Snowflake swaps in a copy that keeps the grants",
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::Replace,

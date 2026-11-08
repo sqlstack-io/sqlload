@@ -6,10 +6,10 @@ use sqlload_testkit::clickhouse::main::start_clickhouse::start_clickhouse;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
-use crate::helpers::{
-    clickhouse_project, described_project, plan_apply_load_with, run_async, run_clickhouse_stops,
-    select_only,
+use crate::clickhouse_helpers::{
+    clickhouse_project, plan_apply_load_with, run_clickhouse_stops, select_only,
 };
+use crate::helpers::{described_project, run_async};
 use crate::test_types::{LoadRunTestCase, StoppedLoadTestCase};
 
 const SETUP: &str = "
@@ -247,9 +247,15 @@ fn given_a_load_stopped_at_every_statement_when_it_runs_again_then_the_table_was
                 expected_minimum_stops: 3,
             },
         ];
+        let set_state = async |sql: &'static str| {
+            client
+                .batch_execute(sql)
+                .await
+                .map_err(|error| error.to_string())
+        };
         for test_case in &test_cases {
             let unstopped =
-                run_clickhouse_stops(&project, &destinations, &client, ("stops", test_case))
+                run_clickhouse_stops(&project, &destinations, &set_state, ("stops", test_case))
                     .await
                     .map_err(|error| format!("{}: {error}", test_case.description))?;
             assert!(
