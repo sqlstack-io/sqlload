@@ -32,6 +32,23 @@ Where the read starts, in order:
 
 `plan` says which one applies, on the table's `cursor` line.
 
+From 0.27.0 (not released yet), text cursors compare by Unicode code point on both sides,
+whatever collation the source column or the destination uses, so `'B1'` comes before `'a9'`.
+Postgres sources and targets compare with `COLLATE "C"`, and Snowflake with `utf8`. Before,
+each side used its own collation. A linguistic one, such as `en_US` or a case-insensitive ICU
+collation, could then read rows again on every run.
+
+- Postgres stops using a plain index on a text cursor for the read, the destination's
+  maximum and `delete_insert`'s deletes, unless the column is already `COLLATE "C"`. Create the
+  index as `CREATE INDEX ... (event_key COLLATE "C")`. On Snowflake, a cursor column declared
+  with another collation may prune fewer micro-partitions.
+- If an existing table's keys only increase in a linguistic order (`apple1`, `Banana2`,
+  `cherry3`, `Date4`), code point order puts some new keys below the maximum, so they are not
+  read. Use keys that increase in either order, such as zero-padded numbers, ULIDs or ISO
+  timestamps.
+- DuckDB, BigQuery and Databricks compare by code point unless a dataset, schema, table or
+  column sets a collation, which SQLLoad doesn't override.
+
 ## Backfilling a range
 
 `--start-cursor` and `--end-cursor` read a range instead, from the start up to but not including the

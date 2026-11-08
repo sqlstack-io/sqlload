@@ -18,6 +18,10 @@ pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
     request: &CursorQuery<'_>,
 ) -> Option<CursorRead> {
     let column = adapter.render_identifier(request.column);
+    let column = match request.column_type {
+        ColumnType::Text | ColumnType::Varchar(_) => adapter.render_binary_text(&column),
+        _ => column,
+    };
     let target = adapter.render_qualified_name(request.table);
     let value = match request.column_type {
         ColumnType::TimestampTz | ColumnType::TimestampNtz => CursorValue::EpochMicros {

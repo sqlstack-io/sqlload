@@ -6,6 +6,7 @@ use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
 use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
@@ -25,6 +26,7 @@ use crate::batch_plan::models::WindowSplit;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
+use crate::column_types::models::Warehouse;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::SourceFormat;
@@ -521,10 +523,7 @@ async fn plan_table_once(
         live.iter()
             .any(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
     });
-    let cursor_expression = read_columns
-        .iter()
-        .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
-        .map(|column| column.expression.as_str());
+    let cursor_expression = source_cursor(spec, &read_columns, cursor_type);
     let lacks_cursor =
         live.is_some() && cursor_name.is_some() && !cursor_in_table && !options.reload;
     let restart_duplicates = match spec.strategy {
@@ -549,7 +548,7 @@ async fn plan_table_once(
         destination,
         table_exists: cursor_in_table,
         cursor_type,
-        cursor_expression,
+        cursor_expression: cursor_expression.as_deref(),
         options,
     };
     let window = match schema.blocked {
@@ -899,6 +898,32 @@ fn write_mode(
             values: Vec::new(),
         },
     }
+}
+
+/// The source expression of `spec`'s cursor among `read_columns`, as its filter compares it: a text cursor bytewise, in code point order, in the source's own dialect (`render_binary_text`), as the destination's maximum is read, whatever collation the source column has; any other cursor, and a source no filter reaches, as it is. `None` when the cursor is not read.
+pub(crate) fn source_cursor(
+    spec: &TableSpec,
+    read_columns: &[ReadColumn],
+    cursor_type: Option<&ColumnType>,
+) -> Option<String> {
+    let name = spec.cursor.as_ref()?.column.as_str();
+    let expression = read_columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(name))?
+        .expression
+        .as_str();
+    let text = matches!(cursor_type, Some(ColumnType::Text | ColumnType::Varchar(_)));
+    let dialect = match (text, &spec.warehouse_source) {
+        (false, _) => None,
+        (true, Some(source)) => source_dialect(source.system),
+        (true, None) => {
+            (spec.python.is_none() && spec.files.is_none()).then_some(Warehouse::Postgres)
+        }
+    };
+    Some(dialect.map_or_else(
+        || expression.to_owned(),
+        |dialect| sql_adapter(dialect).render_binary_text(expression),
+    ))
 }
 
 /// `"column" >= 'from' AND "column" < 'to'` for Postgres, from the bounds that are set.
