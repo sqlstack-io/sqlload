@@ -6,7 +6,7 @@ use crate::file_store::_helpers::keys::object_path;
 use crate::file_store::errors::StoreError;
 use crate::file_store::models::OpenFolder;
 
-/// Delete each of `relative_keys` under `folder`, in bulk where the store allows; a file already gone is not an error.
+/// Delete each of `relative_keys` under `folder`, in bulk where the store allows; a file already gone is not an error. A bulk request that fails as a whole answers once for all its keys, so fewer answers than keys is an error: some files may remain.
 pub async fn delete_files(folder: &OpenFolder, relative_keys: &[String]) -> Result<(), StoreError> {
     let failed = |source: object_store::Error| StoreError::Object {
         action: "cannot delete files in",
@@ -29,7 +29,6 @@ pub async fn delete_files(folder: &OpenFolder, relative_keys: &[String]) -> Resu
             Err(error) => return Err(failed(error)),
         }
     }
-    // A bulk request that fails as a whole yields one error for all its keys, so a missing answer means some files may remain.
     match settled == requested {
         true => Ok(()),
         false => Err(failed(object_store::Error::Generic {
