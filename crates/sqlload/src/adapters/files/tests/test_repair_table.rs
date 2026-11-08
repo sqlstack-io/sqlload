@@ -90,13 +90,14 @@ fn given_a_committed_load_with_a_run_record_when_repairing_then_the_record_is_wr
 fn given_records_of_loaded_source_files_when_listing_the_table_then_only_held_commits_count_and_the_rest_are_stale_unread()
 -> Result<(), String> {
     let test_cases = [LoadedRecordsTestCase {
-        description: "a held commit's files count; a commit repair drops and one whose files are gone are stale, and the stale ones are never read (one is not even JSON)",
+        description: "a held commit's files count, as do those of a commit stopped while replacing (its own files stay); a commit repair drops and one whose files are gone are stale, and the stale ones are never read (one is not even JSON)",
         records: &[
             ("kept.00001.json", "[[\"s3://src/a.parquet\",\"v1\"]]"),
+            ("replacing.00001.json", "[[\"s3://src/c.parquet\",\"v1\"]]"),
             ("crashed.00001.json", "[[\"s3://src/b.parquet\",\"v1\"]]"),
             ("gone.00001.json", "not json"),
         ],
-        expected_loaded: &["s3://src/a.parquet"],
+        expected_loaded: &["s3://src/a.parquet", "s3://src/c.parquet"],
         expected_stale: &[
             "_sqlload/loaded/crashed.00001.json",
             "_sqlload/loaded/gone.00001.json",
@@ -110,9 +111,18 @@ fn given_records_of_loaded_source_files_when_listing_the_table_then_only_held_co
             mark_pending(&folder, "crashed.00001", PendingPhase::Writing, (&[], None))
                 .await
                 .map_err(failed)?;
+            mark_pending(
+                &folder,
+                "replacing.00001",
+                PendingPhase::Replacing,
+                (&[], None),
+            )
+            .await
+            .map_err(failed)?;
             for key in [
                 "day=2026-11-04/part-kept.00001-0.parquet",
                 "day=2026-11-04/part-crashed.00001-0.parquet",
+                "day=2026-11-05/part-replacing.00001-0.parquet",
             ] {
                 write_file(&folder, key, Bytes::from_static(b"x"))
                     .await
@@ -135,6 +145,8 @@ fn given_records_of_loaded_source_files_when_listing_the_table_then_only_held_co
                     .loaded
                     .into_iter()
                     .map(|file| file.name)
+                    .collect::<std::collections::BTreeSet<String>>()
+                    .into_iter()
                     .collect::<Vec<String>>(),
                 state.stale_loaded,
             ))
