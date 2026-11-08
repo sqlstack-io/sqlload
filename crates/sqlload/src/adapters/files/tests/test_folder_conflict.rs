@@ -74,6 +74,30 @@ fn given_configured_table_folders_when_checking_one_then_shared_and_nested_folde
             expected_problem: "",
         },
         FolderConflictTestCase {
+            description: "a target folder inside the folder its files source reads clashes",
+            claim: FolderClaim {
+                source: Some(crate::store_paths::models::Location {
+                    store: bucket(),
+                    prefix: "data/".to_owned(),
+                }),
+                ..claim("files.orders", bucket(), "data/orders/", "public")
+            },
+            others: vec![],
+            expected_problem: "files.orders writes to s3://lake-bucket/data/orders/, which overlaps the folder it reads from",
+        },
+        FolderConflictTestCase {
+            description: "a files source in a folder of its own is no conflict",
+            claim: FolderClaim {
+                source: Some(crate::store_paths::models::Location {
+                    store: bucket(),
+                    prefix: "landing/orders/".to_owned(),
+                }),
+                ..claim("files.orders", bucket(), "data/orders/", "public")
+            },
+            others: vec![],
+            expected_problem: "",
+        },
+        FolderConflictTestCase {
             description: "the table itself is no conflict",
             claim: claim("app.public.orders", bucket(), "shop/orders/", "public"),
             others: vec![claim(

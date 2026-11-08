@@ -3,9 +3,18 @@
 use crate::adapters::files::models::FolderClaim;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// Why `claim`'s folder is unsafe: another configured table's folder is the same, inside it or around it, so replacing one would delete the other's files.
+/// Why `claim`'s folder is unsafe: the folder its own files source reads, or another configured table's folder, is the same, inside it or around it, so replacing one would delete the other's files (or a load would read back what it wrote).
 pub fn folder_conflict(claim: &FolderClaim, claims: &[FolderClaim]) -> Option<String> {
     let key = store_key(&claim.folder);
+    if let Some(source) = &claim.source {
+        let source_key = store_key(source);
+        if key.starts_with(&source_key) || source_key.starts_with(&key) {
+            return Some(format!(
+                "{} writes to {}, which overlaps the folder it reads from, {source}; a load would delete or read back its own source files, so give the target a folder of its own",
+                claim.name, claim.folder
+            ));
+        }
+    }
     let other = claims.iter().find(|other| {
         let other_key = store_key(&other.folder);
         other.id != claim.id && (key.starts_with(&other_key) || other_key.starts_with(&key))

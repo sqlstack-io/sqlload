@@ -57,10 +57,15 @@ From 0.27.0 (not released yet), a [files source](/docs/sources/files/) loads int
 SQLLoad reads the source files and writes them out again, with `append`, `replace`, or
 `delete_insert` by a partition cursor. Each commit records the source files it loaded in
 `_sqlload/loaded/<commit>.json`. Under `append`, the next load skips those files and reads only
-new ones. As for other targets, a source file rewritten in place fails the table until you
-reload the table with `--reload`, or use `delete_insert` on a partition cursor. A record counts only while the table still holds its commit's files, so a
-`replace`, or a load that failed and was repaired, frees those files to load again, and the
-next load deletes records whose files are gone.
+new ones. With a partition cursor, `append` reads from the target's newest partition onward, so
+a late file added to an older partition isn't loaded. As for other targets, a source file
+rewritten in place fails the table until you reload the table with `--reload`, or use
+`delete_insert` on a partition cursor. A record counts only while the table still holds its
+commit's files: the files of a load that failed and was repaired load again, and the next load
+deletes records whose files are gone.
+
+The target folder can't be the source folder, or inside it or around it: a load would delete or
+read back its own source files, so `plan` blocks the table.
 
 SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: markers for loads in
 progress, the run log of `state = "logged"` tables, and the source files a files source's

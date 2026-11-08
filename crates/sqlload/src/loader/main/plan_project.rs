@@ -97,6 +97,7 @@ fn folder_claims(
                 folder: path.folder,
                 template: spec.destination_path.clone().unwrap_or_default(),
                 schema: spec.source_table.schema.clone(),
+                source: spec.files.as_ref().map(|files| files.location.clone()),
             });
         }
     }

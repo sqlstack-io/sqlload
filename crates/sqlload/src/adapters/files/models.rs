@@ -281,6 +281,8 @@ pub struct FolderClaim {
     pub template: String,
     /// The source table's schema.
     pub schema: String,
+    /// The folder a files source reads the table from; `None` for other sources.
+    pub source: Option<Location>,
 }
 
 /// What decides the files a write replaces.
