@@ -75,6 +75,10 @@ jobs:
           version: "0.12.9"
       - name: Install unixODBC and the PostgreSQL ODBC driver
         run: sudo apt-get update -qq && sudo apt-get install -y -qq unixodbc-dev odbc-postgresql
+      # Before any cargo command can rewrite it: the release publishes with --locked, which
+      # refuses a Cargo.lock that no longer matches the manifests.
+      - name: Check Cargo.lock matches the manifests
+        run: cargo metadata --locked --format-version 1 > /dev/null
       - run: make check-ci
       - run: make test-unit
       # Builds the sqlload extension (crates/sqlload-python) in the same target directory, so the
@@ -215,7 +219,8 @@ jobs:
             echo "The merge base has no benchmarks." >&2
             : > perf-base.jsonl
           fi
-          git checkout --quiet --detach "${head}"
+          # Building the base can rewrite its Cargo.lock; discard that so the head checks out.
+          git checkout --quiet --force --detach "${head}"
       - name: Benchmark the head
         run: make bench-perf > perf-head.jsonl
       - name: Compare
