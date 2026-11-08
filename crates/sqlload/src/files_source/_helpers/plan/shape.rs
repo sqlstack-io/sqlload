@@ -10,6 +10,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::errors::ShapeError;
 use crate::files_source::models::DataFile;
+use crate::row_batches::main::normalise_batch::normalise_batch;
 use crate::schema_plan::models::DesiredColumn;
 
 /// The Arrow schema of the batches handed on: one field per output column, at nanoseconds for the `nanos` columns.
@@ -85,6 +86,7 @@ fn shape_column(
     let constant = constants.iter().find(|(key, _)| key == field.name());
     let source: ArrayRef = match (constant, batch.column_by_name(field.name())) {
         (Some((_, value)), _) => Arc::new(StringArray::from(vec![*value; rows])),
+        (None, Some(column)) if nested(column.data_type()) => json_text(field.name(), column)?,
         (None, Some(column)) => column.clone(),
         (None, None) => return Ok(new_null_array(field.data_type(), rows)),
     };
@@ -100,6 +102,30 @@ fn shape_column(
             field.data_type()
         ),
     })
+}
+
+/// Whether a column of `data_type` holds lists, structs or maps, which load as JSON.
+fn nested(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(..)
+            | DataType::Struct(_)
+            | DataType::Map(..)
+    )
+}
+
+/// Nested column `name` as JSON text: a list as an array, a struct as an object with its fields in order, a map as an object keyed by each key's text.
+fn json_text(name: &str, column: &ArrayRef) -> Result<ArrayRef, ShapeError> {
+    let failed = |reason: String| ShapeError {
+        row: None,
+        reason: format!("{name}: cannot convert to JSON: {reason}"),
+    };
+    let batch = RecordBatch::try_from_iter([(name, column.clone())])
+        .map_err(|error| failed(error.to_string()))?;
+    let normal = normalise_batch(&batch).map_err(failed)?;
+    Ok(normal.column(0).clone())
 }
 
 /// The first value of `source` that does not convert to `data_type`.

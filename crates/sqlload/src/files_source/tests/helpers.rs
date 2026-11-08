@@ -304,6 +304,106 @@ async fn break_footer_and_read(folder: &OpenFolder, reuse: bool) -> Result<Strin
         .map_or_else(|_| "failed".to_owned(), |rows| rows.to_string()))
 }
 
+/// One Parquet file of three rows with nested columns, discovered and read: column `name`'s planned type, and its values `|`-separated (`NULL` for NULL).
+pub(crate) async fn nested_parquet_column(name: &str) -> Result<(String, String), String> {
+    let (folder, root) = folder_with(&[]).await?;
+    let result = write_and_read_nested(&folder, name).await;
+    let _ = std::fs::remove_dir_all(&root);
+    result
+}
+
+/// The nested test file's columns: `tags` (list of text), `point` (struct), `attrs` (map of text to int) and `grid` (list of lists).
+fn nested_batch() -> Result<RecordBatch, String> {
+    use arrow_array::builder::{Int64Builder, ListBuilder, MapBuilder, StringBuilder};
+    use arrow_array::{ArrayRef, Float64Array, Int32Array, StructArray};
+    let mut tags = ListBuilder::new(StringBuilder::new());
+    tags.append_value([Some("a"), None, Some("say \"hi\"")]);
+    tags.append_value(Vec::<Option<&str>>::new());
+    tags.append_null();
+    let point = StructArray::from(vec![
+        (
+            Arc::new(Field::new("x", DataType::Float64, true)),
+            Arc::new(Float64Array::from(vec![Some(1.5), Some(-2.25), None])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("y", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        ),
+    ]);
+    let mut attrs = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+    attrs.keys().append_value("k");
+    attrs.values().append_value(1);
+    attrs.append(true).map_err(|error| error.to_string())?;
+    attrs.append(true).map_err(|error| error.to_string())?;
+    attrs.keys().append_value("a");
+    attrs.values().append_null();
+    attrs.append(true).map_err(|error| error.to_string())?;
+    let mut grid = ListBuilder::new(ListBuilder::new(Int64Builder::new()));
+    grid.values().append_value([Some(1), Some(2)]);
+    grid.values().append_value([Some(3)]);
+    grid.append(true);
+    grid.append(true);
+    grid.values().append_null();
+    grid.append(true);
+    RecordBatch::try_from_iter([
+        ("tags", Arc::new(tags.finish()) as ArrayRef),
+        ("point", Arc::new(point) as ArrayRef),
+        ("attrs", Arc::new(attrs.finish()) as ArrayRef),
+        ("grid", Arc::new(grid.finish()) as ArrayRef),
+    ])
+    .map_err(|error| error.to_string())
+}
+
+async fn write_and_read_nested(
+    folder: &OpenFolder,
+    name: &str,
+) -> Result<(String, String), String> {
+    let batch = nested_batch()?;
+    let mut body: Vec<u8> = Vec::new();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut body, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    write_file(folder, "part.parquet", Bytes::from(body))
+        .await
+        .map_err(|error| error.to_string())?;
+    let encoding = FilesEncoding::default();
+    let listed = discover_files(folder, &PathValues::default(), &encoding)
+        .await
+        .map_err(|error| error.to_string())?;
+    let column_type = listed
+        .columns
+        .iter()
+        .find(|column| column.name == name)
+        .map(|column| column.column_type.clone())
+        .ok_or_else(|| format!("no column {name}"))??;
+    let request = FilesRead {
+        nanos: Vec::new(),
+        files: listed.files,
+        encoding,
+        checks: TextChecks::default(),
+        columns: vec![DesiredColumn {
+            name: name.to_owned(),
+            column_type: column_type.clone(),
+            origin: ColumnOrigin::Source,
+        }],
+        batch_rows: 10,
+    };
+    let mut lines: Vec<String> = Vec::new();
+    read_files(
+        folder,
+        &request,
+        &BatchFooters::default(),
+        async |batch: RecordBatch| {
+            lines.extend(row_texts(&batch)?);
+            Ok(())
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok((column_type.to_string(), lines.join("|")))
+}
+
 /// The type the reader finds in the footer of a file written with a column of `written`, with or without the embedded Arrow schema; other writers' files often have none.
 pub(crate) fn footer_type(written: &DataType, embedded_schema: bool) -> Result<DataType, String> {
     let column = arrow_array::new_null_array(written, 1);
