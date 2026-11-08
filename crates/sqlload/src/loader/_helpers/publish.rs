@@ -81,6 +81,8 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
+use crate::publish_checks::main::run_checks::run_checks;
+use crate::publish_checks::models::CheckedCommit;
 use crate::run_log::main::insert_run::insert_run;
 use crate::run_log::main::record_object_name::record_object_name;
 use crate::run_log::main::runs_location::runs_location;
@@ -236,7 +238,8 @@ impl Publisher {
             }
             _ => None,
         };
-        let direct = files.is_none() && writes_directly(&table, &writer);
+        let direct =
+            files.is_none() && table.spec.checks.is_none() && writes_directly(&table, &writer);
         let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
         let keeps_tables = sql_adapter(table.spec.warehouse).keeps_tables();
         let builds =
@@ -571,6 +574,18 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
+        if let Some(checks) = &spec.checks {
+            let commit = CheckedCommit {
+                destination: &self.destination,
+                warehouse,
+                staging: &staging,
+                table: &spec.destination,
+                exists: self.table.exists,
+                columns: &self.table.schema.write_columns,
+                committed: self.committed_rows,
+            };
+            run_checks(&commit, checks).await?;
+        }
         let _held = match self.at_end && !sql_adapter(warehouse).keeps_tables() {
             true => ddl_guard(&self.destination).await,
             false => None,
