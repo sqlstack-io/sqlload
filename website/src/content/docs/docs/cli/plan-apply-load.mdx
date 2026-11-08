@@ -35,7 +35,7 @@ All three take the same options.
 | `--yes` | Rebuild with `--reload` or `--resnapshot` without asking. Needed when not on a terminal. |
 | `--allow-type-change-rebuild` | Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would block. |
 | `--concurrency <N>` | The most tables loading at once. Default: the project's `concurrency`, else 4. |
-| `--json` | Print one JSON document on standard output. For `plan`, the plan. For `apply` and `load` (from 0.27.0, not released yet), the result: see [Results as JSON](#results-as-json). |
+| `--json` | Print one JSON document on standard output. For `plan`, the plan. For `apply` and `load` (from 0.27.0), the result: see [Results as JSON](#results-as-json). |
 
 ## Reading a plan
 
@@ -109,7 +109,7 @@ loaded   raw.app__customers  50 rows  0.0s
 
 ## Results as JSON
 
-From 0.27.0 (not released yet), `apply --json` and `load --json` print one JSON document on
+From 0.27.0, `apply --json` and `load --json` print one JSON document on
 standard output when they finish, for scripts and orchestrators. Logs stay on standard error. The
 exit code is the same as without `--json`.
 

@@ -19,7 +19,7 @@ path = "{source}/{table}/dt={cursor:date}/"
 |-----|---------|
 | `connection` | An `s3` or `filesystem` connection. |
 | `path` | Each table's folder: a template with `{source}`, `{schema}`, `{table}`, and `{cursor}` or `{cursor:date}` to partition by the cursor. Default `{source}/{table}/`. |
-| `format` | `parquet` (default), or from 0.27.0 (not released yet) `csv`. See [CSV files](#csv-files). |
+| `format` | `parquet` (default), or from 0.27.0 `csv`. See [CSV files](#csv-files). |
 | `compression` | From 0.27.0. CSV only: `none` (default), `gzip` or `zstd`. |
 | `csv` | From 0.27.0. CSV only: `{ delimiter, header, quote, null_value }`. Default `{ delimiter = ",", header = true, quote = '"', null_value = "" }`. |
 | `single_file` | From 0.27.0. Write one file per table, or per partition, named after the table folder. Default `false`. |
@@ -56,7 +56,7 @@ diff --all-files` reads every file's footer to report files whose columns differ
 A [`postgres_cdc` source](/docs/sources/postgres-cdc/#into-parquet-files) loads into a files
 target as a changelog, adding files with each load.
 
-From 0.27.0 (not released yet), a [files source](/docs/sources/files/) loads into a files target.
+From 0.27.0, a [files source](/docs/sources/files/) loads into a files target.
 SQLLoad reads the source files and writes them out again, with `append`, `replace`, or
 `delete_insert` by a partition cursor. Each commit records the source files it loaded in
 `_sqlload/loaded/<commit>.json`. Under `append`, the next load skips those files and reads only
@@ -75,7 +75,7 @@ SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: m
 progress, the run log of `state = "logged"` tables, and the source files a files source's
 loads loaded. Run one load at a time per files table.
 
-From 0.27.0 (not released yet), SQLLoad enforces that rule. A load takes a lease on the table, a
+From 0.27.0, SQLLoad enforces that rule. A load takes a lease on the table, a
 file in `_sqlload/lease/`, before it repairs or writes anything. It renews the lease every minute
 and releases it when it finishes. While another load holds a live lease, `plan` blocks the table
 and `load` refuses it:
@@ -90,7 +90,7 @@ lease. If its lease lapsed, or another load took the table, it stops without del
 
 ## Replacing a table
 
-From sqlload 0.27.0, which isn't released yet: in a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
+From sqlload 0.27.0: in a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
 table folder, carry over every file of the table folder that the load doesn't replace (the
 `_sqlload/runs/` log, the load's lease, and any file you keep beside the data), then swap the two folders in one rename
 (`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
@@ -104,7 +104,7 @@ both. `delete_insert` works this way in both stores, as the plan's `note` says.
 
 ## CSV files
 
-From sqlload 0.27.0, which isn't released yet, a files target can write CSV instead of Parquet.
+From sqlload 0.27.0, a files target can write CSV instead of Parquet.
 
 ```toml
 [targets.exports]
@@ -152,7 +152,7 @@ need Parquet, and `single_file` doesn't take `append`; `plan` says so.
 ## Limitations
 
 - Before 0.27.0, a files source can't load into a files target.
-- The lease (from 0.27.0, not released yet) trusts the clocks of the machines that load, and
+- The lease (from 0.27.0) trusts the clocks of the machines that load, and
   needs a store that honours create-only writes, as a local folder and S3 (`If-None-Match: *`) do.
   A load paused for longer than its lease, or an S3-compatible store that ignores that header, can
   still let two loads write one table. With `AWS_CONDITIONAL_PUT=disabled`, loads into S3 fail

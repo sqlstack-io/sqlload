@@ -9,11 +9,11 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 |--------|---------|---------|
 | Postgres | Tables, by `include` patterns | Binary `COPY` into Arrow, over TLS when the connection's `sslmode` asks |
 | Postgres changes (`postgres_cdc`) | Inserts, updates and deletes of tables, by `include` patterns | A snapshot, then a logical replication slot (`pgoutput`), in whole transactions. See [Postgres changes](/docs/sources/postgres-cdc/). |
-| Snowflake (from 0.26.0) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad, or (from 0.27.0, not released yet) by DuckDB itself from an S3 stage. See [Snowflake](/docs/sources/snowflake/). |
-| Databases with an ODBC driver (from 0.27.0, not released yet) | Tables and views, by `include` patterns, and query results | The driver, as Arrow, in builds with the `odbc` feature. See [ODBC](/docs/sources/odbc/). |
+| Snowflake (from 0.26.0) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad, or (from 0.27.0) by DuckDB itself from an S3 stage. See [Snowflake](/docs/sources/snowflake/). |
+| Databases with an ODBC driver (from 0.27.0) | Tables and views, by `include` patterns, and query results | The driver, as Arrow, in builds with the `odbc` feature. See [ODBC](/docs/sources/odbc/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
-| Google Sheets | From 0.27.0 (not released yet). Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |
+| Google Sheets | From 0.27.0. Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |
 | Python | Dicts, Arrow data (pyarrow, polars, pandas), JSON and NDJSON bytes | The `sqlload` package, in process |
 | HTTP APIs | JSON, through `sl.http` in a Python source | Rust |
 | Kafka | Topics, through the separate [exporter](/docs/kafka/) | Rust |
@@ -28,7 +28,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ClickHouse (preview) | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. See [ClickHouse](/docs/targets/clickhouse/). |
 | Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
-| Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or, from 0.27.0 (not released yet), CSV: plain, gzip or zstd. |
+| Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or, from 0.27.0, CSV: plain, gzip or zstd. |
 | Parquet or CSV files in a local folder | As for S3; from 0.27.0, `replace` swaps the folder in one rename | As for S3 |
 
 ## Source and destination combinations
@@ -39,11 +39,11 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Postgres changes (`postgres_cdc`) | Yes | Yes | No | No | No | Yes | Yes, as a changelog |
 | Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | ODBC (from 0.27.0) | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
-| Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | From 0.27.0 (not released yet), read and rewritten by SQLLoad |
+| Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | From 0.27.0, read and rewritten by SQLLoad |
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
-From 0.27.0 (not released yet), a files source loads into a files target, read and rewritten
+From 0.27.0, a files source loads into a files target, read and rewritten
 by SQLLoad. Before, `plan` refused it. `merge` isn't available for files sources or files
 targets. Google Sheets tables reach every target through the same Arrow path; the tests load
 them into DuckDB.
