@@ -96,6 +96,7 @@ fn files(
         connection: target.connection.clone(),
         store,
         max_footer_reads: target.footer_read_limit(),
+        encoding: target.output_encoding(),
     })))
 }
 

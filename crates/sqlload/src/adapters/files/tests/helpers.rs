@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
-use arrow_array::{Date32Array, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray};
+use arrow_array::{
+    ArrayRef, Date32Array, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray,
+};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use crate::adapters::files::_helpers::write::parquet_files::new_file;
+use crate::adapters::files::_helpers::write::data_files::{add_rows, finish_file, new_file};
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::{OpenFolder, StoredFile};
@@ -19,13 +21,23 @@ use crate::adapters::files::models::{
     FolderClaim, PartitionBy, PartitionFolder, PendingPhase, PendingRun, TablePath,
 };
 use crate::adapters::files::tests::test_types::CommittedRepairTestCase;
+use crate::adapters::files::tests::test_types::CsvRenderTestCase;
+use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
 use crate::files_source::models::Footer;
+use crate::project::models::{CsvOutput, FilesFormat, OutputEncoding};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
+
+/// 2026-11-04 00:00:00.000001 UTC, in microseconds.
+const NOV_4_PLUS_1_US: i64 = 1_793_750_400_000_001;
+/// What `watch_folder` records when the folder is missing.
+pub(crate) const NO_FOLDER: &str = "<no folder>";
+/// How the data files a load writes are named.
+const PART_NAME_START: &str = "part-";
 
 /// An S3 bucket in eu-west-2.
 pub(crate) fn bucket() -> StoreKind {
@@ -143,14 +155,9 @@ pub(crate) fn text_footer(values: &[&str]) -> Result<Footer, String> {
         vec![Arc::new(StringArray::from(values.to_vec())) as arrow_array::ArrayRef],
     )
     .map_err(|error| error.to_string())?;
-    let mut file = new_file(&schema)?;
-    file.writer
-        .write(&batch)
-        .map_err(|error| error.to_string())?;
-    let bytes = file
-        .writer
-        .into_inner()
-        .map_err(|error| error.to_string())?;
+    let encoding = OutputEncoding::default();
+    let file = add_rows(new_file(&schema, &encoding)?, &batch, &encoding)?;
+    let bytes = finish_file(file)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))
         .map_err(|error| error.to_string())?;
     Ok(Footer {
@@ -276,4 +283,157 @@ pub(crate) fn repair_committed(
     });
     let _ = std::fs::remove_dir_all(&root);
     outcome
+}
+
+/// The bytes of one CSV file holding `batches` in order, written as `encoding` says.
+pub(crate) fn csv_file(
+    batches: &[RecordBatch],
+    encoding: &OutputEncoding,
+) -> Result<Vec<u8>, String> {
+    let schema = batches
+        .first()
+        .map(RecordBatch::schema)
+        .ok_or("no batches")?;
+    let file = batches
+        .iter()
+        .try_fold(new_file(&schema, encoding)?, |file, batch| {
+            add_rows(file, batch, encoding)
+        })?;
+    finish_file(file)
+}
+
+/// The files under `folder`, hidden ones included, as sorted relative keys.
+pub(crate) fn local_files(folder: &std::path::Path) -> Vec<String> {
+    let mut keys: Vec<String> = walk(folder)
+        .into_iter()
+        .filter_map(|path| {
+            path.strip_prefix(folder)
+                .ok()
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        })
+        .collect();
+    keys.sort();
+    keys
+}
+
+fn walk(folder: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let entries: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    let files = entries.iter().filter(|path| !path.is_dir()).cloned();
+    let nested = entries
+        .iter()
+        .filter(|path| path.is_dir())
+        .flat_map(|path| walk(path));
+    files.chain(nested).collect()
+}
+
+/// List `folder`'s data files (named `part-*`) over and over on another thread until `stop` is set; every distinct set of names seen.
+pub(crate) fn watch_folder(
+    folder: std::path::PathBuf,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<std::collections::BTreeSet<Vec<String>>> {
+    std::thread::spawn(move || {
+        std::iter::from_fn(|| {
+            (!stop.load(std::sync::atomic::Ordering::Relaxed)).then_some(part_names(&folder))
+        })
+        .collect()
+    })
+}
+
+/// The names of `folder`'s `part-*` files, sorted; `NO_FOLDER` when there is no folder.
+fn part_names(folder: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return vec![NO_FOLDER.to_owned()];
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(PART_NAME_START))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Write `body` to each of `keys` below `root`/`prefix`, creating folders.
+pub(crate) fn write_all(
+    root: &std::path::Path,
+    prefix: &str,
+    keys: &[&str],
+    body: &str,
+) -> Result<(), String> {
+    keys.iter().try_for_each(|key| {
+        let path = root.join(prefix).join(key);
+        std::fs::create_dir_all(path.parent().ok_or("no parent")?)
+            .and_then(|()| std::fs::write(&path, body))
+            .map_err(|error| error.to_string())
+    })
+}
+
+/// A nullable column named `name` of `array`'s type.
+pub(crate) fn column(name: &str, array: ArrayRef) -> (Field, ArrayRef) {
+    (Field::new(name, array.data_type().clone(), true), array)
+}
+
+/// A text column tagged as `json`.
+pub(crate) fn json_column(name: &str, values: Vec<Option<&str>>) -> (Field, ArrayRef) {
+    let field =
+        Field::new(name, DataType::Utf8, true).with_metadata(std::collections::HashMap::from([(
+            ARROW_TYPE_METADATA_KEY.to_owned(),
+            ColumnType::Json.to_string(),
+        )]));
+    (field, Arc::new(StringArray::from(values)))
+}
+
+/// 2026-11-04 00:00:00.000001 UTC and a NULL, as timestamps in `zone`.
+pub(crate) fn instants(zone: Option<&str>) -> ArrayRef {
+    Arc::new(
+        TimestampMicrosecondArray::from(vec![Some(NOV_4_PLUS_1_US), None])
+            .with_timezone_opt(zone.map(str::to_owned)),
+    )
+}
+
+/// Tab-separated, no header, NULL as `NULL`.
+pub(crate) fn tab_separated() -> CsvOutput {
+    CsvOutput {
+        delimiter: '\t',
+        header: false,
+        quote: '"',
+        null_value: "NULL".to_owned(),
+    }
+}
+
+/// The CSV text of one file holding the case's columns.
+pub(crate) fn csv_text(test_case: &CsvRenderTestCase) -> Result<String, String> {
+    let (fields, arrays): (Vec<Field>, Vec<ArrayRef>) = test_case.columns.iter().cloned().unzip();
+    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)
+        .map_err(|error| error.to_string())?;
+    let encoding = OutputEncoding {
+        format: FilesFormat::Csv,
+        csv: test_case.csv.clone(),
+        ..OutputEncoding::default()
+    };
+    let bytes = csv_file(&[batch], &encoding)?;
+    String::from_utf8(bytes).map_err(|error| error.to_string())
+}
+
+/// Uncompressed bytes, as they are.
+pub(crate) fn plain_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    Ok(bytes.to_vec())
+}
+
+/// gzip bytes decompressed.
+pub(crate) fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let mut text = Vec::new();
+    std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(bytes), &mut text)
+        .map_err(|error| error.to_string())?;
+    Ok(text)
+}
+
+/// zstd bytes decompressed.
+pub(crate) fn unzstd(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    zstd::decode_all(bytes).map_err(|error| error.to_string())
 }

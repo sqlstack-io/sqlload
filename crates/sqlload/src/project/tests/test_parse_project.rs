@@ -281,7 +281,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "a warehouse target takes no path",
             text: "[targets.other]\nconnection = \"wh\"\nloader_schema = \"RAW\"\npath = \"{table}/\"\n",
-            expected_message: "[targets.other] path, format and max_footer_reads are for targets on an s3 or filesystem connection",
+            expected_message: "[targets.other] path, format, compression, csv, single_file and max_footer_reads are for targets on an s3 or filesystem connection",
         },
         ParseProjectErrorTestCase {
             description: "a files target takes no loader_schema",

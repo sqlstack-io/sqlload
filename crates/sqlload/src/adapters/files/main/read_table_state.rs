@@ -4,8 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::adapters::files::_helpers::layout::loads::load_id_of;
 use crate::adapters::files::_helpers::layout::markers::{parse_marker, pending_folder};
-use crate::adapters::files::_helpers::layout::partitions::group_partitions;
-use crate::adapters::files::constants::PARQUET_SUFFIX;
+use crate::adapters::files::_helpers::layout::partitions::{group_partitions, is_data_file};
 use crate::adapters::files::errors::FilesDestinationError;
 use crate::adapters::files::models::{PendingLoad, PendingPhase, TablePath, TableState};
 use crate::column_types::models::ColumnType;
@@ -46,11 +45,7 @@ pub async fn read_table_state(
         .flat_map(|load| load.deletes.iter())
         .map(String::as_str)
         .collect();
-    let exists = files.iter().any(|file| {
-        file.relative_key
-            .to_ascii_lowercase()
-            .ends_with(PARQUET_SUFFIX)
-    });
+    let exists = files.iter().any(|file| is_data_file(&file.relative_key));
     let kept: Vec<StoredFile> = files
         .iter()
         .filter(|file| !dropped.contains(file.relative_key.as_str()))
