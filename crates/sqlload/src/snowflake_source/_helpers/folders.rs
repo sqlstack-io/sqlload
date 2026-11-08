@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use futures_util::{StreamExt, TryStreamExt};
 use tokio::sync::RwLock;
 
 use crate::file_store::main::delete_files::delete_files;
@@ -8,7 +9,10 @@ use crate::file_store::main::read_file::read_file;
 use crate::file_store::models::OpenFolder;
 use crate::http::errors::ApiError;
 use crate::project::models::UnloadStage;
-use crate::snowflake_source::constants::{EXPIRED_CREDENTIALS, INTERNAL_STAGE, USER_STAGE_FOLDER};
+use crate::snowflake_source::constants::{
+    DOWNLOAD_PREFIX, EXPIRED_CREDENTIALS, INTERNAL_STAGE, PARALLEL_FILE_DOWNLOADS,
+    USER_STAGE_FOLDER,
+};
 use crate::snowflake_source::errors::SnowflakeSourceError;
 use crate::snowflake_source::models::{SnowflakeReader, UnloadFolder};
 use crate::sql_api::main::execute_sql::execute_sql;
@@ -192,6 +196,34 @@ impl Unloaded {
             }
         }
     }
+
+    /// Download every file, decrypted, into local folder `into`, several at a time; each file's name there, in file order.
+    pub(crate) async fn download(
+        &self,
+        reader: &SnowflakeReader,
+        into: &std::path::Path,
+    ) -> Result<Vec<String>, SnowflakeSourceError> {
+        let names: Vec<String> = (0..self.len())
+            .map(|index| format!("{index:05}.parquet"))
+            .collect();
+        futures_util::stream::iter(0..self.len())
+            .map(|index| {
+                let path = into.join(&names[index]);
+                async move {
+                    let bytes = self.fetch(reader, index).await?;
+                    tokio::fs::write(&path, bytes).await.map_err(|error| {
+                        SnowflakeSourceError::File {
+                            file: self.name(index),
+                            reason: format!("cannot write {}: {error}", path.display()),
+                        }
+                    })
+                }
+            })
+            .buffer_unordered(PARALLEL_FILE_DOWNLOADS)
+            .try_collect::<()>()
+            .await?;
+        Ok(names)
+    }
 }
 
 /// Where to fetch internal-stage file `key` from and its key material, issuing `GET` again when the credentials expire within the margin or `renew` asks (S3 refused them).
@@ -267,6 +299,47 @@ pub(crate) async fn unloaded_files(
                 files,
             })
         }
+    }
+}
+
+/// Where the destination reads `folder`'s files: the S3 folder itself, or for an internal stage a new local temporary folder to download them into, removed when the returned handle drops.
+pub(crate) fn destination_folder(
+    folder: &UnloadFolder,
+) -> Result<(Location, Option<tempfile::TempDir>), SnowflakeSourceError> {
+    match folder {
+        UnloadFolder::External { folder, .. } => Ok((folder.clone(), None)),
+        UnloadFolder::Internal { .. } => {
+            let local = tempfile::Builder::new()
+                .prefix(DOWNLOAD_PREFIX)
+                .tempdir()
+                .map_err(|error| {
+                    SnowflakeSourceError::Invalid(format!(
+                        "cannot create a local temporary folder for the unloaded files: {error}"
+                    ))
+                })?;
+            let location = Location {
+                store: StoreKind::Filesystem {
+                    root: local.path().to_string_lossy().into_owned(),
+                },
+                prefix: String::new(),
+            };
+            Ok((location, Some(local)))
+        }
+    }
+}
+
+/// The keys of `folder`'s files where the destination reads them: in the S3 folder, or as downloaded into `local` from an internal stage.
+pub(crate) async fn unloaded_keys(
+    reader: &SnowflakeReader,
+    folder: &UnloadFolder,
+    local: Option<&tempfile::TempDir>,
+) -> Result<Vec<String>, SnowflakeSourceError> {
+    match (unloaded_files(reader, folder).await?, local) {
+        (Unloaded::External { files, .. }, _) => Ok(files),
+        (internal, Some(local)) => internal.download(reader, local.path()).await,
+        (Unloaded::Internal { stage_path, .. }, None) => Err(SnowflakeSourceError::Invalid(
+            format!("{stage_path} is an internal stage with no local folder to download into"),
+        )),
     }
 }
 

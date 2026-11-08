@@ -699,6 +699,13 @@ fn route_text(table: &TablePlan, route: &Route) -> String {
         [Step::Unload(store), Step::DestinationPulls(_)] => {
             format!("unload Parquet to {store} -> {warehouse} {load} (nothing through the loader)")
         }
+        [
+            Step::Unload(store),
+            Step::CopyFiles(Store::Local(folder)),
+            Step::DestinationPulls(_),
+        ] => format!(
+            "unload Parquet to {store} -> download unchanged to {folder} -> {warehouse} {load} (nothing through the loader)"
+        ),
         steps => steps
             .iter()
             .filter(|step| !matches!(step, Step::UseFiles(_)))
