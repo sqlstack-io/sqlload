@@ -111,7 +111,7 @@ partition.
 | `stage` | Snowflake writes to | SQLLoad reads with |
 |---------|---------------------|--------------------|
 | Omitted | A folder of your user stage, `@~/sqlload_unload/` | The temporary credentials Snowflake hands out, several files at a time |
-| `{ url = "s3://example-bucket/unload/", storage_integration = "S3_UNLOAD", region = "eu-west-2" }` | That S3 folder, through the storage integration | The S3 credentials in its environment |
+| `{ url = "s3://example-bucket/unload/", storage_integration = "S3_UNLOAD", region = "eu-west-2" }` | That S3 folder, through the storage integration | Its AWS credentials, found as for an [`s3` connection](/docs/configuration/#s3) |
 | `{ name = "ANALYTICS.SHOP.UNLOAD_STAGE" }` | That stage, internal or external on S3 | As for the rows above |
 
 The user stage and other internal stages work on Snowflake accounts hosted on AWS. A named internal
