@@ -59,6 +59,8 @@ pub(crate) struct ScenarioRun {
     pub(crate) destination_change: &'static str,
     /// Text the plan or load error must contain; empty when the run must succeed.
     pub(crate) expected_error: &'static str,
+    /// Text the rendered plan of a run that succeeds must contain, such as a warning.
+    pub(crate) expected_plan: &'static str,
     /// `--reload`.
     pub(crate) reload: bool,
     /// `--start-cursor-*` and `--end-cursor-*`.

@@ -108,12 +108,12 @@ pub(crate) async fn described_project(text: &str) -> Result<ProjectConfig, Strin
     Ok(project)
 }
 
-/// Plan, apply and load once; the error text when any step fails.
+/// Plan, apply and load once: the rendered plan, or the error text when any step fails.
 async fn run_once(
     project_text: &str,
     destinations: &BTreeMap<String, Destination>,
     options: &PlanOptions,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let project = described_project(project_text).await?;
     let plan = plan_project(&project, destinations, options)
         .await
@@ -123,7 +123,8 @@ async fn run_once(
     apply_project(&plan, destinations)
         .await
         .map_err(|error| error.to_string())?;
-    load_all(&project, &plan, destinations).await
+    load_all(&project, &plan, destinations).await?;
+    Ok(lines.join("\n"))
 }
 
 /// Load every table of `plan`; the first table that failed is the error.
@@ -291,13 +292,14 @@ pub(crate) async fn run_scenario(
             ..PlanOptions::default()
         };
         let run_text = format!("{text}{}", run.settings);
-        let error = run_once(&run_text, &destinations, &options)
-            .await
-            .err()
-            .unwrap_or_default();
+        let outcome = run_once(&run_text, &destinations, &options).await;
+        let error = outcome.as_ref().err().cloned().unwrap_or_default();
+        let planned = outcome.unwrap_or_default();
         assert!(
-            error.contains(run.expected_error) && error.is_empty() == run.expected_error.is_empty(),
-            "{} run {}: {error}",
+            error.contains(run.expected_error)
+                && error.is_empty() == run.expected_error.is_empty()
+                && planned.contains(run.expected_plan),
+            "{} run {}: {error}{planned}",
             test_case.description,
             index + 1
         );

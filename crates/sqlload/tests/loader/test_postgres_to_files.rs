@@ -11,7 +11,7 @@ use crate::test_types::{FilesTargetRun, FilesTargetScenarioTestCase, RoundTripTe
 const ORDERS: &str = "CREATE TABLE public.orders (id int8 PRIMARY KEY, name text, qty int4, placed_at timestamptz NOT NULL);
 INSERT INTO public.orders VALUES (1, 'a', 1, '2026-11-03 10:00:00+00'), (2, 'b', 2, '2026-11-04 10:00:00+00');";
 
-const APPEND_BY_DAY: &str = "write_strategy = \"append\"\ncursor_column = \"placed_at\"\nappend_cursor_inclusive = false\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n";
+const APPEND_BY_DAY: &str = "write_strategy = \"append\"\ncursor_column = \"placed_at\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n";
 
 const DELETE_INSERT_BY_DAY: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"placed_at\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n";
 
@@ -246,6 +246,32 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             }],
             check_column: "name",
             expected_files: "",
+        },
+        FilesTargetScenarioTestCase {
+            description: "append with a date cursor is refused at plan, as for a warehouse",
+            store: local_store,
+            setup: "CREATE TABLE public.orders (id int8 PRIMARY KEY, name text, day date NOT NULL); INSERT INTO public.orders VALUES (1, 'a', '2026-11-03');",
+            target_settings: "",
+            settings: "write_strategy = \"append\"\ncursor_column = \"day\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor}/\"\n",
+            runs: &[FilesTargetRun {
+                expected_error: "write_strategy = \"append\" cannot follow the date cursor day",
+                ..OK
+            }],
+            check_column: "name",
+            expected_files: "",
+        },
+        FilesTargetScenarioTestCase {
+            description: "append_cursor_inclusive = true into files warns that each run appends the maximum's rows again",
+            store: local_store,
+            setup: ORDERS,
+            target_settings: "",
+            settings: "write_strategy = \"append\"\ncursor_column = \"placed_at\"\nappend_cursor_inclusive = true\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n",
+            runs: &[FilesTargetRun {
+                expected_plan: "append_cursor_inclusive = true reads from the maximum placed_at itself",
+                ..OK
+            }],
+            check_column: "name",
+            expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1 2:b",
         },
         FilesTargetScenarioTestCase {
             description: "an incremental load needs the cursor in the path",
