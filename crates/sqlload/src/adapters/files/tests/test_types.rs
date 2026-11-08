@@ -159,3 +159,14 @@ pub(crate) struct CommittedRepairTestCase {
     /// The run record object's text after repair.
     pub(crate) expected_record: &'static str,
 }
+
+/// Records of the source files three commits loaded, against what the table holds of each.
+pub(crate) struct LoadedRecordsTestCase {
+    pub(crate) description: &'static str,
+    /// Each record's key below `_sqlload/loaded/` and its text.
+    pub(crate) records: &'static [(&'static str, &'static str)],
+    /// The source files that count as loaded, by name.
+    pub(crate) expected_loaded: &'static [&'static str],
+    /// The records repair deletes.
+    pub(crate) expected_stale: &'static [&'static str],
+}

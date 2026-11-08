@@ -214,7 +214,6 @@ impl Publisher {
                     replaced,
                     writer: None,
                     deleted: BTreeSet::new(),
-                    loaded: Vec::new(),
                     reading: Vec::new(),
                 })
             }
@@ -1114,19 +1113,12 @@ impl Publisher {
         };
         let sink = self.sink()?;
         let folder = sink.folder.clone();
-        let mut loaded = sink.loaded.clone();
-        loaded.extend(
-            sink.reading
-                .iter()
-                .map(|file| (writer.file_id.clone(), file.clone())),
-        );
-        if !loaded.is_empty() {
-            write_loaded_files(&folder, &self.load_id, &loaded).await?;
+        if !sink.reading.is_empty() {
+            write_loaded_files(&folder, &writer.file_id, &sink.reading).await?;
         }
         replace_files(&folder, &writer.file_id, (&keys, run.as_ref())).await?;
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
-            sink.loaded = loaded;
             sink.reading.clear();
         }
         self.committed_rows += self.waiting_rows;

@@ -585,9 +585,7 @@ pub struct FilesSink {
     pub writer: Option<FilesWriter>,
     /// Replaced files already deleted by earlier commits.
     pub deleted: std::collections::BTreeSet<String>,
-    /// Source files (of a files source) this load committed, each with its commit.
-    pub loaded: Vec<(String, LoadedFile)>,
-    /// Source files read since the last commit.
+    /// Source files (of a files source) read since the last commit, which the next commit records.
     pub reading: Vec<LoadedFile>,
 }
 

@@ -54,3 +54,6 @@ pub const OPEN_FILE_OVERHEAD_BYTES: usize = 1024 * 1024;
 
 /// The start of a pending marker line holding a run record (keys never start with `@`).
 pub const PENDING_RUN_PREFIX: &str = "@run\t";
+
+/// Records of loaded source files read at once while planning.
+pub const RECORD_READS: usize = 16;

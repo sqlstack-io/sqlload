@@ -55,10 +55,12 @@ target as a changelog, adding files with each load.
 
 From 0.27.0 (not released yet), a [files source](/docs/sources/files/) loads into a files target.
 SQLLoad reads the source files and writes them out again, with `append`, `replace`, or
-`delete_insert` by a partition cursor. Under `append`, each load records the source files it
-loaded in `_sqlload/loaded/<load id>.json`, so the next load reads only new or changed files. A
-record counts only while the table still holds that load's files, so a `replace`, or a load
-that failed and was repaired, frees its files to load again.
+`delete_insert` by a partition cursor. Each commit records the source files it loaded in
+`_sqlload/loaded/<commit>.json`. Under `append`, the next load skips those files and reads only
+new ones. As for other targets, a source file rewritten in place fails the table until you load
+it with `--reload`. A record counts only while the table still holds its commit's files, so a
+`replace`, or a load that failed and was repaired, frees those files to load again, and the
+next load deletes records whose files are gone.
 
 SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: markers for loads in
 progress, the run log of `state = "logged"` tables, and the source files a files source's
