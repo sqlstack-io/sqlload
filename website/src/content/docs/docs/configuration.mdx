@@ -49,6 +49,22 @@ Each connection has a `kind`.
 | `database` | required | |
 | `load_method` | required | How data gets into Snowflake. See [Load methods](/docs/targets/snowflake/). |
 
+### `databricks`
+
+| Key | Meaning |
+|-----|---------|
+| `host`, `client_id`, `client_secret`, `warehouse_id`, `catalog`, `volume` | See [Databricks](/docs/targets/databricks/#connection). All required. |
+
+### `bigquery`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `location` | required | Where query jobs run and datasets are created, such as `EU`. |
+| `service_account_key` | required | The service account key file's JSON text. Use `${ENV:NAME}`. |
+| `project` | the key's project | The project tables load into and jobs run in. |
+
+See [BigQuery](/docs/targets/bigquery/).
+
 ### `duckdb`
 
 | Key | Meaning |
@@ -88,8 +104,8 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 
 | Key | Applies to | Meaning |
 |-----|------------|---------|
-| `connection` | all | A `snowflake`, `duckdb`, `s3` or `filesystem` connection. |
-| `loader_schema` | warehouses, required | The schema for tables whose source sets no `schema`. |
+| `connection` | all | A `snowflake`, `databricks`, `bigquery`, `duckdb`, `s3` or `filesystem` connection. |
+| `loader_schema` | warehouses, required | The schema for tables whose source sets no `schema`; a BigQuery target's dataset. |
 | `database` | warehouses | Overrides the connection's database. |
 | `path` | files | Each table's folder template, with `{source}`, `{schema}`, `{table}`, `{cursor}` and `{cursor:date}`. Default `{source}/{table}/`. |
 | `format` | files | `parquet`, the default and only format. |

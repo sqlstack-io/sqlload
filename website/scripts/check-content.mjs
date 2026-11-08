@@ -1,13 +1,11 @@
 // Fail the build when a docs page is missing from the sidebar, or the site names a system SQLLoad
-// does not ship. Only the roadmap page may name the planned systems. Runs before every build.
+// does not ship. Runs before every build.
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const website = new URL('..', import.meta.url).pathname;
 const docs = join(website, 'src/content/docs');
-const roadmap = join(docs, 'docs/roadmap.mdx');
-const unshipped = /\b(BigQuery|Redshift|ClickHouse|SQL Server|MySQL)\b/gi;
-const planned = new Set(['bigquery']);
+const unshipped = /\b(Redshift|ClickHouse|SQL Server|MySQL)\b/gi;
 
 const slugs = (items) =>
 	items.flatMap((item) =>
@@ -29,7 +27,6 @@ for (const path of [...pages, join(website, 'public/index.html')]) {
 		.split('\n')
 		.forEach((line, index) => {
 			for (const [name] of line.matchAll(unshipped)) {
-				if (path === roadmap && planned.has(name.toLowerCase())) continue;
 				problems.push(`${relative(website, path)}:${index + 1}: names ${name}, which SQLLoad does not ship`);
 			}
 		});

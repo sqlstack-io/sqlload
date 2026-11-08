@@ -30,6 +30,7 @@
 			},
 			"docs/targets/snowflake",
 			"docs/targets/databricks",
+			"docs/targets/bigquery",
 			"docs/targets/duckdb",
 			"docs/targets/files"
 		]

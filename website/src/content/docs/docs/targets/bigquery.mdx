@@ -1,0 +1,190 @@
+---
+title: "BigQuery"
+description: "Load into BigQuery (preview): rows streamed as Arrow through the Storage Write API into a staging table, then one query job per write."
+---
+
+A BigQuery target loads into BigQuery datasets. It's in preview from sqlload 0.24.0. SQLLoad
+streams each batch as Arrow through BigQuery's Storage Write API into a staging table, then moves
+the rows into the table with one query job.
+
+## Connection
+
+SQLLoad signs in with a service account's key file:
+
+```toml
+[connections.bq]
+kind = "bigquery"
+location = "EU"
+service_account_key = "${ENV:BIGQUERY_KEY_JSON}"
+# project = "my-project"
+
+[targets.bq]
+connection = "bq"
+loader_schema = "raw"
+```
+
+| Key | Meaning |
+|-----|---------|
+| `location` | Where query jobs run and datasets are created, such as `EU` or `europe-west2`. Required. |
+| `service_account_key` | The key file's JSON text, not its path. Required. |
+| `project` | The project tables load into and jobs run in. Default: the key's own project. |
+
+The target's `loader_schema` is the dataset tables load into; a source's `schema` overrides it.
+`sqlload apply` creates the dataset when it doesn't exist.
+
+Pass the key through the environment, so it stays out of `sqlload.toml`:
+
+```bash
+export BIGQUERY_KEY_JSON="$(cat loader-key.json)"
+```
+
+## Authentication
+
+SQLLoad signs a token request with the key's private key and exchanges it for an OAuth token
+scoped to BigQuery, which it renews shortly before it expires. The service account needs to create
+datasets and tables and run query jobs in the project: the `BigQuery Data Editor` and
+`BigQuery Job User` roles.
+
+`sqlload debug` checks the connection by running a query job, and prints the service account, the
+project and the location jobs run in.
+
+## A first load
+
+With the [quickstart](/docs/quickstart/)'s Postgres database and its `sqlload.toml`, using the
+connection and target above with `default_target = "bq"`:
+
+```console
+$ sqlload plan
+Plan ready  2 selected, 2 objects to create, 2 to load
+
+Objects (2)                                         sqlload apply
+├── raw.app__customers                              create table
+│   ├── customer_id int            -> INT64
+│   ├── email       text           -> STRING
+│   ├── country     text           -> STRING
+│   ├── created_at  timestamp_tz   -> TIMESTAMP
+│   └── + _sqlload_load_id, _loaded_at
+└── raw.app__orders                                 create table
+    ├── order_id    int             -> INT64
+    ├── customer_id int             -> INT64
+    ├── status      text            -> STRING
+    ├── total       decimal(12,2)   -> NUMERIC(12,2)
+    ├── updated_at  timestamp_tz    -> TIMESTAMP
+    └── + _sqlload_load_id, _loaded_at
+
+Loads (2)                                           sqlload load
+├── app__customers                                  merge (unique_key: customer_id)
+│   ├── source  postgres  app  public.customers
+│   ├── route   read as Arrow -> BigQuery takes Arrow
+│   └── batch   about every 1 GB
+└── app__orders                                     merge (unique_key: order_id)
+    ├── source  postgres  app  public.orders
+    ├── route   read as Arrow -> BigQuery takes Arrow
+    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
+    └── cursor  updated_at first run, everything
+
+✓ Plan complete  2 selected, 2 objects to create, 2 to load
+```
+
+```console
+$ sqlload apply
+…
+created  raw.app__customers  6 columns
+created  raw.app__orders     7 columns
+
+$ sqlload load
+…
+loaded   raw.app__customers  50 rows  0.1s
+loaded   raw.app__orders     1,000 rows  0.1s
+
+✓ Completed  2 loaded, 1,050 rows, 0.1s
+```
+
+## How rows arrive
+
+- **Arrow, through the Storage Write API.** Each batch is converted to the Arrow types BigQuery
+  reads and sent in append requests of at most 9 MiB, spread over up to four pending streams.
+  A value that doesn't fit its column fails the batch; it never loads as NULL.
+- **All or nothing per batch.** Each stream is finalized, its row count is checked against the
+  rows sent, and all of them are committed together. Rows of a stream that is never committed are
+  never visible, so no reader sees part of a batch.
+- **Into a staging table, never the table itself.** Rows stream into a staging table named for the
+  load, `<table>__sqlload_staging_<load id>` (a build table for `replace`). BigQuery refuses
+  streams into a table recreated under the same name for a while afterwards, so SQLLoad never
+  streams into the destination table.
+- **Then one query job.** A query job moves the rows from the staging table into the table. Each
+  job carries a request ID, so a retried request never runs it twice.
+
+## Write strategies
+
+Each statement is its own query job and commits on its own. The run record commits after it.
+
+| Strategy | Statement |
+|----------|-----------|
+| `append` | One `INSERT ... SELECT` from the staging table. |
+| `merge` | One `MERGE` on the key. |
+| `delete_insert` | One `MERGE` that inserts the batch and deletes the rows it replaces. |
+| `replace` | `CREATE OR REPLACE TABLE ... AS SELECT` from the build table. |
+
+`replace` loads the whole source into a build table, then swaps it in:
+
+```console
+└── app__orders                                     replace
+    ├── source  postgres  app  public.orders
+    ├── route   read as Arrow -> BigQuery takes Arrow
+    └── batch   about 1 GB at a time into a new table, swapped in once at the end
+```
+
+The new table keeps the old one's description, but not its partitioning, clustering or labels.
+The build table holds only the table's own columns, so a column a
+[contract](/docs/concepts/contracts/) or `on_schema_change = "ignore"` leaves out isn't loaded.
+
+## Staging cleanup
+
+A load drops its staging and build tables when it ends. When a failed run leaves one behind, the
+next load into that dataset drops it once it's over a day old.
+
+## Types
+
+| Type | BigQuery |
+|------|----------|
+| `bool` | `BOOL` |
+| `smallint` | `INT64` ¹ |
+| `int` | `INT64` |
+| `decimal(p,s)` | `NUMERIC(p,s)`, or `BIGNUMERIC(p,s)` for more than 29 digits before the point or a scale over 9 |
+| `float` | `FLOAT64` |
+| `text` | `STRING` |
+| `varchar(n)` | `STRING(n)` |
+| `date` | `DATE` |
+| `time` | `TIME` |
+| `timestamp_tz` | `TIMESTAMP` ¹ |
+| `timestamp_ntz` | `DATETIME` |
+| `json` | `JSON` |
+| `uuid` | `STRING` ¹ |
+| `binary` | `BYTES` |
+
+¹ Held with a loss: `smallint` is stored as a 64-bit integer, `uuid` as text, and `timestamp_tz`
+as a UTC instant without its offset.
+
+## Limitations
+
+- BigQuery is in preview.
+- Nested values (arrays and records) don't load yet.
+- `copy_to_internal_stage` is for Snowflake and is refused here.
+- A [Postgres CDC](/docs/sources/postgres-cdc/) source can't load into BigQuery; `plan` refuses
+  it:
+
+  ```console
+  Errors (1)
+  └── public.customers, public.orders
+      └── reason  kind = "postgres_cdc" loads into DuckDB, Snowflake and Databricks targets, and into files targets as a changelog, in this release; not BigQuery
+  ```
+
+## Tested
+
+A local fake BigQuery (OAuth, query jobs, table metadata and the Storage Write API) covers the
+protocol and failure cases: wrong offsets, refused appends and commits, and expired tokens. Before
+release, live tests ran against a real BigQuery project. They covered every Storage Write API call
+SQLLoad makes, and loads under `append` (once, again, and in two batches), `replace` (twice, and
+ignoring a new column) and `delete_insert` (twice), with no staging tables left afterwards. A
+Postgres source was also loaded with `merge` and `replace`.
