@@ -15,6 +15,7 @@ use crate::project::models::{
     CdcDeletes, CdcMode, LookbackFrom, MaskMethod, SourceConfig, SourceKind, StateMode,
     TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
+use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::USER_STAGE_FOLDER;
@@ -155,6 +156,12 @@ pub(crate) fn build_spec(
         ),
     };
     problems.extend(column_reference_problems(table, overrides));
+    let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
+    problems.extend(
+        checks
+            .iter()
+            .flat_map(|checks| check_problems(checks, (strategy, context.target.path.is_some()))),
+    );
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
@@ -245,6 +252,7 @@ pub(crate) fn build_spec(
             .is_some_and(|(value, _)| value == StateMode::Logged),
         approved: false,
         new_tables: context.source.new_tables,
+        checks,
         files: None,
         destination_path: context.target.path.as_ref().map(|target_path| {
             overrides
