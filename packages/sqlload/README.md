@@ -231,6 +231,14 @@ sslrootcert = "certs/db-ca.pem"        # CA certificates (PEM) to trust
   built into SQLLoad, not the operating system's store or `~/.postgresql/root.crt`. Hosts whose
   certificates come from a private CA, such as Amazon RDS and Aurora or a company CA, need
   `sslrootcert` (for RDS, the region's bundle from AWS).
+- Certificate checks follow the web's rules, which are stricter than libpq's in two ways.
+  `verify-full` matches the host only against the certificate's subject alternative names,
+  never its common name. A self-signed server certificate marked as a CA (as
+  `openssl req -x509` makes by default) cannot be its own `sslrootcert`: sign the server
+  certificate with a separate CA and give that CA instead.
+- As in libpq, `prefer` connects in plain text when the server refuses TLS or the TLS handshake
+  fails, SCRAM authentication over TLS binds to the server's certificate (so a man in the middle
+  fails even when the certificate is not checked), and a Unix socket host never uses TLS.
 - Paths are relative to the directory SQLLoad runs in. A copy URI takes the same settings as a
   query: `postgresql://loader@db.example.com/app?sslmode=verify-full&sslrootcert=certs%2Fdb-ca.pem#public.accounts`.
 - `sqlload debug` shows what protects each Postgres source: `not encrypted`,

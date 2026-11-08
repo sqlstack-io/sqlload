@@ -14,11 +14,14 @@ use tokio_postgres::tls::{ChannelBinding, MakeTlsConnect, TlsConnect, TlsStream}
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream as RustlsStream;
 
-/// Makes the handshake for each host; `encrypted` turns true once one completes.
+use crate::postgres_source::_helpers::tls::server_end_point;
+
+/// Makes the handshake for each host: `encrypted` tells whether the last one completed, `refused` whether it failed.
 #[derive(Clone)]
 pub(crate) struct RustlsConnect {
     pub(crate) config: Arc<ClientConfig>,
     pub(crate) encrypted: Arc<AtomicBool>,
+    pub(crate) refused: Arc<AtomicBool>,
 }
 
 impl<S> MakeTlsConnect<S> for RustlsConnect
@@ -31,6 +34,8 @@ where
 
     /// Called for every host before asking for TLS, a Unix socket with an empty `domain` included: a name that cannot be checked fails the handshake, should the server agree to one, not the connection.
     fn make_tls_connect(&mut self, domain: &str) -> Result<Handshake, io::Error> {
+        self.encrypted.store(false, Ordering::Relaxed);
+        self.refused.store(false, Ordering::Relaxed);
         Ok(Handshake {
             connect: self.clone(),
             name: ServerName::try_from(domain.to_owned()),
@@ -54,12 +59,17 @@ where
 
     fn connect(self, stream: S) -> Self::Future {
         let connector = TlsConnector::from(self.connect.config);
-        let encrypted = self.connect.encrypted;
+        let RustlsConnect {
+            encrypted, refused, ..
+        } = self.connect;
         Box::pin(async move {
             let name = self
                 .name
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-            let session = connector.connect(name, stream).await?;
+            let session = connector
+                .connect(name, stream)
+                .await
+                .inspect_err(|_| refused.store(true, Ordering::Relaxed))?;
             encrypted.store(true, Ordering::Relaxed);
             Ok(Encrypted(session))
         })
@@ -70,9 +80,15 @@ where
 pub(crate) struct Encrypted<S>(RustlsStream<S>);
 
 impl<S: AsyncRead + AsyncWrite + Unpin> TlsStream for Encrypted<S> {
-    /// None: SCRAM authenticates without binding to the TLS session (libpq's `channel_binding = prefer` does the same when it is not offered).
+    /// `tls-server-end-point`, so SCRAM authentication fails through a man in the middle even when the certificate is not checked, as libpq's default `channel_binding = prefer` does; none when the certificate's hash is not one Postgres binds to.
     fn channel_binding(&self) -> ChannelBinding {
-        ChannelBinding::none()
+        self.0
+            .get_ref()
+            .1
+            .peer_certificates()
+            .and_then(<[_]>::first)
+            .and_then(|certificate| server_end_point(certificate))
+            .map_or_else(ChannelBinding::none, ChannelBinding::tls_server_end_point)
     }
 }
 

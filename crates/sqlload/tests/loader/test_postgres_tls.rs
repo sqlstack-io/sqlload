@@ -12,12 +12,13 @@ use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_tls::start_postgres_tls;
 
 use crate::helpers::{
-    CDC_CHANGES, cdc_project, described_project, duckdb_text, run_async, run_sqlload, tls_project,
+    CDC_CHANGES, bridge_address, cdc_project, described_project, duckdb_text, run_async,
+    run_sqlload, tls_project,
 };
 use crate::test_postgres_cdc::{MERGED_QUERY, MERGED_RESULT, SETUP};
 use crate::test_types::{
-    CdcTlsTestCase, PlanWarningTestCase, RelaySessionTestCase, RelayTestCase, TlsDebugTestCase,
-    TlsServer,
+    CdcTlsTestCase, PlanAddress, PlanWarningTestCase, RelaySessionTestCase, RelayTestCase,
+    TlsDebugTestCase, TlsServer,
 };
 
 /// Where a case's settings name the test certificates.
@@ -238,34 +239,39 @@ fn given_prefer_when_a_plain_server_is_planned_then_only_a_network_fallback_warn
     let test_cases = [
         PlanWarningTestCase {
             description: "prefer over the network warns",
-            network: true,
+            address: PlanAddress::Network,
             settings: "",
             expected_warning: true,
         },
         PlanWarningTestCase {
             description: "an explicit disable does not",
-            network: true,
+            address: PlanAddress::Network,
             settings: "sslmode = \"disable\"",
             expected_warning: false,
         },
         PlanWarningTestCase {
             description: "prefer to a loopback address does not",
-            network: false,
+            address: PlanAddress::Loopback,
+            settings: "",
+            expected_warning: false,
+        },
+        PlanWarningTestCase {
+            description: "prefer over the network to a server that takes TLS does not",
+            address: PlanAddress::TlsNetwork,
             settings: "",
             expected_warning: false,
         },
     ];
     run_async(async {
         let plain = start_postgres().await?;
-        let bridge = plain
-            .container
-            .get_bridge_ip_address()
-            .await
-            .map_err(|error| error.to_string())?
-            .to_string();
-        let addresses = [(plain.host.clone(), plain.port), (bridge, 5432)];
+        let tls = start_postgres_tls().await?;
+        let addresses = [
+            (plain.host.clone(), plain.port),
+            (bridge_address(&plain).await?, 5432),
+            (bridge_address(&tls.postgres).await?, 5432),
+        ];
         for test_case in test_cases {
-            let (host, port) = &addresses[usize::from(test_case.network)];
+            let (host, port) = &addresses[test_case.address as usize];
             let text = tls_project((host, *port, USER), test_case.settings);
             let project = described_project(&text).await?;
             let destinations = connect_targets(&project)

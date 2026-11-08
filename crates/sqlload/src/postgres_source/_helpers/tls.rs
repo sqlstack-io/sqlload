@@ -12,6 +12,11 @@ use rustls::{
     CertificateError, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
 };
 
+use sha2::{Digest, Sha256, Sha384, Sha512};
+
+use crate::postgres_source::constants::{
+    DER_LENGTH_BYTES, DER_LONG_FORM, SHA256_SIGNATURES, SHA384_SIGNATURES, SHA512_SIGNATURES,
+};
 use crate::postgres_source::models::{Encryption, PostgresTls, SslMode};
 
 /// What a TLS session under `tls` checks of the server's certificate; as in libpq, `require` checks the chain when a root certificate is set.
@@ -186,4 +191,39 @@ impl ServerCertVerifier for AnyHost {
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.0.supported_verify_schemes()
     }
+}
+
+/// RFC 5929's `tls-server-end-point` for a server certificate (DER): its hash under its signature's digest, SHA-256 for MD5 and SHA-1; `None` for a signature whose digest Postgres would not bind to by this rule (RSA-PSS, Ed25519, anything unknown), so authentication proceeds unbound rather than failing.
+pub(crate) fn server_end_point(certificate: &[u8]) -> Option<Vec<u8>> {
+    let (body, _) = der_element(certificate)?;
+    let (_, after_tbs) = der_element(body)?;
+    let (algorithm, _) = der_element(after_tbs)?;
+    let (oid, _) = der_element(algorithm)?;
+    if SHA256_SIGNATURES.contains(&oid) {
+        return Some(Sha256::digest(certificate).to_vec());
+    }
+    if SHA384_SIGNATURES.contains(&oid) {
+        return Some(Sha384::digest(certificate).to_vec());
+    }
+    SHA512_SIGNATURES
+        .contains(&oid)
+        .then(|| Sha512::digest(certificate).to_vec())
+}
+
+/// The contents of the DER element at the start of `der` (a one-byte tag), and what follows it.
+fn der_element(der: &[u8]) -> Option<(&[u8], &[u8])> {
+    let (_, rest) = der.split_first()?;
+    let (&first, rest) = rest.split_first()?;
+    let (length, rest) = match first {
+        short if short < DER_LONG_FORM => (usize::from(short), rest),
+        long => {
+            let count = usize::from(long & !DER_LONG_FORM);
+            let bytes = rest.get(..count).filter(|_| count <= DER_LENGTH_BYTES)?;
+            let length = bytes
+                .iter()
+                .fold(0usize, |length, byte| (length << 8) | usize::from(*byte));
+            (length, &rest[count..])
+        }
+    };
+    (rest.len() >= length).then(|| rest.split_at(length))
 }

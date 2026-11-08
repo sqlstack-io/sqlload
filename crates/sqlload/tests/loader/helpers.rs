@@ -1801,3 +1801,15 @@ pub(crate) fn tls_project((host, port, user): (&str, u16, &str), settings: &str)
         "[connections.pg]\nkind = \"postgres\"\nhost = \"{host}\"\nport = {port}\nuser = \"{user}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n{settings}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.*\"]\n"
     )
 }
+
+/// `postgres`'s address on the container network, a host that is not loopback.
+pub(crate) async fn bridge_address(
+    postgres: &sqlload_testkit::postgres::models::Postgres,
+) -> Result<String, String> {
+    postgres
+        .container
+        .get_bridge_ip_address()
+        .await
+        .map(|ip| ip.to_string())
+        .map_err(|error| error.to_string())
+}

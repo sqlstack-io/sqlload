@@ -12,7 +12,7 @@ use crate::postgres_source::constants::{RELAY_ACCEPT_TIMEOUT, SSL_REQUEST};
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::{PostgresAddress, SslMode};
 
-/// When `address` may use TLS: a private socket folder whose `.s.PGSQL.<port>` socket carries the next session opened on it to the server, encrypted, or in plain text when the server refuses TLS under `prefer` (one connection either way, so the server logs no abandoned one). `None` to connect directly: `sslmode = "disable"` or a Unix socket host.
+/// When `address` may use TLS: a private socket folder whose `.s.PGSQL.<port>` socket carries the next session opened on it to the server, encrypted, or in plain text when the server refuses TLS under `prefer` (one connection either way, so the server logs no abandoned one). `None` to connect directly: `sslmode = "disable"`, a Unix socket host, or a failed handshake under `prefer`, which libpq also retries in plain text.
 pub async fn relay_tls(address: &PostgresAddress<'_>) -> Result<Option<String>, PostgresError> {
     if address.tls.mode == SslMode::Disable || address.host.starts_with('/') {
         return Ok(None);
@@ -45,10 +45,11 @@ pub async fn relay_tls(address: &PostgresAddress<'_>) -> Result<Option<String>, 
     }
     let name = rustls::pki_types::ServerName::try_from(address.host.to_owned())
         .map_err(|error| failed(error.to_string()))?;
-    let session = TlsConnector::from(config)
-        .connect(name, server)
-        .await
-        .map_err(|error| failed(format!("TLS handshake failed: {error}")))?;
+    let session = match TlsConnector::from(config).connect(name, server).await {
+        Ok(session) => session,
+        Err(_) if address.tls.mode == SslMode::Prefer => return Ok(None),
+        Err(error) => return Err(failed(format!("TLS handshake failed: {error}"))),
+    };
     Ok(Some(relay(session, address.port).map_err(failed)?))
 }
 

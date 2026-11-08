@@ -647,10 +647,20 @@ pub(crate) struct TlsDebugTestCase {
     pub(crate) expected_text: &'static str,
 }
 
+/// Where a plan-warning case reaches its server; its index in the case's list of addresses.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PlanAddress {
+    /// The plain server on a loopback address.
+    Loopback = 0,
+    /// The plain server on its network address.
+    Network = 1,
+    /// The TLS-only server on its network address.
+    TlsNetwork = 2,
+}
+
 pub(crate) struct PlanWarningTestCase {
     pub(crate) description: &'static str,
-    /// The server's network address rather than a loopback one.
-    pub(crate) network: bool,
+    pub(crate) address: PlanAddress,
     pub(crate) settings: &'static str,
     pub(crate) expected_warning: bool,
 }
