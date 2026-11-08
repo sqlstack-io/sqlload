@@ -356,13 +356,14 @@ pub(crate) fn resnapshot_warning(spec: &TableSpec, options: &PlanOptions) -> Opt
     })
 }
 
-/// Array and `json` columns of a captured table read as JSON: the stream sends them as Postgres text (`{a,b}` for an array, the original spacing and duplicate keys for `json`), which would not load as JSON or would differ from the snapshot's jsonb rows, so they must be pinned to text (`jsonb` streams as the snapshot reads it).
+/// Array and `json` columns of a captured table read as JSON or as `array(T)`: the stream sends them as Postgres text (`{a,b}` for an array, the original spacing and duplicate keys for `json`), which would not load as JSON or would differ from the snapshot's jsonb rows, so they must be pinned to text (`jsonb` streams as the snapshot reads it).
 fn streamed_array_problems(table: &SourceTable, read: &[ReadColumn]) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     for column in &table.columns {
-        let as_json = read
-            .iter()
-            .any(|read| read.name == column.name && read.output == ColumnType::Json);
+        let as_json = read.iter().any(|read| {
+            read.name == column.name
+                && matches!(read.output, ColumnType::Json | ColumnType::Array(_))
+        });
         let streamed_as_text = column.pg_type == PgType::Array
             || (column.pg_type == PgType::Json && column.postgres_type == PLAIN_JSON_TYPE);
         if streamed_as_text && as_json {

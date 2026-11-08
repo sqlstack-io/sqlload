@@ -330,6 +330,17 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             ),
         },
         ReadTextFilesTestCase {
+            description: "a single value pinned as an array fails rather than loading as a one-element array",
+            encoding: encoding(SourceFormat::Ndjson),
+            files: &[("a.ndjson", "{\"n\":5}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &int_pins,
+            expected_rows: Err(
+                "a.ndjson: n: cannot convert to List(Int64): row 1: 5 is not a JSON array",
+            ),
+        },
+        ReadTextFilesTestCase {
             description: "a CSV field holding a JSON array loads as an array",
             encoding: encoding(SourceFormat::Csv),
             files: &[("a.csv", "id,tags\n1,\"[\"\"a\"\",\"\"b\"\"]\"\n")],

@@ -65,7 +65,7 @@ fn captured_values(
             let raw = unescape_partition_value(group.map_or("", |group| group.as_str()));
             let value = normalised(&raw, column_type).map_err(|reason| {
                 format!(
-                    "{relative_key}: path column {name} is {raw:?}, which is not a {column_type}: {reason}"
+                    "{relative_key}: path column {name} is {raw:?}, which does not convert to {column_type}: {reason}"
                 )
             })?;
             Ok((name.clone(), value))

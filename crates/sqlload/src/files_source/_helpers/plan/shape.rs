@@ -106,6 +106,24 @@ fn shape_column(
             ),
         });
     }
+    if is_list(field)
+        && !matches!(
+            source.data_type(),
+            DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(..)
+                | DataType::Null
+        )
+    {
+        return Err(ShapeError {
+            row: None,
+            reason: format!(
+                "{}: is {} in the files, which is neither a list nor JSON text, so it does not load as an array",
+                field.name(),
+                source.data_type()
+            ),
+        });
+    }
     let strict = CastOptions {
         safe: false,
         ..CastOptions::default()

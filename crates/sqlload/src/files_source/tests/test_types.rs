@@ -179,3 +179,12 @@ pub(crate) struct NestedParquetTestCase {
     /// Each row's value, `|`-separated (`NULL` for NULL).
     pub(crate) expected_values: &'static str,
 }
+
+pub(crate) struct FooterColumnsTestCase {
+    /// What the case checks.
+    pub(crate) description: &'static str,
+    /// The Arrow type of the file's one column.
+    pub(crate) written: arrow_schema::DataType,
+    /// The portable type the footer reads back as.
+    pub(crate) expected_type: &'static str,
+}

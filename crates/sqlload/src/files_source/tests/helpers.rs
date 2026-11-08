@@ -482,3 +482,30 @@ pub(crate) fn timestamp(
 ) -> arrow_schema::DataType {
     arrow_schema::DataType::Timestamp(unit, zone.map(std::sync::Arc::from))
 }
+
+/// The portable type `footer_columns` reads for the one column of a Parquet file written with a column of `written`.
+pub(crate) fn footer_column_type(written: &DataType) -> Result<String, String> {
+    let column = arrow_array::new_null_array(written, 1);
+    let batch =
+        RecordBatch::try_from_iter([("values", column)]).map_err(|error| error.to_string())?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    let read = ArrowReaderMetadata::load(&Bytes::from(buffer), ArrowReaderOptions::new())
+        .map_err(|error| error.to_string())?;
+    let footer = crate::files_source::models::Footer {
+        relative_key: "part.parquet".to_owned(),
+        schema: read.schema().clone(),
+        metadata: read.metadata().clone(),
+    };
+    let (columns, _) =
+        crate::files_source::main::footer_columns::footer_columns(std::slice::from_ref(&footer));
+    let column = columns.first().ok_or("no column read")?;
+    column
+        .column_type
+        .as_ref()
+        .map(ToString::to_string)
+        .map_err(Clone::clone)
+}

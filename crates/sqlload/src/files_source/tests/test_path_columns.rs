@@ -100,7 +100,7 @@ fn given_a_path_template_when_listing_keys_then_captures_become_typed_values() -
             unmatched: UnmatchedPaths::Skip,
             key: "2026-13-45/a.parquet",
             expected_values: Some("source=lake"),
-            expected_problem: "2026-13-45/a.parquet: path column day is \"2026-13-45\", which is not a date",
+            expected_problem: "2026-13-45/a.parquet: path column day is \"2026-13-45\", which does not convert to date",
         },
         PathColumnsTestCase {
             description: "a sign is not part of an integer capture",

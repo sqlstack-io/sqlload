@@ -251,8 +251,35 @@ impl SnowflakeWriter {
     }
 }
 
+/// An error naming the first row of float list column `name` that holds NaN or an infinity, which a Snowflake array of JSON values cannot keep.
+fn refuse_non_finite(name: &str, column: &arrow_array::ArrayRef) -> Result<(), String> {
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+    let lists = column.as_list::<i32>();
+    let offsets = lists.offsets();
+    let first = usize::try_from(offsets[0]).map_err(|error| error.to_string())?;
+    let last = usize::try_from(offsets[offsets.len() - 1]).map_err(|error| error.to_string())?;
+    let values = arrow_cast::cast(
+        &lists.values().slice(first, last - first),
+        &arrow_schema::DataType::Float64,
+    )
+    .map_err(|error| error.to_string())?;
+    let Some(position) = values
+        .as_primitive::<arrow_array::types::Float64Type>()
+        .iter()
+        .position(|value| matches!(value, Some(value) if !value.is_finite()))
+    else {
+        return Ok(());
+    };
+    let found = i32::try_from(first + position).map_err(|error| error.to_string())?;
+    let row = offsets.partition_point(|offset| *offset <= found);
+    Err(format!(
+        "column {name}, row {row}: an array holds NaN or an infinity, which a Snowflake array holds as JSON and cannot keep; pin array(text) to keep such values as text"
+    ))
+}
+
 /// `batch` with each list column as its JSON text, the way Snowflake reads an array exactly (its own reading of a Parquet list cuts timestamps to milliseconds and decimals to their digits).
-fn lists_as_json(batch: RecordBatch) -> Result<RecordBatch, String> {
+pub(crate) fn lists_as_json(batch: RecordBatch) -> Result<RecordBatch, String> {
     let schema = batch.schema();
     if !schema
         .fields()
@@ -265,7 +292,10 @@ fn lists_as_json(batch: RecordBatch) -> Result<RecordBatch, String> {
     let mut columns: Vec<arrow_array::ArrayRef> = Vec::with_capacity(schema.fields().len());
     for (field, column) in schema.fields().iter().zip(batch.columns()) {
         match field.data_type() {
-            arrow_schema::DataType::List(_) => {
+            arrow_schema::DataType::List(item) => {
+                if item.data_type().is_floating() {
+                    refuse_non_finite(field.name(), column)?;
+                }
                 let one = RecordBatch::try_from_iter([(field.name().as_str(), column.clone())])
                     .map_err(|error| error.to_string())?;
                 let text = normalise_batch(&one)?;
