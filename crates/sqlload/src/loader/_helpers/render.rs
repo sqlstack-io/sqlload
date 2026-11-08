@@ -196,11 +196,18 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .unwrap_or(0)
         + 3;
     let from_path = |name: &str| {
-        table.spec.files.as_ref().is_some_and(|files| {
-            files
-                .partition_types
-                .iter()
-                .any(|(partition, _)| partition == name)
+        table.spec.files.as_ref().map_or("", |files| {
+            match (
+                files.constants.iter().any(|constant| constant == name),
+                files
+                    .partition_types
+                    .iter()
+                    .any(|(partition, _)| partition == name),
+            ) {
+                (true, _) => "  (constant)",
+                (false, true) => "  (from the path)",
+                (false, false) => "",
+            }
         })
     };
     let mut details: Vec<PlanDetail> = data
@@ -211,8 +218,8 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
                 column.column_type == ColumnType::Uuid,
                 from_path(&column.name),
             ) {
-                (_, true) => "  (from the path)",
-                (true, false) if rendered.sql.starts_with("VARCHAR") => "  (stored as text)",
+                (_, path) if !path.is_empty() => path,
+                (true, _) if rendered.sql.starts_with("VARCHAR") => "  (stored as text)",
                 _ => "",
             };
             detail(
@@ -319,6 +326,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                         source.encoding
                     ),
                 };
+                let unmatched = match source.table.unmatched {
+                    0 => String::new(),
+                    count => format!(", {count} skipped (paths that do not match path_columns)"),
+                };
                 let fresh = match table.mode {
                     WriteMode::Recreate | WriteMode::Replace => "to read",
                     _ => "new",
@@ -326,7 +337,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 detail(
                     "files",
                     format!(
-                        "{} {fresh} of {} listed{skipped}",
+                        "{} {fresh} of {} listed{skipped}{unmatched}",
                         thousands(read.files.len() as u64),
                         thousands(source.table.files.len() as u64)
                     ),

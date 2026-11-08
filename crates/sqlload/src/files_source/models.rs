@@ -13,8 +13,59 @@ use crate::schema_plan::models::DesiredColumn;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataFile {
     pub file: StoredFile,
-    /// Values of the source's declared partition columns, from the file's `key=value` folders.
+    /// Values of the source's declared partition columns: from the file's `key=value` folders, captured by `path_columns`, and `constant_columns`.
     pub partitions: Vec<(String, String)>,
+}
+
+/// The columns a files source fills from each file's path or its configuration rather than from the files.
+#[derive(Debug, Clone, Default)]
+pub struct PathValues {
+    /// `partition_columns`: Hive `key=value` folders.
+    pub partition_columns: Vec<String>,
+    /// `path_columns`: values captured from the key below the source's path.
+    pub template: Option<PathTemplate>,
+    /// What a file whose key does not match `template` does.
+    pub unmatched: UnmatchedPaths,
+    /// `constant_columns`: the same value, as text, for every file.
+    pub constants: Vec<(String, String)>,
+}
+
+impl PathValues {
+    /// Every column these values fill, in table order: Hive folders, captures, then constants.
+    pub fn names(&self) -> Vec<&str> {
+        self.partition_columns
+            .iter()
+            .map(String::as_str)
+            .chain(
+                self.template
+                    .iter()
+                    .flat_map(|template| template.captures.iter())
+                    .map(|(name, _)| name.as_str()),
+            )
+            .chain(self.constants.iter().map(|(name, _)| name.as_str()))
+            .collect()
+    }
+}
+
+/// A `path_columns` template, compiled: one regex group per capture, in order.
+#[derive(Debug, Clone)]
+pub struct PathTemplate {
+    /// The template as written.
+    pub text: String,
+    pub pattern: regex::Regex,
+    /// Each capture's column and type, in the order of the regex's groups.
+    pub captures: Vec<(String, ColumnType)>,
+}
+
+/// What a file whose key does not match `path_columns` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnmatchedPaths {
+    /// `plan` fails, naming the file.
+    #[default]
+    Fail,
+    /// The file is not loaded; `plan` counts it.
+    Skip,
 }
 
 /// One column in the files, and the portable type it maps to (or why it has none).
@@ -50,6 +101,8 @@ pub struct FilesTable {
     pub problems: Vec<String>,
     /// Listed files skipped because their names do not fit the format and compression.
     pub skipped: usize,
+    /// Listed files skipped because their keys do not match `path_columns` (with `unmatched_paths = "skip"`).
+    pub unmatched: usize,
     /// The loader's own columns found in the files (as they spell them), dropped for this load's.
     pub dropped: Vec<String>,
 }
@@ -206,6 +259,17 @@ impl std::fmt::Display for FilesEncoding {
             (format, Compression::Zstd) => write!(formatter, "{format}, zstd"),
         }
     }
+}
+
+/// The files a source reads, and what listing left out or found wrong.
+#[derive(Debug)]
+pub(crate) struct ListedFiles {
+    pub(crate) files: Vec<(DataFile, Codec)>,
+    /// Files whose names do not fit the format and compression.
+    pub(crate) skipped: usize,
+    /// Files whose keys do not match `path_columns`, skipped.
+    pub(crate) unmatched: usize,
+    pub(crate) problems: Vec<String>,
 }
 
 /// One file of a read, and what its batches are shaped into.

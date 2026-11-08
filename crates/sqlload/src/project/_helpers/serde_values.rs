@@ -62,3 +62,34 @@ pub(crate) fn deserialize_optional_keys<'de, D: Deserializer<'de>>(
         }),
     )
 }
+
+/// Each source's `constant_columns` dates and times as `{ value, type }`: deserializing turns a TOML date or time into a plain string, which would load as text.
+pub(crate) fn typed_constants(mut value: toml::Value) -> toml::Value {
+    let Some(toml::Value::Table(sources)) = value.get_mut("sources") else {
+        return value;
+    };
+    for (_, source) in sources.iter_mut() {
+        let Some(toml::Value::Table(constants)) = source.get_mut("constant_columns") else {
+            continue;
+        };
+        for (_, constant) in constants.iter_mut() {
+            let toml::Value::Datetime(datetime) = constant else {
+                continue;
+            };
+            let written = match (datetime.date, datetime.time, datetime.offset) {
+                (Some(_), None, _) => "date",
+                (Some(_), Some(_), Some(_)) => "timestamp_tz",
+                (Some(_), Some(_), None) => "timestamp_ntz",
+                (None, _, _) => "time",
+            };
+            *constant = toml::Value::Table(toml::Table::from_iter([
+                (
+                    "value".to_owned(),
+                    toml::Value::String(datetime.to_string()),
+                ),
+                ("type".to_owned(), toml::Value::String(written.to_owned())),
+            ]));
+        }
+    }
+    value
+}

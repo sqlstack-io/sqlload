@@ -136,6 +136,9 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `compression` | files | `auto` (default), `none`, `gzip` or `zstd`. |
 | `csv` | files | `{ delimiter, header, quote, null_values }`; defaults `","`, `true`, `'"'`, `[""]`. |
 | `partition_columns` | files | Hive `key=value` folders as typed columns, such as `{ dt = "date" }`. |
+| `path_columns` | files | A path template whose captures load as typed columns, such as `"{region}/{day:date}/*"`. See [Columns from paths](/docs/sources/files/#columns-from-paths). |
+| `unmatched_paths` | files | `fail` (default) or `skip`: what a file whose path doesn't match `path_columns` does. |
+| `constant_columns` | files | The same value in every row, such as `{ region = "eu" }`, typed by its TOML value or `{ value, type }`. |
 | `copy_to_internal_stage` | files into Snowflake | Upload files no external stage covers to `@~`. Much slower. |
 | `[sources.NAME.tables."schema.table"]` | all | Per-table settings. A files source's table is named after the source. |
 

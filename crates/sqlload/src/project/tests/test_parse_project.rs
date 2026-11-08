@@ -312,7 +312,27 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "copy_to_internal_stage is for files sources, never silently ignored",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ncopy_to_internal_stage = true\n",
-            expected_message: "[sources.app] path, partition_columns and copy_to_internal_stage are for kind = \"files\"",
+            expected_message: "[sources.app] path, partition_columns, path_columns, unmatched_paths, constant_columns and copy_to_internal_stage are for kind = \"files\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a column filled by both a Hive folder and a constant has no single value",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\npartition_columns = { day = \"date\" }\nconstant_columns = { day = 2026-11-08 }\n",
+            expected_message: "[sources.events] column day is in both partition_columns and constant_columns",
+        },
+        ParseProjectErrorTestCase {
+            description: "names differing only in case clash: destinations fold them together",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\npath_columns = \"{Region}/*\"\nconstant_columns = { region = \"eu\" }\n",
+            expected_message: "[sources.events] column region is in both path_columns and constant_columns",
+        },
+        ParseProjectErrorTestCase {
+            description: "a malformed path template fails parsing, before any file is listed",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\npath_columns = \"{region/*\"\n",
+            expected_message: "[sources.events] path_columns \"{region/*\": { in \"{region\" is never closed",
+        },
+        ParseProjectErrorTestCase {
+            description: "unmatched_paths without path_columns is never silently ignored",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\nunmatched_paths = \"skip\"\n",
+            expected_message: "[sources.events] unmatched_paths is for path_columns, which is not set",
         },
         ParseProjectErrorTestCase {
             description: "a target cannot load into a source database",
