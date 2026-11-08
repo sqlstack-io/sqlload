@@ -198,6 +198,10 @@ impl SqlAdapter for SnowflakeSql {
         }
     }
 
+    fn render_binary_text(&self, expression: &str) -> String {
+        format!("COLLATE({expression}, 'utf8')")
+    }
+
     fn render_staging_filter(&self, suffix: &str) -> String {
         format!(
             "CONTAINS(table_name, {}) AND last_altered < DATEADD(hour, -{STALE_STAGING_HOURS}, CURRENT_TIMESTAMP())",
