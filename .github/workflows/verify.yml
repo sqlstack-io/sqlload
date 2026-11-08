@@ -219,7 +219,8 @@ jobs:
             echo "The merge base has no benchmarks." >&2
             : > perf-base.jsonl
           fi
-          git checkout --quiet --detach "${head}"
+          # Building the base can rewrite its Cargo.lock; discard that so the head checks out.
+          git checkout --quiet --force --detach "${head}"
       - name: Benchmark the head
         run: make bench-perf > perf-head.jsonl
       - name: Compare
