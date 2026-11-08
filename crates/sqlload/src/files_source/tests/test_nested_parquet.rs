@@ -29,6 +29,18 @@ fn given_parquet_lists_structs_and_maps_when_reading_then_each_loads_as_json() -
             expected_type: "json",
             expected_values: "[[1,2],[3]]|[]|[null]",
         },
+        NestedParquetTestCase {
+            description: "a field of Arrow's NULL type is null, not empty text",
+            column: "opt",
+            expected_type: "json",
+            expected_values: "{\"a\":null,\"b\":1}|{\"a\":null,\"b\":2}|{\"a\":null,\"b\":3}",
+        },
+        NestedParquetTestCase {
+            description: "dictionary-encoded values inside a list keep their type",
+            column: "codes",
+            expected_type: "json",
+            expected_values: "[5,7]|[5]|[]",
+        },
     ];
     for test_case in test_cases {
         assert_eq!(
