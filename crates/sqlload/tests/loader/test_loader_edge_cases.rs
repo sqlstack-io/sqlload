@@ -37,6 +37,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                 ScenarioRun {
                     source_change: "DELETE FROM public.prices WHERE id = 3;",
                     destination_change: "",
+                    expected_plan: "updated_at from 2026-11-01 00:00:00.000000+00 (destination maximum)",
                     ..OK
                 },
             ],
