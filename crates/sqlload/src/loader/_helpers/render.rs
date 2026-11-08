@@ -309,6 +309,17 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             };
             format!("{read}  {}  {what}", spec.source_name)
         }
+        (None, None) if spec.sheet.is_some() => {
+            let range = spec
+                .sheet
+                .as_ref()
+                .and_then(|sheet| sheet.range.clone())
+                .unwrap_or_else(|| format!("tab {}", spec.source_table.name));
+            format!(
+                "google_sheets  {}  {range}  {} rows",
+                spec.source_name, spec.source_table.estimated_rows
+            )
+        }
         (None, None) => match &spec.cdc {
             Some(cdc) => format!(
                 "postgres_cdc  {}  {}  slot {}",

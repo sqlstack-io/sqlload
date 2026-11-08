@@ -6,6 +6,7 @@ use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
 use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
@@ -26,6 +27,7 @@ use crate::batch_plan::models::WindowSplit;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
+use crate::column_types::models::Warehouse;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::SourceFormat;
@@ -35,6 +37,7 @@ use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
+use crate::loader::_helpers::sources::with_live_types;
 use crate::loader::constants::CHECKS_LOADER_WARNING;
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
@@ -192,7 +195,9 @@ pub(crate) async fn plan_table(
         ));
     }
     let plan = plan_table_once(spec, destination, options).await?;
-    let mut plan = match with_live_columns(spec, plan.live.as_deref()) {
+    let augmented = with_live_columns(spec, plan.live.as_deref())
+        .or_else(|| with_live_types(spec, plan.live.as_deref()));
+    let mut plan = match augmented {
         Some(augmented) => plan_table_once(&augmented, destination, options).await?,
         None => plan,
     };
@@ -230,7 +235,9 @@ pub(crate) async fn replan_columns(
         }
         (None, _) => live_columns(destination, &spec.destination).await?,
     };
-    let spec = with_live_columns(spec, live.as_deref()).unwrap_or_else(|| spec.clone());
+    let spec = with_live_columns(spec, live.as_deref())
+        .or_else(|| with_live_types(spec, live.as_deref()))
+        .unwrap_or_else(|| spec.clone());
     let read = read_columns(&spec).map_err(|problems| LoaderError::Invalid(problems.join("; ")))?;
     let desired = desired_columns(&spec, &read);
     let schema = match files_destination(destination) {
@@ -277,6 +284,7 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
         (None, None) if spec.warehouse_source.is_some() => {
             unload_read_columns(&selected_columns(spec), &spec.pinned)
         }
+        (None, None) if spec.sheet.is_some() => files_read_columns(spec),
         (None, None) => {
             let selected = selected_columns(spec);
             let mut read = plan_read(&selected, &spec.pinned)?;
@@ -515,10 +523,7 @@ async fn plan_table_once(
         live.iter()
             .any(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
     });
-    let cursor_expression = read_columns
-        .iter()
-        .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
-        .map(|column| column.expression.as_str());
+    let cursor_expression = source_cursor(spec, &read_columns, cursor_type);
     let lacks_cursor =
         live.is_some() && cursor_name.is_some() && !cursor_in_table && !options.reload;
     let restart_duplicates = match spec.strategy {
@@ -543,7 +548,7 @@ async fn plan_table_once(
         destination,
         table_exists: cursor_in_table,
         cursor_type,
-        cursor_expression,
+        cursor_expression: cursor_expression.as_deref(),
         options,
     };
     let window = match schema.blocked {
@@ -905,6 +910,32 @@ fn write_mode(
     }
 }
 
+/// The source expression of `spec`'s cursor among `read_columns`, as its filter compares it: a text cursor bytewise, in code point order, in the source's own dialect (`render_binary_text`), as the destination's maximum is read, whatever collation the source column has; any other cursor, and a source no filter reaches, as it is. `None` when the cursor is not read.
+pub(crate) fn source_cursor(
+    spec: &TableSpec,
+    read_columns: &[ReadColumn],
+    cursor_type: Option<&ColumnType>,
+) -> Option<String> {
+    let name = spec.cursor.as_ref()?.column.as_str();
+    let expression = read_columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(name))?
+        .expression
+        .as_str();
+    let text = matches!(cursor_type, Some(ColumnType::Text | ColumnType::Varchar(_)));
+    let dialect = match (text, &spec.warehouse_source) {
+        (false, _) => None,
+        (true, Some(source)) => source_dialect(source.system),
+        (true, None) => {
+            (spec.python.is_none() && spec.files.is_none()).then_some(Warehouse::Postgres)
+        }
+    };
+    Some(dialect.map_or_else(
+        || expression.to_owned(),
+        |dialect| sql_adapter(dialect).render_binary_text(expression),
+    ))
+}
+
 /// `"column" >= 'from' AND "column" < 'to'` for Postgres, from the bounds that are set.
 pub(crate) fn source_filter(
     column: &str,
@@ -920,7 +951,7 @@ pub(crate) fn source_filter(
     (!bounds.is_empty()).then(|| bounds.join(" AND "))
 }
 
-/// Where the read starts, and why: a `--start-cursor`, the destination's maximum, `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
+/// Where the read starts, and why: a `--start-cursor`, the destination's maximum (read after it by `append` from a database or Python source, unless `append_cursor_inclusive`; a files source reads from it, skipping files already loaded), `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
 async fn lower_bound(
     request: &WindowRequest<'_>,
     cursor: &CursorSpec,
@@ -1004,8 +1035,15 @@ async fn lower_bound(
     };
     Ok(Ok(match (maximum, &cursor_start) {
         (Some(maximum), _) => {
+            let bound = match request.spec.strategy == WriteStrategy::Append
+                && !cursor.inclusive
+                && request.spec.files.is_none()
+            {
+                true => "after",
+                false => "from",
+            };
             let note = format!(
-                "{} from {maximum} (destination maximum{lookback})",
+                "{} {bound} {maximum} (destination maximum{lookback})",
                 cursor.column
             );
             (Some(maximum), note, data_maximum)
