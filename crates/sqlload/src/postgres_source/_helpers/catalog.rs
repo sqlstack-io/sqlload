@@ -82,5 +82,6 @@ fn column_from_row(row: &Row) -> SourceColumn {
         pg_type,
         column_type: natural_type(pg_type, details),
         nullable: row.get(9),
+        source_spelling: None,
     }
 }

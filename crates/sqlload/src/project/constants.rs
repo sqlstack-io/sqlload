@@ -5,6 +5,8 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "cursor_column",
     "cursor_start",
     "lookback",
+    "lookahead",
+    "lookback_from",
     "append_cursor_inclusive",
     "contract",
     "on_schema_change",
@@ -43,6 +45,8 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "cdc_mode",
     "deletes",
     "batch_interval",
+    "warehouse",
+    "stage",
 ];
 
 /// Keys a Python source may set (`kind` is added by discovery), besides the table settings.
@@ -70,6 +74,7 @@ pub const TABLE_ONLY_KEYS: &[&str] = &[
     "description",
     "name",
     "destination_path",
+    "sql",
     "columns",
     "mask",
     "exclude_columns",
