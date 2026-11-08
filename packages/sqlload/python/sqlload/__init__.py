@@ -29,7 +29,22 @@ import sysconfig
 from importlib.metadata import version
 
 from sqlload._data import checkpoint, json, ndjson
-from sqlload._http import Http, Job, api_key, basic, bearer, cursor, http, link_header, next_link, offset, page_number, single
+from sqlload._http import (
+	Http,
+	Job,
+	api_key,
+	basic,
+	bearer,
+	cursor,
+	http,
+	link_header,
+	next_link,
+	oauth2_client_credentials,
+	oauth2_refresh_token,
+	offset,
+	page_number,
+	single,
+)
 from sqlload._declare import Context, Source, Table, source, table
 
 __version__: str = version("sqlload")
@@ -52,6 +67,8 @@ __all__ = [
 	"link_header",
 	"ndjson",
 	"next_link",
+	"oauth2_client_credentials",
+	"oauth2_refresh_token",
 	"offset",
 	"page_number",
 	"single",
