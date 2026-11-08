@@ -81,20 +81,6 @@ pub(crate) struct CachedTokens {
     pub(crate) refresh_expires_at: Option<u64>,
 }
 
-/// How a sign-in reaches the person: whether a terminal is there to sign in from, how the browser is opened (false when it cannot be), and how a pasted line is read.
-pub struct SignInIo {
-    pub terminal: Box<dyn Fn() -> bool + Send + Sync>,
-    pub open_browser: Box<dyn Fn(&str) -> bool + Send + Sync>,
-    pub read_line: Box<dyn Fn() -> std::io::Result<String> + Send + Sync>,
-}
-
-/// Why a token request failed: the server refused the grant (a revoked or expired refresh token), or the request itself failed.
-#[derive(Debug)]
-pub(crate) enum TokenError {
-    Refused(String),
-    Failed(ApiError),
-}
-
 #[derive(Debug)]
 enum Method {
     Pat(Secret),

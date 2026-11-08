@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::collections::BTreeMap;
 
 use crate::adapters::dispatch::models::Destination;
+use crate::auth::main::forbid_sign_in::forbid_sign_in;
 use crate::command::_helpers::output::confirm_reload;
 use crate::command::_helpers::project_file::replace_file;
 use crate::command::_helpers::signals::wait_for_signal;
@@ -100,6 +101,9 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String
         }
         _ => false,
     };
+    if json {
+        forbid_sign_in();
+    }
     let project = match load_project_config(&request).await {
         Ok(project) => project,
         Err(error) => return config_failure(&request.command, error),

@@ -29,8 +29,41 @@ load_method = { type = "external_stage", url = "s3://example-bucket/sqlload/", s
 
 A method the role can't use fails at `plan`. SQLLoad never falls back to another one.
 
-`auth` is `{ method = "key_pair", private_key_file = "..." }` or
-`{ method = "pat", token = "${ENV:SNOWFLAKE_TOKEN}" }`.
+`auth` is `{ method = "key_pair", private_key_file = "..." }`,
+`{ method = "pat", token = "${ENV:SNOWFLAKE_TOKEN}" }`, or `{ method = "oauth_authorization_code" }`.
+See [Signing in](#signing-in).
+
+## Signing in
+
+| `method` | Use it for | Notes |
+|----------|------------|-------|
+| `key_pair` | Unattended runs: schedulers, CI, servers. | The only method Snowpipe `insertFiles` accepts. |
+| `pat` | Unattended runs. | A programmatic access token. |
+| `oauth_authorization_code` | A person running SQLLoad at a terminal. | From 0.27.0 (not released yet). Signs in in the browser. |
+
+From 0.27.0 (not released yet), `{ method = "oauth_authorization_code" }` signs you in through
+Snowflake's built-in `SNOWFLAKE$LOCAL_APPLICATION` integration, so nobody has to create a security
+integration. The first command that connects prints a sign-in address and opens it in your
+browser. You sign in there as the connection's `user`, with whatever your account asks for:
+password and MFA, or single sign-on. The browser then returns to SQLLoad on `127.0.0.1`. Where no
+browser can open, as over SSH, SQLLoad prints the address and waits for you to paste the address
+the browser ended on (a page on `127.0.0.1` that fails to load).
+
+SQLLoad asks for the connection's `role` and a refresh token, caches the tokens in
+`~/.cache/sqlload/snowflake-tokens.json` (under `XDG_CACHE_HOME` when set, readable only by you), and
+refreshes them before they expire. Later runs sign in again only once the refresh token has
+expired or been revoked. To sign out, delete that file. `sqlload debug` shows the method and the
+cache file. With no terminal, or with `--json`, a run that needs to sign in fails at once instead
+of waiting; sign in once from a terminal, or use `key_pair` or `pat`.
+
+Password and MFA are supported through this browser sign-in, not as a direct login: SQLLoad
+never sees your password. A security integration of your own can stand in for the built-in one:
+
+```toml
+auth = { method = "oauth_authorization_code", client_id = "...", client_secret = "${ENV:OAUTH_SECRET}", redirect_uri = "http://127.0.0.1:8765/" }
+```
+
+The redirect URI must be the one the integration registered, on `http://127.0.0.1`.
 
 ## External stage
 

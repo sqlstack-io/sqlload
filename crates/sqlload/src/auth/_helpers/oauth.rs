@@ -4,10 +4,11 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 
-use crate::auth::_helpers::sign_in::sign_in;
+use crate::auth::_helpers::sign_in::{SignInIo, sign_in};
 use crate::auth::_helpers::token_cache::{read_cached, write_cached};
 use crate::auth::constants::OAUTH_REFRESH_MARGIN_SECS;
-use crate::auth::models::{OauthClient, OauthTokens, Secret, SignInIo, TokenError};
+use crate::auth::errors::TokenError;
+use crate::auth::models::{OauthClient, OauthTokens, Secret};
 use crate::http::errors::ApiError;
 use crate::time_text::main::now_ms::now_ms;
 
@@ -138,7 +139,10 @@ pub(crate) async fn token_request(
         .text()
         .await
         .map_err(|error| TokenError::Failed(error.into()))?;
-    let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    let body: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(body) => body,
+        Err(_) => serde_json::Value::Null,
+    };
     if !status.is_success() {
         let reason = format!(
             "{} {}",

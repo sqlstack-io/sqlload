@@ -9,10 +9,19 @@ use tokio::net::TcpListener;
 
 use crate::auth::_helpers::oauth::{authorize_url, new_pkce, redirect_code, token_request};
 use crate::auth::constants::{
-    REDIRECT_REQUEST_LIMIT, SIGN_IN_FAILED_PAGE, SIGN_IN_TIMEOUT_SECS, SIGNED_IN_PAGE,
+    LOOPBACK_HOST, LOOPBACK_SCHEME, REDIRECT_REQUEST_LIMIT, SIGN_IN_FAILED_PAGE,
+    SIGN_IN_TIMEOUT_SECS, SIGNED_IN_PAGE,
 };
-use crate::auth::models::{OauthClient, OauthTokens, SignInIo, TokenError};
+use crate::auth::errors::TokenError;
+use crate::auth::models::{OauthClient, OauthTokens};
 use crate::http::errors::ApiError;
+
+/// How a sign-in reaches the person: whether a terminal is there to sign in from, how the browser is opened (false when it cannot be), and how a pasted line is read.
+pub(crate) struct SignInIo {
+    pub(crate) terminal: Box<dyn Fn() -> bool + Send + Sync>,
+    pub(crate) open_browser: Box<dyn Fn(&str) -> bool + Send + Sync>,
+    pub(crate) read_line: Box<dyn Fn() -> std::io::Result<String> + Send + Sync>,
+}
 
 /// Whether this run may ask a person to sign in; a command whose output a program reads (`--json`) turns it off.
 pub(crate) static SIGN_IN_ALLOWED: AtomicBool = AtomicBool::new(true);
@@ -96,7 +105,11 @@ async fn loopback(configured: Option<&str>) -> Result<(TcpListener, String), Api
     let (port, path) = match configured {
         Some(uri) => {
             let url = match reqwest::Url::parse(uri) {
-                Ok(url) if url.scheme() == "http" && url.host_str() == Some("127.0.0.1") => url,
+                Ok(url)
+                    if url.scheme() == LOOPBACK_SCHEME && url.host_str() == Some(LOOPBACK_HOST) =>
+                {
+                    url
+                }
                 _ => {
                     return Err(ApiError::Auth(format!(
                         "redirect_uri {uri:?} must be http://127.0.0.1[:port][/path], where SQLLoad listens"
@@ -107,7 +120,7 @@ async fn loopback(configured: Option<&str>) -> Result<(TcpListener, String), Api
         }
         None => (0, "/".to_owned()),
     };
-    let listener = TcpListener::bind(("127.0.0.1", port))
+    let listener = TcpListener::bind((LOOPBACK_HOST, port))
         .await
         .map_err(|error| {
             ApiError::Auth(format!(
@@ -131,7 +144,7 @@ async fn receive_redirect(listener: &TcpListener) -> Result<String, ApiError> {
             .accept()
             .await
             .map_err(|error| ApiError::Auth(format!("the sign-in redirect failed: {error}")))?;
-        let mut request = Vec::new();
+        let mut request: Vec<u8> = Vec::new();
         let mut buffer = [0_u8; 2048];
         while !request.windows(4).any(|window| window == b"\r\n\r\n")
             && request.len() < REDIRECT_REQUEST_LIMIT

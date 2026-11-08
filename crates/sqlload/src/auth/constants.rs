@@ -12,6 +12,9 @@ pub const OAUTH_REFRESH_MARGIN_SECS: u64 = 60;
 pub const TOKEN_CACHE_FILE: &str = "sqlload/snowflake-tokens.json";
 /// What the browser shows when Snowflake sent back an error instead of a code.
 pub const SIGN_IN_FAILED_PAGE: &str = "<!doctype html><title>SQLLoad</title><p>The Snowflake sign-in failed. Return to the terminal for the reason.</p>";
+/// Where the browser sign-in redirects to: SQLLoad listens there.
+pub const LOOPBACK_HOST: &str = "127.0.0.1";
+pub const LOOPBACK_SCHEME: &str = "http";
 /// How long the browser sign-in may take before SQLLoad stops waiting.
 pub const SIGN_IN_TIMEOUT_SECS: u64 = 300;
 /// The most of a redirect request SQLLoad reads.
