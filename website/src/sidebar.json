@@ -18,6 +18,7 @@
 			"docs/sources/postgres-cdc",
 			"docs/sources/snowflake",
 			"docs/sources/files",
+			"docs/sources/google-sheets",
 			"docs/sources/python",
 			"docs/sources/logged-state"
 		]
