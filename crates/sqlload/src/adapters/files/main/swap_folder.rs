@@ -77,7 +77,12 @@ pub async fn swap_folder(
             format!("cannot swap the new table in: {error}"),
         )
     })?;
-    let removed = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&staged_path)).await;
+    let removed =
+        tokio::task::spawn_blocking(move || match std::fs::remove_dir_all(&staged_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            removed => removed,
+        })
+        .await;
     if let Err(error) = removed
         .map_err(|error| error.to_string())
         .and_then(|removed| removed.map_err(|error| error.to_string()))
