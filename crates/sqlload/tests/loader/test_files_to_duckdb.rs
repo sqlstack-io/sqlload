@@ -343,6 +343,20 @@ fn given_files_in_plain_folders_when_path_columns_capture_a_date_then_delete_ins
             expected_result: "0",
         },
         FilesScenarioTestCase {
+            description: "a constant cannot be the cursor: it is the same in every file",
+            store: local_store,
+            settings: concat!(
+                "write_strategy = \"delete_insert\"\ncursor_column = \"shop\"\n",
+                "path_columns = \"{region}/{day:date}_*.parquet\"\nconstant_columns = { shop = \"main\", day_count = 1, as_of = 2026-11-08 }\n",
+            ),
+            runs: &[FilesRun {
+                files: &[EU_NOV_3],
+                expected_error: "cursor_column shop is a constant column",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        FilesScenarioTestCase {
             description: "unmatched_paths = skip leaves it out",
             store: local_store,
             settings: concat!(

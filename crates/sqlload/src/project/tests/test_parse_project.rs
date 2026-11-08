@@ -320,6 +320,11 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.events] column day is in both partition_columns and constant_columns",
         },
         ParseProjectErrorTestCase {
+            description: "names differing only in case clash: destinations fold them together",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\npath_columns = \"{Region}/*\"\nconstant_columns = { region = \"eu\" }\n",
+            expected_message: "[sources.events] column region is in both path_columns and constant_columns",
+        },
+        ParseProjectErrorTestCase {
             description: "a malformed path template fails parsing, before any file is listed",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\npath_columns = \"{region/*\"\n",
             expected_message: "[sources.events] path_columns \"{region/*\": { in \"{region\" is never closed",

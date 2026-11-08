@@ -233,7 +233,10 @@ fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         Err(problem) => problems.push(format!("{place} {problem}")),
     }
     for (index, (name, setting)) in names.iter().enumerate() {
-        if let Some((_, first)) = names[..index].iter().find(|(seen, _)| seen == name) {
+        if let Some((_, first)) = names[..index]
+            .iter()
+            .find(|(seen, _)| seen.eq_ignore_ascii_case(name))
+        {
             problems.push(format!(
                 "{place} column {name} is in both {first} and {setting}; give it one source"
             ));

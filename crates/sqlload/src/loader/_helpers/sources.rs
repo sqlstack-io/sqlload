@@ -524,12 +524,23 @@ pub(crate) async fn plan_files(
             Some((name, column_type)) => Some((name.as_str(), column_type)),
             None => {
                 return Ok(Err(format!(
-                    "cursor_column {} must be one of the partition_columns, path_columns or constant_columns for a files source",
+                    "cursor_column {} must be one of the partition_columns or path_columns for a files source",
                     cursor.column
                 )));
             }
         },
     };
+    if let Some((name, _)) = cursor
+        && request
+            .files
+            .constants
+            .iter()
+            .any(|constant| constant == name)
+    {
+        return Ok(Err(format!(
+            "cursor_column {name} is a constant column, the same in every file, so it cannot pick the files to read; use a partition_columns or path_columns column"
+        )));
+    }
     if spec.strategy == WriteStrategy::Merge {
         return Ok(Err(
             "merge is not supported for files sources yet (loaded files would be re-read once their rows are updated); use delete_insert on a partition cursor, or append".to_owned(),

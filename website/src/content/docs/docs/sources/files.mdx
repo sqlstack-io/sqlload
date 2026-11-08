@@ -95,7 +95,8 @@ A file at `orders/eu/web/2026-11-08/part-0.parquet` loads with `region = 'eu'`, 
 The template matches the whole path, file name included. A `date` capture matches `2026-11-08` or
 `20261108` and loads as a date, and an integer capture matches digits only, so
 `*_{export_date:date}_*.csv` finds the date in `orders_eu_20261108_v2.csv`. A text capture takes the
-shortest value the rest of the template allows, so keep a literal between two captures.
+shortest value the rest of the template allows, so keep a literal between two captures. `%XX`
+escapes in a captured value are undone, as for Hive folders.
 
 A file whose path doesn't match fails `plan` and names the file, unless `unmatched_paths = "skip"`;
 `plan` then counts the files it leaves out. A captured value that doesn't convert to its type always
@@ -106,12 +107,16 @@ integer as `int`, a float as `float` and `true` or `false` as `bool`. An unquote
 (`2026-11-08`) loads as `date`, and a date and time as `timestamp_tz` with an offset or
 `timestamp_ntz` without. For any other type, write `{ value = "12.50", type = "decimal(10,2)" }`.
 
+Captured and typed values load the same in every destination: a boolean as `true` or `false`, an
+integer without leading zeros, a date as `2026-11-08`, and a timestamp with an offset converted to
+UTC.
+
 Captured and constant columns work like Hive partition columns. A captured date can be the
 `cursor_column` of `delete_insert`, which replaces the newest loaded value and everything after
-it. A column in the files with the same name is replaced. Destinations that read the files
-themselves still do: SQLLoad writes each file's values into the `COPY` or `read_parquet` as
-literals. A column can come from only one of `partition_columns`, `path_columns` and
-`constant_columns`.
+it; a constant can't. A column in the files with the same name is replaced. Destinations that
+read the files themselves still do: SQLLoad writes each file's values into the `COPY` or
+`read_parquet` as literals. A column can come from only one of `partition_columns`, `path_columns` and
+`constant_columns`, ignoring case.
 
 ## Files the destination reads itself
 

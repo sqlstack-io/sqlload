@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::files_source::_helpers::plan::partitions::converts;
+use crate::files_source::_helpers::plan::partitions::normalised;
 
-/// Each constant's column, type and value as text: a string is `text`, an integer `int`, a float `float` and a boolean `bool`; `{ value = "...", type = "..." }` takes any type `destinations` take, and must convert to it.
+/// Each constant's column, type and value as text: a string is `text`, an integer `int`, a float `float` and a boolean `bool`; `{ value = "...", type = "..." }` takes any type `destinations` take, and must convert to it; it is stored in the one form every destination reads alike.
 pub fn constant_columns(
     constants: &BTreeMap<String, toml::Value>,
     destinations: &[Warehouse],
@@ -29,7 +29,7 @@ pub fn constant_columns(
                     let text = scalar_text(value).ok_or_else(|| {
                         fail(format!("{value} is not a string, number or boolean"))
                     })?;
-                    converts(&text, &parsed.column_type).map_err(|reason| {
+                    let text = normalised(&text, &parsed.column_type).map_err(|reason| {
                         fail(format!("{text:?} is not a {}: {reason}", parsed.column_type))
                     })?;
                     (parsed.column_type, text)

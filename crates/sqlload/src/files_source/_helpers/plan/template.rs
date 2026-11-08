@@ -57,11 +57,11 @@ fn capture(inside: &str, destinations: &[Warehouse]) -> Result<(String, ColumnTy
     Ok((name.to_owned(), parsed.column_type))
 }
 
-/// What a capture of `column_type` matches inside one segment: a date as `YYYY-MM-DD` or `YYYYMMDD`, an integer as digits, anything else as the shortest run of characters the rest of the template allows.
+/// What a capture of `column_type` matches inside one segment: a date as `YYYY-MM-DD` or `YYYYMMDD`, an integer as ASCII digits (no sign), anything else as the shortest run of characters the rest of the template allows.
 fn value_pattern(column_type: &ColumnType) -> &'static str {
     match column_type {
-        ColumnType::Date => r"(\d{4}-\d{2}-\d{2}|\d{8})",
-        ColumnType::Int | ColumnType::SmallInt => r"([+-]?\d+)",
+        ColumnType::Date => "([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{8})",
+        ColumnType::Int | ColumnType::SmallInt => "([0-9]+)",
         _ => "([^/]+?)",
     }
 }
