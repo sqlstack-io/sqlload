@@ -23,12 +23,9 @@ pub fn projection_problem(projection: &Projection, rules: ProjectionRules<'_>) -
     })
 }
 
-/// Whether the projected column `name` loads `column`: itself, or a `<name>__<key>` column when `flatten` lists it.
+/// Whether the projected column `name` loads `column`: itself, or a `<name>__<key>` column when `flatten` lists it (exactly, as flattening matches it).
 fn loads_as(name: &str, column: &str, flatten: &[String]) -> bool {
-    let flattened = flatten
-        .iter()
-        .any(|listed| listed.eq_ignore_ascii_case(name));
-    match flattened {
+    match flatten.iter().any(|listed| listed == name) {
         true => column
             .get(..name.len() + FLATTEN_SEPARATOR.len())
             .is_some_and(|prefix| {

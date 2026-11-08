@@ -236,6 +236,17 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             ),
         },
         ProjectionProblemTestCase {
+            description: "a flatten entry in another case flattens nothing, so the field loads under its own name",
+            fields: &["customer"],
+            keep_record: None,
+            cursor_column: Some("customer__updated_at"),
+            flatten: &["Customer"],
+            masked: &[],
+            expected_problem: Some(
+                "the table's cursor_column customer__updated_at is not among the fields; add it to fields",
+            ),
+        },
+        ProjectionProblemTestCase {
             description: "keep_record can be the cursor",
             fields: &[],
             keep_record: Some("raw"),

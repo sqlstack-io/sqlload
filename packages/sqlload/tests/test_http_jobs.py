@@ -481,6 +481,24 @@ def test_given_a_cursor_column_when_rows_are_projected_then_the_cursor_must_be_a
 	assert api.log == []  # type: ignore[attr-defined]
 
 
+
+@pytest.mark.parametrize(
+	"data",
+	[
+		"api.paginate('/offset', paginator=sl.offset(limit=10), fields={'id': '$.order_id', 'status': '$.status'}, keep_record='raw')",
+		"[sl.ndjson(b'{\"order_id\": 1, \"status\": \"paid\"}', fields={'id': '$.order_id', 'status': '$.status'}, keep_record='raw')]",
+	],
+	ids=["paginate", "ndjson"],
+)
+def test_given_a_masked_table_when_rows_keep_their_record_then_the_load_is_refused(tmp_path: Path, api: ThreadingHTTPServer, data: str) -> None:
+	tables = f"@shop.table(description='T.', mask={{'status': 'hash'}})\ndef t(ctx):\n    return {data}\n"
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load")
+	output = done.stdout + done.stderr
+	assert done.returncode == 1, output
+	assert "keep_record would hold the masked columns (status) unmasked" in output, output
+	assert api.log == []  # type: ignore[attr-defined]
+
 def oauth_project(tmp_path: Path, server: ThreadingHTTPServer, auth: str, job: str) -> Path:
 	tables = f"oauth = sl.http(shop, auth={auth})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return oauth.{job}\n"
 	return make_project(tmp_path, server, tables)
