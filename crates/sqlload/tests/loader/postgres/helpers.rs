@@ -50,6 +50,18 @@ append_cursor_inclusive = false
 [sources.app.tables."public.stores"]
 description = "Test stores."
 write_strategy = "replace"
+
+[sources.app.tables."public.keys_src"]
+description = "Test text cursor, ICU-collated in the source."
+write_strategy = "append"
+cursor_column = "k"
+append_cursor_inclusive = false
+
+[sources.app.tables."public.keys_dst"]
+description = "Test text cursor, ICU-collated in the target."
+write_strategy = "append"
+cursor_column = "k"
+append_cursor_inclusive = false
 "#
     )
 }
