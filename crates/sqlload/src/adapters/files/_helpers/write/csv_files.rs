@@ -3,6 +3,7 @@
 use std::io::Write;
 
 use arrow_array::{Array, ArrayRef, Float32Array, Float64Array, RecordBatch, StringArray};
+use arrow_cast::cast;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::{DataType, Field, Schema};
 use flate2::Compression as GzipLevel;
@@ -15,6 +16,7 @@ use crate::adapters::files::models::CsvOut;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::models::ColumnType;
 use crate::project::models::{CsvOutput, OutputCompression};
+use crate::row_batches::constants::UTC_ZONE;
 
 /// The header line: every column name, quoted where it needs to be.
 pub(crate) fn csv_header(schema: &Schema, csv: &CsvOutput) -> Vec<u8> {
@@ -119,20 +121,24 @@ fn column_text(array: &ArrayRef, field: &Field) -> Result<Vec<Option<String>>, S
         (DataType::Float32, _) => array
             .as_any()
             .downcast_ref::<Float32Array>()
-            .map(|values| {
-                values
-                    .iter()
-                    .map(|value| value.map(|value| float_text(f64::from(value))))
-                    .collect()
-            })
+            .map(|values| values.iter().map(|value| value.map(float_text)).collect())
             .ok_or_else(|| format!("{}: not a float column", field.name()))?,
         (DataType::Utf8, true) => array
             .as_any()
             .downcast_ref::<StringArray>()
             .ok_or_else(|| format!("{}: not a text column", field.name()))?
             .iter()
-            .map(|value| value.map(|value| compact_json(value, field.name())).transpose())
+            .map(|value| {
+                value
+                    .map(|value| compact_json(value, field.name()))
+                    .transpose()
+            })
             .collect::<Result<_, String>>()?,
+        (DataType::Timestamp(unit, Some(zone)), _) if zone.as_ref() != UTC_ZONE => {
+            let utc = DataType::Timestamp(*unit, Some(UTC_ZONE.into()));
+            let in_utc = cast(array, &utc).map_err(|error| format!("{}: {error}", field.name()))?;
+            return column_text(&in_utc, field);
+        }
         _ => {
             let options = FormatOptions::default()
                 .with_timestamp_tz_format(Some(CSV_TIMESTAMP_TZ))
@@ -153,8 +159,9 @@ fn column_text(array: &ArrayRef, field: &Field) -> Result<Vec<Option<String>>, S
 }
 
 /// A float in plain notation with the fewest digits that read back the same value, never an exponent; `NaN`, `Infinity` and `-Infinity` otherwise.
-fn float_text(value: f64) -> String {
-    match (value.is_nan(), value.is_infinite(), value.is_sign_negative()) {
+fn float_text<F: Into<f64> + std::fmt::Display + Copy>(value: F) -> String {
+    let wide: f64 = value.into();
+    match (wide.is_nan(), wide.is_infinite(), wide.is_sign_negative()) {
         (true, _, _) => "NaN".to_owned(),
         (false, true, false) => "Infinity".to_owned(),
         (false, true, true) => "-Infinity".to_owned(),

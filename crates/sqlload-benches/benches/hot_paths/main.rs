@@ -20,7 +20,6 @@ use sqlload::adapters::files::main::write_rows::write_rows;
 use sqlload::adapters::files::models::{TablePath, WriterRequest};
 use sqlload::column_types::models::ColumnType;
 use sqlload::file_store::models::OpenFolder;
-use sqlload::project::models::OutputEncoding;
 use sqlload::files_source::main::discover_files::discover_files;
 use sqlload::files_source::main::read_files::read_files;
 use sqlload::files_source::models::{
@@ -31,6 +30,7 @@ use sqlload::parquet_parts::main::write_part::write_part;
 use sqlload::parquet_parts::models::PartWriter;
 use sqlload::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use sqlload::postgres_source::main::decode_copy::decode_copy;
+use sqlload::project::models::OutputEncoding;
 use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::conform_batch::conform_batch;
 use sqlload::row_batches::main::json_rows::json_rows;

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
-use crate::adapters::files::main::newest_load_files::newest_load_files;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
+use crate::adapters::files::main::newest_load_files::newest_load_files;
 use crate::adapters::files::main::table_path::table_path;
 use crate::adapters::files::models::{FilesDestination, TableFiles, TablePath, TablePathRequest};
 use crate::column_types::models::ColumnType;

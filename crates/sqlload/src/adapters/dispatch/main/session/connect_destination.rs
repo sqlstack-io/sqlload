@@ -60,7 +60,7 @@ pub async fn connect_destination(
                 connection: target.connection.clone(),
                 store: StoreKind::Filesystem { root: root.clone() },
                 max_footer_reads: target.footer_read_limit(),
-            encoding: target.output_encoding(),
+                encoding: target.output_encoding(),
             }))
         }
         Some(other) => {

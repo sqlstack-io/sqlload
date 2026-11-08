@@ -17,7 +17,7 @@ use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, Footer, 
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, OutputEncoding, OnSchemaChange, Policy, ProjectConfig,
+    BatchStep, Contract, NewTables, OnSchemaChange, OutputEncoding, Policy, ProjectConfig,
     WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
@@ -535,6 +535,15 @@ pub struct FilesSink {
     pub writer: Option<FilesWriter>,
     /// Replaced files already deleted by earlier commits.
     pub deleted: std::collections::BTreeSet<String>,
+    /// Set when the load writes the whole table into a hidden folder beside it (`folder`) and swaps it in at commit.
+    pub swap: Option<FolderSwap>,
+}
+
+/// The table folder a staged table replaces, and the files of it the load replaces; every other file is carried over.
+#[derive(Debug)]
+pub struct FolderSwap {
+    pub live: OpenFolder,
+    pub replaced: std::collections::BTreeSet<String>,
 }
 
 /// A connected source, ready to read.

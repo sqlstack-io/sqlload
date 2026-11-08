@@ -271,3 +271,68 @@ pub(crate) fn repair_committed(
     let _ = std::fs::remove_dir_all(&root);
     outcome
 }
+
+/// The bytes of one CSV file holding `batches` in order, written as `encoding` says.
+pub(crate) fn csv_file(
+    batches: &[RecordBatch],
+    encoding: &OutputEncoding,
+) -> Result<Vec<u8>, String> {
+    let schema = batches
+        .first()
+        .map(RecordBatch::schema)
+        .ok_or("no batches")?;
+    let file = batches
+        .iter()
+        .try_fold(new_file(&schema, encoding)?, |file, batch| {
+            add_rows(file, batch, encoding)
+        })?;
+    finish_file(file)
+}
+
+/// The files under `folder`, hidden ones included, as sorted relative keys.
+pub(crate) fn local_files(folder: &std::path::Path) -> Vec<String> {
+    let mut keys: Vec<String> = walk(folder)
+        .into_iter()
+        .filter_map(|path| {
+            path.strip_prefix(folder)
+                .ok()
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        })
+        .collect();
+    keys.sort();
+    keys
+}
+
+fn walk(folder: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|entry| match entry.path().is_dir() {
+            true => walk(&entry.path()),
+            false => vec![entry.path()],
+        })
+        .collect()
+}
+
+/// List `folder`'s data files (named `part-*`) over and over on another thread until `stop` is set; every distinct set of names seen.
+pub(crate) fn watch_folder(
+    folder: std::path::PathBuf,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<std::collections::BTreeSet<Vec<String>>> {
+    std::thread::spawn(move || {
+        let mut seen = std::collections::BTreeSet::new();
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut names: Vec<String> = std::fs::read_dir(&folder)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with("part-"))
+                .collect();
+            names.sort();
+            seen.insert(names);
+        }
+        seen
+    })
+}

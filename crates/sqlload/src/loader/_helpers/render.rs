@@ -14,8 +14,8 @@ use crate::loader::models::{
     TablePlan, WholeReason,
 };
 use crate::project::models::BatchStep;
-use crate::project::models::{FilesFormat, OutputCompression};
 use crate::project::models::MaskMethod;
+use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnOrigin, TableAction};

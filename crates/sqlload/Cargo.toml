@@ -90,6 +90,9 @@ uuid.workspace = true
 webpki-roots.workspace = true
 zstd.workspace = true
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
 bytes.workspace = true
 arrow-array = { workspace = true, features = ["chrono-tz"] }

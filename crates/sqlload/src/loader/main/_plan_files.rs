@@ -12,13 +12,13 @@ use crate::loader::_helpers::table_plan::{
     desired_columns, read_columns, read_window,
 };
 use crate::loader::errors::LoaderError;
-use crate::project::models::{FilesFormat, OutputEncoding, WriteStrategy};
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_files_window::files_window;
 use crate::loader::models::{
     CommitRule, FilesContext, FilesOutput, FilesWindowRequest, LiveFiles, PlanOptions, TablePlan,
     TableSpec, WholeReason,
 };
+use crate::project::models::{FilesFormat, OutputEncoding, WriteStrategy};
 
 /// One table's plan against the files already in its folder.
 pub(in crate::loader) async fn plan_files_table(
@@ -74,7 +74,7 @@ pub(in crate::loader) async fn plan_files_table(
         None => (None, WriteMode::Append, None),
     };
     let mode = captured_mode(spec, mode);
-    let notes = write_notes(&mode);
+    let notes = write_notes(&mode, &path.folder.store);
     let commits = commit_rule(&CommitRequest {
         spec,
         window: read.as_ref(),
@@ -84,9 +84,7 @@ pub(in crate::loader) async fn plan_files_table(
         mode: &mode,
     });
     let commits = match commits {
-        Ok(_) if destination.encoding.single_file => {
-            CommitRule::Whole(WholeReason::SingleFile)
-        }
+        Ok(_) if destination.encoding.single_file => CommitRule::Whole(WholeReason::SingleFile),
         Ok(commits) => commits,
         Err(problem) => {
             if schema.blocked.is_none() {

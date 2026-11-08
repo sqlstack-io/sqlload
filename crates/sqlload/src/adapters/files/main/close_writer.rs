@@ -16,9 +16,11 @@ pub async fn close_writer(
         writer.written.push(key);
     }
     if keep_schema && writer.written.is_empty() && writer.partition.is_none() {
-        let file = new_file(&writer.schema, &writer.encoding).map_err(|reason| FilesDestinationError::Write {
-            key: writer.folder.location.to_string(),
-            reason,
+        let file = new_file(&writer.schema, &writer.encoding).map_err(|reason| {
+            FilesDestinationError::Write {
+                key: writer.folder.location.to_string(),
+                reason,
+            }
         })?;
         let key = next_key(writer, "");
         store_file(&writer.folder, &key, file).await?;

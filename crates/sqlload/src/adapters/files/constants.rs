@@ -34,6 +34,9 @@ pub const SECONDS_PER_DAY: i64 = 86_400;
 /// The folder below a table's folder holding one marker per load that has not finished.
 pub const PENDING_FOLDER: &str = "_sqlload/pending/";
 
+/// Marks the hidden folder a filesystem `replace` stages the table in, beside the table folder: `.<table folder>.sqlload-<load id>`.
+pub const STAGED_FOLDER_MARK: &str = ".sqlload-";
+
 /// The first line of a pending marker while the load writes its files.
 pub const PENDING_WRITING: &str = "writing";
 

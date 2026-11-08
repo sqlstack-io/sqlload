@@ -186,7 +186,10 @@ pub enum CsvOut {
     Plain(Vec<u8>),
     Gzip(flate2::write::GzEncoder<Vec<u8>>),
     /// zstd frames compressed so far, and text waiting for the next frame.
-    Zstd { done: Vec<u8>, pending: Vec<u8> },
+    Zstd {
+        done: Vec<u8>,
+        pending: Vec<u8>,
+    },
 }
 
 /// A load's writer: one open file per partition, flushed to the store as files fill up.

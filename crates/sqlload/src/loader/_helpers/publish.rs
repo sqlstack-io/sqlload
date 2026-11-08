@@ -26,6 +26,9 @@ use crate::adapters::files::main::close_writer::close_writer;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::open_writer::open_writer;
 use crate::adapters::files::main::partitions_finished::partitions_finished;
+use crate::adapters::files::main::remove_staged::remove_staged;
+use crate::adapters::files::main::staged_folder::staged_folder;
+use crate::adapters::files::main::swap_folder::swap_folder;
 use crate::adapters::files::main::write_rows::write_rows;
 use crate::adapters::files::models::FilesWriter;
 use crate::adapters::files::models::PartitionFolder;
@@ -72,6 +75,7 @@ use crate::loader::main::_files_repair::files_to_replace;
 use crate::loader::models::CommitRange;
 use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
+use crate::loader::models::FolderSwap;
 use crate::loader::models::Publisher;
 use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
@@ -203,14 +207,28 @@ impl Publisher {
         let load_id = uuid::Uuid::new_v4().to_string();
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
-                let folder = open_folder(&output.path.folder)?;
-                let replaced = files_to_replace(&folder, &table, output).await?;
+                let live = open_folder(&output.path.folder)?;
+                remove_staged(&output.path.folder).await;
+                let replaced = files_to_replace(&live, &table, output).await?;
+                let (folder, replaced, swap) =
+                    match staged_folder(&output.path.folder, &table.mode, &load_id) {
+                        Some(staged) => (
+                            open_folder(&staged)?,
+                            ReplacedFiles::default(),
+                            Some(FolderSwap {
+                                live,
+                                replaced: replaced.keys(&BTreeSet::new()).into_iter().collect(),
+                            }),
+                        ),
+                        None => (live, replaced, None),
+                    };
                 Some(FilesSink {
                     output: output.clone(),
                     folder,
                     replaced,
                     writer: None,
                     deleted: BTreeSet::new(),
+                    swap,
                 })
             }
             (false, None) => {
@@ -1084,7 +1102,7 @@ impl Publisher {
                 let mut record = self.record(self.waiting_rows)?;
                 record.files = writer.written.clone();
                 Some(PendingRun {
-                    prefix: runs_location(&self.sink()?.output.path.folder).prefix,
+                    prefix: runs_location(&self.sink()?.folder.location).prefix,
                     name: record_object_name(&record),
                     json: serde_json::to_string(&record)
                         .map_err(|error| LoaderError::Invalid(error.to_string()))?,
@@ -1095,6 +1113,9 @@ impl Publisher {
         let sink = self.sink()?;
         let folder = sink.folder.clone();
         replace_files(&folder, &writer.file_id, (&keys, run.as_ref())).await?;
+        if let Some(swap) = self.sink()?.swap.as_ref().filter(|_| last) {
+            swap_folder(&swap.live, &folder, &swap.replaced).await?;
+        }
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
         }
@@ -1199,11 +1220,15 @@ impl Publisher {
         Ok(())
     }
 
-    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored.
+    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored; a table staged beside its folder is deleted whole, and the next load deletes it if this fails.
     pub(crate) async fn abandon_files(&mut self) {
         let Some(sink) = self.files.as_mut() else {
             return;
         };
+        if let Some(swap) = &sink.swap {
+            remove_staged(&swap.live.location).await;
+            return;
+        }
         let Some(writer) = sink.writer.take() else {
             return;
         };
