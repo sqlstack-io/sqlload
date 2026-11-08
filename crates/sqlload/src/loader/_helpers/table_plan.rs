@@ -830,7 +830,7 @@ pub(crate) fn source_filter(
     (!bounds.is_empty()).then(|| bounds.join(" AND "))
 }
 
-/// Where the read starts, and why: a `--start-cursor`, the destination's maximum, `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
+/// Where the read starts, and why: a `--start-cursor`, the destination's maximum (read after it by `append`, unless `append_cursor_inclusive`), `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
 async fn lower_bound(
     request: &WindowRequest<'_>,
     cursor: &CursorSpec,
@@ -900,8 +900,12 @@ async fn lower_bound(
     };
     Ok(Ok(match (maximum, &cursor_start) {
         (Some(maximum), _) => {
+            let bound = match request.spec.strategy == WriteStrategy::Append && !cursor.inclusive {
+                true => "after",
+                false => "from",
+            };
             let note = format!(
-                "{} from {maximum} (destination maximum{lookback})",
+                "{} {bound} {maximum} (destination maximum{lookback})",
                 cursor.column
             );
             (Some(maximum), note, data_maximum)
