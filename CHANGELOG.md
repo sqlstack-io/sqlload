@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.27.0](https://github.com/sqlstack-io/sqlload/compare/v0.26.0...v0.27.0) (2026-11-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **loader:** text cursors compare by code point on Postgres and Snowflake sources and targets. Keys that only increase in a linguistic order (apple1, Banana2, cherry3, Date4) can fall below the maximum and stop being read; keys that increase in either order are unaffected. On Postgres a plain index on a text cursor no longer serves the read, the maximum or the deletes: create it as (col COLLATE "C").
+
+### Features
+
+* **cli:** apply --json and load --json print the run's result ([#135](https://github.com/sqlstack-io/sqlload/issues/135)) ([dd64b11](https://github.com/sqlstack-io/sqlload/commit/dd64b11a418a1447789d8bbcc8ec1406caed1011))
+* **files:** CSV output for files targets ([#113](https://github.com/sqlstack-io/sqlload/issues/113)) ([c2083b5](https://github.com/sqlstack-io/sqlload/commit/c2083b5ef805b4af5adc89198cc7ff216722ebae))
+* **files:** files source into a files target ([#127](https://github.com/sqlstack-io/sqlload/issues/127)) ([3cbaf73](https://github.com/sqlstack-io/sqlload/commit/3cbaf73ef29bdb16c4e21bcc947d2afdf53401b8))
+* **files:** lease a files target table so only one load writes it ([#124](https://github.com/sqlstack-io/sqlload/issues/124)) ([e28336d](https://github.com/sqlstack-io/sqlload/commit/e28336d41df601b3beb4236bad3810d708e5452d))
+* **files:** load each JSON object or CSV line whole (shape = "record") ([#121](https://github.com/sqlstack-io/sqlload/issues/121)) ([683523a](https://github.com/sqlstack-io/sqlload/commit/683523ab5c7d55f377c3cb769655ca9ecc0bc225))
+* **files:** load Parquet list, struct and map columns as json ([#123](https://github.com/sqlstack-io/sqlload/issues/123)) ([ca499c7](https://github.com/sqlstack-io/sqlload/commit/ca499c7c8a8f6534cfc5e9c5f4a698b93e24fc18))
+* **http:** OAuth2 client credentials and refresh-token auth for sl.http ([#129](https://github.com/sqlstack-io/sqlload/issues/129)) ([73a4ebb](https://github.com/sqlstack-io/sqlload/commit/73a4ebb40a9185f1e428fd351635304dd3635a9b))
+* **http:** project JSON rows with fields and keep_record ([#131](https://github.com/sqlstack-io/sqlload/issues/131)) ([1a80c47](https://github.com/sqlstack-io/sqlload/commit/1a80c470a6de2ae72d2897dd761efe0f8fd8f54a))
+* **postgres:** SSH tunnels for Postgres connections ([#111](https://github.com/sqlstack-io/sqlload/issues/111)) ([61e3b35](https://github.com/sqlstack-io/sqlload/commit/61e3b35416e389e07fc641c80e0b53cc125957eb))
+* **s3:** read the AWS shared credentials file and a profile per s3 connection ([#136](https://github.com/sqlstack-io/sqlload/issues/136)) ([c9adc1e](https://github.com/sqlstack-io/sqlload/commit/c9adc1ee86e15ac330ee6e0f4c3c5c0715d2d5c0))
+* **snowflake:** let DuckDB load files unloaded to an S3 stage itself ([#125](https://github.com/sqlstack-io/sqlload/issues/125)) ([f8658ba](https://github.com/sqlstack-io/sqlload/commit/f8658ba94fb1e3a4a9eac34d63a466d8b203fe09))
+* **sources:** Google Sheets source ([#117](https://github.com/sqlstack-io/sqlload/issues/117)) ([28b51ba](https://github.com/sqlstack-io/sqlload/commit/28b51baa45bef8a97cbd68a06ee50a98b7c64e1e))
+* **sources:** ODBC source ([#122](https://github.com/sqlstack-io/sqlload/issues/122)) ([9077d6e](https://github.com/sqlstack-io/sqlload/commit/9077d6ed0eb2eca272f7cbb0cda2b0026a705a7a))
+* **types:** array(&lt;scalar&gt;) column type across destinations and sources ([#128](https://github.com/sqlstack-io/sqlload/issues/128)) ([f312cf9](https://github.com/sqlstack-io/sqlload/commit/f312cf9bde0c232b617f05804f6d387593bd78da))
+
+
+### Bug Fixes
+
+* **build:** bring Cargo.lock in line with the manifests so --locked works ([#139](https://github.com/sqlstack-io/sqlload/issues/139)) ([8b4ff84](https://github.com/sqlstack-io/sqlload/commit/8b4ff849621ae0f36c08ea6c01669f9b57c9cd3b))
+* **loader:** compare text cursors by code point on source and destination ([#126](https://github.com/sqlstack-io/sqlload/issues/126)) ([1f6b66c](https://github.com/sqlstack-io/sqlload/commit/1f6b66c962005df917548b117c6334fd9712a9d4))
+* **loader:** plan says an append reads after the cursor's maximum ([#116](https://github.com/sqlstack-io/sqlload/issues/116)) ([f1b20fc](https://github.com/sqlstack-io/sqlload/commit/f1b20fc4aef42fc5e10fefe967e4b4034c5be557))
+
+
+### Performance Improvements
+
+* **files:** delete files in bulk instead of one request each ([#133](https://github.com/sqlstack-io/sqlload/issues/133)) ([532214b](https://github.com/sqlstack-io/sqlload/commit/532214b9b596c139d3079397a72238b18f036204))
+* **files:** stream DuckDB's direct load and read Parquet footers in one request ([#138](https://github.com/sqlstack-io/sqlload/issues/138)) ([821c517](https://github.com/sqlstack-io/sqlload/commit/821c517ecd17f8b43a919c084c270b80fc07bcc2))
+* **snowflake:** have DuckDB read internal-stage unloads downloaded to a local folder ([#140](https://github.com/sqlstack-io/sqlload/issues/140)) ([ded51ac](https://github.com/sqlstack-io/sqlload/commit/ded51ac4dd37f13842884ef80302efc7f53f92a3))
+* **snowflake:** list source tables with SHOW and DESCRIBE instead of the catalog views ([#134](https://github.com/sqlstack-io/sqlload/issues/134)) ([ff6fdd1](https://github.com/sqlstack-io/sqlload/commit/ff6fdd1385a98ebcc026f770a99720d2ea97c178))
+
+
+### Documentation
+
+* 0.26.0 on sqlload.io: ClickHouse and Postgres targets, checks before publish ([#132](https://github.com/sqlstack-io/sqlload/issues/132)) ([11c8d82](https://github.com/sqlstack-io/sqlload/commit/11c8d82254f4e11e793dba9cb8be93209fb163c9))
+
 ## [0.26.0](https://github.com/sqlstack-io/sqlload/compare/v0.25.0...v0.26.0) (2026-11-08)
 
 
