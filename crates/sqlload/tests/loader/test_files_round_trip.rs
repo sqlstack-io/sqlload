@@ -3,8 +3,10 @@ use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
-use crate::files_helpers::{no_files, run_files_to_files, third_day};
-use crate::helpers::{local_store, run_async, run_metadata_round_trip, seaweedfs_store, two_days};
+use crate::files_helpers::{late_and_new, no_files, run_files_to_files, third_day};
+use crate::helpers::{
+    local_store, run_async, run_metadata_round_trip, seaweedfs_store, two_batches, two_days,
+};
 use crate::test_types::{FilesToFilesTestCase, MetadataRoundTripTestCase};
 
 /// The DuckDB table's columns in order, its rows, its distinct load ids, and the rows a load before `{stamp}` wrote.
@@ -70,6 +72,19 @@ fn given_a_files_source_when_loading_it_into_a_files_target_again_then_each_sour
         FilesToFilesTestCase {
             description: "append into S3 behaves the same",
             store: seaweedfs_store,
+            ..APPEND
+        },
+        FilesToFilesTestCase {
+            description: "append by day: a late file in an older day is skipped, a new file in the newest day loads once",
+            settings: "write_strategy = \"append\"\ncursor_column = \"day\"\ndestination_path = \"PREFIX/out/{table}/day={cursor:date}/\"",
+            runs: &[two_days, late_and_new, no_files],
+            expected_held: &["6|1", "8|2", "8|2"],
+            ..APPEND
+        },
+        FilesToFilesTestCase {
+            description: "append in two commits: the next load finds both commits' files loaded",
+            runs: &[two_batches, no_files],
+            expected_held: &["2002|1", "2002|1"],
             ..APPEND
         },
         FilesToFilesTestCase {

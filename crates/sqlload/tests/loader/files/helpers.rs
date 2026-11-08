@@ -20,6 +20,22 @@ pub(crate) fn third_day() -> Result<Vec<(String, bytes::Bytes)>, String> {
     day_files("2026-11-03", (1, 0), None)
 }
 
+/// A run adding a late file to the first day and a new file to the second, the newest.
+pub(crate) fn late_and_new() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let rename =
+        |(key, body): (String, bytes::Bytes), name: &str| (key.replace("part-00000", name), body);
+    let mut files: Vec<(String, bytes::Bytes)> = day_files("2026-11-01", (1, 0), None)?
+        .into_iter()
+        .map(|file| rename(file, "part-late"))
+        .collect();
+    files.extend(
+        day_files("2026-11-02", (1, 0), None)?
+            .into_iter()
+            .map(|file| rename(file, "part-new")),
+    );
+    Ok(files)
+}
+
 /// Load the case's files source into a files target once per run, adding that run's source files first; after each run, the rows the target holds and how many loads wrote them, as `rows|loads`.
 pub(crate) async fn run_files_to_files(
     endpoint: &str,
