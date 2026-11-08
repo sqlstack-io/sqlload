@@ -882,7 +882,7 @@ pub(crate) fn change_line(line: &str) -> TallyLine {
     }
 }
 
-/// What `run` did after `plan`: the plan, each object it created or altered, each table's outcome, and counts.
+/// What `run` did after `plan`: the plan, each change it made, each table's outcome, and counts (a table altered by several changes counts once).
 pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
     let RunReport {
         command,
@@ -908,7 +908,8 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
         })
         .collect();
     let tables: Vec<TableResult> = outcomes.iter().map(table_result).collect();
-    let actions = |action: &str| {
+    let actions = |action: &str| objects.iter().filter(|o| o.action == action).count();
+    let distinct = |action: &str| {
         objects
             .iter()
             .filter(|object| object.action == action)
@@ -919,7 +920,7 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
     let statuses = |status: &str| tables.iter().filter(|t| t.status == status).count();
     let summary = RunSummary {
         created: actions("created"),
-        altered: actions("altered"),
+        altered: distinct("altered"),
         recreated: actions("recreated"),
         loaded: statuses("loaded"),
         failed: statuses("failed"),
