@@ -1,25 +1,42 @@
 //! Delete files.
 
-use object_store::ObjectStoreExt;
+use futures_util::StreamExt;
 
 use crate::file_store::_helpers::keys::object_path;
 use crate::file_store::errors::StoreError;
 use crate::file_store::models::OpenFolder;
 
-/// Delete each of `relative_keys` under `folder`; a file already gone is not an error.
+/// Delete each of `relative_keys` under `folder`, in bulk where the store allows; a file already gone is not an error. A bulk request that fails as a whole answers once for all its keys, so fewer answers than keys is an error: some files may remain.
 pub async fn delete_files(folder: &OpenFolder, relative_keys: &[String]) -> Result<(), StoreError> {
-    for relative_key in relative_keys {
-        let failed = |source: object_store::Error| StoreError::Object {
-            action: "cannot delete",
-            key: relative_key.clone(),
-            source,
-        };
-        let path =
-            object_path(&format!("{}{relative_key}", folder.location.prefix)).map_err(failed)?;
-        match folder.store.delete(&path).await {
-            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+    let failed = |source: object_store::Error| StoreError::Object {
+        action: "cannot delete files in",
+        key: folder.location.to_string(),
+        source,
+    };
+    let paths = relative_keys
+        .iter()
+        .map(|relative_key| object_path(&format!("{}{relative_key}", folder.location.prefix)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(failed)?;
+    let requested = paths.len();
+    let mut deleted = folder
+        .store
+        .delete_stream(futures_util::stream::iter(paths.into_iter().map(Ok)).boxed());
+    let mut settled = 0;
+    while let Some(outcome) = deleted.next().await {
+        match outcome {
+            Ok(_) | Err(object_store::Error::NotFound { .. }) => settled += 1,
             Err(error) => return Err(failed(error)),
         }
     }
-    Ok(())
+    match settled == requested {
+        true => Ok(()),
+        false => Err(failed(object_store::Error::Generic {
+            store: "delete",
+            source: format!(
+                "the store settled {settled} of {requested} deletes; a bulk delete failed as a whole (an S3-compatible store without bulk delete needs AWS_DISABLE_BULK_DELETE=true)"
+            )
+            .into(),
+        })),
+    }
 }
