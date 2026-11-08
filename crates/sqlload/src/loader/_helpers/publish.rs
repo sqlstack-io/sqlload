@@ -7,7 +7,7 @@ use crate::adapters::contract::models::TableShape;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::contract::models::WriteTarget;
-use crate::adapters::contract::models::{DirectBatch, DirectLoaded};
+use crate::adapters::contract::models::{DirectBatch, DirectLoaded, UnloadedBatch};
 use crate::adapters::contract::types::TableWriter;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
@@ -18,6 +18,7 @@ use crate::adapters::dispatch::main::session::table_destination::table_destinati
 use crate::adapters::dispatch::main::session::table_shape::table_shape;
 use crate::adapters::dispatch::main::write::file_keys::file_keys;
 use crate::adapters::dispatch::main::write::load_files::load_files;
+use crate::adapters::dispatch::main::write::load_unloaded::load_unloaded;
 use crate::adapters::dispatch::main::write::open_table_writer::open_table_writer;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::dispatch::models::Writer;
@@ -64,6 +65,7 @@ use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
+use crate::loader::_helpers::sources::unload_source;
 use crate::loader::_helpers::table_plan::source_filter;
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
@@ -95,6 +97,7 @@ use crate::schema_plan::constants::LOADED_AT_COLUMN;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
+use crate::snowflake_source::models::UnloadedFiles;
 use crate::store_paths::models::Location;
 use crate::table_lease::constants::LEASE_REFRESH;
 use crate::table_lease::main::keep_lease::keep_lease;
@@ -117,7 +120,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use crate::loader::_helpers::table_plan::is_direct;
+use crate::loader::_helpers::table_plan::{is_direct, pulls_unloaded};
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself).
 fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
@@ -565,6 +568,52 @@ impl Publisher {
         }
     }
 
+    /// Load one unload's `files` by having the destination read them itself, where the plan chose that; the destination must load them so.
+    pub(crate) async fn load_unloaded(
+        &mut self,
+        files: &UnloadedFiles,
+    ) -> Result<DirectLoaded, LoaderError> {
+        let columns = staged_columns(&self.table);
+        let batch = UnloadedBatch {
+            files,
+            read: &self.table.read_columns,
+            write_columns: &self.table.schema.write_columns,
+            target: write_target(
+                &self.table,
+                self.staging.as_ref(),
+                &columns,
+                ((&self.load_id, self.batch), (self.direct, self.builds)),
+            ),
+            loaded_at: &self.loaded_at,
+        };
+        let loaded = load_unloaded(&mut self.writer, &batch).await?.ok_or_else(|| {
+            LoaderError::Invalid(format!(
+                "{}: the plan has the destination load the unloaded files itself, but it cannot",
+                self.table.spec.destination.table
+            ))
+        })?;
+        self.note_direct(&loaded);
+        Ok(loaded)
+    }
+
+    /// Pass `part` of the table's rows on: the destination loads the unloaded files itself where the plan chose that, otherwise SQLLoad stages the rows.
+    async fn pass_part(
+        &mut self,
+        reader: &SourceReader,
+        part: ReadPart,
+    ) -> Result<(), LoaderError> {
+        let table = self.table.clone();
+        if pulls_unloaded(table.route.as_ref()) {
+            unload_source(reader, &table, part, async |files| {
+                self.load_unloaded(files).await
+            })
+            .await?;
+            return Ok(());
+        }
+        read_source(reader, &table, part, async |batch| stage(self, batch).await).await?;
+        Ok(())
+    }
+
     /// Note what a direct batch did; a batch that is not yet committed waits for `cut`.
     pub(crate) fn note_direct(&mut self, loaded: &DirectLoaded) {
         match loaded {
@@ -897,10 +946,7 @@ async fn feed(
                         batch_bytes,
                         ..ReadPart::default()
                     };
-                    read_source(reader, table, part, async |batch| {
-                        stage(&mut publisher, batch).await
-                    })
-                    .await?;
+                    publisher.pass_part(reader, part).await?;
                     publisher
                         .cut(CommitRange::Window {
                             from: window.from.clone(),
@@ -1010,27 +1056,29 @@ async fn feed(
                     batch_bytes,
                     ..ReadPart::default()
                 };
-                read_source(reader, table, part, async |batch| {
-                    stage(&mut publisher, batch).await?;
-                    match publisher.full() {
-                        true => publisher
-                            .cut(CommitRange::Planned)
-                            .await
-                            .map_err(|error| error.to_string()),
-                        false => Ok(()),
+                match pulls_unloaded(table.route.as_ref()) {
+                    true => publisher.pass_part(reader, part).await?,
+                    false => {
+                        read_source(reader, table, part, async |batch| {
+                            stage(&mut publisher, batch).await?;
+                            match publisher.full() {
+                                true => publisher
+                                    .cut(CommitRange::Planned)
+                                    .await
+                                    .map_err(|error| error.to_string()),
+                                false => Ok(()),
+                            }
+                        })
+                        .await?;
                     }
-                })
-                .await?;
+                }
             }
             CommitRule::Whole(_) => {
                 let part = ReadPart {
                     batch_bytes,
                     ..ReadPart::default()
                 };
-                read_source(reader, table, part, async |batch| {
-                    stage(&mut publisher, batch).await
-                })
-                .await?;
+                publisher.pass_part(reader, part).await?;
                 if deletes_range(table) {
                     publisher.cut(CommitRange::Planned).await?;
                 }

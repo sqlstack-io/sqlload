@@ -3,28 +3,29 @@
 use crate::adapters::duckdb::_helpers::blocking::with_connection;
 use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbDestination;
+use crate::file_store::main::s3_keys::s3_keys;
+use crate::stage_api::models::AwsCredentials;
 use crate::store_paths::models::StoreKind;
 
-/// Run `insert` and return the rows it loaded. For S3 files it first loads `httpfs` (installing it on first use) and sets a temporary secret scoped to the bucket and named after it (hex, so two buckets never share a name), in the connection's region, else `AWS_REGION` / `AWS_DEFAULT_REGION`, else us-east-1 as SQLLoad's reader does: the `AWS_*` keys when the environment has them, which are passed as parameters and never appear in SQL, otherwise the AWS credential chain.
+/// Run `insert` and return the rows it loaded. For S3 files it first loads `httpfs` (installing it on first use) and sets a temporary secret scoped to the bucket and named after it (hex, so two buckets never share a name), in the connection's region, else `AWS_REGION` / `AWS_DEFAULT_REGION`, else us-east-1 as SQLLoad's reader does: the keys SQLLoad's own S3 reads use (the `AWS_*` variables, else the shared credentials file under the connection's `profile` or `AWS_PROFILE`), passed as parameters and never in SQL, otherwise the AWS credential chain.
 pub(in crate::adapters) async fn pull_files(
     destination: &DuckDbDestination,
     store: &StoreKind,
     insert: String,
 ) -> Result<u64, DuckDbError> {
-    let bucket = match store {
-        StoreKind::S3 { bucket, region, .. } => Some((bucket.clone(), region.clone())),
-        StoreKind::Filesystem { .. } => None,
-    };
-    let keys: Option<[String; 3]> = match (
-        std::env::var("AWS_ACCESS_KEY_ID"),
-        std::env::var("AWS_SECRET_ACCESS_KEY"),
-    ) {
-        (Ok(key), Ok(secret)) => Some([
-            key,
-            secret,
-            std::env::var("AWS_SESSION_TOKEN").unwrap_or_default(),
-        ]),
-        _ => None,
+    let (bucket, keys) = match store {
+        StoreKind::S3 {
+            bucket,
+            region,
+            profile,
+            ..
+        } => (
+            Some((bucket.clone(), region.clone())),
+            s3_keys(profile.as_deref())
+                .map_err(DuckDbError::Task)?
+                .map(secret_parameters),
+        ),
+        StoreKind::Filesystem { .. } => (None, None),
     };
     let region = std::env::var("AWS_REGION")
         .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
@@ -52,4 +53,10 @@ pub(in crate::adapters) async fn pull_files(
         Ok(connection.execute(&insert, [])? as u64)
     })
     .await
+}
+
+/// `keys` as the `KEY_ID`, `SECRET` and `SESSION_TOKEN` parameters of a DuckDB secret.
+fn secret_parameters(keys: AwsCredentials) -> [String; 3] {
+    let token = keys.session_token.map(|token| token.0).unwrap_or_default();
+    [keys.key_id, keys.secret.0, token]
 }

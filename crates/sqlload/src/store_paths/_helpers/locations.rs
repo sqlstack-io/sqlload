@@ -17,6 +17,7 @@ pub(crate) fn url_location(path: &str) -> Result<Option<Location>, PathError> {
                 bucket: bucket.to_owned(),
                 region: None,
                 endpoint: None,
+                profile: None,
             },
             prefix: folder(&[key])?,
         }));

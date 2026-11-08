@@ -36,3 +36,14 @@ pub(crate) enum UnloadFolder {
         folder: crate::store_paths::models::Location,
     },
 }
+
+/// One unload's files in S3, which the destination reads itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnloadedFiles {
+    /// The unload's own folder.
+    pub folder: crate::store_paths::models::Location,
+    /// Each file's key below `folder`; none when the unload wrote no rows.
+    pub keys: Vec<String>,
+    /// The rows `COPY INTO` reports unloading.
+    pub rows: u64,
+}

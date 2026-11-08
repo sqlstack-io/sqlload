@@ -21,3 +21,9 @@ pub const FLATTENED_METADATA_KEY: &str = "sqlload.flattened";
 
 /// Separates the names under `FLATTENED_METADATA_KEY`.
 pub const FLATTENED_SEPARATOR: &str = "\u{0}";
+
+/// The start of a projection's path: the row object itself.
+pub const PROJECTION_ROOT: &str = "$";
+
+/// Separates the keys of a projection's path, `$.address.city`.
+pub const PROJECTION_SEPARATOR: char = '.';

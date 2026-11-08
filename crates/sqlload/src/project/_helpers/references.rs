@@ -36,6 +36,16 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
             .any(|target| target.connection == *name);
         problems.extend(stage_problems(name, connection, targeted));
         problems.extend(odbc_connection_problems(name, connection));
+        if let ConnectionConfig::S3 {
+            profile: Some(profile),
+            ..
+        } = connection
+            && profile.is_empty()
+        {
+            problems.push(format!(
+                "[connections.{name}] profile is empty; omit it to use AWS_PROFILE, else default"
+            ));
+        }
     }
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));

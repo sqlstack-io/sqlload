@@ -974,5 +974,6 @@ fn table_read(
         state: feed.state.clone(),
         is_reload: load.options.reload,
         flatten: spec.flatten.clone(),
+        masked: spec.masked.columns.keys().cloned().collect(),
     }
 }

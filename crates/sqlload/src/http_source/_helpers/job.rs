@@ -13,18 +13,30 @@ use crate::http_source::_helpers::oauth::token_url;
 use crate::http_source::_helpers::pages::paginate;
 use crate::http_source::_helpers::selector::{selected_rows, selector};
 use crate::http_source::_helpers::urls::{filled_path, placeholders};
+use crate::row_batches::main::projection::projection;
+use crate::row_batches::main::projection_problem::projection_problem;
+use crate::row_batches::models::{Projection, ProjectionRules};
 use std::time::Duration;
 
 use crate::http::main::install_tls_provider::install_tls_provider;
 use crate::http_source::constants::{JOB_THREADS, MAX_REDIRECTS, PAGES_AHEAD};
 use crate::http_source::models::{
-    Auth, Calls, FanOut, HttpJob, HttpPage, KeyFeed, Over, Paginator, Request, Selector,
+    Auth, Calls, FanOut, FieldSpec, HttpJob, HttpPage, KeyFeed, Over, Paginator, Request, Selector,
     StatusAction,
 };
 
-/// Every problem the job's definition has, found before any request.
-pub(crate) fn job_problems(job: &HttpJob) -> Vec<String> {
-    match job {
+/// Every problem the job's definition has, found before any request, including projected rows that break the table's `rules`.
+pub(crate) fn job_problems(job: &HttpJob, rules: ProjectionRules<'_>) -> Vec<String> {
+    let rows = match job {
+        HttpJob::Paginate(request) => request,
+        HttpJob::FanOut(fan_out) => &fan_out.request,
+    };
+    let mut problems = match request_projection(rows) {
+        Ok(Some(projection)) => projection_problem(&projection, rules).into_iter().collect(),
+        Ok(None) => Vec::new(),
+        Err(problem) => vec![problem],
+    };
+    problems.extend(match job {
         HttpJob::Paginate(request) => {
             let mut problems = request_problems(request);
             problems.extend(field_problem(request));
@@ -37,7 +49,22 @@ pub(crate) fn job_problems(job: &HttpJob) -> Vec<String> {
             problems
         }
         HttpJob::FanOut(fan_out) => fan_out_problems(fan_out),
-    }
+    });
+    problems
+}
+
+/// The projection `request`'s `fields` and `keep_record` describe, if any.
+pub(crate) fn request_projection(request: &Request) -> Result<Option<Projection>, String> {
+    let fields = request.fields.as_deref().map(field_triples);
+    projection(fields.as_deref(), request.keep_record.as_deref())
+}
+
+/// Each field as (column, path, required).
+fn field_triples(fields: &[FieldSpec]) -> Vec<(String, String, bool)> {
+    fields
+        .iter()
+        .map(|field| (field.name.clone(), field.path.clone(), field.required))
+        .collect()
 }
 
 /// Why the rows' `select` names a key field, which only fan_out's over reads, if it does.
@@ -131,6 +158,10 @@ fn fan_out_problems(fan_out: &FanOut) -> Vec<String> {
     match &fan_out.over {
         Over::Paginate(over) => {
             problems.extend(request_problems(over));
+            problems.extend(
+                (over.fields.is_some() || over.keep_record.is_some())
+                    .then(|| "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows".to_owned()),
+            );
             problems.extend(placeholders(&over.path).first().map(|name| {
                 format!("fan_out over path {} has the placeholder {{{name}}}; over must be a plain paginate", over.path)
             }));

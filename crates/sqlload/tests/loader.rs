@@ -60,6 +60,8 @@ mod test_postgres_to_duckdb;
 mod test_postgres_to_files;
 #[path = "loader/test_publish_checks.rs"]
 mod test_publish_checks;
+#[path = "loader/test_s3_profiles.rs"]
+mod test_s3_profiles;
 #[path = "loader/test_sheets_to_duckdb.rs"]
 mod test_sheets_to_duckdb;
 #[path = "loader/test_snowflake_routes.rs"]

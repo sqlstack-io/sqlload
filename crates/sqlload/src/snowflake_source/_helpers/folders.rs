@@ -110,6 +110,7 @@ fn run_folder(
             bucket,
             region,
             endpoint: None,
+            profile: None,
         },
         prefix: format!("{}{run}/", location.prefix),
     })

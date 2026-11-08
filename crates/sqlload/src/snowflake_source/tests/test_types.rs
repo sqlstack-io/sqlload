@@ -50,3 +50,27 @@ pub(crate) struct RowsUnloadedTestCase {
     /// The row count, or the error.
     pub(crate) expected_rows: Result<u64, &'static str>,
 }
+
+/// One `SHOW` listing: its columns and rows.
+pub(crate) type Listing = (&'static [&'static str], Vec<Vec<Option<&'static str>>>);
+
+/// A kept table as `SCHEMA.NAME`, its row and byte estimates, and its comment.
+pub(crate) type ListedTable = (&'static str, i64, i64, Option<&'static str>);
+
+pub(crate) struct ListedTablesTestCase {
+    pub(crate) description: &'static str,
+    /// The `SHOW TABLES` and `SHOW VIEWS` results.
+    pub(crate) listings: Vec<Listing>,
+    pub(crate) include: &'static [&'static str],
+    pub(crate) exclude: &'static [&'static str],
+    /// The kept tables in order; `None` when the listing is not trusted.
+    pub(crate) expected_tables: Option<Vec<ListedTable>>,
+}
+
+pub(crate) struct DescribedColumnsTestCase {
+    pub(crate) description: &'static str,
+    /// `DESCRIBE TABLE` rows: name, type and `null?`.
+    pub(crate) rows: &'static [[&'static str; 3]],
+    /// Each column's loaded name, nullability and type.
+    pub(crate) expected_columns: Vec<(&'static str, bool, Result<ColumnType, String>)>,
+}

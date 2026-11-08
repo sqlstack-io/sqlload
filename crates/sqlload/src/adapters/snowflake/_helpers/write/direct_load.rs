@@ -56,7 +56,7 @@ impl SnowflakeWriter {
         if let Some(reason) = direct_check(
             spec,
             (batch.read, batch.files, &refused),
-            covering.as_ref().map(|(stage, _)| stage),
+            covering.as_ref().map(|(stage, _)| stage.as_ref()),
         ) {
             return Err(LoaderError::Invalid(format!(
                 "Snowflake cannot load this batch's files exactly by reading them itself, and they never go through SQLLoad instead: {reason}"

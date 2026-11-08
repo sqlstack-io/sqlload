@@ -155,6 +155,20 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             ],
         },
         PlanRouteTestCase {
+            description: "an unload the destination could read itself is read back when the table needs the loader",
+            reader: ReaderOffer {
+                needs_loader: Some(HMAC.to_owned()),
+                ..warehouse_source(BIG)
+            },
+            writer: clickhouse_destination(),
+            overrides: RouteOverrides::default(),
+            expected_steps: &[
+                "unload Parquet to s3://lake/unload/",
+                "read parquet into Arrow",
+                "destination takes Arrow",
+            ],
+        },
+        PlanRouteTestCase {
             description: "a local directory downloads an unload from the lake",
             reader: warehouse_source(BIG),
             writer: local_destination(),

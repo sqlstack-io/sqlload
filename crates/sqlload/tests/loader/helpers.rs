@@ -326,6 +326,7 @@ pub(crate) fn seaweedfs_store(endpoint: &str, _: &std::path::Path) -> (StoreKind
         bucket: "example-bucket-test".to_owned(),
         region: Some(REGION.to_owned()),
         endpoint: Some(endpoint.to_owned()),
+        profile: None,
     };
     (store, toml)
 }
@@ -1026,6 +1027,7 @@ pub(crate) async fn run_route(
             bucket: "fake-bucket".to_owned(),
             region: Some("us-east-1".to_owned()),
             endpoint: Some(base.clone()),
+            profile: None,
         },
     ][usize::from(test_case.files == RouteFiles::Bucket)]
     .clone();

@@ -6,7 +6,9 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::snowflake_source::_helpers::type_map::{loaded_name, natural_type};
-use crate::snowflake_source::constants::CATALOG_NOT_NULL;
+use crate::snowflake_source::constants::{
+    CATALOG_NOT_NULL, CATALOG_SCHEMA, DESCRIBED_NOT_NULL, SHOW_ROWS_MAX,
+};
 use crate::snowflake_source::errors::SnowflakeSourceError;
 use crate::sql_api::models::SqlRows;
 
@@ -50,7 +52,7 @@ pub(crate) fn catalog_tables(
                 number(4).unwrap_or(38),
                 number(5).unwrap_or(0)
             ),
-            "TEXT" => match number(6) {
+            "TEXT" | "VARCHAR" => match number(6) {
                 Some(length) => format!("VARCHAR({length})"),
                 None => "VARCHAR".to_owned(),
             },
@@ -75,6 +77,65 @@ pub(crate) fn catalog_tables(
         ));
     }
     tables.into_values().collect()
+}
+
+/// The tables and views that `SHOW TABLES` and `SHOW VIEWS` list, still without columns, keeping those `include` matches and `exclude` does not, sorted by schema and name; `None` when a listing may have been cut short at Snowflake's row cap.
+pub(crate) fn listed_tables(
+    listings: &[SqlRows],
+    include: &GlobSet,
+    exclude: &GlobSet,
+) -> Option<Vec<SourceTable>> {
+    let mut tables: BTreeMap<(String, String), SourceTable> = BTreeMap::new();
+    for listing in listings {
+        if listing.rows.len() >= SHOW_ROWS_MAX {
+            return None;
+        }
+        for row in &listing.rows {
+            let text = |column: &str| listing.value(row, column).unwrap_or_default().to_owned();
+            let number = |column: &str| {
+                listing
+                    .value(row, column)
+                    .and_then(catalog_number)
+                    .unwrap_or(-1)
+            };
+            let (schema, name) = (text("schema_name"), text("name"));
+            let qualified = format!("{schema}.{name}");
+            if schema == CATALOG_SCHEMA
+                || !include.is_match(&qualified)
+                || exclude.is_match(&qualified)
+            {
+                continue;
+            }
+            let table = SourceTable {
+                schema: schema.clone(),
+                name: name.clone(),
+                columns: Vec::new(),
+                primary_key: Vec::new(),
+                indexed_columns: Vec::new(),
+                estimated_rows: number("rows"),
+                estimated_bytes: number("bytes"),
+                comment: Some(text("comment")).filter(|comment| !comment.trim().is_empty()),
+            };
+            tables.insert((schema, name), table);
+        }
+    }
+    Some(tables.into_values().collect())
+}
+
+/// The columns `DESCRIBE TABLE` or `DESCRIBE RESULT` lists, in order.
+pub(crate) fn described_columns(described: &SqlRows) -> Vec<SourceColumn> {
+    described
+        .rows
+        .iter()
+        .map(|row| {
+            let text = |column: &str| described.value(row, column).unwrap_or_default();
+            source_column(
+                text("name"),
+                text("type"),
+                text("null?") != DESCRIBED_NOT_NULL,
+            )
+        })
+        .collect()
 }
 
 /// A column of Snowflake type `type_text`, loaded under its lower-case name when it is a plain upper-case identifier.

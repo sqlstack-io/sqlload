@@ -12,7 +12,7 @@ pub fn json_rows(
     on_rows: impl FnMut(RowColumns) -> Result<(), String>,
 ) -> Result<(), String> {
     let bytes = bytes.strip_prefix(BYTE_ORDER_MARK).unwrap_or(bytes);
-    let mut sink = RowSink::new(read.batch_rows, on_rows);
+    let mut sink = RowSink::new(read.batch_rows, read.projection.clone(), on_rows);
     match (read.layout, read.path.as_deref()) {
         (JsonLayout::Lines, None) => sink.read_lines(bytes)?,
         (JsonLayout::Lines, Some(_)) => {

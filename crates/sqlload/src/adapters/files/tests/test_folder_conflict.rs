@@ -66,6 +66,7 @@ fn given_configured_table_folders_when_checking_one_then_shared_and_nested_folde
                         bucket: "other-bucket".to_owned(),
                         region: None,
                         endpoint: None,
+                        profile: None,
                     },
                     prefix: "shop/orders/".to_owned(),
                 },

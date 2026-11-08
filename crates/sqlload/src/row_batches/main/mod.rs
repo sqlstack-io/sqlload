@@ -5,5 +5,7 @@ pub mod flattened_columns;
 pub mod json_rows;
 pub mod merge_schema;
 pub mod normalise_batch;
+pub mod projection;
+pub mod projection_problem;
 pub mod settled_schema;
 pub mod text_rows;
