@@ -4,3 +4,4 @@ pub mod cursor_end;
 pub mod decode_copy;
 pub mod plan_read;
 pub mod read_catalog;
+pub mod relay_tls;

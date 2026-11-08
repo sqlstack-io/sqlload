@@ -119,3 +119,9 @@ JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = $1 AND c.relname = $2";
 /// Pages (8 KiB each by default, so 128 MiB) below which a table is read in one pass: more connections would not pay off.
 pub const SPLIT_READ_MIN_PAGES: i64 = 16_384;
+
+/// Postgres's `SSLRequest`: length 8, then code 80877103.
+pub const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
+
+/// How long a TLS relay waits for its replication client to connect.
+pub const RELAY_ACCEPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);

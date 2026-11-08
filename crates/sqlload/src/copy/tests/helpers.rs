@@ -22,6 +22,8 @@ const KEYS: &[&str] = &[
     "loader_schema",
     "destination",
     "description",
+    "sslmode",
+    "sslrootcert",
 ];
 
 /// The project's lines for `KEYS`, the connections `--print-toml` prints, each variable as `NAME=value` and each warning; or the error. A line `leaked` follows when any of it but the variables holds the test password.

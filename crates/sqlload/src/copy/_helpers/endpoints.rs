@@ -2,7 +2,7 @@
 
 use toml::{Table, Value};
 
-use crate::copy::constants::{REDACTED, S3_SETTINGS};
+use crate::copy::constants::{POSTGRES_SETTINGS, REDACTED, S3_SETTINGS};
 use crate::copy::models::{Endpoint, Role};
 
 /// The endpoint `text` names at `role`: `connection:locator` for a connection in `connections` (or a bare name), a URI, or a local folder; every message shows `text` with its password redacted.
@@ -143,7 +143,7 @@ fn uri_endpoint(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<End
     }
 }
 
-/// `postgresql://user[:password]@host[:port]/database#schema.table`; `${ENV:NAME}` works in every part, and a literal password moves into a variable so the project only references it.
+/// `postgresql://user[:password]@host[:port]/database[?sslmode=...]#schema.table`; `${ENV:NAME}` works in every part, and a literal password moves into a variable so the project only references it.
 fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoint, String> {
     let problem = |what: &str| {
         format!(
@@ -167,9 +167,10 @@ fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoin
     let slash = find_outside(place, '/', false)
         .filter(|_| find_outside(place, '@', false).is_none())
         .ok_or_else(|| problem("it names no database"))?;
-    let (host_port, database) = (&place[..slash], &place[slash + 1..]);
-    if database.is_empty() || database.contains(['/', '?']) {
-        return Err(problem("it names no database, or has a query"));
+    let (host_port, path) = (&place[..slash], &place[slash + 1..]);
+    let (database, query) = path.split_once('?').unwrap_or((path, ""));
+    if database.is_empty() || database.contains('/') {
+        return Err(problem("it names no database"));
     }
     let (host, port) = host_and_port(host_port);
     let host = host.trim_start_matches('[').trim_end_matches(']');
@@ -187,6 +188,16 @@ fn postgres(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<Endpoin
         ("database", &decoded(database)),
     ]);
     table.insert("port".to_owned(), port);
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if !POSTGRES_SETTINGS.contains(&key) {
+            return Err(problem(&format!(
+                "it sets {key}; a postgresql:// URI takes only {}",
+                POSTGRES_SETTINGS.join(", ")
+            )));
+        }
+        table.insert(key.to_owned(), Value::String(decoded(value)));
+    }
     let reference = format!("${{ENV:{}}}", role.password_variable());
     let (stored, password_shown) = match (password.is_empty(), literal) {
         (true, _) => (None, String::new()),

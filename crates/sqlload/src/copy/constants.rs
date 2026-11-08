@@ -15,3 +15,6 @@ pub const REDACTED: &str = "***";
 
 /// The query settings an `s3://` URI takes.
 pub const S3_SETTINGS: &[&str] = &["region", "endpoint"];
+
+/// The query settings a `postgresql://` URI takes, as libpq names them.
+pub const POSTGRES_SETTINGS: &[&str] = &["sslmode", "sslrootcert", "sslcert", "sslkey"];

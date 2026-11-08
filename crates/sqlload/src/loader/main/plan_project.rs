@@ -37,6 +37,7 @@ pub async fn plan_project(
             };
         let module = project.python_modules.get(source_name);
         plan.problems.extend(resolved.problems);
+        plan.warnings.extend(resolved.warnings);
         plan.skipped.extend(resolved.skipped);
         claims.extend(folder_claims(&resolved.specs, destinations));
         names.extend(resolved.specs.iter().map(|spec| {
