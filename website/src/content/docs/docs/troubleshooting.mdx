@@ -34,6 +34,13 @@ common ones; each message is copied from SQLLoad.
 | `Postgres query failed: permission denied for database postgres (SQLSTATE 42501)` | The user can't create the publication. Create it as the tables' owner and name it with `publication`. See [Requirements](/docs/sources/postgres-cdc/#requirements). |
 | `Python source shop uses connection wh, which target dev loads into` | Give the Python source its own connection; table functions never get warehouse credentials. |
 | `Python table orders is declared twice (...); table names are unique across the project` | Rename one of the functions, or pass `name=` to the decorator. |
+| `write_strategy = "append" cannot follow the date cursor visit_day: ...` | `append` refuses a date cursor from 0.25.0. Use `delete_insert` or `merge`. See [append](/docs/concepts/write-strategies/#append). |
+| `append_cursor_inclusive = true reads from the maximum order_id itself, so every run appends the rows at that value again ...` | A warning. Leave `append_cursor_inclusive` unset to read after the maximum. |
+| `[sources.app] reads legacy-db.example.com:5432 in plain text: ...` | A warning: the server doesn't offer TLS and `sslmode = "prefer"` fell back. Enable TLS on the server and set `sslmode = "verify-full"`, or set `sslmode = "disable"` to accept it. See [TLS](/docs/sources/postgres/#tls). |
+| `error performing TLS handshake: invalid peer certificate: UnknownIssuer` | The server's certificate isn't signed by a CA SQLLoad trusts. Set `sslrootcert` to its CA. |
+| `invalid peer certificate: certificate not valid for name "..."` | `verify-full` connected to a host the certificate doesn't name. Use the host name in its subject alternative names. |
+| `error performing TLS handshake: server does not support TLS` | `require` or `verify-*` against a server without TLS. |
+| `sslcert and sslkey must be set together` | Set both, or neither. |
 | `skipped rows outside the cursor window; use ctx.cursor_value to read only new data` | A warning: the load is correct, but the function reads more than it needs. Filter on `ctx.cursor_value`. |
 
 ## A table is missing from the plan

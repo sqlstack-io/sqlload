@@ -27,6 +27,8 @@ and later. From 0.24.0, a load into a files target names each table by its folde
   tables and has `CREATE` on the database. Otherwise, create one as the tables' owner and name it
   with `publication`; SQLLoad then only checks it.
 - **Every table** has a primary key and a replica identity other than `NOTHING`.
+- **TLS**, when the server needs it, is set on the connection as for any Postgres source, and
+  covers the replication session too. See [TLS](/docs/sources/postgres/#tls).
 - **The target** is DuckDB, Snowflake, Databricks (see [Into Databricks](#into-databricks)), or a
   files target with `cdc_mode = "changelog"` (see [Into Parquet files](#into-parquet-files)). A
   BigQuery target is refused at `plan`.
