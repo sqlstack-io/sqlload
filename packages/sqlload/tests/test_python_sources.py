@@ -953,3 +953,24 @@ def test_given_flatten_on_a_files_source_when_planning_then_it_is_refused(tmp_pa
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
 	assert "flatten applies to Python tables; nested values from this source stay JSON" in done.stdout, done.stdout + done.stderr
+
+
+DATE_CURSOR_MODULE = '''
+import datetime
+
+import sqlload as sl
+
+shop = sl.source("shop", connection="shop")
+
+
+@shop.table(description="Test table.", write_strategy="append", cursor_column="day")
+def days(ctx):
+    yield {"id": 1, "day": datetime.date(2026, 11, 1)}
+'''
+
+
+def test_given_append_with_an_undeclared_date_cursor_when_loading_then_it_is_refused_before_the_table_exists(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=DATE_CURSOR_MODULE)
+	done = sqlload(project, "load")
+	assert (done.returncode, 'cannot follow the date cursor day' in done.stdout + done.stderr) == (1, True), done.stdout + done.stderr
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__days'") == [(0,)]

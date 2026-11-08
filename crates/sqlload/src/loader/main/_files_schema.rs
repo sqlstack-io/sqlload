@@ -67,7 +67,8 @@ pub(in crate::loader) fn files_schema(
                 "cursor_column {name} is not written to the files (excluded, not in the enforced contract, or ignored by on_schema_change)"
             )])
         }
-        _ => append_checked(spec, desired, schema),
+        (true, _) => append_checked(spec, desired, schema),
+        _ => schema,
     }
 }
 
