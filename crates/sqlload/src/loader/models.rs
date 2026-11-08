@@ -13,7 +13,9 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::models::OpenFolder;
-use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, Footer, TextChecks};
+use crate::files_source::models::{
+    FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile, TextChecks,
+};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
@@ -529,6 +531,10 @@ pub struct FilesSink {
     pub writer: Option<FilesWriter>,
     /// Replaced files already deleted by earlier commits.
     pub deleted: std::collections::BTreeSet<String>,
+    /// Source files (of a files source) this load committed, each with its commit.
+    pub loaded: Vec<(String, LoadedFile)>,
+    /// Source files read since the last commit.
+    pub reading: Vec<LoadedFile>,
 }
 
 /// A connected source, ready to read.

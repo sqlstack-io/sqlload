@@ -26,10 +26,10 @@ use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::python::with_live_columns;
-use crate::loader::_helpers::sources::FilesPlanRequest;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
+use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource};
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
@@ -483,7 +483,7 @@ async fn plan_table_once(
             let request = FilesPlanRequest {
                 spec,
                 files,
-                destination,
+                loaded: LoadedSource::Query(destination),
                 live: live.as_deref(),
                 read_columns: &read_columns,
                 written: &written,

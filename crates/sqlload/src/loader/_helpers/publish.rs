@@ -26,6 +26,7 @@ use crate::adapters::files::main::close_writer::close_writer;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::open_writer::open_writer;
 use crate::adapters::files::main::partitions_finished::partitions_finished;
+use crate::adapters::files::main::write_loaded_files::write_loaded_files;
 use crate::adapters::files::main::write_rows::write_rows;
 use crate::adapters::files::models::FilesWriter;
 use crate::adapters::files::models::PartitionFolder;
@@ -53,7 +54,7 @@ use crate::files_source::main::batch_headers::batch_headers;
 use crate::files_source::main::key_columns::key_columns;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
-use crate::files_source::models::{FilesRead, FilesTable, SourceFormat, TextChecks};
+use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_runs_table;
@@ -211,6 +212,8 @@ impl Publisher {
                     replaced,
                     writer: None,
                     deleted: BTreeSet::new(),
+                    loaded: Vec::new(),
+                    reading: Vec::new(),
                 })
             }
             (false, None) => {
@@ -870,6 +873,7 @@ async fn feed(
                         }
                         None => {}
                     }
+                    publisher.note_read(&files);
                     let part = ReadPart {
                         files: Some(files),
                         footers,
@@ -1092,9 +1096,20 @@ impl Publisher {
         };
         let sink = self.sink()?;
         let folder = sink.folder.clone();
+        let mut loaded = sink.loaded.clone();
+        loaded.extend(
+            sink.reading
+                .iter()
+                .map(|file| (writer.file_id.clone(), file.clone())),
+        );
+        if !loaded.is_empty() {
+            write_loaded_files(&folder, &self.load_id, &loaded).await?;
+        }
         replace_files(&folder, &writer.file_id, (&keys, run.as_ref())).await?;
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
+            sink.loaded = loaded;
+            sink.reading.clear();
         }
         self.committed_rows += self.waiting_rows;
         self.waiting_rows = 0;
@@ -1128,6 +1143,18 @@ impl Publisher {
         partitions_finished(&writer.partitions, partition.by, cursor_type, to)
             .map(|finished| !finished)
             .map_err(LoaderError::Invalid)
+    }
+
+    /// Note the source files about to be read, so a files target's commit records them as loaded.
+    fn note_read(&mut self, files: &[DataFile]) {
+        let (Some(sink), Some(source)) = (self.files.as_mut(), &self.table.spec.files) else {
+            return;
+        };
+        let location = source.location.to_string();
+        sink.reading.extend(files.iter().map(|data| LoadedFile {
+            name: format!("{location}{}", data.file.relative_key),
+            version: data.file.version(),
+        }));
     }
 
     /// The columns grew while a files commit is being written: store its open files, and write later rows to new files holding the new columns too.

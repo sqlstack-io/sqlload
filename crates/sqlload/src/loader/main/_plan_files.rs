@@ -1,4 +1,4 @@
-//! Plan one table into a files target: its folder, unfinished loads, the live schema from the newest load's footers, and the cursor window.
+//! Plan one table into a files target: its folder, unfinished loads, the live schema from the newest load's footers, the cursor window, and for a files source the files it reads.
 
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::files::main::read_table_state::read_table_state;
@@ -6,6 +6,7 @@ use crate::adapters::files::main::write_notes::write_notes;
 use crate::adapters::files::models::FilesDestination;
 use crate::file_store::main::open_folder::open_folder;
 use crate::loader::_helpers::destination::{live_schema, table_folder};
+use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, plan_files};
 use crate::loader::_helpers::table_plan::{CommitRequest, commit_rule};
 use crate::loader::_helpers::table_plan::{
     blocked_plan, blocked_table, captured_columns, captured_mode, captured_problems, check_output,
@@ -69,8 +70,43 @@ pub(in crate::loader) async fn plan_files_table(
         },
     };
     let read = window.as_ref().and_then(|window| read_window(spec, window));
+    let bounds = window
+        .as_ref()
+        .map(|window| window.bounds.clone())
+        .unwrap_or_default();
+    let written: Vec<String> = schema
+        .write_columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let files = match (&spec.files, &schema.blocked) {
+        (Some(source), None) => {
+            let request = FilesPlanRequest {
+                spec,
+                files: source,
+                loaded: LoadedSource::Recorded(&state.loaded),
+                live: live.as_deref(),
+                read_columns: &read_columns,
+                written: &written,
+                bounds: (bounds.0.as_deref(), bounds.1.as_deref()),
+                options,
+            };
+            match plan_files(&request).await? {
+                Ok(read) => Some(read),
+                Err(problem) => {
+                    schema = blocked_plan(vec![problem]);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
     let (source_filter, mode, cursor_note) = match window {
-        Some(window) => (window.filter, window.mode, window.note),
+        Some(window) => (
+            window.filter.filter(|_| spec.files.is_none()),
+            window.mode,
+            window.note,
+        ),
         None => (None, WriteMode::Append, None),
     };
     let mode = captured_mode(spec, mode);
@@ -80,7 +116,7 @@ pub(in crate::loader) async fn plan_files_table(
         window: read.as_ref(),
         cursor_type: cursor_type.as_ref(),
         read_columns: &read_columns,
-        files: None,
+        files: files.as_ref(),
         mode: &mode,
     });
     let commits = match commits {
@@ -102,7 +138,7 @@ pub(in crate::loader) async fn plan_files_table(
         cursor_note,
         window: read,
         route: None,
-        files: None,
+        files,
         exists: state.exists,
         logged: None,
         commits,
@@ -126,12 +162,6 @@ async fn files_context(
     destination: &FilesDestination,
     options: &PlanOptions,
 ) -> Result<Result<FilesContext, TablePlan>, LoaderError> {
-    if spec.files.is_some() {
-        return Ok(Err(blocked_table(
-            spec,
-            vec!["a files source cannot load into a files target yet".to_owned()],
-        )));
-    }
     let read_columns = match read_columns(spec) {
         Ok(read) => read,
         Err(problems) => return Ok(Err(blocked_table(spec, problems))),

@@ -31,6 +31,12 @@ pub const UTC_SUFFIX: &str = "+00";
 /// Seconds in a day, to turn Parquet date statistics (days since 1970) into dates.
 pub const SECONDS_PER_DAY: i64 = 86_400;
 
+/// The folder below a table's folder holding, per load from a files source, the source files it loaded and the commit that holds each one's rows.
+pub const LOADED_FOLDER: &str = "_sqlload/loaded/";
+
+/// The suffix of a load's record in [`LOADED_FOLDER`], which no data file has.
+pub const LOADED_SUFFIX: &str = ".json";
+
 /// The folder below a table's folder holding one marker per load that has not finished.
 pub const PENDING_FOLDER: &str = "_sqlload/pending/";
 
