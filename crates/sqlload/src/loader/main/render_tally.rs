@@ -2,23 +2,8 @@
 
 use std::time::Duration;
 
-use crate::loader::_helpers::render::thousands;
+use crate::loader::_helpers::render::{change_line, thousands};
 use crate::loader::models::{TableOutcome, TallyLine};
-
-/// `created  name  detail`, as `apply` and a Python table's load report a change, as a tally line.
-fn change_line(line: &str) -> TallyLine {
-    let mut parts = line.splitn(3, "  ");
-    let verb = match parts.next().unwrap_or_default() {
-        "created" => "created",
-        "recreated" => "recreated",
-        _ => "altered",
-    };
-    TallyLine {
-        verb,
-        name: parts.next().unwrap_or_default().to_owned(),
-        detail: parts.next().unwrap_or_default().to_owned(),
-    }
-}
 
 /// One aligned line per object `applied` created or altered and per table loaded or failed, then a final line counting them; and whether nothing failed.
 pub fn render_tally(

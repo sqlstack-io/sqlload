@@ -368,6 +368,15 @@ impl ProjectPlan {
 }
 
 impl TablePlan {
+    /// Where the table comes from and goes, and how it is written, for its outcome.
+    pub fn origin(&self) -> OutcomeOrigin {
+        OutcomeOrigin {
+            source: self.spec.source_name.clone(),
+            target: self.spec.target.clone(),
+            strategy: self.spec.strategy,
+        }
+    }
+
     /// The name the table's load is reported under: its folder in a files target, which has no schema, and its display name elsewhere.
     pub fn outcome_name(&self) -> String {
         let adapter = sql_adapter(self.spec.warehouse);
@@ -434,8 +443,18 @@ pub struct SharedRun {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableOutcome {
     pub table: String,
+    /// The table's source, target and write strategy; `None` for a failure of no one table (a `load --follow` with none).
+    pub origin: Option<OutcomeOrigin>,
     pub loaded: Result<TableLoaded, String>,
     pub elapsed: std::time::Duration,
+}
+
+/// Where a loaded table comes from and goes, and how it is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutcomeOrigin {
+    pub source: String,
+    pub target: String,
+    pub strategy: WriteStrategy,
 }
 
 /// What a table's load did: rows written, schema changes made on the way (Python tables), and a remark for the `loaded` line.
@@ -730,4 +749,68 @@ pub struct FileSchema {
     /// The key below the table's folder.
     pub key: String,
     pub columns: Vec<LiveColumn>,
+}
+
+/// An `apply` or `load` to report as JSON: what it applied and loaded, and when it started and how long it took.
+#[derive(Debug, Clone, Copy)]
+pub struct RunReport<'a> {
+    /// `apply` or `load`.
+    pub command: &'static str,
+    /// The `created ...` and `altered ...` lines `apply` returned.
+    pub applied: &'a [String],
+    pub outcomes: &'a [TableOutcome],
+    pub started: chrono::DateTime<chrono::Utc>,
+    pub elapsed: std::time::Duration,
+}
+
+/// What `apply --json` and `load --json` print, in this field order.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RunResult {
+    pub schema_version: u32,
+    /// `apply` or `load`.
+    pub command: &'static str,
+    /// Whether every selected table planned, and every table loaded.
+    pub ok: bool,
+    pub started_at: String,
+    pub finished_at: String,
+    pub duration_seconds: f64,
+    pub summary: RunSummary,
+    pub plan: PlanView,
+    /// Objects created, altered or recreated, by `apply` and by Python tables' loads.
+    pub objects: Vec<ObjectChange>,
+    pub tables: Vec<TableResult>,
+}
+
+/// A run's counts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RunSummary {
+    pub created: usize,
+    pub altered: usize,
+    pub recreated: usize,
+    pub loaded: usize,
+    pub failed: usize,
+    pub rows: u64,
+}
+
+/// An object a run created, altered or recreated.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ObjectChange {
+    pub action: &'static str,
+    pub name: String,
+    pub detail: String,
+}
+
+/// A table's load in a run's result.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct TableResult {
+    pub table: String,
+    pub source: Option<String>,
+    pub target: Option<String>,
+    pub write_strategy: Option<String>,
+    /// `loaded` or `failed`.
+    pub status: &'static str,
+    pub rows: Option<u64>,
+    pub duration_seconds: f64,
+    pub note: Option<String>,
+    pub error: Option<String>,
 }

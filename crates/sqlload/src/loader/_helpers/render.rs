@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+use chrono::SecondsFormat;
+
 use crate::adapters::contract::models::{ChangeApply, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
@@ -8,10 +12,13 @@ use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, pulls_unloaded};
-use crate::loader::constants::{LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN};
+use crate::loader::constants::{
+    LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, RESULT_SCHEMA_VERSION,
+};
 use crate::loader::models::{
-    CommitRule, FilesOutput, PlanDetail, PlanItem, PlanView, ProjectPlan, PythonTable, SourceEnd,
-    TablePlan, WarehouseRoute, WarehouseSource, WholeReason,
+    CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
+    PythonTable, RunReport, RunResult, RunSummary, SourceEnd, TableOutcome, TablePlan, TableResult,
+    TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
 };
 use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
@@ -876,4 +883,106 @@ pub(crate) fn view_lines(view: &PlanView) -> Vec<String> {
         false => format!("✗ Plan failed with errors{summary}"),
     });
     lines
+}
+
+/// `created  name  detail`, as `apply` and a Python table's load report a change, as a tally line.
+pub(crate) fn change_line(line: &str) -> TallyLine {
+    let mut parts = line.splitn(3, "  ");
+    let verb = match parts.next().unwrap_or_default() {
+        "created" => "created",
+        "recreated" => "recreated",
+        _ => "altered",
+    };
+    TallyLine {
+        verb,
+        name: parts.next().unwrap_or_default().to_owned(),
+        detail: parts.next().unwrap_or_default().to_owned(),
+    }
+}
+
+/// What `run` did after `plan`: the plan, each change it made, each table's outcome, and counts (a table altered by several changes counts once).
+pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
+    let RunReport {
+        command,
+        applied,
+        outcomes,
+        started,
+        elapsed,
+    } = *run;
+    let changes = outcomes
+        .iter()
+        .flat_map(|outcome| outcome.loaded.iter())
+        .flat_map(|loaded| &loaded.changes);
+    let objects: Vec<ObjectChange> = applied
+        .iter()
+        .chain(changes)
+        .map(|line| {
+            let change = change_line(line);
+            ObjectChange {
+                action: change.verb,
+                name: change.name,
+                detail: change.detail,
+            }
+        })
+        .collect();
+    let tables: Vec<TableResult> = outcomes.iter().map(table_result).collect();
+    let actions = |action: &str| objects.iter().filter(|o| o.action == action).count();
+    let distinct = |action: &str| {
+        objects
+            .iter()
+            .filter(|object| object.action == action)
+            .map(|object| object.name.as_str())
+            .collect::<std::collections::BTreeSet<&str>>()
+            .len()
+    };
+    let statuses = |status: &str| tables.iter().filter(|t| t.status == status).count();
+    let summary = RunSummary {
+        created: actions("created"),
+        altered: distinct("altered"),
+        recreated: actions("recreated"),
+        loaded: statuses("loaded"),
+        failed: statuses("failed"),
+        rows: tables.iter().filter_map(|table| table.rows).sum(),
+    };
+    let view = plan_view(plan);
+    let finished = started + chrono::Duration::from_std(elapsed).unwrap_or_default();
+    RunResult {
+        schema_version: RESULT_SCHEMA_VERSION,
+        command,
+        ok: view.ok && summary.failed == 0,
+        started_at: started.to_rfc3339_opts(SecondsFormat::Millis, true),
+        finished_at: finished.to_rfc3339_opts(SecondsFormat::Millis, true),
+        duration_seconds: seconds(elapsed),
+        summary,
+        plan: view,
+        objects,
+        tables,
+    }
+}
+
+/// `outcome` as `--json` reports it.
+fn table_result(outcome: &TableOutcome) -> TableResult {
+    let (status, rows, note, error) = match &outcome.loaded {
+        Ok(loaded) => ("loaded", Some(loaded.rows), loaded.note.clone(), None),
+        Err(reason) => ("failed", None, None, Some(reason.clone())),
+    };
+    TableResult {
+        table: outcome.table.clone(),
+        source: outcome.origin.as_ref().map(|origin| origin.source.clone()),
+        target: outcome.origin.as_ref().map(|origin| origin.target.clone()),
+        write_strategy: outcome
+            .origin
+            .as_ref()
+            .map(|origin| origin.strategy.to_string()),
+        status,
+        rows,
+        duration_seconds: seconds(outcome.elapsed),
+        note,
+        error,
+    }
+}
+
+/// `elapsed` in seconds, to the millisecond.
+fn seconds(elapsed: Duration) -> f64 {
+    (elapsed.as_secs_f64() * 1000.0).round() / 1000.0
 }

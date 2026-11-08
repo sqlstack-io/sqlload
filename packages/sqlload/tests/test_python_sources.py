@@ -208,6 +208,57 @@ def test_given_a_generator_that_raises_when_loading_then_only_its_table_fails_an
 	assert query(project, "SELECT table_name FROM information_schema.tables ORDER BY table_name") == [("shop__good",)]
 
 
+
+def test_given_one_table_failing_when_loading_with_json_then_stdout_is_one_document_with_each_tables_outcome(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', name='good')(rows)\nshop.table(description='Test table.', name='bad')(rows)\n")
+	give(project, "good", [{"id": 1}, {"id": 2}])
+	give(project, "bad", {"rows": [{"id": 1}], "raise": "the API returned 503"})
+	done = sqlload(project, "load", "--json")
+	assert done.returncode == 1, done.stdout + done.stderr
+	result = json.loads(done.stdout)
+	assert (result["schema_version"], result["command"], result["ok"]) == (1, "load", False)
+	assert result["summary"] == {"created": 1, "altered": 0, "recreated": 0, "loaded": 1, "failed": 1, "rows": 2}
+	assert [(o["action"], o["name"]) for o in result["objects"]] == [("created", "RAW.shop__good")]
+	outcomes = {table["table"]: table for table in result["tables"]}
+	assert {name: (t["status"], t["rows"], t["source"], t["target"], t["write_strategy"]) for name, t in outcomes.items()} == {
+		"RAW.shop__good": ("loaded", 2, "shop", "dev", "replace"),
+		"RAW.shop__bad": ("failed", None, "shop", "dev", "replace"),
+	}
+	assert "RuntimeError: the API returned 503" in outcomes["RAW.shop__bad"]["error"]
+	assert result["plan"]["selected"] == 2
+	reload = sqlload(project, "load", "--json", "--reload")
+	assert reload.returncode == 1, reload.stdout + reload.stderr
+	error = json.loads(reload.stdout)["error"]
+	assert (error["code"], "--json cannot ask to confirm it; add --yes" in error["message"]) == ("load", True), reload.stdout
+	applied = sqlload(project, "apply", "--json")
+	assert applied.returncode == 0, applied.stdout + applied.stderr
+	assert (json.loads(applied.stdout)["command"], json.loads(applied.stdout)["tables"]) == ("apply", [])
+
+
+def test_given_a_plan_error_and_a_printing_source_when_loading_with_json_then_stdout_parses_and_the_run_is_not_ok(tmp_path: Path) -> None:
+	module = """import sqlload as sl
+
+shop = sl.source("shop", connection="shop")
+
+
+@shop.table(description="Orders.")
+def orders(ctx):
+    print("fetching page 1")
+    yield {"order_id": 1}
+
+
+@shop.table(description="Refunds.", columns={"refund_id": "no_such_type"})
+def refunds(ctx):
+    yield {"refund_id": 1}
+"""
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	done = sqlload(project, "load", "--json")
+	assert done.returncode == 1, done.stdout + done.stderr
+	result = json.loads(done.stdout)
+	assert (result["ok"], result["summary"]["loaded"], result["summary"]["failed"]) == (False, 1, 0)
+	assert [error["name"] for error in result["plan"]["errors"]] == ["refunds"]
+	assert "fetching page 1" in done.stderr
+
 def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come_from(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', name='orders', columns={'total': 'decimal(18,2)'})(rows)\nshop.table(description='Test table.', name='stores')(rows)\n")
 	done = sqlload(project, "plan")

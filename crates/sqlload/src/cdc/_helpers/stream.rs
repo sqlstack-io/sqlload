@@ -1236,6 +1236,7 @@ pub(crate) fn source_outcomes(
         });
         outcomes.push(TableOutcome {
             table: table.outcome_name(),
+            origin: Some(table.origin()),
             loaded: rows
                 .map(|rows| TableLoaded {
                     rows,
@@ -1406,6 +1407,7 @@ pub(crate) fn failed_outcomes(
     match outcomes.is_empty() {
         true => vec![TableOutcome {
             table: "load --follow".to_owned(),
+            origin: None,
             loaded: Err(error),
             elapsed,
         }],

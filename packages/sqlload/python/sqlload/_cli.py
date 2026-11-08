@@ -1,5 +1,6 @@
 """The `sqlload` console script: the native command line, run in this Python process."""
 
+import contextlib
 import signal
 import sys
 import threading
@@ -14,4 +15,10 @@ def main() -> None:
 		signal.signal(signal.SIGINT, signal.SIG_DFL)
 	sys.stdout.flush()
 	sys.stderr.flush()
-	sys.exit(_native.run_cli(["sqlload", *sys.argv[1:]]))
+	args = ["sqlload", *sys.argv[1:]]
+	if "--json" not in args:
+		sys.exit(_native.run_cli(args))
+	# The native command writes its one JSON document to the process's stdout; a source's print() goes to stderr, so stdout still parses.
+	with contextlib.redirect_stdout(sys.stderr):
+		code = _native.run_cli(args)
+	sys.exit(code)

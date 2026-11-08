@@ -55,10 +55,10 @@ fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_e
             expected_exit: "exit 1",
         },
         PlanFailureTestCase {
-            description: "--json on apply is refused before the project is read",
+            description: "--json on apply: a project that fails to plan is one JSON error, as for plan",
             project: NO_LOAD_METHOD,
             argv: &["apply", "--json"],
-            expected_output: "--json applies to plan only",
+            expected_output: "{\"error\":{\"code\":\"config\",\"help\":\"add one of these to [connections.wh]:",
             expected_exit: "exit 1",
         },
         PlanFailureTestCase {
