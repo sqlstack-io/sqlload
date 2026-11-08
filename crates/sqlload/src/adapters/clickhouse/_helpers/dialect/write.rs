@@ -119,7 +119,20 @@ pub(crate) fn write_statements(
     ]
 }
 
-/// The rows a `delete_insert` replaces: those whose cursor is one of its values, or within its range (`1`, every row, when it has no bounds). The bounds are cast to the cursor's type without `Nullable`, a timestamp's parsed with its offset (in UTC when it has none), so a bound ClickHouse cannot read fails rather than matching nothing.
+/// `text` as a value of `column_type` without `Nullable`, so text ClickHouse cannot read fails: a timestamp parsed with its offset (in UTC when it has none), anything else cast.
+pub(crate) fn typed_literal(text: &str, column_type: &ColumnType) -> String {
+    let literal = ClickHouseSql.render_loader_value_literal(text);
+    match column_type {
+        ColumnType::TimestampTz => format!("parseDateTime64BestEffort({literal}, 6, 'UTC')"),
+        ColumnType::TimestampNtz => format!("parseDateTime64BestEffort({literal}, 6)"),
+        _ => {
+            let sql_type = ClickHouseSql.render_loader_logical_type(column_type).sql;
+            format!("CAST({literal} AS {})", unwrapped(&sql_type))
+        }
+    }
+}
+
+/// The rows a `delete_insert` replaces: those whose cursor is one of its values, or within its range (`1`, every row, when it has no bounds). The bounds are [typed literals](typed_literal), so a bound ClickHouse cannot read fails rather than matching nothing.
 fn range_condition(adapter: &ClickHouseSql, request: &WriteStatementsRequest<'_>) -> String {
     let WriteMode::DeleteInsert {
         cursor_column,
@@ -135,16 +148,7 @@ fn range_condition(adapter: &ClickHouseSql, request: &WriteStatementsRequest<'_>
         .iter()
         .find(|column| column.name == *cursor_column)
         .map_or(ColumnType::Text, |column| column.column_type.clone());
-    let sql_type = adapter.render_loader_logical_type(&cursor_type).sql;
-    let sql_type = unwrapped(&sql_type);
-    let cast = |text: &str| {
-        let literal = adapter.render_loader_value_literal(text);
-        match cursor_type {
-            ColumnType::TimestampTz => format!("parseDateTime64BestEffort({literal}, 6, 'UTC')"),
-            ColumnType::TimestampNtz => format!("parseDateTime64BestEffort({literal}, 6)"),
-            _ => format!("CAST({literal} AS {sql_type})"),
-        }
-    };
+    let cast = |text: &str| typed_literal(text, &cursor_type);
     let column = adapter.render_identifier(cursor_column);
     if !values.is_empty() {
         let listed: Vec<String> = values.iter().map(|value| cast(value)).collect();
