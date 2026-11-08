@@ -25,7 +25,8 @@ $ sqlload load app__orders
 Where the read starts, in order:
 
 1. `--start-cursor`, when given.
-2. The destination's maximum of `cursor_column`, minus `lookback`.
+2. The destination's maximum of `cursor_column`, minus `lookback`. `append` reads strictly after
+   it; `plan` still prints it as `from` the maximum.
 3. `cursor_start`, when the table is empty.
 4. Otherwise, everything.
 

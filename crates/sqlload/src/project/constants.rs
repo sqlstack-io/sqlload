@@ -103,6 +103,7 @@ pub const WAREHOUSE_CONNECTION_KINDS: &[&str] = &[
     "bigquery",
     "clickhouse",
     "duckdb",
+    "postgres",
 ];
 
 /// The connection kind of a ClickHouse server, whose targets name no database above their loader schema.

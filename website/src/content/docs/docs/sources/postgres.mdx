@@ -115,3 +115,70 @@ it can still see.
 `numeric` without a precision has no fixed scale, so `plan` asks you to pin a type for it, such as
 `columns = { amount = "decimal(38,10)" }`. Postgres arrays load as JSON. See
 [Types](/docs/types/).
+
+## TLS
+
+A Postgres connection takes libpq's TLS settings, from 0.25.0. They apply to `postgres` and
+[`postgres_cdc`](/docs/sources/postgres-cdc/) sources alike, replication included.
+
+```toml
+[connections.app]
+kind = "postgres"
+host = "db.example.com"
+port = 5432
+user = "loader"
+password = "${ENV:APP_DB_PASSWORD}"
+database = "shop"
+sslmode = "verify-full"
+sslrootcert = "certs/db-ca.pem"
+# sslcert = "certs/loader.pem"   # a client certificate, with sslkey
+# sslkey = "certs/loader.key"
+```
+
+| `sslmode` | Encrypts | Checks the certificate |
+|-----------|----------|------------------------|
+| `disable` | Never | No |
+| `prefer` (default) | When the server offers it | No |
+| `require` | Always | No, unless `sslrootcert` is set: then as `verify-ca` |
+| `verify-ca` | Always | Signed by a trusted CA |
+| `verify-full` | Always | Signed by a trusted CA, for the host connected to |
+
+`require` and the `verify-*` modes refuse a server without TLS rather than fall back to plain text.
+
+`sqlload debug` ends each Postgres source's line with what protects it: `not encrypted`,
+`TLS, certificate not checked`, `TLS, CA checked` or `TLS, CA and host name checked`.
+
+```console
+$ sqlload debug
+ok    config  2 connections, 1 targets, 1 sources
+ok    target local  DuckDB v2.0.0
+ok    source app  loader@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2), TLS, CA and host name checked
+```
+
+When `prefer` reads a server over the network in plain text, `plan` warns. It doesn't for
+`localhost`, a loopback address, a Unix socket, or an explicit `sslmode = "disable"`.
+
+```console
+$ sqlload plan
+…
+Warnings (1)
+└── [sources.app] reads legacy-db.example.com:5432 in plain text: the server does not offer TLS, so sslmode = "prefer" fell back; set sslmode = "require" (or "verify-full") on connection app to refuse plain text, or "disable" to accept it
+```
+
+Where SQLLoad differs from libpq:
+
+- `verify-ca` and `verify-full` without `sslrootcert` trust the public CA roots built into SQLLoad,
+  not the operating system's store or `~/.postgresql/root.crt`. A server whose certificate comes
+  from a private CA, such as Amazon RDS and Aurora or a company CA, needs `sslrootcert`.
+- `verify-full` matches the host only against the certificate's subject alternative names, never
+  its common name.
+- A self-signed server certificate marked as a CA, as `openssl req -x509` makes by default, can't
+  be its own `sslrootcert`. Sign the server certificate with a separate CA and give that CA.
+- Certificate paths are relative to the directory SQLLoad runs in, not to `sqlload.toml`.
+
+As in libpq, `prefer` falls back to plain text when the server refuses TLS or the handshake fails,
+and a Unix socket host never uses TLS. Only `verify-full`, or `verify-ca` on a private network,
+keeps a man in the middle out.
+
+A `postgresql://` URI for [`sqlload copy`](/docs/cli/copy/) takes the same settings as a query,
+such as `?sslmode=verify-full&sslrootcert=certs/db-ca.pem`.

@@ -7,4 +7,5 @@ pub mod databricks;
 pub mod dispatch;
 pub mod duckdb;
 pub mod files;
+pub mod postgres;
 pub mod snowflake;

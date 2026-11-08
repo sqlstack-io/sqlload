@@ -7,7 +7,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 
 | Source | Formats | Read by |
 |--------|---------|---------|
-| Postgres | Tables, by `include` patterns | Binary `COPY` into Arrow |
+| Postgres | Tables, by `include` patterns | Binary `COPY` into Arrow, over TLS when the connection's `sslmode` asks |
 | Postgres changes (`postgres_cdc`) | Inserts, updates and deletes of tables, by `include` patterns | A snapshot, then a logical replication slot (`pgoutput`), in whole transactions. See [Postgres changes](/docs/sources/postgres-cdc/). |
 | Snowflake | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad. See [Snowflake](/docs/sources/snowflake/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |

@@ -1,3 +1,12 @@
+/// Why `--reload` is refused where SQLLoad never drops or recreates tables.
+pub const KEPT_TABLES_RELOAD_PROBLEM: &str = "--reload drops and recreates the table, which SQLLoad never does on a Postgres target; write_strategy = \"replace\" empties and refills it in one transaction instead";
+
+/// How to add a column a load needs to a table that has rows, where `--reload` would rebuild it.
+pub const RELOAD_FIX: &str = "run it once with --reload";
+
+/// The same on a Postgres target, which never drops and recreates a table.
+pub const KEPT_TABLES_COLUMN_FIX: &str = "SQLLoad never drops and recreates a Postgres table (--reload), so add the column with ALTER TABLE, then empty the table or fill the column, and load again";
+
 /// Rows per batch read from a database source.
 pub const SOURCE_BATCH_ROWS: usize = 65_536;
 
