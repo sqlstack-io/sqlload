@@ -265,6 +265,7 @@ pub(crate) fn pull_folder(endpoint: &str, prefix: &str) -> Result<OpenFolder, St
             bucket: PULL_BUCKET.to_owned(),
             region: Some(REGION.to_owned()),
             endpoint: Some(endpoint.to_owned()),
+            profile: None,
         },
         prefix: format!("{prefix}/"),
     })

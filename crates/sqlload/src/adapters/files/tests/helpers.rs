@@ -33,6 +33,7 @@ pub(crate) fn bucket() -> StoreKind {
         bucket: "lake-bucket".to_owned(),
         region: Some("eu-west-2".to_owned()),
         endpoint: None,
+        profile: None,
     }
 }
 
@@ -113,6 +114,7 @@ pub(crate) fn bucket_elsewhere() -> StoreKind {
         bucket: "lake-bucket".to_owned(),
         region: Some("us-east-1".to_owned()),
         endpoint: Some("http://127.0.0.1:9000".to_owned()),
+        profile: None,
     }
 }
 

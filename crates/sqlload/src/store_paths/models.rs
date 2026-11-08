@@ -6,6 +6,8 @@ pub enum StoreKind {
         region: Option<String>,
         /// A custom endpoint (MinIO, LocalStack, tests).
         endpoint: Option<String>,
+        /// The shared credentials file's profile to take keys from, over `AWS_PROFILE`.
+        profile: Option<String>,
     },
     /// A directory on the machine SQLLoad runs on.
     Filesystem { root: String },

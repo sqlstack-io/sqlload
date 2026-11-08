@@ -168,7 +168,7 @@ pub enum ConnectionConfig {
         #[serde(default)]
         sslkey: Option<PathBuf>,
     },
-    /// An S3 bucket; credentials come from `AWS_*` environment variables, web identity, or the instance/container role (AWS profiles and SSO are not read yet).
+    /// An S3 bucket; credentials come from `AWS_*` environment variables, the shared credentials file (under `profile`, else `AWS_PROFILE`), web identity, or the instance/container role.
     S3 {
         bucket: String,
         #[serde(default)]
@@ -176,6 +176,9 @@ pub enum ConnectionConfig {
         /// A custom endpoint such as MinIO.
         #[serde(default)]
         endpoint: Option<String>,
+        /// The shared credentials file's profile to take keys from.
+        #[serde(default)]
+        profile: Option<String>,
     },
     /// A directory on the machine SQLLoad runs on.
     Filesystem { root: String },
