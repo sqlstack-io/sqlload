@@ -2,7 +2,7 @@ use crate::http::errors::ApiError;
 use crate::stage_api::models::PipeTarget;
 
 /// A request to the pipe's Snowpipe REST `endpoint`; Snowpipe accepts only key-pair JWTs.
-pub(crate) fn pipe_request(
+pub(crate) async fn pipe_request(
     target: &PipeTarget<'_>,
     method: reqwest::Method,
     endpoint: &str,
@@ -18,7 +18,7 @@ pub(crate) fn pipe_request(
             "Snowpipe {endpoint} needs key-pair authentication; use load = \"copy\" with a token"
         )));
     }
-    let bearer = auth.bearer()?;
+    let bearer = auth.bearer().await?;
     Ok(http
         .request(
             method,

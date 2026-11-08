@@ -13,7 +13,8 @@ pub async fn load_history_scan(
     target: &PipeTarget<'_>,
     start: &str,
 ) -> Result<LoadReport, ApiError> {
-    let response = pipe_request(target, reqwest::Method::GET, "loadHistoryScan")?
+    let response = pipe_request(target, reqwest::Method::GET, "loadHistoryScan")
+        .await?
         .query(&[("startTimeInclusive", start)])
         .send()
         .await?;

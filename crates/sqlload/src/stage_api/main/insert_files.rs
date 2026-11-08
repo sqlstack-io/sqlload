@@ -13,7 +13,8 @@ pub async fn insert_files(
     paths: &[String],
 ) -> Result<Vec<String>, ApiError> {
     let files: Vec<_> = paths.iter().map(|path| json!({ "path": path })).collect();
-    let response = pipe_request(target, reqwest::Method::POST, "insertFiles")?
+    let response = pipe_request(target, reqwest::Method::POST, "insertFiles")
+        .await?
         .query(&[("showSkippedFiles", "true")])
         .json(&json!({ "files": files }))
         .send()

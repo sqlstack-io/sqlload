@@ -262,7 +262,7 @@ impl DriverSession {
     }
 
     async fn login(&self) -> Result<Tokens, ApiError> {
-        let login = self.auth.login_token()?;
+        let login = self.auth.login_token().await?;
         let body = json!({ "data": {
             "CLIENT_APP_ID": "sqlload",
             "CLIENT_APP_VERSION": env!("CARGO_PKG_VERSION"),
