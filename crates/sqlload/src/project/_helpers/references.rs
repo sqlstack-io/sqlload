@@ -33,9 +33,46 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
             .values()
             .any(|target| target.connection == *name);
         problems.extend(stage_problems(name, connection, targeted));
+        problems.extend(odbc_connection_problems(name, connection));
     }
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));
+    }
+    problems
+}
+
+/// Why an `odbc` connection cannot connect: it needs exactly one of `connection_string` and `dsn`; `user` and `password` go with `dsn`; and `dsn` and `user` are written unbraced, as driver managers read them, so they cannot hold `;`, `{` or `}`.
+fn odbc_connection_problems(name: &str, connection: &ConnectionConfig) -> Vec<String> {
+    let ConnectionConfig::Odbc {
+        connection_string,
+        dsn,
+        user,
+        password,
+    } = connection
+    else {
+        return Vec::new();
+    };
+    let place = format!("[connections.{name}]");
+    let mut problems: Vec<String> = Vec::new();
+    match (connection_string.is_some(), dsn.is_some()) {
+        (false, false) => problems.push(format!("{place} needs connection_string, or dsn")),
+        (true, true) => problems.push(format!(
+            "{place} takes connection_string or dsn, not both"
+        )),
+        (true, false) if user.is_some() || password.is_some() => problems.push(format!(
+            "{place} user and password go with dsn; with connection_string, put them in it (UID=...;PWD=...)"
+        )),
+        _ => {}
+    }
+    let unbraced = [dsn.as_deref(), user.as_deref()];
+    if unbraced
+        .into_iter()
+        .flatten()
+        .any(|value| value.contains([';', '{', '}']))
+    {
+        problems.push(format!(
+            "{place} dsn and user cannot contain ';', '{{' or '}}'; use connection_string instead"
+        ));
     }
     problems
 }

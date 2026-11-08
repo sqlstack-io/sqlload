@@ -1,9 +1,9 @@
 //! Read a table or query through ODBC as Arrow batches.
 
 use arrow_array::RecordBatch;
-use arrow_odbc::OdbcReaderBuilder;
 use tokio::sync::mpsc::Sender;
 
+use crate::odbc_source::_helpers::batches::{batch_reader, fetch_error};
 use crate::odbc_source::_helpers::connect::connect;
 use crate::odbc_source::_helpers::convert::{converted, output_schema};
 use crate::odbc_source::_helpers::query::select_query;
@@ -34,7 +34,7 @@ pub async fn read_rows(
     Ok(rows)
 }
 
-/// Fetch `query`'s rows into `sender` until they end, the receiver goes away, or a fetch fails (sent on as the error).
+/// Fetch `query`'s rows into `sender` until they end, the receiver goes away, or a fetch fails (sent on as the error). Decimal columns are fetched as text, which `converted` parses without rounding, since drivers round values to the scale they describe (an unbounded `numeric` as `NUMERIC(28,6)`).
 fn fetch(
     reader: &OdbcReader,
     query: &str,
@@ -42,27 +42,15 @@ fn fetch(
     sender: &Sender<Result<RecordBatch, OdbcSourceError>>,
 ) -> Result<(), OdbcSourceError> {
     let connection = connect(reader)?;
+    let dbms: String = connection.database_management_system_name()?;
     let Some(cursor) = connection.execute(query, (), None)? else {
         return Err(OdbcSourceError::Invalid(
             "the read returned no result set".to_owned(),
         ));
     };
-    let mut builder = OdbcReaderBuilder::new();
-    builder
-        .with_max_num_rows_per_batch(batch_rows)
-        .with_fallibale_allocations(true);
-    if let Some(size) = reader.limits.max_text_size {
-        builder.with_max_text_size(size);
-    }
-    if let Some(size) = reader.limits.max_binary_size {
-        builder.with_max_binary_size(size);
-    }
-    for batch in builder.build(cursor)? {
-        let batch = batch.map_err(|error| {
-            OdbcSourceError::Invalid(format!(
-                "{error}; a value longer than its buffer fails the read rather than being cut, so raise max_text_size or max_binary_size on the source"
-            ))
-        });
+    let batches = batch_reader(reader, cursor, (dbms, batch_rows))?;
+    for batch in batches {
+        let batch = batch.map_err(|error| fetch_error(&error.to_string()));
         let failed = batch.is_err();
         if sender.blocking_send(batch).is_err() || failed {
             break;

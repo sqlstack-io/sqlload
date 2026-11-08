@@ -33,7 +33,7 @@ clean-partial-duckdb-sources:
 # and unixODBC with the PostgreSQL ODBC driver (Debian and Ubuntu: unixodbc-dev odbc-postgresql) for the ODBC source.
 # The AWS variables are the test containers' credentials.
 test-containers:
-	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests --test exporter --quiet -- --test-threads=2
+	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,odbc --test exporter --quiet -- --test-threads=2
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,odbc --test loader --quiet -- --test-threads=2
 
 # Builds the sqlload extension (debug) into .venv and runs the package's tests.

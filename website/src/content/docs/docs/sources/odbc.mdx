@@ -67,13 +67,13 @@ Loads (2)                                           sqlload load
 | Key | Meaning |
 |-----|---------|
 | `connection_string` | The driver's connection string, such as `Driver={PostgreSQL Unicode};Server=db.example.com;Database=erp;Uid=loader;Pwd=...`. Use `${ENV:NAME}`, since it usually holds a password. |
-| `dsn` | A data source name from `odbc.ini`, instead of `connection_string`. |
+| `dsn` | A data source name from `odbc.ini`, instead of `connection_string`. It and `user` can't contain `;`, `{` or `}`. |
 | `user`, `password` | With `dsn`, when the DSN doesn't hold them. |
 
 Set `connection_string` or `dsn`, not both. SQLLoad uses unixODBC on Linux and macOS, and the
 driver manager built into Windows. The driver and the driver manager must be installed on the
-machine SQLLoad runs on; on Debian and Ubuntu, `unixodbc` plus the driver's package, such as
-`odbc-postgresql`.
+machine SQLLoad runs on; on Debian and Ubuntu, `unixodbc-dev` (which `cargo install` links
+against) plus the driver's package, such as `odbc-postgresql`.
 
 ## Drivers
 
@@ -84,7 +84,11 @@ with an `ANSI_QUOTES` SQL mode.
 | Driver | Tested |
 |--------|--------|
 | psqlODBC (`PostgreSQL Unicode`) | Yes, in containers. Add `BoolsAsChar=0` to the connection string so `boolean` columns load as `bool` rather than text. |
-| Others | Not yet. Any driver that describes prepared statements and lists tables should work; run `sqlload plan` to see the types it reports. |
+| Others | Not yet. A driver needs to describe prepared statements and list tables; run `sqlload plan` to see the types it reports. |
+
+A cursor filter compares the cursor column with a quoted literal, such as
+`"updated_at" >= '2026-03-01 10:00:05.123456'`, which the database converts to the column's type.
+Postgres does; check that yours does too before relying on a cursor.
 
 ## Choosing tables
 
@@ -106,11 +110,12 @@ cursor outside it, so the query needs no placeholder. Write the query in the dat
 
 ## Value sizes
 
-Drivers read values into buffers of a fixed size per column. A column with a declared length, such
-as `VARCHAR(200)`, gets a buffer that holds it. Columns without one, such as `TEXT` or
-`VARCHAR(MAX)`, need `max_text_size` (bytes) on the source, and binary ones need
-`max_binary_size`. A value longer than its buffer fails the read, naming the setting to raise; it's
-never cut short.
+Drivers read values into buffers of a fixed size per column, from the length the driver reports.
+`max_text_size` (bytes) caps the buffer of every text column, and `max_binary_size` that of every
+binary column, so set them when the driver reports a huge length for unbounded columns such as
+`TEXT` or `VARCHAR(MAX)`, or none at all, which the read then refuses, naming the setting. A value
+longer than its buffer, even in a `VARCHAR(10000)` column capped at 8000 bytes, fails the read,
+naming the setting to raise; it's never cut short.
 
 ## Types
 
@@ -120,14 +125,18 @@ SQLLoad reads each column's type as the driver describes it:
 |-----------|----------|
 | `TINYINT`, `SMALLINT` | `smallint` |
 | `INTEGER`, `BIGINT` | `int` |
-| `NUMERIC(p,s)`, `DECIMAL(p,s)`, p up to 38 | `decimal(p,s)` |
+| `NUMERIC(p,s)`, `DECIMAL(p,s)`, p up to 38 | `decimal(p,s)`, read as text so no digit is lost |
 | `REAL`, `FLOAT`, `DOUBLE` | `float` |
 | `BIT` | `bool` |
 | `DATE`, `TIME` | `date`, `time` |
-| `TIMESTAMP` | `timestamp_ntz` |
+| `TIMESTAMP` | `timestamp_ntz`; a timestamp with a time zone, in the session's time zone |
 | `CHAR`, `VARCHAR` and their wide and long forms | `text` |
 | `BINARY`, `VARBINARY`, `LONGVARBINARY` | `binary` |
 | Anything else, and `NUMERIC` above 38 digits | `text`, as the driver writes it |
+
+A decimal value with more places than its column's scale fails the read rather than being rounded.
+psqlODBC describes an unbounded `numeric` as `NUMERIC(28,6)`, so pin such a column, for example
+`columns = { amount = "decimal(38,10)" }` or `"text"`.
 
 Pin a type to load a column another way, such as `columns = { total = "decimal(18,2)" }`. A value that
 doesn't convert to the pinned type fails the read, naming the column. See [Types](/docs/types/).

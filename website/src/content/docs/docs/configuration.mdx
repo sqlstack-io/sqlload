@@ -99,7 +99,7 @@ From 0.26.0 (not released yet). See [ODBC](/docs/sources/odbc/#connection).
 |-----|---------|
 | `connection_string` | The driver's connection string. Use `${ENV:NAME}`. |
 | `dsn` | A data source name, instead of `connection_string`. |
-| `user`, `password` | With `dsn`, when the DSN doesn't hold them. |
+| `user`, `password` | With `dsn`, when the DSN doesn't hold them. Set `connection_string` or `dsn`, not both. |
 
 ### `http`
 
@@ -146,7 +146,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
 | `warehouse` | snowflake | From 0.26.0 (not released yet). The warehouse unloads run on; the connection's when omitted. |
 | `stage` | snowflake | From 0.26.0. Where unloads go: `{ url, storage_integration, region }` or `{ name }`; the user stage when omitted. See [Snowflake](/docs/sources/snowflake/#where-the-files-go). |
-| `max_text_size`, `max_binary_size` | odbc | From 0.26.0 (not released yet). The longest text and binary value a read holds, in bytes, for columns without a declared length. See [ODBC](/docs/sources/odbc/#value-sizes). |
+| `max_text_size`, `max_binary_size` | odbc | From 0.26.0 (not released yet). The longest text and binary value a read holds, in bytes; caps every text and binary column. See [ODBC](/docs/sources/odbc/#value-sizes). |
 | `path` | files | The folder holding the files, relative to the connection. |
 | `format` | files | `parquet` (default), `ndjson`, `json` or `csv`. |
 | `compression` | files | `auto` (default), `none`, `gzip` or `zstd`. |

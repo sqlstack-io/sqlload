@@ -11,28 +11,30 @@ CREATE TABLE erp.items (id bigint PRIMARY KEY, name text, price numeric(10,2), a
 INSERT INTO erp.items SELECT g, 'item ' || g, g * 1.25, g % 2 = 0, DATE '2026-01-01' + g, TIMESTAMP '2026-01-01' + g * INTERVAL '1 hour', 'short' FROM generate_series(1, 3000) g;
 CREATE TABLE erp."Mixed Case" ("Id" int PRIMARY KEY, "Label" varchar(20));
 INSERT INTO erp."Mixed Case" VALUES (1, 'one'), (2, 'two');
+CREATE TABLE erp.amounts (id int PRIMARY KEY, n numeric);
+INSERT INTO erp.amounts VALUES (1, 1.5), (2, 2.25);
 CREATE TABLE erp.ignored (id int);
 "#;
 
 const ITEMS: &str = "SELECT count(*) || ':' || sum(price) || ':' || count(*) FILTER (WHERE active) || ':' || max(opened) || ':' || max(updated_at) || ':' || count(DISTINCT _sqlload_load_id) FROM raw.erp__items";
 
 #[test]
-fn given_an_odbc_source_when_loading_through_its_driver_then_tables_and_queries_load_typed_and_merge_on_their_cursor()
+fn given_an_odbc_source_when_loading_through_its_driver_then_tables_and_queries_load_typed_exactly_and_merge_on_their_cursor()
 -> Result<(), String> {
     let test_cases = [
         OdbcLoadTestCase {
             description: "the first load discovers the matching tables, types them from the driver's description, and loads a query table",
             source_change: "",
             max_text_size: 1000,
-            expected_output: (true, "3 loaded"),
+            expected_output: (true, "4 loaded"),
             check_query: "SELECT (SELECT string_agg(table_name || '.' || column_name || ' ' || data_type, ',' ORDER BY table_name, ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\') || '|' || (SELECT string_agg(\"Id\" || '=' || \"Label\", ',' ORDER BY \"Id\") FROM raw.\"erp__mixed case\") || '|' || (SELECT count(*) || ':' || min(id) FROM raw.erp__recent)",
-            expected_result: "erp__items.id BIGINT,erp__items.name VARCHAR,erp__items.price DECIMAL(10,2),erp__items.active BOOLEAN,erp__items.opened DATE,erp__items.updated_at TIMESTAMP,erp__items.note VARCHAR,erp__mixed case.Id BIGINT,erp__mixed case.Label VARCHAR,erp__recent.id BIGINT,erp__recent.name VARCHAR|1=one,2=two|10:2991",
+            expected_result: "erp__amounts.id BIGINT,erp__amounts.n DECIMAL(28,6),erp__items.id BIGINT,erp__items.name VARCHAR,erp__items.price DECIMAL(10,2),erp__items.active BOOLEAN,erp__items.opened DATE,erp__items.updated_at TIMESTAMP,erp__items.note VARCHAR,erp__mixed case.Id BIGINT,erp__mixed case.Label VARCHAR,erp__recent.id BIGINT,erp__recent.name VARCHAR|1=one,2=two|10:2991",
         },
         OdbcLoadTestCase {
             description: "a cursor merge reads the changed rows and upserts them",
             source_change: "UPDATE erp.items SET name = 'changed', updated_at = TIMESTAMP '2027-01-01' WHERE id IN (5, 6); INSERT INTO erp.items VALUES (9001, 'new', 1, true, DATE '2026-02-02', TIMESTAMP '2027-01-02', 'n');",
             max_text_size: 1000,
-            expected_output: (true, "3 loaded"),
+            expected_output: (true, "4 loaded"),
             check_query: ITEMS,
             expected_result: "3001:5626876.00:1501:2034-03-20:2027-01-02 00:00:00:2",
         },
@@ -48,9 +50,17 @@ fn given_an_odbc_source_when_loading_through_its_driver_then_tables_and_queries_
             description: "with a larger cap the long value loads whole",
             source_change: "",
             max_text_size: 8000,
-            expected_output: (true, "3 loaded"),
+            expected_output: (true, "4 loaded"),
             check_query: "SELECT count(*) || ':' || max(length(note)) FROM raw.erp__items",
             expected_result: "3001:5000",
+        },
+        OdbcLoadTestCase {
+            description: "an unbounded numeric, which the driver describes as numeric(28,6), fails on a value with more places instead of rounding it",
+            source_change: "INSERT INTO erp.amounts VALUES (3, 1.123456789);",
+            max_text_size: 8000,
+            expected_output: (false, "n holds 1.123456789"),
+            check_query: "SELECT count(*) || ':' || sum(n) FROM raw.erp__amounts",
+            expected_result: "2:3.750000",
         },
     ];
     run_async(async {

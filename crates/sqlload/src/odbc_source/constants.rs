@@ -18,3 +18,6 @@ pub const QUERY_ALIAS: &str = "sqlload_query";
 
 /// Batches read ahead of the one being loaded.
 pub const BATCHES_AHEAD: usize = 2;
+
+/// What the driver manager's error says when a value is longer than its buffer.
+pub const TOO_LARGE_VALUE: &str = "too large to be written into the allocated buffer";
