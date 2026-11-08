@@ -31,8 +31,14 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
         ColumnType::Float => exact("Float64"),
         ColumnType::Text => exact("String"),
         ColumnType::Varchar(_) => lossy("String", "the length limit is not enforced"),
-        ColumnType::Date => exact("Date32"),
-        ColumnType::Time => lossy("String", "stored as text, HH:MM:SS.ffffff"),
+        ColumnType::Date => lossy(
+            "Date32",
+            "holds dates from 1900 to 2299; a date outside them fails the load",
+        ),
+        ColumnType::Time => lossy(
+            "String",
+            "stored as text, HH:MM:SS with a fraction when there is one",
+        ),
         ColumnType::TimestampTz => lossy(
             "DateTime64(6, 'UTC')",
             "stored as a UTC instant from 1900 to 2299; the offset is not kept",
@@ -84,24 +90,20 @@ fn decimal(precision: u8, scale: Option<&str>) -> Option<ColumnType> {
         .then_some(ColumnType::Decimal { precision, scale })
 }
 
-/// A column type as `system.columns` reports it, such as `Nullable(Decimal(18, 2))` or `DateTime64(6, 'UTC')`: a time with a zone argument is a zoned timestamp, one without a wall-clock one; a type with no portable name has none.
+/// A column type as `system.columns` reports it, such as `Nullable(Decimal(18, 2))` or `DateTime64(6, 'UTC')`: a time with a zone argument is a zoned timestamp, one without a wall-clock one. Only a type holding every value of its portable type has a portable name; a narrower one (`Int32`, `UInt16`, `Float32`, `Date`, `DateTime`, `DateTime64(3)`) has none, as ClickHouse would wrap or cut the values put into it rather than fail.
 pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
     let text = unwrapped(&live.data_type);
     let base = text.split('(').next().unwrap_or_default().trim();
     let arguments = arguments(text);
     Some(match base {
         "Bool" => ColumnType::Bool,
-        "Int8" | "Int16" | "UInt8" => ColumnType::SmallInt,
-        "Int32" | "Int64" | "UInt16" | "UInt32" => ColumnType::Int,
-        "Float32" | "Float64" => ColumnType::Float,
+        "Int16" => ColumnType::SmallInt,
+        "Int64" => ColumnType::Int,
+        "Float64" => ColumnType::Float,
         "String" => ColumnType::Text,
         "UUID" => ColumnType::Uuid,
-        "Date" | "Date32" => ColumnType::Date,
-        "DateTime" => match arguments.first() {
-            Some(_) => ColumnType::TimestampTz,
-            None => ColumnType::TimestampNtz,
-        },
-        "DateTime64" => match arguments.get(1) {
+        "Date32" => ColumnType::Date,
+        "DateTime64" if arguments.first() == Some(&"6") => match arguments.get(1) {
             Some(_) => ColumnType::TimestampTz,
             None => ColumnType::TimestampNtz,
         },

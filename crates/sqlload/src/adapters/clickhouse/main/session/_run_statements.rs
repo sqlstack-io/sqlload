@@ -2,7 +2,6 @@
 
 use crate::adapters::clickhouse::_helpers::publish::{
     PartitionPublish, delta_partitions_query, displaced_partitions_query, partition_statements,
-    with_delta,
 };
 use crate::adapters::clickhouse::_helpers::steps::{publish_step, run_step};
 use crate::adapters::clickhouse::main::session::_query_rows::query_rows;
@@ -28,7 +27,6 @@ pub(in crate::adapters) async fn run_statements(
             target,
             delta,
             copy,
-            aside,
             displaced,
         }) = publish_step(statement)?
         else {
@@ -43,7 +41,6 @@ pub(in crate::adapters) async fn run_statements(
                     .collect(),
             )
         };
-        let displaced = displaced.map(|condition| with_delta(&condition, &delta));
         let new = partitions(delta_partitions_query(&delta)).await?;
         let replaced = match &displaced {
             Some(condition) => partitions(displaced_partitions_query(&target, condition)).await?,
@@ -53,7 +50,6 @@ pub(in crate::adapters) async fn run_statements(
             target: &target,
             delta: &delta,
             copy: &copy,
-            aside: &aside,
             displaced: displaced.as_deref(),
         };
         for step in partition_statements(&publish, (&new, &replaced)) {

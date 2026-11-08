@@ -172,6 +172,30 @@ fn given_a_reported_column_type_when_reading_it_back_then_it_maps_to_the_portabl
             expected_type: ColumnType::Text,
         },
         LiveTypeTestCase {
+            description: "ClickHouse Int32 is narrower than int, so it stays native rather than wrap a wider value",
+            live: live("Nullable(Int32)", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Native("Nullable(Int32)".to_owned()),
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse UInt16 holds no negative smallint, so it stays native",
+            live: live("UInt16", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Native("UInt16".to_owned()),
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse Date holds only 1970 on, so it stays native rather than be a date",
+            live: live("Nullable(Date)", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Native("Nullable(Date)".to_owned()),
+        },
+        LiveTypeTestCase {
+            description: "ClickHouse DateTime64(3) drops microseconds, so it stays native",
+            live: live("DateTime64(3, 'UTC')", None, None, None),
+            warehouse: Warehouse::ClickHouse,
+            expected_type: ColumnType::Native("DateTime64(3, 'UTC')".to_owned()),
+        },
+        LiveTypeTestCase {
             description: "ClickHouse Array passes through as native",
             live: live("Array(Int64)", None, None, None),
             warehouse: Warehouse::ClickHouse,

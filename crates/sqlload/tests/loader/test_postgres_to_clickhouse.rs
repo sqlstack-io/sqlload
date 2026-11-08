@@ -59,7 +59,10 @@ append_cursor_inclusive = false
 
 [sources.app.tables."public.kinds"]
 write_strategy = "replace"
+"#;
 
+/// A source loading into `legacy`, an `Ordinary` database, which cannot exchange tables.
+const LEGACY: &str = r#"
 [sources.old]
 kind = "postgres"
 connection = "app_pg"
@@ -71,7 +74,7 @@ write_strategy = "replace"
 description = "Stores, in a database that cannot exchange tables."
 "#;
 
-/// A project reading the test Postgres into the test ClickHouse's `schema` database (and `legacy` for the `old` source).
+/// A project reading the test Postgres into the test ClickHouse's `schema` database.
 fn clickhouse_project(postgres_port: u16, clickhouse_port: u16, schema: &str) -> String {
     format!(
         r#"
@@ -202,12 +205,6 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 expected_result: "L1@8593b9db65212160979d946950601c26622a219c80f1f122679eb69ec5b96600",
             },
             LoadRunTestCase {
-                description: "replace into a database that cannot exchange tables swaps by renames instead",
-                source_change: "",
-                check_query: "SELECT (SELECT engine FROM system.databases WHERE name = 'legacy') || ': ' || (SELECT arrayStringConcat(groupArray(code), ',') FROM (SELECT code FROM legacy.old__stores ORDER BY code))",
-                expected_result: "Ordinary: L1",
-            },
-            LoadRunTestCase {
                 description: "a new source column is added to the table and filled",
                 source_change: "ALTER TABLE public.stores ADD COLUMN opened date; UPDATE public.stores SET opened = '2020-01-02';",
                 check_query: "SELECT arrayStringConcat(groupArray(code || '@' || toString(opened)), ',') FROM raw.app__stores",
@@ -216,7 +213,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
             LoadRunTestCase {
                 description: "no staging, delta or copy table is left behind",
                 source_change: "",
-                check_query: "SELECT toString(count()) FROM system.tables WHERE database IN ('raw', 'legacy') AND name LIKE '%sqlload_staging%'",
+                check_query: "SELECT toString(count()) FROM system.tables WHERE database = 'raw' AND name LIKE '%sqlload_staging%'",
                 expected_result: "0",
             },
         ];
@@ -238,6 +235,18 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 test_case.description
             );
         }
+        let legacy = described_project(&format!(
+            "{}{LEGACY}",
+            clickhouse_project(postgres.port, clickhouse.port, "raw")
+        ))
+        .await?;
+        let refused = load(&legacy, &destinations, &only("old__stores")).await;
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|error| error.contains("load into an Atomic database")),
+            "a replace into a database that cannot exchange tables is refused rather than swapped by renames: {refused:?}"
+        );
         Ok(())
     })
 }

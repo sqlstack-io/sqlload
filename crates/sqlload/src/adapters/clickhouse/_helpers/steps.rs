@@ -24,47 +24,32 @@ pub(crate) async fn run_step(
         None => send(destination, None, statement.as_bytes().to_vec())
             .await
             .map(|_| ()),
-        Some(PublishStep::Exchange {
-            target,
-            build,
-            aside,
-        }) => exchange(destination, (&target, &build, &aside)).await,
+        Some(PublishStep::Exchange { target, build }) => {
+            exchange(destination, &target, &build).await
+        }
         Some(PublishStep::Partitions { .. }) => Err(ApiError::Protocol(
             "a partition publish cannot run inside another".to_owned(),
         )),
     }
 }
 
-/// Swap `build` in for `target` with `EXCHANGE TABLES`, atomic in an `Atomic` database; where the database cannot exchange tables, by one `RENAME TABLE` moving `target` to `aside`, `build` to `target` and `aside` to `build`, so `build` holds the old table either way.
+/// Swap `build` in for `target` with `EXCHANGE TABLES`, so `build` holds the old table. A database that cannot exchange tables (an `Ordinary` one) is refused: the `RENAME TABLE` that could stand in is not atomic, and a server failing midway would leave no table.
 pub(crate) async fn exchange(
     destination: &ClickHouseDestination,
-    (target, build, aside): (&str, &str, &str),
+    target: &str,
+    build: &str,
 ) -> Result<(), ApiError> {
-    let exchanged = send(
+    send(
         destination,
         None,
         format!("EXCHANGE TABLES {target} AND {build}").into_bytes(),
     )
-    .await;
-    match exchanged {
-        Ok(_) => Ok(()),
-        Err(error)
-            if error
-                .code()
-                .is_some_and(|code| EXCHANGE_UNSUPPORTED_CODES.contains(&code)) =>
-        {
-            tracing::debug!(%error, "EXCHANGE TABLES is unsupported here; swapping by renames");
-            send(
-                destination,
-                None,
-                format!(
-                    "RENAME TABLE {target} TO {aside}, {build} TO {target}, {aside} TO {build}"
-                )
-                .into_bytes(),
-            )
-            .await
-            .map(|_| ())
-        }
-        Err(error) => Err(error),
-    }
+    .await
+    .map(|_| ())
+    .map_err(|error| match error.code() {
+        Some(code) if EXCHANGE_UNSUPPORTED_CODES.contains(&code) => ApiError::Protocol(format!(
+            "{target} is in a database that cannot swap tables atomically with EXCHANGE TABLES; load into an Atomic database (ClickHouse's default) instead ({error})"
+        )),
+        _ => error,
+    })
 }

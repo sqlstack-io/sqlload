@@ -1,7 +1,6 @@
 //! The statements publishing a delta table's partitions, once the server has said which partitions the write touches.
 
 use crate::adapters::clickhouse::_helpers::dialect::write::publish_statement;
-use crate::adapters::clickhouse::constants::DELTA_PLACEHOLDER;
 use crate::adapters::clickhouse::models::{ClickHouseSql, PublishStep};
 use crate::adapters::contract::types::SqlAdapter;
 
@@ -11,8 +10,7 @@ pub(crate) struct PartitionPublish<'a> {
     pub target: &'a str,
     pub delta: &'a str,
     pub copy: &'a str,
-    pub aside: &'a str,
-    /// The condition on the target's rows that the delta replaces, with `{delta}` filled in; `None` when it replaces none.
+    /// The condition on the target's rows that the delta replaces; `None` when it replaces none.
     pub displaced: Option<&'a str>,
 }
 
@@ -24,11 +22,6 @@ pub(crate) fn delta_partitions_query(delta: &str) -> String {
 /// The query listing the target's partitions holding rows the delta replaces.
 pub(crate) fn displaced_partitions_query(target: &str, displaced: &str) -> String {
     format!("SELECT DISTINCT _partition_id FROM {target} WHERE ifNull({displaced}, 0) ORDER BY 1")
-}
-
-/// `condition` naming the delta table.
-pub(crate) fn with_delta(condition: &str, delta: &str) -> String {
-    condition.replace(DELTA_PLACEHOLDER, delta)
 }
 
 /// The statements publishing the delta's partitions `new` (and, replacing rows, the target's partitions `displaced` that hold them), each partition whole and every one at once: none when nothing is touched; an added single partition attached from the delta (it copies nothing); a single rebuilt partition built beside the table from its kept rows and the delta's and swapped in by `REPLACE PARTITION`; several partitions rebuilt in a copy of the table that hard-links its parts, then swapped in for the table by one `EXCHANGE TABLES`. A run killed at any point leaves the table as it was or with every partition, so the next run converges.
@@ -44,7 +37,6 @@ pub(crate) fn partition_statements(
         target,
         delta,
         copy,
-        aside,
         displaced: condition,
     } = *publish;
     let attach = |into: &str, partition: &String| {
@@ -94,7 +86,6 @@ pub(crate) fn partition_statements(
             statements.push(publish_statement(&PublishStep::Exchange {
                 target: target.to_owned(),
                 build: copy.to_owned(),
-                aside: aside.to_owned(),
             }));
         }
     }

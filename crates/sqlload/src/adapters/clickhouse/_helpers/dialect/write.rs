@@ -1,9 +1,7 @@
 //! ClickHouse's writes: no transactions, so each is published by one swap of a whole table or of whole partitions, and a rerun converges.
 
 use crate::adapters::clickhouse::_helpers::dialect::type_names::unwrapped;
-use crate::adapters::clickhouse::constants::{
-    ASIDE_SUFFIX, COPY_SUFFIX, DELTA_PLACEHOLDER, PUBLISH_PREFIX,
-};
+use crate::adapters::clickhouse::constants::{COPY_SUFFIX, PUBLISH_PREFIX};
 use crate::adapters::clickhouse::models::{ClickHouseSql, PublishStep};
 use crate::adapters::contract::_helpers::identifiers::with_suffix;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
@@ -30,7 +28,6 @@ pub(crate) fn swap_statements(
         publish_statement(&PublishStep::Exchange {
             target: adapter.render_qualified_name(target),
             build: build_name.clone(),
-            aside: adapter.render_qualified_name(&with_suffix(build, ASIDE_SUFFIX)),
         }),
         format!("DROP TABLE IF EXISTS {build_name}"),
     ]
@@ -73,9 +70,7 @@ pub(crate) fn write_statements(
                 .map(|key| adapter.render_identifier(key))
                 .collect();
             let keys = keys.join(", ");
-            Some(format!(
-                "({keys}) IN (SELECT {keys} FROM {DELTA_PLACEHOLDER})"
-            ))
+            Some(format!("({keys}) IN (SELECT {keys} FROM {delta})"))
         }
         WriteMode::DeleteInsert { .. } => Some(range_condition(adapter, request)),
         WriteMode::Changes(_) => {
@@ -89,7 +84,6 @@ pub(crate) fn write_statements(
         WriteMode::Replace | WriteMode::Recreate => PublishStep::Exchange {
             target: target.clone(),
             build: delta.clone(),
-            aside: adapter.render_qualified_name(&with_suffix(&delta_table, ASIDE_SUFFIX)),
         },
         _ => {
             let copy = with_suffix(&delta_table, COPY_SUFFIX);
@@ -97,7 +91,6 @@ pub(crate) fn write_statements(
                 target: target.clone(),
                 delta: delta.clone(),
                 copy: adapter.render_qualified_name(&copy),
-                aside: adapter.render_qualified_name(&with_suffix(&copy, ASIDE_SUFFIX)),
                 displaced,
             }
         }
@@ -116,7 +109,7 @@ pub(crate) fn write_statements(
     ]
 }
 
-/// The rows a `delete_insert` replaces: those whose cursor is one of its values, or within its range (`1`, every row, when it has no bounds). The bounds are cast to the cursor's type without `Nullable`, so a bound ClickHouse cannot read fails rather than matching nothing.
+/// The rows a `delete_insert` replaces: those whose cursor is one of its values, or within its range (`1`, every row, when it has no bounds). The bounds are cast to the cursor's type without `Nullable`, a timestamp's parsed with its offset (in UTC when it has none), so a bound ClickHouse cannot read fails rather than matching nothing.
 fn range_condition(adapter: &ClickHouseSql, request: &WriteStatementsRequest<'_>) -> String {
     let WriteMode::DeleteInsert {
         cursor_column,
@@ -135,10 +128,12 @@ fn range_condition(adapter: &ClickHouseSql, request: &WriteStatementsRequest<'_>
     let sql_type = adapter.render_loader_logical_type(&cursor_type).sql;
     let sql_type = unwrapped(&sql_type);
     let cast = |text: &str| {
-        format!(
-            "CAST({} AS {sql_type})",
-            adapter.render_loader_value_literal(text)
-        )
+        let literal = adapter.render_loader_value_literal(text);
+        match cursor_type {
+            ColumnType::TimestampTz => format!("parseDateTime64BestEffort({literal}, 6, 'UTC')"),
+            ColumnType::TimestampNtz => format!("parseDateTime64BestEffort({literal}, 6)"),
+            _ => format!("CAST({literal} AS {sql_type})"),
+        }
     };
     let column = adapter.render_identifier(cursor_column);
     if !values.is_empty() {

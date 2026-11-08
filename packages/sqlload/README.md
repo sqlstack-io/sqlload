@@ -547,7 +547,8 @@ available.
 
 ### How rows reach ClickHouse (preview)
 
-A ClickHouse target loads into one ClickHouse server over its HTTP interface:
+A ClickHouse target loads into one ClickHouse server, version 25.3 or later, over its HTTP
+interface:
 
 ```toml
 [connections.serving]
@@ -578,18 +579,27 @@ order_by = ["customer_id", "order_date"]   # default: the unique_key, else unsor
 Every loaded column is `Nullable`, so a table with a key gets `allow_nullable_key = 1` unless
 `table_settings` sets it. Only engines of the `MergeTree` family on a single server are taken.
 `plan` shows each column's type: `timestamp_tz` is `DateTime64(6, 'UTC')`, `timestamp_ntz`
-`DateTime64(6)`, `date` `Date32`, decimals keep their precision and scale, and JSON and times are
-text. Pin `native("JSON")` or `native("LowCardinality(String)")` on a column to use those types.
+`DateTime64(6)`, `date` `Date32` (1900 to 2299; a date outside them fails the load), decimals keep
+their precision and scale, and JSON and times are text. Pin `native("JSON")` or
+`native("LowCardinality(String)")` on a column to use those types. An existing table's narrower
+types (`Int32`, `UInt16`, `Float32`, `Date`, `DateTime`, `DateTime64(3)`) would wrap or cut wider
+values without an error, so `plan` reports them as incompatible rather than load into them.
+
+Layout settings apply when SQLLoad creates a table, and `--reload` keeps the table's layout: to lay
+an existing table out again, drop it and load. ClickHouse cannot change the type of a column in the
+sorting or partition key, so a key column whose source type widens fails the load.
 
 Rows go as Arrow over HTTP into a staging table (a build table for `replace`) and reach the table
 only when the load publishes them. ClickHouse has no transactions, so each publish is one atomic
-swap. `replace` and `--reload` swap the build table in with `EXCHANGE TABLES`, or with one
-`RENAME TABLE` in a database that cannot exchange tables. `append` attaches the new rows'
-partitions. `merge` and `delete_insert` rewrite whole partitions: one partition is rebuilt beside
+swap. `replace` and `--reload` swap the build table in with `EXCHANGE TABLES`, which needs an
+`Atomic` database (ClickHouse's default); a load into an `Ordinary` database is refused. `append`
+attaches the new rows' partitions. `merge` and `delete_insert` rewrite whole partitions: one partition is rebuilt beside
 the table and swapped in with `REPLACE PARTITION`, and several are rebuilt in a copy that
 hard-links the table's other parts, then exchanged in at once. A load killed at any point leaves the table as it was or fully
 published, and the next run converges. `merge` matches rows on `unique_key` exactly, so readers
-need no `FINAL`.
+need no `FINAL`. It replaces whole rows, so a column the source no longer has is `NULL` on the rows
+it updates. Rows arrive by swapping parts, never by `INSERT`, so materialized views on a loaded
+table see none of them: build them from the table instead.
 
 A rewrite costs as much as the partitions it touches, and an unpartitioned table is one partition:
 partition large tables by the column new rows arrive on. Load each table from one `sqlload` process
