@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::adapters::contract::models::{TableName, WriteMode};
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::{Destination, Writer};
 use crate::adapters::files::models::{
     FilesWriter, PartitionFolder, PendingLoad, ReplacedFiles, TableFiles, TablePath, TableState,
@@ -304,6 +305,17 @@ impl ProjectPlan {
                 .cloned()
                 .collect(),
             ..self.clone()
+        }
+    }
+}
+
+impl TablePlan {
+    /// The name the table's load is reported under: its folder in a files target, which has no schema, and its display name elsewhere.
+    pub fn outcome_name(&self) -> String {
+        let adapter = sql_adapter(self.spec.warehouse);
+        match &self.output {
+            Some(output) if !adapter.runs_sql() => output.path.folder.to_string(),
+            _ => adapter.render_display_name(&self.spec.destination),
         }
     }
 }

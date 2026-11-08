@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite, WriteMode};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
-use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
 use crate::adapters::files::main::cursor_maximum::cursor_maximum;
@@ -1252,7 +1251,7 @@ pub(crate) fn source_outcomes(
                 .unwrap_or_default()
         });
         outcomes.push(TableOutcome {
-            table: sql_adapter(spec.warehouse).render_display_name(&spec.destination),
+            table: table.outcome_name(),
             loaded: rows
                 .map(|rows| TableLoaded {
                     rows,
