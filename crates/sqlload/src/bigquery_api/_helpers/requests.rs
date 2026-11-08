@@ -3,20 +3,30 @@
 use crate::auth::models::Secret;
 use crate::bigquery_api::_helpers::token::signed_assertion;
 use crate::bigquery_api::constants::{
-    JWT_BEARER_GRANT, RATE_LIMITED, TOKEN_REFRESH_MARGIN_MS, UNAUTHORIZED,
+    JWT_BEARER_GRANT, RATE_LIMITED, SCOPE, TOKEN_REFRESH_MARGIN_MS, UNAUTHORIZED,
 };
-use crate::bigquery_api::models::BigQueryClient;
+use crate::bigquery_api::models::{BigQueryClient, ServiceAccountKey};
 use crate::http::constants::TOO_MANY_REQUESTS;
 use crate::http::errors::ApiError;
 use crate::http::models::RetryPolicy;
 use crate::time_text::main::now_ms::now_ms;
 
-/// A token for the client's key: the kept one, or a new one when it is missing, near its expiry, or the one the server `refused`; a request refused with a token another request has already replaced gets the replacement.
+/// A token for the client's key: see [`token_for`].
 pub(crate) async fn access_token(
     client: &BigQueryClient,
     refused: Option<&Secret>,
 ) -> Result<Secret, ApiError> {
-    let mut kept = client.token.lock().await;
+    token_for(&client.http, &client.key, &client.token, (SCOPE, refused)).await
+}
+
+/// A token with `scope` for `key`: the one `kept`, or a new one when it is missing, near its expiry, or the one the server `refused`; a request refused with a token another request has already replaced gets the replacement.
+pub(crate) async fn token_for(
+    http: &reqwest::Client,
+    key: &ServiceAccountKey,
+    kept: &tokio::sync::Mutex<Option<(Secret, i64)>>,
+    (scope, refused): (&str, Option<&Secret>),
+) -> Result<Secret, ApiError> {
+    let mut kept = kept.lock().await;
     if let Some((token, expires_ms)) = kept.as_ref()
         && refused.is_none_or(|refused| refused.expose() != token.expose())
         && now_ms() + TOKEN_REFRESH_MARGIN_MS < *expires_ms
@@ -24,10 +34,9 @@ pub(crate) async fn access_token(
         return Ok(token.clone());
     }
     let now_secs = u64::try_from(now_ms() / 1000).unwrap_or_default();
-    let assertion = signed_assertion(&client.key, now_secs)?;
-    let sent = client
-        .http
-        .post(&client.key.token_uri)
+    let assertion = signed_assertion(key, scope, now_secs)?;
+    let sent = http
+        .post(&key.token_uri)
         .form(&[("grant_type", JWT_BEARER_GRANT), ("assertion", &assertion)])
         .send()
         .await?;
@@ -50,7 +59,7 @@ pub(crate) async fn access_token(
                 (true, error) => error,
                 (false, error) => ApiError::Auth(format!(
                     "Google refused the service-account key {}: {error}",
-                    client.key.client_email
+                    key.client_email
                 )),
             })?;
     let body: serde_json::Value = response.json().await?;

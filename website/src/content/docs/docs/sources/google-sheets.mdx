@@ -1,0 +1,84 @@
+---
+title: "Google Sheets"
+description: "Load a spreadsheet's tabs or ranges as tables, with typed dates, numbers and booleans, read with a service-account key."
+---
+
+From 0.26.0 (not released yet). A Google Sheets source loads tabs or ranges of one spreadsheet, one table each. Values arrive typed
+as the sheet holds them, not as the text it shows.
+
+```toml
+[connections.sheets]
+kind = "google_sheets"
+service_account_json = "${ENV:GOOGLE_SA_JSON}"
+
+[sources.reference]
+kind = "google_sheets"
+connection = "sheets"
+description = "Reference tables kept in a spreadsheet."
+spreadsheet_id = "${ENV:REFERENCE_SHEET_ID}"
+ranges = { locations = "Locations!A:F", codes = "Codes" }
+```
+
+Share the spreadsheet with the service account's email as a Viewer. SQLLoad asks for read-only
+access to spreadsheets and nothing else.
+
+## Connection
+
+| Setting | Meaning |
+|---------|---------|
+| `service_account_json` | The service-account key file's JSON text, normally `${ENV:...}`. |
+| `service_account_json_base64` | The same, base64-encoded, for secret stores that dislike newlines and quotes. |
+| `service_account_file` | A path to the key file. |
+
+Set at most one; `plan` refuses more. With none, SQLLoad reads the key file `GOOGLE_APPLICATION_CREDENTIALS` names.
+`sqlload debug` shows which service account reads each source and how many tabs it sees; the key
+itself never appears. Workload identity and user sign-in are not supported yet.
+
+## Source
+
+| Setting | Meaning |
+|---------|---------|
+| `spreadsheet_id` | The ID in the spreadsheet's URL, between `/d/` and `/edit`. |
+| `ranges` | Tables by name: a tab's name, or an A1 range such as `"Locations!A:F"` or `"'Q4 Report'!B3:H"`. Without it, every tab loads as a table named after it (`Q4 Report` as `q4_report`); empty tabs are left out with a warning. |
+| `header` | `false` when a range has no header row; its columns are then `column_1`, `column_2`, …. Table or source setting. |
+| `header_row` | The range's row holding the header, counting from 1, when title rows sit above it. Table or source setting. |
+
+Per-table settings go under `[sources.<name>.tables.<table>]`, where `<table>` is the name in
+`ranges` (or the tab's table name), as for other sources: `columns`, `unique_key`, `header` and so on.
+With more than one table, a `table_name` template must contain `{table}`. Files settings such as
+`format` or `constant_columns` are refused.
+
+## Columns and types
+
+- The header row names the columns, as written. A blank header cell between named ones, or two names
+  equal ignoring case, fails `plan` naming the cell (`Locations!C1`). A merged header cell names
+  only its first column; the rest count as blank. Cells right of the last named header cell are not
+  loaded, with a warning.
+- Rows with nothing in the header's columns are skipped; a short row is padded with NULLs.
+- Each column's type comes from every cell in it: TRUE/FALSE as `bool`; whole numbers in a plain
+  format as `int`, other numbers as `float` (currency, percentages and scientific numbers always,
+  even when whole; a percentage as its fraction); cells formatted as dates, dates with times, or
+  times as `date`, `timestamp_ntz` and `time`; text as `text`. Dates and times load as the sheet
+  shows them, wall-clock time in the spreadsheet's time zone, so `timestamp_ntz`. A number typed
+  as text, such as `'00123`, stays text with its zeros.
+- A column mixing kinds loads as `text` as the sheet shows each value, with a `plan` warning. Pin a
+  type in `columns` to load it as another; a cell that does not convert fails the load, naming it.
+- A column keeps the type its table already has when its values fit it: whole numbers in a `float`
+  column, anything in a `text` column, and a column emptied in the sheet. A column first loaded
+  with no values, such as every column of a header-only tab, is `text`; to type it once rows arrive,
+  pin a type in `columns` or run `load --reload`. A whole-number column that later gets a fraction
+  is refused at `plan`, so pin `float` up front where fractions may appear.
+- A formula error (`#DIV/0!`, `#N/A`) fails the load naming the cell, rather than loading NULL.
+
+## Writing
+
+A sheet has no column to read after, so its tables `replace` by default and reload whole each run.
+`merge` on a `unique_key` and `append` (a snapshot each run) also work; `cursor_column`,
+`delete_insert` and `batch_size` are refused at `plan`, and so is a `merge` whose key repeats in the
+sheet, naming both rows. Each table goes through the target's usual staging and swap, so a failed
+read leaves the table as it was.
+
+`plan` reads each range, or the whole spreadsheet once when there are no `ranges`; `load` plans the
+same way, then reads each table's tab or range in one request and
+holds it in memory, which suits reference sheets up to a few hundred thousand cells. Reads that hit
+Sheets' per-minute quota are retried for about a minute and a half.
