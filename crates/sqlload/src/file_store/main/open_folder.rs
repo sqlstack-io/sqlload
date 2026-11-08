@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use object_store::ObjectStore;
-use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 
 use crate::file_store::errors::StoreError;
+use crate::file_store::main::s3_builder::s3_builder;
 use crate::file_store::models::OpenFolder;
 use crate::http::main::install_tls_provider::install_tls_provider;
 use crate::store_paths::models::{Location, StoreKind};
@@ -23,19 +23,11 @@ pub fn open_folder(location: &Location) -> Result<OpenFolder, StoreError> {
             bucket,
             region,
             endpoint,
-        } => {
-            let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
-            if let Some(region) = region {
-                builder = builder.with_region(region);
-            }
-            if let Some(endpoint) = endpoint {
-                builder = builder
-                    .with_endpoint(endpoint)
-                    .with_allow_http(endpoint.starts_with("http://"))
-                    .with_virtual_hosted_style_request(false);
-            }
-            Arc::new(builder.build().map_err(failed)?)
-        }
+        } => Arc::new(
+            s3_builder(bucket, region.as_deref(), endpoint.as_deref())
+                .build()
+                .map_err(failed)?,
+        ),
         StoreKind::Filesystem { root } => {
             std::fs::create_dir_all(root).map_err(|error| {
                 failed(object_store::Error::Generic {
