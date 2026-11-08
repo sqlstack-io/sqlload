@@ -41,6 +41,7 @@ use crate::postgres_source::models::SourceTable;
 use crate::project::constants::FILES_CONNECTION_KINDS;
 use crate::project::models::ProjectConfig;
 use crate::project::models::SourceConfig;
+use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::python_sources::models::CursorRead;
 use crate::python_sources::models::TableRead;
 use crate::python_sources::types::BatchStream;
@@ -886,6 +887,21 @@ async fn replan(
     });
     if let Some(problem) = append_problem(&columns.spec, cursor_type) {
         return Err(LoaderError::Invalid(problem));
+    }
+    let loaded: Vec<String> = columns
+        .schema
+        .write_columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let problems: Vec<String> = columns
+        .spec
+        .checks
+        .iter()
+        .flat_map(|checks| check_column_problems(checks, &loaded))
+        .collect();
+    if !problems.is_empty() {
+        return Err(LoaderError::Invalid(problems.join("; ")));
     }
     Ok(TablePlan {
         spec: columns.spec,
