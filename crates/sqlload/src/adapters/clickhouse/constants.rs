@@ -23,6 +23,9 @@ pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// The header carrying the code of the error a request failed with.
 pub const EXCEPTION_CODE_HEADER: &str = "X-ClickHouse-Exception-Code";
 
+/// The header carrying a finished query's progress, such as the rows it wrote.
+pub const SUMMARY_HEADER: &str = "X-ClickHouse-Summary";
+
 /// The error codes of an `EXCHANGE TABLES` the database cannot run (a database not of the `Atomic` engine), which a rename swap replaces.
 pub const EXCHANGE_UNSUPPORTED_CODES: &[&str] = &["1", "48"];
 
@@ -49,6 +52,10 @@ pub const INSERT_BYTES: usize = 64 * 1024 * 1024;
 
 /// The most characters of an error response kept in the error.
 pub const ERROR_PREVIEW: usize = 2_000;
+
+/// The settings a pull reading `_sqlload_source_row` runs with, so each file's rows are numbered in the order they are stored.
+pub const ORDERED_READ_SETTINGS: &str =
+    "max_threads = 1, max_insert_threads = 1, input_format_parquet_preserve_order = 1";
 
 /// Shown for `copy_to_internal_stage` on a ClickHouse target.
 pub const NO_INTERNAL_STAGE_COPY: &str =
