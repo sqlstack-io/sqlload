@@ -11,6 +11,10 @@ make test-python      # builds the sqlload extension into .venv and runs its tes
 
 `make check-ci` is what CI runs, and must be clean, including fensu with 0 faults.
 
+The unit and container tests link the ODBC source against unixODBC's `libodbc.so`, and the
+container tests also need the PostgreSQL ODBC driver: `unixodbc-dev odbc-postgresql` on Debian and Ubuntu, `unixodbc psqlodbc`
+with Homebrew.
+
 ## Files a warehouse reads itself never pass through SQLLoad
 
 When a files source loads into a warehouse that reads files itself (Snowflake), the warehouse

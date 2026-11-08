@@ -34,9 +34,46 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
             .values()
             .any(|target| target.connection == *name);
         problems.extend(stage_problems(name, connection, targeted));
+        problems.extend(odbc_connection_problems(name, connection));
     }
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));
+    }
+    problems
+}
+
+/// Why an `odbc` connection cannot connect: it needs exactly one of `connection_string` and `dsn`; `user` and `password` go with `dsn`; and `dsn` and `user` are written unbraced, as driver managers read them, so they cannot hold `;`, `{` or `}`.
+fn odbc_connection_problems(name: &str, connection: &ConnectionConfig) -> Vec<String> {
+    let ConnectionConfig::Odbc {
+        connection_string,
+        dsn,
+        user,
+        password,
+    } = connection
+    else {
+        return Vec::new();
+    };
+    let place = format!("[connections.{name}]");
+    let mut problems: Vec<String> = Vec::new();
+    match (connection_string.is_some(), dsn.is_some()) {
+        (false, false) => problems.push(format!("{place} needs connection_string, or dsn")),
+        (true, true) => problems.push(format!(
+            "{place} takes connection_string or dsn, not both"
+        )),
+        (true, false) if user.is_some() || password.is_some() => problems.push(format!(
+            "{place} user and password go with dsn; with connection_string, put them in it (UID=...;PWD=...)"
+        )),
+        _ => {}
+    }
+    let unbraced = [dsn.as_deref(), user.as_deref()];
+    if unbraced
+        .into_iter()
+        .flatten()
+        .any(|value| value.contains([';', '{', '}']))
+    {
+        problems.push(format!(
+            "{place} dsn and user cannot contain ';', '{{' or '}}'; use connection_string instead"
+        ));
     }
     problems
 }
@@ -47,6 +84,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     let expected = match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => "postgres",
         SourceKind::Snowflake => "snowflake",
+        SourceKind::Odbc => "odbc",
         SourceKind::Files => "s3 or filesystem",
         SourceKind::Python => "any",
         SourceKind::GoogleSheets => "google_sheets",
@@ -107,6 +145,7 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::PostgresCdc => "postgres_cdc",
         SourceKind::Files => "files",
         SourceKind::Snowflake => "snowflake",
+        SourceKind::Odbc => "odbc",
         SourceKind::Python => "python",
         SourceKind::GoogleSheets => "google_sheets",
     }
@@ -161,11 +200,23 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         problems.extend(cdc_problems(place, source));
     }
     let queries = source.tables.values().any(|table| table.sql.is_some());
+    if !matches!(source.kind, SourceKind::Snowflake | SourceKind::Odbc) && queries {
+        problems.push(format!(
+            "{place} sql is for kind = \"snowflake\" and kind = \"odbc\""
+        ));
+    }
     if source.kind != SourceKind::Snowflake
-        && (queries || source.warehouse.is_some() || source.stage.is_some())
+        && (source.warehouse.is_some() || source.stage.is_some())
     {
         problems.push(format!(
-            "{place} sql, warehouse and stage are for kind = \"snowflake\""
+            "{place} warehouse and stage are for kind = \"snowflake\""
+        ));
+    }
+    if source.kind != SourceKind::Odbc
+        && (source.max_text_size.is_some() || source.max_binary_size.is_some())
+    {
+        problems.push(format!(
+            "{place} max_text_size and max_binary_size are for kind = \"odbc\""
         ));
     }
     if source.kind == SourceKind::Snowflake {
@@ -181,10 +232,13 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         ));
     }
     match source.kind {
-        SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake => {
+        SourceKind::Postgres
+        | SourceKind::PostgresCdc
+        | SourceKind::Snowflake
+        | SourceKind::Odbc => {
             if source.include.is_empty() && !queries {
                 let tables = match source.kind {
-                    SourceKind::Snowflake => {
+                    SourceKind::Snowflake | SourceKind::Odbc => {
                         "; list tables in include, or give a table a sql query"
                     }
                     _ => "",

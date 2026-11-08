@@ -135,6 +135,8 @@ pub struct WarehouseSource {
 pub enum WarehouseRoute {
     /// The warehouse writes Parquet into `store`, which SQLLoad reads back and removes; `stage` says why there, for `plan`.
     Unload { store: Store, stage: String },
+    /// SQLLoad runs the query and reads its rows as Arrow.
+    Query,
 }
 
 /// A created table's layout, with SQLBuild's ClickHouse field names; every field unset by default.
@@ -585,6 +587,10 @@ pub struct FilesSink {
     pub writer: Option<FilesWriter>,
     /// Replaced files already deleted by earlier commits.
     pub deleted: std::collections::BTreeSet<String>,
+    /// The load's claim on the table, refreshed in the background until `keeper`'s guard is dropped.
+    pub lease: crate::table_lease::models::Lease,
+    /// The guard stopping the lease's renewal, and the renewal task.
+    pub keeper: Option<(tokio_util::sync::DropGuard, tokio::task::JoinHandle<()>)>,
 }
 
 /// A connected source, ready to read.
@@ -595,6 +601,9 @@ pub enum SourceReader {
     Files(OpenFolder),
     /// A warehouse source that unloads its tables.
     Snowflake(Box<SnowflakeReader>),
+    /// A database read through its ODBC driver.
+    #[cfg(feature = "odbc")]
+    Odbc(Box<crate::odbc_source::models::OdbcReader>),
     /// A Google Sheets client and the spreadsheet it reads.
     Sheets(crate::sheets_source::models::SheetsClient, String),
 }

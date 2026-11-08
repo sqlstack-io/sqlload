@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde_json::{Map, Value};
 
+use crate::http_source::_helpers::oauth::shared_token_source;
 use crate::http_source::_helpers::urls::encoded;
 use crate::http_source::constants::SECRET_HEADER_WORDS;
-use crate::http_source::models::{Auth, ClientSpec, Credential, Endpoint, Limiter};
+use crate::http_source::models::{Auth, ClientSpec, Credential, Endpoint, Grant, Limiter};
 
 /// The endpoint of `client`'s connection: its `base_url`, headers and the credential its `auth` names.
 pub(crate) fn endpoint(
@@ -30,6 +31,7 @@ pub(crate) fn endpoint(
             format!("connection {name} needs {key} for the sl.http auth this job uses")
         })
     };
+    let present = |key: &str| text(key).filter(|value| !value.is_empty());
     let credential = match &client.auth {
         Auth::None => Credential::None,
         Auth::Bearer => Credential::Header {
@@ -63,6 +65,30 @@ pub(crate) fn endpoint(
                 ),
             }
         }
+        Auth::Oauth2ClientCredentials(spec) => {
+            let grant = Grant::ClientCredentials {
+                client_id: needed("client_id")?,
+                client_secret: needed("client_secret")?,
+            };
+            Credential::OAuth2(shared_token_source(
+                name,
+                &format!("{:?}", client.auth),
+                spec,
+                grant,
+            )?)
+        }
+        Auth::Oauth2RefreshToken(spec) => {
+            let grant = Grant::RefreshToken {
+                refresh_token: needed("refresh_token")?,
+                client: (present("client_id"), present("client_secret")),
+            };
+            Credential::OAuth2(shared_token_source(
+                name,
+                &format!("{:?}", client.auth),
+                spec,
+                grant,
+            )?)
+        }
     };
     let mut headers = settings
         .get("headers")
@@ -70,7 +96,16 @@ pub(crate) fn endpoint(
         .map(text_headers)
         .unwrap_or_default();
     headers.extend(client.headers.clone());
-    let secrets = secret_texts(&credential, &headers, [text("token"), text("password")]);
+    let secrets = secret_texts(
+        &credential,
+        &headers,
+        [
+            text("token"),
+            text("password"),
+            text("client_secret"),
+            text("refresh_token"),
+        ],
+    );
     Ok(Endpoint {
         base_url,
         headers,
@@ -79,11 +114,11 @@ pub(crate) fn endpoint(
     })
 }
 
-/// Every text an error must never show: the token and password as they are and percent-encoded, the credential as sent (`Bearer ...`, `Basic ...` and its base64), and the values of headers whose names look secret (`X-Api-Key`, `Cookie`, ...); other header values such as `Accept` or a version stay readable.
+/// Every text an error must never show: the token, password, client secret and refresh token as they are and percent-encoded, the credential as sent (`Bearer ...`, `Basic ...` and its base64), and the values of headers whose names look secret (`X-Api-Key`, `Cookie`, ...); other header values such as `Accept` or a version stay readable.
 fn secret_texts(
     credential: &Credential,
     headers: &BTreeMap<String, String>,
-    raw: [Option<String>; 2],
+    raw: [Option<String>; 4],
 ) -> Vec<String> {
     let mut secrets: Vec<String> = raw.into_iter().flatten().collect();
     let encoded: Vec<String> = secrets.iter().map(|secret| encoded(secret)).collect();
@@ -101,6 +136,18 @@ fn secret_texts(
     secrets.retain(|secret| !secret.is_empty());
     secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
     secrets
+}
+
+impl Endpoint {
+    /// The connection's secrets plus the OAuth2 ones issued so far, longest first.
+    pub(crate) fn current_secrets(&self) -> Vec<String> {
+        let mut secrets = self.secrets.clone();
+        if let Credential::OAuth2(tokens) = &self.credential {
+            secrets.extend(tokens.secrets());
+            secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+        }
+        secrets
+    }
 }
 
 /// Whether a header's name says its value is a secret.
