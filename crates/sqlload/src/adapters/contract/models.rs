@@ -4,7 +4,9 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{BatchFooters, DataFile, FilesRead};
 use crate::loader::models::TableSpec;
+use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::models::{DesiredColumn, LiveColumn};
+use crate::snowflake_source::models::UnloadedFiles;
 
 /// A destination table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +174,19 @@ pub struct DirectBatch<'a> {
     pub live: Option<&'a [LiveColumn]>,
     /// The files' own folder, which `copy_to_internal_stage` uploads them from.
     pub source_folder: Option<&'a OpenFolder>,
+}
+
+/// One unload's files the destination loads by reading them itself: times and timestamps held as whole microseconds, every other column as the type it is read as.
+#[derive(Debug, Clone, Copy)]
+pub struct UnloadedBatch<'a> {
+    pub files: &'a UnloadedFiles,
+    /// The columns the files hold, as they are read.
+    pub read: &'a [ReadColumn],
+    /// The table's columns as the load writes them.
+    pub write_columns: &'a [DesiredColumn],
+    pub target: WriteTarget<'a>,
+    /// The load time as an ISO 8601 UTC timestamp, written to every row.
+    pub loaded_at: &'a str,
 }
 
 /// A query a check before publish runs on a relation; each returns its values as text.

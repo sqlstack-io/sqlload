@@ -162,6 +162,12 @@ symbols = ["cross"]
 reason = "PyO3 maps each of the Python function's keyword-only arguments to one Rust parameter."
 
 [[targets.rust.rule_exceptions]]
+rule = "FPRSS120"
+path = "crates/sqlload-python/src/bindings/models.rs"
+symbols = ["JsonData::new"]
+reason = "PyO3 maps each of sl.json's and sl.ndjson's keyword-only arguments to one Rust parameter."
+
+[[targets.rust.rule_exceptions]]
 rule = "FPRSH003"
 path = "crates/sqlload-python/src/crossing/_helpers/parser.rs"
 symbols = ["panic_if"]

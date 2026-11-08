@@ -9,8 +9,9 @@ use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods};
 use pyo3::{Bound, PyAny, PyRef, PyResult, Python, pyclass, pymethods};
 use sqlload::row_batches::main::conform_batch::conform_batch;
+use sqlload::row_batches::main::projection::projection;
 use sqlload::row_batches::main::settled_schema::settled_schema;
-use sqlload::row_batches::models::JsonLayout;
+use sqlload::row_batches::models::{JsonLayout, Projection};
 
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{Polled, TableBatches};
@@ -22,14 +23,24 @@ pub struct JsonData {
     pub(crate) bytes: PyBackedBytes,
     pub(crate) layout: JsonLayout,
     pub(crate) path: Option<String>,
+    /// The columns each row loads as, when only some of its values load.
+    pub(crate) projection: Option<Projection>,
 }
 
 #[pymethods]
 impl JsonData {
-    /// `data` as one JSON document (rows at dotted `path`, or the whole document), or as NDJSON when `lines`.
+    /// `data` as one JSON document (rows at dotted `path`, or the whole document), or as NDJSON when `lines`; `fields` (column, path, required) and `keep_record` project each row.
     #[new]
-    #[pyo3(signature = (data, *, lines = false, path = None))]
-    fn new(data: PyBackedBytes, lines: bool, path: Option<String>) -> PyResult<Self> {
+    #[pyo3(signature = (data, *, lines = false, path = None, fields = None, keep_record = None))]
+    fn new(
+        data: PyBackedBytes,
+        lines: bool,
+        path: Option<String>,
+        fields: Option<Vec<(String, String, bool)>>,
+        keep_record: Option<String>,
+    ) -> PyResult<Self> {
+        let projection =
+            projection(fields.as_deref(), keep_record.as_deref()).map_err(PyValueError::new_err)?;
         let layout = match (lines, &path) {
             (true, Some(_)) => {
                 return Err(PyValueError::new_err(
@@ -43,6 +54,7 @@ impl JsonData {
             bytes: data,
             layout,
             path,
+            projection,
         })
     }
 

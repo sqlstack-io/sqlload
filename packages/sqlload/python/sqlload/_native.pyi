@@ -26,7 +26,13 @@ def cross(
 
 class JsonData:
 	def __new__(
-		cls, data: bytes | bytearray, *, lines: bool = False, path: str | None = None
+		cls,
+		data: bytes | bytearray,
+		*,
+		lines: bool = False,
+		path: str | None = None,
+		fields: list[tuple[str, str, bool]] | None = None,
+		keep_record: str | None = None,
 	) -> JsonData: ...
 	@property
 	def lines(self) -> bool: ...

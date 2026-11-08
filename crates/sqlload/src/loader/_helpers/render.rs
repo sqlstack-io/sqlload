@@ -7,7 +7,7 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::sources::source_readers;
-use crate::loader::_helpers::table_plan::is_direct;
+use crate::loader::_helpers::table_plan::{is_direct, pulls_unloaded};
 use crate::loader::constants::{LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN};
 use crate::loader::models::{
     CommitRule, FilesOutput, PlanDetail, PlanItem, PlanView, ProjectPlan, PythonTable, SourceEnd,
@@ -456,6 +456,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     if matches!(table.commits, CommitRule::Windows(_))
         && spec.python.is_none()
         && spec.files.is_none()
+        && spec.warehouse_source.is_none()
     {
         details.push(detail(
             "note",
@@ -545,6 +546,9 @@ fn batch_line(table: &TablePlan) -> String {
                 thousands(MAX_BATCH_FILES as u64)
             )
         }
+        (_, true) if pulls_unloaded(table.route.as_ref()) => {
+            "each unload loaded at once into a new table, swapped in once at the end".to_owned()
+        }
         (_, true) if sql_adapter(spec.warehouse).keeps_tables() => {
             "about 1 GB at a time into a staging table, then the table emptied and refilled in one transaction".to_owned()
         }
@@ -560,6 +564,9 @@ fn batch_line(table: &TablePlan) -> String {
                 _ => "",
             }
         ),
+        (CommitRule::Size, false) if pulls_unloaded(table.route.as_ref()) => {
+            "one commit: the destination loads the whole unload at once".to_owned()
+        }
         (CommitRule::Size, false) => "about every 1 GB".to_owned(),
         (CommitRule::Whole(reason), false) => {
             let estimated = u64::try_from(spec.source_table.estimated_bytes).unwrap_or_default();
@@ -678,6 +685,9 @@ fn route_text(table: &TablePlan, route: &Route) -> String {
             real.unwrap_or_else(|| files.format.to_string()),
             files.store
         ),
+        [Step::Unload(store), Step::DestinationPulls(_)] => {
+            format!("unload Parquet to {store} -> {warehouse} {load} (nothing through the loader)")
+        }
         steps => steps
             .iter()
             .filter(|step| !matches!(step, Step::UseFiles(_)))
