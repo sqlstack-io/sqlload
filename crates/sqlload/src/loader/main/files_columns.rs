@@ -8,7 +8,7 @@ use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::constants::CONCURRENT_FOOTER_READS;
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
-use crate::loader::_helpers::destination::{live_schema, table_folder};
+use crate::loader::_helpers::destination::{live_schema, parquet_files, table_folder};
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::table_plan::{check_output, desired_columns, read_columns};
 use crate::loader::errors::LoaderError;
@@ -57,7 +57,7 @@ pub async fn files_columns(
             .iter()
             .flat_map(|partition| partition.files.iter().cloned())
             .collect();
-        columns.files = file_schemas(&folder, &every).await?;
+        columns.files = file_schemas(&folder, &parquet_files(&every)).await?;
     }
     Ok(columns)
 }

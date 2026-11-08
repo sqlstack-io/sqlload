@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 
-use crate::adapters::files::constants::PARQUET_SUFFIX;
+use crate::adapters::files::constants::DATA_SUFFIXES;
 use crate::adapters::files::models::{Partition, PartitionBy, PartitionKey, TableFiles, TablePath};
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::StoredFile;
@@ -55,11 +55,7 @@ pub(crate) fn group_partitions(
 ) -> TableFiles {
     let data: Vec<StoredFile> = files
         .into_iter()
-        .filter(|file| {
-            file.relative_key
-                .to_ascii_lowercase()
-                .ends_with(PARQUET_SUFFIX)
-        })
+        .filter(|file| is_data_file(&file.relative_key))
         .collect();
     let (Some(partition), Some(cursor_type)) = (&path.partition, cursor_type) else {
         let partitions = match data.is_empty() {
@@ -101,4 +97,10 @@ pub(crate) fn group_partitions(
         partitions: grouped.into_values().collect(),
         problems,
     }
+}
+
+/// Whether `key` names a data file a files target writes, in any format.
+pub(crate) fn is_data_file(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    DATA_SUFFIXES.iter().any(|suffix| lower.ends_with(suffix))
 }

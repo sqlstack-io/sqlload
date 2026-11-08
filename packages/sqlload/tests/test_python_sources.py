@@ -287,6 +287,18 @@ def test_given_a_files_target_when_loading_a_python_table_then_parquet_files_fol
 	assert files_rows(project, "rows") == expected
 
 
+def test_given_single_file_csv_when_columns_appear_partway_through_a_load_then_it_fails_and_keeps_the_table(tmp_path: Path) -> None:
+	toml = FILES_PROJECT.replace('path = "{table}/"', 'path = "{table}/"\nformat = "csv"\nsingle_file = true')
+	project = make_project(tmp_path, toml, "shop.table(description='Test table.')(rows)\n")
+	give(project, "rows", [{"id": 1, "v": "a"}])
+	load(project)
+	give(project, "rows", [{"id": n, "v": "b"} for n in range(1001)] + [{"id": 1001, "v": "b", "extra": True}])
+	done = sqlload(project, "load")
+	assert done.returncode == 1
+	assert "new columns appeared partway through the load, and single_file writes each file once" in done.stdout + done.stderr, done.stdout + done.stderr
+	assert (project / "lake" / "rows" / "rows.csv").read_text().splitlines()[1].startswith("1,a,")
+
+
 def test_given_a_files_target_with_day_partitions_when_delete_insert_reloads_a_day_then_it_is_replaced(tmp_path: Path) -> None:
 	toml = FILES_PROJECT.replace('path = "{table}/"', 'path = "{table}/day={cursor:date}/"')
 	project = make_project(tmp_path, toml, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'})(rows)\n")

@@ -14,8 +14,8 @@ use crate::loader::models::{
     TablePlan, WarehouseRoute, WarehouseSource, WholeReason,
 };
 use crate::project::models::BatchStep;
-use crate::project::models::FilesFormat;
 use crate::project::models::MaskMethod;
+use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnOrigin, TableAction};
@@ -570,6 +570,7 @@ fn batch_line(table: &TablePlan) -> String {
             let large = !table.exists && (spec.python.is_some() || estimated > BATCH_BYTES as u64);
             let why = match reason {
                 WholeReason::Chosen => "batch_size = \"none\"",
+                WholeReason::SingleFile => "single_file writes each file once, whole",
                 WholeReason::TextCursor => {
                     "a text cursor, which the source and destination may sort differently"
                 }
@@ -616,9 +617,16 @@ fn files_line(output: &FilesOutput) -> PlanDetail {
         Some(partition) => format!("  partitions {partition}"),
         None => String::new(),
     };
-    let format = match output.format {
-        FilesFormat::Parquet => "parquet (zstd)",
+    let encoding = &output.encoding;
+    let mut format = match (encoding.format, encoding.compression) {
+        (FilesFormat::Parquet, _) => "parquet (zstd)".to_owned(),
+        (FilesFormat::Csv, OutputCompression::None) => "csv".to_owned(),
+        (FilesFormat::Csv, OutputCompression::Gzip) => "csv (gzip)".to_owned(),
+        (FilesFormat::Csv, OutputCompression::Zstd) => "csv (zstd)".to_owned(),
     };
+    if encoding.single_file {
+        format.push_str(", single file");
+    }
     detail(
         "files",
         format!("{}  {format}{partition}", output.path.folder),

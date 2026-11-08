@@ -2,18 +2,18 @@
 
 use arrow_array::RecordBatch;
 
-use crate::adapters::files::_helpers::write::parquet_files::{
-    new_file, next_key, open_bytes, store_file,
+use crate::adapters::files::_helpers::write::data_files::{
+    add_rows, new_file, next_key, open_bytes, store_file,
 };
 use crate::adapters::files::_helpers::write::spill::spill_order;
 use crate::adapters::files::_helpers::write::split::partition_rows;
 use crate::adapters::files::constants::{
-    FILE_MAX_BYTES, FILE_MAX_ROWS, OPEN_FILES_MAX, OPEN_FILES_MAX_BYTES,
+    FILE_MAX_BYTES, FILE_MAX_ROWS, OPEN_FILES_MAX, OPEN_FILES_MAX_BYTES, SINGLE_FILE_MAX_BYTES,
 };
 use crate::adapters::files::errors::FilesDestinationError;
 use crate::adapters::files::models::FilesWriter;
 
-/// Write `batch` into its partitions' open files; full files are stored, and the largest while too many files are open or they hold too much.
+/// Write `batch` into its partitions' open files; full files are stored, and the largest while too many files are open or they hold too much; with `single_file` each partition keeps its one file open until the commit.
 pub async fn write_rows(
     writer: &mut FilesWriter,
     batch: RecordBatch,
@@ -34,11 +34,28 @@ pub async fn write_rows(
     spill(writer, OPEN_FILES_MAX).await
 }
 
-/// Store the largest open files until at most `max_files` stay open, holding at most the memory cap.
+/// Store the largest open files until at most `max_files` stay open, holding at most the memory cap; with `single_file` a file is never stored early, so more open files than the cap, or more than `SINGLE_FILE_MAX_BYTES` held, fail instead.
 async fn spill(
     writer: &mut FilesWriter,
     max_files: usize,
 ) -> Result<&mut FilesWriter, FilesDestinationError> {
+    if writer.encoding.single_file {
+        let held: usize = writer.open.values().map(open_bytes).sum();
+        let reason = match (writer.open.len() > max_files, held > SINGLE_FILE_MAX_BYTES) {
+            (true, _) => format!(
+                "single_file keeps one file open per partition, and this commit writes more than {OPEN_FILES_MAX} partitions; load fewer partitions at once (--start-cursor/--end-cursor) or drop single_file"
+            ),
+            (false, true) => format!(
+                "single_file holds each file in memory until the load commits, and this load passed {} GiB; compress it, partition it, or drop single_file",
+                SINGLE_FILE_MAX_BYTES / (1024 * 1024 * 1024)
+            ),
+            (false, false) => return Ok(writer),
+        };
+        return Err(FilesDestinationError::Write {
+            key: writer.folder.location.to_string(),
+            reason,
+        });
+    }
     let sizes: Vec<(String, usize)> = writer
         .open
         .iter()
@@ -65,17 +82,15 @@ async fn add_part(
         key: writer.folder.location.to_string(),
         reason,
     };
-    let mut file = match writer.open.remove(&value) {
+    let file = match writer.open.remove(&value) {
         Some(file) => file,
-        None => new_file(&writer.schema).map_err(failed)?,
+        None => new_file(&writer.schema, &writer.encoding).map_err(failed)?,
     };
-    file.writer
-        .write(&part)
-        .map_err(|error| failed(error.to_string()))?;
-    file.rows += part.num_rows();
+    let file = add_rows(file, &part, &writer.encoding).map_err(failed)?;
     writer.rows += part.num_rows() as u64;
     writer.partitions.insert(value.clone());
-    match file.rows >= FILE_MAX_ROWS || open_bytes(&file) >= FILE_MAX_BYTES {
+    let full = file.rows >= FILE_MAX_ROWS || open_bytes(&file) >= FILE_MAX_BYTES;
+    match full && !writer.encoding.single_file {
         true => {
             let key = next_key(writer, &value);
             store_file(&writer.folder, &key, file).await?;

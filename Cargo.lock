@@ -5511,6 +5511,7 @@ dependencies = [
  "rlimit",
  "rsa 0.9.10",
  "russh",
+ "rustix 1.1.6",
  "rustls",
  "serde",
  "serde_json",
