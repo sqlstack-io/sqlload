@@ -1,7 +1,7 @@
 //! Unload a table or query as Parquet for the destination to read itself.
 
 use crate::snowflake_source::_helpers::folders::{
-    Unloaded, destination_folder, remove_folder, unload_folder, unloaded_files,
+    destination_folder, remove_folder, unload_folder, unloaded_keys,
 };
 use crate::snowflake_source::_helpers::unload::{copy_statement, rows_unloaded};
 use crate::snowflake_source::_helpers::unload_query::unload_query;
@@ -27,23 +27,21 @@ pub async fn unload_files<T, E: From<SnowflakeSourceError>>(
         let (location, downloads) = destination_folder(&folder)?;
         let keys = match rows {
             0 => Vec::new(),
-            _ => match (unloaded_files(reader, &folder).await?, &downloads) {
-                (Unloaded::External { files, .. }, _) => files,
-                (internal, Some(local)) => internal.download(reader, local.path()).await?,
-                (Unloaded::Internal { stage_path, .. }, None) => {
-                    return Err(SnowflakeSourceError::Invalid(format!(
-                        "{stage_path} is an internal stage with no local folder to download into"
-                    ))
-                    .into());
-                }
-            },
+            _ => unloaded_keys(reader, &folder, downloads.as_ref()).await?,
         };
         let files = UnloadedFiles {
             folder: location,
             keys,
             rows,
         };
-        load(&files).await
+        let loaded = load(&files).await;
+        if let Some(local) = downloads {
+            let path = local.path().display().to_string();
+            if let Err(error) = local.close() {
+                tracing::warn!(folder = %path, %error, "cannot remove the downloaded files");
+            }
+        }
+        loaded
     }
     .await;
     if let Err(error) = remove_folder(reader, &folder).await {

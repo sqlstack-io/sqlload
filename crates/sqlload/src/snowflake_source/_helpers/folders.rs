@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use tokio::sync::RwLock;
 
 use crate::file_store::main::delete_files::delete_files;
@@ -10,7 +10,8 @@ use crate::file_store::models::OpenFolder;
 use crate::http::errors::ApiError;
 use crate::project::models::UnloadStage;
 use crate::snowflake_source::constants::{
-    EXPIRED_CREDENTIALS, INTERNAL_STAGE, PARALLEL_FILE_DOWNLOADS, USER_STAGE_FOLDER,
+    DOWNLOAD_PREFIX, EXPIRED_CREDENTIALS, INTERNAL_STAGE, PARALLEL_FILE_DOWNLOADS,
+    USER_STAGE_FOLDER,
 };
 use crate::snowflake_source::errors::SnowflakeSourceError;
 use crate::snowflake_source::models::{SnowflakeReader, UnloadFolder};
@@ -204,18 +205,22 @@ impl Unloaded {
         let names: Vec<String> = (0..self.len())
             .map(|index| format!("{index:05}.parquet"))
             .collect();
-        let mut fetched = futures_util::stream::iter(0..self.len())
-            .map(|index| async move { (index, self.fetch(reader, index).await) })
-            .buffer_unordered(PARALLEL_FILE_DOWNLOADS);
-        while let Some((index, bytes)) = fetched.next().await {
-            let path = into.join(&names[index]);
-            tokio::fs::write(&path, bytes?)
-                .await
-                .map_err(|error| SnowflakeSourceError::File {
-                    file: self.name(index),
-                    reason: format!("cannot write {}: {error}", path.display()),
-                })?;
-        }
+        futures_util::stream::iter(0..self.len())
+            .map(|index| {
+                let path = into.join(&names[index]);
+                async move {
+                    let bytes = self.fetch(reader, index).await?;
+                    tokio::fs::write(&path, bytes).await.map_err(|error| {
+                        SnowflakeSourceError::File {
+                            file: self.name(index),
+                            reason: format!("cannot write {}: {error}", path.display()),
+                        }
+                    })
+                }
+            })
+            .buffer_unordered(PARALLEL_FILE_DOWNLOADS)
+            .try_collect::<()>()
+            .await?;
         Ok(names)
     }
 }
@@ -303,11 +308,14 @@ pub(crate) fn destination_folder(
     match folder {
         UnloadFolder::External { folder, .. } => Ok((folder.clone(), None)),
         UnloadFolder::Internal { .. } => {
-            let local = tempfile::tempdir().map_err(|error| {
-                SnowflakeSourceError::Invalid(format!(
-                    "cannot create a local temporary folder for the unloaded files: {error}"
-                ))
-            })?;
+            let local = tempfile::Builder::new()
+                .prefix(DOWNLOAD_PREFIX)
+                .tempdir()
+                .map_err(|error| {
+                    SnowflakeSourceError::Invalid(format!(
+                        "cannot create a local temporary folder for the unloaded files: {error}"
+                    ))
+                })?;
             let location = Location {
                 store: StoreKind::Filesystem {
                     root: local.path().to_string_lossy().into_owned(),
@@ -316,6 +324,21 @@ pub(crate) fn destination_folder(
             };
             Ok((location, Some(local)))
         }
+    }
+}
+
+/// The keys of `folder`'s files where the destination reads them: in the S3 folder, or as downloaded into `local` from an internal stage.
+pub(crate) async fn unloaded_keys(
+    reader: &SnowflakeReader,
+    folder: &UnloadFolder,
+    local: Option<&tempfile::TempDir>,
+) -> Result<Vec<String>, SnowflakeSourceError> {
+    match (unloaded_files(reader, folder).await?, local) {
+        (Unloaded::External { files, .. }, _) => Ok(files),
+        (internal, Some(local)) => internal.download(reader, local.path()).await,
+        (Unloaded::Internal { stage_path, .. }, None) => Err(SnowflakeSourceError::Invalid(
+            format!("{stage_path} is an internal stage with no local folder to download into"),
+        )),
     }
 }
 

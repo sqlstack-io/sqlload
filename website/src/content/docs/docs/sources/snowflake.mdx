@@ -148,9 +148,11 @@ unchanged, 16 at a time, into a temporary folder, and DuckDB reads them from the
 route   unload Parquet to internal stage @~/sqlload_unload/ -> download unchanged to a local temporary folder -> DuckDB reads them (nothing through the loader)
 ```
 
-The temporary folder is in the system's temporary directory (`TMPDIR`), and needs room for one
-read's files at once: the whole table, or one window with `batch_size`. It is removed after the
-read, when the read fails too.
+The folder, named `sqlload-unload-…`, is in the system's temporary directory (`TMPDIR`). It needs
+room for one read's files (the whole table, or one window with `batch_size`) for each table loading
+at once, up to `concurrency`. Where the temporary directory is in memory (tmpfs), so are the files.
+The folder is removed after the read, when the read fails too; a run that is killed can leave it
+behind.
 
 SQLLoad reads the files instead, and `plan` says why, for a table with masked columns or checks
 before publish, for a stage given by `name`, and for targets other than DuckDB.

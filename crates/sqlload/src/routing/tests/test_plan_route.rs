@@ -200,6 +200,31 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             ],
         },
         PlanRouteTestCase {
+            description: "an internal-stage unload is read back by SQLLoad when DuckDB cannot load it exactly, as for masked columns",
+            reader: ReaderOffer {
+                direct_blocked: Some("the table masks columns".to_owned()),
+                ..warehouse_source(BIG)
+            },
+            writer: duckdb_destination(),
+            overrides: internal_stage(),
+            expected_steps: &[
+                "unload Parquet to internal stage @~",
+                "read parquet into Arrow",
+                "destination takes Arrow",
+            ],
+        },
+        PlanRouteTestCase {
+            description: "a destination that reads only S3 has an internal-stage unload read back by SQLLoad",
+            reader: warehouse_source(BIG),
+            writer: clickhouse_destination(),
+            overrides: internal_stage(),
+            expected_steps: &[
+                "unload Parquet to internal stage @~",
+                "read parquet into Arrow",
+                "destination takes Arrow",
+            ],
+        },
+        PlanRouteTestCase {
             description: "an internal-stage unload is read back by SQLLoad when the table needs the loader",
             reader: ReaderOffer {
                 needs_loader: Some(HMAC.to_owned()),
