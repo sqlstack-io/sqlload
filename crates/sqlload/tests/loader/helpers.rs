@@ -1738,19 +1738,31 @@ pub(crate) fn spawn_sqlload(
         .map_err(|error| error.to_string())
 }
 
-/// Send `signal` (as `kill` takes it, such as `-TERM`; `-0` sends none) to `child`, then wait for it to exit: whether it succeeded, and its output.
+/// How long [`stop_sqlload`] waits before killing a run that has not exited, so a hang fails with its output.
+const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Send `signal` (as `kill` takes it, such as `-TERM`; `-0` sends none) to `child`, then wait for it to exit, killing it after `STOP_DEADLINE`: whether it succeeded, and its output.
 pub(crate) async fn stop_sqlload(
     child: std::process::Child,
     signal: &str,
 ) -> Result<(bool, String), String> {
+    let pid = child.id().to_string();
     let _ = std::process::Command::new("kill")
         .arg(signal)
-        .arg(child.id().to_string())
+        .arg(&pid)
         .status();
+    let deadline = tokio::spawn(async move {
+        tokio::time::sleep(STOP_DEADLINE).await;
+        let _ = std::process::Command::new("kill")
+            .arg("-KILL")
+            .arg(pid)
+            .status();
+    });
     let output = tokio::task::spawn_blocking(move || child.wait_with_output())
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
+    deadline.abort();
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
