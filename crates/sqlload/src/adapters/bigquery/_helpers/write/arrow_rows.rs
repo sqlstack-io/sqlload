@@ -10,12 +10,19 @@ use prost::Message;
 use crate::adapters::bigquery::_helpers::dialect::type_names::decimal_digits;
 use crate::bigquery_api::main::arrow_request::arrow_request;
 use crate::bigquery_api::models::AppendRowsRequest;
+use crate::column_types::constants::ARRAY_ITEM;
 use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::DesiredColumn;
 
 /// The Arrow type the Write API reads into a column of `column_type`, given the type the rows arrived as, or why it cannot load it yet.
 fn write_api_type(column_type: &ColumnType, arrived: &DataType) -> Result<DataType, String> {
-    if arrived.is_nested() {
+    if let (ColumnType::Array(element), DataType::List(item)) = (column_type, arrived) {
+        let element = write_api_type(element, item.data_type())?;
+        return Ok(DataType::List(Arc::new(Field::new(
+            ARRAY_ITEM, element, true,
+        ))));
+    }
+    if arrived.is_nested() || matches!(column_type, ColumnType::Array(_)) {
         return Err("nested values are not streamed".to_owned());
     }
     Ok(match column_type {
@@ -44,6 +51,7 @@ fn write_api_type(column_type: &ColumnType, arrived: &DataType) -> Result<DataTy
             DataType::LargeBinary | DataType::BinaryView => DataType::Binary,
             other => other.clone(),
         },
+        ColumnType::Array(_) => return Err("an array arrives as a list".to_owned()),
     })
 }
 

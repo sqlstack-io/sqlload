@@ -81,7 +81,7 @@ fn read_as(pg_type: PgType, output: &ColumnType, quoted: &str) -> Option<(String
         (ColumnType::Decimal { .. }, PgType::Int2 | PgType::Int4 | PgType::Int8) => {
             cast("numeric", WireType::Numeric)
         }
-        (ColumnType::Json, PgType::Array) => {
+        (ColumnType::Json | ColumnType::Array(_), PgType::Array) => {
             Some((format!("to_jsonb({quoted})::text"), WireType::Text))
         }
         (ColumnType::Json, PgType::Json) => {

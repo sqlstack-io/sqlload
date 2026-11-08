@@ -35,6 +35,11 @@ pub(crate) fn arrow_type(column_type: &ColumnType) -> Result<DataType, String> {
         ColumnType::Native(name) => {
             return Err(format!("native({name:?}) has no Arrow representation"));
         }
+        ColumnType::Array(_) => {
+            return Err(
+                "an array column is not read from a change stream yet; pin json".to_owned(),
+            );
+        }
     })
 }
 

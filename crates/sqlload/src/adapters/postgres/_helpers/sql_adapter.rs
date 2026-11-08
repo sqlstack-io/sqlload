@@ -105,14 +105,16 @@ impl SqlAdapter for PostgresSql {
         staging_type(column_type)
     }
 
-    /// JSON, UUIDs and native types are converted from their staged text by their type's own input, which refuses what it cannot read; the rest by the table's assignment casts, which refuse a value that does not fit.
+    /// JSON, UUIDs, arrays and native types are converted from their staged text by their type's own input, which refuses what it cannot read; the rest by the table's assignment casts, which refuse a value that does not fit.
     fn render_source_expression_cast(&self, name: &str, column_type: &ColumnType) -> String {
         let column = self.render_identifier(name);
         match column_type {
-            ColumnType::Json | ColumnType::Uuid | ColumnType::Native(_) => format!(
-                "CAST({column} AS {})",
-                self.render_loader_logical_type(column_type).sql
-            ),
+            ColumnType::Json | ColumnType::Uuid | ColumnType::Native(_) | ColumnType::Array(_) => {
+                format!(
+                    "CAST({column} AS {})",
+                    self.render_loader_logical_type(column_type).sql
+                )
+            }
             _ => column,
         }
     }

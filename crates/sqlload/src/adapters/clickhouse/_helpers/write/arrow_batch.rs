@@ -6,11 +6,18 @@ use arrow_array::{ArrayRef, RecordBatch};
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
+use crate::column_types::constants::ARRAY_ITEM;
 use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::DesiredColumn;
 
 /// The Arrow type ClickHouse reads into a column of `column_type`, given the type the rows arrived as, or why it cannot: times as their `HH:MM:SS.ffffff` text (the column is a `String`), decimals at their column's precision so a value too wide fails here by name, and view, large and dictionary types as plain ones, which its Arrow reader does not take. A nested value loads only into a `native(...)` column, as a cast to text would load its display text.
 fn clickhouse_type(column_type: &ColumnType, arrived: &DataType) -> Result<DataType, String> {
+    if let (ColumnType::Array(element), DataType::List(item)) = (column_type, arrived) {
+        let element = clickhouse_type(element, item.data_type())?;
+        return Ok(DataType::List(Arc::new(Field::new(
+            ARRAY_ITEM, element, true,
+        ))));
+    }
     if arrived.is_nested() && !matches!(column_type, ColumnType::Native(_)) {
         return Err(format!(
             "a nested value loads only into a native(...) column, not {column_type}"
@@ -36,6 +43,7 @@ fn clickhouse_type(column_type: &ColumnType, arrived: &DataType) -> Result<DataT
         ColumnType::TimestampNtz => DataType::Timestamp(TimeUnit::Microsecond, None),
         ColumnType::Date => DataType::Date32,
         ColumnType::Native(_) => plain_type(arrived),
+        ColumnType::Array(_) => return Err("an array arrives as a list".to_owned()),
     })
 }
 

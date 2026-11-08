@@ -1,6 +1,7 @@
 //! ClickHouse's spelling of each portable type, and the way back from what it reports.
 
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
+use crate::column_types::main::array_element::array_element;
 use crate::column_types::models::{ColumnType, LiveColumnType, WarehouseType};
 
 /// A type ClickHouse holds exactly, as a `Nullable` column.
@@ -57,6 +58,17 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
             sql: name.clone(),
             lossy: None,
         },
+        ColumnType::Array(element) => {
+            let element = logical_type(element);
+            WarehouseType {
+                sql: format!("Array({})", element.sql),
+                lossy: Some(
+                    element
+                        .lossy
+                        .unwrap_or("a NULL array loads as an empty one"),
+                ),
+            }
+        }
     }
 }
 
@@ -96,6 +108,13 @@ fn decimal(precision: u8, scale: Option<&str>) -> Option<ColumnType> {
 /// A column type as `system.columns` reports it, such as `Nullable(Decimal(18, 2))` or `DateTime64(6, 'UTC')`: a time with a zone argument is a zoned timestamp, one without a wall-clock one. Only a type holding every value of its portable type has a portable name; a narrower one (`Int32`, `UInt16`, `Float32`, `Date`, `DateTime`, `DateTime64(3)`) has none, as ClickHouse would wrap or cut the values put into it rather than fail.
 pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
     let text = unwrapped(&live.data_type);
+    if let Some(element) = text
+        .strip_prefix("Array(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        let element = portable_type(&array_element(live, element))?;
+        return Some(ColumnType::Array(Box::new(element)));
+    }
     let base = text.split('(').next().unwrap_or_default().trim();
     let arguments = arguments(text);
     Some(match base {

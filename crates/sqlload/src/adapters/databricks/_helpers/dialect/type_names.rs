@@ -1,6 +1,7 @@
 //! Databricks' spelling of each portable type, and the way back from what it reports.
 
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
+use crate::column_types::main::array_element::array_element;
 use crate::column_types::models::{ColumnType, LiveColumnType, WarehouseType};
 
 /// A type Databricks holds exactly.
@@ -40,6 +41,13 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
         ColumnType::Uuid => lossy("STRING", "stored as text"),
         ColumnType::Binary => exact("BINARY"),
         ColumnType::Native(name) => exact(name.clone()),
+        ColumnType::Array(element) => {
+            let element = logical_type(element);
+            WarehouseType {
+                sql: format!("ARRAY<{}>", element.sql),
+                lossy: element.lossy,
+            }
+        }
     }
 }
 
@@ -60,6 +68,14 @@ fn decimal(live: &LiveColumnType) -> Option<ColumnType> {
 /// A Unity Catalog `information_schema.columns` type, read from `full_data_type` (`bigint`, `decimal(18,2)`, `varchar(10)`, `array<string>`).
 pub(crate) fn portable_type(live: &LiveColumnType) -> Option<ColumnType> {
     let lower = live.data_type.to_ascii_lowercase();
+    if let Some(element) = lower
+        .trim()
+        .strip_prefix("array<")
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        let element = portable_type(&array_element(live, element))?;
+        return Some(ColumnType::Array(Box::new(element)));
+    }
     let (base, argument) = match lower.split_once('(') {
         Some((base, rest)) => (base.trim(), rest.trim_end_matches(')').trim()),
         None => (lower.trim(), ""),

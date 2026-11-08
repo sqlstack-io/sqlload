@@ -92,7 +92,11 @@ impl CopyDecoder {
             .builders
             .iter_mut()
             .map(ColumnBuilder::finish)
-            .collect();
+            .collect::<Result<_, String>>()
+            .map_err(|reason| PostgresError::Batch {
+                table: self.table.clone(),
+                reason,
+            })?;
         self.rows = 0;
         self.bytes = 0;
         RecordBatch::try_new(self.schema.clone(), arrays).map_err(|error| PostgresError::Batch {

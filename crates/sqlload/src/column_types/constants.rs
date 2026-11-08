@@ -40,3 +40,22 @@ pub const SMALLINT_DIGITS: u8 = 5;
 
 /// Characters in a hyphenated UUID.
 pub const UUID_TEXT_LENGTH: u32 = 36;
+
+/// The name of the array type, `array(<element>)`.
+pub const ARRAY_NAME: &str = "array";
+
+/// The element types an `array(...)` holds besides `decimal(p,s)`: scalars every destination keeps in an array.
+pub const ARRAY_ELEMENTS: &[crate::column_types::models::ColumnType] = &[
+    crate::column_types::models::ColumnType::Bool,
+    crate::column_types::models::ColumnType::SmallInt,
+    crate::column_types::models::ColumnType::Int,
+    crate::column_types::models::ColumnType::Float,
+    crate::column_types::models::ColumnType::Text,
+    crate::column_types::models::ColumnType::Date,
+    crate::column_types::models::ColumnType::TimestampTz,
+    crate::column_types::models::ColumnType::TimestampNtz,
+    crate::column_types::models::ColumnType::Uuid,
+];
+
+/// The name of an array's element field in Arrow and Parquet lists.
+pub const ARRAY_ITEM: &str = "item";

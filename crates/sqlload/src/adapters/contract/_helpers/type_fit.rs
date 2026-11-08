@@ -3,7 +3,7 @@ use crate::column_types::main::holds_values::holds_values;
 use crate::column_types::main::widened_type::widened_type;
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit};
 
-/// Whether `live` holds every `desired` value on the adapter's warehouse, can be widened to, or cannot. A pinned `native(...)` type fits the live column it creates, which reads back as its portable type (ClickHouse's `LowCardinality(String)` as text, Snowflake's `VARIANT` as json).
+/// Whether `live` holds every `desired` value on the adapter's warehouse, can be widened to, or cannot. A pinned `native(...)` or `array(...)` type fits the live column it creates, which reads back as its portable type (ClickHouse's `LowCardinality(String)` as text, Snowflake's `VARIANT` as json).
 pub(crate) fn type_fit<A: SqlAdapter + ?Sized>(
     adapter: &A,
     desired: &ColumnType,
@@ -11,9 +11,9 @@ pub(crate) fn type_fit<A: SqlAdapter + ?Sized>(
 ) -> TypeFit {
     let sql = |column_type: &ColumnType| adapter.render_loader_logical_type(column_type).sql;
     let created = match desired {
-        ColumnType::Native(text) => {
+        ColumnType::Native(_) | ColumnType::Array(_) => {
             adapter.live_type(&LiveColumnType {
-                data_type: text.clone(),
+                data_type: sql(desired),
                 precision: None,
                 scale: None,
                 char_length: None,
