@@ -7,3 +7,4 @@ pub(crate) mod json_reader;
 pub(crate) mod json_records;
 pub(crate) mod sample;
 pub(crate) mod text_reader;
+pub(crate) mod whole_records;

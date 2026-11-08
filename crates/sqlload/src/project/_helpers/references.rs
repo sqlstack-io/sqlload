@@ -1,6 +1,7 @@
+use crate::files_source::constants::LOADER_COLUMNS;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
-use crate::files_source::models::SourceFormat;
+use crate::files_source::models::{RecordShape, SourceFormat};
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
@@ -333,9 +334,11 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if source.format != SourceFormat::Parquet
         || source.compression.is_some()
         || source.csv.is_some()
+        || source.shape != RecordShape::Columns
+        || source.record_column.is_some()
     {
         problems.push(format!(
-            "{place} format, compression and csv are for kind = \"files\""
+            "{place} format, compression, csv, shape and record_column are for kind = \"files\""
         ));
     }
     problems
@@ -401,6 +404,9 @@ fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         ),
         Some(Err(problem)) => problems.push(format!("{place} {problem}")),
     }
+    if let Some(record) = &source.files_encoding().record {
+        names.push((record.clone(), "record_column"));
+    }
     match constant_columns(&source.constant_columns, &[]) {
         Ok(constants) => names.extend(
             constants
@@ -425,6 +431,43 @@ fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
 /// Settings that do not fit a files source's format.
 fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
+    match (source.shape, source.format, &source.record_column) {
+        (RecordShape::Record, SourceFormat::Parquet, _) => problems.push(format!(
+            "{place} shape = \"record\" is for ndjson, json and csv files; Parquet files already have typed columns"
+        )),
+        (RecordShape::Columns, _, Some(_)) => problems.push(format!(
+            "{place} record_column is for shape = \"record\", which is not set"
+        )),
+        (_, _, Some(name)) if name.trim().is_empty() => {
+            problems.push(format!("{place} record_column must not be empty"));
+        }
+        (_, _, Some(name))
+            if LOADER_COLUMNS
+                .iter()
+                .any(|loader| loader.eq_ignore_ascii_case(name)) =>
+        {
+            problems.push(format!(
+                "{place} record_column {name} is a column SQLLoad adds itself; choose another name"
+            ));
+        }
+        _ => {}
+    }
+    if let Some(record) = &source.files_encoding().record {
+        for (table, overrides) in &source.tables {
+            let pinned: Vec<&str> = overrides
+                .columns
+                .keys()
+                .map(String::as_str)
+                .filter(|name| name != record)
+                .collect();
+            if !pinned.is_empty() {
+                problems.push(format!(
+                    "{place} shape = \"record\" loads each record into one json column, {record}, so [tables.{table}] columns cannot pin {}",
+                    pinned.join(", ")
+                ));
+            }
+        }
+    }
     if source.format == SourceFormat::Parquet && source.compression.is_some() {
         problems.push(format!(
             "{place} compression is for ndjson, json and csv files; Parquet files compress inside the file"

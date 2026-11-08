@@ -19,6 +19,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: vec![("name".to_owned(), "Timestamp(ns)".to_owned())],
             copied: false,
+            whole: false,
             expected_problem: Some(
                 "name is Timestamp(ns) in the files, which the direct COPY does not load exactly",
             ),
@@ -32,6 +33,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: vec![("excluded".to_owned(), "UInt64".to_owned())],
             copied: false,
+            whole: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -51,6 +53,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -66,6 +69,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -77,6 +81,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: vec![("name".to_owned(), MaskMethod::Hash)],
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -88,6 +93,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -99,6 +105,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -110,9 +117,22 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: true,
+            whole: false,
             expected_problem: Some(
                 "copy_to_internal_stage cannot load JSON or NDJSON yet: keys first seen after plan's sample would be missed; add a storage integration for these files instead",
             ),
+        },
+        DirectProblemTestCase {
+            description: "copy_to_internal_stage takes NDJSON loaded whole, which samples no keys",
+            source: "other/orders/",
+            format: SourceFormat::Ndjson,
+            keys: &["part-0.ndjson"],
+            columns: order_columns(),
+            masks: Vec::new(),
+            refused: Vec::new(),
+            copied: true,
+            whole: true,
+            expected_problem: None,
         },
         DirectProblemTestCase {
             description: "copy_to_internal_stage takes CSV, and a source folder a stage path could not name, since only the uploaded keys are named",
@@ -123,6 +143,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: true,
+            whole: false,
             expected_problem: None,
         },
         DirectProblemTestCase {
@@ -134,6 +155,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: Some("the files are outside the stage url s3://lake/raw/"),
         },
         DirectProblemTestCase {
@@ -145,6 +167,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: Some(
                 "batch=10%3A00/part-0.parquet has characters a stage path cannot name exactly",
             ),
@@ -158,6 +181,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: vec![("name".to_owned(), MaskMethod::Hmac)],
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: Some(
                 "name is masked with hmac, which Snowflake cannot compute without its key in SQL",
             ),
@@ -179,6 +203,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: vec![("id".to_owned(), MaskMethod::Hash)],
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: Some(
                 "id is hashed but is not text in the files; SQLLoad hashes its text",
             ),
@@ -200,6 +225,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: Some("id is int in the files but loads as text; SQLLoad converts it"),
         },
         DirectProblemTestCase {
@@ -219,6 +245,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: Some("meta is uuid, which the direct COPY does not load exactly"),
         },
         DirectProblemTestCase {
@@ -230,6 +257,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             masks: Vec::new(),
             refused: Vec::new(),
             copied: false,
+            whole: false,
             expected_problem: Some(
                 "code is varchar(4), which the direct COPY does not load exactly",
             ),
@@ -246,6 +274,7 @@ fn given_a_files_table_when_choosing_the_route_then_only_exact_loads_go_direct()
             stage_url: [Some(&stage.location), None][usize::from(test_case.copied)],
             source: &lake(test_case.source),
             format: test_case.format,
+            whole: test_case.whole,
             files: &files,
             columns: &test_case.columns,
             masks: &test_case.masks,

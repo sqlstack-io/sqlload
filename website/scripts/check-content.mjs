@@ -5,7 +5,7 @@ import { join, relative } from 'node:path';
 
 const website = new URL('..', import.meta.url).pathname;
 const docs = join(website, 'src/content/docs');
-const unshipped = /\b(Redshift|ClickHouse|SQL Server|MySQL)\b/gi;
+const unshipped = /\b(Redshift|SQL Server|MySQL)\b/gi;
 
 const slugs = (items) =>
 	items.flatMap((item) =>

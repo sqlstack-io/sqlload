@@ -90,6 +90,8 @@ at a time, and swaps it in once at the end, so readers see the old table until t
 - A Python table that yields no rows into a table that has rows fails rather than emptying it. Set
   `allow_empty=True` on the table or source when an empty result is real.
 - On a files target, the new files are written first and the older ones deleted after.
+- On a [Postgres target](/docs/targets/postgres/#write-strategies), the table is emptied and
+  refilled in one transaction instead, so it keeps its grants, indexes and dependent views.
 
 ## Reloading a table
 
@@ -103,6 +105,7 @@ error: --reload rebuilds app__customers from the whole source, replacing what th
 ```
 
 A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` refuses it. See
-[Reloading](/docs/sources/postgres-cdc/#reloading).
+[Reloading](/docs/sources/postgres-cdc/#reloading). `--reload` is refused on
+[Postgres targets](/docs/targets/postgres/), which SQLLoad never drops or recreates.
 
 See [Cursors](/docs/concepts/cursors/) for how a run decides what to read.

@@ -1,6 +1,8 @@
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::{CsvOptions, SourceFormat};
-use crate::files_source::tests::helpers::{block_on, csv_encoding, encoding, read_rows};
+use crate::files_source::tests::helpers::{
+    block_on, csv_encoding, encoding, read_rows, record_encoding,
+};
 use crate::files_source::tests::test_types::ReadTextFilesTestCase;
 
 #[test]
@@ -299,6 +301,56 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             exclude: &[],
             pinned: &[],
             expected_rows: Ok("1"),
+        },
+        ReadTextFilesTestCase {
+            description: "record shape, ndjson: each object whole as compact JSON, numbers keeping their digits, keys in file order (a repeated key once, with its last value where it last appears), keys outside any sample kept",
+            encoding: record_encoding(SourceFormat::Ndjson, CsvOptions::default()),
+            files: &[(
+                "a.ndjson.gz",
+                "{\"b\": 1, \"a\": {\"x\": [1, 2.50]}, \"b\": \"q\\\"\\u00e9\"}\n\n{\"z\": null}\n{}\n",
+            )],
+            unsampled: &[("b.ndjson", "{\"late\": true}\n")],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok(
+                "{\"a\":{\"x\":[1,2.50]},\"b\":\"q\\\"\u{e9}\"}\n{\"z\":null}\n{}\n{\"late\":true}",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "record shape, json: objects in a top-level array; a record that is not an object names its line",
+            encoding: record_encoding(SourceFormat::Json, CsvOptions::default()),
+            files: &[("a.json", "[\n{\"id\": 1},\n[1, 2]\n]")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err("a.json: line 3: "),
+        },
+        ReadTextFilesTestCase {
+            description: "record shape, csv: each line an array of its fields as text, NULL values as null, headers skipped unchecked even when files differ",
+            encoding: record_encoding(SourceFormat::Csv, CsvOptions::default()),
+            files: &[
+                ("a.csv", "id,name\n1,\"a,b\"\n2,\n"),
+                ("b.csv.gz", "x,x\n\"say \"\"hi\"\"\",007\n"),
+            ],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("[\"1\",\"a,b\"]\n[\"2\",null]\n[\"say \\\"hi\\\"\",\"007\"]"),
+        },
+        ReadTextFilesTestCase {
+            description: "record shape, csv without a header: the first line is a record, and a line with a different number of fields names its line",
+            encoding: record_encoding(
+                SourceFormat::Csv,
+                CsvOptions {
+                    header: false,
+                    ..CsvOptions::default()
+                },
+            ),
+            files: &[("a.csv", "1,2\n3\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err("a.csv: incorrect number of fields for line 2, expected 2 got 1"),
         },
     ];
     for test_case in test_cases {

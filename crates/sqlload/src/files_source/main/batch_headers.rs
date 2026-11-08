@@ -12,7 +12,7 @@ use crate::files_source::constants::CONCURRENT_FOOTER_READS;
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::{DataFile, FilesEncoding};
 
-/// Each of `files`' CSV column names (the header's, or `column_1`, ... without one), by relative key, read from the start of each file a few at a time; empty for a file with no records.
+/// Each of `files`' CSV column names (the header's, or `column_1`, ... without one or in `shape = "record"`), by relative key, read from the start of each file a few at a time; empty for a file with no records.
 pub async fn batch_headers(
     folder: &OpenFolder,
     files: &[DataFile],
@@ -41,7 +41,7 @@ async fn read_header(
     let bytes = open_bytes(folder, &data.file, codec)
         .await
         .map_err(failed)?;
-    let reader = CsvReader::open(bytes, &encoding.csv, 1)
+    let reader = CsvReader::open_as(bytes, (&encoding.csv, 1), encoding.record.is_none())
         .await
         .map_err(failed)?;
     Ok((key.clone(), reader.names().to_vec()))
