@@ -91,24 +91,30 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 }
                 _ => None,
             };
-            let (from, note) = match (start, maximum, &cursor.start) {
+            let (from, note, operator) = match (start, maximum, &cursor.start) {
                 (Some(start), _, _) => (
                     Some(start.clone()),
                     format!("{column} from {start} (--start-cursor)"),
+                    INCLUSIVE_BOUND,
                 ),
                 (None, Some((maximum, note)), _) => {
                     data_maximum = Some(maximum.clone());
-                    (Some(maximum), note)
+                    let operator = match cursor.inclusive {
+                        true => INCLUSIVE_BOUND,
+                        false => EXCLUSIVE_BOUND,
+                    };
+                    (Some(maximum), note, operator)
                 }
                 (None, None, Some(start)) => (
                     Some(start.clone()),
                     format!("{column} first run, from cursor_start {start}"),
+                    INCLUSIVE_BOUND,
                 ),
-                (None, None, None) => (None, format!("{column} first run, everything")),
-            };
-            let operator = match (cursor.inclusive, &options.start_cursor) {
-                (Some(false), None) => EXCLUSIVE_BOUND,
-                _ => INCLUSIVE_BOUND,
+                (None, None, None) => (
+                    None,
+                    format!("{column} first run, everything"),
+                    INCLUSIVE_BOUND,
+                ),
             };
             (from, end, note, operator)
         }

@@ -487,7 +487,7 @@ pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<Cu
             &table.append_cursor_inclusive,
             &source.append_cursor_inclusive,
         )
-        .map(|(value, _)| value),
+        .is_some_and(|(value, _)| value),
     })
 }
 

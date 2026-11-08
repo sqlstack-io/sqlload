@@ -44,7 +44,8 @@ cursor_column = "event_id"
 
 `append` refuses a date cursor: rows added later to the last day would be lost, or, read
 inclusively, the whole day would be inserted again on every run. Use `delete_insert`, which
-replaces the last day.
+replaces the last day. A files source is exempt, since it skips the files it already loaded
+rather than reading after the cursor.
 
 `append` takes no `lookback`, which would insert the window again on every run. Use `merge` or
 `delete_insert` for that.

@@ -306,7 +306,7 @@ pub(crate) fn captured_mode(spec: &TableSpec, mode: WriteMode) -> WriteMode {
 }
 
 /// Why `append` cannot follow this cursor: a date's last day may still gain rows, and reading after it would lose them while reading from it would append that day again; files sources are exempt, since they skip files already loaded rather than reading after the cursor.
-fn append_problem(spec: &TableSpec, cursor_type: Option<&ColumnType>) -> Option<String> {
+pub(crate) fn append_problem(spec: &TableSpec, cursor_type: Option<&ColumnType>) -> Option<String> {
     let cursor = spec.cursor.as_ref()?;
     (spec.strategy == WriteStrategy::Append
         && cursor_type == Some(&ColumnType::Date)
@@ -320,10 +320,10 @@ fn append_problem(spec: &TableSpec, cursor_type: Option<&ColumnType>) -> Option<
 }
 
 /// A warning for `append_cursor_inclusive = true` on a cursor read: every run appends the rows at the cursor's maximum again.
-fn inclusive_append_warning(spec: &TableSpec) -> Option<String> {
+pub(crate) fn inclusive_append_warning(spec: &TableSpec) -> Option<String> {
     let cursor = spec.cursor.as_ref()?;
     (spec.strategy == WriteStrategy::Append
-        && cursor.inclusive == Some(true)
+        && cursor.inclusive
         && spec.files.is_none())
     .then(|| {
         format!(
@@ -963,7 +963,7 @@ pub(crate) async fn cursor_window(
             Err(problem) => return Ok(Err(problem)),
         };
     let inclusive = match (spec.strategy, &options.start_cursor) {
-        (WriteStrategy::Append, None) => cursor.inclusive.unwrap_or(maximum.is_none()),
+        (WriteStrategy::Append, None) => cursor.inclusive || maximum.is_none(),
         _ => true,
     };
     let operator = match inclusive {

@@ -44,10 +44,10 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "1=5.00,2=2.00 staging:0",
         },
         ScenarioTestCase {
-            description: "append reads after an integer cursor's maximum: a re-run with no change loads nothing, a new row loads once",
+            description: "append reads after an integer cursor's maximum: the first run includes cursor_start, a re-run with no change loads nothing, a new row loads once",
             setup: "CREATE TABLE public.ticks (seq int8, note text);
                     INSERT INTO public.ticks VALUES (1, 'a'), (2, 'b');",
-            settings: "write_strategy = \"append\"\ncursor_column = \"seq\"\n[sources.app.tables.\"public.ticks\"]\n",
+            settings: "write_strategy = \"append\"\ncursor_column = \"seq\"\ncursor_start = \"1\"\n[sources.app.tables.\"public.ticks\"]\n",
             runs: &[
                 OK,
                 OK,

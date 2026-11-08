@@ -11,7 +11,7 @@ use crate::test_types::{FilesTargetRun, FilesTargetScenarioTestCase, RoundTripTe
 const ORDERS: &str = "CREATE TABLE public.orders (id int8 PRIMARY KEY, name text, qty int4, placed_at timestamptz NOT NULL);
 INSERT INTO public.orders VALUES (1, 'a', 1, '2026-11-03 10:00:00+00'), (2, 'b', 2, '2026-11-04 10:00:00+00');";
 
-const APPEND_BY_DAY: &str = "write_strategy = \"append\"\ncursor_column = \"placed_at\"\nappend_cursor_inclusive = false\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n";
+const APPEND_BY_DAY: &str = "write_strategy = \"append\"\ncursor_column = \"placed_at\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n";
 
 const DELETE_INSERT_BY_DAY: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"placed_at\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n";
 
