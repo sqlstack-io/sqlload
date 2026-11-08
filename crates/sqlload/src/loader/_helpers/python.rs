@@ -373,6 +373,7 @@ fn python_column(name: &str, column_type: ColumnType) -> SourceColumn {
         pg_type: PgType::Other,
         column_type: Ok(column_type),
         nullable: true,
+        source_spelling: None,
     }
 }
 

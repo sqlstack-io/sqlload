@@ -36,6 +36,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
                 pg_type: PgType::Other,
                 column_type: Ok(crate::column_types::models::ColumnType::Text),
                 nullable: true,
+                source_spelling: None,
             })
             .collect(),
         primary_key: Vec::new(),

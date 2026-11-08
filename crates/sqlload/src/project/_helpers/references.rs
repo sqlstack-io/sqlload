@@ -5,11 +5,14 @@ use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, TABLE_PLACEHOLDER,
+    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, STAGE_NAME_PARTS,
+    TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
     CdcDeletes, CdcMode, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind,
 };
+use crate::store_paths::main::resolve_location::resolve_location;
+use crate::store_paths::models::{Location, StoreKind};
 
 /// Problems with names one section uses to refer to another.
 pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
@@ -25,7 +28,11 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
         problems.extend(target_problems(project, name, target));
     }
     for (name, connection) in &project.connections {
-        problems.extend(stage_problems(name, connection));
+        let targeted = project
+            .targets
+            .values()
+            .any(|target| target.connection == *name);
+        problems.extend(stage_problems(name, connection, targeted));
     }
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));
@@ -38,6 +45,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     let place = source_place(project, name);
     let expected = match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => "postgres",
+        SourceKind::Snowflake => "snowflake",
         SourceKind::Files => "s3 or filesystem",
         SourceKind::Python => "any",
     };
@@ -96,6 +104,7 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::Postgres => "postgres",
         SourceKind::PostgresCdc => "postgres_cdc",
         SourceKind::Files => "files",
+        SourceKind::Snowflake => "snowflake",
         SourceKind::Python => "python",
     }
 }
@@ -148,10 +157,29 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if source.kind == SourceKind::PostgresCdc {
         problems.extend(cdc_problems(place, source));
     }
+    let queries = source.tables.values().any(|table| table.sql.is_some());
+    if source.kind != SourceKind::Snowflake
+        && (queries || source.warehouse.is_some() || source.stage.is_some())
+    {
+        problems.push(format!(
+            "{place} sql, warehouse and stage are for kind = \"snowflake\""
+        ));
+    }
+    if source.kind == SourceKind::Snowflake {
+        problems.extend(unload_stage_problems(place, source));
+    }
     match source.kind {
-        SourceKind::Postgres | SourceKind::PostgresCdc => {
-            if source.include.is_empty() {
-                problems.push(format!("{place} include is empty, so it selects no tables"));
+        SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake => {
+            if source.include.is_empty() && !queries {
+                let tables = match source.kind {
+                    SourceKind::Snowflake => {
+                        "; list tables in include, or give a table a sql query"
+                    }
+                    _ => "",
+                };
+                problems.push(format!(
+                    "{place} include is empty, so it selects no tables{tables}"
+                ));
             }
             if !template.contains(TABLE_PLACEHOLDER) {
                 problems.push(format!(
@@ -195,6 +223,38 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
                 ));
             }
         }
+    }
+    problems
+}
+
+/// Problems with a `snowflake` source's `stage`: an S3 `url` with its `storage_integration`, or an existing stage's `name`, not both.
+fn unload_stage_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let Some(stage) = &source.stage else {
+        return Vec::new();
+    };
+    let place = format!("{place} stage");
+    let mut problems: Vec<String> = Vec::new();
+    match (&stage.url, &stage.storage_integration, &stage.name) {
+        (Some(url), Some(_), None) => match resolve_location(None, url) {
+            Ok(Location {
+                store: StoreKind::S3 { .. },
+                ..
+            }) => {}
+            Ok(_) => problems.push(format!("{place} url {url:?} must be an s3:// URL")),
+            Err(error) => problems.push(format!("{place} url {url:?}: {error}")),
+        },
+        (Some(_), None, None) => problems.push(format!(
+            "{place} url needs the storage_integration Snowflake writes to it with"
+        )),
+        (None, None, Some(name))
+            if name.split('.').filter(|part| !part.is_empty()).count() != STAGE_NAME_PARTS =>
+        {
+            problems.push(format!("{place} name {name:?} must be DATABASE.SCHEMA.STAGE"));
+        }
+        (None, None, Some(_)) => {}
+        _ => problems.push(format!(
+            "{place} takes either url and storage_integration (an S3 folder) or name (an existing stage)"
+        )),
     }
     problems
 }

@@ -8,6 +8,8 @@ mod commit_statements;
 mod contract;
 #[path = "tests/test_cursor_bound.rs"]
 mod cursor_bound;
+#[path = "tests/test_cursor_from_now.rs"]
+mod cursor_from_now;
 #[path = "tests/test_cursor_text.rs"]
 mod cursor_text;
 #[path = "tests/helpers.rs"]

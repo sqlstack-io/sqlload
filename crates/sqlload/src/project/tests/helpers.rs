@@ -85,6 +85,29 @@ csv = { delimiter = ";", null_values = ["NA", ""] }
 /// Connections and a target that the error cases' sources can refer to.
 pub(crate) const CONNECTIONS: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[connections.pg]\nkind = \"postgres\"\nhost = \"h\"\nuser = \"u\"\ndatabase = \"d\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 
+/// A Snowflake connection no target uses, and a source on it with one query table read in a window around now.
+pub(crate) const SNOWFLAKE_SOURCE: &str = r#"
+[connections.sf]
+kind = "snowflake"
+account = "a"
+user = "u"
+auth = { method = "pat", token = "t" }
+database = "D"
+
+[sources.marts]
+kind = "snowflake"
+connection = "sf"
+warehouse = "EXPORT_WH"
+
+[sources.marts.tables.current]
+description = "d"
+sql = "SELECT * FROM MARTS.EVENTS"
+cursor_column = "event_date"
+lookback = "7d"
+lookahead = "7d"
+lookback_from = "now"
+"#;
+
 /// Every `${ENV:NAME}` resolves to `<NAME>`.
 pub(crate) fn environment(name: &str) -> Option<String> {
     Some(format!("<{name}>"))
