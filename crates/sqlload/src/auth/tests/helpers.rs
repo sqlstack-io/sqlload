@@ -43,13 +43,15 @@ pub(crate) fn test_client(base: &str, file: &Path, user: &str) -> Result<OauthCl
     })
 }
 
-/// Tokens whose access token is due for renewal in `left` seconds.
-pub(crate) fn tokens(access: &str, left: i64, refresh: Option<&str>) -> OauthTokens {
+/// Tokens whose access token is due for renewal `left` seconds after `now`; a refresh token named `expired-…` expired a second before `now`.
+pub(crate) fn tokens(now: u64, access: &str, left: i64, refresh: Option<&str>) -> OauthTokens {
     OauthTokens {
         access_token: Secret(access.to_owned()),
-        renew_after: now_secs().saturating_add_signed(left),
+        renew_after: now.saturating_add_signed(left),
         refresh_token: refresh.map(|token| Secret(token.to_owned())),
-        refresh_expires_at: None,
+        refresh_expires_at: refresh
+            .filter(|token| token.starts_with("expired-"))
+            .map(|_| now - 1),
     }
 }
 
@@ -70,20 +72,25 @@ pub(crate) async fn lifecycle(
     }));
     let base = start_fake_oauth(fake.clone()).await?;
     let client = test_client(&base, &folder.path().join("tokens.json"), "loader")?;
+    let now = now_secs();
     test_case
         .cached
-        .map(|(access, left, refresh)| write_cached(&client, &tokens(access, left, refresh)))
+        .map(|(access, left, refresh)| write_cached(&client, &tokens(now, access, left, refresh)))
         .transpose()?;
     let io = fake_io(test_case.terminal, test_case.browser, fake.clone())?;
     let state = tokio::sync::Mutex::new(OauthState {
         tokens: test_case
             .held
-            .map(|(access, left, refresh)| tokens(access, left, refresh)),
+            .map(|(access, left, refresh)| tokens(now, access, left, refresh)),
         failure: None,
     });
-    let outcome = fresh_access_token(&client, &state, &io)
-        .await
-        .unwrap_or_else(|error| error.to_string());
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fresh_access_token(&client, &state, &io),
+    )
+    .await
+    .map_err(|_| "no token within 5 s, under the listener's read limit".to_owned())?
+    .unwrap_or_else(|error| error.to_string());
     let grants = fake
         .lock()
         .map(|fake| fake.grants.clone())
@@ -106,7 +113,7 @@ pub(crate) async fn lifecycle(
     })
 }
 
-/// A terminal that is there or not; a browser that, after two forged redirects as another local process could send (another sign-in's state, and an error with no state), follows the sign-in to its redirect; or none, in which case the read line is the address the fake would redirect to, after the person opened the sign-in elsewhere.
+/// A terminal that is there or not; a browser that, after opening a connection that sends nothing and two forged redirects as another local process could send (another sign-in's state, and an error with no state), follows the sign-in to its redirect; or none, in which case the read line is the address the fake would redirect to, after the person opened the sign-in elsewhere.
 fn fake_io(terminal: bool, browser: bool, fake: Shared) -> Result<SignInIo, String> {
     let http =
         build_http_client(&ConnectionCounter::default()).map_err(|error| error.to_string())?;
@@ -124,6 +131,10 @@ fn fake_io(terminal: bool, browser: bool, fake: Shared) -> Result<SignInIo, Stri
                 tokio::spawn(async move {
                     let query = query_pairs(url.split_once('?').map_or("", |(_, query)| query));
                     let redirect = query.get("redirect_uri").cloned().unwrap_or_default();
+                    let port = reqwest::Url::parse(&redirect)
+                        .map(|redirect| redirect.port().unwrap_or(80))
+                        .unwrap_or_default();
+                    let _idle = tokio::net::TcpStream::connect(("127.0.0.1", port)).await;
                     let _forged = http
                         .get(format!("{redirect}?code=evil&state=other"))
                         .send()

@@ -1,3 +1,4 @@
+use crate::auth::_helpers::oauth::now_secs;
 use crate::auth::_helpers::token_cache::{read_cached, write_cached};
 use crate::auth::tests::helpers::{test_client, tokens};
 use crate::auth::tests::test_types::TokenCacheTestCase;
@@ -22,7 +23,7 @@ fn given_sign_ins_of_several_users_when_caching_them_then_each_is_kept_in_a_file
                 .count();
             write_cached(
                 &client,
-                &tokens(&format!("access-{user}-{written}"), 600, None),
+                &tokens(now_secs(), &format!("access-{user}-{written}"), 600, None),
             )?;
         }
         let mut found = Vec::new();

@@ -146,12 +146,15 @@ async fn receive_redirect(listener: &TcpListener, state: &str) -> Result<String,
     let (found, mut received) = mpsc::channel::<String>(1);
     loop {
         tokio::select! {
-            accepted = listener.accept() => {
-                let (stream, _) = accepted.map_err(|error| {
-                    ApiError::Auth(format!("the sign-in redirect failed: {error}"))
-                })?;
-                tokio::spawn(answer_redirect(stream, state.to_owned(), found.clone()));
-            }
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => {
+                    tokio::spawn(answer_redirect(stream, state.to_owned(), found.clone()));
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "a connection to the sign-in listener failed");
+                    tokio::time::sleep(Duration::from_millis(BROWSER_CHECK_MILLIS)).await;
+                }
+            },
             Some(target) = received.recv() => return Ok(target),
         }
     }
@@ -167,8 +170,16 @@ async fn answer_redirect(mut stream: TcpStream, state: String, found: mpsc::Send
     let Ok(Ok(target)) = read else {
         return;
     };
-    let ours = redirect_state(&target).as_deref() == Some(state.as_str());
+    let returned = redirect_state(&target);
+    let ours = returned.as_deref() == Some(state.as_str());
+    let unstated_error = returned.is_none() && target.contains("error=");
+    if let (true, Err(error)) = (unstated_error, redirect_code(&target, &state)) {
+        say(&format!(
+            "An error came back without the sign-in's state, so SQLLoad keeps waiting: {error}. If it came from your sign-in, press Ctrl-C and fix that."
+        ));
+    }
     let (status, page) = match (ours, target.contains("error=")) {
+        (false, _) if unstated_error => ("400 Bad Request", SIGN_IN_FAILED_PAGE),
         (false, _) => ("400 Bad Request", NOT_THIS_SIGN_IN_PAGE),
         (true, true) => ("200 OK", SIGN_IN_FAILED_PAGE),
         (true, false) => ("200 OK", SIGNED_IN_PAGE),

@@ -203,20 +203,17 @@ fn tokens_from(client: &OauthClient, body: &serde_json::Value) -> Result<OauthTo
             .map(|token| Secret(token.to_owned())),
         refresh_expires_at: body["refresh_token_expires_in"]
             .as_u64()
-            .map(|seconds| now + seconds),
+            .map(|seconds| now.saturating_add(seconds)),
     })
 }
 
-/// The access token to send now. In order: the one held, while its renewal time has not come; newer tokens another connection or process cached; one renewed with the refresh token (keeping the refresh token when Snowflake sends no new one); one from a new browser sign-in. Every new token is cached. Only a refused refresh falls through to signing in, and a failed sign-in fails every later request of the run at once, so nobody is asked twice.
+/// The access token to send now. In order: the one held, while its renewal time has not come; newer tokens another connection or process cached; one renewed with the refresh token (keeping the refresh token when Snowflake sends no new one); one from a new browser sign-in. Every new token is cached. A refused refresh first looks for a refresh token another holder rotated it to meanwhile, and only then signs in; a failed sign-in fails every later request of the run that the cache cannot serve, so nobody is asked twice.
 pub(crate) async fn fresh_access_token(
     client: &OauthClient,
     state: &tokio::sync::Mutex<OauthState>,
     io: &SignInIo,
 ) -> Result<String, ApiError> {
     let mut held = state.lock().await;
-    if let Some(failure) = &held.failure {
-        return Err(ApiError::Auth(failure.clone()));
-    }
     let now = now_secs();
     if let Some(access) = usable_access(held.tokens.as_ref(), now) {
         return Ok(access);
@@ -232,7 +229,22 @@ pub(crate) async fn fresh_access_token(
     if let Some(access) = usable_access(held.tokens.as_ref(), now) {
         return Ok(access);
     }
-    let refreshed = refresh(client, held.tokens.as_ref(), now).await?;
+    if let Some(failure) = &held.failure {
+        return Err(ApiError::Auth(failure.clone()));
+    }
+    let mut refreshed = refresh(client, held.tokens.as_ref(), now).await?;
+    let sent = held
+        .tokens
+        .as_ref()
+        .and_then(|current| current.refresh_token.clone());
+    let rotated = read_cached(client).filter(|cached| cached.refresh_token != sent);
+    if let Some(cached) = rotated.filter(|_| refreshed.is_none()) {
+        if let Some(access) = usable_access(Some(&cached), now) {
+            held.tokens = Some(cached);
+            return Ok(access);
+        }
+        refreshed = refresh(client, Some(&cached), now).await?;
+    }
     let renewed = match refreshed {
         Some(renewed) => renewed,
         None => match sign_in(client, io).await {
@@ -300,7 +312,7 @@ async fn refresh(
 /// When to renew an access token issued at `now` for `lifetime` seconds (Snowflake's default of 600 when not given): a minute before it expires, or halfway through for a token of under two minutes.
 pub(crate) fn renew_after(now: u64, lifetime: Option<u64>) -> u64 {
     let lifetime = lifetime.unwrap_or(DEFAULT_ACCESS_LIFETIME_SECS);
-    now + lifetime - (lifetime / 2).min(OAUTH_REFRESH_MARGIN_SECS)
+    now.saturating_add(lifetime - (lifetime / 2).min(OAUTH_REFRESH_MARGIN_SECS))
 }
 
 /// Now, in Unix seconds.
