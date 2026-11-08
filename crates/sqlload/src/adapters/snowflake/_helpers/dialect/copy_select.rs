@@ -6,7 +6,7 @@ use crate::adapters::snowflake::_helpers::dialect::text_values::{
 };
 use crate::adapters::snowflake::_helpers::dialect::values::partition_text;
 use crate::adapters::snowflake::constants::{
-    COPY_OPTIONS, PARQUET_COPY_FORMAT, UNEXPECTED_FILE_MARKER,
+    COPY_OPTIONS, MISFIT_MARKER, PARQUET_COPY_FORMAT, UNEXPECTED_FILE_MARKER,
 };
 use crate::adapters::snowflake::models::SnowflakeSql;
 use crate::adapters::snowflake::models::{CopyColumn, CopyValue, DirectCopy};
@@ -99,6 +99,9 @@ fn column_value(
     };
     let inferred = request.inferred.contains(&column.name);
     Ok(match &column.value {
+        CopyValue::File { .. } if request.encoding.record.is_some() => {
+            record_value(request, header)
+        }
         CopyValue::File { .. } if request.encoding.format == SourceFormat::Csv => {
             match header
                 .unwrap_or_default()
@@ -152,6 +155,35 @@ fn column_value(
             "NULL".to_owned(),
         )?,
     })
+}
+
+/// The whole record of a `shape = "record"` read: a JSON record itself, or a CSV line as an array of its `header`'s fields as strings, a NULL field (see `csv_field`) as JSON `null`. A line with another number of fields than the header fails the load, as SQLLoad's reader does (Snowflake's CSV error names the file and line, and shows a metadata column's placeholder in place of a message reading one, so the message reads none): a present field is never NULL in the `COPY` (no `NULL_IF`, empty fields kept), and one past the line's end is.
+fn record_value(request: &DirectCopy<'_>, header: Option<&[String]>) -> String {
+    match request.encoding.format {
+        SourceFormat::Csv => {
+            let count = header.unwrap_or_default().len();
+            let fields: Vec<String> = (1..=count)
+                .map(|position| {
+                    format!(
+                        "COALESCE(TO_VARIANT({}), PARSE_JSON('null'))",
+                        csv_field(position, &request.encoding.csv.null_values)
+                    )
+                })
+                .collect();
+            let array = format!("ARRAY_CONSTRUCT({})", fields.join(", "));
+            match count {
+                0 => array,
+                _ => format!(
+                    "IFF(${count} IS NULL OR ${} IS NOT NULL, CAST(TO_VARCHAR(TO_NUMBER({})) AS VARIANT), {array})",
+                    count + 1,
+                    SnowflakeSql.render_loader_value_literal(&format!(
+                        "{MISFIT_MARKER}a line does not have {count} fields, as the file's first line does"
+                    )),
+                ),
+            }
+        }
+        _ => "$1".to_owned(),
+    }
 }
 
 /// The file's value of partition column `column`, cast to its type; `NULL` when its path has none.

@@ -1,0 +1,185 @@
+---
+title: "ClickHouse"
+description: "Load into ClickHouse (preview): rows sent as Arrow over HTTP into a staging table, then published by swapping in whole tables or partitions."
+---
+
+A ClickHouse target loads into one ClickHouse server over its HTTP interface. It's in preview from
+sqlload 0.26.0. SQLLoad sends each batch as Arrow into a staging table. The rows reach the table
+only when the load publishes them, by swapping in a whole table or whole partitions. Parquet files
+in S3 skip SQLLoad: ClickHouse reads them itself.
+
+## Connection
+
+```toml
+[connections.serving]
+kind = "clickhouse"
+host = "clickhouse.example.com"
+password = "${ENV:CLICKHOUSE_PASSWORD}"
+# port = 8123
+# user = "default"
+# secure = true
+
+[targets.serving]
+connection = "serving"
+loader_schema = "raw"
+```
+
+| Key | Meaning |
+|-----|---------|
+| `host` | The server's host name. Required. |
+| `port` | The HTTP port. Default: 8123, or 8443 with `secure = true`. |
+| `user` | The user SQLLoad signs in as. Default: `default`. |
+| `password` | The user's password. Use `${ENV:NAME}`. |
+| `secure` | `true` for HTTPS. Default: `false`. |
+
+The target's `loader_schema` is the ClickHouse database tables load into; a source's `schema`
+overrides it. ClickHouse has no level above its databases, so a ClickHouse target takes no
+`database`, and `plan` refuses one. `sqlload apply` creates the database when it doesn't exist.
+
+SQLLoad is tested against ClickHouse 25.8.
+
+## Permissions
+
+SQLLoad creates databases and tables, inserts into its staging tables, moves partitions between
+tables (`ATTACH PARTITION`, `REPLACE PARTITION`), exchanges, renames and drops tables, and reads
+files with the `s3` table function. The user needs the grants for these in the target's databases.
+
+`sqlload debug` checks the connection, and prints the user, the server's version and its time zone.
+
+## Table layout
+
+A table SQLLoad creates is laid out by these settings, on a source for all its tables or on one
+table. They use SQLBuild's names for ClickHouse:
+
+```toml
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+partition_by = "toYYYYMM(updated_at)"
+order_by = ["customer_id", "order_id"]
+# engine = "ReplacingMergeTree(_sqlload_loaded_at)"
+# primary_key = ["customer_id"]
+# table_settings = { index_granularity = 4096 }
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `engine` | `MergeTree` | The table engine, with its arguments. Only engines of the `MergeTree` family on one server; `plan` refuses others. |
+| `order_by` | the `unique_key`, else unsorted | The sorting key: an expression or a list of them. |
+| `partition_by` | none | The partitioning expression. |
+| `primary_key` | none | The primary key, a prefix of `order_by`. |
+| `table_settings` | none | Table settings by name. A table's settings are added to its source's, the table's value winning. |
+
+Every loaded column is `Nullable`, so a table with a sorting, partitioning or primary key gets
+`allow_nullable_key = 1` unless `table_settings` sets it. Other targets refuse these settings at
+`plan`.
+
+The layout applies when SQLLoad creates a table. `--reload` keeps the table's layout: to lay an
+existing table out again, drop it and load. ClickHouse can't change the type of a column in the
+sorting or partition key, so a key column whose source type widens fails the load.
+
+## How rows arrive
+
+- **Arrow over HTTP, into a staging table.** Rows go into a staging table named for the load (a
+  build table for `replace`), never into the table itself.
+- **One swap per publish.** ClickHouse has no transactions, so each publish is one swap of a whole
+  table or of whole partitions. It's atomic in an `Atomic` database, ClickHouse's default. A load
+  killed at any point leaves the table as it was or fully published, and the next run converges.
+- **Not atomic in an `Ordinary` database.** A database that can't exchange tables swaps with one
+  `RENAME TABLE`, which ClickHouse doesn't make atomic. Readers can briefly find no table, and a
+  server failing mid-rename can leave the old table under the build table's name.
+- **Never by `INSERT` into the table.** Rows arrive by swapping parts, so materialized views on a
+  loaded table see none of them. Build them from the table instead.
+
+## Files ClickHouse reads itself
+
+A files source of Parquet in S3 skips SQLLoad. ClickHouse reads each file with `s3()` into the
+staging table, and `plan` shows the route as `ClickHouse reads directly from s3://...`.
+
+- ClickHouse signs its reads with the credentials SQLLoad reads S3 with. They're sent as query
+  parameters, never in the SQL. With `AWS_SKIP_SIGNATURE=true`, the reads are unsigned.
+- The server must reach the bucket, or the S3 connection's `endpoint`, or `AWS_ENDPOINT_URL_S3`.
+- A signed read's statement must stay under ClickHouse's `http_max_field_value_size`: 128 KiB by
+  default, about 1,800 columns.
+- Hive folder values are converted as SQLLoad's reader converts them, so a value that doesn't fit
+  its type fails the load.
+- A batch's files load only if ClickHouse writes exactly as many rows as their footers hold.
+
+SQLLoad reads the files itself and sends Arrow instead when ClickHouse wouldn't load them exactly:
+
+- another format (CSV, JSON, NDJSON), or files in a local folder;
+- masked columns;
+- a column loaded as a different type than the files hold;
+- nanosecond or epoch timestamps;
+- times of day, which ClickHouse reads from Parquet as timestamps;
+- a path that reads as a glob.
+
+## Write strategies
+
+| Strategy | Publishes |
+|----------|-----------|
+| `append` | Attaches the new rows' partition to the table. Rows in several partitions are attached to a copy of the table, which is exchanged in. |
+| `merge` | Rewrites each partition holding a matched key or a new row. |
+| `delete_insert` | Rewrites each partition holding the cursor range it read. |
+| `replace` | Builds a new table and swaps it in with `EXCHANGE TABLES`. `--reload` does the same. |
+
+`merge` and `delete_insert` rewrite whole partitions. One partition is rebuilt beside the table and
+swapped in with `REPLACE PARTITION`. Several are rebuilt in a copy that hard-links the table's
+other parts, then exchanged in at once.
+
+`merge` matches rows on `unique_key` exactly, so readers need no `FINAL`. It replaces whole rows,
+so a column the source no longer has is `NULL` on the rows it updates.
+
+A rewrite costs as much as the partitions it touches, and an unpartitioned table is one partition.
+Partition large tables by the column new rows arrive on.
+
+## Types
+
+Every column is `Nullable`, as `plan` shows: `int` is `Nullable(Int64)`.
+
+| Type | ClickHouse |
+|------|------------|
+| `bool` | `Bool` |
+| `smallint` | `Int16` |
+| `int` | `Int64` |
+| `decimal(p,s)` | `Decimal(p, s)` |
+| `float` | `Float64` |
+| `text` | `String` |
+| `varchar(n)` | `String` ¹ |
+| `date` | `Date32` ¹ |
+| `time` | `String` ¹ |
+| `timestamp_tz` | `DateTime64(6, 'UTC')` ¹ |
+| `timestamp_ntz` | `DateTime64(6)` ¹ |
+| `json` | `String` ¹ |
+| `uuid` | `UUID` |
+| `binary` | `String` |
+
+¹ Held with a loss: `varchar` lengths aren't enforced; `time` and `json` are stored as text;
+`timestamp_tz` is a UTC instant without its offset; `timestamp_ntz` is shown in the server's time
+zone. `date` and both timestamps hold values from 1900 to 2299, and a date outside them fails the
+load.
+
+Pin `native("JSON")` or `native("LowCardinality(String)")` on a text column in `columns` to use
+those types. A native type is used exactly as written.
+
+An existing table's narrower types (`Int32`, `UInt16`, `Float32`, `Date`, `DateTime`,
+`DateTime64(3)`) would wrap or cut wider values without an error, so `plan` reports them as
+incompatible rather than load into them.
+
+## Limitations
+
+- ClickHouse is in preview.
+- One server only: clusters, replicated tables and distributed tables aren't supported.
+- Load each table from one `sqlload` process at a time.
+- `copy_to_internal_stage` is for Snowflake and is refused here.
+- A [Postgres CDC](/docs/sources/postgres-cdc/) source can't load into ClickHouse; `plan` refuses
+  it.
+
+## Tested
+
+Container tests run against ClickHouse 25.8 and an S3-compatible store. They load Postgres tables
+again and again under every write strategy: tables created with their layout, every portable type,
+`merge` moving a row between partitions with no `FINAL` needed, `replace` by exchange and by
+renames, a new source column, and no staging tables left behind. ClickHouse reads Parquet files in
+S3 itself; a time column goes through SQLLoad, and a folder value too large for its type fails the
+load. Loads and file reads stopped at every statement, then run again, never leave a table half
+published.
