@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.26.0](https://github.com/sqlstack-io/sqlload/compare/v0.25.0...v0.26.0) (2026-11-08)
+
+
+### Features
+
+* **clickhouse:** load into ClickHouse with exchange swaps and partition publishes ([#107](https://github.com/sqlstack-io/sqlload/issues/107)) ([dd69626](https://github.com/sqlstack-io/sqlload/commit/dd6962688b40e48aa8c4767a19bc5fba60d4f134))
+* **clickhouse:** read Parquet files from S3 with s3() ([#115](https://github.com/sqlstack-io/sqlload/issues/115)) ([6f2693c](https://github.com/sqlstack-io/sqlload/commit/6f2693ce5322b0232018cf1df54cdba35aee086a))
+* **files:** columns from path templates and constant columns ([#108](https://github.com/sqlstack-io/sqlload/issues/108)) ([2b07f4a](https://github.com/sqlstack-io/sqlload/commit/2b07f4aea948f1ec9a1aa4dcd22cb7d01aa57dde))
+* **loader:** checks before publish (unique, not_null, min_rows, max_row_drop) ([#119](https://github.com/sqlstack-io/sqlload/issues/119)) ([11b705b](https://github.com/sqlstack-io/sqlload/commit/11b705b185df9c2c67f4940f0f1915b1f4682f4f))
+* **postgres:** load into Postgres targets ([#109](https://github.com/sqlstack-io/sqlload/issues/109)) ([6f430f7](https://github.com/sqlstack-io/sqlload/commit/6f430f789becea24fb100905c5e0b017ebbfeb8a))
+* **snowflake:** Snowflake as a source, read by unload ([#110](https://github.com/sqlstack-io/sqlload/issues/110)) ([b704369](https://github.com/sqlstack-io/sqlload/commit/b704369b1bd0b01c3c6dbb75be3e9876bb0696a1))
+
+
+### Documentation
+
+* document Postgres TLS and the append cursor default in 0.25.0 ([#114](https://github.com/sqlstack-io/sqlload/issues/114)) ([977e8d4](https://github.com/sqlstack-io/sqlload/commit/977e8d422a0e63429aad03d106cca84c1f82ec95))
+* **snowflake:** mark the Snowflake source as from 0.26.0, not released yet ([#120](https://github.com/sqlstack-io/sqlload/issues/120)) ([80d913c](https://github.com/sqlstack-io/sqlload/commit/80d913c9971581cc5c40aa355cbaf07b6ea64a17))
+
 ## [0.25.0](https://github.com/sqlstack-io/sqlload/compare/v0.24.0...v0.25.0) (2026-11-08)
 
 

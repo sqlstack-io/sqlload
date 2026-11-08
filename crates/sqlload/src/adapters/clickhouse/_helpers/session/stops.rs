@@ -2,16 +2,19 @@
 
 use std::sync::Mutex;
 
-/// The table whose statements stop, and how many still run before they do.
-pub(crate) static STOP: Mutex<Option<(String, usize)>> = Mutex::new(None);
+/// The tables whose statements stop, each with how many still run before they do; one entry per table, so tests running at the same time stop only their own.
+pub(crate) static STOP: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
 
 /// Whether `statement` is one the armed stop refuses: it names the stopped table and the statements allowed before the stop have run.
 pub(crate) fn stopped(statement: &str) -> bool {
     let Ok(mut stop) = STOP.lock() else {
         return false;
     };
-    match stop.as_mut() {
-        Some((table, left)) if statement.contains(table.as_str()) => match left {
+    match stop
+        .iter_mut()
+        .find(|(table, _)| statement.contains(table.as_str()))
+    {
+        Some((_, left)) => match left {
             0 => true,
             _ => {
                 *left -= 1;
