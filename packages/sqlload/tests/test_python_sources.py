@@ -653,7 +653,8 @@ def test_given_no_rows_when_loading_into_files_with_rows_then_only_an_allowed_re
 	give(project, "rows", [])
 	done = sqlload(project, "load")
 	assert (done.returncode == 1) == fails, done.stdout + done.stderr
-	assert ("yielded no rows; replace would empty" in done.stdout + done.stderr) == fails, done.stderr
+	assert ("yielded no rows; replace would empty " in done.stdout + done.stderr) == fails, done.stderr
+	assert ("lake/rows/; set allow_empty=True" in done.stdout + done.stderr) == fails, done.stderr
 	assert files_rows(project, "rows") == expected_rows
 
 
