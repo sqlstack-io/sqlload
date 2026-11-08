@@ -29,6 +29,8 @@ pub mod loader;
 pub mod masking;
 pub mod metrics;
 pub mod naming;
+#[cfg(feature = "odbc")]
+pub mod odbc_source;
 pub mod parquet_parts;
 pub mod planning;
 pub mod postgres_source;
