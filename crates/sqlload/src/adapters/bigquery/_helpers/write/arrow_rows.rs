@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, ArrayRef, ListArray, RecordBatch};
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use prost::Message;
@@ -17,7 +18,12 @@ use crate::schema_plan::models::DesiredColumn;
 /// The Arrow type the Write API reads into a column of `column_type`, given the type the rows arrived as, or why it cannot load it yet.
 fn write_api_type(column_type: &ColumnType, arrived: &DataType) -> Result<DataType, String> {
     if let (ColumnType::Array(element), DataType::List(item)) = (column_type, arrived) {
-        let element = write_api_type(element, item.data_type())?;
+        // The Write API reads a decimal element at its column's own scale (9 for NUMERIC, 38 for BIGNUMERIC), whatever scale the Arrow type gives.
+        let element = match write_api_type(element, item.data_type())? {
+            DataType::Decimal128(_, _) => DataType::Decimal128(38, 9),
+            DataType::Decimal256(_, _) => DataType::Decimal256(76, 38),
+            other => other,
+        };
         return Ok(DataType::List(Arc::new(Field::new(
             ARRAY_ITEM, element, true,
         ))));
@@ -87,10 +93,35 @@ pub(crate) fn write_api_batch(
         let cast = cast_with_options(array, &target, &options).map_err(|error| {
             format!("column {name} cannot be sent to BigQuery as {target}: {error}")
         })?;
-        fields.push(Field::new(name, target, true));
+        let cast = repeated(cast).map_err(|reason| format!("column {name}: {reason}"))?;
+        fields.push(Field::new(name, cast.data_type().clone(), true));
         arrays.push(cast);
     }
     RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|error| error.to_string())
+}
+
+/// A list column as a repeated field takes it: elements that cannot be NULL, a NULL list as an empty one, and a NULL element an error, as BigQuery's arrays hold no NULLs; any other column unchanged.
+fn repeated(array: ArrayRef) -> Result<ArrayRef, String> {
+    let DataType::List(item) = array.data_type() else {
+        return Ok(array);
+    };
+    let lists = array.as_list::<i32>();
+    for row in 0..lists.len() {
+        if lists.is_valid(row) && lists.value(row).null_count() > 0 {
+            return Err(format!(
+                "row {}: an array holds a NULL element, which BigQuery arrays cannot hold",
+                row + 1
+            ));
+        }
+    }
+    let lists = ListArray::try_new(
+        Arc::new(item.as_ref().clone().with_nullable(false)),
+        lists.offsets().clone(),
+        lists.values().clone(),
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(Arc::new(lists))
 }
 
 /// `batch` cut into append requests of at most `max_bytes` each (sized by the rows it holds, not the buffers a slice shares), every one carrying the writer schema and no stream yet, with its rows; a single row larger than `max_bytes` goes alone, for BigQuery to refuse by name.
