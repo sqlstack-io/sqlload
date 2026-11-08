@@ -116,6 +116,13 @@ impl TokenSource {
             .clone()
     }
 
+    /// Whether `access` is still the cached token and was issued longer than `age` ago.
+    pub(crate) async fn issued_before(&self, access: &str, age: Duration) -> bool {
+        let state = self.state.lock().await;
+        state.access.as_deref() == Some(access)
+            && state.issued_at.is_some_and(|issued| issued.elapsed() > age)
+    }
+
     /// The access token to send: the cached one while it is fresh and is not `refused`, else a new one from the token URL.
     pub(crate) async fn access_token(
         &self,
@@ -142,6 +149,7 @@ impl TokenSource {
         secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
         drop(secrets);
         state.access = Some(issued.access.clone());
+        state.issued_at = Some(Instant::now());
         state.renew_at = renew_at;
         if state.refresh_token.is_some() {
             state.refresh_token = issued.refresh_token.or(state.refresh_token.take());
@@ -298,6 +306,9 @@ pub(crate) fn renewal_delay(expires_in: Option<&Value>) -> Result<Option<Duratio
 /// `secret` as sent and as it appears in a URL or a form body, for redaction.
 fn secret_forms(secret: &str) -> [String; 3] {
     let percent = encoded(secret);
-    let form = percent.replace("%20", "+");
+    let form = percent
+        .replace("%20", "+")
+        .replace("%2A", "*")
+        .replace('~', "%7E");
     [secret.to_owned(), percent, form]
 }

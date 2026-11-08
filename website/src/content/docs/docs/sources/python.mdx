@@ -361,11 +361,12 @@ api = sl.http(
 
 - The token is fetched once per run and shared by every job on the connection with the same auth.
   It is renewed before it expires (by `expires_in`), and once more when the API answers 401; the
-  request is then retried with the new token. A 401 that `on_status` maps to `"skip"` is skipped
-  without renewing the token.
+  request is then retried with the new token. When `on_status` maps 401 to `"skip"`, a 401 renews
+  the token only if it is over 30 seconds old; otherwise the request is skipped.
 - `client_auth="basic"` sends `client_id` and `client_secret` to the token URL with HTTP basic
-  auth, the method RFC 6749 requires servers to support. Use `"post"` for a server that wants them
-  as form fields.
+  auth, the method RFC 6749 requires servers to support. As the RFC asks, both are form-encoded
+  first, so a secret with characters such as `+` or `/` reaches the server encoded. Use `"post"`
+  for a server that rejects that, or that wants them as form fields.
 - The client secret and refresh token go only to `token_url`, which must be `https` (`http` only on
   `localhost`). Access tokens go only to the connection's own origin, like every other credential.
 - Token errors name the token URL, the status and the server's `error` and `error_description`.

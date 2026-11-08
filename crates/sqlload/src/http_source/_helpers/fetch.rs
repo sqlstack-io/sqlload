@@ -10,6 +10,7 @@ use crate::http::models::RetryPolicy;
 use crate::http_source::_helpers::urls::{link_header_next, redacted, same_origin};
 use crate::http_source::constants::{
     ERROR_EXCERPT_CHARS, FIRST_RETRY_DELAY, MAX_REDIRECTS, MAX_RETRY_AFTER, MAX_RETRY_DELAY,
+    SKIPPED_REFUSAL_RENEWAL_AGE,
 };
 use crate::http_source::models::{Attempt, Calls, Credential, Fetched, StatusAction};
 
@@ -53,7 +54,7 @@ pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, S
     }
 }
 
-/// One try at `url`, with the OAuth2 `access` token when the connection uses one; a 401 comes back as `Refused` while `may_renew`.
+/// One try at `url`, with the OAuth2 `access` token when the connection uses one; a 401 from the connection's origin comes back as `Refused` while `may_renew`, unless `on_status` skips 401 and the token is younger than `SKIPPED_REFUSAL_RENEWAL_AGE`.
 async fn once(
     calls: &Calls,
     url: &Url,
@@ -106,6 +107,17 @@ async fn once(
         }
     };
     let skipped = calls.on_status.get(&status) == Some(&StatusAction::Skip);
+    let renewable = match (&endpoint.credential, access) {
+        (Credential::OAuth2(tokens), Some(access))
+            if status == UNAUTHORIZED && may_renew && own =>
+        {
+            !skipped
+                || tokens
+                    .issued_before(access, SKIPPED_REFUSAL_RENEWAL_AGE)
+                    .await
+        }
+        _ => false,
+    };
     let excerpt = || {
         redacted(&String::from_utf8_lossy(&body), &secrets)
             .chars()
@@ -118,8 +130,8 @@ async fn once(
             next_link,
             url: landed,
         })),
+        _ if renewable => Attempt::Refused,
         _ if skipped => Attempt::Done(None),
-        UNAUTHORIZED if may_renew && own && access.is_some() => Attempt::Refused,
         300..=399 => {
             return Err(format!(
                 "{shown}: HTTP {status}: the redirect was not followed: it leads to another origin, has no Location, or goes past {MAX_REDIRECTS} hops; credentials never leave the connection's origin, so use the final URL as base_url"

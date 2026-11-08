@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import duckdb
 import pytest
@@ -20,7 +20,7 @@ import pytest
 ORDERS = [{"order_id": n, "status": "open" if n % 2 else "closed"} for n in range(1, 8)]
 ITEMS = {n: [{"order_id": n, "line": line} for line in range(n % 3)] for n in range(1, 8)}
 TOKEN = "s3cret-token"
-CLIENT_SECRET = "cl1ent-secret"
+CLIENT_SECRET = "cl1ent+secret/x~y"
 REFRESH_TOKEN = "r3fresh-first"
 
 
@@ -58,6 +58,7 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/landed/more": lambda query: self.reply(200, {"items": ORDERS[3:], "next": None}),
 			"/v1/sparse": self.sparse,
 			"/v1/slow": self.slow,
+			"/v1/away401": lambda query: self.reply(200, {"items": ORDERS[:1], "next": f"{self.server.other}/denied"}),  # type: ignore[attr-defined]
 			"/v1/leak": lambda query: self.reply(200, {"items": ORDERS[:1], "next": f"/v1/notjson?access_token={bearer}"}),
 			"/v1/notjson": lambda query: self.reply_text("<html>maintenance</html>"),
 			"/v1/denied": lambda query: self.reply(401, {"message": "not your shop"}),
@@ -76,7 +77,8 @@ class Api(BaseHTTPRequestHandler):
 		"""The OAuth2 token endpoint: `self.server.oauth` sets the lifetime, uses before revocation and rotation of tokens it issues."""
 		form = {key: values[0] for key, values in parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode()).items()}
 		basic = self.headers.get("Authorization", "")
-		client = b64decode(basic.removeprefix("Basic ")).decode().split(":", 1) if basic.startswith("Basic ") else [form.get("client_id"), form.get("client_secret")]
+		pair = b64decode(basic.removeprefix("Basic ")).decode().split(":", 1) if basic.startswith("Basic ") else None
+		client = [unquote_plus(part) for part in pair] if pair else [form.get("client_id"), form.get("client_secret")]
 		server = self.server
 		server.token_requests.append({**form, "client": client})  # type: ignore[attr-defined]
 		oauth = server.oauth  # type: ignore[attr-defined]
@@ -179,7 +181,7 @@ class Elsewhere(BaseHTTPRequestHandler):
 	def do_GET(self) -> None:
 		self.server.seen.append(dict(self.headers))  # type: ignore[attr-defined]
 		data = json.dumps([{"order_id": 99, "status": "stolen"}]).encode()
-		self.send_response(200)
+		self.send_response(401 if self.path == "/denied" else 200)
 		self.send_header("Content-Length", str(len(data)))
 		self.end_headers()
 		self.wfile.write(data)
@@ -455,7 +457,7 @@ def test_given_short_lived_tokens_when_pages_outlast_one_then_it_is_renewed_befo
 def test_given_a_token_revoked_mid_pagination_when_the_api_answers_401_then_a_new_one_is_fetched_and_the_page_retried(
 	tmp_path: Path, api: ThreadingHTTPServer, auth: str, expected_grant: list[tuple[str, str | None]]
 ) -> None:
-	api.oauth = {"uses": 3, "rotate": "refresh_token" in auth}  # type: ignore[attr-defined]
+	api.oauth = {"uses": 3, "rotate": True}  # type: ignore[attr-defined]
 	project = oauth_project(tmp_path, api, auth, "paginate('/offset', paginator=sl.offset(limit=1))")
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
@@ -512,3 +514,14 @@ def test_given_401_listed_as_skip_when_the_api_answers_it_then_the_request_is_sk
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert len([path for path, _, _ in api.log if path == "/v1/denied"]) == 5  # type: ignore[attr-defined]
 	assert len(api.token_requests) == 1  # type: ignore[attr-defined]
+
+
+def test_given_a_401_from_another_origin_when_loading_then_no_token_is_sent_there_or_renewed_for_it(
+	tmp_path: Path, api: ThreadingHTTPServer, elsewhere: ThreadingHTTPServer
+) -> None:
+	project = oauth_project(tmp_path, api, "sl.oauth2_client_credentials(TOKEN_URL)", "paginate('/away401', paginator=sl.next_link('$.next'), select='$.items')")
+	done = sqlload(project, "load")
+	assert done.returncode == 1
+	assert "/denied: HTTP 401" in done.stdout + done.stderr, done.stdout + done.stderr
+	assert len(api.token_requests) == 1  # type: ignore[attr-defined]
+	assert not any("authorization" in {name.lower() for name in headers} for headers in elsewhere.seen)  # type: ignore[attr-defined]

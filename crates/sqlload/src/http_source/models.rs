@@ -124,10 +124,11 @@ pub struct TokenSource {
     pub secrets: Mutex<Vec<String>>,
 }
 
-/// The current access token, when it should be replaced, and a rotated refresh token.
+/// The current access token, when it was issued and should be replaced, and a rotated refresh token.
 #[derive(Debug, Default)]
 pub struct TokenState {
     pub access: Option<String>,
+    pub issued_at: Option<Instant>,
     pub renew_at: Option<Instant>,
     pub refresh_token: Option<String>,
 }
