@@ -1,4 +1,3 @@
-use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -44,7 +43,7 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
             elapsed: started.elapsed(),
         },
         Err(error) => TableOutcome {
-            table: sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination),
+            table: table.outcome_name(),
             loaded: Err(error.to_string()),
             elapsed: started.elapsed(),
         },
@@ -114,8 +113,7 @@ impl<'a> TableQueue<'a> {
         self.outcomes.push((
             index,
             outcome.unwrap_or_else(|reason| TableOutcome {
-                table: sql_adapter(table.spec.warehouse)
-                    .render_display_name(&table.spec.destination),
+                table: table.outcome_name(),
                 loaded: Err(reason),
                 elapsed: std::time::Duration::ZERO,
             }),

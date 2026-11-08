@@ -1,6 +1,5 @@
 //! Load one table: read its source (a Python table through the host) and commit its rows batch by batch.
 
-use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::loader::_helpers::publish::publish_table;
 use crate::loader::_helpers::sources::{open_source, source_readers};
 use crate::loader::constants::NO_PYTHON_HOST;
@@ -26,11 +25,7 @@ pub(in crate::loader) async fn load_one(
     let destination = run.destinations.get(&planned.spec.target).ok_or_else(|| {
         LoaderError::Invalid(format!("target {:?} is not connected", planned.spec.target))
     })?;
-    let adapter = sql_adapter(planned.spec.warehouse);
-    let name = match &planned.output {
-        Some(output) if !adapter.runs_sql() => output.path.folder.to_string(),
-        _ => adapter.render_display_name(&planned.spec.destination),
-    };
+    let name = planned.outcome_name();
     let loaded = match (&planned.spec.python, &run.host) {
         (Some(_), Some(host)) => {
             let load = PythonLoad {

@@ -19,7 +19,7 @@ const FILES_CHANGELOG_QUERY: &str = "SELECT (SELECT string_agg(_sqlload_seq || '
 const FILES_PLANTED_QUERY: &str = "SELECT (SELECT string_agg(_sqlload_seq || ':' || _sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM read_parquet('{root}/out/log/orders/*.parquet', union_by_name = true)) || ' | ' || (SELECT count(*) FROM glob('{root}/out/log/orders/**/*planted*'))";
 
 const FILES_CAUGHT_UP: [CdcStep; 4] = [
-    step("", LOG, "", (true, "loaded")),
+    step("", LOG, "", (true, "/log/orders/  3 rows")),
     step(CHANGES, LOG, "", (true, "Completed")),
     step("", LOG, "", (true, "0 rows")),
     step(
