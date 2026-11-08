@@ -30,7 +30,7 @@ cursor_column = "dt"
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
 | `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
-| `path_columns` | From 0.26.0 (not released yet). A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
+| `path_columns` | From 0.26.0. A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
 | `unmatched_paths` | From 0.26.0. What a file whose path doesn't match `path_columns` does: `fail` (default) fails `plan` and names it, `skip` leaves it out. |
 | `constant_columns` | From 0.26.0. Columns with the same value in every row, such as `{ region = "eu", as_of = 2026-11-08 }`. See [Columns from paths](#columns-from-paths). |
 | `copy_to_internal_stage` | Snowflake only: upload files no external stage covers to the user stage. See [Load methods](/docs/targets/snowflake/#files-into-snowflake). |
@@ -68,7 +68,7 @@ adds](/docs/concepts/projects/#columns-sqlload-adds)).
 
 ## Columns from paths
 
-From sqlload 0.26.0, which isn't released yet, values can come from folder and file names that
+From sqlload 0.26.0, values can come from folder and file names that
 aren't `key=value` folders. `path_columns` is a template over each file's path below `path`:
 
 ```toml

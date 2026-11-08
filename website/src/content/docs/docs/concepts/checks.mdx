@@ -1,0 +1,57 @@
+---
+title: "Checks before publish"
+description: "unique, not_null, min_rows and max_row_drop: checks on the rows a load has staged, which stop bad rows before they reach the table."
+---
+
+A table's `checks` run on the rows a load has staged, before they reach the table. A failed check
+publishes none of the commit's rows.
+
+```toml
+[sources.app.tables."public.customers"]
+description = "Customers, one row per customer."
+write_strategy = "replace"
+checks = { unique = ["customer_id"], not_null = ["customer_id", "email"], min_rows = 1, max_row_drop = "20%" }
+```
+
+| Check | Passes when | Strategies |
+|-------|-------------|------------|
+| `unique` | No two rows share these columns' values. Rows with a NULL in them are skipped, as in SQL; add the columns to `not_null` to forbid NULLs too. | All |
+| `not_null` | None of these columns holds a NULL. | All |
+| `min_rows` | At least this many rows are loaded. | `replace` |
+| `max_row_drop` | The table loses at most this share of its rows, compared with what it holds now. A whole percentage from `"0%"` to `"100%"`. | `replace` |
+| `warn` | A list of the checks above that only log their failure, such as `warn = ["max_row_drop"]`. | |
+
+## When a check fails
+
+A failed check fails the table with the counts, and up to five repeated keys for `unique`. The
+commit publishes none of its rows: the table keeps what it held, and the staging table is dropped.
+The table's error names each failed check:
+
+```text
+checks.unique failed: 1 value(s) of (customer_id) appear in more than one row, such as (2); nothing was published
+```
+
+A check listed in `warn` logs its failure and publishes the rows anyway. `warn` can only name
+checks the table sets.
+
+## Batches
+
+Each commit is checked by itself. A load that commits batch by batch (`append`, `merge`,
+`delete_insert`) checks each batch, and a failing batch leaves the batches committed before it in
+place. The message then says how many rows earlier commits published.
+
+`min_rows` and `max_row_drop` describe the whole table, so only `replace`, which commits once,
+takes them. `plan` fails for them under another strategy. `max_row_drop` has nothing to compare
+with on the first load, when the table doesn't exist yet.
+
+## Where checks apply
+
+- The columns the checks name must be loaded columns, matched ignoring case. `plan` fails for one
+  the table doesn't load.
+- A source can set `checks` for all its tables. A table's own `checks` replaces the source's whole
+  block, as other settings do.
+- [Python tables](/docs/sources/python/#settings) take the same setting, as `checks=`.
+- Tables with checks always stage their rows. A files source the destination would read directly
+  goes through SQLLoad instead, which is slower, and `plan` warns about it.
+- [Files targets](/docs/targets/files/) and [`postgres_cdc`](/docs/sources/postgres-cdc/) sources
+  take no checks.

@@ -9,7 +9,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 |--------|---------|---------|
 | Postgres | Tables, by `include` patterns | Binary `COPY` into Arrow, over TLS when the connection's `sslmode` asks |
 | Postgres changes (`postgres_cdc`) | Inserts, updates and deletes of tables, by `include` patterns | A snapshot, then a logical replication slot (`pgoutput`), in whole transactions. See [Postgres changes](/docs/sources/postgres-cdc/). |
-| Snowflake (from 0.26.0, not released yet) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad. See [Snowflake](/docs/sources/snowflake/). |
+| Snowflake (from 0.26.0) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad. See [Snowflake](/docs/sources/snowflake/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
 | Python | Dicts, Arrow data (pyarrow, polars, pandas), JSON and NDJSON bytes | The `sqlload` package, in process |
@@ -23,19 +23,21 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Snowflake | `append`, `merge`, `delete_insert`, `replace` | Parquet staged on an external, user, table or named stage, then `COPY`; or Snowpipe Streaming, or `INSERT`, by `load_method`. Files under an external stage load with `COPY` directly. |
 | BigQuery (preview) | `append`, `merge`, `delete_insert`, `replace` | Arrow streamed through the Storage Write API into a staging table, then one query job per write. See [BigQuery](/docs/targets/bigquery/). |
 | Databricks | `append`, `merge`, `delete_insert`, `replace` | Parquet staged in a Unity Catalog volume, then `COPY INTO`; one statement per write. Files of a files source pass through SQLLoad. |
+| ClickHouse (preview) | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. See [ClickHouse](/docs/targets/clickhouse/). |
+| Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
 | Parquet files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed. |
 | Parquet files in a local folder | As for S3 | As for S3 |
 
 ## Source and destination combinations
 
-| From \ Into | Snowflake | Databricks | BigQuery (preview) | DuckDB | Parquet files |
-|-------------|-----------|------------|--------------------|--------|---------------|
-| Postgres | Yes | Yes | Yes | Yes | Yes |
-| Postgres changes (`postgres_cdc`) | Yes | Yes | No | Yes | Yes, as a changelog |
-| Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes |
-| Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet read by DuckDB | No |
-| Python | Yes | Yes | Yes | Yes | Yes |
+| From \ Into | Snowflake | Databricks | BigQuery (preview) | ClickHouse (preview) | Postgres | DuckDB | Parquet files |
+|-------------|-----------|------------|--------------------|----------------------|----------|--------|---------------|
+| Postgres | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Postgres changes (`postgres_cdc`) | Yes | Yes | No | No | No | Yes | Yes, as a changelog |
+| Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | No |
+| Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
 A files source into a files target is refused at `plan`. `merge` isn't available for files
 sources or files targets.
@@ -46,7 +48,8 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 
 | System | How it's tested |
 |--------|-----------------|
-| Postgres | Real Postgres in containers. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB, Snowflake and Databricks. |
+| Postgres | Real Postgres in containers, as a source and as a target. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB, Snowflake and Databricks. See [Postgres](/docs/targets/postgres/#tested). |
+| ClickHouse | Real ClickHouse 25.8 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
 | DuckDB | Real, in process. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |

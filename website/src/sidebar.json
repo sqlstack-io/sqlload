@@ -32,6 +32,8 @@
 			"docs/targets/snowflake",
 			"docs/targets/databricks",
 			"docs/targets/bigquery",
+			"docs/targets/clickhouse",
+			"docs/targets/postgres",
 			"docs/targets/duckdb",
 			"docs/targets/files"
 		]
@@ -41,6 +43,7 @@
 		"items": [
 			"docs/concepts/projects",
 			"docs/concepts/write-strategies",
+			"docs/concepts/checks",
 			"docs/concepts/cursors",
 			"docs/concepts/contracts"
 		]

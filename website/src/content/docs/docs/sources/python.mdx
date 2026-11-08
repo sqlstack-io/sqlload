@@ -149,6 +149,7 @@ Unknown settings raise `TypeError` when the module is imported.
 |---------|----|---------|
 | `write_strategy`, `unique_key`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings). |
 | `contract`, `on_schema_change`, `auto_widen`, `type_change_rebuild` | source or table | See [Contracts](/docs/concepts/contracts/). |
+| `checks` | source or table | Checks on the staged rows, such as `{"unique": ["order_id"]}`. See [Checks before publish](/docs/concepts/checks/). |
 | `allow_empty` | source or table | Let `replace` empty a table when the function yields no rows. |
 | `state` | source or table | `"logged"` to keep a position in `ctx.state`. See [Logged state](/docs/concepts/cursors/#logged-state). |
 | `columns` | table | Pinned column types, such as `{"total": "decimal(18,2)"}`. |

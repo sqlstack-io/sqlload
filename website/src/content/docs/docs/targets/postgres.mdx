@@ -1,0 +1,149 @@
+---
+title: "Postgres"
+description: "Load into Postgres: rows sent by binary COPY into a temporary staging table, then one transaction per commit, into tables SQLLoad creates or tables you already have."
+---
+
+A Postgres target loads into a Postgres database, from sqlload 0.26.0. SQLLoad sends each batch by
+binary `COPY` into a temporary staging table, then applies the write strategy in one transaction.
+It never drops or recreates a table, and it loads tables it didn't create as they are.
+
+## Connection
+
+A Postgres target uses a `kind = "postgres"` connection, the same as a
+[Postgres source](/docs/sources/postgres/):
+
+```toml
+[connections.app_db]
+kind = "postgres"
+host = "db.example.com"
+user = "loader"
+password = "${ENV:PGPASSWORD}"
+database = "shop"
+sslmode = "verify-full"
+
+[targets.app]
+connection = "app_db"
+loader_schema = "reporting"
+```
+
+| Key | Meaning |
+|-----|---------|
+| `host`, `user`, `database` | Required. |
+| `port` | Default: 5432. |
+| `password` | Use `${ENV:NAME}`. |
+| `sslmode`, `sslrootcert`, `sslcert`, `sslkey` | TLS, as libpq takes it. See [TLS](/docs/sources/postgres/#tls). |
+
+The target's `loader_schema` is the schema tables load into; a source's `schema` overrides it. The
+target's `database` overrides the connection's.
+
+`sqlload debug` shows the target's user, database, server version and what protects the
+connection.
+
+## Permissions
+
+The role needs:
+
+- `TEMPORARY` on the database, for the staging tables. Every role has it by default.
+- The rights to write the tables it loads.
+- `CREATE` on the schema, for tables SQLLoad creates.
+- `CREATE` on the database, only when the schema doesn't exist yet. SQLLoad creates a missing
+  schema; an existing one needs nothing more.
+
+## How rows arrive
+
+- **One session per table.** Each table loads on a session of its own.
+- **Binary `COPY` into a temporary table.** Batches go into a temporary staging table on that
+  session. A run that dies takes its temporary table with it.
+- **One transaction per commit.** Each commit applies the write strategy in one transaction. A
+  failed commit rolls back and leaves the table as it was.
+
+## Write strategies
+
+| Strategy | Statement |
+|----------|-----------|
+| `append` | `INSERT ... SELECT` from the staging table. |
+| `merge` | `INSERT ... ON CONFLICT (unique_key) DO UPDATE`. |
+| `delete_insert` | `DELETE` of the range it read, then `INSERT`. |
+| `replace` | `DELETE` of every row, then `INSERT`, in one transaction. |
+
+`replace` empties the table and refills it from the staging table. The table is never dropped or
+recreated, so it keeps its grants, indexes, defaults, triggers and the views that depend on it.
+Readers see the old rows until the commit. `--reload` is refused on Postgres targets.
+
+`merge` needs a valid, non-deferrable unique index or constraint on exactly the `unique_key`
+columns. SQLLoad creates one on tables it creates; on other tables `plan` fails until one exists. A
+key repeated within one commit fails that commit.
+
+## Foreign keys
+
+`replace` and `delete_insert` delete rows, so `plan` checks the foreign keys that reference the
+table:
+
+- A foreign key with `ON DELETE CASCADE`, `SET NULL` or `SET DEFAULT` would change the referencing
+  table, so `plan` fails and names it.
+- Any other foreign key checked immediately makes the commit fail while referencing rows point at
+  deleted ones, so `plan` warns about it.
+- A table's foreign key to itself doesn't stop `replace`, which deletes every row.
+
+## Tables SQLLoad didn't create
+
+A table with no `_sqlload_load_id` column is one SQLLoad didn't create. SQLLoad loads it as it is
+and never alters it:
+
+- It loads only the source columns the table has. `plan` warns about the others, or fails with
+  `on_schema_change = "fail"`. The table's other columns get their defaults.
+- The `_sqlload_*` columns aren't added.
+- A source column loads into the table's column of exactly the name Postgres stores. One that
+  matches only when case is ignored fails `plan`.
+- Values convert to the table's column types as `INSERT` converts them.
+
+A narrower column that refuses what doesn't fit is allowed, such as a smaller integer, a shorter
+`varchar(n)`, or a `numeric` with at least the source's digits after the point. A value too large
+fails the commit. As in any Postgres `INSERT`, text over `n` characters only by trailing spaces
+loses those spaces, and a `character(n)` column pads with spaces.
+
+A column that would round values fails `plan`, such as `real`, `timestamp(3)`, or a `numeric` with
+fewer digits after the point. So does a column of another kind.
+
+## Types
+
+| Type | Postgres |
+|------|----------|
+| `bool` | `boolean` |
+| `smallint` | `smallint` |
+| `int` | `bigint` |
+| `decimal(p,s)` | `numeric(p,s)` |
+| `float` | `double precision` |
+| `text` | `text` |
+| `varchar(n)` | `varchar(n)` |
+| `date` | `date` |
+| `time` | `time` |
+| `timestamp_tz` | `timestamptz` ¹ |
+| `timestamp_ntz` | `timestamp` |
+| `json` | `jsonb` ¹ |
+| `uuid` | `uuid` |
+| `binary` | `bytea` |
+
+¹ Held with a loss: `timestamp_tz` is a UTC instant without its offset, and `jsonb` keeps neither
+key order nor duplicate keys.
+
+Postgres arrays arrive as JSON, so they load as `jsonb`.
+
+## Limitations
+
+- `--reload` is refused. To add a column a load needs to a table that has rows, add it with
+  `ALTER TABLE`, then empty the table or fill the column, and load again.
+- `copy_to_internal_stage` is for Snowflake and is refused here.
+- A [Postgres CDC](/docs/sources/postgres-cdc/) source can't load into a Postgres target; `plan`
+  refuses it.
+
+## Tested
+
+Container tests run against Postgres 17. They load Postgres tables into a Postgres target again and
+again under every write strategy: new tables with a unique index for `merge`, arrays as `jsonb`,
+`replace` into a table SQLLoad didn't create, and `replace` keeping a dependent view, a grant and
+the primary key. They cover a value too long for its column failing the commit, no session or
+staging table left behind, and `plan` refusing `--reload`, `merge` without a unique index,
+`ON DELETE CASCADE` and a column that would round values. Against a TLS-only server, the target
+checks the certificate and host name with `verify-full`, and encrypts without checking with
+`require`, as a source does.
