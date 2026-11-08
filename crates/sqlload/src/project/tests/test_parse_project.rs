@@ -1,5 +1,7 @@
 use crate::project::main::parse_project::parse_project;
-use crate::project::tests::helpers::{CONNECTIONS, FILES_PROJECT, PROJECT, environment};
+use crate::project::tests::helpers::{
+    CONNECTIONS, FILES_PROJECT, PROJECT, SNOWFLAKE_SOURCE, environment,
+};
 use crate::project::tests::test_types::{ParseProjectErrorTestCase, ParseProjectTestCase};
 
 #[test]
@@ -295,6 +297,31 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "unknown variant `avro`",
         },
         ParseProjectErrorTestCase {
+            description: "a query table is for snowflake sources",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\nsql = \"SELECT 1\"\n",
+            expected_message: "[sources.app] sql, warehouse and stage are for kind = \"snowflake\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a snowflake source selects tables or has a query table",
+            text: "[connections.sf]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[sources.marts]\nkind = \"snowflake\"\nconnection = \"sf\"\n",
+            expected_message: "[sources.marts] include is empty, so it selects no tables; list tables in include, or give a table a sql query",
+        },
+        ParseProjectErrorTestCase {
+            description: "an unload url needs the storage integration Snowflake writes with",
+            text: "[connections.sf]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[sources.marts]\nkind = \"snowflake\"\nconnection = \"sf\"\ninclude = [\"MARTS.*\"]\nstage = { url = \"s3://b/unload/\" }\n",
+            expected_message: "[sources.marts] stage url needs the storage_integration Snowflake writes to it with",
+        },
+        ParseProjectErrorTestCase {
+            description: "an unload stage is a url or a name, not both",
+            text: "[connections.sf]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[sources.marts]\nkind = \"snowflake\"\nconnection = \"sf\"\ninclude = [\"MARTS.*\"]\nstage = { url = \"s3://b/u/\", storage_integration = \"I\", name = \"D.S.X\" }\n",
+            expected_message: "[sources.marts] stage takes either url and storage_integration (an S3 folder) or name (an existing stage)",
+        },
+        ParseProjectErrorTestCase {
+            description: "a snowflake connection a target loads into still needs a load_method",
+            text: "[connections.sf]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.sf]\nconnection = \"sf\"\nloader_schema = \"RAW\"\n",
+            expected_message: "connection sf: load_method is required",
+        },
+        ParseProjectErrorTestCase {
             description: "format settings are for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nformat = \"csv\"\n",
             expected_message: "[sources.app] format, compression and csv are for kind = \"files\"",
@@ -370,4 +397,56 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             test_case.description
         );
     }
+}
+
+#[test]
+fn given_a_snowflake_source_when_parsing_then_its_query_tables_and_window_are_read_and_no_load_method_is_needed()
+-> Result<(), String> {
+    let text = format!("{CONNECTIONS}{SNOWFLAKE_SOURCE}");
+    let project = parse_project(&text, &environment).map_err(|error| error.to_string())?;
+    let test_cases = [
+        ParseProjectTestCase {
+            description: "the source's warehouse is read",
+            read: |project| format!("{:?}", project.sources["marts"].warehouse),
+            expected_value: "Some(\"EXPORT_WH\")",
+        },
+        ParseProjectTestCase {
+            description: "a query table keeps its query",
+            read: |project| format!("{:?}", project.sources["marts"].tables["current"].sql),
+            expected_value: "Some(\"SELECT * FROM MARTS.EVENTS\")",
+        },
+        ParseProjectTestCase {
+            description: "lookahead is a duration",
+            read: |project| {
+                format!(
+                    "{:?}",
+                    project.sources["marts"].tables["current"]
+                        .settings
+                        .lookahead
+                )
+            },
+            expected_value: "Some(604800s)",
+        },
+        ParseProjectTestCase {
+            description: "lookback_from is read",
+            read: |project| {
+                format!(
+                    "{:?}",
+                    project.sources["marts"].tables["current"]
+                        .settings
+                        .lookback_from
+                )
+            },
+            expected_value: "Some(Now)",
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            (test_case.read)(&project),
+            test_case.expected_value,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

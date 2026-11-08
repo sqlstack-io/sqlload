@@ -93,5 +93,6 @@ pub(crate) fn source_column(pg_type: PgType) -> SourceColumn {
         pg_type,
         column_type: Ok(ColumnType::Text),
         nullable: true,
+        source_spelling: None,
     }
 }
