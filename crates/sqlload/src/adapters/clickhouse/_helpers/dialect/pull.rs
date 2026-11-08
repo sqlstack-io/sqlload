@@ -49,20 +49,28 @@ pub(crate) fn credential_parameters(
     let mut parameters = vec![
         (
             format!("param_{KEY_ID_PARAMETER}"),
-            credentials.key_id.clone(),
+            escaped(&credentials.key_id),
         ),
         (
             format!("param_{SECRET_PARAMETER}"),
-            credentials.secret.clone(),
+            escaped(&credentials.secret),
         ),
     ];
     parameters.extend(
         credentials
             .token
-            .clone()
-            .map(|token| (format!("param_{TOKEN_PARAMETER}"), token)),
+            .as_deref()
+            .map(|token| (format!("param_{TOKEN_PARAMETER}"), escaped(token))),
     );
     parameters
+}
+
+/// `value` as ClickHouse's escaped text, which it unescapes into the parameter's value: a backslash, tab or newline as `\\`, `\t` or `\n`.
+fn escaped(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 /// `INSERT INTO into` every one of `columns` (each typed by `sql_type`) from `file`, read by ClickHouse's `s3()` signed with `credentials` (named as [query parameters](credential_parameters)), or unsigned (`NOSIGN`) when there are none. A column takes the file's constant when it has one of that name, the file's own column when its footer holds it, and NULL otherwise; `_sqlload_source_row` numbers the file's rows from 1 in stored order (read by one thread, in order); the load id and load time are the batch's. Binary columns go through `substring`, which keeps a fixed-size value's trailing zero bytes that a cast to `String` drops.

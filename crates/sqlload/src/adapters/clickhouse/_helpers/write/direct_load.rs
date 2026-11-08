@@ -53,8 +53,8 @@ impl ClickHouseWriter {
         let endpoint =
             setting(AmazonS3ConfigKey::S3Endpoint).or(setting(AmazonS3ConfigKey::Endpoint));
         let in_endpoint = endpoint.is_some()
-            && setting(AmazonS3ConfigKey::VirtualHostedStyleRequest).as_deref() == Some("true");
-        let unsigned = setting(AmazonS3ConfigKey::SkipSignature).as_deref() == Some("true");
+            && switched_on(setting(AmazonS3ConfigKey::VirtualHostedStyleRequest));
+        let unsigned = switched_on(setting(AmazonS3ConfigKey::SkipSignature));
         let unreadable = |error: String| {
             LoaderError::Invalid(format!(
                 "cannot sign ClickHouse's reads of s3://{bucket}/: {error}"
@@ -118,6 +118,13 @@ impl ClickHouseWriter {
         }
         Ok(Some(DirectLoaded::Staged(rows)))
     }
+}
+
+/// Whether an S3 switch is on, read as object_store reads it from the environment (`true`, `1`, `yes`, `on` or `y`, in any case).
+fn switched_on(value: Option<String>) -> bool {
+    value.is_some_and(|value| {
+        ["true", "1", "yes", "on", "y"].contains(&value.trim().to_ascii_lowercase().as_str())
+    })
 }
 
 /// What ClickHouse reads for `data`, at `url`: the read columns its own footer holds, and the values SQLLoad gives every row of it, each path value converted to its column's type as SQLLoad's reader would (so ClickHouse's own casts, which wrap and roll over instead of failing, never see it); `Err` names a value that does not convert.

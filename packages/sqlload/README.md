@@ -594,7 +594,8 @@ only when the load publishes them. A files source of Parquet in S3 skips SQLLoad
 each file itself with `s3()`, signed with the credentials SQLLoad reads S3 with (sent as query
 parameters, never in the SQL; unsigned with `AWS_SKIP_SIGNATURE=true`), and `plan` shows
 "ClickHouse reads directly from s3://...". The server must reach the bucket (or the S3 connection's
-`endpoint`, or `AWS_ENDPOINT_URL_S3`). Hive folder values are converted as SQLLoad converts them,
+`endpoint`, or `AWS_ENDPOINT_URL_S3`). A signed pull's statement must stay under ClickHouse's
+`http_max_field_value_size` (128 KiB by default, about 1,800 columns). Hive folder values are converted as SQLLoad converts them,
 so one that does not fit its type fails the load. A table whose files ClickHouse would not load exactly (another format, masks, a column
 loaded as another type than the files hold, nanosecond or epoch timestamps, times of day, or a path
 that reads as a glob) goes through SQLLoad instead, and a batch's files load only if ClickHouse
