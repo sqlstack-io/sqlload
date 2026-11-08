@@ -26,7 +26,7 @@ Each end is a connection named in `sqlload.toml`, or a URI:
 | Form | As source | As destination |
 |------|-----------|----------------|
 | `connection:schema.table` | A table of a named Postgres connection | A table of a named Snowflake or DuckDB connection |
-| `postgresql://user:${ENV:PGPASSWORD}@host:5432/db#schema.table` | A Postgres table | |
+| `postgresql://user:${ENV:PGPASSWORD}@host:5432/db#schema.table` | A Postgres table; add `?sslmode=...` and the other [TLS settings](/docs/sources/postgres/#tls) as a query | |
 | `duckdb://file.duckdb#SCHEMA.TABLE` | | A DuckDB table |
 | `s3://bucket/prefix/?region=eu-west-2` | Files in S3 | Parquet files in S3 |
 | `file:///folder`, or a folder | Files in a folder | Parquet files in a folder |

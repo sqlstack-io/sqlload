@@ -35,7 +35,7 @@ duckdb = { version = "1.20000", features = ["bundled", "appender-arrow", "parque
 clap = { version = "4", features = ["derive", "env"] }
 csv-core = "0.1"
 flate2 = "1"
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 getrandom = "0.3"
 globset = "0.4"
 gungraun = "0.20"

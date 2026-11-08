@@ -97,6 +97,15 @@ pub struct CursorQuery<'a> {
     pub lookback: Option<Duration>,
 }
 
+/// Which way a cursor bound counted from now moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NowShift {
+    /// Back by `lookback`, for the window's start.
+    Back(Duration),
+    /// Ahead by `lookahead`, for the window's end.
+    Ahead(Duration),
+}
+
 /// How a cursor query's single value is turned into the lower bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorValue {

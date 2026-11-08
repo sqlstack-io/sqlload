@@ -20,6 +20,28 @@ pub(crate) struct SplitReadTestCase {
     pub(crate) expected_copies: i64,
 }
 
+pub(crate) struct TargetTlsTestCase {
+    pub(crate) description: &'static str,
+    /// TLS settings for the connection, `FILES` standing for the test certificates' folder.
+    pub(crate) settings: &'static str,
+    /// What `debug` says protects the target's connection.
+    pub(crate) expected_debug: &'static str,
+    /// The loaded table's codes.
+    pub(crate) expected_result: &'static str,
+}
+
+pub(crate) struct PostgresTargetTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run in the test database before this load.
+    pub(crate) source_change: &'static str,
+    pub(crate) options: sqlload::loader::models::PlanOptions,
+    /// `ok`, or a part of the plan's or the load's error.
+    pub(crate) expected_load: &'static str,
+    /// A query on the target and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 pub(crate) struct LoadRunTestCase {
     pub(crate) description: &'static str,
     /// SQL run in Postgres before this load.

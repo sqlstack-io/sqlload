@@ -9,12 +9,15 @@ use crate::adapters::dispatch::models::Destination;
 use crate::column_types::models::Warehouse;
 use crate::loader::errors::LoaderError;
 
-/// Drop the staging tables in `name`'s schema that crashed loads left: untouched for a day on Snowflake, named over a day old elsewhere; returns how many.
+/// Drop the staging tables in `name`'s schema that crashed loads left: untouched for a day on Snowflake, named over a day old elsewhere, and none on Postgres, whose staging tables are temporary and went with their session (any table in the schema is someone's own); returns how many.
 pub async fn drop_stale_staging(
     destination: &Destination,
     name: &TableName,
     warehouse: Warehouse,
 ) -> Result<usize, LoaderError> {
+    if let Destination::Postgres(_) = destination {
+        return Ok(0);
+    }
     let database = match destination {
         Destination::Snowflake(snowflake) => Some(snowflake.database.as_str()),
         Destination::Databricks(databricks) => Some(databricks.catalog.as_str()),

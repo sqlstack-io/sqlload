@@ -339,6 +339,30 @@ pub struct SourceConfig {
     /// How often `load --follow` writes the changes it has read (`postgres_cdc`); 10 seconds when omitted.
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub batch_interval: Option<Duration>,
+    /// The warehouse a `snowflake` source's unloads run on; the connection's when omitted.
+    #[serde(default)]
+    pub warehouse: Option<String>,
+    /// Where a `snowflake` source unloads: an external stage, or the user stage `@~` when omitted.
+    #[serde(default)]
+    pub stage: Option<UnloadStage>,
+}
+
+/// Where a `snowflake` source's unloads go: an S3 URL with a storage integration, or an existing stage by name.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnloadStage {
+    /// The S3 folder, `s3://bucket/prefix/`, unloaded to through `storage_integration`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// The storage integration Snowflake writes to `url` with.
+    #[serde(default)]
+    pub storage_integration: Option<String>,
+    /// An existing stage, `DATABASE.SCHEMA.STAGE`: external on S3, or internal.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The bucket's region, for SQLLoad's own reads of an external stage.
+    #[serde(default)]
+    pub region: Option<String>,
 }
 
 /// How a `postgres_cdc` source writes its changes.
@@ -364,9 +388,12 @@ pub enum CdcDeletes {
 }
 
 impl SourceConfig {
-    /// Whether the source reads a Postgres database's tables (`postgres` or `postgres_cdc`).
-    pub fn reads_postgres(&self) -> bool {
-        matches!(self.kind, SourceKind::Postgres | SourceKind::PostgresCdc)
+    /// Whether the source finds its tables in a database's catalog with `include` patterns (`postgres`, `postgres_cdc` or `snowflake`).
+    pub fn discovers_tables(&self) -> bool {
+        matches!(
+            self.kind,
+            SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake
+        )
     }
 
     /// How a files source's files are encoded, with defaults for what is not set.
@@ -382,9 +409,13 @@ impl SourceConfig {
     pub fn table_name_template(&self) -> &str {
         match (&self.table_name, self.kind) {
             (Some(template), _) => template,
-            (None, SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Python) => {
-                DEFAULT_TABLE_NAME
-            }
+            (
+                None,
+                SourceKind::Postgres
+                | SourceKind::PostgresCdc
+                | SourceKind::Snowflake
+                | SourceKind::Python,
+            ) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
         }
     }
@@ -399,6 +430,8 @@ pub enum SourceKind {
     PostgresCdc,
     /// Existing files in an object store or directory.
     Files,
+    /// Snowflake tables and queries, unloaded as Parquet and read back.
+    Snowflake,
     /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
     Python,
 }
@@ -434,6 +467,12 @@ pub struct TableSettings {
     pub cursor_start: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub lookback: Option<Duration>,
+    /// Read only cursor values before now plus this (a date cursor: up to and including today plus this many days).
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub lookahead: Option<Duration>,
+    /// What `lookback` counts back from on incremental runs: the destination's maximum (default) or now.
+    #[serde(default)]
+    pub lookback_from: Option<LookbackFrom>,
     #[serde(default)]
     pub append_cursor_inclusive: Option<bool>,
     #[serde(default)]
@@ -483,6 +522,17 @@ pub enum LayoutSetting {
     Text(String),
 }
 
+/// What a cursor's `lookback` counts back from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LookbackFrom {
+    /// The destination's cursor maximum.
+    #[default]
+    Destination,
+    /// The time the run plans (a date cursor: today, UTC), for a fixed rolling window.
+    Now,
+}
+
 /// One table's settings: everything a source can set, plus what only a table can.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TableOverride {
@@ -496,6 +546,9 @@ pub struct TableOverride {
     /// The folder template in a files target, overriding the source's `destination_path`.
     #[serde(default)]
     pub destination_path: Option<String>,
+    /// A query whose rows are the table (`snowflake` sources); the table's key is then its name.
+    #[serde(default)]
+    pub sql: Option<String>,
     /// Pinned column types, by column name.
     #[serde(default)]
     pub columns: BTreeMap<String, String>,
