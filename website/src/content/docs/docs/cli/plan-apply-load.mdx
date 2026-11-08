@@ -48,14 +48,14 @@ Objects (2)                                         sqlload apply
 │   ├── customer_id int            -> BIGINT
 │   ├── email       text           -> VARCHAR
 │   ├── country     text           -> VARCHAR
-│   ├── created_at  timestamp_tz   -> TIMESTAMP WITH TIME ZONE
+│   ├── created_at  timestamp_tz   -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
 │   └── + _sqlload_load_id, _loaded_at
 └── raw.app__orders                                 create table
     ├── order_id    int             -> BIGINT
     ├── customer_id int             -> BIGINT
     ├── status      text            -> VARCHAR
     ├── total       decimal(12,2)   -> DECIMAL(12,2)
-    ├── updated_at  timestamp_tz    -> TIMESTAMP WITH TIME ZONE
+    ├── updated_at  timestamp_tz    -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
     └── + _sqlload_load_id, _loaded_at
 
 Loads (2)                                           sqlload load
@@ -74,7 +74,7 @@ Loads (2)                                           sqlload load
 
 | Section | Lists |
 |---------|-------|
-| `Objects` | Tables `apply` creates or alters: each column as its portable type `->` the warehouse type, added and widened columns, excluded and masked columns. |
+| `Objects` | Tables `apply` creates or alters: each column as its portable type `->` the warehouse type, then in brackets what that type loses, if anything (from 0.28.0, not released yet; for an array, both the array's loss and its elements'), added and widened columns, excluded and masked columns. |
 | `Loads` | Each table `load` loads, with its write strategy, and lines for `source`, `files`, `schema`, `route`, `batch`, `cursor`, `state` and `note`. |
 | `Skipped` | Tables left out on purpose, such as by `skip_tables_with_columns` or `new_tables = "skip"`, with the reason. |
 | `Errors` | Tables that can't load as configured, with the reason and the fix. |

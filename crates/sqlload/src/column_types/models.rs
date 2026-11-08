@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 /// A column type from the portable vocabulary, or a warehouse-only type passed through.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ColumnType {
@@ -91,7 +92,7 @@ pub struct ParsedType {
 pub struct WarehouseType {
     pub sql: String,
     /// Why the warehouse cannot hold the portable type exactly, if it cannot.
-    pub lossy: Option<&'static str>,
+    pub lossy: Option<Cow<'static, str>>,
 }
 
 /// A column type as a warehouse's information schema reports it.

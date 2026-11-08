@@ -1,4 +1,4 @@
-use crate::adapters::contract::tests::test_types::WarehouseTypeTestCase;
+use crate::adapters::contract::tests::test_types::{ArrayLossTestCase, WarehouseTypeTestCase};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, Warehouse};
 
@@ -204,6 +204,40 @@ fn given_a_portable_type_when_mapping_to_a_warehouse_then_the_sql_name_and_loss_
         assert_eq!(
             mapped.lossy.is_some(),
             test_case.expected_lossy,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_an_array_of_a_lossy_element_when_mapping_it_then_its_note_names_both_losses() {
+    let test_cases = [
+        ArrayLossTestCase {
+            description: "BigQuery: no NULLs, and uuid elements as text",
+            element: ColumnType::Uuid,
+            warehouse: Warehouse::BigQuery,
+            expected_loss: "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load; elements: stored as text",
+        },
+        ArrayLossTestCase {
+            description: "BigQuery: an exact element adds nothing",
+            element: ColumnType::Int,
+            warehouse: Warehouse::BigQuery,
+            expected_loss: "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load",
+        },
+        ArrayLossTestCase {
+            description: "ClickHouse: a NULL array still loads empty when the element has its own loss",
+            element: ColumnType::Date,
+            warehouse: Warehouse::ClickHouse,
+            expected_loss: "a NULL array loads as an empty one; elements: holds dates from 1900 to 2299; a date outside them fails the load",
+        },
+    ];
+    for test_case in test_cases {
+        let mapped = sql_adapter(test_case.warehouse)
+            .render_loader_logical_type(&ColumnType::Array(Box::new(test_case.element)));
+        assert_eq!(
+            mapped.lossy.as_deref(),
+            Some(test_case.expected_loss),
             "{}",
             test_case.description
         );

@@ -101,6 +101,13 @@ pub(crate) struct WarehouseTypeTestCase {
     pub(crate) expected_lossy: bool,
 }
 
+pub(crate) struct ArrayLossTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) element: ColumnType,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) expected_loss: &'static str,
+}
+
 pub(crate) struct LiveTypeTestCase {
     pub(crate) description: &'static str,
     pub(crate) live: LiveColumnType,

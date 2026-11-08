@@ -62,14 +62,14 @@ Objects (2)                                         sqlload apply
 │   ├── customer_id int            -> INT64
 │   ├── email       text           -> STRING
 │   ├── country     text           -> STRING
-│   ├── created_at  timestamp_tz   -> TIMESTAMP
+│   ├── created_at  timestamp_tz   -> TIMESTAMP  (stored as a UTC instant; the offset is not kept)
 │   └── + _sqlload_load_id, _loaded_at
 └── raw.app__orders                                 create table
     ├── order_id    int             -> INT64
     ├── customer_id int             -> INT64
     ├── status      text            -> STRING
     ├── total       decimal(12,2)   -> NUMERIC(12,2)
-    ├── updated_at  timestamp_tz    -> TIMESTAMP
+    ├── updated_at  timestamp_tz    -> TIMESTAMP  (stored as a UTC instant; the offset is not kept)
     └── + _sqlload_load_id, _loaded_at
 
 Loads (2)                                           sqlload load

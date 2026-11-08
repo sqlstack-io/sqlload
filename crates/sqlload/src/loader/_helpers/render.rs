@@ -221,13 +221,10 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .iter()
         .map(|column| {
             let rendered = adapter.render_loader_logical_type(&column.column_type);
-            let note = match (
-                column.column_type == ColumnType::Uuid,
-                from_path(&column.name),
-            ) {
-                (_, path) if !path.is_empty() => path,
-                (true, _) if rendered.sql.starts_with("VARCHAR") => "  (stored as text)",
-                _ => "",
+            let note = match (from_path(&column.name), &rendered.lossy) {
+                (path, _) if !path.is_empty() => path.to_owned(),
+                (_, Some(loss)) => format!("  ({loss})"),
+                (_, None) => String::new(),
             };
             detail(
                 "",

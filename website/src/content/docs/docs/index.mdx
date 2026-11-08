@@ -24,7 +24,7 @@ Objects (1)                                         sqlload apply
     ├── order_id   int            -> BIGINT
     ├── customer   text           -> VARCHAR
     ├── total      float          -> DOUBLE
-    ├── ordered_at timestamp_tz   -> TIMESTAMP WITH TIME ZONE
+    ├── ordered_at timestamp_tz   -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
     └── + _sqlload_source_file, _source_version, _source_row, _load_id, _loaded_at
 
 Loads (1)                                           sqlload load

@@ -237,6 +237,18 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             expected_result: "10001,1,x",
         },
         TextFilesScenarioTestCase {
+            description: "plan notes what the destination's type loses",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { coupon_code = \"varchar(8)\" }\n",
+            runs: &[TextFilesRun {
+                files: &[LATE_KEY],
+                expected_error: "",
+                expected_plan: "-> VARCHAR  (the length limit is not enforced)",
+            }],
+            check_query: "SELECT count(*) || ',' || count(coupon_code) || ',' || max(coupon_code) FROM raw.scores",
+            expected_result: "10001,1,x",
+        },
+        TextFilesScenarioTestCase {
             description: "a key outside the sample that is pinned and masked loads masked",
             store: local_store,
             settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { coupon_code = \"text\" }\nmask = { coupon_code = \"hash\" }\n",
