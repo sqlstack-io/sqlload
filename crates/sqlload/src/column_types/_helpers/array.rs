@@ -43,13 +43,6 @@ fn element_type(
             ),
         });
     }
-    if element.column_type == ColumnType::TimestampTz && destinations.contains(&Warehouse::BigQuery)
-    {
-        return Err(TypeError::Unsupported {
-            written: written.to_owned(),
-            reason: "does not load into BigQuery yet, whose write API refuses arrays of zoned timestamps; pin array(timestamp_ntz), which holds UTC times, or json".to_owned(),
-        });
-    }
     let column_type = ColumnType::Array(Box::new(element.column_type));
     let compact: String = written
         .chars()

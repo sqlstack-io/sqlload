@@ -7,7 +7,9 @@ use arrow_array::{
 use prost::Message;
 
 use crate::adapters::bigquery::_helpers::write::arrow_rows::{append_requests, write_api_batch};
-use crate::adapters::bigquery::tests::helpers::{batch_of, decoded_ids, desired, noted_ids, shown};
+use crate::adapters::bigquery::tests::helpers::{
+    batch_of, decimal_lists, decoded_ids, desired, noted_ids, shown,
+};
 use crate::adapters::bigquery::tests::test_types::{AppendRequestsTestCase, WriteApiBatchTestCase};
 use crate::column_types::models::ColumnType;
 
@@ -111,6 +113,40 @@ fn given_planned_columns_when_preparing_rows_for_the_write_api_then_each_takes_t
                 ])),
             )])?,
             expected_batch: Err("column tags (List(Int64)) cannot load into BigQuery yet"),
+        },
+        WriteApiBatchTestCase {
+            builds: false,
+            description: "an array of decimals goes at NUMERIC's own scale, which is how the Write API reads an element whatever its Arrow scale; a NULL array goes as an empty one",
+            columns: vec![desired(
+                "amounts",
+                ColumnType::Array(Box::new(ColumnType::Decimal {
+                    precision: 10,
+                    scale: 2,
+                })),
+            )],
+            batch: batch_of(vec![(
+                "amounts",
+                Arc::new(decimal_lists(vec![
+                    Some(vec![Some(150), Some(-225)]),
+                    None,
+                ])?),
+            )])?,
+            expected_batch: Ok(
+                "amounts: List(non-null Decimal128(38, 9)) = [1.500000000, -2.250000000]|[]",
+            ),
+        },
+        WriteApiBatchTestCase {
+            builds: false,
+            description: "a NULL element fails the batch, as a BigQuery array cannot hold one",
+            columns: vec![desired("ids", ColumnType::Array(Box::new(ColumnType::Int)))],
+            batch: batch_of(vec![(
+                "ids",
+                Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                    Some(vec![Some(1)]),
+                    Some(vec![Some(2), None]),
+                ])),
+            )])?,
+            expected_batch: Err("column ids"),
         },
         WriteApiBatchTestCase {
             builds: false,

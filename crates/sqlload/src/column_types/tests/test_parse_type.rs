@@ -195,12 +195,6 @@ fn given_an_invalid_type_when_parsing_then_the_error_explains_the_fix() {
             expected_message: "cannot hold json elements",
         },
         ParseTypeErrorTestCase {
-            description: "BigQuery's write API refuses arrays of zoned timestamps",
-            text: "array(timestamp_tz)",
-            destinations: &[Warehouse::BigQuery],
-            expected_message: "pin array(timestamp_ntz), which holds UTC times, or json",
-        },
-        ParseTypeErrorTestCase {
             description: "arrays do not nest",
             text: "array(array(int))",
             destinations: MIXED,

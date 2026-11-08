@@ -38,3 +38,13 @@ pub(crate) struct FlattenBatchTestCase {
     pub(crate) flatten: &'static [&'static str],
     pub(crate) expected_batch: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct JsonListsTestCase {
+    pub(crate) description: &'static str,
+    /// JSON array texts, `None` for NULL.
+    pub(crate) texts: &'static [Option<&'static str>],
+    /// The type of each list's elements.
+    pub(crate) element: crate::column_types::models::ColumnType,
+    /// The lists joined by `|`, or the error up to its first `: `.
+    pub(crate) expected_lists: Result<&'static str, &'static str>,
+}

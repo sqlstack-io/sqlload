@@ -30,6 +30,13 @@ impl SqlAdapter for BigQuerySql {
         logical_type(column_type)
     }
 
+    /// The Write API refuses arrays of zoned timestamps.
+    fn type_problem(&self, column_type: &ColumnType) -> Option<&'static str> {
+        (*column_type == ColumnType::Array(Box::new(ColumnType::TimestampTz))).then_some(
+            "BigQuery cannot load array(timestamp_tz) yet, as its write API refuses arrays of zoned timestamps; pin array(timestamp_ntz), which holds UTC times, or json",
+        )
+    }
+
     fn live_type(&self, live: &LiveColumnType) -> ColumnType {
         portable_type(live).unwrap_or_else(|| ColumnType::Native(live.data_type.clone()))
     }

@@ -2,9 +2,7 @@
 
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, new_null_array};
 use arrow_cast::cast::cast;
-use arrow_schema::{DataType, SchemaRef};
-
-use crate::row_batches::main::json_lists::json_lists;
+use arrow_schema::SchemaRef;
 
 /// `batch` with `schema`'s columns in its order: missing columns are NULL and differing types are cast; a column `schema` lacks is an error.
 pub fn conform_batch(batch: &RecordBatch, schema: &SchemaRef) -> Result<RecordBatch, String> {
@@ -21,13 +19,6 @@ pub fn conform_batch(batch: &RecordBatch, schema: &SchemaRef) -> Result<RecordBa
         .iter()
         .map(|field| match batch.column_by_name(field.name()) {
             Some(column) if column.data_type() == field.data_type() => Ok(column.clone()),
-            Some(column)
-                if matches!(field.data_type(), DataType::List(_))
-                    && *column.data_type() == DataType::Utf8 =>
-            {
-                json_lists(column, field.data_type())
-                    .map_err(|error| format!("column {}: {error}", field.name()))
-            }
             Some(column) => cast(column, field.data_type())
                 .map_err(|error| format!("column {}: {error}", field.name())),
             None => Ok(new_null_array(field.data_type(), batch.num_rows())),

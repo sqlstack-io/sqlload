@@ -69,6 +69,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// How the warehouse spells `column_type` in DDL, and what is lost if it cannot hold it exactly.
     fn render_loader_logical_type(&self, column_type: &ColumnType) -> WarehouseType;
 
+    /// Why the warehouse cannot load a column of `column_type` yet, if it cannot.
+    fn type_problem(&self, _column_type: &ColumnType) -> Option<&'static str> {
+        None
+    }
+
     /// The portable type of a live column the information schema reports; `native(...)` when it has none.
     fn live_type(&self, live: &LiveColumnType) -> ColumnType {
         ColumnType::Native(live.data_type.clone())

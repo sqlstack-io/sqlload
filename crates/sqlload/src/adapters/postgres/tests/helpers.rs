@@ -45,22 +45,67 @@ pub(crate) fn round_trip(
     )],
     chunk_bytes: usize,
 ) -> Result<String, String> {
+    let read_as: Vec<StagedColumn<'_>> = columns
+        .iter()
+        .map(|(name, column_type, wire, array)| {
+            (
+                *name,
+                column_type.clone(),
+                *wire,
+                column_type.clone(),
+                array.clone(),
+            )
+        })
+        .collect();
+    encode_and_decode(&read_as, chunk_bytes)
+}
+
+/// `columns` staged in their types and read back as the text each was sent as, as [`round_trip`] gives them.
+pub(crate) fn staged_text(
+    columns: &[(&str, ColumnType, arrow_array::ArrayRef)],
+) -> Result<String, String> {
+    let read_as: Vec<StagedColumn<'_>> = columns
+        .iter()
+        .map(|(name, column_type, array)| {
+            (
+                *name,
+                column_type.clone(),
+                crate::postgres_source::models::WireType::Text,
+                ColumnType::Text,
+                array.clone(),
+            )
+        })
+        .collect();
+    encode_and_decode(&read_as, 1024)
+}
+
+/// A column's name, staged type, wire type, the type it is read back as, and its values.
+type StagedColumn<'a> = (
+    &'a str,
+    ColumnType,
+    crate::postgres_source::models::WireType,
+    ColumnType,
+    arrow_array::ArrayRef,
+);
+
+/// `columns` encoded by binary `COPY` and decoded, as [`round_trip`] describes.
+fn encode_and_decode(columns: &[StagedColumn<'_>], chunk_bytes: usize) -> Result<String, String> {
     let extra: arrow_array::ArrayRef = std::sync::Arc::new(arrow_array::Int64Array::from(vec![
         7;
         columns
             .first()
-            .map_or(0, |(_, _, _, array)| array.len())
+            .map_or(0, |(_, _, _, _, array)| array.len())
     ]));
     let batch = arrow_array::RecordBatch::try_from_iter(
         columns
             .iter()
-            .map(|(name, _, _, array)| (*name, array.clone()))
+            .map(|(name, _, _, _, array)| (*name, array.clone()))
             .chain([("not_staged", extra)]),
     )
     .map_err(|error| error.to_string())?;
     let staged: Vec<DesiredColumn> = columns
         .iter()
-        .map(|(name, column_type, _, _)| desired(name, column_type.clone()))
+        .map(|(name, column_type, _, _, _)| desired(name, column_type.clone()))
         .collect();
     let cut = |error: String| error.split(": ").next().unwrap_or_default().to_owned();
     let chunks =
@@ -69,11 +114,11 @@ pub(crate) fn round_trip(
     let read = columns
         .iter()
         .map(
-            |(name, column_type, wire, _)| crate::postgres_source::models::ReadColumn {
+            |(name, _, wire, output, _)| crate::postgres_source::models::ReadColumn {
                 name: (*name).to_owned(),
                 expression: String::new(),
                 wire: *wire,
-                output: column_type.clone(),
+                output: output.clone(),
             },
         )
         .collect();
@@ -103,4 +148,12 @@ pub(crate) fn numeric_wire(digits: &[i16], weight: i16, sign: u16, scale: u8) ->
         bytes.extend_from_slice(&digit.to_be_bytes());
     }
     bytes
+}
+
+/// A list of strings per row; `None` is a NULL list or a NULL element.
+pub(crate) fn text_lists(rows: Vec<Option<Vec<Option<&str>>>>) -> arrow_array::ListArray {
+    let mut lists =
+        arrow_array::builder::ListBuilder::new(arrow_array::builder::StringBuilder::new());
+    lists.extend(rows);
+    lists.finish()
 }

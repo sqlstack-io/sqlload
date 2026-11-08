@@ -15,10 +15,9 @@ use crate::column_types::constants::ARRAY_ITEM;
 use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::DesiredColumn;
 
-/// The Arrow type the Write API reads into a column of `column_type`, given the type the rows arrived as, or why it cannot load it yet.
+/// The Arrow type the Write API reads into a column of `column_type`, given the type the rows arrived as, or why it cannot load it yet. A decimal inside an array goes at its column's own scale (9 for NUMERIC, 38 for BIGNUMERIC), as the Write API reads an element at that scale whatever scale the Arrow type gives.
 fn write_api_type(column_type: &ColumnType, arrived: &DataType) -> Result<DataType, String> {
     if let (ColumnType::Array(element), DataType::List(item)) = (column_type, arrived) {
-        // The Write API reads a decimal element at its column's own scale (9 for NUMERIC, 38 for BIGNUMERIC), whatever scale the Arrow type gives.
         let element = match write_api_type(element, item.data_type())? {
             DataType::Decimal128(_, _) => DataType::Decimal128(38, 9),
             DataType::Decimal256(_, _) => DataType::Decimal256(76, 38),
