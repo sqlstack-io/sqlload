@@ -17,6 +17,7 @@
 			"docs/sources/postgres",
 			"docs/sources/postgres-cdc",
 			"docs/sources/snowflake",
+			"docs/sources/odbc",
 			"docs/sources/files",
 			"docs/sources/google-sheets",
 			"docs/sources/python",
