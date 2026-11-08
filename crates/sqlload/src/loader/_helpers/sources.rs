@@ -15,12 +15,14 @@ use crate::files_source::constants::{
     NANOSECOND_SCALE, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
     VERSION_SEPARATOR,
 };
+use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::discover_files::discover_files;
+use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
 use crate::files_source::models::{
     BatchFooters, DataFile, FileColumn, FileSelection, FilesRead, FilesTable, LoadedFile,
-    SourceFormat, StoredRead, TextChecks,
+    PathValues, SourceFormat, StoredRead, TextChecks,
 };
 use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::{resolve_tables, source_target};
@@ -264,13 +266,54 @@ pub(crate) async fn discover_files_table(
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
-    let partition_names: Vec<String> = source.partition_columns.keys().cloned().collect();
+    let (values, _) = path_values(source, warehouse)?;
     let encoding = source.files_encoding();
-    let table = discover_files(&folder, &partition_names, &encoding).await?;
+    let table = discover_files(&folder, &values, &encoding).await?;
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
     }
     files_source_parts(source_name, source, warehouse, (location, table))
+}
+
+/// What a files source fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then `constant_columns`.
+fn path_values(
+    source: &SourceConfig,
+    warehouse: Warehouse,
+) -> Result<(PathValues, Vec<(String, ColumnType)>), LoaderError> {
+    let mut types: Vec<(String, ColumnType)> = Vec::new();
+    for (name, text) in &source.partition_columns {
+        let parsed = parse_type(text, &[warehouse])
+            .map_err(|error| LoaderError::Invalid(format!("partition column {name}: {error}")))?;
+        types.push((name.clone(), parsed.column_type));
+    }
+    let template = source
+        .path_columns
+        .as_deref()
+        .map(|text| path_template(text, &[warehouse]))
+        .transpose()
+        .map_err(LoaderError::Invalid)?;
+    types.extend(
+        template
+            .iter()
+            .flat_map(|template| template.captures.clone()),
+    );
+    let constants =
+        constant_columns(&source.constant_columns, &[warehouse]).map_err(LoaderError::Invalid)?;
+    let values = PathValues {
+        partition_columns: source.partition_columns.keys().cloned().collect(),
+        template,
+        unmatched: source.unmatched_paths.unwrap_or_default(),
+        constants: constants
+            .iter()
+            .map(|(name, _, text)| (name.clone(), text.clone()))
+            .collect(),
+    };
+    types.extend(
+        constants
+            .into_iter()
+            .map(|(name, column_type, _)| (name, column_type)),
+    );
+    Ok((values, types))
 }
 
 /// A files source's table and files from the files found: the file columns, partition columns and source-file columns as one source table.
@@ -281,12 +324,7 @@ pub(crate) fn files_source_parts(
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let encoding = source.files_encoding();
-    let mut partition_types: Vec<(String, ColumnType)> = Vec::new();
-    for (name, text) in &source.partition_columns {
-        let parsed = parse_type(text, &[warehouse])
-            .map_err(|error| LoaderError::Invalid(format!("partition column {name}: {error}")))?;
-        partition_types.push((name.clone(), parsed.column_type));
-    }
+    let (values, partition_types) = path_values(source, warehouse)?;
     let added: Vec<&str> = partition_types
         .iter()
         .map(|(name, _)| name.as_str())
@@ -370,6 +408,7 @@ pub(crate) fn files_source_parts(
             location,
             table,
             partition_types,
+            constants: values.constants.into_iter().map(|(name, _)| name).collect(),
             encoding,
             checks,
             notes,
@@ -551,12 +590,23 @@ pub(crate) async fn plan_files(
             Some((name, column_type)) => Some((name.as_str(), column_type)),
             None => {
                 return Ok(Err(format!(
-                    "cursor_column {} must be one of the partition_columns for a files source",
+                    "cursor_column {} must be one of the partition_columns or path_columns for a files source",
                     cursor.column
                 )));
             }
         },
     };
+    if let Some((name, _)) = cursor
+        && request
+            .files
+            .constants
+            .iter()
+            .any(|constant| constant == name)
+    {
+        return Ok(Err(format!(
+            "cursor_column {name} is a constant column, the same in every file, so it cannot pick the files to read; use a partition_columns or path_columns column"
+        )));
+    }
     if spec.strategy == WriteStrategy::Merge {
         return Ok(Err(
             "merge is not supported for files sources yet (loaded files would be re-read once their rows are updated); use delete_insert on a partition cursor, or append".to_owned(),

@@ -1,3 +1,5 @@
+use crate::files_source::main::constant_columns::constant_columns;
+use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::SourceFormat;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
@@ -186,10 +188,13 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
             if source.path.is_some()
                 || !source.partition_columns.is_empty()
+                || source.path_columns.is_some()
+                || source.unmatched_paths.is_some()
+                || !source.constant_columns.is_empty()
                 || source.copy_to_internal_stage
             {
                 problems.push(format!(
-                    "{place} path, partition_columns and copy_to_internal_stage are for kind = \"files\""
+                    "{place} path, partition_columns, path_columns, unmatched_paths, constant_columns and copy_to_internal_stage are for kind = \"files\""
                 ));
             }
             if source.format != SourceFormat::Parquet
@@ -209,6 +214,7 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
                 problems.push(format!("{place} include and exclude are for database sources; a files source is one table"));
             }
             problems.extend(encoding_problems(place, source));
+            problems.extend(path_value_problems(place, source));
         }
         SourceKind::Python => {
             if source.tables.len() > 1 && !template.contains(TABLE_PLACEHOLDER) {
@@ -249,6 +255,52 @@ fn unload_stage_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         _ => problems.push(format!(
             "{place} takes either url and storage_integration (an S3 folder) or name (an existing stage)"
         )),
+    }
+    problems
+}
+
+/// A files source's `path_columns` and `constant_columns` that do not parse, and a column any two of them and `partition_columns` both fill.
+fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let mut names: Vec<(String, &str)> = source
+        .partition_columns
+        .keys()
+        .map(|name| (name.clone(), "partition_columns"))
+        .collect();
+    match source
+        .path_columns
+        .as_deref()
+        .map(|text| path_template(text, &[]))
+    {
+        None if source.unmatched_paths.is_some() => problems.push(format!(
+            "{place} unmatched_paths is for path_columns, which is not set"
+        )),
+        None => {}
+        Some(Ok(template)) => names.extend(
+            template
+                .captures
+                .into_iter()
+                .map(|(name, _)| (name, "path_columns")),
+        ),
+        Some(Err(problem)) => problems.push(format!("{place} {problem}")),
+    }
+    match constant_columns(&source.constant_columns, &[]) {
+        Ok(constants) => names.extend(
+            constants
+                .into_iter()
+                .map(|(name, _, _)| (name, "constant_columns")),
+        ),
+        Err(problem) => problems.push(format!("{place} {problem}")),
+    }
+    for (index, (name, setting)) in names.iter().enumerate() {
+        if let Some((_, first)) = names[..index]
+            .iter()
+            .find(|(seen, _)| seen.eq_ignore_ascii_case(name))
+        {
+            problems.push(format!(
+                "{place} column {name} is in both {first} and {setting}; give it one source"
+            ));
+        }
     }
     problems
 }

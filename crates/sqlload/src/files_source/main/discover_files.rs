@@ -12,18 +12,31 @@ use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::errors::FilesError;
-use crate::files_source::models::{Codec, DataFile, FilesEncoding, FilesTable, SourceFormat};
+use crate::files_source::models::{
+    FilesEncoding, FilesTable, ListedFiles, PathValues, SourceFormat,
+};
 
-/// The `encoding` files under `folder` with their `partition_columns` values, and the schema of the newest ones without the loader's own columns, which this load fills.
+/// The `encoding` files under `folder` with their path `values`, and the schema of the newest ones without the loader's own columns, which this load fills; when a file's path lacks a value, only the listing and its problems, before any file is read.
 pub async fn discover_files(
     folder: &OpenFolder,
-    partition_columns: &[String],
+    values: &PathValues,
     encoding: &FilesEncoding,
 ) -> Result<FilesTable, FilesError> {
-    let (files, skipped, mut problems) = listed_files(folder, partition_columns, encoding).await?;
-    let replaced: Vec<&str> = partition_columns
-        .iter()
-        .map(String::as_str)
+    let listed = listed_files(folder, values, encoding).await?;
+    let (files, mut problems) = (listed.files, listed.problems);
+    if !problems.is_empty() {
+        return Ok(FilesTable {
+            files: files.into_iter().map(|(data, _)| data).collect(),
+            columns: Vec::new(),
+            problems,
+            skipped: listed.skipped,
+            unmatched: listed.unmatched,
+            dropped: Vec::new(),
+        });
+    }
+    let replaced: Vec<&str> = values
+        .names()
+        .into_iter()
         .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
         .collect();
     let text_format = encoding.format != SourceFormat::Parquet;
@@ -53,37 +66,48 @@ pub async fn discover_files(
         files: files.into_iter().map(|(data, _)| data).collect(),
         columns: file_columns(columns),
         problems,
-        skipped,
+        skipped: listed.skipped,
+        unmatched: listed.unmatched,
         dropped,
     })
 }
 
-/// The listed files `encoding` reads, sorted by key, with their decompression; how many others were skipped; and a problem for each missing partition folder.
+/// The listed files `encoding` reads and `values` keeps, sorted by key, with their decompression; how many others were skipped; and a problem for each file whose path lacks a value.
 async fn listed_files(
     folder: &OpenFolder,
-    partition_columns: &[String],
+    values: &PathValues,
     encoding: &FilesEncoding,
-) -> Result<(Vec<(DataFile, Codec)>, usize, Vec<String>), FilesError> {
-    let mut files: Vec<(DataFile, Codec)> = Vec::new();
-    let mut skipped: usize = 0;
-    let mut problems: Vec<String> = Vec::new();
+) -> Result<ListedFiles, FilesError> {
+    let mut listed = ListedFiles {
+        files: Vec::new(),
+        skipped: 0,
+        unmatched: 0,
+        problems: Vec::new(),
+    };
     for file in list_files(folder).await? {
         let Some(codec) = file_codec(&file.relative_key, encoding) else {
-            skipped += 1;
+            listed.skipped += 1;
             continue;
         };
-        let (data, problem) = data_file(file, partition_columns);
-        problems.extend(problem);
-        files.push((data, codec));
+        let (data, problem) = data_file(file, values);
+        listed.problems.extend(problem);
+        match data {
+            Some(data) => listed.files.push((data, codec)),
+            None => listed.unmatched += 1,
+        }
     }
-    match files.is_empty() {
+    let unmatched = match listed.unmatched {
+        0 => String::new(),
+        count => format!("; {count} listed files do not match path_columns"),
+    };
+    match listed.files.is_empty() {
         true => Err(FilesError::File {
             key: folder.location.to_string(),
             reason: format!(
-                "no {} files found; check the source's path and format (an empty source never empties the destination)",
+                "no {} files found{unmatched}; check the source's path and format (an empty source never empties the destination)",
                 file_names(encoding)
             ),
         }),
-        false => Ok((files, skipped, problems)),
+        false => Ok(listed),
     }
 }
