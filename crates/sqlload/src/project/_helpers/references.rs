@@ -285,9 +285,10 @@ fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             || settings.cursor_column.is_some()
             || settings.batch_size.is_some()
             || settings.state.is_some()
+            || settings.checks.is_some()
         {
             problems.push(format!(
-                "{place} kind = \"postgres_cdc\" writes every captured change, so it takes no write_strategy, cursor_column, batch_size or state; choose cdc_mode = \"merge\" or \"changelog\""
+                "{place} kind = \"postgres_cdc\" writes every captured change, so it takes no write_strategy, cursor_column, batch_size, state or checks; choose cdc_mode = \"merge\" or \"changelog\""
             ));
             break;
         }

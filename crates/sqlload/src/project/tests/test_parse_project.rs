@@ -36,6 +36,18 @@ fn given_a_full_project_when_parsing_then_sources_and_table_settings_are_read() 
             expected_value: "Skip",
         },
         ParseProjectTestCase {
+            description: "a table's checks are read, the row-drop limit as a percentage",
+            read: |project| {
+                format!(
+                    "{:?}",
+                    project.sources["app"].tables["public.accounts"]
+                        .settings
+                        .checks
+                )
+            },
+            expected_value: "Some(TableChecks { unique: Some([\"id\"]), not_null: [\"id\"], min_rows: None, max_row_drop: Some(20), warn: [MaxRowDrop] })",
+        },
+        ParseProjectTestCase {
             description: "source-level table settings are defaults",
             read: |project| format!("{:?}", project.sources["app"].defaults.write_strategy),
             expected_value: "Some(Merge)",
@@ -213,6 +225,16 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "shaping is gone: nothing chooses SQLLoad's route over the warehouse's own read",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshaping = \"loader\"\n",
             expected_message: "unknown key \"shaping\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a row-drop limit must be a percentage",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nchecks = { max_row_drop = \"120%\" }\n",
+            expected_message: "\"120%\" is not a percentage",
+        },
+        ParseProjectErrorTestCase {
+            description: "an unknown check is rejected",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nchecks = { uniq = [\"id\"] }\n",
+            expected_message: "unknown field `uniq`",
         },
         ParseProjectErrorTestCase {
             description: "a misspelt source key suggests the right one",

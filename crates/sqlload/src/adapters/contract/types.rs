@@ -12,7 +12,7 @@ use crate::adapters::contract::_helpers::promote::{
     drop_and_rename, merge_statement, swap_statements,
 };
 use crate::adapters::contract::_helpers::queries::{
-    cursor_query, insert_rows, loaded_files_query, staging_tables_query, staging_time,
+    check_query, cursor_query, insert_rows, loaded_files_query, staging_tables_query, staging_time,
     stale_staging,
 };
 use crate::adapters::contract::_helpers::recreate::recreate_statements;
@@ -23,7 +23,7 @@ use crate::adapters::contract::_helpers::schema::{
 use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::_helpers::write::write_statements;
 use crate::adapters::contract::models::{
-    ChangeApply, ChangeWrite, CursorQuery, CursorRead, CursorValue, TableName,
+    ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, TableName,
     WriteStatementsRequest, WriteTarget,
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
@@ -121,6 +121,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// The expression turning staging column `name` into the table's type.
     fn render_source_expression_cast(&self, name: &str, column_type: &ColumnType) -> String {
         source_expression_cast(self, name, column_type)
+    }
+
+    /// `expression` as text.
+    fn render_text_cast(&self, expression: &str) -> String {
+        format!("CAST({expression} AS VARCHAR)")
+    }
+
+    /// The query `check` runs on `relation`, returning its values as text.
+    fn render_check_query(&self, relation: &TableName, check: CheckQuery<'_>) -> String {
+        check_query(self, relation, check)
     }
 
     /// A query returning a row when `table` holds one.

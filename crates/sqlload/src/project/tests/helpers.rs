@@ -41,6 +41,7 @@ lookback = "1h"
 [sources.app.tables."public.accounts"]
 columns = { balance = "decimal(18,2)" }
 type_change_rebuild = "allow"
+checks = { unique = ["id"], not_null = ["id"], max_row_drop = "20%", warn = ["max_row_drop"] }
 
 [sources.app.tables."public.events"]
 write_strategy = "append"

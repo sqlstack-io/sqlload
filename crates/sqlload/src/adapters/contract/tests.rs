@@ -1,5 +1,7 @@
 #[path = "tests/test_build_table.rs"]
 mod build_table;
+#[path = "tests/test_check_query.rs"]
+mod check_query;
 #[path = "tests/test_commit_statements.rs"]
 mod commit_statements;
 #[path = "tests/test_contract.rs"]
