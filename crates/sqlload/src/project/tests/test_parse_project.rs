@@ -372,6 +372,16 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.events] column Record is in both record_column and constant_columns",
         },
         ParseProjectErrorTestCase {
+            description: "the record column cannot take a name SQLLoad adds itself, which would drop the record",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\nformat = \"ndjson\"\nshape = \"record\"\nrecord_column = \"_SQLLOAD_SOURCE_ROW\"\n",
+            expected_message: "[sources.events] record_column _SQLLOAD_SOURCE_ROW is a column SQLLoad adds itself",
+        },
+        ParseProjectErrorTestCase {
+            description: "a record-shape source pins no typed columns, which would load NULL or the whole record",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\nformat = \"ndjson\"\nshape = \"record\"\n[sources.events.tables.events]\ncolumns = { id = \"int\" }\n",
+            expected_message: "[sources.events] shape = \"record\" loads each record into one json column, record, so [tables.events] columns cannot pin id",
+        },
+        ParseProjectErrorTestCase {
             description: "shape is for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshape = \"record\"\n",
             expected_message: "[sources.app] format, compression, csv, shape and record_column are for kind = \"files\"",

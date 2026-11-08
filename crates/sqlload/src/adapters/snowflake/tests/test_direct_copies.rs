@@ -140,7 +140,7 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             )),
         },
         DirectCopiesTestCase {
-            description: "record shape, csv: each line an array of its fields as strings, a NULL value as JSON null",
+            description: "record shape, csv: each line an array of its fields as strings, a NULL value as JSON null, a line with another number of fields failing",
             files: vec![("part-0.csv".to_owned(), "2026-11-04")],
             columns: vec![column(RECORD_COLUMN, ColumnType::Json, WHOLE_FILE)],
             from: EXTERNAL,
@@ -156,7 +156,7 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             header: &["column_1", "column_2"],
             expected_copies: Ok((
                 1,
-                "(SELECT ARRAY_CONSTRUCT(COALESCE(TO_VARIANT(NULLIF($1, 'NA')), PARSE_JSON('null')), COALESCE(TO_VARIANT(NULLIF($2, 'NA')), PARSE_JSON('null'))) FROM",
+                "(SELECT IFF($2 IS NULL OR $3 IS NOT NULL, CAST(TO_VARCHAR(TO_NUMBER('sqlload: a line does not have 2 fields, as the file''s first line does')) AS VARIANT), ARRAY_CONSTRUCT(COALESCE(TO_VARIANT(NULLIF($1, 'NA')), PARSE_JSON('null')), COALESCE(TO_VARIANT(NULLIF($2, 'NA')), PARSE_JSON('null')))) FROM",
             )),
         },
     ];

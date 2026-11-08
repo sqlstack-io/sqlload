@@ -303,7 +303,7 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             expected_rows: Ok("1"),
         },
         ReadTextFilesTestCase {
-            description: "record shape, ndjson: each object whole as compact JSON, numbers as written, keys in file order (a repeated key once, with its last value where it last appears), keys outside any sample kept",
+            description: "record shape, ndjson: each object whole as compact JSON, numbers keeping their digits, keys in file order (a repeated key once, with its last value where it last appears), keys outside any sample kept",
             encoding: record_encoding(SourceFormat::Ndjson, CsvOptions::default()),
             files: &[(
                 "a.ndjson.gz",

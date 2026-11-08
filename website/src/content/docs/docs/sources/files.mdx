@@ -143,10 +143,11 @@ partition_columns = { dt = "date" }
   being checked, so files with different headers load together. Every line needs as many fields as
   the file's first line.
 
-Nothing is sampled and the columns never change: new keys and fields arrive inside the record.
+Nothing is sampled and the columns never change: new keys and fields arrive inside the record, so
+the source's tables pin no other `columns`, and `record_column` can't be a name SQLLoad adds itself.
 Partition, path and constant columns and the `_sqlload_source_*` columns load beside it as usual.
 The column is `json` in every destination (`VARIANT` in Snowflake), and Snowflake still reads the
-files itself. Parquet files already have typed columns, so they can't use `shape = "record"`.
+files itself, also from `copy_to_internal_stage`. Parquet files already have typed columns, so they can't use `shape = "record"`.
 
 ## Files the destination reads itself
 

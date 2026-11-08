@@ -64,6 +64,8 @@ pub(crate) struct DirectProblemTestCase {
     pub(crate) refused: Vec<(String, String)>,
     /// Copied unchanged to an internal stage (`copy_to_internal_stage`) instead of read under the stage.
     pub(crate) copied: bool,
+    /// Each record loads whole (`shape = "record"`).
+    pub(crate) whole: bool,
     pub(crate) expected_problem: Option<&'static str>,
 }
 

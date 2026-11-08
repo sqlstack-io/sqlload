@@ -1,3 +1,4 @@
+use crate::files_source::constants::LOADER_COLUMNS;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::{RecordShape, SourceFormat};
@@ -323,7 +324,32 @@ fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         (_, _, Some(name)) if name.trim().is_empty() => {
             problems.push(format!("{place} record_column must not be empty"));
         }
+        (_, _, Some(name))
+            if LOADER_COLUMNS
+                .iter()
+                .any(|loader| loader.eq_ignore_ascii_case(name)) =>
+        {
+            problems.push(format!(
+                "{place} record_column {name} is a column SQLLoad adds itself; choose another name"
+            ));
+        }
         _ => {}
+    }
+    if let Some(record) = &source.files_encoding().record {
+        for (table, overrides) in &source.tables {
+            let pinned: Vec<&str> = overrides
+                .columns
+                .keys()
+                .map(String::as_str)
+                .filter(|name| name != record)
+                .collect();
+            if !pinned.is_empty() {
+                problems.push(format!(
+                    "{place} shape = \"record\" loads each record into one json column, {record}, so [tables.{table}] columns cannot pin {}",
+                    pinned.join(", ")
+                ));
+            }
+        }
     }
     if source.format == SourceFormat::Parquet && source.compression.is_some() {
         problems.push(format!(
