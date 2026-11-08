@@ -30,18 +30,19 @@ pub async fn take_lease(
     };
     let leases = lease_folder(folder);
     let key = lease_key(lease.generation);
-    if !create_file(&leases, &key, Bytes::from(lease_text(&lease))).await? {
-        let (_, winner) = newest_lease(folder).await?;
-        if let Some(own) = winner.as_ref().filter(|winner| {
-            winner.generation == lease.generation && winner.load_id == lease.load_id
-        }) {
-            return Ok(Ok(own.clone()));
-        }
-        return Ok(Err(winner.map_or_else(
-            || "another load took the table at the same moment; retry".to_owned(),
-            |winner| lease_refusal(&winner),
-        )));
-    }
+    let created = create_file(&leases, &key, Bytes::from(lease_text(&lease))).await?;
+    let lease = match created {
+        true => lease,
+        false => match newest_lease(folder).await?.1 {
+            Some(own) if own.generation == lease.generation && own.load_id == lease.load_id => own,
+            winner => {
+                return Ok(Err(winner.map_or_else(
+                    || "another load took the table at the same moment; retry".to_owned(),
+                    |winner| lease_refusal(&winner),
+                )));
+            }
+        },
+    };
     let older: Vec<String> = (highest > 0)
         .then(|| lease_key(highest))
         .into_iter()

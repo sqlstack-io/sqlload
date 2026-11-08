@@ -1319,7 +1319,7 @@ fn keep_in_background(
 
 /// Release `lease` after the load, best effort: one left behind expires on its own.
 async fn give_back(folder: &OpenFolder, lease: &Lease) {
-    if let Err(error) = release_lease(folder, lease, chrono::Utc::now()).await {
+    if let Err(error) = release_lease(folder, lease).await {
         tracing::warn!(%error, folder = %folder.location, "cannot release the table's lease; it expires on its own");
     }
 }

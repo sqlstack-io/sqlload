@@ -59,7 +59,7 @@ fn given_a_holder_when_it_refreshes_and_releases_its_lease_then_it_keeps_the_tab
             for (load, releases) in test_case.others {
                 let other = taken(&folder, load, now).await?;
                 for released in [&other].into_iter().take(usize::from(*releases)) {
-                    release_lease(&folder, released, now)
+                    release_lease(&folder, released)
                         .await
                         .map_err(|error| error.to_string())?;
                 }
@@ -72,7 +72,7 @@ fn given_a_holder_when_it_refreshes_and_releases_its_lease_then_it_keeps_the_tab
                 .await
                 .map_err(|error| error.to_string())?
                 .unwrap_or_default();
-            release_lease(&folder, &lease, now)
+            release_lease(&folder, &lease)
                 .await
                 .map_err(|error| error.to_string())?;
             let after = lease_holder(&folder, now)
