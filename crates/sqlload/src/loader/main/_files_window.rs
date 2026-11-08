@@ -84,7 +84,11 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             let maximum = match (&start, newest) {
                 (None, Some(newest)) => {
                     newest_maximum(request, partition.by, newest)?.map(|(maximum, from)| {
-                        let note = format!("{column} from {maximum} ({from})");
+                        let bound = match cursor.inclusive {
+                            true => "from",
+                            false => "after",
+                        };
+                        let note = format!("{column} {bound} {maximum} ({from})");
                         (maximum, note)
                     })
                 }
