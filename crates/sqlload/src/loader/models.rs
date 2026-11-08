@@ -168,6 +168,8 @@ pub struct ResolvedTables {
     pub skipped: Vec<SkippedTable>,
     /// Problems with one table's settings, as `source_table: problem`.
     pub problems: Vec<String>,
+    /// Warnings about reaching the source, such as reading it in plain text.
+    pub warnings: Vec<String>,
 }
 
 /// The selected tables of one project for `contract`, before any destination is read.

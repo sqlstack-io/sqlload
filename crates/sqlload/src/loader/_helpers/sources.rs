@@ -25,7 +25,9 @@ use crate::loader::_helpers::python::python_tables;
 use crate::loader::_helpers::resolve::{resolve_tables, source_target};
 use crate::loader::_helpers::specs::{missing_description, table_name};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
-use crate::loader::constants::{PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS};
+use crate::loader::constants::{
+    LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS,
+};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
     CommitRule, FilesSource, PlanOptions, ProjectPlan, ResolvedTables, SkippedTable, SourceEnd,
@@ -37,8 +39,10 @@ use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::main::cursor_end::cursor_end;
 use crate::postgres_source::main::read_catalog::read_catalog;
 use crate::postgres_source::models::{
-    CopyRequest, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable, WireType,
+    CopyRequest, Encryption, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable,
+    SslMode, WireType,
 };
+use crate::project::main::postgres_address::postgres_address;
 use crate::project::models::{
     BatchStep, ConnectionConfig, NewTables, ProjectConfig, SourceConfig, SourceKind, TableOverride,
     WriteStrategy,
@@ -49,31 +53,12 @@ use crate::similar_names::main::nearest_name::nearest_name;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// A client for a source's Postgres connection.
+/// A client for a source's Postgres connection, and what protects it.
 pub(crate) async fn connect_source(
     project: &ProjectConfig,
     source: &SourceConfig,
-) -> Result<Client, LoaderError> {
-    let Some(ConnectionConfig::Postgres {
-        host,
-        port,
-        user,
-        password,
-        database,
-    }) = project.connections.get(&source.connection)
-    else {
-        return Err(LoaderError::Invalid(format!(
-            "connection {:?} is not a Postgres connection",
-            source.connection
-        )));
-    };
-    let address = PostgresAddress {
-        host,
-        port: *port,
-        user,
-        password: password.as_ref().map(|secret| secret.expose()),
-        database,
-    };
+) -> Result<(Client, Encryption), LoaderError> {
+    let address = postgres_address(project, &source.connection).map_err(LoaderError::Invalid)?;
     Ok(connect_postgres(address).await?)
 }
 
@@ -123,11 +108,11 @@ pub(crate) async fn open_source(
 ) -> Result<SourceReader, LoaderError> {
     match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => {
-            let client = connect_source(project, source).await?;
+            let (client, _) = connect_source(project, source).await?;
             let mut helpers = Vec::with_capacity(readers.saturating_sub(1));
             for _ in 1..readers {
                 match connect_source(project, source).await {
-                    Ok(helper) => helpers.push(helper),
+                    Ok((helper, _)) => helpers.push(helper),
                     Err(_) => break,
                 }
             }
@@ -142,21 +127,29 @@ pub(crate) async fn open_source(
     }
 }
 
-/// A source's tables, and its files for a files source; `Ok(Err(problem))` when they cannot be found, including when a Postgres source cannot be reached or its `include`/`exclude` patterns are invalid.
+/// A source's tables, its files for a files source, and warnings about reaching it; `Ok(Err(problem))` when they cannot be found, including when a Postgres source cannot be reached or its `include`/`exclude` patterns are invalid.
 pub(crate) async fn source_tables(
     project: &ProjectConfig,
     source_name: &str,
     source: &SourceConfig,
-) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>), String>, LoaderError> {
+) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>, Vec<String>), String>, LoaderError> {
     match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => {
-            let client = match connect_source(project, source).await {
-                Ok(client) => client,
-                Err(error) => return Ok(Err(error.to_string())),
+            let address = match postgres_address(project, &source.connection) {
+                Ok(address) => address,
+                Err(problem) => return Ok(Err(problem)),
             };
+            let (client, encryption) = match connect_postgres(address.clone()).await {
+                Ok(connected) => connected,
+                Err(error) => return Ok(Err(LoaderError::from(error).to_string())),
+            };
+            let warnings: Vec<String> =
+                plain_text_warning((source_name, &source.connection), &address, encryption)
+                    .into_iter()
+                    .collect();
             Ok(
                 match read_catalog(&client, &source.include, &source.exclude).await {
-                    Ok(discovered) => Ok((discovered, None)),
+                    Ok(discovered) => Ok((discovered, None, warnings)),
                     Err(error) => Err(LoaderError::from(error).to_string()),
                 },
             )
@@ -168,13 +161,33 @@ pub(crate) async fn source_tables(
             };
             Ok(
                 match discover_files_table(project, source_name, source, warehouse).await {
-                    Ok((table, files)) => Ok((vec![table], Some(files))),
+                    Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
                     Err(error) => Err(error.to_string()),
                 },
             )
         }
-        SourceKind::Python => Ok(Ok((python_tables(source), None))),
+        SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
     }
+}
+
+/// A warning when source `source_name` reads `address` over the network in plain text because the server refused TLS under `sslmode = "prefer"`; none for a loopback or Unix socket host, whose traffic stays on the machine, or for an explicit `disable`.
+fn plain_text_warning(
+    (source_name, connection): (&str, &str),
+    address: &PostgresAddress<'_>,
+    encryption: Encryption,
+) -> Option<String> {
+    let local = address.host == LOCALHOST
+        || address.host.starts_with('/')
+        || address
+            .host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    (encryption == Encryption::None && address.tls.mode == SslMode::Prefer && !local).then(|| {
+        format!(
+            "[sources.{source_name}] reads {}:{} in plain text: the server does not offer TLS, so sslmode = \"prefer\" fell back; set sslmode = \"require\" (or \"verify-full\") on connection {connection} to refuse plain text, or \"disable\" to accept it",
+            address.host, address.port
+        )
+    })
 }
 
 /// A files source as one source table (file columns, partition columns, the source-file column), and its files.
@@ -662,7 +675,7 @@ pub(crate) async fn source_ends(
             continue;
         };
         if client.is_none() {
-            client = Some(connect_source(project, source).await?);
+            client = Some(connect_source(project, source).await?.0);
         }
         let Some(connected) = &client else {
             continue;
@@ -719,7 +732,7 @@ pub(crate) async fn scoped_tables(
     (project, options): (&ProjectConfig, &PlanOptions),
     (source_name, source): (&str, &SourceConfig),
 ) -> Result<Result<(ResolvedTables, Option<FilesSource>), Vec<String>>, LoaderError> {
-    let (discovered, files) = match source_tables(project, source_name, source).await? {
+    let (discovered, files, warnings) = match source_tables(project, source_name, source).await? {
         Ok(found) => found,
         Err(problem) => {
             let in_scope = source_in_scope((project, options), (source_name, source), None);
@@ -730,8 +743,9 @@ pub(crate) async fn scoped_tables(
         }
     };
     let mut resolved = resolve_tables(project, source_name, &discovered);
-    if !source_in_scope((project, options), (source_name, source), Some(&discovered)) {
-        resolved.problems.clear();
+    match source_in_scope((project, options), (source_name, source), Some(&discovered)) {
+        true => resolved.warnings = warnings,
+        false => resolved.problems.clear(),
     }
     Ok(Ok((resolved, files)))
 }

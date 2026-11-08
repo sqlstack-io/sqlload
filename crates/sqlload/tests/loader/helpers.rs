@@ -1794,3 +1794,22 @@ pub(crate) const CDC_CHANGES: &str = "
 BEGIN; INSERT INTO public.orders VALUES (4, 4, 'd', '{\"x y\",z}'); UPDATE public.orders SET qty = 10 WHERE id = 1; INSERT INTO public.items VALUES (3, 'three'); COMMIT;
 BEGIN; DELETE FROM public.orders WHERE id = 2; UPDATE public.items SET name = 'one!' WHERE id = 1; COMMIT;
 ";
+
+/// A Postgres source `app` on `host:port` as `user` with the TLS `settings`, and an in-memory DuckDB target.
+pub(crate) fn tls_project((host, port, user): (&str, u16, &str), settings: &str) -> String {
+    format!(
+        "[connections.pg]\nkind = \"postgres\"\nhost = \"{host}\"\nport = {port}\nuser = \"{user}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n{settings}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.*\"]\n"
+    )
+}
+
+/// `postgres`'s address on the container network, a host that is not loopback.
+pub(crate) async fn bridge_address(
+    postgres: &sqlload_testkit::postgres::models::Postgres,
+) -> Result<String, String> {
+    postgres
+        .container
+        .get_bridge_ip_address()
+        .await
+        .map(|ip| ip.to_string())
+        .map_err(|error| error.to_string())
+}

@@ -48,9 +48,11 @@ use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
+use crate::postgres_source::main::relay_tls::relay_tls;
 use crate::postgres_source::models::{CopyRequest, PostgresAddress, ReadColumn, SourceTable};
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
-use crate::project::models::{ConnectionConfig, SourceConfig, TargetConfig};
+use crate::project::main::postgres_address::postgres_address;
+use crate::project::models::{SourceConfig, TargetConfig};
 use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_PREFIX, CDC_UNCHANGED_COLUMN};
 
 /// How often the replication session reports the confirmed position.
@@ -117,38 +119,20 @@ fn quoted(name: &str) -> String {
 impl CdcSource<'_> {
     /// The source's Postgres connection settings.
     fn address(&self) -> Result<PostgresAddress<'_>, LoaderError> {
-        let Some(ConnectionConfig::Postgres {
-            host,
-            port,
-            user,
-            password,
-            database,
-        }) = self.run.project.connections.get(&self.source.connection)
-        else {
-            return Err(LoaderError::Invalid(format!(
-                "connection {:?} is not a Postgres connection",
-                self.source.connection
-            )));
-        };
-        Ok(PostgresAddress {
-            host,
-            port: *port,
-            user,
-            password: password.as_ref().map(|secret| secret.expose()),
-            database,
-        })
+        postgres_address(self.run.project, &self.source.connection).map_err(LoaderError::Invalid)
     }
 
     /// A control connection to the source.
     async fn connect(&self) -> Result<Client, LoaderError> {
-        Ok(connect_postgres(self.address()?).await?)
+        Ok(connect_postgres(self.address()?).await?.0)
     }
 
-    /// The replication session's settings, starting where the slot confirmed.
-    fn replication_config(&self) -> Result<ReplicationConfig, LoaderError> {
+    /// The replication session's settings, starting where the slot confirmed; over TLS through a local relay, since the replication client speaks plain text only.
+    async fn replication_config(&self) -> Result<ReplicationConfig, LoaderError> {
         let address = self.address()?;
+        let relay = relay_tls(&address).await?;
         Ok(ReplicationConfig::new(
-            address.host,
+            relay.as_deref().unwrap_or(address.host),
             address.user,
             address.password.unwrap_or_default(),
             address.database,
@@ -527,7 +511,7 @@ impl CdcSource<'_> {
                     false => self.backfill(&control, &unrecorded, &missing).await?,
                 };
                 crash_point("backfill-before-stream");
-                let session = ReplicationClient::connect(self.replication_config()?)
+                let session = ReplicationClient::connect(self.replication_config().await?)
                     .await
                     .map_err(replication)?;
                 (session, copied)
@@ -624,7 +608,7 @@ impl CdcSource<'_> {
     ) -> Result<BTreeMap<String, u64>, LoaderError> {
         self.add_to_publication(control, missing).await?;
         crash_point("backfill-after-publication");
-        let mut session = ReplicationClient::connect_gated(self.replication_config()?)
+        let mut session = ReplicationClient::connect_gated(self.replication_config().await?)
             .await
             .map_err(replication)?;
         let name: String = self
@@ -688,7 +672,7 @@ impl CdcSource<'_> {
     /// Create the slot with an exported snapshot and copy every table under it, each table's rows getting the snapshot's LSN; returns the session, which streams on from the snapshot.
     async fn snapshot(&self) -> Result<(ReplicationClient, BTreeMap<String, u64>), LoaderError> {
         let mut rows: BTreeMap<String, u64> = BTreeMap::new();
-        let mut session = ReplicationClient::connect_gated(self.replication_config()?)
+        let mut session = ReplicationClient::connect_gated(self.replication_config().await?)
             .await
             .map_err(replication)?;
         let created = session

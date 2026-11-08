@@ -136,6 +136,18 @@ pub enum ConnectionConfig {
         #[serde(default)]
         password: Option<crate::auth::models::Secret>,
         database: String,
+        /// Whether to use TLS and what to check, as libpq's `sslmode`; `prefer` by default.
+        #[serde(default)]
+        sslmode: crate::postgres_source::models::SslMode,
+        /// CA certificates (PEM) to trust instead of the built-in public roots.
+        #[serde(default)]
+        sslrootcert: Option<PathBuf>,
+        /// A client certificate (PEM), with `sslkey`.
+        #[serde(default)]
+        sslcert: Option<PathBuf>,
+        /// The client certificate's private key (PEM).
+        #[serde(default)]
+        sslkey: Option<PathBuf>,
     },
     /// An S3 bucket; credentials come from `AWS_*` environment variables, web identity, or the instance/container role (AWS profiles and SSO are not read yet).
     S3 {
