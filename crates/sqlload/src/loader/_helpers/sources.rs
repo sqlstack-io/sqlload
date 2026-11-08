@@ -9,6 +9,7 @@ use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::config::models::{DestinationConfig, DestinationKind};
 use crate::file_store::main::open_folder::open_folder;
 use crate::files_source::constants::{
     NANOSECOND_SCALE, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
@@ -28,7 +29,8 @@ use crate::loader::_helpers::resolve::{resolve_tables, source_target};
 use crate::loader::_helpers::specs::{missing_description, table_name};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
-    LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, SOURCE_BATCH_ROWS,
+    KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, RELOAD_FIX,
+    SOURCE_BATCH_ROWS,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -52,6 +54,11 @@ use crate::project::models::{
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::similar_names::main::close_name::close_name;
 use crate::similar_names::main::nearest_name::nearest_name;
+use crate::snowflake_source::constants::SESSION_SCHEMA;
+use crate::snowflake_source::main::connect_snowflake_source::connect_snowflake_source;
+use crate::snowflake_source::main::read_catalog::read_catalog as read_snowflake_catalog;
+use crate::snowflake_source::main::unload_rows::unload_rows;
+use crate::snowflake_source::models::UnloadRequest;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
@@ -123,6 +130,10 @@ pub(crate) async fn open_source(
         SourceKind::Files => Ok(SourceReader::Files(open_folder(&files_location(
             project, source,
         )?)?)),
+        SourceKind::Snowflake => Ok(SourceReader::Snowflake(Box::new(connect_snowflake_source(
+            snowflake_session(project, source)?,
+            source.stage.clone(),
+        )?))),
         SourceKind::Python => Err(LoaderError::Invalid(
             "a Python source is read by calling its table functions".to_owned(),
         )),
@@ -168,6 +179,27 @@ pub(crate) async fn source_tables(
                 },
             )
         }
+        SourceKind::Snowflake => {
+            let reader = match snowflake_session(project, source)
+                .and_then(|session| Ok(connect_snowflake_source(session, None)?))
+            {
+                Ok(reader) => reader,
+                Err(error) => return Ok(Err(error.to_string())),
+            };
+            let queries: Vec<(String, String)> = source
+                .tables
+                .iter()
+                .filter_map(|(name, table)| Some((name.clone(), table.sql.clone()?)))
+                .collect();
+            Ok(
+                match read_snowflake_catalog(&reader, (&source.include, &source.exclude), &queries)
+                    .await
+                {
+                    Ok(discovered) => Ok((discovered, None, Vec::new())),
+                    Err(error) => Err(error.to_string()),
+                },
+            )
+        }
         SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
     }
 }
@@ -189,6 +221,40 @@ fn plain_text_warning(
             "[sources.{source_name}] reads {}:{} in plain text: the server does not offer TLS, so sslmode = \"prefer\" fell back; set sslmode = \"require\" (or \"verify-full\") on connection {connection} to refuse plain text, or \"disable\" to accept it",
             address.host, address.port
         )
+    })
+}
+
+/// The session a `snowflake` source reads in: its connection's account, credentials, role and database, on the source's `warehouse` or else the connection's.
+fn snowflake_session(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+) -> Result<DestinationConfig, LoaderError> {
+    let Some(ConnectionConfig::Snowflake {
+        account,
+        user,
+        auth,
+        role,
+        warehouse,
+        database,
+        base_url,
+        ..
+    }) = project.connections.get(&source.connection)
+    else {
+        return Err(LoaderError::Invalid(format!(
+            "connection {:?} is not a snowflake connection",
+            source.connection
+        )));
+    };
+    Ok(DestinationConfig {
+        kind: DestinationKind::Snowflake,
+        account: account.clone(),
+        user: user.clone(),
+        auth: auth.clone(),
+        role: role.clone(),
+        warehouse: source.warehouse.clone().or_else(|| warehouse.clone()),
+        database: database.clone(),
+        schema: SESSION_SCHEMA.to_owned(),
+        base_url: base_url.clone(),
     })
 }
 
@@ -306,6 +372,7 @@ pub(crate) fn files_source_parts(
             pg_type: PgType::Other,
             column_type,
             nullable: true,
+            source_spelling: None,
         })
         .collect();
     let checks = TextChecks {
@@ -508,6 +575,14 @@ fn fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> Option<i64> {
         .filter(|digits| *digits < i64::from(NANOSECOND_SCALE))
 }
 
+/// How to give a table with rows a column a load needs, on `warehouse`.
+pub(crate) fn column_fix(warehouse: Warehouse) -> &'static str {
+    match sql_adapter(warehouse).keeps_tables() {
+        true => KEPT_TABLES_COLUMN_FIX,
+        false => RELOAD_FIX,
+    }
+}
+
 /// The files to read, or why the table cannot be loaded.
 pub(crate) async fn plan_files(
     request: &FilesPlanRequest<'_>,
@@ -553,7 +628,8 @@ pub(crate) async fn plan_files(
         && !request.options.reload
     {
         return Ok(Err(format!(
-            "the table has no {SOURCE_FILE_COLUMN} column, so append cannot tell which files are loaded and would load them all again; run it once with --reload"
+            "the table has no {SOURCE_FILE_COLUMN} column, so append cannot tell which files are loaded and would load them all again; {}",
+            column_fix(spec.warehouse)
         )));
     }
     if skips_loaded
@@ -679,6 +755,21 @@ pub(crate) async fn read_source(
                 None => files.clone(),
             };
             Ok(read_files(folder, &read, &part.footers, on_batch).await?)
+        }
+        (SourceReader::Snowflake(snowflake), _) => {
+            let filter = part.filter.or_else(|| table.source_filter.clone());
+            let request = UnloadRequest {
+                table: &table.spec.source_table,
+                sql: table
+                    .spec
+                    .warehouse_source
+                    .as_ref()
+                    .and_then(|source| source.sql.as_deref()),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+                batch_rows: SOURCE_BATCH_ROWS,
+            };
+            Ok(unload_rows(snowflake, &request, on_batch).await?)
         }
         (SourceReader::Files(_), None) => Err(LoaderError::Invalid(format!(
             "{}: a files source has no files planned",

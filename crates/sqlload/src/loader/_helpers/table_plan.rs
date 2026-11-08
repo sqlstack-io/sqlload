@@ -1,6 +1,8 @@
 use crate::adapters::contract::main::cursor_bound::cursor_bound;
+use crate::adapters::contract::main::cursor_from_now::cursor_from_now;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::CursorQuery;
+use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
@@ -12,6 +14,7 @@ use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
+use crate::adapters::dispatch::main::session::write_problems::write_problems;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::output_problems::output_problems;
 use crate::adapters::files::models::{OutputCheck, TablePath};
@@ -27,10 +30,12 @@ use crate::files_source::models::FilesRead;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::FilesPlanRequest;
+use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
-use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
+use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
+use crate::loader::constants::{ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
@@ -44,6 +49,7 @@ use crate::loader::models::SourceEnd;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
 use crate::loader::models::WholeReason;
+use crate::loader::models::{WarehouseRoute, WarehouseSource};
 use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::SourceTable;
 use crate::postgres_source::models::{PgType, ReadColumn};
@@ -70,6 +76,7 @@ use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::SchemaPlan;
 use crate::schema_plan::models::SchemaRules;
 use crate::schema_plan::models::TableAction;
+use crate::snowflake_source::main::read_columns::read_columns as unload_read_columns;
 use crate::store_paths::models::StoreKind;
 
 /// The source table without its excluded columns.
@@ -264,6 +271,9 @@ pub(crate) async fn replan_columns(
 pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     match (&spec.files, &spec.python) {
         (Some(_), _) | (_, Some(_)) => files_read_columns(spec),
+        (None, None) if spec.warehouse_source.is_some() => {
+            unload_read_columns(&selected_columns(spec), &spec.pinned)
+        }
         (None, None) => {
             let selected = selected_columns(spec);
             let mut read = plan_read(&selected, &spec.pinned)?;
@@ -373,6 +383,32 @@ pub(crate) fn read_window(spec: &TableSpec, window: &Window) -> Option<ReadWindo
     })
 }
 
+/// Why `--reload` cannot run for `spec`: a CDC table's, or one on a warehouse that keeps tables, which never drops and recreates one.
+fn reload_refusal(spec: &TableSpec, options: &PlanOptions) -> Option<&'static str> {
+    match (spec.cdc.is_some(), options.reload) {
+        (true, true) => Some(CDC_RELOAD_PROBLEM),
+        (false, true) if sql_adapter(spec.warehouse).keeps_tables() => {
+            Some(KEPT_TABLES_RELOAD_PROBLEM)
+        }
+        _ => None,
+    }
+}
+
+/// `schema` with what stops or endangers writing `mode` into the existing table: blocked by its problems, with its warnings added.
+async fn checked_writes(
+    destination: &Destination,
+    spec: &TableSpec,
+    mode: &WriteMode,
+    mut schema: SchemaPlan,
+) -> Result<SchemaPlan, LoaderError> {
+    let (problems, warnings) = write_problems(destination, &spec.destination, mode).await?;
+    schema.warnings.extend(warnings);
+    Ok(match problems.is_empty() {
+        true => schema,
+        false => blocked_plan(problems),
+    })
+}
+
 async fn plan_table_once(
     spec: &TableSpec,
     destination: &Destination,
@@ -382,11 +418,11 @@ async fn plan_table_once(
         return plan_files_table(spec, files, options).await;
     }
     let live = live_columns(destination, &spec.destination).await?;
-    if spec.cdc.is_some() && options.reload {
+    if let Some(refusal) = reload_refusal(spec, options) {
         return Ok(TablePlan {
             exists: live.is_some(),
             live,
-            ..blocked_table(spec, vec![CDC_RELOAD_PROBLEM.to_owned()])
+            ..blocked_table(spec, vec![refusal.to_owned()])
         });
     }
     let read_columns = match read_columns(spec) {
@@ -474,7 +510,8 @@ async fn plan_table_once(
         cursor_name.filter(|_| lacks_cursor && restart_duplicates && schema.blocked.is_none())
     {
         schema = blocked_plan(vec![format!(
-            "the table has no {name} column yet, so this load would read every row again and duplicate the rows already there; run it once with --reload"
+            "the table has no {name} column yet, so this load would read every row again and duplicate the rows already there; {}",
+            column_fix(spec.warehouse)
         )]);
     }
     if let Some(problem) = append_problem(spec, cursor_type).filter(|_| schema.blocked.is_none()) {
@@ -536,6 +573,9 @@ async fn plan_table_once(
     schema.warnings.extend(resnapshot_warning(spec, options));
     let mode = captured_mode(spec, mode);
     let exists = live.is_some();
+    if schema.blocked.is_none() && exists {
+        schema = checked_writes(destination, spec, &mode, schema).await?;
+    }
     let chosen = match &schema.blocked {
         None => {
             let direct_append = mode == WriteMode::Append && !spec.logged;
@@ -624,6 +664,9 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
                 adapter.render_create_schema(&spec.destination),
                 adapter.render_create_loaded_table(spec, &table.schema.write_columns),
             ];
+            if let WriteMode::Merge { unique_key } = &table.mode {
+                statements.extend(adapter.render_key_index(&spec.destination, unique_key));
+            }
             statements.extend(adapter.render_table_comment(&spec.destination, &spec.description));
             Some(statements)
         }
@@ -676,10 +719,21 @@ fn reader_offer(
         (true, true) => Some("the table sets test_loader_route (tests only)".to_owned()),
         (true, false) => None,
     };
+    let unload_to: Vec<Store> = match &spec.warehouse_source {
+        Some(WarehouseSource {
+            route: WarehouseRoute::Unload { store, .. },
+            ..
+        }) => vec![store.clone()],
+        None => Vec::new(),
+    };
+    let direct_blocked = match unload_to.is_empty() {
+        true => direct_blocked,
+        false => Some(UNLOADED_TIMES.to_owned()),
+    };
     ReaderOffer {
-        arrow: true,
+        arrow: unload_to.is_empty(),
         existing_files,
-        unload_to: Vec::new(),
+        unload_to,
         estimated_bytes: match u64::try_from(spec.source_table.estimated_bytes) {
             Ok(bytes) => Some(bytes),
             Err(_) => None,
@@ -854,6 +908,20 @@ async fn lower_bound(
         Some(Err(problem)) => return Ok(Err(format!("cursor_start: {problem}"))),
         None => None,
     };
+    if cursor.from_now && !options.reload {
+        let lookback = cursor.lookback.unwrap_or_default();
+        let from = match cursor_from_now(chrono::Utc::now(), cursor_type, NowShift::Back(lookback))
+        {
+            Ok(from) => from,
+            Err(problem) => return Ok(Err(problem)),
+        };
+        let note = format!(
+            "{} from {from} (now minus lookback {})",
+            cursor.column,
+            humantime::format_duration(lookback)
+        );
+        return Ok(Ok((Some(from), note, None)));
+    }
     if options.reload || !request.table_exists {
         let label = if options.reload {
             "reload"
@@ -977,9 +1045,28 @@ pub(crate) async fn cursor_window(
         true => ">=",
         false => ">",
     };
-    let note = match &to {
-        Some(end) => format!("{note}, below {end} (--end-cursor)"),
-        None => note,
+    let ahead = match (&to, cursor.lookahead) {
+        (None, Some(lookahead)) => {
+            match cursor_from_now(chrono::Utc::now(), cursor_type, NowShift::Ahead(lookahead)) {
+                Ok(end) => Some((end, lookahead)),
+                Err(problem) => return Ok(Err(problem)),
+            }
+        }
+        _ => None,
+    };
+    let (to, note) = match (to, ahead) {
+        (Some(end), _) => (
+            Some(end.clone()),
+            format!("{note}, below {end} (--end-cursor)"),
+        ),
+        (None, Some((end, lookahead))) => (
+            Some(end.clone()),
+            format!(
+                "{note}, below {end} (now plus lookahead {})",
+                humantime::format_duration(lookahead)
+            ),
+        ),
+        (None, None) => (None, note),
     };
     Ok(Ok(Window {
         filter: source_filter(

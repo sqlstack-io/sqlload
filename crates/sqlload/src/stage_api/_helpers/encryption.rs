@@ -1,6 +1,4 @@
-#[cfg(test)]
-use aes::cipher::BlockDecrypt;
-use aes::cipher::{BlockEncrypt, KeyInit};
+use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use aes::{Aes128, Aes192, Aes256};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -35,7 +33,6 @@ impl Cipher {
         }
     }
 
-    #[cfg(test)]
     fn decrypt_block(&self, block: &mut [u8; BLOCK]) {
         let block = block.into();
         match self {
@@ -54,7 +51,6 @@ fn pad(data: &[u8]) -> Vec<u8> {
     output
 }
 
-#[cfg(test)]
 fn unpad(data: &[u8]) -> Result<&[u8], String> {
     let padding = usize::from(*data.last().ok_or("empty ciphertext")?);
     let valid = (1..=BLOCK).contains(&padding)
@@ -117,8 +113,7 @@ pub(crate) fn encrypt(
     Ok((ciphertext, metadata))
 }
 
-/// The inverse of [`encrypt`].
-#[cfg(test)]
+/// The inverse of [`encrypt`]: a staged file's plaintext, from its wrapped file key and IV.
 pub(crate) fn decrypt(
     material: &EncryptionMaterial,
     metadata: &EncryptionMetadata,

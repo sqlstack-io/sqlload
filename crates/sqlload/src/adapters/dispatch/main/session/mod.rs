@@ -10,3 +10,4 @@ pub mod single_text;
 pub mod table_destination;
 pub mod table_shape;
 pub mod text_values;
+pub mod write_problems;
