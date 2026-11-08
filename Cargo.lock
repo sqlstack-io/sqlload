@@ -4677,7 +4677,7 @@ dependencies = [
  "reqwest",
  "rlimit",
  "rsa",
- "rustix",
+ "rustix 1.1.6",
  "rustls",
  "serde",
  "serde_json",
