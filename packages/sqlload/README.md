@@ -194,6 +194,34 @@ timestamp_ntz → timestamp_tz instead, shown in `plan`, and never to float, tex
 that rebuilds the table still needs `--allow-type-change-rebuild`. A type pinned in `columns`
 widens the table as before.
 
+## Checks before publish
+
+A table's `checks` run on the rows a load has staged, before they reach the table:
+
+```toml
+[sources.app.tables."public.customers"]
+checks = { unique = ["customer_id"], not_null = ["customer_id", "email"], min_rows = 1, max_row_drop = "20%" }
+```
+
+- `unique`: no two rows share these columns' values. Rows with a NULL in them are skipped, as in
+  SQL; add the columns to `not_null` to forbid NULLs too.
+- `not_null`: none of these columns holds a NULL.
+- `min_rows`: at least this many rows are loaded.
+- `max_row_drop`: the table loses at most this share of its rows, compared with what it holds now.
+
+A failed check fails the table with the counts and up to five repeated keys, and the commit
+publishes none of its rows: the table keeps what it held and the staging table is dropped. A check
+listed in `warn = ["max_row_drop"]` only logs its failure. Each commit is checked by itself, so a
+load that commits batch by batch (`append`, `merge`, `delete_insert`) checks each batch, and a
+failing batch leaves the batches committed before it in place; `min_rows` and `max_row_drop`
+describe the whole table, so only `replace`, which commits once, takes them.
+
+Columns the checks name must be loaded columns, matched ignoring case. A source can set `checks`
+for all its tables; a table's own `checks` replaces the source's whole block, as other settings
+do. Python tables take the same setting. Tables with checks always stage their rows, so a files
+source's direct load goes through SQLLoad instead, which `plan` warns about. Files targets and
+`postgres_cdc` sources take no checks.
+
 ## New tables
 
 With `new_tables = "skip"`, a table that appears after the source's first load loads only once
@@ -681,7 +709,16 @@ an existing table out again, drop it and load. ClickHouse cannot change the type
 sorting or partition key, so a key column whose source type widens fails the load.
 
 Rows go as Arrow over HTTP into a staging table (a build table for `replace`) and reach the table
-only when the load publishes them. ClickHouse has no transactions, so each publish is one swap,
+only when the load publishes them. A files source of Parquet in S3 skips SQLLoad: ClickHouse reads
+each file itself with `s3()`, signed with the credentials SQLLoad reads S3 with (sent as query
+parameters, never in the SQL; unsigned with `AWS_SKIP_SIGNATURE=true`), and `plan` shows
+"ClickHouse reads directly from s3://...". The server must reach the bucket (or the S3 connection's
+`endpoint`, or `AWS_ENDPOINT_URL_S3`). A signed pull's statement must stay under ClickHouse's
+`http_max_field_value_size` (128 KiB by default, about 1,800 columns). Hive folder values are converted as SQLLoad converts them,
+so one that does not fit its type fails the load. A table whose files ClickHouse would not load exactly (another format, masks, a column
+loaded as another type than the files hold, nanosecond or epoch timestamps, times of day, or a path
+that reads as a glob) goes through SQLLoad instead, and a batch's files load only if ClickHouse
+writes exactly as many rows as their footers hold. ClickHouse has no transactions, so each publish is one swap,
 atomic in an `Atomic` database (ClickHouse's default). `replace` and `--reload` swap the build
 table in with `EXCHANGE TABLES`. In a database that cannot exchange tables (an `Ordinary` one) they
 swap with one `RENAME TABLE`, which ClickHouse does not make atomic: readers can briefly find no

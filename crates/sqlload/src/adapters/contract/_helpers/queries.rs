@@ -5,7 +5,9 @@ use chrono::NaiveDateTime;
 use crate::adapters::contract::constants::{
     MAX_INSERT_ROWS, MAX_INSERT_SQL_BYTES, STAGING_SUFFIX, STAGING_TIME_DIGITS, STAGING_TIME_FORMAT,
 };
-use crate::adapters::contract::models::{CursorQuery, CursorRead, CursorValue, TableName};
+use crate::adapters::contract::models::{
+    CheckQuery, CursorQuery, CursorRead, CursorValue, TableName,
+};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::DesiredColumn;
@@ -16,6 +18,10 @@ pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
     request: &CursorQuery<'_>,
 ) -> Option<CursorRead> {
     let column = adapter.render_identifier(request.column);
+    let column = match request.column_type {
+        ColumnType::Text | ColumnType::Varchar(_) => adapter.render_binary_text(&column),
+        _ => column,
+    };
     let target = adapter.render_qualified_name(request.table);
     let value = match request.column_type {
         ColumnType::TimestampTz | ColumnType::TimestampNtz => CursorValue::EpochMicros {
@@ -161,4 +167,60 @@ pub(crate) fn insert_rows<A: SqlAdapter + ?Sized>(
         statements.push(format!("{opening}{}", current.join(", ")));
     }
     statements
+}
+
+/// The query `check` runs on `relation`: counts and example values as text, in SQL every warehouse runs.
+pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    relation: &TableName,
+    check: CheckQuery<'_>,
+) -> String {
+    let from = adapter.render_qualified_name(relation);
+    let count = adapter.render_text_cast("COUNT(*)");
+    let grouped = |columns: &[String]| {
+        let names: Vec<String> = columns
+            .iter()
+            .map(|column| adapter.render_identifier(column))
+            .collect();
+        let present: Vec<String> = names
+            .iter()
+            .map(|name| format!("{name} IS NOT NULL"))
+            .collect();
+        (
+            names.clone(),
+            format!(
+                "FROM {from} WHERE {} GROUP BY {} HAVING COUNT(*) > 1",
+                present.join(" AND "),
+                names.join(", ")
+            ),
+        )
+    };
+    match check {
+        CheckQuery::Counts(columns) => {
+            let counts: Vec<String> = std::iter::once(count.clone())
+                .chain(columns.iter().map(|column| {
+                    adapter.render_text_cast(&format!(
+                        "COUNT(*) - COUNT({})",
+                        adapter.render_identifier(column)
+                    ))
+                }))
+                .collect();
+            format!("SELECT {} FROM {from}", counts.join(" || ',' || "))
+        }
+        CheckQuery::Duplicates(columns) => format!(
+            "SELECT {count} FROM (SELECT 1 AS repeated {}) repeated_keys",
+            grouped(columns).1
+        ),
+        CheckQuery::DuplicateExamples(columns) => {
+            let (names, rest) = grouped(columns);
+            let texts: Vec<String> = names
+                .iter()
+                .map(|name| adapter.render_text_cast(name))
+                .collect();
+            format!(
+                "SELECT {} AS example {rest} ORDER BY 1 LIMIT 5",
+                texts.join(" || ', ' || ")
+            )
+        }
+    }
 }

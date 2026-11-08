@@ -6,6 +6,7 @@ use crate::cdc::constants::{
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
+use crate::loader::constants::SNOWFLAKE_SOURCE;
 use crate::loader::models::{
     CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
 };
@@ -15,6 +16,7 @@ use crate::project::models::{
     CdcDeletes, CdcMode, LookbackFrom, MaskMethod, SourceConfig, SourceKind, StateMode,
     TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
+use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::USER_STAGE_FOLDER;
@@ -155,6 +157,12 @@ pub(crate) fn build_spec(
         ),
     };
     problems.extend(column_reference_problems(table, overrides));
+    let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
+    problems.extend(
+        checks
+            .iter()
+            .flat_map(|checks| check_problems(checks, (strategy, context.target.path.is_some()))),
+    );
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
@@ -246,6 +254,7 @@ pub(crate) fn build_spec(
         approved: false,
         tunnel: None,
         new_tables: context.source.new_tables,
+        checks,
         files: None,
         destination_path: context.target.path.as_ref().map(|target_path| {
             overrides
@@ -289,7 +298,7 @@ fn warehouse_source(source: &SourceConfig, overrides: &TableOverride) -> Option<
             ),
         };
         WarehouseSource {
-            system: "snowflake",
+            system: SNOWFLAKE_SOURCE,
             sql: overrides.sql.clone(),
             route: WarehouseRoute::Unload { store, stage },
         }

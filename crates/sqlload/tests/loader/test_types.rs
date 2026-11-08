@@ -761,7 +761,24 @@ pub(crate) struct StoppedLoadTestCase {
     pub(crate) options: sqlload::loader::models::PlanOptions,
     /// The table's state as one text.
     pub(crate) query: &'static str,
-    /// Each source state: the SQL setting it up, and the query's text once it is loaded.
+    /// Each source state: what sets it up (SQL for a database source, `day=id,...` parts for a files source), and the query's text once it is loaded.
     pub(crate) states: [(&'static str, &'static str); 2],
     pub(crate) expected_minimum_stops: usize,
+}
+
+/// A Parquet events file a ClickHouse pull test writes.
+pub(crate) struct EventsFile {
+    pub(crate) key: &'static str,
+    pub(crate) ids: std::ops::RangeInclusive<i64>,
+    pub(crate) note: Option<&'static str>,
+}
+
+/// One load of the ClickHouse pull test: the files written before it, and what it must show.
+pub(crate) struct FilesPullTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) files: Vec<EventsFile>,
+    /// Text the plan holds, or the error the load fails with.
+    pub(crate) expected_plan: Result<&'static str, &'static str>,
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
 }

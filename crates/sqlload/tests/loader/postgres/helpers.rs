@@ -50,6 +50,18 @@ append_cursor_inclusive = false
 [sources.app.tables."public.stores"]
 description = "Test stores."
 write_strategy = "replace"
+
+[sources.app.tables."public.keys_src"]
+description = "Test text cursor, ICU-collated in the source."
+write_strategy = "append"
+cursor_column = "k"
+append_cursor_inclusive = false
+
+[sources.app.tables."public.keys_dst"]
+description = "Test text cursor, ICU-collated in the target."
+write_strategy = "append"
+cursor_column = "k"
+append_cursor_inclusive = false
 "#
     )
 }
@@ -90,4 +102,47 @@ pub(crate) async fn text(client: &Client, query: &str) -> Result<String, String>
         .and_then(|row| row.try_get::<_, Option<String>>(0))
         .map(|value| value.unwrap_or_else(|| "NULL".to_owned()))
         .map_err(|error| format!("{query}: {error}"))
+}
+
+/// The test database's `public` tables loaded through `target`'s connection into its `mart` schema, each with checks.
+pub(crate) fn checks_project_text(port: u16, target: &str) -> String {
+    format!(
+        r#"
+[connections.app_pg]
+kind = "postgres"
+host = "127.0.0.1"
+port = {port}
+user = "sqlload"
+password = "sqlload"
+database = "app"
+
+[connections.local]
+kind = "duckdb"
+database = ":memory:"
+
+[targets.out]
+connection = "{target}"
+loader_schema = "mart"
+
+[sources.app]
+kind = "postgres"
+connection = "app_pg"
+include = ["public.*"]
+table_name = "{{table}}"
+
+[sources.app.tables."public.customers"]
+write_strategy = "replace"
+checks = {{ unique = ["ID"], not_null = ["EMAIL"], min_rows = 1, max_row_drop = "50%" }}
+
+[sources.app.tables."public.events"]
+write_strategy = "append"
+cursor_column = "at"
+append_cursor_inclusive = false
+checks = {{ unique = ["event_id"], not_null = ["kind"] }}
+
+[sources.app.tables."public.tags"]
+write_strategy = "replace"
+checks = {{ min_rows = 5, warn = ["min_rows"] }}
+"#
+    )
 }

@@ -79,3 +79,9 @@ pub const LOCALHOST: &str = "localhost";
 
 /// Why a warehouse source's unloaded files go through SQLLoad rather than straight into the destination.
 pub const UNLOADED_TIMES: &str = "the warehouse writes times and timestamps as whole microseconds (its Parquet writer keeps only milliseconds), which SQLLoad turns back into them";
+
+/// The plan warning for a files table whose checks pull its files through SQLLoad instead of the destination's own read.
+pub const CHECKS_LOADER_WARNING: &str = "checks run on rows SQLLoad stages, so every file goes through the loader rather than the destination's own read, which is slower; without checks the table stays on the direct route.";
+
+/// The `system` of a Snowflake source's tables.
+pub const SNOWFLAKE_SOURCE: &str = "snowflake";

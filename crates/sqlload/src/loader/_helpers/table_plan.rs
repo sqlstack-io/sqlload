@@ -6,6 +6,7 @@ use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
 use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
@@ -25,6 +26,7 @@ use crate::batch_plan::models::WindowSplit;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
+use crate::column_types::models::Warehouse;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::SourceFormat;
@@ -35,7 +37,9 @@ use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
-use crate::loader::constants::{ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES};
+use crate::loader::constants::{
+    CHECKS_LOADER_WARNING, ENFORCED_UNDECLARED_PROBLEM, UNLOADED_TIMES,
+};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
@@ -57,6 +61,7 @@ use crate::project::models::BatchStep;
 use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
+use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
 use crate::routing::models::FileSet;
@@ -394,6 +399,23 @@ fn reload_refusal(spec: &TableSpec, options: &PlanOptions) -> Option<&'static st
     }
 }
 
+/// `schema` blocked when the table's checks name columns it does not load; a Python table's columns are checked once its rows show them.
+fn checked_columns(spec: &TableSpec, schema: SchemaPlan) -> SchemaPlan {
+    let loaded: Vec<String> = schema
+        .write_columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let problems = match (&spec.checks, &spec.python, &schema.blocked) {
+        (Some(checks), None, None) => check_column_problems(checks, &loaded),
+        _ => Vec::new(),
+    };
+    match problems.is_empty() {
+        true => schema,
+        false => blocked_plan(problems),
+    }
+}
+
 /// `schema` with what stops or endangers writing `mode` into the existing table: blocked by its problems, with its warnings added.
 async fn checked_writes(
     destination: &Destination,
@@ -495,10 +517,7 @@ async fn plan_table_once(
         live.iter()
             .any(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
     });
-    let cursor_expression = read_columns
-        .iter()
-        .find(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
-        .map(|column| column.expression.as_str());
+    let cursor_expression = source_cursor(spec, &read_columns, cursor_type);
     let lacks_cursor =
         live.is_some() && cursor_name.is_some() && !cursor_in_table && !options.reload;
     let restart_duplicates = match spec.strategy {
@@ -523,7 +542,7 @@ async fn plan_table_once(
         destination,
         table_exists: cursor_in_table,
         cursor_type,
-        cursor_expression,
+        cursor_expression: cursor_expression.as_deref(),
         options,
     };
     let window = match schema.blocked {
@@ -573,6 +592,7 @@ async fn plan_table_once(
     schema.warnings.extend(resnapshot_warning(spec, options));
     let mode = captured_mode(spec, mode);
     let exists = live.is_some();
+    schema = checked_columns(spec, schema);
     if schema.blocked.is_none() && exists {
         schema = checked_writes(destination, spec, &mode, schema).await?;
     }
@@ -711,13 +731,16 @@ fn reader_offer(
         .filter(|(_, method)| **method == MaskMethod::Hmac)
         .map(|(name, _)| name.as_str())
         .collect();
-    let needs_loader = match (hmac.is_empty(), spec.test_loader_route) {
-        (false, _) => Some(format!(
+    let needs_loader = match (hmac.is_empty(), spec.test_loader_route, &spec.checks) {
+        (false, _, _) => Some(format!(
             "{} masked with hmac, whose key must never appear in SQL",
             hmac.join(", ")
         )),
-        (true, true) => Some("the table sets test_loader_route (tests only)".to_owned()),
-        (true, false) => None,
+        (true, true, _) => Some("the table sets test_loader_route (tests only)".to_owned()),
+        (true, false, Some(_)) => {
+            Some("the table has checks, which run on the rows SQLLoad stages".to_owned())
+        }
+        (true, false, None) => None,
     };
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
@@ -775,6 +798,7 @@ fn hmac_warnings(
     let reads_itself = writer_accepts(destination, stage)
         .reads_files_itself
         .is_some();
+    let checked = reads_itself && spec.files.is_some() && spec.checks.is_some();
     spec.masked
         .columns
         .iter()
@@ -784,6 +808,7 @@ fn hmac_warnings(
                 "{name}: hmac masking pulls every file through the loader (the key must never be in SQL), which is much slower than a direct load. mask = \"hash\" stays on the direct route."
             )
         })
+        .chain(checked.then(|| CHECKS_LOADER_WARNING.to_owned()))
         .collect()
 }
 
@@ -867,6 +892,32 @@ fn write_mode(
             values: Vec::new(),
         },
     }
+}
+
+/// The source expression of `spec`'s cursor among `read_columns`, as its filter compares it: a text cursor bytewise, in code point order, in the source's own dialect (`render_binary_text`), as the destination's maximum is read, whatever collation the source column has; any other cursor, and a source no filter reaches, as it is. `None` when the cursor is not read.
+pub(crate) fn source_cursor(
+    spec: &TableSpec,
+    read_columns: &[ReadColumn],
+    cursor_type: Option<&ColumnType>,
+) -> Option<String> {
+    let name = spec.cursor.as_ref()?.column.as_str();
+    let expression = read_columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(name))?
+        .expression
+        .as_str();
+    let text = matches!(cursor_type, Some(ColumnType::Text | ColumnType::Varchar(_)));
+    let dialect = match (text, &spec.warehouse_source) {
+        (false, _) => None,
+        (true, Some(source)) => source_dialect(source.system),
+        (true, None) => {
+            (spec.python.is_none() && spec.files.is_none()).then_some(Warehouse::Postgres)
+        }
+    };
+    Some(dialect.map_or_else(
+        || expression.to_owned(),
+        |dialect| sql_adapter(dialect).render_binary_text(expression),
+    ))
 }
 
 /// `"column" >= 'from' AND "column" < 'to'` for Postgres, from the bounds that are set.
