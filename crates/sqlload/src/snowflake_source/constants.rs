@@ -19,6 +19,12 @@ pub const USER_STAGE_FOLDER: &str = "@~/sqlload_unload/";
 /// Unloaded files downloaded at once.
 pub const PARALLEL_DOWNLOADS: usize = 8;
 
+/// Unloaded files downloaded at once to a local folder, each written as it arrives rather than held for Arrow, so more go at once.
+pub const PARALLEL_FILE_DOWNLOADS: usize = 16;
+
+/// The name prefix of the local temporary folder an internal-stage unload is downloaded into, so one a killed run leaves behind is easy to find.
+pub const DOWNLOAD_PREFIX: &str = "sqlload-unload-";
+
 /// The session schema; tables are always named with their schema.
 pub const SESSION_SCHEMA: &str = "PUBLIC";
 
