@@ -1,10 +1,13 @@
 //! BigQuery's spelling of each portable type, and the way back from what it reports.
 
+use std::borrow::Cow;
+
 use crate::adapters::bigquery::constants::{
     NUMERIC_DEFAULT, NUMERIC_MAX_INTEGER_DIGITS, NUMERIC_MAX_SCALE,
 };
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
 use crate::column_types::main::array_element::array_element;
+use crate::column_types::main::array_loss::array_loss;
 use crate::column_types::models::{ColumnType, LiveColumnType, WarehouseType};
 
 /// A type BigQuery holds exactly.
@@ -19,7 +22,7 @@ fn exact(sql: impl Into<String>) -> WarehouseType {
 fn lossy(sql: impl Into<String>, reason: &'static str) -> WarehouseType {
     WarehouseType {
         sql: sql.into(),
-        lossy: Some(reason),
+        lossy: Some(Cow::Borrowed(reason)),
     }
 }
 
@@ -61,12 +64,16 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
         ColumnType::Uuid => lossy("STRING", "stored as text"),
         ColumnType::Binary => exact("BYTES"),
         ColumnType::Native(name) => exact(name.clone()),
-        ColumnType::Array(element) => WarehouseType {
-            sql: format!("ARRAY<{}>", logical_type(element).sql),
-            lossy: Some(
-                "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load",
-            ),
-        },
+        ColumnType::Array(element) => {
+            let element = logical_type(element);
+            WarehouseType {
+                sql: format!("ARRAY<{}>", element.sql),
+                lossy: Some(array_loss(
+                    "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load",
+                    element.lossy,
+                )),
+            }
+        }
     }
 }
 

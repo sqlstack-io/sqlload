@@ -1,5 +1,7 @@
 //! DuckDB's spelling of each portable type, and the way back from what it reports.
 
+use std::borrow::Cow;
+
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
 use crate::column_types::main::array_element::array_element;
 use crate::column_types::models::{ColumnType, LiveColumnType, WarehouseType};
@@ -16,7 +18,7 @@ fn exact(sql: impl Into<String>) -> WarehouseType {
 fn lossy(sql: impl Into<String>, reason: &'static str) -> WarehouseType {
     WarehouseType {
         sql: sql.into(),
-        lossy: Some(reason),
+        lossy: Some(Cow::Borrowed(reason)),
     }
 }
 

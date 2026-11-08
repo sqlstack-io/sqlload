@@ -49,7 +49,7 @@ Objects (2)                                         sqlload apply
 │   ├── order_id    int             -> BIGINT
 │   ├── customer_id int             -> BIGINT
 │   ├── order_date  date            -> DATE
-│   ├── placed_at   timestamp_tz    -> TIMESTAMP WITH TIME ZONE
+│   ├── placed_at   timestamp_tz    -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
 │   ├── total       decimal(12,2)   -> DECIMAL(12,2)
 │   ├── items       json            -> JSON
 │   └── + _sqlload_load_id, _loaded_at

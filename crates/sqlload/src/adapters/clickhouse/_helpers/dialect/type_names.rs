@@ -1,7 +1,10 @@
 //! ClickHouse's spelling of each portable type, and the way back from what it reports.
 
+use std::borrow::Cow;
+
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
 use crate::column_types::main::array_element::array_element;
+use crate::column_types::main::array_loss::array_loss;
 use crate::column_types::models::{ColumnType, LiveColumnType, WarehouseType};
 
 /// A type ClickHouse holds exactly, as a `Nullable` column.
@@ -16,7 +19,7 @@ fn exact(sql: &str) -> WarehouseType {
 fn lossy(sql: &str, reason: &'static str) -> WarehouseType {
     WarehouseType {
         sql: format!("Nullable({sql})"),
-        lossy: Some(reason),
+        lossy: Some(Cow::Borrowed(reason)),
     }
 }
 
@@ -62,11 +65,10 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
             let element = logical_type(element);
             WarehouseType {
                 sql: format!("Array({})", element.sql),
-                lossy: Some(
-                    element
-                        .lossy
-                        .unwrap_or("a NULL array loads as an empty one"),
-                ),
+                lossy: Some(array_loss(
+                    "a NULL array loads as an empty one",
+                    element.lossy,
+                )),
             }
         }
     }
