@@ -5472,7 +5472,7 @@ checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
 
 [[package]]
 name = "sqlload"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "aes 0.8.4",
  "arrow-array",
@@ -5538,7 +5538,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-benches"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -5550,7 +5550,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-python"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "arrow-array",
  "arrow-pyarrow",
@@ -5563,7 +5563,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-testkit"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "arrow-array",
  "arrow-cast",
