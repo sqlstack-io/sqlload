@@ -63,11 +63,18 @@ pub struct OauthClient {
     pub http: reqwest::Client,
 }
 
-/// An access token and the refresh token that renews it, each with when it expires (Unix seconds).
+/// A browser sign-in's tokens in one run, and why signing in failed, after which the run asks nobody again.
+#[derive(Debug, Default)]
+pub struct OauthState {
+    pub tokens: Option<OauthTokens>,
+    pub failure: Option<String>,
+}
+
+/// An access token with when to renew it, and the refresh token that renews it with when that expires (Unix seconds).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OauthTokens {
     pub access_token: Secret,
-    pub access_expires_at: u64,
+    pub renew_after: u64,
     pub refresh_token: Option<Secret>,
     pub refresh_expires_at: Option<u64>,
 }
@@ -76,7 +83,7 @@ pub struct OauthTokens {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CachedTokens {
     pub(crate) access_token: String,
-    pub(crate) access_expires_at: u64,
+    pub(crate) renew_after: u64,
     pub(crate) refresh_token: Option<String>,
     pub(crate) refresh_expires_at: Option<u64>,
 }
@@ -90,7 +97,7 @@ enum Method {
     },
     Oauth {
         client: Box<OauthClient>,
-        tokens: tokio::sync::Mutex<Option<OauthTokens>>,
+        tokens: tokio::sync::Mutex<OauthState>,
     },
 }
 
@@ -146,7 +153,7 @@ impl Authenticator {
                     })?,
                     http: build_http_client(&ConnectionCounter::default())?,
                 }),
-                tokens: tokio::sync::Mutex::new(None),
+                tokens: tokio::sync::Mutex::new(OauthState::default()),
             },
         };
         Ok(Self {

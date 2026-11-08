@@ -6,7 +6,8 @@ fn given_a_cache_a_refresh_token_or_a_terminal_when_a_token_is_needed_then_the_b
 -> Result<(), String> {
     let test_cases = [
         TokenLifecycleTestCase {
-            description: "a cached token with time left is used without any request",
+            description: "a cached token before its renewal time is used without any request",
+            held: None,
             cached: Some(("cached-access", 600, Some("refresh-0"))),
             revoked: &[],
             terminal: false,
@@ -18,8 +19,9 @@ fn given_a_cache_a_refresh_token_or_a_terminal_when_a_token_is_needed_then_the_b
             expected_cached_refresh: Some("refresh-0"),
         },
         TokenLifecycleTestCase {
-            description: "a token with under a minute left is refreshed, and the rotated refresh token is cached",
-            cached: Some(("cached-access", 30, Some("refresh-0"))),
+            description: "a token past its renewal time is refreshed, and the rotated refresh token is cached",
+            held: None,
+            cached: Some(("cached-access", -1, Some("refresh-0"))),
             revoked: &[],
             terminal: false,
             browser: false,
@@ -30,7 +32,34 @@ fn given_a_cache_a_refresh_token_or_a_terminal_when_a_token_is_needed_then_the_b
             expected_cached_refresh: Some("refresh-1"),
         },
         TokenLifecycleTestCase {
+            description: "a refresh token Snowflake does not rotate is kept",
+            held: None,
+            cached: Some(("cached-access", -1, Some("fixed-0"))),
+            revoked: &[],
+            terminal: false,
+            browser: false,
+            username: "LOADER",
+            refusal: None,
+            expected_outcome: "access-1",
+            expected_grants: &["refresh_token"],
+            expected_cached_refresh: Some("fixed-0"),
+        },
+        TokenLifecycleTestCase {
+            description: "newer tokens another connection cached replace stale ones held, so a used refresh token is never sent",
+            held: Some(("held-access", -1, Some("refresh-0"))),
+            cached: Some(("cached-access", 600, Some("refresh-9"))),
+            revoked: &["refresh-0"],
+            terminal: false,
+            browser: false,
+            username: "LOADER",
+            refusal: None,
+            expected_outcome: "cached-access",
+            expected_grants: &[],
+            expected_cached_refresh: Some("refresh-9"),
+        },
+        TokenLifecycleTestCase {
             description: "a refused refresh token without a terminal fails at once, naming the unattended methods",
+            held: None,
             cached: Some(("cached-access", -5, Some("refresh-0"))),
             revoked: &["refresh-0"],
             terminal: false,
@@ -43,6 +72,7 @@ fn given_a_cache_a_refresh_token_or_a_terminal_when_a_token_is_needed_then_the_b
         },
         TokenLifecycleTestCase {
             description: "nothing cached and no terminal fails without a request",
+            held: None,
             cached: None,
             revoked: &[],
             terminal: false,
@@ -54,7 +84,8 @@ fn given_a_cache_a_refresh_token_or_a_terminal_when_a_token_is_needed_then_the_b
             expected_cached_refresh: None,
         },
         TokenLifecycleTestCase {
-            description: "a refused refresh token at a terminal signs in through the browser's redirect",
+            description: "a refused refresh token at a terminal signs in through the browser's redirect, past forged ones",
+            held: None,
             cached: Some(("cached-access", -5, Some("refresh-0"))),
             revoked: &["refresh-0"],
             terminal: true,
@@ -67,6 +98,7 @@ fn given_a_cache_a_refresh_token_or_a_terminal_when_a_token_is_needed_then_the_b
         },
         TokenLifecycleTestCase {
             description: "with no browser, the pasted address signs in",
+            held: None,
             cached: None,
             revoked: &[],
             terminal: true,
@@ -79,6 +111,7 @@ fn given_a_cache_a_refresh_token_or_a_terminal_when_a_token_is_needed_then_the_b
         },
         TokenLifecycleTestCase {
             description: "signing in as another user is refused, and nothing is cached",
+            held: None,
             cached: None,
             revoked: &[],
             terminal: true,
@@ -91,6 +124,7 @@ fn given_a_cache_a_refresh_token_or_a_terminal_when_a_token_is_needed_then_the_b
         },
         TokenLifecycleTestCase {
             description: "Snowflake's own refusal in the redirect is reported, with no code exchanged",
+            held: None,
             cached: None,
             revoked: &[],
             terminal: true,
@@ -121,7 +155,12 @@ fn given_a_cache_a_refresh_token_or_a_terminal_when_a_token_is_needed_then_the_b
             "{}",
             test_case.description
         );
-        assert!(found.pkce_matches, "{}: PKCE", test_case.description);
+        assert_eq!(
+            found.repeated,
+            (found.outcome.clone(), test_case.expected_grants.len()),
+            "{}: asking again reuses the token, or the run's sign-in failure, without another request",
+            test_case.description
+        );
     }
     Ok(())
 }

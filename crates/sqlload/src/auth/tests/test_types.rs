@@ -3,7 +3,9 @@ use std::collections::BTreeSet;
 /// A token needed with what the cache, the fake Snowflake and the terminal hold.
 pub(crate) struct TokenLifecycleTestCase {
     pub(crate) description: &'static str,
-    /// The cached access token, its seconds left, and its refresh token.
+    /// The access token this connection already holds, its seconds until renewal, and its refresh token.
+    pub(crate) held: Option<(&'static str, i64, Option<&'static str>)>,
+    /// The cached access token, its seconds until renewal, and its refresh token.
     pub(crate) cached: Option<(&'static str, i64, Option<&'static str>)>,
     /// Refresh tokens Snowflake refuses.
     pub(crate) revoked: &'static [&'static str],
@@ -53,8 +55,8 @@ pub(crate) struct TokenCacheTestCase {
 pub(crate) struct FakeOauth {
     /// The grant type of every token request, in order.
     pub(crate) grants: Vec<String>,
-    /// The last code exchange's verifier.
-    pub(crate) verifier: String,
+    /// The last authorization request's PKCE challenge, which a code exchange's verifier must match.
+    pub(crate) challenge: String,
     pub(crate) revoked: BTreeSet<String>,
     pub(crate) username: String,
     pub(crate) refusal: Option<String>,
@@ -67,8 +69,15 @@ pub(crate) struct LifecycleOutcome {
     pub(crate) outcome: String,
     pub(crate) grants: Vec<String>,
     pub(crate) cached_refresh: Option<String>,
-    /// Whether the verifier sent with the code hashes to the challenge in the address the browser was asked to open.
-    pub(crate) pkce_matches: bool,
+    /// What asking a second time gave, and how many token requests had been made by then.
+    pub(crate) repeated: (String, usize),
+}
+
+/// When to renew an access token issued at second 1000.
+pub(crate) struct RenewAfterTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) lifetime: Option<u64>,
+    pub(crate) expected_renew_after: u64,
 }
 
 /// A PKCE verifier and the S256 challenge it gives.

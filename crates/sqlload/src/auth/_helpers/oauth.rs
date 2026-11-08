@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::_helpers::sign_in::{SignInIo, sign_in};
 use crate::auth::_helpers::token_cache::{read_cached, write_cached};
-use crate::auth::constants::OAUTH_REFRESH_MARGIN_SECS;
+use crate::auth::constants::{DEFAULT_ACCESS_LIFETIME_SECS, OAUTH_REFRESH_MARGIN_SECS};
 use crate::auth::errors::TokenError;
-use crate::auth::models::{OauthClient, OauthTokens, Secret};
+use crate::auth::models::{OauthClient, OauthState, OauthTokens, Secret};
 use crate::http::errors::ApiError;
 use crate::time_text::main::now_ms::now_ms;
 
@@ -83,36 +83,58 @@ pub(crate) fn authorize_url(
     Ok(url.into())
 }
 
-/// The authorization code in the address the sign-in redirected to (a full URL, or its path and query), checked against `state`; Snowflake's own error when it sent one.
-pub(crate) fn redirect_code(redirected: &str, state: &str) -> Result<String, ApiError> {
+/// The address the sign-in ended on, as a URL: a full URL, or its path and query.
+fn redirect_url(redirected: &str) -> Result<reqwest::Url, ApiError> {
     let trimmed = redirected.trim();
     let absolute = match trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         true => trimmed.to_owned(),
         false => format!("http://127.0.0.1/{}", trimmed.trim_start_matches('/')),
     };
-    let url = reqwest::Url::parse(&absolute).map_err(|error| {
+    reqwest::Url::parse(&absolute).map_err(|error| {
         ApiError::Auth(format!(
             "that is not the address the sign-in ended on: {error}"
         ))
-    })?;
-    let value = |name: &str| {
-        url.query_pairs()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.into_owned())
+    })
+}
+
+/// `name`'s value in `url`'s query.
+fn query_value(url: &reqwest::Url, name: &str) -> Option<String> {
+    url.query_pairs()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.into_owned())
+}
+
+/// The `state` the address a sign-in ended on carries, if any.
+pub(crate) fn redirect_state(redirected: &str) -> Option<String> {
+    match redirect_url(redirected) {
+        Ok(url) => query_value(&url, "state"),
+        Err(_) => None,
+    }
+}
+
+/// The authorization code in the address the sign-in redirected to, checked against `state`; Snowflake's own error when it sent one, with control characters dropped so it cannot drive the terminal.
+pub(crate) fn redirect_code(redirected: &str, state: &str) -> Result<String, ApiError> {
+    let url = redirect_url(redirected)?;
+    let printable = |text: String| -> String {
+        text.chars()
+            .filter(|character| !character.is_control())
+            .collect()
     };
-    if let Some(error) = value("error") {
-        let description = value("error_description").unwrap_or_default();
+    if let Some(error) = query_value(&url, "error") {
+        let description = query_value(&url, "error_description").unwrap_or_default();
         return Err(ApiError::Auth(format!(
-            "Snowflake refused the sign-in: {error} {description}"
+            "Snowflake refused the sign-in: {} {}",
+            printable(error),
+            printable(description)
         )));
     }
-    if value("state").as_deref() != Some(state) {
+    if query_value(&url, "state").as_deref() != Some(state) {
         return Err(ApiError::Auth(
             "the sign-in came back for another request (state does not match); sign in again"
                 .to_owned(),
         ));
     }
-    value("code").ok_or_else(|| {
+    query_value(&url, "code").ok_or_else(|| {
         ApiError::Auth("the address the sign-in ended on has no code= in it".to_owned())
     })
 }
@@ -175,7 +197,7 @@ fn tokens_from(client: &OauthClient, body: &serde_json::Value) -> Result<OauthTo
     let now = now_secs();
     Ok(OauthTokens {
         access_token: Secret(access_token.to_owned()),
-        access_expires_at: now + body["expires_in"].as_u64().unwrap_or(0),
+        renew_after: renew_after(now, body["expires_in"].as_u64()),
         refresh_token: body["refresh_token"]
             .as_str()
             .map(|token| Secret(token.to_owned())),
@@ -185,65 +207,100 @@ fn tokens_from(client: &OauthClient, body: &serde_json::Value) -> Result<OauthTo
     })
 }
 
-/// The access token to send now: the one held or cached while it has more than a minute left, else one renewed with the refresh token (keeping the refresh token when Snowflake sends no new one), else one from a new browser sign-in. Every new token is cached; only a refused refresh falls through to signing in.
+/// The access token to send now. In order: the one held, while its renewal time has not come; newer tokens another connection or process cached; one renewed with the refresh token (keeping the refresh token when Snowflake sends no new one); one from a new browser sign-in. Every new token is cached. Only a refused refresh falls through to signing in, and a failed sign-in fails every later request of the run at once, so nobody is asked twice.
 pub(crate) async fn fresh_access_token(
     client: &OauthClient,
-    tokens: &tokio::sync::Mutex<Option<OauthTokens>>,
+    state: &tokio::sync::Mutex<OauthState>,
     io: &SignInIo,
 ) -> Result<String, ApiError> {
-    let mut held = tokens.lock().await;
+    let mut held = state.lock().await;
+    if let Some(failure) = &held.failure {
+        return Err(ApiError::Auth(failure.clone()));
+    }
     let now = now_secs();
-    if held.is_none() {
-        *held = read_cached(client);
+    if let Some(access) = usable_access(held.tokens.as_ref(), now) {
+        return Ok(access);
     }
-    if let Some(current) = held.as_ref()
-        && current.access_expires_at > now + OAUTH_REFRESH_MARGIN_SECS
-    {
-        return Ok(current.access_token.expose().to_owned());
-    }
-    let refresh = held.as_ref().and_then(|current| {
-        current.refresh_token.clone().filter(|_| {
-            current
-                .refresh_expires_at
-                .is_none_or(|expires| expires > now)
-        })
+    let newer = read_cached(client).filter(|cached| {
+        held.tokens
+            .as_ref()
+            .is_none_or(|current| cached.renew_after > current.renew_after)
     });
-    let refreshed = match refresh {
-        Some(refresh) => match token_request(
-            client,
-            &[
-                ("grant_type", "refresh_token"),
-                ("refresh_token", refresh.expose()),
-            ],
-        )
-        .await
-        {
-            Ok(mut renewed) => {
-                if renewed.refresh_token.is_none() {
-                    renewed.refresh_token = Some(refresh);
-                    renewed.refresh_expires_at =
-                        held.as_ref().and_then(|current| current.refresh_expires_at);
-                }
-                Some(renewed)
-            }
-            Err(TokenError::Refused(reason)) => {
-                tracing::info!(%reason, "Snowflake refused the cached refresh token; signing in again");
-                None
-            }
-            Err(TokenError::Failed(error)) => return Err(error),
-        },
-        None => None,
-    };
+    if newer.is_some() {
+        held.tokens = newer;
+    }
+    if let Some(access) = usable_access(held.tokens.as_ref(), now) {
+        return Ok(access);
+    }
+    let refreshed = refresh(client, held.tokens.as_ref(), now).await?;
     let renewed = match refreshed {
         Some(renewed) => renewed,
-        None => sign_in(client, io).await?,
+        None => match sign_in(client, io).await {
+            Ok(signed_in) => signed_in,
+            Err(error) => {
+                held.failure = Some(error.to_string());
+                return Err(error);
+            }
+        },
     };
     if let Err(error) = write_cached(client, &renewed) {
         tracing::warn!(%error, "cannot cache the Snowflake sign-in; the next run signs in again");
     }
     let access = renewed.access_token.expose().to_owned();
-    *held = Some(renewed);
+    held.tokens = Some(renewed);
     Ok(access)
+}
+
+/// The access token of `tokens` while its renewal time has not come.
+fn usable_access(tokens: Option<&OauthTokens>, now: u64) -> Option<String> {
+    tokens
+        .filter(|current| current.renew_after > now)
+        .map(|current| current.access_token.expose().to_owned())
+}
+
+/// Tokens renewed with the refresh token of `current`, keeping it when Snowflake sends no new one; `None` when there is no unexpired refresh token or Snowflake refused it.
+async fn refresh(
+    client: &OauthClient,
+    current: Option<&OauthTokens>,
+    now: u64,
+) -> Result<Option<OauthTokens>, ApiError> {
+    let Some((refresh, expires)) = current.and_then(|current| {
+        current
+            .refresh_token
+            .clone()
+            .filter(|_| {
+                current
+                    .refresh_expires_at
+                    .is_none_or(|expires| expires > now)
+            })
+            .map(|token| (token, current.refresh_expires_at))
+    }) else {
+        return Ok(None);
+    };
+    let grant = [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh.expose()),
+    ];
+    match token_request(client, &grant).await {
+        Ok(mut renewed) => {
+            if renewed.refresh_token.is_none() {
+                renewed.refresh_token = Some(refresh);
+                renewed.refresh_expires_at = expires;
+            }
+            Ok(Some(renewed))
+        }
+        Err(TokenError::Refused(reason)) => {
+            tracing::info!(%reason, "Snowflake refused the cached refresh token; signing in again");
+            Ok(None)
+        }
+        Err(TokenError::Failed(error)) => Err(error),
+    }
+}
+
+/// When to renew an access token issued at `now` for `lifetime` seconds (Snowflake's default of 600 when not given): a minute before it expires, or halfway through for a token of under two minutes.
+pub(crate) fn renew_after(now: u64, lifetime: Option<u64>) -> u64 {
+    let lifetime = lifetime.unwrap_or(DEFAULT_ACCESS_LIFETIME_SECS);
+    now + lifetime - (lifetime / 2).min(OAUTH_REFRESH_MARGIN_SECS)
 }
 
 /// Now, in Unix seconds.

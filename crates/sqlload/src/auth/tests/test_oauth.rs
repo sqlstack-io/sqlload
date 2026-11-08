@@ -1,5 +1,7 @@
-use crate::auth::_helpers::oauth::{challenge, redirect_code, scope};
-use crate::auth::tests::test_types::{ChallengeTestCase, RedirectCodeTestCase, ScopeTestCase};
+use crate::auth::_helpers::oauth::{challenge, redirect_code, renew_after, scope};
+use crate::auth::tests::test_types::{
+    ChallengeTestCase, RedirectCodeTestCase, RenewAfterTestCase, ScopeTestCase,
+};
 
 #[test]
 fn given_a_pkce_verifier_when_deriving_its_challenge_then_it_is_the_s256_challenge() {
@@ -42,6 +44,11 @@ fn given_where_a_sign_in_ended_when_reading_its_code_then_only_a_code_for_this_r
             expected_outcome: "Snowflake refused the sign-in: invalid_scope no such role",
         },
         RedirectCodeTestCase {
+            description: "control characters in Snowflake's error never reach the terminal",
+            redirected: "/?error=bad%1B%5B2J&error_description=x%07y",
+            expected_outcome: "Snowflake refused the sign-in: bad[2J xy",
+        },
+        RedirectCodeTestCase {
             description: "an address without a code",
             redirected: "http://127.0.0.1:49152/?state=s1",
             expected_outcome: "has no code= in it",
@@ -81,6 +88,36 @@ fn given_a_configured_role_when_asking_for_a_scope_then_the_role_is_named_as_sno
         assert_eq!(
             scope(test_case.role),
             test_case.expected_scope,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_an_access_tokens_lifetime_when_planning_its_renewal_then_it_is_renewed_before_it_expires_but_not_on_every_request()
+ {
+    let test_cases = [
+        RenewAfterTestCase {
+            description: "the default ten minutes: a minute early",
+            lifetime: Some(600),
+            expected_renew_after: 1540,
+        },
+        RenewAfterTestCase {
+            description: "no lifetime given: Snowflake's default",
+            lifetime: None,
+            expected_renew_after: 1540,
+        },
+        RenewAfterTestCase {
+            description: "a one-minute token: halfway through, not at once",
+            lifetime: Some(60),
+            expected_renew_after: 1030,
+        },
+    ];
+    for test_case in &test_cases {
+        assert_eq!(
+            renew_after(1000, test_case.lifetime),
+            test_case.expected_renew_after,
             "{}",
             test_case.description
         );

@@ -42,7 +42,7 @@ pub(crate) fn read_cached(client: &OauthClient) -> Option<OauthTokens> {
     let cached = read_file(&client.cache_file).remove(&cache_key(client))?;
     Some(OauthTokens {
         access_token: Secret(cached.access_token),
-        access_expires_at: cached.access_expires_at,
+        renew_after: cached.renew_after,
         refresh_token: cached.refresh_token.map(Secret),
         refresh_expires_at: cached.refresh_expires_at,
     })
@@ -56,7 +56,7 @@ pub(crate) fn write_cached(client: &OauthClient, tokens: &OauthTokens) -> Result
         cache_key(client),
         CachedTokens {
             access_token: tokens.access_token.expose().to_owned(),
-            access_expires_at: tokens.access_expires_at,
+            renew_after: tokens.renew_after,
             refresh_token: tokens
                 .refresh_token
                 .as_ref()
@@ -70,7 +70,11 @@ pub(crate) fn write_cached(client: &OauthClient, tokens: &OauthTokens) -> Result
         .ok_or_else(|| format!("{} has no folder", path.display()))?;
     create_private_folder(folder)
         .map_err(|error| format!("cannot create {}: {error}", folder.display()))?;
-    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    let temporary = path.with_extension(format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    ));
     write_private(&temporary, text.as_bytes())
         .and_then(|()| std::fs::rename(&temporary, path))
         .map_err(|error| {

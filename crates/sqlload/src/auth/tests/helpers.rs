@@ -11,7 +11,7 @@ use axum::routing::{get, post};
 use crate::auth::_helpers::oauth::{challenge, fresh_access_token, now_secs};
 use crate::auth::_helpers::sign_in::SignInIo;
 use crate::auth::_helpers::token_cache::{read_cached, write_cached};
-use crate::auth::models::{OauthClient, OauthTokens, Secret};
+use crate::auth::models::{OauthClient, OauthState, OauthTokens, Secret};
 use crate::auth::tests::test_types::{FakeOauth, LifecycleOutcome, TokenLifecycleTestCase};
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
@@ -43,11 +43,11 @@ pub(crate) fn test_client(base: &str, file: &Path, user: &str) -> Result<OauthCl
     })
 }
 
-/// Tokens whose access token has `left` seconds to go.
+/// Tokens whose access token is due for renewal in `left` seconds.
 pub(crate) fn tokens(access: &str, left: i64, refresh: Option<&str>) -> OauthTokens {
     OauthTokens {
         access_token: Secret(access.to_owned()),
-        access_expires_at: now_secs().saturating_add_signed(left),
+        renew_after: now_secs().saturating_add_signed(left),
         refresh_token: refresh.map(|token| Secret(token.to_owned())),
         refresh_expires_at: None,
     }
@@ -74,32 +74,44 @@ pub(crate) async fn lifecycle(
         .cached
         .map(|(access, left, refresh)| write_cached(&client, &tokens(access, left, refresh)))
         .transpose()?;
-    let (io, opened) = fake_io(test_case.terminal, test_case.browser)?;
-    let held = tokio::sync::Mutex::new(None);
-    let outcome = fresh_access_token(&client, &held, &io)
+    let io = fake_io(test_case.terminal, test_case.browser, fake.clone())?;
+    let state = tokio::sync::Mutex::new(OauthState {
+        tokens: test_case
+            .held
+            .map(|(access, left, refresh)| tokens(access, left, refresh)),
+        failure: None,
+    });
+    let outcome = fresh_access_token(&client, &state, &io)
         .await
         .unwrap_or_else(|error| error.to_string());
+    let grants = fake
+        .lock()
+        .map(|fake| fake.grants.clone())
+        .map_err(|error| error.to_string())?;
     let cached_refresh = read_cached(&client)
         .and_then(|cached| cached.refresh_token)
         .map(|token| token.expose().to_owned());
-    let fake = fake.lock().map_err(|error| error.to_string())?;
-    let opened = opened.lock().map(|url| url.clone()).unwrap_or_default();
-    let sent = query_pairs(opened.split_once('?').map_or("", |(_, query)| query));
-    let sent_challenge = sent.get("code_challenge").cloned().unwrap_or_default();
+    let repeated = fresh_access_token(&client, &state, &io)
+        .await
+        .unwrap_or_else(|error| error.to_string());
+    let requests = fake
+        .lock()
+        .map(|fake| fake.grants.len())
+        .map_err(|error| error.to_string())?;
     Ok(LifecycleOutcome {
         outcome,
-        grants: fake.grants.clone(),
+        grants,
         cached_refresh,
-        pkce_matches: fake.verifier.is_empty() || challenge(&fake.verifier) == sent_challenge,
+        repeated: (repeated, requests),
     })
 }
 
-/// A terminal that is there or not; a browser that follows the sign-in to its redirect, or none, in which case the read line is the address the fake would redirect to; and the last address the browser was asked to open.
-fn fake_io(terminal: bool, browser: bool) -> Result<(SignInIo, Arc<Mutex<String>>), String> {
+/// A terminal that is there or not; a browser that, after two forged redirects as another local process could send (another sign-in's state, and an error with no state), follows the sign-in to its redirect; or none, in which case the read line is the address the fake would redirect to, after the person opened the sign-in elsewhere.
+fn fake_io(terminal: bool, browser: bool, fake: Shared) -> Result<SignInIo, String> {
     let http =
         build_http_client(&ConnectionCounter::default()).map_err(|error| error.to_string())?;
     let seen = Arc::new(Mutex::new(String::new()));
-    let (opened, pasted) = (seen.clone(), seen.clone());
+    let (opened, pasted) = (seen.clone(), seen);
     let io = SignInIo {
         terminal: Box::new(move || terminal),
         open_browser: Box::new(move |url| {
@@ -108,8 +120,21 @@ fn fake_io(terminal: bool, browser: bool) -> Result<(SignInIo, Arc<Mutex<String>
                 .into_iter()
                 .for_each(|mut last| url.clone_into(&mut last));
             let (http, url) = (http.clone(), url.to_owned());
-            let _following =
-                browser.then(|| tokio::spawn(async move { http.get(url).send().await }));
+            let _following = browser.then(|| {
+                tokio::spawn(async move {
+                    let query = query_pairs(url.split_once('?').map_or("", |(_, query)| query));
+                    let redirect = query.get("redirect_uri").cloned().unwrap_or_default();
+                    let _forged = http
+                        .get(format!("{redirect}?code=evil&state=other"))
+                        .send()
+                        .await;
+                    let _unstated = http
+                        .get(format!("{redirect}?error=access_denied"))
+                        .send()
+                        .await;
+                    http.get(url).send().await
+                })
+            });
             browser
         }),
         read_line: Box::new(move || {
@@ -117,10 +142,14 @@ fn fake_io(terminal: bool, browser: bool) -> Result<(SignInIo, Arc<Mutex<String>
             let query = query_pairs(url.split_once('?').map_or("", |(_, query)| query));
             let redirect = query.get("redirect_uri").cloned().unwrap_or_default();
             let state = query.get("state").cloned().unwrap_or_default();
+            let challenge = query.get("code_challenge").cloned().unwrap_or_default();
+            fake.lock()
+                .into_iter()
+                .for_each(|mut fake| fake.challenge.clone_from(&challenge));
             Ok(format!("{redirect}?code=fake-code&state={state}\n"))
         }),
     };
-    Ok((io, seen))
+    Ok(io)
 }
 
 /// Serve the fake's authorization and token endpoints on a free local port.
@@ -137,12 +166,13 @@ async fn start_fake_oauth(state: Shared) -> Result<String, String> {
     Ok(format!("http://{address}"))
 }
 
-/// Redirect back with a code, or with the refusal.
+/// Record the PKCE challenge and redirect back with a code, or with the refusal.
 async fn authorize(State(state): State<Shared>, uri: Uri) -> Response {
     let query = query_pairs(uri.query().unwrap_or_default());
-    let Ok(fake) = state.lock() else {
+    let Ok(mut fake) = state.lock() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
+    fake.challenge = query.get("code_challenge").cloned().unwrap_or_default();
     let redirect = query.get("redirect_uri").cloned().unwrap_or_default();
     let returned = query.get("state").cloned().unwrap_or_default();
     let answer = fake.refusal.as_ref().map_or_else(
@@ -156,7 +186,7 @@ async fn authorize(State(state): State<Shared>, uri: Uri) -> Response {
         .into_response()
 }
 
-/// Exchange the fake code or a refresh token that is not revoked for new tokens.
+/// Exchange the fake code with the verifier of the last challenge, or a refresh token that is not revoked, for new tokens; a refresh token starting `fixed-` is not rotated, so the answer carries none.
 async fn token_request(State(state): State<Shared>, body: String) -> Response {
     let form = query_pairs(&body);
     let Ok(mut fake) = state.lock() else {
@@ -167,10 +197,15 @@ async fn token_request(State(state): State<Shared>, body: String) -> Response {
     let refused = form
         .get("refresh_token")
         .is_some_and(|token| fake.revoked.contains(token))
-        || form.get("code").is_some_and(|code| code != "fake-code");
-    form.get("code_verifier")
-        .into_iter()
-        .for_each(|verifier| verifier.clone_into(&mut fake.verifier));
+        || form.get("code").is_some_and(|code| {
+            let verified = form
+                .get("code_verifier")
+                .is_some_and(|verifier| challenge(verifier) == fake.challenge);
+            code != "fake-code" || !verified
+        });
+    let rotates = !form
+        .get("refresh_token")
+        .is_some_and(|token| token.starts_with("fixed-"));
     fake.issued += u32::from(!refused);
     let issued = fake.issued;
     let username = fake.username.clone();
@@ -179,7 +214,7 @@ async fn token_request(State(state): State<Shared>, body: String) -> Response {
             serde_json::json!({
                 "access_token": format!("access-{issued}"),
                 "expires_in": 600,
-                "refresh_token": format!("refresh-{issued}"),
+                "refresh_token": rotates.then(|| format!("refresh-{issued}")),
                 "token_type": "Bearer",
                 "username": username,
             })

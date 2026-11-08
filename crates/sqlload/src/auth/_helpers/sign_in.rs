@@ -5,12 +5,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 
-use crate::auth::_helpers::oauth::{authorize_url, new_pkce, redirect_code, token_request};
+use crate::auth::_helpers::oauth::{
+    authorize_url, new_pkce, redirect_code, redirect_state, token_request,
+};
 use crate::auth::constants::{
-    LOOPBACK_HOST, LOOPBACK_SCHEME, REDIRECT_REQUEST_LIMIT, SIGN_IN_FAILED_PAGE,
-    SIGN_IN_TIMEOUT_SECS, SIGNED_IN_PAGE,
+    BROWSER_CHECK_MILLIS, BROWSER_CHECKS, LOOPBACK_HOST, LOOPBACK_SCHEME, NOT_THIS_SIGN_IN_PAGE,
+    REDIRECT_READ_TIMEOUT_SECS, REDIRECT_REQUEST_LIMIT, SIGN_IN_FAILED_PAGE, SIGN_IN_TIMEOUT_SECS,
+    SIGNED_IN_PAGE,
 };
 use crate::auth::errors::TokenError;
 use crate::auth::models::{OauthClient, OauthTokens};
@@ -62,7 +66,7 @@ pub(crate) async fn sign_in(client: &OauthClient, io: &SignInIo) -> Result<Oauth
             say("Waiting for the browser to finish signing in...");
             tokio::time::timeout(
                 Duration::from_secs(SIGN_IN_TIMEOUT_SECS),
-                receive_redirect(&listener),
+                receive_redirect(&listener, &pkce.state),
             )
             .await
             .map_err(|_| {
@@ -137,71 +141,100 @@ async fn loopback(configured: Option<&str>) -> Result<(TcpListener, String), Api
     Ok((listener, uri))
 }
 
-/// The path and query of the first request to `listener` that carries a code or an error, answered with a page saying to return to the terminal; other requests (a favicon) get a 404.
-async fn receive_redirect(listener: &TcpListener) -> Result<String, ApiError> {
+/// The path and query of the first request to `listener` that carries this sign-in's `state`. Each connection is read on its own task with a time limit, so one that sends nothing or garbage holds nothing up; a request for another sign-in or with no state (another local process, or a web page probing the port) gets a 400 and is otherwise ignored.
+async fn receive_redirect(listener: &TcpListener, state: &str) -> Result<String, ApiError> {
+    let (found, mut received) = mpsc::channel::<String>(1);
     loop {
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .map_err(|error| ApiError::Auth(format!("the sign-in redirect failed: {error}")))?;
-        let mut request: Vec<u8> = Vec::new();
-        let mut buffer = [0_u8; 2048];
-        while !request.windows(4).any(|window| window == b"\r\n\r\n")
-            && request.len() < REDIRECT_REQUEST_LIMIT
-        {
-            let read = stream
-                .read(&mut buffer)
-                .await
-                .map_err(|error| ApiError::Auth(format!("the sign-in redirect failed: {error}")))?;
-            if read == 0 {
-                break;
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _) = accepted.map_err(|error| {
+                    ApiError::Auth(format!("the sign-in redirect failed: {error}"))
+                })?;
+                tokio::spawn(answer_redirect(stream, state.to_owned(), found.clone()));
             }
-            request.extend_from_slice(&buffer[..read]);
-        }
-        let text = String::from_utf8_lossy(&request);
-        let target = text
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .unwrap_or_default()
-            .to_owned();
-        let (status, page) = match (target.contains("code="), target.contains("error=")) {
-            (_, true) => ("200 OK", SIGN_IN_FAILED_PAGE),
-            (true, false) => ("200 OK", SIGNED_IN_PAGE),
-            (false, false) => ("404 Not Found", ""),
-        };
-        let response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
-            page.len()
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
-        let _ = stream.shutdown().await;
-        if !page.is_empty() {
-            return Ok(target);
+            Some(target) = received.recv() => return Ok(target),
         }
     }
 }
 
-/// Open `url` in the person's browser; false where there is none to open (SSH without a display) or opening failed.
+/// Answer one connection to the sign-in listener, and pass its request target on when it carries this sign-in's `state`.
+async fn answer_redirect(mut stream: TcpStream, state: String, found: mpsc::Sender<String>) {
+    let read = tokio::time::timeout(
+        Duration::from_secs(REDIRECT_READ_TIMEOUT_SECS),
+        request_target(&mut stream),
+    )
+    .await;
+    let Ok(Ok(target)) = read else {
+        return;
+    };
+    let ours = redirect_state(&target).as_deref() == Some(state.as_str());
+    let (status, page) = match (ours, target.contains("error=")) {
+        (false, _) => ("400 Bad Request", NOT_THIS_SIGN_IN_PAGE),
+        (true, true) => ("200 OK", SIGN_IN_FAILED_PAGE),
+        (true, false) => ("200 OK", SIGNED_IN_PAGE),
+    };
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
+        page.len()
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.shutdown().await;
+    if ours {
+        let _ = found.send(target).await;
+    }
+}
+
+/// The target (path and query) of the HTTP request on `stream`, read up to the end of its headers or `REDIRECT_REQUEST_LIMIT` bytes.
+async fn request_target(stream: &mut TcpStream) -> std::io::Result<String> {
+    let mut request: Vec<u8> = Vec::new();
+    let mut buffer = [0_u8; 2048];
+    while !request.windows(4).any(|window| window == b"\r\n\r\n")
+        && request.len() < REDIRECT_REQUEST_LIMIT
+    {
+        let read = stream.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+    }
+    let text = String::from_utf8_lossy(&request);
+    Ok(text
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or_default()
+        .to_owned())
+}
+
+/// Open `url` in the person's browser without waiting for the browser itself: true once the opener exits successfully or is still running after about two seconds; false where there is no browser to open (an SSH session without a forwarded display) or the opener failed.
 fn open_browser(url: &str) -> bool {
-    let has_display = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    let has = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    let remote = has("SSH_CONNECTION") || has("SSH_TTY");
     let (program, arguments): (&str, Vec<&str>) = match std::env::consts::OS {
-        "macos" if !has_display("SSH_CONNECTION") => ("open", vec![url]),
-        "windows" => ("rundll32", vec!["url.dll,FileProtocolHandler", url]),
-        "linux" | "freebsd" | "openbsd" | "netbsd"
-            if has_display("DISPLAY") || has_display("WAYLAND_DISPLAY") =>
-        {
+        "macos" if !remote => ("open", vec![url]),
+        "windows" if !remote => ("rundll32", vec!["url.dll,FileProtocolHandler", url]),
+        "linux" | "freebsd" | "openbsd" | "netbsd" if has("DISPLAY") || has("WAYLAND_DISPLAY") => {
             ("xdg-open", vec![url])
         }
         _ => return false,
     };
-    std::process::Command::new(program)
+    let Ok(mut opener) = std::process::Command::new(program)
         .args(arguments)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .spawn()
+    else {
+        return false;
+    };
+    for _ in 0..BROWSER_CHECKS {
+        match opener.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => std::thread::sleep(Duration::from_millis(BROWSER_CHECK_MILLIS)),
+            Err(_) => return false,
+        }
+    }
+    true
 }
 
 /// Tell the person signing in what to do, on stderr so stdout stays the command's output.
