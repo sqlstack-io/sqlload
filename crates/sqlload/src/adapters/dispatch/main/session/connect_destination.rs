@@ -7,6 +7,8 @@ use crate::adapters::databricks::main::session::_connect_databricks::connect_dat
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_open_duckdb::open_duckdb;
+#[cfg(feature = "duckdb")]
+use crate::adapters::duckdb::main::_open_motherduck::open_motherduck;
 use crate::adapters::files::models::FilesDestination;
 use crate::adapters::postgres::main::session::_open_postgres::open_postgres;
 use crate::adapters::snowflake::main::session::_connect_snowflake::connect_snowflake;
@@ -28,8 +30,15 @@ pub async fn connect_destination(
     let destination = match project.connections.get(&target.connection) {
         #[cfg(feature = "duckdb")]
         Some(ConnectionConfig::DuckDb { database }) => Destination::DuckDb(open_duckdb(database)?),
+        #[cfg(feature = "duckdb")]
+        Some(ConnectionConfig::MotherDuck { database, token }) => {
+            Destination::DuckDb(open_motherduck(
+                target.database.as_deref().or(database.as_deref()),
+                token.as_ref(),
+            )?)
+        }
         #[cfg(not(feature = "duckdb"))]
-        Some(ConnectionConfig::DuckDb { .. }) => {
+        Some(ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }) => {
             return Err(LoaderError::Invalid(format!(
                 "target {name:?}: this sqlload was built without DuckDB (cargo feature \"duckdb\")"
             )));

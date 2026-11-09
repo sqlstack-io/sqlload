@@ -33,3 +33,16 @@ pub(crate) struct PulledUnloadedTestCase {
     pub(crate) expected_outcome: &'static str,
     pub(crate) expected_rows: u64,
 }
+
+pub(crate) struct MotherDuckTokenTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) database: Option<&'static str>,
+    pub(crate) expected_error: &'static str,
+}
+
+pub(crate) struct MotherDuckRefusalTestCase {
+    pub(crate) description: &'static str,
+    /// DuckDB's error opening the database.
+    pub(crate) error: String,
+    pub(crate) expected: &'static str,
+}
