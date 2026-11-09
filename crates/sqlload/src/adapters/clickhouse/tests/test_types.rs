@@ -61,3 +61,10 @@ pub(crate) struct ObjectUrlTestCase {
     pub(crate) key: &'static str,
     pub(crate) expected_url: &'static str,
 }
+
+pub(crate) struct TextRowsTestCase {
+    pub(crate) description: &'static str,
+    /// A `JSONCompactStrings` answer.
+    pub(crate) answer: &'static str,
+    pub(crate) expected_rows: &'static [&'static [Option<&'static str>]],
+}
