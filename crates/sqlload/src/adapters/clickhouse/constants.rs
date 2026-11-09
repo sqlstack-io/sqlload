@@ -7,7 +7,6 @@ pub const DEFAULT_HTTPS_PORT: u16 = 8443;
 /// Settings every request runs with, so SQLLoad's SQL behaves the same on every server: statements finish before the next starts, a NULL never becomes a default value, wall-clock timestamps read in UTC (as the Arrow values are sent), one insert may fill any number of partitions (a first load of a long history does), and errors come with the response's status.
 pub const SESSION_SETTINGS: &[(&str, &str)] = &[
     ("mutations_sync", "2"),
-    ("lightweight_deletes_sync", "2"),
     ("insert_null_as_default", "0"),
     ("input_format_null_as_default", "0"),
     ("session_timezone", "UTC"),
@@ -33,7 +32,7 @@ pub const EXCHANGE_UNSUPPORTED_CODES: &[&str] = &["1", "48"];
 /// The error code of a lightweight `DELETE` the server or table refuses (lightweight deletes turned off, or a table with projections that is set to refuse them), which `ALTER TABLE ... DELETE` replaces.
 pub const LIGHTWEIGHT_DELETE_REFUSED_CODE: &str = "344";
 
-/// The setting a lightweight `DELETE` runs with, so it marks rows deleted in the parts that hold them: a patch part, as another mode writes, is not carried by `REPLACE PARTITION`. Servers before ClickHouse 25.5 have no such setting; their copies are rebuilt from the kept rows instead.
+/// The setting a lightweight `DELETE` runs with, so it marks rows deleted in the parts that hold them: a patch part, as another mode writes, is not carried by `REPLACE PARTITION`. Servers before ClickHouse 25.5 have no such setting, and a profile may pin another value; there the copies are rebuilt from the kept rows instead.
 pub const LIGHTWEIGHT_DELETE_MODE: (&str, &str) = ("lightweight_delete_mode", "alter_update");
 
 /// The engine a created table gets when its layout names none.

@@ -107,7 +107,7 @@ async fn replace_or_drop(
         .map(|_| ())
 }
 
-/// Delete `table`'s rows matching `condition` with a lightweight `DELETE`, which only marks them (with [`LIGHTWEIGHT_DELETE_MODE`]), or by rewriting their parts with `ALTER TABLE ... DELETE` where the table refuses one.
+/// Delete `table`'s rows matching `condition` with a lightweight `DELETE`, which only marks them (with [`LIGHTWEIGHT_DELETE_MODE`], and finished before it returns), or by rewriting their parts with `ALTER TABLE ... DELETE` where the table refuses one.
 async fn delete_rows(
     destination: &ClickHouseDestination,
     (table, condition): (&str, &str),
@@ -116,7 +116,7 @@ async fn delete_rows(
         destination,
         None,
         format!(
-            "DELETE FROM {table} WHERE {condition} SETTINGS {} = '{}'",
+            "DELETE FROM {table} WHERE {condition} SETTINGS {} = '{}', lightweight_deletes_sync = 2",
             LIGHTWEIGHT_DELETE_MODE.0, LIGHTWEIGHT_DELETE_MODE.1
         )
         .into_bytes(),

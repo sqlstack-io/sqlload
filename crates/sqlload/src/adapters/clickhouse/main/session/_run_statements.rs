@@ -35,7 +35,7 @@ pub(in crate::adapters) async fn run_statements(
             run_step(destination, statement).await?;
             continue;
         };
-        let partitions = |query: String| async move {
+        let first_values = |query: String| async move {
             let rows = query_rows(destination, &query).await?;
             Ok::<Vec<String>, ApiError>(
                 rows.into_iter()
@@ -43,11 +43,11 @@ pub(in crate::adapters) async fn run_statements(
                     .collect(),
             )
         };
-        let new = partitions(delta_partitions_query(&delta)).await?;
+        let new = first_values(delta_partitions_query(&delta)).await?;
         let (replaced, lightweight) = match &displaced {
             Some(condition) => (
-                partitions(displaced_partitions_query(&target, condition)).await?,
-                !partitions(lightweight_delete_query()).await?.is_empty(),
+                first_values(displaced_partitions_query(&target, condition)).await?,
+                !first_values(lightweight_delete_query()).await?.is_empty(),
             ),
             None => (Vec::new(), false),
         };

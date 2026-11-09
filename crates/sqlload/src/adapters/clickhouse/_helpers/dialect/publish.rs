@@ -23,11 +23,11 @@ pub(crate) fn delta_partitions_query(delta: &str) -> String {
     format!("SELECT DISTINCT _partition_id FROM {delta} ORDER BY 1")
 }
 
-/// The query answering a row when the server has the setting a lightweight `DELETE` is pinned with.
+/// The query answering a row when the server has the setting a lightweight `DELETE` is pinned with, and lets this user set it.
 pub(crate) fn lightweight_delete_query() -> String {
+    let (name, value) = LIGHTWEIGHT_DELETE_MODE;
     format!(
-        "SELECT name FROM system.settings WHERE name = '{}'",
-        LIGHTWEIGHT_DELETE_MODE.0
+        "SELECT name FROM system.settings WHERE name = '{name}' AND (readonly = 0 OR value = '{value}')"
     )
 }
 

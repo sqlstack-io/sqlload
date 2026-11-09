@@ -39,8 +39,8 @@ const VIEWS_WITH_PROJECTION: &str = "CREATE TABLE raw.app__views (id Nullable(In
 /// The rows `public.views` starts with, already in its table, so the first load replaces its window there too.
 const VIEWS_ROWS: &str = "INSERT INTO raw.app__views VALUES (1, '2026-10-20', NULL, NULL), (2, '2026-10-30', NULL, NULL)";
 
-/// `1` when the loads above took the publish path the server allows: only lightweight `DELETE`s where it has `lightweight_delete_mode` (ClickHouse 25.5 and later), only kept rows copied by `INSERT ... SELECT` where it has not.
-const PUBLISH_PATH: &str = "SELECT toString(if((SELECT count() > 0 FROM system.settings WHERE name = 'lightweight_delete_mode'), deletes > 0 AND kept = 0, deletes = 0 AND kept > 0)) FROM (SELECT countIf(query LIKE 'DELETE FROM %') AS deletes, countIf(query LIKE 'INSERT INTO % SELECT * FROM `raw`.%') AS kept FROM system.query_log WHERE type = 'QueryFinish')";
+/// `1` when the loads above took the publish path the server allows: only lightweight `DELETE`s on ClickHouse 25.5 and later, only kept rows copied by `INSERT ... SELECT` before.
+const PUBLISH_PATH: &str = "SELECT toString(if((toUInt32(splitByChar('.', version())[1]), toUInt32(splitByChar('.', version())[2])) >= (25, 5), deletes > 0 AND kept = 0, deletes = 0 AND kept > 0)) FROM (SELECT countIf(query LIKE 'DELETE FROM %') AS deletes, countIf(query LIKE 'INSERT INTO % SELECT * FROM `raw`.%') AS kept FROM system.query_log WHERE type = 'QueryFinish')";
 
 /// The tables' settings: monthly partitions for the windowed and merged tables, a sorting key for the merged one, nothing for the rest.
 const TABLES: &str = r#"

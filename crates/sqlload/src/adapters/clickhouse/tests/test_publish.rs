@@ -173,6 +173,39 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
                 "DROP TABLE IF EXISTS `raw`.`c`",
             ],
         },
+        PartitionStatementsTestCase {
+            description: "before ClickHouse 25.5, a write into one partition displacing no rows rebuilds it from all its rows and the delta's, then replaces it",
+            displaced: Some(WINDOW),
+            new: &["202401"],
+            replaced: &[],
+            lightweight: false,
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`c`",
+                "CREATE TABLE `raw`.`c` AS `raw`.`events`",
+                "INSERT INTO `raw`.`c` SELECT * FROM `raw`.`events` WHERE _partition_id IN ('202401') AND NOT ifNull(`day` >= CAST('2024-01-10' AS Date32), 0)",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ID '202401' FROM `raw`.`d`",
+                "ALTER TABLE `raw`.`events` REPLACE PARTITION ID '202401' FROM `raw`.`c`",
+                "DROP TABLE IF EXISTS `raw`.`c`",
+            ],
+        },
+        PartitionStatementsTestCase {
+            description: "before ClickHouse 25.5, a write into two partitions displacing no rows drops and refills both in a hard-linked copy, then exchanges it in",
+            displaced: Some(WINDOW),
+            new: &["202401", "202402"],
+            replaced: &[],
+            lightweight: false,
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`c`",
+                "CREATE TABLE `raw`.`c` AS `raw`.`events`",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ALL FROM `raw`.`events`",
+                "ALTER TABLE `raw`.`c` DROP PARTITION ID '202401', DROP PARTITION ID '202402'",
+                "INSERT INTO `raw`.`c` SELECT * FROM `raw`.`events` WHERE _partition_id IN ('202401', '202402') AND NOT ifNull(`day` >= CAST('2024-01-10' AS Date32), 0)",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ID '202401' FROM `raw`.`d`",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ID '202402' FROM `raw`.`d`",
+                EXCHANGE,
+                "DROP TABLE IF EXISTS `raw`.`c`",
+            ],
+        },
     ];
     for test_case in test_cases {
         let owned = |partitions: &[&str]| -> Vec<String> {
