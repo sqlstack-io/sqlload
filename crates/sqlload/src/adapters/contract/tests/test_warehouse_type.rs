@@ -59,11 +59,11 @@ fn given_a_portable_type_when_mapping_to_a_warehouse_then_the_sql_name_and_loss_
             expected_lossy: false,
         },
         WarehouseTypeTestCase {
-            description: "Parquet files cannot hold a native type",
+            description: "a native type has no loss note for Parquet files, as plan refuses it",
             column_type: ColumnType::Native("GEOGRAPHY".to_owned()),
             warehouse: Warehouse::Parquet,
             expected_sql: "native(\"GEOGRAPHY\")",
-            expected_lossy: true,
+            expected_lossy: false,
         },
         WarehouseTypeTestCase {
             description: "BigQuery decimal(38,9) is the widest NUMERIC",

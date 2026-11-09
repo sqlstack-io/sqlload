@@ -1098,3 +1098,11 @@ def test_given_arrow_list_batches_when_loading_a_pinned_array_then_every_batch_k
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	load(project)
 	assert query(project, 'SELECT id, xs::VARCHAR FROM "RAW".shop__t ORDER BY id') == expected
+
+
+def test_given_a_native_type_pinned_for_a_files_target_when_planning_then_plan_refuses_the_column(tmp_path: Path) -> None:
+	module = "import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={'n': 'native(\"HUGEINT\")'})(lambda ctx: [{'id': 1, 'n': 5}])\n"
+	project = make_project(tmp_path, FILES_PROJECT, "", module=module)
+	planned = sqlload(project, "plan")
+	assert planned.returncode != 0, planned.stdout
+	assert "column n: a native type has no Arrow type, so Parquet and CSV files cannot hold it; pin a portable type" in planned.stdout + planned.stderr, planned.stdout + planned.stderr

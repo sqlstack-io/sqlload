@@ -51,7 +51,8 @@ keeps neither key order nor duplicate keys; DuckDB doesn't enforce `varchar` len
 Every ClickHouse column is `Nullable`, such as `Nullable(Int64)`.
 
 `native("GEOGRAPHY")` passes a warehouse-only type through unchanged. SQLLoad doesn't widen or
-convert such columns.
+convert such columns. Files targets can't hold one, and from 0.29.0 (not released yet) `plan`
+fails on the column instead of the load.
 
 ## Arrays
 
