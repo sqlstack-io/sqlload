@@ -66,7 +66,7 @@ use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
-use crate::loader::_helpers::table_plan::source_filter;
+use crate::loader::_helpers::table_plan::{numeric_cursor, source_filter};
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
@@ -1100,17 +1100,17 @@ async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), Stri
 /// The Postgres filter reading one cursor window.
 fn window_filter(table: &TablePlan, window: &CursorWindow) -> Option<String> {
     let cursor = table.spec.cursor.as_ref()?;
-    let expression = table
+    let column = table
         .read_columns
         .iter()
-        .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
-        .map(|column| column.expression.clone())?;
+        .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))?;
     let operator = match window.inclusive {
         true => INCLUSIVE_BOUND,
         false => EXCLUSIVE_BOUND,
     };
     source_filter(
-        &expression,
+        &column.expression,
+        numeric_cursor(&column.output),
         window.from.as_deref().map(|from| (operator, from)),
         window.to.as_deref(),
     )
