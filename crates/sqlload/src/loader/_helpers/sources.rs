@@ -7,6 +7,10 @@ use crate::adapters::dispatch::main::dialect::files_destination::files_destinati
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
+use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
+use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
+use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
+use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::config::models::{DestinationConfig, DestinationKind};
@@ -152,6 +156,9 @@ pub(crate) async fn open_source(
             source.stage.clone(),
         )?))),
         SourceKind::Odbc => Ok(open_odbc(project, source)?),
+        SourceKind::BigQuery => Ok(SourceReader::BigQuery(Box::new(bigquery_source_reader(
+            project, source,
+        )?))),
         SourceKind::Python => Err(LoaderError::Invalid(
             "a Python source is read by calling its table functions".to_owned(),
         )),
@@ -232,6 +239,25 @@ pub(crate) async fn source_tables(
                 .await
                 .map(|discovered| (discovered, None, Vec::new())))
         }
+        SourceKind::BigQuery => {
+            let reader = match bigquery_source_reader(project, source) {
+                Ok(reader) => reader,
+                Err(error) => return Ok(Err(error.to_string())),
+            };
+            let queries: Vec<(String, String)> = source
+                .tables
+                .iter()
+                .filter_map(|(name, table)| Some((name.clone(), table.sql.clone()?)))
+                .collect();
+            Ok(
+                match read_bigquery_catalog(&reader, (&source.include, &source.exclude), &queries)
+                    .await
+                {
+                    Ok(discovered) => Ok((discovered, None, Vec::new())),
+                    Err(error) => Err(error.to_string()),
+                },
+            )
+        }
         SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
         SourceKind::GoogleSheets => Ok(match sheets_tables(project, source).await {
             Ok((tables, warnings)) => Ok((tables, None, warnings)),
@@ -308,6 +334,20 @@ async fn discover_odbc(
     _: &[(String, String)],
 ) -> Result<Vec<SourceTable>, String> {
     Err(crate::loader::constants::NO_ODBC.to_owned())
+}
+
+/// A `bigquery` source's reader, for its connection and the project its tables live in.
+pub(crate) fn bigquery_source_reader(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+) -> Result<BigQueryReader, LoaderError> {
+    let connection = project.connections.get(&source.connection).ok_or_else(|| {
+        LoaderError::Invalid(format!(
+            "connection {:?} is not a [connections] entry",
+            source.connection
+        ))
+    })?;
+    Ok(bigquery_reader(connection, source.project.as_deref())?)
 }
 
 /// A Sheets client for a `google_sheets` source's connection, with the key it names (or `GOOGLE_APPLICATION_CREDENTIALS`'s), and the spreadsheet it reads.
@@ -1127,6 +1167,20 @@ pub(crate) async fn read_source(
                 batch_rows: SOURCE_BATCH_ROWS,
             };
             Ok(crate::odbc_source::main::read_rows::read_rows(reader, &request, on_batch).await?)
+        }
+        (SourceReader::BigQuery(reader), _) => {
+            let filter = part.filter.or_else(|| table.source_filter.clone());
+            let request = BigQueryReadRequest {
+                table: &table.spec.source_table,
+                sql: table
+                    .spec
+                    .warehouse_source
+                    .as_ref()
+                    .and_then(|source| source.sql.as_deref()),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+            };
+            Ok(read_bigquery_rows(reader, &request, on_batch).await?)
         }
         (SourceReader::Sheets(client, spreadsheet_id), _) => {
             let batch = sheet_rows(client, spreadsheet_id, table).await?;

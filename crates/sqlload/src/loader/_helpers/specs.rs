@@ -1,5 +1,6 @@
 use crate::adapters::contract::models::{ChangeApply, TableName};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
 };
@@ -282,6 +283,11 @@ pub(crate) fn build_spec(
                 sql: overrides.sql.clone(),
                 route: WarehouseRoute::Query,
             }),
+            SourceKind::BigQuery => Some(WarehouseSource {
+                system: BIGQUERY_SOURCE,
+                sql: overrides.sql.clone(),
+                route: WarehouseRoute::Query,
+            }),
             _ => warehouse_source(context.source, overrides),
         },
         layout,
@@ -411,7 +417,11 @@ pub(crate) fn missing_description(
         SourceKind::GoogleSheets => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.{qualified}], or under [sources.{source_name}] for every table"
         ),
-        SourceKind::Postgres | SourceKind::PostgresCdc | SourceKind::Snowflake | SourceKind::Odbc => format!(
+        SourceKind::Postgres
+        | SourceKind::PostgresCdc
+        | SourceKind::Snowflake
+        | SourceKind::Odbc
+        | SourceKind::BigQuery => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
         ),
     };

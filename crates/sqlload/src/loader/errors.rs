@@ -22,6 +22,8 @@ pub enum LoaderError {
     Files(#[from] FilesError),
     #[error(transparent)]
     WarehouseSource(#[from] SnowflakeSourceError),
+    #[error(transparent)]
+    BigQuerySource(#[from] crate::bigquery_source::errors::BigQuerySourceError),
     #[cfg(feature = "odbc")]
     #[error(transparent)]
     Odbc(#[from] crate::odbc_source::errors::OdbcSourceError),

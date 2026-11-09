@@ -24,6 +24,7 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
+use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
@@ -281,6 +282,17 @@ pub(crate) async fn replan_columns(
 pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     match (&spec.files, &spec.python) {
         (Some(_), _) | (_, Some(_)) => files_read_columns(spec),
+        (None, None)
+            if spec
+                .warehouse_source
+                .as_ref()
+                .is_some_and(|source| source.system == BIGQUERY_SOURCE) =>
+        {
+            crate::bigquery_source::main::read_columns::read_columns(
+                &selected_columns(spec),
+                &spec.pinned,
+            )
+        }
         #[cfg(feature = "odbc")]
         (None, None)
             if spec

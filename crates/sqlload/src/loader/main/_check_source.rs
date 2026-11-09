@@ -36,6 +36,26 @@ pub(in crate::loader) async fn check_source(
                 .and_then(|row| row.first().cloned().flatten())
                 .unwrap_or_default())
         }
+        SourceKind::BigQuery => {
+            let SourceReader::BigQuery(reader) = open_source(project, source, 1).await? else {
+                return Err(LoaderError::Invalid(
+                    "a bigquery source opens as a BigQuery reader".to_owned(),
+                ));
+            };
+            let datasets = crate::bigquery_api::main::list_tables::list_datasets(
+                &reader.client,
+                &reader.project,
+            )
+            .await
+            .map_err(crate::bigquery_source::errors::BigQuerySourceError::from)?;
+            Ok(format!(
+                "project {} ({} datasets), jobs in {} at {}",
+                reader.project,
+                datasets.len(),
+                reader.client.project,
+                reader.client.location()
+            ))
+        }
         #[cfg(feature = "odbc")]
         SourceKind::Odbc => {
             let reader = crate::loader::_helpers::sources::odbc_source_reader(project, source)?;
