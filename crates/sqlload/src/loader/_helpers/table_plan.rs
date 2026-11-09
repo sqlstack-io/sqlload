@@ -997,12 +997,18 @@ pub(crate) fn numeric_cursor(column_type: &ColumnType) -> bool {
     )
 }
 
-/// Whether `value` is a plain decimal number, safe to write unquoted.
+/// Whether `value` is a plain decimal number (a sign, digits with at most one point, and an optional exponent), safe to write unquoted.
 fn is_number(value: &str) -> bool {
-    value
-        .chars()
-        .all(|character| character.is_ascii_digit() || "+-.eE".contains(character))
-        && value.parse::<f64>().is_ok()
+    let digits = |text: &str| text.chars().all(|character| character.is_ascii_digit());
+    let unsigned = value.strip_prefix(['-', '+']).unwrap_or(value);
+    let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
+    let exponent = exponent.strip_prefix(['-', '+']).unwrap_or(exponent);
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    !(whole.is_empty() && fraction.is_empty())
+        && digits(whole)
+        && digits(fraction)
+        && !exponent.is_empty()
+        && digits(exponent)
 }
 
 /// Where the read starts, and why: a `--start-cursor`, the destination's maximum (read after it by `append` from a database or Python source, unless `append_cursor_inclusive`; a files source reads from it, skipping files already loaded), `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
