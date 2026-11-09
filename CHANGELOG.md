@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.5](https://github.com/sqlstack-io/sqlload/compare/v0.33.4...v0.33.5) (2026-11-09)
+
+
+### Performance Improvements
+
+* **clickhouse:** publish a delete_insert read in windows once per run; a stopped run publishes nothing, so split long backfills with --end-cursor ([#176](https://github.com/sqlstack-io/sqlload/issues/176)) ([164df2b](https://github.com/sqlstack-io/sqlload/commit/164df2b44ae6b04d245b6418a3a42476cbfa0036))
+
 ## [0.33.4](https://github.com/sqlstack-io/sqlload/compare/v0.33.3...v0.33.4) (2026-11-09)
 
 
