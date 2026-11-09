@@ -79,8 +79,7 @@ impl ColumnBuilder {
         })
     }
 
-    /// Append one value that arrived as `wire`; `None` is SQL `NULL`.
-    // `#[inline]` keeps this inlinable into the COPY decoder's per-field loop across codegen units; without it, unrelated code moving the split took it out of line (12-17% more instructions).
+    /// Append one value that arrived as `wire`; `None` is SQL `NULL`. Marked `#[inline]` so the COPY decoder's per-field loop can inline it across codegen units; otherwise unrelated code changes can move it out of line.
     #[inline]
     pub(crate) fn append(&mut self, wire: WireType, value: Option<&[u8]>) -> Result<(), String> {
         let Some(bytes) = value else {
