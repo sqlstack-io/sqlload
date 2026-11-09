@@ -86,3 +86,11 @@ pub(crate) struct MergedErrorsTestCase {
     pub(crate) errors: &'static [ItemSpec],
     pub(crate) expected_names: &'static [&'static str],
 }
+
+pub(crate) struct SourceFilterTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) numeric: bool,
+    pub(crate) lower: Option<(&'static str, &'static str)>,
+    pub(crate) upper: Option<&'static str>,
+    pub(crate) expected_filter: Option<&'static str>,
+}
