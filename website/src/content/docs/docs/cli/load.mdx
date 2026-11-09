@@ -26,7 +26,8 @@ Each table prints `created`, `altered`, `loaded` or `failed`. A failed table doe
 others; the summary counts them and the command exits 1.
 
 Large loads commit along the way, so a failure keeps what committed and the next run carries on
-from there; see [Batches](/docs/concepts/cursors/#batches). To read a range instead of continuing
+from there; a `delete_insert` into ClickHouse publishes once per run instead. See
+[Batches](/docs/concepts/cursors/#batches). To read a range instead of continuing
 from the destination's maximum, give `--start-cursor` and `--end-cursor`; see
 [Backfilling a range](/docs/concepts/cursors/#backfilling-a-range).
 

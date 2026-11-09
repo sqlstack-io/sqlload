@@ -568,7 +568,7 @@ fn batch_line(table: &TablePlan) -> String {
                 count => format!("{count} windows"),
             };
             let commits = match publishes_once(table) {
-                true => "staged one after another and published in one commit at the end",
+                true => "staged one after another and published in one commit",
                 false => "one commit each",
             };
             format!("{windows} of {step}, {commits}{end}")
@@ -602,13 +602,13 @@ fn batch_line(table: &TablePlan) -> String {
                 .to_owned()
         }
         (_, true) => "about 1 GB at a time into a new table, swapped in once at the end".to_owned(),
+        (CommitRule::Ordered { column, .. }, false) if publishes_once(table) => format!(
+            "in {column} order (an index leads with it, NULLs first), staged about 1 GB at a time and published in one commit replacing the whole range"
+        ),
         (CommitRule::Ordered { column, .. }, false) => format!(
             "about every 1 GB, in {column} order (an index leads with it, NULLs first), between distinct values{}",
-            match (&table.mode, publishes_once(table)) {
-                (WriteMode::DeleteInsert { .. }, true) => {
-                    "; staged in that order and published in one commit replacing the whole range"
-                }
-                (WriteMode::DeleteInsert { .. }, false) => "; each commit replaces its own cursor range",
+            match table.mode {
+                WriteMode::DeleteInsert { .. } => "; each commit replaces its own cursor range",
                 _ => "",
             }
         ),
@@ -632,9 +632,14 @@ fn batch_line(table: &TablePlan) -> String {
                     "committing part of an unordered cursor read could skip rows"
                 }
             };
-            let hint = match (large, reason) {
-                (true, WholeReason::Unordered) => {
+            let once = matches!(table.mode, WriteMode::DeleteInsert { .. })
+                && sql_adapter(spec.warehouse).publishes_ranges_once();
+            let hint = match (large, reason, once) {
+                (true, WholeReason::Unordered, false) => {
                     "; for a large first load, set batch_size (such as batch_size = \"1d\") to commit it window by window"
+                }
+                (true, WholeReason::Unordered, true) => {
+                    "; for a large first load, set batch_size (such as batch_size = \"1d\") to read it window by window, or split it into runs with --end-cursor"
                 }
                 _ => "",
             };

@@ -120,7 +120,7 @@ SQLLoad reads the files itself and sends Arrow instead when ClickHouse wouldn't 
 |----------|-----------|
 | `append` | Attaches the new rows' partition to the table. Rows in several partitions are attached to a copy of the table, which is exchanged in. |
 | `merge` | Rewrites each partition holding a matched key or a new row. |
-| `delete_insert` | Rewrites each partition holding the cursor range it read, once per run. |
+| `delete_insert` | Rewrites each partition holding the cursor range it read. |
 | `replace` | Builds a new table and swaps it in with `EXCHANGE TABLES`. `--reload` does the same. |
 
 `merge` and `delete_insert` publish whole partitions. On ClickHouse 25.5 and later, the touched
@@ -143,12 +143,13 @@ SQLLoad must be the only writer of the tables it loads. Rows another writer adds
 publishes can be lost, and a lightweight `UPDATE` run on the table is undone or refused by the next
 publish, as it lives in a patch part that moving partitions does not carry.
 
-A `delete_insert` read in windows (`batch_size`) or in cursor order stages every window and
-publishes the whole range it read in one commit at the end, so readers see the table as it was
-before the run or after it, never part way, and a partition several windows share is rewritten
-once. `batch_size` then splits only the reads. A run stopped part way publishes nothing, and the
-next run reads the range again, so split a long backfill into several runs with `--end-cursor`. A
-files source still commits each batch of partitions as it goes.
+A `delete_insert` read in windows (`batch_size`) or [in cursor
+order](/docs/concepts/cursors/#batches) stages everything it reads and publishes the whole range in
+one commit at the end, so readers see the table as it was before the run or after it, never part
+way, and a partition several windows share is rewritten once. `batch_size` then splits only the
+reads. A run stopped part way publishes nothing, and the next run reads the range again, so split a
+long backfill into several runs with `--end-cursor`. A files source still commits each batch of
+partitions as it goes.
 
 `merge` matches rows on `unique_key` exactly, so readers need no `FINAL`. It replaces whole rows,
 so a column the source no longer has is `NULL` on the rows it updates.

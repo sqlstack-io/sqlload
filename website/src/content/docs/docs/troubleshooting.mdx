@@ -61,6 +61,8 @@ See [Load methods](/docs/targets/).
 
 A cursor table without an ordered read commits once for the whole read. For a large first load,
 set `batch_size` (such as `batch_size = "1d"`) with `cursor_start`, so it commits window by window.
+A `delete_insert` into ClickHouse still publishes once per run; split a long first load into runs
+with `--end-cursor` instead.
 See [Batches](/docs/concepts/cursors/#batches).
 
 ## Starting a table over
