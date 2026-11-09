@@ -1,0 +1,226 @@
+---
+title: "Load Postgres tables"
+description: "Load a Postgres database's tables into a warehouse, keep them up to date with cursors, and connect over TLS or through an SSH tunnel."
+---
+
+This guide loads the tables of a Postgres database into a warehouse and keeps them up to date. It
+then connects over TLS and through an SSH tunnel. Every setting is on the
+[Postgres source](/docs/sources/postgres/) page. To capture inserts, updates and deletes from a
+replication slot instead, see [Capture Postgres changes](/docs/guides/postgres-cdc/).
+
+## Load the tables
+
+A source names a connection and the tables to load. Here the shop database has `customers`,
+`orders` and `audit_log` tables in `public`, and every one loads into DuckDB except the audit
+tables:
+
+```toml
+default_target = "local"
+
+[connections.app]
+kind = "postgres"
+host = "db.example.com"
+user = "loader"
+password = "${ENV:APP_DB_PASSWORD}"
+database = "shop"
+
+[connections.warehouse]
+kind = "duckdb"
+database = "shop.duckdb"
+
+[targets.local]
+connection = "warehouse"
+loader_schema = "raw"
+
+[sources.app]
+kind = "postgres"
+connection = "app"
+description = "The shop's application database."
+include = ["public.*"]
+exclude = ["public.audit_*"]
+
+[sources.app.tables."public.customers"]
+description = "Customers, one row per customer."
+
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+cursor_column = "updated_at"
+```
+
+The user needs `SELECT` on the tables. Any other target works the same way: swap the target's
+connection for a [Snowflake](/docs/targets/snowflake/), [Databricks](/docs/targets/databricks/) or
+other one.
+
+Run `sqlload plan` to see what loads, then `sqlload load`:
+
+```console
+$ sqlload plan
+…
+Loads (2)                                           sqlload load
+├── app__customers                                  replace
+│   ├── source  postgres  app  public.customers
+│   ├── route   read as Arrow -> DuckDB takes Arrow
+│   └── batch   about 1 GB at a time into a new table, swapped in once at the end
+└── app__orders                                     merge (unique_key: order_id)
+    ├── source  postgres  app  public.orders
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
+    └── cursor  updated_at first run, everything
+```
+
+- `customers` has no `cursor_column`, so it takes `replace`: each run rebuilds it from the whole
+  table.
+- `orders` has a `cursor_column` and a primary key, so it takes `merge`: each run reads from the
+  destination's maximum `updated_at` and upserts on the key.
+- `audit_log` matches `exclude`, so it isn't listed.
+
+See [Choosing tables](/docs/sources/postgres/#choosing-tables) for patterns and tables that appear
+later, and [Write strategies](/docs/concepts/write-strategies/) for the defaults.
+
+## Keep tables up to date
+
+Run `sqlload load` on a schedule. A table with a `cursor_column` continues from the destination's
+maximum of that column, read from the table itself:
+
+```console
+$ sqlload plan app__orders
+…
+    └── cursor  updated_at from 2026-10-12 16:00:00.000000+00 (destination maximum)
+```
+
+For a table whose rows can arrive late, such as a `page_views` table without a key, re-read a
+window before the maximum with `lookback`, and replace it with `delete_insert`, which needs no key:
+
+```toml
+[sources.app.tables."public.page_views"]
+description = "Page views, one row per view."
+write_strategy = "delete_insert"
+cursor_column = "viewed_at"
+lookback = "2h"
+```
+
+```console
+$ sqlload load app__page_views
+…
+    └── cursor  viewed_at from 2026-10-14 19:20:00.000000+00 (destination maximum minus lookback 2h)
+```
+
+To reload a fixed window around today on every run, such as the last 7 days and the next 7, see
+[Reload a window](/docs/guides/reload-a-window/).
+
+## Load a large table in batches
+
+A table whose `cursor_column` leads an index commits about every 1 GB, as the plan above shows.
+Any other cursor table commits once for the whole read. For a large first load, set a `batch_size`
+and a `cursor_start`, so it commits one window at a time:
+
+```toml
+[sources.app.tables."public.page_views"]
+description = "Page views, one row per view."
+write_strategy = "delete_insert"
+cursor_column = "viewed_at"
+cursor_start = "2026-10-01"
+batch_size = "7d"
+lookback = "2h"
+```
+
+```console
+$ sqlload load app__page_views
+…
+└── app__page_views                                 delete_insert (cursor: viewed_at)
+    ├── source  postgres  app  public.page_views
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   6 windows of 7days, one commit each
+    ├── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
+    └── cursor  viewed_at first run, from cursor_start 2026-10-01 00:00:00.000000+00
+…
+loaded   raw.app__page_views  2,000 rows  0.1s
+```
+
+A failure keeps the windows that committed, and the next run carries on from there. See
+[Batches](/docs/concepts/cursors/#batches).
+
+To load a range again, give `--start-cursor` and `--end-cursor`. The end isn't included:
+
+```console
+$ sqlload load app__page_views --start-cursor 2026-10-05 --end-cursor 2026-10-07
+…
+    └── cursor  viewed_at from 2026-10-05 00:00:00.000000+00 (--start-cursor), below 2026-10-07 00:00:00.000000+00 (--end-cursor)
+…
+loaded   raw.app__page_views  288 rows  0.0s
+```
+
+## Connect over TLS
+
+Set `sslmode` on the connection. `verify-full` encrypts and checks that a trusted CA signed the
+server's certificate for the host connected to:
+
+```toml
+[connections.app]
+kind = "postgres"
+host = "db.example.com"
+port = 5432
+user = "loader"
+password = "${ENV:APP_DB_PASSWORD}"
+database = "shop"
+sslmode = "verify-full"
+sslrootcert = "certs/db-ca.pem"
+# sslcert = "certs/loader.pem"   # a client certificate, with sslkey
+# sslkey = "certs/loader.key"
+```
+
+Give `sslrootcert` when the server's certificate comes from a private CA, such as Amazon RDS and
+Aurora or a company CA. Without it, SQLLoad trusts only the public CA roots built into it. The
+modes and where SQLLoad differs from libpq are under [TLS](/docs/sources/postgres/#tls).
+
+`sqlload debug` ends each Postgres source's line with what protects it: `not encrypted`,
+`TLS, certificate not checked`, `TLS, CA checked` or `TLS, CA and host name checked`.
+
+```console
+$ sqlload debug
+ok    config  2 connections, 1 targets, 1 sources
+ok    target local  DuckDB v2.0.0
+ok    source app  loader@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2), TLS, CA and host name checked
+```
+
+When the default, `prefer`, reads a server over the network in plain text, `plan` warns. It
+doesn't for `localhost`, a loopback address, a Unix socket, or an explicit `sslmode = "disable"`.
+
+```console
+$ sqlload plan
+…
+Warnings (1)
+└── [sources.app] reads legacy-db.example.com:5432 in plain text: the server does not offer TLS, so sslmode = "prefer" fell back; set sslmode = "require" (or "verify-full") on connection app to refuse plain text, or "disable" to accept it
+```
+
+A `postgresql://` URI for [`sqlload copy`](/docs/cli/copy/) takes the same settings as a query,
+such as `?sslmode=verify-full&sslrootcert=certs/db-ca.pem`.
+
+## Connect through an SSH tunnel
+
+From 0.27.0. When the database is reachable only through a bastion host, give the connection an
+`ssh` table. `host` and `port` are then the database as the bastion sees it:
+
+```toml
+[connections.app]
+kind = "postgres"
+host = "db.internal"
+port = 5432
+user = "loader"
+password = "${ENV:APP_DB_PASSWORD}"
+database = "shop"
+ssh = { host = "bastion.example.com", user = "deploy", private_key_file = "~/.ssh/id_ed25519" }
+```
+
+The bastion's host key must be in `known_hosts` first (`~/.ssh/known_hosts` by default). An
+unknown key fails with its fingerprint and the command that adds it. Once the bastion's
+administrator confirms the fingerprint, add it and compare the fingerprint it prints:
+
+```bash
+ssh-keyscan -p 22 bastion.example.com >> ~/.ssh/known_hosts
+```
+
+`sqlload debug` says which hop failed: the tunnel, or the database through it. `plan` shows the
+route on each table's `source` line, for example `via ssh deploy@bastion.example.com:22`. The
+`ssh` table's keys are in [`sqlload.toml`](/docs/configuration/#postgres), and how the tunnel
+behaves is under [SSH tunnels](/docs/sources/postgres/#ssh-tunnels).

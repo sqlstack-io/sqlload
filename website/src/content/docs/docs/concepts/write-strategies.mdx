@@ -79,6 +79,9 @@ cursor_column = "viewed_at"
 lookback = "2h"
 ```
 
+To replace a fixed window around today on every run, such as 7 days back to 7 days ahead, see
+[Reload a window](/docs/guides/reload-a-window/).
+
 On a files source partitioned by the cursor, it replaces whole partitions, and never splits one
 across commits.
 

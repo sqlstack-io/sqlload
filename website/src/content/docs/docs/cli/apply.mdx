@@ -1,0 +1,38 @@
+---
+title: "apply"
+description: "Create or change destination tables, as the plan shows. Never loads data."
+---
+
+```bash
+sqlload apply [SELECTOR ...] [OPTIONS]
+```
+
+`sqlload apply` creates or changes the selected destination tables, and the Snowflake stages
+SQLLoad owns, as [`plan`](/docs/cli/plan/) shows them under `Objects`. It never loads data. It
+takes the same [options](/docs/cli/plan/#options) as `plan`.
+
+It prints the plan first, then each object it created or altered (here cut to the last lines):
+
+```console
+$ sqlload apply
+…
+created  raw.app__customers  6 columns
+created  raw.app__orders     7 columns
+
+✓ Completed  0.0s
+```
+
+Use it when you want tables in place before data arrives, to grant access, say. You don't need it
+before a load: [`load`](/docs/cli/load/) creates any table that doesn't exist yet. A Python table
+is created by its first load, never by `apply`.
+
+A table under `Errors` in the plan is left out; the others are still applied, and the command
+exits 1. A change that rebuilds a table needs `--allow-type-change-rebuild` while
+`type_change_rebuild` is `require_confirmation`; see
+[Changes that rebuild a table](/docs/concepts/contracts/#changes-that-rebuild-a-table).
+
+From 0.27.0, `apply --json` prints its result as one JSON document, as `load --json` does; see
+[Results as JSON](/docs/cli/load/#results-as-json).
+
+In a [Kafka exporter](/docs/guides/kafka/) configuration, `apply` creates the missing tables,
+stages and pipes instead.

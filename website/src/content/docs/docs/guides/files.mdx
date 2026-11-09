@@ -1,0 +1,182 @@
+---
+title: "Load files"
+description: "Load Parquet, CSV, JSON or NDJSON files from a local folder, S3 or an SFTP server, load only new files or new partitions, and let the warehouse read the files itself."
+---
+
+A files source loads every file under a folder into one table. This guide loads a local folder,
+then S3 and an SFTP server, and shows when the warehouse reads the files itself. Every setting is
+on the [Files source](/docs/sources/files/) page.
+
+## Load a folder
+
+A `filesystem` connection names a folder on the machine SQLLoad runs on. The source's `path` is a
+folder below it:
+
+```toml
+default_target = "local"
+
+[connections.lake]
+kind = "filesystem"
+root = "lake"
+
+[connections.warehouse]
+kind = "duckdb"
+database = "shop.duckdb"
+
+[targets.local]
+connection = "warehouse"
+loader_schema = "raw"
+
+[sources.events_log]
+kind = "files"
+connection = "lake"
+path = "events/"
+format = "parquet"
+description = "Click events, one row per event."
+write_strategy = "append"
+```
+
+`format` is `parquet` (the default), `csv`, `json` or `ndjson`. A files source is one table, named
+after the source, and needs its own `description`.
+
+Under `append`, each run loads only the files it hasn't loaded yet, by `_sqlload_source_file`.
+After one more file arrives:
+
+```console
+$ sqlload load
+…
+└── events_log                                      append
+    ├── source  files  lake/events/  parquet
+    ├── files   1 new of 4 listed
+    ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
+    └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined, so later batches may add columns
+
+✓ Plan complete  1 selected, 1 to load
+loaded   raw.events_log  3 rows  0.0s
+```
+
+A file rewritten in place after it loaded fails the table, with the fix. When files change, load
+them by partition instead.
+
+## Load new partitions
+
+Files in Hive `key=value` folders, such as `events/dt=2026-11-08/`, load the folder values as
+typed columns. With `delete_insert` on a partition cursor, each run replaces the newest loaded
+partition and loads everything after it:
+
+```toml
+[sources.events]
+kind = "files"
+connection = "lake"
+path = "events/"
+format = "parquet"
+description = "Click events, partitioned by day."
+partition_columns = { dt = "date" }
+write_strategy = "delete_insert"
+cursor_column = "dt"
+```
+
+```console
+$ sqlload load
+…
+└── events                                          delete_insert (cursor: dt)
+    ├── source  files  lake/events/  parquet
+    ├── files   2 new of 3 listed
+    ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
+    ├── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined, so later batches may add columns
+    └── cursor  dt from 2026-11-08 (destination maximum)
+
+✓ Plan complete  1 selected, 1 to load
+loaded   raw.events  6 rows  0.0s
+```
+
+A partition is never split across commits. For values in folder and file names that aren't
+`key=value`, such as `orders/eu/2026-11-08/part-0.parquet`, see
+[Columns from paths](/docs/sources/files/#columns-from-paths).
+
+## Load files from S3
+
+An `s3` connection names a bucket. Everything else is the same as for a folder:
+
+```toml
+[connections.lake]
+kind = "s3"
+bucket = "example-bucket"
+region = "eu-west-2"
+
+[sources.events]
+kind = "files"
+connection = "lake"
+path = "events/"
+format = "parquet"
+description = "Click events, partitioned by day."
+partition_columns = { dt = "date" }
+write_strategy = "delete_insert"
+cursor_column = "dt"
+```
+
+SQLLoad finds AWS credentials in the environment, the shared credentials file, web identity, or
+the instance or container role. See the [`s3` connection](/docs/configuration/#s3) for the order,
+`profile` and custom endpoints.
+
+## Load files from an SFTP server
+
+From 0.32.0. An `sftp` connection reads files from an SFTP server, such as a partner's daily drop:
+
+```toml
+[connections.partner]
+kind = "sftp"
+host = "sftp.partner.example"
+user = "export"
+private_key_file = "~/.ssh/partner_ed25519"
+known_hosts = "~/.ssh/known_hosts"
+
+[sources.orders]
+kind = "files"
+connection = "partner"
+path = "outgoing/orders/"
+format = "csv"
+write_strategy = "append"
+description = "Orders the partner drops each day."
+```
+
+- The server's host key must be in `known_hosts` first. An unknown key fails before anything is
+  listed, with its fingerprint and the command that adds it.
+- `path` is below the user's login folder, or from `/` when it starts with `/`.
+- `append` loads only new files, and notices a file rewritten in place by its size and
+  modification time.
+- The rows always pass through SQLLoad, since no warehouse reads files over SFTP itself.
+- SQLLoad never writes, moves or deletes files on the server.
+
+The rest of how SFTP sources behave is under
+[Files on an SFTP server](/docs/sources/files/#files-on-an-sftp-server), and the connection's keys
+under [`sftp`](/docs/configuration/#sftp).
+
+## Let the warehouse read the files
+
+When the destination can load the files exactly by itself, it does, and no row passes through
+SQLLoad. `plan` names the route on each table's `route` line:
+
+| Destination | Reads the files itself |
+|-------------|------------------------|
+| DuckDB | Parquet in S3 or a local folder, with `read_parquet`. |
+| Snowflake | Parquet, JSON, NDJSON and CSV under the `url` of an `external_stage` load method, with `COPY`. |
+| ClickHouse | Parquet in S3, with `s3()`. |
+
+Otherwise SQLLoad reads the files and loads the rows. Into Snowflake, files no external stage
+covers fail `plan`, unless the source sets `copy_to_internal_stage = true`, which uploads them to
+the user stage first and is much slower. To have Snowflake read files in S3 in place, give the
+connection an external stage over the files' bucket:
+
+```toml
+[connections.wh]
+kind = "snowflake"
+# ...
+load_method = { type = "external_stage", url = "s3://example-bucket/", storage_integration = "LAKE_INT" }
+```
+
+A route that can't load a column exactly fails `plan` and names the column; it never falls back
+to a slower route. See [Files into Snowflake](/docs/targets/snowflake/#files-into-snowflake),
+[DuckDB](/docs/targets/duckdb/) and
+[Files ClickHouse reads itself](/docs/targets/clickhouse/#files-clickhouse-reads-itself) for what
+each one reads.

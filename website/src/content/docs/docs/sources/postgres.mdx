@@ -1,10 +1,11 @@
 ---
 title: "Postgres"
-description: "Load Postgres tables: choosing tables and columns, masking, and how each table is read."
+description: "The postgres source: connection settings, choosing tables and columns, masking, how each table is read, TLS modes and SSH tunnels."
 ---
 
 A Postgres source loads the tables of one database that match its `include` patterns, one table
-each, read with binary `COPY` into Arrow.
+each, read with binary `COPY` into Arrow. To set one up and keep it up to date, see
+[Load Postgres tables](/docs/guides/postgres/).
 
 ```toml
 [connections.app]
@@ -28,6 +29,13 @@ description = "Orders, one row per order."
 cursor_column = "updated_at"
 ```
 
+## Connection
+
+A `postgres` connection takes `host`, `port`, `user`, `password` and `database`, the
+[TLS](#tls) settings, and an `ssh` table for an [SSH tunnel](#ssh-tunnels). Every key and its
+default is in [`sqlload.toml`](/docs/configuration/#postgres). [Postgres targets](/docs/targets/postgres/)
+use the same connection.
+
 ## Choosing tables
 
 `include` and `exclude` are `schema.table` patterns (`*` matches any text). A table must match an
@@ -44,7 +52,8 @@ first load:
 | `fail` | Stops the plan. |
 
 The first load is the one before any of the source's tables exists in the destination, whichever
-tables are selected. Tables present then count as approved.
+tables are selected. Tables present then count as approved. A table that didn't load then, such as
+one a problem blocked, counts as new afterwards, so name it exactly in `include`.
 
 ## Choosing columns
 
@@ -103,23 +112,62 @@ mask = { email = "hmac" }
 be recovered. Use `hmac` for personal data. A masked column can't be the `cursor_column` or part of
 the `unique_key`.
 
+## How Postgres is read
+
+SQLLoad reads each table with binary `COPY` into Arrow. A table whose `cursor_column` leads an
+index is read in cursor order and commits about every 1 GB, between distinct cursor values.
+`batch_size = "none"` opts out, for tables where the ordered read is slower than a scan. Windows
+of a [`batch_size`](/docs/concepts/cursors/#batches) are all read in one `REPEATABLE READ`
+snapshot, so a row moving between windows is read once. That snapshot stays open for the whole
+table load: it counts towards `idle_in_transaction_session_timeout`, and vacuum can't remove rows
+it can still see. Use a larger `batch_size` or a narrower range if either matters.
+
+`numeric` without a precision has no fixed scale, so `plan` asks you to pin a type for it, such as
+`columns = { amount = "decimal(38,10)" }`. Postgres arrays load as JSON. See
+[Types](/docs/concepts/types/).
+
+## TLS
+
+A Postgres connection takes libpq's TLS settings, from 0.25.0. They apply to `postgres` and
+[`postgres_cdc`](/docs/sources/postgres-cdc/) sources alike, replication included, and to
+[Postgres targets](/docs/targets/postgres/). To set them up and check them, see
+[Connect over TLS](/docs/guides/postgres/#connect-over-tls).
+
+| `sslmode` | Encrypts | Checks the certificate |
+|-----------|----------|------------------------|
+| `disable` | Never | No |
+| `prefer` (default) | When the server offers it | No |
+| `require` | Always | No, unless `sslrootcert` is set: then as `verify-ca` |
+| `verify-ca` | Always | Signed by a trusted CA |
+| `verify-full` | Always | Signed by a trusted CA, for the host connected to |
+
+`require` and the `verify-*` modes refuse a server without TLS rather than fall back to plain text.
+`sslrootcert` names CA certificates (PEM) to trust. `sslcert` and `sslkey` give a client
+certificate and its private key; set both or neither.
+
+Where SQLLoad differs from libpq:
+
+- `verify-ca` and `verify-full` without `sslrootcert` trust the public CA roots built into SQLLoad,
+  not the operating system's store or `~/.postgresql/root.crt`. A server whose certificate comes
+  from a private CA, such as Amazon RDS and Aurora or a company CA, needs `sslrootcert`: for RDS,
+  the region's certificate bundle from AWS.
+- `verify-full` matches the host only against the certificate's subject alternative names, never
+  its common name.
+- A self-signed server certificate marked as a CA, as `openssl req -x509` makes by default, can't
+  be its own `sslrootcert`. Sign the server certificate with a separate CA and give that CA.
+- Certificate paths are relative to the directory SQLLoad runs in, not to `sqlload.toml`.
+
+As in libpq, `prefer` falls back to plain text when the server refuses TLS or the handshake fails,
+and a Unix socket host never uses TLS. SCRAM sign-in over TLS binds to the server's certificate, as
+libpq does by default. That stops an attacker who only relays the password exchange, but not one
+who changes how the client signs in. Only `verify-full`, or `verify-ca` on a private network, keeps
+a man in the middle out.
+
 ## SSH tunnels
 
-From 0.27.0.
-
-When the database is reachable only through a bastion host, give the connection an `ssh` table.
-`host` and `port` are then the database as the bastion sees it.
-
-```toml
-[connections.app]
-kind = "postgres"
-host = "db.internal"
-port = 5432
-user = "loader"
-password = "${ENV:APP_DB_PASSWORD}"
-database = "shop"
-ssh = { host = "bastion.example.com", user = "deploy", private_key_file = "~/.ssh/id_ed25519" }
-```
+From 0.27.0. A connection with an `ssh` table reaches the database through a bastion host. `host`
+and `port` are then the database as the bastion sees it. To set one up, see
+[Connect through an SSH tunnel](/docs/guides/postgres/#connect-through-an-ssh-tunnel).
 
 - SQLLoad opens the tunnel itself, with no `ssh` program needed. It keeps one session to the
   bastion per run, shared by every table, and closes it when the run ends. It opens no local
@@ -134,88 +182,5 @@ ssh = { host = "bastion.example.com", user = "deploy", private_key_file = "~/.ss
 - Keepalives every 15 seconds hold idle tunnels open through long reads and `load --follow`.
   When the tunnel drops, the table fails with an error that names the tunnel. A
   `postgres_cdc` source resumes from its slot on the next run.
-- `sqlload debug` says which hop failed: the tunnel, or the database through it. `plan` shows the
-  route on each table's `source` line, for example `via ssh deploy@bastion.example.com:22`.
 - `postgres` and `postgres_cdc` sources only for now: a Python source that names the connection
   gets its settings but no tunnel. Copy URIs, jump chains and `~/.ssh/config` aren't supported.
-
-## How Postgres is read
-
-SQLLoad reads each table with binary `COPY` into Arrow. A table whose `cursor_column` leads an
-index is read in cursor order and commits about every 1 GB, between distinct cursor values. Windows
-of a [`batch_size`](/docs/concepts/cursors/#batches) are all read in one `REPEATABLE READ`
-snapshot, so a row moving between windows is read once. That snapshot stays open for the whole
-table load: it counts towards `idle_in_transaction_session_timeout`, and vacuum can't remove rows
-it can still see.
-
-`numeric` without a precision has no fixed scale, so `plan` asks you to pin a type for it, such as
-`columns = { amount = "decimal(38,10)" }`. Postgres arrays load as JSON. See
-[Types](/docs/concepts/types/).
-
-## TLS
-
-A Postgres connection takes libpq's TLS settings, from 0.25.0. They apply to `postgres` and
-[`postgres_cdc`](/docs/sources/postgres-cdc/) sources alike, replication included, and to
-[Postgres targets](/docs/targets/postgres/).
-
-```toml
-[connections.app]
-kind = "postgres"
-host = "db.example.com"
-port = 5432
-user = "loader"
-password = "${ENV:APP_DB_PASSWORD}"
-database = "shop"
-sslmode = "verify-full"
-sslrootcert = "certs/db-ca.pem"
-# sslcert = "certs/loader.pem"   # a client certificate, with sslkey
-# sslkey = "certs/loader.key"
-```
-
-| `sslmode` | Encrypts | Checks the certificate |
-|-----------|----------|------------------------|
-| `disable` | Never | No |
-| `prefer` (default) | When the server offers it | No |
-| `require` | Always | No, unless `sslrootcert` is set: then as `verify-ca` |
-| `verify-ca` | Always | Signed by a trusted CA |
-| `verify-full` | Always | Signed by a trusted CA, for the host connected to |
-
-`require` and the `verify-*` modes refuse a server without TLS rather than fall back to plain text.
-
-`sqlload debug` ends each Postgres source's line with what protects it: `not encrypted`,
-`TLS, certificate not checked`, `TLS, CA checked` or `TLS, CA and host name checked`.
-
-```console
-$ sqlload debug
-ok    config  2 connections, 1 targets, 1 sources
-ok    target local  DuckDB v2.0.0
-ok    source app  loader@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2), TLS, CA and host name checked
-```
-
-When `prefer` reads a server over the network in plain text, `plan` warns. It doesn't for
-`localhost`, a loopback address, a Unix socket, or an explicit `sslmode = "disable"`.
-
-```console
-$ sqlload plan
-…
-Warnings (1)
-└── [sources.app] reads legacy-db.example.com:5432 in plain text: the server does not offer TLS, so sslmode = "prefer" fell back; set sslmode = "require" (or "verify-full") on connection app to refuse plain text, or "disable" to accept it
-```
-
-Where SQLLoad differs from libpq:
-
-- `verify-ca` and `verify-full` without `sslrootcert` trust the public CA roots built into SQLLoad,
-  not the operating system's store or `~/.postgresql/root.crt`. A server whose certificate comes
-  from a private CA, such as Amazon RDS and Aurora or a company CA, needs `sslrootcert`.
-- `verify-full` matches the host only against the certificate's subject alternative names, never
-  its common name.
-- A self-signed server certificate marked as a CA, as `openssl req -x509` makes by default, can't
-  be its own `sslrootcert`. Sign the server certificate with a separate CA and give that CA.
-- Certificate paths are relative to the directory SQLLoad runs in, not to `sqlload.toml`.
-
-As in libpq, `prefer` falls back to plain text when the server refuses TLS or the handshake fails,
-and a Unix socket host never uses TLS. Only `verify-full`, or `verify-ca` on a private network,
-keeps a man in the middle out.
-
-A `postgresql://` URI for [`sqlload copy`](/docs/cli/copy/) takes the same settings as a query,
-such as `?sslmode=verify-full&sslrootcert=certs/db-ca.pem`.

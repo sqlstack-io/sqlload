@@ -1,9 +1,10 @@
 ---
 title: "Files"
-description: "Load Parquet, CSV, JSON or NDJSON files from S3, an SFTP server or a local folder, including files the destination reads itself."
+description: "The files source: settings, which files load, columns, columns from paths, whole records, SFTP servers and the files a destination reads itself."
 ---
 
-A files source is one table built from every file under a folder.
+A files source is one table built from every file under a folder, in S3, a local folder or, from
+0.32.0, an SFTP server. To set one up, see [Load files](/docs/guides/files/).
 
 ```toml
 [connections.lake]
@@ -164,25 +165,8 @@ files itself, also from `copy_to_internal_stage`. Parquet files already have typ
 
 ## Files on an SFTP server
 
-From 0.32.0. An [`sftp` connection](/docs/configuration/#sftp) reads files from
-an SFTP server, such as a partner's daily drop:
-
-```toml
-[connections.partner]
-kind = "sftp"
-host = "sftp.partner.example"
-user = "export"
-private_key_file = "~/.ssh/partner_ed25519"
-known_hosts = "~/.ssh/known_hosts"
-
-[sources.orders]
-kind = "files"
-connection = "partner"
-path = "outgoing/orders/"
-format = "csv"
-write_strategy = "append"
-description = "Orders the partner drops each day."
-```
+From 0.32.0. An [`sftp` connection](/docs/configuration/#sftp) reads files from an SFTP server. To
+set one up, see [Load files from an SFTP server](/docs/guides/files/#load-files-from-an-sftp-server).
 
 - `path` is a folder below the user's login folder (`~/` may start it), or from `/` when it starts
   with `/`. SQLLoad lists it and every folder below it, except hidden ones. It reads regular files
@@ -216,5 +200,8 @@ SQLLoad:
 - **DuckDB** reads Parquet in S3 or a local folder with `read_parquet`.
 - **Snowflake** runs `COPY` from an external stage over the files' bucket, for Parquet, JSON,
   NDJSON and CSV.
+- **ClickHouse** reads Parquet in S3 with `s3()`.
 
-`plan` names the route for each table. See [Load methods](/docs/targets/).
+`plan` names the route for each table. See
+[Let the warehouse read the files](/docs/guides/files/#let-the-warehouse-read-the-files) and
+[Load methods](/docs/targets/).

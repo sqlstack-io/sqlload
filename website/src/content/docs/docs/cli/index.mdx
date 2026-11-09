@@ -25,14 +25,14 @@ Commands:
 
 | Command | Page |
 |---------|------|
-| `plan`, `apply`, `load` | [plan, apply and load](/docs/cli/plan-apply-load/) |
+| `plan` | [plan](/docs/cli/plan/) |
+| `apply` | [apply](/docs/cli/apply/) |
+| `load` | [load](/docs/cli/load/) |
 | `copy` | [copy](/docs/cli/copy/) |
 | `contract diff`, `contract generate` | [contract](/docs/cli/contract/) |
 | `debug` | [debug](/docs/cli/debug/) |
-| `run`, `status`, `tables` | [Kafka exporter](/docs/guides/kafka/) |
-
-`sqlload logged-state` is only for Python tables with `state="logged"`; see
-[Logged state](/docs/sources/logged-state/).
+| `logged-state` | [logged-state](/docs/cli/logged-state/), only for Python tables with `state="logged"` |
+| `run`, `status`, `tables` | [run](/docs/cli/run/), [status](/docs/cli/status/) and [tables](/docs/cli/tables/), for the [Kafka exporter](/docs/guides/kafka/) |
 
 ## Global options
 
@@ -57,4 +57,4 @@ Every command takes these:
 
 `--json` doesn't change the exit code. A declined `--reload` exits 1. From 0.27.0,
 `apply --json` and `load --json` print their result as JSON; see
-[Results as JSON](/docs/cli/plan-apply-load/#results-as-json).
+[Results as JSON](/docs/cli/load/#results-as-json).

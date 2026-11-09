@@ -6,27 +6,24 @@ description: "Stream Kafka topics into Snowflake tables continuously, with Snowp
 The Kafka exporter is SQLLoad's mode for Kafka. It runs continuously, reads Kafka topics and writes
 each one into a Snowflake table, through Snowpipe Streaming or staged files. It's separate from
 loader projects: its `sqlload.toml` has `[source]` with `kind = "kafka"`, `[destination]`,
-`[staging]` and the sections in [Configuration](/docs/kafka/configuration/), instead of
-`[connections]`, `[targets]` and `[sources]`. The repository's
+`[staging]` and the sections in [Kafka exporter configuration](/docs/kafka/configuration/), instead
+of `[connections]`, `[targets]` and `[sources]`. The repository's
 [`sqlload.example.toml`](https://github.com/sqlstack-io/sqlload/blob/main/sqlload.example.toml)
 is a complete example.
 
-## Commands
+## Run the exporter
 
-| Command | Does |
-|---------|------|
-| `sqlload tables [--topics-file FILE]` | Prints `topic<TAB>table<TAB>stream<TAB>group` for each topic, without connecting to Snowflake. |
-| `sqlload plan` | Shows each topic's table and the objects it needs. |
-| `sqlload apply` | Creates missing tables, stages and pipes. |
-| `sqlload run [--max-duration D] [--shard N]` | Exports until stopped, or for `--max-duration`, such as `10m`. |
-| `sqlload status` | Shows per-partition lag and committed offsets. |
-| `sqlload debug` | Validates the configuration and tests the connections. |
+| Step | Command |
+|------|---------|
+| Check the configuration and the connections. | [`sqlload debug`](/docs/cli/debug/) |
+| See how topics map to tables, without connecting to Snowflake. | [`sqlload tables [--topics-file FILE]`](/docs/cli/tables/) |
+| Show each topic's table and the objects it needs. | [`sqlload plan`](/docs/cli/plan/) |
+| Create missing tables, stages and pipes. | [`sqlload apply`](/docs/cli/apply/) |
+| Export until stopped, or for `--max-duration`. | [`sqlload run [--max-duration D] [--shard N]`](/docs/cli/run/) |
+| Show per-partition lag and committed offsets. | [`sqlload status`](/docs/cli/status/) |
 
-| Option | Meaning |
-|--------|---------|
-| `--topics-file <FILE>` | `tables` only: read topic names, one per line, from this file instead of Kafka. |
-| `--max-duration <D>` | `run` only: stop after this long. |
-| `--shard <N>` | `run` only: this instance's index below `source.shards`. Also `SQLLOAD_SHARD`. |
+`load`, `copy`, `contract` and `logged-state` are for loader projects, and refuse an exporter
+configuration.
 
 ## How rows reach Snowflake
 
@@ -44,8 +41,8 @@ see [Envelope columns](/docs/kafka/configuration/#envelope).
 
 ## Naming topics
 
-`tables` shows how topics map to tables before anything connects. With the example configuration
-and a file of topic names:
+`sqlload tables` shows how topics map to tables before anything connects. With the example
+configuration and a file of topic names:
 
 ```console
 $ sqlload tables --topics-file topics.txt
@@ -54,6 +51,9 @@ shop.orders_v2.events	ORDERS__EVENTS	orders__events	sqlload-orders__events
 shop.payments_v1.events	PAYMENTS__EVENTS	payments__events	sqlload-payments__events
 ```
 
-`shop.orders.dlq` was in the file too, but matches the example's `exclude`, so it isn't listed.
+[Kafka topic naming](/docs/kafka/naming/) covers the rules.
 
-[Naming topics](/docs/kafka/naming/) covers the rules.
+## Running several instances
+
+Set `shards` under `[source]` above 1 to split the streams between instances, and run each with
+its own `--shard`, from 0, or `SQLLOAD_SHARD`. See [`sqlload run`](/docs/cli/run/).

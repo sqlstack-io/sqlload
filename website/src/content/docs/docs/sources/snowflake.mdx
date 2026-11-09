@@ -100,7 +100,8 @@ settings move the window to the time of the run instead:
 
 `lookback = "7d"`, `lookahead = "7d"` and `lookback_from = "now"` read from 7 days ago to 7 days
 ahead on every run, which suits tables whose rows change for a while and include future dates.
-Use `write_strategy = "delete_insert"` with them, so each run replaces the whole window.
+Use `write_strategy = "delete_insert"` with them, so each run replaces the whole window. See
+[Reload a window](/docs/guides/reload-a-window/).
 
 Days are counted in UTC. The first run reads the same window. `--start-cursor` and `--end-cursor`
 override it for one run. `--reload` rebuilds the table from `cursor_start`, or from the first row,

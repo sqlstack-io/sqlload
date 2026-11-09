@@ -12,8 +12,11 @@
 	{
 		"label": "Guides",
 		"items": [
+			"docs/guides/postgres",
 			"docs/guides/postgres-cdc",
+			"docs/guides/files",
 			"docs/guides/python",
+			"docs/guides/reload-a-window",
 			"docs/guides/kafka"
 		]
 	},
@@ -49,14 +52,16 @@
 					{
 						"label": "Python",
 						"link": "/docs/sources/python/"
-					},
-					"docs/sources/logged-state"
+					}
 				]
 			},
 			{
 				"label": "Targets",
 				"items": [
-					"docs/targets",
+					{
+						"label": "Targets and load methods",
+						"slug": "docs/targets"
+					},
 					"docs/targets/snowflake",
 					"docs/targets/databricks",
 					"docs/targets/bigquery",
@@ -73,17 +78,26 @@
 		"label": "CLI Reference",
 		"items": [
 			"docs/cli",
-			"docs/cli/plan-apply-load",
+			"docs/cli/plan",
+			"docs/cli/apply",
+			"docs/cli/load",
 			"docs/cli/copy",
 			"docs/cli/contract",
-			"docs/cli/debug"
+			"docs/cli/debug",
+			"docs/cli/logged-state",
+			"docs/cli/run",
+			"docs/cli/status",
+			"docs/cli/tables"
 		]
 	},
 	{
 		"label": "Reference",
 		"items": [
 			"docs/configuration",
-			"docs/sources/python",
+			{
+				"label": "Python API",
+				"slug": "docs/sources/python"
+			},
 			"docs/kafka/configuration",
 			"docs/kafka/naming",
 			"docs/troubleshooting"

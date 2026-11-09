@@ -1,0 +1,97 @@
+---
+title: "Reload a window"
+description: "Replace a window of recent and future rows on every run, such as 7 days ago to 7 days ahead, with delete_insert, lookback, lookahead and lookback_from."
+---
+
+Some tables keep changing for a while after their rows are written, and hold future dates: orders
+that ship later, deliveries scheduled up to two weeks ahead, bookings. A fixed window around today,
+replaced on every run, keeps them right without reloading the whole table. This guide reloads
+from 7 days ago to 7 days ahead.
+
+## Set the window
+
+```toml
+[sources.app.tables."public.deliveries"]
+description = "Deliveries, one row per delivery, scheduled up to two weeks ahead."
+write_strategy = "delete_insert"
+cursor_column = "delivery_date"
+lookback = "7d"
+lookahead = "7d"
+lookback_from = "now"
+```
+
+| Setting | Here |
+|---------|------|
+| `write_strategy = "delete_insert"` | Deletes the rows in the window it read, then inserts what it read. It needs a `cursor_column` and no key. |
+| `cursor_column` | The date or timestamp the window is on. |
+| `lookback` | How far back the window starts. |
+| `lookback_from = "now"` | Count `lookback` back from the time of the run, not from the destination's maximum. Needs a `lookback`. |
+| `lookahead` | Read only cursor values before now plus this. A date cursor reads up to and including today plus that many days. |
+
+`plan` shows the window on the table's `cursor` line. On 9 November 2026:
+
+```console
+$ sqlload plan
+…
+Loads (1)                                           sqlload load
+└── app__deliveries                                 delete_insert (cursor: delivery_date)
+    ├── source  postgres  app  public.deliveries
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   one commit for the whole read (committing part of an unordered cursor read could skip rows)
+    └── cursor  delivery_date from 2026-11-02 (now minus lookback 7days), below 2026-11-17 (now plus lookahead 7days)
+```
+
+Every run reads `delivery_date` from 2 November up to and including 16 November, deletes those
+dates from the destination, and inserts what it read. A delivery deleted at the source while its
+date is in the window is deleted from the destination too.
+
+## How the window is counted
+
+- Days are counted in UTC. A date cursor moves by whole days.
+- A timestamp cursor reads from exactly now minus `lookback` to now plus `lookahead`.
+- The first run reads the same window, so rows before it never load. To fill the table first,
+  run `--reload` once (below), or backfill a range.
+- `--start-cursor` and `--end-cursor` replace the window for one run:
+
+  ```console
+  $ sqlload plan --start-cursor 2026-10-01 --end-cursor 2026-11-01
+  …
+      └── cursor  delivery_date from 2026-10-01 (--start-cursor), below 2026-11-01 (--end-cursor)
+  ```
+
+- `--reload` rebuilds the table from `cursor_start`, or from the first row, up to the lookahead:
+
+  ```console
+  $ sqlload load --reload --yes
+  …
+      └── cursor  delivery_date reload, everything, below 2026-11-17 (now plus lookahead 7days)
+  ```
+
+## Without `lookback_from`
+
+Without `lookback_from = "now"`, `lookback` counts back from the destination's maximum of the
+cursor. Each run then re-reads a window behind the newest row it already has, such as the last 2
+hours, and everything after it:
+
+```toml
+[sources.app.tables."public.page_views"]
+description = "Page views, one row per view."
+write_strategy = "delete_insert"
+cursor_column = "viewed_at"
+lookback = "2h"
+```
+
+That suits rows that arrive late, but not a table holding future dates: its maximum is already
+ahead of today. `lookahead` works with either, and caps the read at now plus the lookahead.
+
+## Limits
+
+- `lookahead` and `lookback_from = "now"` need a date or timestamp cursor.
+- `append` takes no `lookback`, which would insert the window again on every run. Use
+  `delete_insert`, or `merge` when the table has a key.
+- A files target takes neither `lookahead` nor `lookback_from = "now"`: its window follows its
+  newest partition.
+- Python tables take `lookback`, but not `lookahead` or `lookback_from`.
+
+See [Cursors and state](/docs/concepts/cursors/) for how a run decides where to read, and
+[delete_insert](/docs/concepts/write-strategies/#delete_insert) for how it replaces a range.

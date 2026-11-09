@@ -1,0 +1,90 @@
+---
+title: "plan"
+description: "Preview what apply and load would do: every table, column, type mapping, write strategy, route and cursor. Changes nothing."
+---
+
+```bash
+sqlload plan [SELECTOR ...] [OPTIONS]
+```
+
+`sqlload plan` prints what [`apply`](/docs/cli/apply/) and [`load`](/docs/cli/load/) would do:
+tables to create or alter, each column's type mapping, write strategy, route, batches and cursor.
+It reads the sources' and destinations' catalogs and changes nothing. `apply` and `load` print the
+same plan before they run. See [Projects](/docs/concepts/projects/) for how the three fit together.
+
+In a [Kafka exporter](/docs/guides/kafka/) configuration, `plan` shows each topic's table and the
+objects it needs, and refuses the options below.
+
+## Selecting tables
+
+A selector is a source name, a destination table name, or a source's `schema.table`. Give
+selectors positionally or with `--select`, and leave tables out with `--exclude`. With none, every
+table is selected. See [Selecting tables](/docs/concepts/projects/#selecting-tables) for examples.
+
+A source's problems, such as a refused setting or a server it can't reach, fail only a command
+that selects something from it. A source that can't list its tables also fails a command that
+selects a table by name, since that table could be one of its own.
+
+## Options
+
+`plan`, `apply` and `load` take the same options.
+
+| Option | Meaning |
+|--------|---------|
+| `SELECTOR ...`, `-s`, `--select <SELECTOR>...` | Sources or tables to select: a source name, a destination table name, or a source's `schema.table`. All when none is given. |
+| `--exclude <SELECTOR>...` | Sources or tables to leave out. Wins over `--select`. |
+| `--start-cursor <VALUE>` | Read from this cursor value instead of the destination's maximum. Typed from each table's cursor: an integer, an RFC 3339 timestamp or a date. |
+| `--end-cursor <VALUE>` | Read only cursor values below this one. |
+| `--reload` | Rebuild the selected tables from the whole source, with the current columns and types. Asks first, unless `--yes`. Refuses `postgres_cdc` tables, which `--resnapshot` copies again; see [Reloading](/docs/guides/postgres-cdc/#reloading). |
+| `--resnapshot` | `postgres_cdc` sources: drop and recreate the replication slot, then copy every table again. Asks first, unless `--yes`. See [Postgres changes](/docs/guides/postgres-cdc/#re-snapshot). |
+| `--follow` | `load` of one `postgres_cdc` source only: keep streaming after catching up, writing a batch every `batch_interval`, until `--max-duration` passes or Ctrl-C or SIGTERM. See [Keep streaming](/docs/guides/postgres-cdc/#keep-streaming). |
+| `--max-duration <DURATION>` | With `--follow`: stop after this long, such as `10m`, once the changes read so far are written. |
+| `--yes` | Rebuild with `--reload` or `--resnapshot` without asking. Needed when not on a terminal. |
+| `--allow-type-change-rebuild` | Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would block. |
+| `--concurrency <N>` | The most tables loading at once. Default: the project's `concurrency`, else 4. |
+| `--json` | Print one JSON document on standard output. For `plan`, the plan. For `apply` and `load` (from 0.27.0), the result: see [Results as JSON](/docs/cli/load/#results-as-json). |
+
+## Reading a plan
+
+```console
+$ sqlload plan
+Plan ready  2 selected, 2 objects to create, 2 to load
+
+Objects (2)                                         sqlload apply
+├── raw.app__customers                              create table
+│   ├── customer_id int            -> BIGINT
+│   ├── email       text           -> VARCHAR
+│   ├── country     text           -> VARCHAR
+│   ├── created_at  timestamp_tz   -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
+│   └── + _sqlload_load_id, _loaded_at
+└── raw.app__orders                                 create table
+    ├── order_id    int             -> BIGINT
+    ├── customer_id int             -> BIGINT
+    ├── status      text            -> VARCHAR
+    ├── total       decimal(12,2)   -> DECIMAL(12,2)
+    ├── updated_at  timestamp_tz    -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
+    └── + _sqlload_load_id, _loaded_at
+
+Loads (2)                                           sqlload load
+├── app__customers                                  merge (unique_key: customer_id)
+│   ├── source  postgres  app  public.customers
+│   ├── route   read as Arrow -> DuckDB takes Arrow
+│   └── batch   about every 1 GB
+└── app__orders                                     merge (unique_key: order_id)
+    ├── source  postgres  app  public.orders
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
+    └── cursor  updated_at first run, everything
+
+✓ Plan complete  2 selected, 2 objects to create, 2 to load
+```
+
+| Section | Lists |
+|---------|-------|
+| `Objects` | Tables `apply` creates or alters: each column as its portable type `->` the warehouse type, then in brackets what that type loses, if anything (from 0.29.0; for an array, the array's own loss, then its elements' after `elements:`), added and widened columns, with the same note from 0.31.0, excluded and masked columns. |
+| `Loads` | Each table `load` loads, with its write strategy, and lines for `source`, `files`, `schema`, `route`, `batch`, `cursor`, `state` and `note`. |
+| `Skipped` | Tables left out on purpose, such as by `skip_tables_with_columns` or `new_tables = "skip"`, with the reason. |
+| `Errors` | Tables that can't load as configured, with the reason and the fix. |
+| `Warnings` | Tables that load, but slower or with less than you might expect. |
+
+A table under `Errors` is left out; the others still run, and the command exits 1.

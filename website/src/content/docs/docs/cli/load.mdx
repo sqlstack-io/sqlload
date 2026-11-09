@@ -1,0 +1,135 @@
+---
+title: "load"
+description: "Load the selected tables of a project, reload them from scratch, follow a Postgres CDC source, and print the result as JSON."
+---
+
+```bash
+sqlload load [SELECTOR ...] [OPTIONS]
+```
+
+`sqlload load` loads the selected tables, creating any that don't exist yet. It prints the
+[plan](/docs/cli/plan/) first, then a line per table. It takes the same
+[options](/docs/cli/plan/#options) as `plan`.
+
+## Loading
+
+```console
+$ sqlload load
+…
+loaded   raw.app__customers  50 rows  0.0s
+loaded   raw.app__orders     1,000 rows  0.0s
+
+✓ Completed  2 loaded, 1,050 rows, 0.1s
+```
+
+Each table prints `created`, `altered`, `loaded` or `failed`. A failed table doesn't stop the
+others; the summary counts them and the command exits 1.
+
+Large loads commit along the way, so a failure keeps what committed and the next run carries on
+from there; see [Batches](/docs/concepts/cursors/#batches). To read a range instead of continuing
+from the destination's maximum, give `--start-cursor` and `--end-cursor`; see
+[Backfilling a range](/docs/concepts/cursors/#backfilling-a-range).
+
+## Reloading
+
+`--reload` rebuilds tables from scratch. On a terminal it shows the plan and asks; in scripts, add
+`--yes`:
+
+```console
+$ sqlload load --reload --yes app__customers
+…
+loaded   raw.app__customers  50 rows  0.0s
+
+✓ Completed  1 loaded, 50 rows, 0.1s
+```
+
+A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` refuses it. See
+[Reloading](/docs/guides/postgres-cdc/#reloading). `--reload` is also refused on
+[Postgres targets](/docs/targets/postgres/).
+
+## Following a Postgres CDC source
+
+`sqlload load SOURCE --follow` keeps streaming one `postgres_cdc` source after it catches up,
+writing a batch every `batch_interval`, until `--max-duration` passes or it gets Ctrl-C or
+SIGTERM. A second Ctrl-C or SIGTERM stops it at once, with exit code 130. See
+[Keep streaming](/docs/guides/postgres-cdc/#keep-streaming).
+
+```bash
+sqlload load app --follow --max-duration 10m
+```
+
+## Results as JSON
+
+From 0.27.0, `apply --json` and `load --json` print one JSON document on
+standard output when they finish, for scripts and orchestrators. Logs stay on standard error. The
+exit code is the same as without `--json`.
+
+```console
+$ sqlload load --json
+{
+  "schema_version": 1,
+  "command": "load",
+  "ok": false,
+  "started_at": "2026-11-08T16:33:56.655Z",
+  "finished_at": "2026-11-08T16:33:56.731Z",
+  "duration_seconds": 0.076,
+  "summary": {
+    "created": 1,
+    "altered": 0,
+    "recreated": 0,
+    "loaded": 1,
+    "failed": 1,
+    "rows": 1200
+  },
+  "plan": { "ok": true, "summary": "2 selected, 2 objects to create, 2 to load", … },
+  "objects": [
+    { "action": "created", "name": "raw.shop__orders", "detail": "4 columns" }
+  ],
+  "tables": [
+    {
+      "table": "raw.shop__orders",
+      "source": "shop",
+      "target": "dev",
+      "write_strategy": "replace",
+      "status": "loaded",
+      "rows": 1200,
+      "duration_seconds": 0.032,
+      "note": null,
+      "error": null
+    },
+    {
+      "table": "raw.shop__refunds",
+      "source": "shop",
+      "target": "dev",
+      "write_strategy": "replace",
+      "status": "failed",
+      "rows": null,
+      "duration_seconds": 0.009,
+      "note": null,
+      "error": "RuntimeError: the API returned 503 (File \"/srv/project/sources/shop.py\", line 14, in refunds)"
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `schema_version` | `1`. New fields can appear without a change; it changes only when a field changes meaning or goes away. |
+| `command` | `apply` or `load`. |
+| `ok` | Whether every selected table planned and loaded: `true` exactly when the exit code is 0. |
+| `summary` | How many objects were `created`, `altered` (each table once, however many changes it had) and `recreated`; tables `loaded` and `failed`; `rows` loaded. |
+| `plan` | The same document `plan --json` prints. Tables a plan error left out are in its `errors`, and tables with nothing to load in `skipped`. |
+| `objects` | One entry per change to a table or stage, by `apply` or during a load: its `action` (`created`, `altered` or `recreated`), its `name` and the `detail`. A table that gains two columns has two `altered` entries. |
+| `tables` | Each table loaded: its `status` (`loaded` or `failed`), `rows`, `duration_seconds`, a `note` (the cursor window it read, or that its table waits for first data), and the `error` when it failed. `source`, `target` and `write_strategy` are `null` only for a `load --follow` that failed before any table. `apply` loads nothing, so its list is empty. |
+
+When the run can't start (the configuration doesn't parse, a connection fails), standard output
+holds one error document instead, the same as `plan --json`'s:
+`{"error": {"code": "config", "message": "…", "help": "…"}}`. `code` is `config` for the
+configuration, else the command's name.
+
+`--reload` and `--resnapshot` need `--yes` with `--json`, as there is no prompt to answer.
+
+Under `--json`, what a Python source prints goes to standard error, so standard output holds only
+the document. Output written to the process's standard output directly, such as by a child process
+that inherits it or `os.write(1, …)`, still reaches standard output: capture or redirect it in the
+source.

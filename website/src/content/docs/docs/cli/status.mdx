@@ -1,0 +1,29 @@
+---
+title: "status"
+description: "Show the Kafka exporter's per-partition lag and committed offsets."
+---
+
+```bash
+sqlload status
+```
+
+`sqlload status` shows how far the [Kafka exporter](/docs/guides/kafka/) has got. For each stream
+it prints one line, then one line per partition:
+
+```text
+<stream> -> <table> (group <consumer group>, lag <records>)
+  <topic>[<partition>] committed <offset> of <high watermark>, lag <records>
+```
+
+| Field | Meaning |
+|-------|---------|
+| `lag` on the stream | The records not yet committed, across its partitions. |
+| `committed` | The consumer group's committed offset, or `-` before the first commit. |
+| `of` | The partition's high watermark. |
+| `lag` on a partition | The records between the two. |
+
+With Snowpipe Streaming (`[staging] kind = "none"`), each partition's line also shows the
+channel's committed offset in Snowflake and how many rows it rejected:
+`, channel committed <offset>, rejected rows <count>`.
+
+It takes only the [global options](/docs/cli/#global-options).
