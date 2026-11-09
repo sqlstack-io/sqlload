@@ -74,3 +74,6 @@ pub const TOKEN_PARAMETER: &str = "sqlload_token";
 
 /// The multipart boundary of a request that sends query parameters beside its SQL.
 pub const FORM_BOUNDARY: &str = "sqlload-form-7c1e0b2f9a4d";
+
+/// How `JSONCompactStrings` writes a NULL.
+pub const NULL_TEXT: &str = "ᴺᵁᴸᴸ";

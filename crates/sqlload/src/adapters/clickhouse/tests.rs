@@ -8,5 +8,7 @@ mod layout;
 mod publish;
 #[path = "tests/test_pull.rs"]
 mod pull;
+#[path = "tests/test_rows.rs"]
+mod rows;
 #[path = "tests/test_types.rs"]
 mod test_types;
