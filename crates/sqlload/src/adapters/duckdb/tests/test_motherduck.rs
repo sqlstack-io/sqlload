@@ -9,11 +9,12 @@ use crate::adapters::duckdb::_helpers::motherduck_connection::{
 use crate::adapters::duckdb::main::_describe_table::describe_table;
 use crate::adapters::duckdb::main::_open_duckdb::open_duckdb;
 use crate::adapters::duckdb::main::_open_motherduck::open_motherduck;
+use crate::adapters::duckdb::main::_table_shape::table_shape;
 use crate::adapters::duckdb::models::DuckDbSql;
 use crate::adapters::duckdb::tests::test_types::{
-    AttachedDatabaseTestCase, ConnectionStringTestCase, DuckDbPathTestCase, MotherDuckOpenTestCase,
-    MotherDuckPathTestCase, MotherDuckRefusalTestCase, MotherDuckRouteTestCase,
-    MotherDuckTokenTestCase, ResolvedDatabaseTestCase,
+    AttachedDatabaseTestCase, ConnectionStringTestCase, DuckDbPathTestCase, IndexReplayTestCase,
+    MotherDuckOpenTestCase, MotherDuckPathTestCase, MotherDuckRefusalTestCase,
+    MotherDuckRouteTestCase, MotherDuckTokenTestCase, ResolvedDatabaseTestCase,
 };
 use crate::auth::models::Secret;
 use crate::column_types::models::Warehouse;
@@ -51,6 +52,21 @@ fn given_a_motherduck_database_when_naming_its_path_then_one_md_prefix_leads_and
             description: "options are kept",
             database: "MD:shop?attach_mode=single",
             expected_path: Ok("md:shop?attach_mode=single"),
+        },
+        MotherDuckPathTestCase {
+            description: "only the first prefix is MotherDuck's",
+            database: "md:motherduck:x",
+            expected_path: Ok("md:motherduck:x"),
+        },
+        MotherDuckPathTestCase {
+            description: "a name holding the word token is a name",
+            database: "md:token_store",
+            expected_path: Ok("md:token_store"),
+        },
+        MotherDuckPathTestCase {
+            description: "a token in the name part is refused too",
+            database: "md:shop&MotherDuck_Token=tok.en-1",
+            expected_path: Err(TOKEN_IN_DATABASE),
         },
         MotherDuckPathTestCase {
             description: "no name opens the account's default database",
@@ -244,6 +260,22 @@ fn given_a_motherduck_target_when_resolving_its_tables_then_they_are_named_with_
             expected_database: Ok("shop"),
         },
         ResolvedDatabaseTestCase {
+            description: "md: alone names no database, so it is refused",
+            connection_line: "database = \"md:\"",
+            target_line: "",
+            expected_database: Err(
+                "invalid project:\n  - [targets.prod] loads into MotherDuck, which attaches every database in the account: name the database, in the target or its connection",
+            ),
+        },
+        ResolvedDatabaseTestCase {
+            description: "options alone name no database either",
+            connection_line: "",
+            target_line: "database = \"MD:?attach_mode=single\"",
+            expected_database: Err(
+                "invalid project:\n  - [targets.prod] loads into MotherDuck, which attaches every database in the account: name the database, in the target or its connection",
+            ),
+        },
+        ResolvedDatabaseTestCase {
             description: "a target naming no database is refused, as MotherDuck attaches every database",
             connection_line: "",
             target_line: "",
@@ -397,6 +429,63 @@ fn given_other_attached_databases_when_reading_the_schema_and_staging_then_only_
         );
         assert_eq!(
             dropped, test_case.expected_dropped,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_indexes_and_a_database_named_like_the_schema_when_a_rebuild_recreates_them_then_they_land_on_the_table()
+-> Result<(), String> {
+    let test_cases = [IndexReplayTestCase {
+        description: "a unique index on a quoted name and an expression index, replayed after the table is rebuilt",
+        indexes: "CREATE UNIQUE INDEX \"ix one\" ON raw.orders (id);
+                  CREATE INDEX ix2 ON raw.orders (lower(name), \"Odd Col\");",
+        expected_indexes: "ix one,ix2",
+    }];
+    let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
+    for test_case in test_cases {
+        let destination = open_duckdb(":memory:").map_err(|error| error.to_string())?;
+        let table = TableName {
+            database: Some("memory".to_owned()),
+            schema: "raw".to_owned(),
+            table: "orders".to_owned(),
+        };
+        let connection = destination.connection.clone();
+        connection
+            .lock()
+            .map_err(|error| error.to_string())?
+            .execute_batch(&format!(
+                "CREATE SCHEMA raw; CREATE TABLE raw.orders (id INTEGER, name VARCHAR, \"Odd Col\" INTEGER); {} ATTACH ':memory:' AS raw;",
+                test_case.indexes
+            ))
+            .map_err(|error| error.to_string())?;
+        let shape = runtime
+            .block_on(table_shape(&destination, &table))
+            .map_err(|error| error.to_string())?
+            .ok_or("the table has a shape")?;
+        let rebuilt = format!(
+            "DROP TABLE memory.raw.orders; CREATE TABLE memory.raw.orders {}; {};",
+            shape.definition,
+            shape.indexes.join("; ")
+        );
+        let names: String = {
+            let connection = connection.lock().map_err(|error| error.to_string())?;
+            connection
+                .execute_batch(&rebuilt)
+                .map_err(|error| format!("{}: {error}", test_case.description))?;
+            connection
+                .query_row(
+                    "SELECT string_agg(index_name, ',' ORDER BY index_name) FROM duckdb_indexes() WHERE table_name = 'orders'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?
+        };
+        assert_eq!(
+            names, test_case.expected_indexes,
             "{}",
             test_case.description
         );

@@ -8,10 +8,14 @@ use crate::auth::models::Secret;
 use crate::project::constants::MOTHERDUCK_PREFIX;
 use crate::project::main::motherduck_path::motherduck_path;
 
-/// `database` as an `md:` path, with its options. A token in its options is refused, as the path appears in messages.
+/// `database` as an `md:` path, with its options. A token in its options or name is refused, as the path appears in messages.
 pub(in crate::adapters::duckdb) fn path_text(database: &str) -> Result<String, DuckDbError> {
     let parts = motherduck_path(database);
-    if parts.options.to_ascii_lowercase().contains("token") {
+    if parts.options.to_ascii_lowercase().contains("token")
+        || parts
+            .name
+            .is_some_and(|name| name.to_ascii_lowercase().contains("motherduck_token"))
+    {
         return Err(DuckDbError::MotherDuck(
             "a motherduck connection's database holds a token; set it in token instead".to_owned(),
         ));

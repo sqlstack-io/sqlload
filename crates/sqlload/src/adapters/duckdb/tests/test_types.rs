@@ -99,3 +99,11 @@ pub(crate) struct AttachedDatabaseTestCase {
     pub(crate) expected_columns: &'static [&'static str],
     pub(crate) expected_dropped: usize,
 }
+
+pub(crate) struct IndexReplayTestCase {
+    pub(crate) description: &'static str,
+    /// `CREATE INDEX` statements on `raw.orders`, run before a database named `raw` is attached.
+    pub(crate) indexes: &'static str,
+    /// The index names on the rebuilt table, comma-separated in order.
+    pub(crate) expected_indexes: &'static str,
+}
