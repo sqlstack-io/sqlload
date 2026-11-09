@@ -48,7 +48,9 @@ pub enum PublishStep {
         copy: String,
         partition: String,
     },
-    /// Publish the rows of `delta` (a table in `target`'s shape) into `target`, partition by partition. With `displaced`, a condition on `target`'s rows, the rows it holds are replaced: each partition the delta or those rows touch is rebuilt in `copy` from its kept rows and the delta's, then swapped in. Without it the delta's partitions are added. `aside` is where a rename swap of `copy` moves the old table.
+    /// Delete `table`'s rows matching `condition` with a lightweight `DELETE`, or with `ALTER TABLE ... DELETE` where the server or table refuses one (lightweight deletes turned off, or a table with projections that is set to refuse them).
+    DeleteRows { table: String, condition: String },
+    /// Publish the rows of `delta` (a table in `target`'s shape) into `target`, partition by partition. With `displaced`, a condition on `target`'s rows, the rows it holds are replaced: each partition the delta or those rows touch is hard-linked into `copy`, the displaced rows are deleted there and the delta's attached, then it is swapped in. Without it the delta's partitions are added. `aside` is where a rename swap of `copy` moves the old table.
     Partitions {
         target: String,
         delta: String,

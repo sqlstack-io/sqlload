@@ -41,7 +41,7 @@ pub(crate) fn partition_rows_query(table: &str, partition: &str) -> String {
     )
 }
 
-/// The statements publishing the delta's partitions `new` (and, replacing rows, the target's partitions `displaced` that hold them), each partition whole and every one at once: none when nothing is touched; an added single partition attached from the delta (it copies nothing); a single rebuilt partition built beside the table from its kept rows and the delta's and swapped in by `REPLACE PARTITION`; when the delta adds none of that partition's rows, it is dropped instead if the copy holds none either; several partitions rebuilt in a copy of the table that hard-links its parts, then swapped in for the table by one `EXCHANGE TABLES`. A run killed at any point leaves the table as it was or with every partition, so the next run converges.
+/// The statements publishing the delta's partitions `new` (and, replacing rows, the target's partitions `displaced` that hold them), each partition whole and every one at once: none when nothing is touched; an added single partition attached from the delta (it copies nothing); otherwise the table's touched partitions (a single one) or all of them hard-linked into a copy, the displaced rows deleted there and the delta's partitions attached, so no kept row is copied; then a single partition swapped in by `REPLACE PARTITION` (or dropped when the copy holds none of its rows), several by one `EXCHANGE TABLES` of the copy. A run killed at any point leaves the table as it was or with every partition, so the next run converges.
 pub(crate) fn partition_statements(
     publish: &PartitionPublish<'_>,
     (new, displaced): (&[String], &[String]),
@@ -57,61 +57,49 @@ pub(crate) fn partition_statements(
         aside,
         displaced: condition,
     } = *publish;
-    let attach = |into: &str, partition: &String| {
+    let attach = |into: &str, from: &str, partition: &String| {
         format!(
-            "ALTER TABLE {into} ATTACH PARTITION ID {} FROM {delta}",
+            "ALTER TABLE {into} ATTACH PARTITION ID {} FROM {from}",
             literal(partition)
         )
     };
-    let kept = |partitions: &str| match condition {
-        Some(condition) => format!(
-            "INSERT INTO {copy} SELECT * FROM {target} WHERE _partition_id IN ({partitions}) AND NOT ifNull({condition}, 0)"
-        ),
-        None => format!(
-            "INSERT INTO {copy} SELECT * FROM {target} WHERE _partition_id IN ({partitions})"
-        ),
-    };
-    let listed: Vec<String> = touched.iter().map(|partition| literal(partition)).collect();
+    let listed: Vec<String> = displaced
+        .iter()
+        .map(|partition| literal(partition))
+        .collect();
     let mut statements: Vec<String> = Vec::new();
-    match (touched.as_slice(), condition) {
+    let linked = match (touched.as_slice(), condition) {
         ([], _) => return statements,
-        ([only], None) => return vec![attach(target, only)],
-        ([only], Some(_)) => {
-            statements.push(format!("DROP TABLE IF EXISTS {copy}"));
-            statements.push(format!("CREATE TABLE {copy} AS {target}"));
-            statements.push(kept(&listed.join(", ")));
-            statements.extend(new.iter().map(|partition| attach(copy, partition)));
-            statements.push(match new.contains(only) {
-                true => replace_partition(target, copy, only),
-                false => publish_statement(&PublishStep::ReplacePartition {
-                    target: target.to_owned(),
-                    copy: copy.to_owned(),
-                    partition: only.clone(),
-                }),
-            });
-        }
-        (_, condition) => {
-            statements.push(format!("DROP TABLE IF EXISTS {copy}"));
-            statements.push(format!("CREATE TABLE {copy} AS {target}"));
-            statements.push(format!(
-                "ALTER TABLE {copy} ATTACH PARTITION ALL FROM {target}"
-            ));
-            if condition.is_some() {
-                let drops: Vec<String> = listed
-                    .iter()
-                    .map(|partition| format!("DROP PARTITION ID {partition}"))
-                    .collect();
-                statements.push(format!("ALTER TABLE {copy} {}", drops.join(", ")));
-                statements.push(kept(&listed.join(", ")));
-            }
-            statements.extend(new.iter().map(|partition| attach(copy, partition)));
-            statements.push(publish_statement(&PublishStep::Exchange {
-                target: target.to_owned(),
-                build: copy.to_owned(),
-                aside: aside.to_owned(),
-            }));
-        }
+        ([only], None) => return vec![attach(target, delta, only)],
+        ([only], Some(_)) => attach(copy, target, only),
+        _ => format!("ALTER TABLE {copy} ATTACH PARTITION ALL FROM {target}"),
+    };
+    statements.push(format!("DROP TABLE IF EXISTS {copy}"));
+    statements.push(format!("CREATE TABLE {copy} AS {target}"));
+    statements.push(linked);
+    if let (Some(condition), false) = (condition, displaced.is_empty()) {
+        statements.push(publish_statement(&PublishStep::DeleteRows {
+            table: copy.to_owned(),
+            condition: format!(
+                "_partition_id IN ({}) AND ifNull({condition}, 0)",
+                listed.join(", ")
+            ),
+        }));
     }
+    statements.extend(new.iter().map(|partition| attach(copy, delta, partition)));
+    statements.push(match (touched.as_slice(), condition) {
+        ([only], Some(_)) if new.contains(only) => replace_partition(target, copy, only),
+        ([only], Some(_)) => publish_statement(&PublishStep::ReplacePartition {
+            target: target.to_owned(),
+            copy: copy.to_owned(),
+            partition: only.clone(),
+        }),
+        _ => publish_statement(&PublishStep::Exchange {
+            target: target.to_owned(),
+            build: copy.to_owned(),
+            aside: aside.to_owned(),
+        }),
+    });
     statements.push(format!("DROP TABLE IF EXISTS {copy}"));
     statements
 }

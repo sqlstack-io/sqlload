@@ -36,13 +36,14 @@ The target's `loader_schema` is the ClickHouse database tables load into; a sour
 overrides it. ClickHouse has no level above its databases, so a ClickHouse target takes no
 `database`, and `plan` refuses one. `sqlload apply` creates the database when it doesn't exist.
 
-SQLLoad is tested against ClickHouse 25.8 and 26.10.
+SQLLoad needs ClickHouse 25.5 or later, and is tested against 25.8 and 26.10.
 
 ## Permissions
 
 SQLLoad creates databases and tables, inserts into its staging tables, moves partitions between
-tables (`ATTACH PARTITION`, `REPLACE PARTITION`, `DROP PARTITION`), exchanges, renames and drops tables, and reads
-files with the `s3` table function. The user needs the grants for these in the target's databases.
+tables (`ATTACH PARTITION`, `REPLACE PARTITION`, `DROP PARTITION`), deletes rows from its own copies
+of tables (`DELETE FROM`, or `ALTER TABLE ... DELETE`), exchanges, renames and drops tables, and
+reads files with the `s3` table function. The user needs the grants for these in the target's databases.
 
 `sqlload debug` checks the connection, and prints the user, the server's version and its time zone.
 
@@ -122,15 +123,28 @@ SQLLoad reads the files itself and sends Arrow instead when ClickHouse wouldn't 
 | `delete_insert` | Rewrites each partition holding the cursor range it read. |
 | `replace` | Builds a new table and swaps it in with `EXCHANGE TABLES`. `--reload` does the same. |
 
-`merge` and `delete_insert` rewrite whole partitions. One partition is rebuilt beside the table and
-swapped in with `REPLACE PARTITION`, or dropped with `DROP PARTITION` when none of its rows remain. Several are rebuilt in a copy that hard-links the table's
-other parts, then exchanged in at once.
+`merge` and `delete_insert` publish whole partitions. The touched partitions are hard-linked into a
+copy of the table, so no kept row is copied. The rows being replaced are deleted from the copy with a
+lightweight `DELETE`, and the new rows are attached. One partition is then swapped in with
+`REPLACE PARTITION`, or dropped with `DROP PARTITION` when none of its rows remain. Several are
+exchanged in at once with the rest of the table. Rows a lightweight `DELETE` removes are hidden from
+readers straight away and removed from disk when ClickHouse next merges the parts. Until then,
+`system.parts.rows` and `system.tables.total_rows` still count them.
+
+Where a lightweight `DELETE` is refused, as on a table with projections whose
+`lightweight_mutation_projection_mode` is `throw` (the default), SQLLoad deletes with
+`ALTER TABLE ... DELETE` instead, which rewrites the touched parts.
+
+SQLLoad must be the only writer of the tables it loads. Rows another writer adds while a load
+publishes can be lost, and a lightweight `UPDATE` run on the table is undone or refused by the next
+publish, as it lives in a patch part that moving partitions does not carry.
 
 `merge` matches rows on `unique_key` exactly, so readers need no `FINAL`. It replaces whole rows,
 so a column the source no longer has is `NULL` on the rows it updates.
 
-A rewrite costs as much as the partitions it touches, and an unpartitioned table is one partition.
-Partition large tables by the column new rows arrive on.
+A publish costs about as much as the rows it replaces and adds, plus a scan of the touched
+partitions to find the rows to delete and a new hard-linked version of each part in the copy. An
+unpartitioned table is one partition. Partition large tables by the column new rows arrive on.
 
 ## Types
 
