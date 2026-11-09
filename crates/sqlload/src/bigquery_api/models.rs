@@ -239,3 +239,107 @@ pub struct AppendStream {
     pub requests: tokio::sync::mpsc::Sender<AppendRowsRequest>,
     pub responses: tonic::Streaming<AppendRowsResponse>,
 }
+
+/// `ReadSession`: what a Storage Read API session reads and how, and, once created, its name, schema and streams.
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct ReadSession {
+    #[prost(string, tag = "1")]
+    pub name: String,
+    /// `DataFormat`: [`ARROW_FORMAT`](crate::bigquery_api::constants::ARROW_FORMAT).
+    #[prost(int32, tag = "3")]
+    pub data_format: i32,
+    #[prost(message, optional, tag = "5")]
+    pub arrow_schema: Option<ArrowSchema>,
+    /// The table read, as `projects/p/datasets/d/tables/t`.
+    #[prost(string, tag = "6")]
+    pub table: String,
+    #[prost(message, optional, tag = "7")]
+    pub table_modifiers: Option<TableModifiers>,
+    #[prost(message, optional, tag = "8")]
+    pub read_options: Option<TableReadOptions>,
+    #[prost(message, repeated, tag = "10")]
+    pub streams: Vec<ReadStream>,
+    #[prost(int64, tag = "12")]
+    pub estimated_total_bytes_scanned: i64,
+    #[prost(int64, tag = "14")]
+    pub estimated_row_count: i64,
+}
+
+/// `ReadSession.TableModifiers`: the instant the table is read as of.
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct TableModifiers {
+    #[prost(message, optional, tag = "1")]
+    pub snapshot_time: Option<Timestamp>,
+}
+
+/// `ReadSession.TableReadOptions`: the columns read, a filter on the rows, and how Arrow buffers are compressed.
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct TableReadOptions {
+    #[prost(string, repeated, tag = "1")]
+    pub selected_fields: Vec<String>,
+    /// A GoogleSQL condition on the table's columns; empty reads every row.
+    #[prost(string, tag = "2")]
+    pub row_restriction: String,
+    #[prost(message, optional, tag = "3")]
+    pub arrow_serialization_options: Option<ArrowSerializationOptions>,
+}
+
+/// `ArrowSerializationOptions`: the codec of the batches' buffers ([`LZ4_FRAME`](crate::bigquery_api::constants::LZ4_FRAME)).
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct ArrowSerializationOptions {
+    #[prost(int32, tag = "2")]
+    pub buffer_compression: i32,
+}
+
+/// `ReadStream`: one of a session's streams, by name.
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct ReadStream {
+    #[prost(string, tag = "1")]
+    pub name: String,
+}
+
+/// `CreateReadSessionRequest`: a session billed to the project `parent` (`projects/p`), split into at most `max_stream_count` streams.
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct CreateReadSessionRequest {
+    #[prost(string, tag = "1")]
+    pub parent: String,
+    #[prost(message, optional, tag = "2")]
+    pub read_session: Option<ReadSession>,
+    #[prost(int32, tag = "3")]
+    pub max_stream_count: i32,
+}
+
+/// `ReadRowsRequest`: a stream's rows from row `offset` on.
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct ReadRowsRequest {
+    #[prost(string, tag = "1")]
+    pub read_stream: String,
+    #[prost(int64, tag = "2")]
+    pub offset: i64,
+}
+
+/// `ReadRowsResponse` with Arrow rows: one record batch and its row count.
+#[derive(Clone, PartialEq, Debug, prost::Message)]
+#[prost(skip_debug)]
+pub struct ReadRowsResponse {
+    #[prost(message, optional, tag = "4")]
+    pub arrow_record_batch: Option<ArrowRecordBatch>,
+    #[prost(int64, tag = "6")]
+    pub row_count: i64,
+}
+
+/// What a read session reads: the columns, a GoogleSQL filter on them, the instant (milliseconds since the epoch; `None` for now), and the most streams to split it into.
+#[derive(Debug, Clone)]
+pub struct ReadSessionRequest<'a> {
+    pub fields: &'a [String],
+    pub restriction: Option<&'a str>,
+    pub snapshot_ms: Option<i64>,
+    pub max_streams: i32,
+}

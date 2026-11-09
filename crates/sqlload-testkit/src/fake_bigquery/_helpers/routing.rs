@@ -7,7 +7,9 @@ use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-use crate::fake_bigquery::_helpers::statements::{google_error, run_query, table_metadata};
+use crate::fake_bigquery::_helpers::statements::{
+    google_error, list_datasets, list_tables, run_query, table_metadata,
+};
 use crate::fake_bigquery::constants::{FAKE_PROJECT, TOKEN_PATH, TOKEN_PREFIX};
 use crate::fake_bigquery::models::SharedState;
 
@@ -56,6 +58,8 @@ pub(crate) async fn handle(
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     let outcome = match (parts.method.as_str(), segments.as_slice()) {
         ("POST", ["projects", _, "queries"]) => run_query(&state, &body),
+        ("GET", ["projects", _, "datasets"]) => list_datasets(&state),
+        ("GET", ["projects", _, "datasets", dataset, "tables"]) => list_tables(&state, dataset),
         ("GET", ["projects", _, "datasets", dataset, "tables", table]) => {
             table_metadata(&state, dataset, table)
         }

@@ -37,6 +37,7 @@ odbc = ["dep:arrow-odbc"]
 [dependencies]
 aes.workspace = true
 arrow-array = { workspace = true, features = ["chrono-tz"] }
+arrow-buffer.workspace = true
 arrow-cast.workspace = true
 arrow-csv.workspace = true
 arrow-ipc.workspace = true
