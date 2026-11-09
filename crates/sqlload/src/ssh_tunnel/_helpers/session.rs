@@ -1,4 +1,4 @@
-//! Signing in to the bastion and checking who it is.
+//! Signing in to an SSH server (a bastion, or an SFTP server) and checking who it is.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -21,13 +21,18 @@ static SESSIONS: OnceLock<Mutex<HashMap<String, Slot>>> = OnceLock::new();
 /// The tunnels, by [`slot_key`], whose connections saw their session close: a session can be reopened (by another table) before a failed connection asks, so the closing is kept for the rest of the run.
 static DROPPED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
-/// Which session `tunnel` uses on the current runtime: the runtime, the bastion and the sign-in.
+/// Which session `tunnel` uses on the current runtime: the runtime, the server and the sign-in (a password by its hash, so two passwords never share a session and neither is kept as text).
 pub(crate) fn slot_key(tunnel: &SshTunnel) -> String {
     format!(
-        "{}|{}|{:?}|{:?}",
+        "{}|{}|{:?}|{:?}|{:?}",
         tokio::runtime::Handle::current().id(),
         tunnel.route(),
         tunnel.private_key_file,
+        tunnel.password.as_ref().map(|password| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(password.expose(), &mut hasher);
+            std::hash::Hasher::finish(&hasher)
+        }),
         tunnel.known_hosts
     )
 }
@@ -89,7 +94,7 @@ pub(crate) fn expanded(path: &Path) -> PathBuf {
 /// Why the bastion's host key is not trusted, with its fingerprint and the fix; `None` when `known_hosts` lists it.
 pub(crate) fn host_key_refusal(check: &HostCheck, key: &PublicKeyOrCertificate) -> Option<String> {
     let PublicKeyOrCertificate::PublicKey { key, .. } = key else {
-        return Some("the bastion presented a host certificate; SQLLoad checks plain host keys against known_hosts only".to_owned());
+        return Some("the server presented a host certificate; SQLLoad checks plain host keys against known_hosts only".to_owned());
     };
     let shown = check.known_hosts.display();
     let fingerprint = key.fingerprint(HashAlg::Sha256);
@@ -99,7 +104,7 @@ pub(crate) fn host_key_refusal(check: &HostCheck, key: &PublicKeyOrCertificate) 
     };
     if !check.known_hosts.is_file() {
         return Some(format!(
-            "{shown} is missing or not a file, so the bastion's host key {fingerprint} ({}) cannot be checked; once its administrator confirms that fingerprint, add it with `ssh-keyscan -p {} {} >> {shown}` and compare the fingerprint it prints",
+            "{shown} is missing or not a file, so the server's host key {fingerprint} ({}) cannot be checked; once its administrator confirms that fingerprint, add it with `ssh-keyscan -p {} {} >> {shown}` and compare the fingerprint it prints",
             key.algorithm(),
             check.port,
             check.host,
@@ -117,13 +122,13 @@ pub(crate) fn host_key_refusal(check: &HostCheck, key: &PublicKeyOrCertificate) 
     ) {
         (true, _) => None,
         (false, true) => Some(format!(
-            "the bastion's host key changed: it now presents {fingerprint} ({}), which {shown} does not list for {listed}; if the change is expected, remove the old entry with `ssh-keygen -R '{listed}' -f {shown}`, then add the new one with `ssh-keyscan -p {} {} >> {shown}` and compare the fingerprint it prints",
+            "the server's host key changed: it now presents {fingerprint} ({}), which {shown} does not list for {listed}; if the change is expected, remove the old entry with `ssh-keygen -R '{listed}' -f {shown}`, then add the new one with `ssh-keyscan -p {} {} >> {shown}` and compare the fingerprint it prints",
             key.algorithm(),
             check.port,
             check.host,
         )),
         (false, false) => Some(format!(
-            "the bastion's host key {fingerprint} ({}) is not in {shown}; once its administrator confirms that fingerprint, add it with `ssh-keyscan -p {} {} >> {shown}` and compare the fingerprint it prints",
+            "the server's host key {fingerprint} ({}) is not in {shown}; once its administrator confirms that fingerprint, add it with `ssh-keyscan -p {} {} >> {shown}` and compare the fingerprint it prints",
             key.algorithm(),
             check.port,
             check.host,
@@ -176,7 +181,7 @@ async fn open_session(tunnel: &SshTunnel) -> Result<Handle<HostCheck>, String> {
         .map_err(|_| format!("signing in took longer than {}s", CONNECT_TIMEOUT.as_secs()))?
 }
 
-/// `session` signed in as `tunnel.user` with its private key, or with ssh-agent's keys when it names none.
+/// `session` signed in as `tunnel.user` with its private key, else its password, else ssh-agent's keys.
 async fn sign_in(
     mut session: Handle<HostCheck>,
     tunnel: &SshTunnel,
@@ -188,7 +193,10 @@ async fn sign_in(
         .flatten();
     let user = tunnel.user.as_str();
     let Some(file) = &tunnel.private_key_file else {
-        return agent_sign_in(session, user, rsa_hash).await;
+        return match &tunnel.password {
+            Some(password) => password_sign_in(session, user, password.expose()).await,
+            None => agent_sign_in(session, user, rsa_hash).await,
+        };
     };
     let file = expanded(file);
     let passphrase = tunnel
@@ -204,9 +212,25 @@ async fn sign_in(
     match result.success() {
         true => Ok(session),
         false => Err(format!(
-            "the bastion refused {user}'s key {}",
+            "the server refused {user}'s key {}",
             file.display()
         )),
+    }
+}
+
+/// `session` signed in as `user` with `password`.
+async fn password_sign_in(
+    mut session: Handle<HostCheck>,
+    user: &str,
+    password: &str,
+) -> Result<Handle<HostCheck>, String> {
+    let result = session
+        .authenticate_password(user, password)
+        .await
+        .map_err(|error| error.to_string())?;
+    match result.success() {
+        true => Ok(session),
+        false => Err(format!("the server refused {user}'s password")),
     }
 }
 
@@ -217,7 +241,7 @@ async fn agent_sign_in(
     rsa_hash: Option<HashAlg>,
 ) -> Result<Handle<HostCheck>, String> {
     let mut agent = AgentClient::connect_env().await.map_err(|error| {
-        format!("no private_key_file is set and ssh-agent is not reachable ({error}); set private_key_file in the ssh table")
+        format!("neither private_key_file nor password is set and ssh-agent is not reachable ({error}); set private_key_file or password")
     })?;
     let identities = agent
         .request_identities()
@@ -238,7 +262,7 @@ async fn agent_sign_in(
         }
     }
     Err(format!(
-        "the bastion refused {user} with each of ssh-agent's {} keys; set private_key_file in the ssh table",
+        "the server refused {user} with each of ssh-agent's {} keys; set private_key_file or password",
         identities.len()
     ))
 }

@@ -7,19 +7,21 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
 
 use crate::ssh::_helpers::key_files::key_files;
-use crate::ssh::constants::{FORWARDING, IMAGE, SSH_PORT, SSH_USER, TAG};
+use crate::ssh::constants::{IMAGE, SSH_PASSWORD, SSH_PORT, SSH_USER, SSHD_SETTINGS, TAG};
 use crate::ssh::models::Bastion;
 
-/// A bastion that lets [`SSH_USER`] in with a fresh key and forwards connections to containers on its own network (see [`crate::ssh::main::behind_bastion::behind_bastion`]), on a free host port.
+/// A bastion (which also serves SFTP) that lets [`SSH_USER`] in with a fresh key or [`SSH_PASSWORD`] and forwards connections to containers on its own network (see [`crate::ssh::main::behind_bastion::behind_bastion`]), on a free host port.
 pub async fn start_bastion() -> Result<Bastion, String> {
     let network = format!("sqlload-bastion-{}", uuid::Uuid::new_v4().simple());
     let container = GenericImage::new(IMAGE, TAG)
         .with_exposed_port(SSH_PORT.tcp())
         .with_wait_for(WaitFor::message_on_stdout("[ls.io-init] done."))
         .with_env_var("USER_NAME", SSH_USER)
+        .with_env_var("PASSWORD_ACCESS", "true")
+        .with_env_var("USER_PASSWORD", SSH_PASSWORD)
         .with_copy_to(
             "/config/sshd/sshd_config.d/forwarding.conf",
-            FORWARDING.as_bytes().to_vec(),
+            SSHD_SETTINGS.as_bytes().to_vec(),
         )
         .with_network(network.clone())
         .with_startup_timeout(Duration::from_secs(120))

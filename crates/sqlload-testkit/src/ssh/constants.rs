@@ -8,8 +8,11 @@ pub const SSH_PORT: u16 = 2222;
 /// The bastion's user.
 pub const SSH_USER: &str = "loader";
 
-/// Lets the bastion open connections onward, which the image turns off; read before the main config, so it wins.
-pub const FORWARDING: &str = "AllowTcpForwarding yes\n";
+/// The password [`SSH_USER`] may also sign in with.
+pub const SSH_PASSWORD: &str = "loader-test-password";
+
+/// Lets the bastion open connections onward, which the image turns off, and turns off OpenSSH's per-source penalties, so tests that fail to sign in on purpose don't lock out the next ones; read before the main config, so it wins.
+pub const SSHD_SETTINGS: &str = "AllowTcpForwarding yes\nPerSourcePenalties no\n";
 
 /// Run in the started container once sshd answers (it logs to a file, not the container output): a client key for [`SSH_USER`] and one the bastion does not know, then the host's public keys, each block after an `@@` line.
 pub const KEYS_SCRIPT: &str = "set -e; until nc -z localhost 2222; do sleep 0.2; done; ssh-keygen -q -t ed25519 -N '' -f /tmp/client; ssh-keygen -q -t ed25519 -N '' -f /tmp/other; cat /tmp/client.pub >> /config/.ssh/authorized_keys; cat /tmp/client; echo @@; cat /tmp/other; echo @@; cat /tmp/client.pub; echo @@; cat /config/ssh_host_keys/ssh_host_*_key.pub";

@@ -22,11 +22,14 @@ pub struct SshTunnel {
     #[serde(default)]
     pub port: Option<u16>,
     pub user: String,
-    /// The private key to sign in with (`~/` is the home folder); ssh-agent's keys when unset.
+    /// The private key to sign in with (`~/` is the home folder); `password`, else ssh-agent's keys, when unset.
     #[serde(default)]
     pub private_key_file: Option<PathBuf>,
     #[serde(default)]
     pub private_key_passphrase: Option<Secret>,
+    /// The password to sign in with when no `private_key_file` is set.
+    #[serde(default)]
+    pub password: Option<Secret>,
     /// The file the bastion's host key must be listed in; `~/.ssh/known_hosts` when unset.
     #[serde(default)]
     pub known_hosts: Option<PathBuf>,
@@ -44,7 +47,7 @@ impl SshTunnel {
     }
 }
 
-/// Checks the bastion's host key against `known_hosts`, keeping why it refused one.
+/// Checks the server's host key against `known_hosts`, keeping why it refused one.
 #[derive(Debug)]
 pub(crate) struct HostCheck {
     pub(crate) host: String,
