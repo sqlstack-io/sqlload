@@ -1104,5 +1104,5 @@ def test_given_a_native_type_pinned_for_a_files_target_when_planning_then_plan_r
 	module = "import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={'n': 'native(\"HUGEINT\")'})(lambda ctx: [{'id': 1, 'n': 5}])\n"
 	project = make_project(tmp_path, FILES_PROJECT, "", module=module)
 	planned = sqlload(project, "plan")
-	assert planned.returncode != 0, planned.stdout
+	assert planned.returncode == 1, planned.stdout
 	assert "column n: a native type has no Arrow type, so Parquet and CSV files cannot hold it; pin a portable type" in planned.stdout + planned.stderr, planned.stdout + planned.stderr
