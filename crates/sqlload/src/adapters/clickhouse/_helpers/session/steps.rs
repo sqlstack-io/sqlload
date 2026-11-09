@@ -85,9 +85,7 @@ async fn insert_sorted(
     let sorted = sorted_insert(insert, key, &key_columns, columns);
     match send(destination, None, sorted.clone().into_bytes()).await {
         Ok(_) => Ok(()),
-        Err(error)
-            if sorted != insert && error.code() == Some(MEMORY_LIMIT_EXCEEDED_CODE) =>
-        {
+        Err(error) if sorted != insert && error.code() == Some(MEMORY_LIMIT_EXCEEDED_CODE) => {
             tracing::debug!(%error, "the sorted insert ran out of memory; inserting unsorted");
             let delta = format!(
                 "{}.{}",
