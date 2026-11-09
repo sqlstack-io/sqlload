@@ -17,6 +17,7 @@ CREATE TABLE public.accounts (id int8 PRIMARY KEY, name text, balance numeric(12
 CREATE TABLE public.events (event_id int8, kind text, day date NOT NULL);
 CREATE TABLE public.stores (code text, city text);
 CREATE TABLE public.visits (id int8, day date NOT NULL);
+CREATE TABLE public.views (id int8, day date NOT NULL);
 CREATE TABLE public.clicks (id int8, at timestamptz);
 CREATE TABLE public.kinds (id int2, tz timestamptz, ntz timestamp, amount numeric(38,9), born date, ref uuid, doc jsonb, raw bytea, opens time, ok bool, ratio float8);
 INSERT INTO public.accounts VALUES
@@ -25,11 +26,18 @@ INSERT INTO public.accounts VALUES
 INSERT INTO public.events VALUES (1, 'open', '2026-10-20'), (2, 'close', '2026-10-30'), (3, 'open', '2026-11-03');
 INSERT INTO public.stores VALUES ('L1', 'Leeds'), ('Y1', 'York');
 INSERT INTO public.visits VALUES (1, '2026-10-20'), (2, '2026-10-30');
+INSERT INTO public.views VALUES (1, '2026-10-20'), (2, '2026-10-30');
 INSERT INTO public.clicks VALUES (1, '2026-11-01 00:00:00+00');
 INSERT INTO public.kinds VALUES
   (7, '2026-03-29 01:30:00+02', '2026-03-29 01:30:00.123456', 12345678901234567890.123456789, '1960-02-29', '0f8fad5b-d9cb-469f-a165-70867728950e', '{\"a\": 1}', '\\x00ff', '13:04:05.123456', true, 0.5),
   (8, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 ";
+
+/// `public.views`'s table as ClickHouse holds it before the first load: with a projection, so a lightweight `DELETE` on it is refused.
+const VIEWS_WITH_PROJECTION: &str = "CREATE TABLE raw.app__views (id Nullable(Int64), day Nullable(Date32), _sqlload_load_id Nullable(String), _sqlload_loaded_at Nullable(DateTime64(6, 'UTC')), PROJECTION by_day (SELECT day, count() GROUP BY day)) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY tuple() SETTINGS allow_nullable_key = 1";
+
+/// The rows `public.views` starts with, already in its table, so the first load replaces its window there too.
+const VIEWS_ROWS: &str = "INSERT INTO raw.app__views VALUES (1, '2026-10-20', NULL, NULL), (2, '2026-10-30', NULL, NULL)";
 
 /// The tables' settings: monthly partitions for the windowed and merged tables, a sorting key for the merged one, nothing for the rest.
 const TABLES: &str = r#"
@@ -49,6 +57,11 @@ write_strategy = "delete_insert"
 cursor_column = "day"
 partition_by = "toYYYYMM(day)"
 lookback = "5d"
+
+[sources.app.tables."public.views"]
+write_strategy = "delete_insert"
+cursor_column = "day"
+partition_by = "toYYYYMM(day)"
 
 [sources.app.tables."public.stores"]
 write_strategy = "replace"
@@ -90,6 +103,9 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
             &["--allow_deprecated_database_ordinary=1"],
         )
         .await?;
+        run_client(&clickhouse, "CREATE DATABASE raw", &[]).await?;
+        run_client(&clickhouse, VIEWS_WITH_PROJECTION, &[]).await?;
+        run_client(&clickhouse, VIEWS_ROWS, &[]).await?;
         let project = described_project(&clickhouse_project(
             postgres.port,
             clickhouse.port,
@@ -151,6 +167,12 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 source_change: "DELETE FROM public.visits WHERE id = 2;",
                 check_query: "SELECT arrayStringConcat(groupArray(toString(id) || '@' || toString(day)), ',') FROM (SELECT id, day FROM raw.app__visits ORDER BY id)",
                 expected_result: "1@2026-10-20",
+            },
+            LoadRunTestCase {
+                description: "delete_insert into a table with a projection, which refuses a lightweight DELETE, rewrites the window's rows instead and keeps the projection",
+                source_change: "DELETE FROM public.views WHERE id = 2; INSERT INTO public.views VALUES (3, '2026-10-30');",
+                check_query: "SELECT arrayStringConcat(groupArray(toString(id) || '@' || toString(day)), ',') || ' / ' || toString((SELECT count() FROM system.projections WHERE database = 'raw' AND table = 'app__views')) FROM (SELECT id, day FROM raw.app__views ORDER BY id)",
+                expected_result: "1@2026-10-20,3@2026-10-30 / 1",
             },
             LoadRunTestCase {
                 description: "append adds the new rows' partition and keeps the old",

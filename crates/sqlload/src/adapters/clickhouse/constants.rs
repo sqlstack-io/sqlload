@@ -7,6 +7,7 @@ pub const DEFAULT_HTTPS_PORT: u16 = 8443;
 /// Settings every request runs with, so SQLLoad's SQL behaves the same on every server: statements finish before the next starts, a NULL never becomes a default value, wall-clock timestamps read in UTC (as the Arrow values are sent), one insert may fill any number of partitions (a first load of a long history does), and errors come with the response's status.
 pub const SESSION_SETTINGS: &[(&str, &str)] = &[
     ("mutations_sync", "2"),
+    ("lightweight_deletes_sync", "2"),
     ("insert_null_as_default", "0"),
     ("input_format_null_as_default", "0"),
     ("session_timezone", "UTC"),
@@ -28,6 +29,9 @@ pub const SUMMARY_HEADER: &str = "X-ClickHouse-Summary";
 
 /// The error codes of an `EXCHANGE TABLES` the database cannot run (a database not of the `Atomic` engine), which a rename swap replaces.
 pub const EXCHANGE_UNSUPPORTED_CODES: &[&str] = &["1", "48"];
+
+/// The error code of a lightweight `DELETE` a table refuses (one with projections, unless it is set to rebuild them), which `ALTER TABLE ... DELETE` replaces.
+pub const LIGHTWEIGHT_DELETE_REFUSED_CODE: &str = "344";
 
 /// The engine a created table gets when its layout names none.
 pub const DEFAULT_ENGINE: &str = "MergeTree";

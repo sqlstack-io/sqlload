@@ -4,7 +4,9 @@ use crate::adapters::clickhouse::_helpers::dialect::publish::{
     partition_rows_query, replace_partition,
 };
 use crate::adapters::clickhouse::_helpers::session::http::send;
-use crate::adapters::clickhouse::constants::{EXCHANGE_UNSUPPORTED_CODES, PUBLISH_PREFIX};
+use crate::adapters::clickhouse::constants::{
+    EXCHANGE_UNSUPPORTED_CODES, LIGHTWEIGHT_DELETE_REFUSED_CODE, PUBLISH_PREFIX,
+};
 use crate::adapters::clickhouse::models::{ClickHouseDestination, ClickHouseSql, PublishStep};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::http::errors::ApiError;
@@ -19,7 +21,7 @@ pub(crate) fn publish_step(statement: &str) -> Result<Option<PublishStep>, ApiEr
         .map_err(|error| ApiError::Protocol(format!("a malformed publish step: {error}")))
 }
 
-/// Run one statement, or the exchange or partition replace it stands for; a partition publish here is a mistake, as it only follows from a write.
+/// Run one statement, or the exchange, partition replace or row delete it stands for; a partition publish here is a mistake, as it only follows from a write.
 pub(crate) async fn run_step(
     destination: &ClickHouseDestination,
     statement: &str,
@@ -38,6 +40,9 @@ pub(crate) async fn run_step(
             copy,
             partition,
         }) => replace_or_drop(destination, (&target, &copy, &partition)).await,
+        Some(PublishStep::DeleteRows { table, condition }) => {
+            delete_rows(destination, (&table, &condition)).await
+        }
         Some(PublishStep::Partitions { .. }) => Err(ApiError::Protocol(
             "a partition publish cannot run inside another".to_owned(),
         )),
@@ -99,4 +104,31 @@ async fn replace_or_drop(
     send(destination, None, statement.into_bytes())
         .await
         .map(|_| ())
+}
+
+/// Delete `table`'s rows matching `condition` with a lightweight `DELETE`, which only marks them, or by rewriting their parts with `ALTER TABLE ... DELETE` where the table refuses one.
+async fn delete_rows(
+    destination: &ClickHouseDestination,
+    (table, condition): (&str, &str),
+) -> Result<(), ApiError> {
+    let deleted = send(
+        destination,
+        None,
+        format!("DELETE FROM {table} WHERE {condition}").into_bytes(),
+    )
+    .await;
+    match deleted {
+        Ok(_) => Ok(()),
+        Err(error) if error.code() == Some(LIGHTWEIGHT_DELETE_REFUSED_CODE) => {
+            tracing::debug!(%error, "a lightweight DELETE is refused here; rewriting the parts");
+            send(
+                destination,
+                None,
+                format!("ALTER TABLE {table} DELETE WHERE {condition}").into_bytes(),
+            )
+            .await
+            .map(|_| ())
+        }
+        Err(error) => Err(error),
+    }
 }
