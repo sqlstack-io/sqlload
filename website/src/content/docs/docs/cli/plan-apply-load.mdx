@@ -74,7 +74,7 @@ Loads (2)                                           sqlload load
 
 | Section | Lists |
 |---------|-------|
-| `Objects` | Tables `apply` creates or alters: each column as its portable type `->` the warehouse type, then in brackets what that type loses, if anything (from 0.29.0; for an array, the array's own loss, then its elements' after `elements:`), added and widened columns, with the same note from 0.31.0 (not released yet), excluded and masked columns. |
+| `Objects` | Tables `apply` creates or alters: each column as its portable type `->` the warehouse type, then in brackets what that type loses, if anything (from 0.29.0; for an array, the array's own loss, then its elements' after `elements:`), added and widened columns, with the same note from 0.31.0, excluded and masked columns. |
 | `Loads` | Each table `load` loads, with its write strategy, and lines for `source`, `files`, `schema`, `route`, `batch`, `cursor`, `state` and `note`. |
 | `Skipped` | Tables left out on purpose, such as by `skip_tables_with_columns` or `new_tables = "skip"`, with the reason. |
 | `Errors` | Tables that can't load as configured, with the reason and the fix. |
