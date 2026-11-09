@@ -79,7 +79,8 @@ impl ColumnBuilder {
         })
     }
 
-    /// Append one value that arrived as `wire`; `None` is SQL `NULL`.
+    /// Append one value that arrived as `wire`; `None` is SQL `NULL`. Inlined into the COPY decoder's loop wherever the compiler splits the crate, which otherwise decides it by code elsewhere.
+    #[inline]
     pub(crate) fn append(&mut self, wire: WireType, value: Option<&[u8]>) -> Result<(), String> {
         let Some(bytes) = value else {
             self.append_null();
