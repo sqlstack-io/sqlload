@@ -23,6 +23,8 @@ mod sheets_helpers;
 mod test_batched_loads;
 #[path = "loader/test_bigquery_loads.rs"]
 mod test_bigquery_loads;
+#[path = "loader/test_bigquery_source.rs"]
+mod test_bigquery_source;
 #[path = "loader/test_databricks_loads.rs"]
 mod test_databricks_loads;
 #[path = "loader/test_debug_project.rs"]

@@ -637,6 +637,8 @@ pub enum SourceReader {
     Files(OpenFolder),
     /// A warehouse source that unloads its tables.
     Snowflake(Box<SnowflakeReader>),
+    /// BigQuery tables and queries, read through the Storage Read API.
+    BigQuery(Box<crate::bigquery_source::models::BigQueryReader>),
     /// A database read through its ODBC driver.
     #[cfg(feature = "odbc")]
     Odbc(Box<crate::odbc_source::models::OdbcReader>),

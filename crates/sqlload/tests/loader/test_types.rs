@@ -853,3 +853,29 @@ pub(crate) struct S3ProfileTestCase {
     pub(crate) expected_text: &'static str,
     pub(crate) expected_ok: bool,
 }
+
+/// One load from a bigquery source into DuckDB.
+pub(crate) struct BigQuerySourceTestCase {
+    pub(crate) description: &'static str,
+    /// Rows added to the fake's `marts.orders` before the load.
+    pub(crate) rows: fn() -> Vec<serde_json::Value>,
+    /// How many read streams break after their first row.
+    pub(crate) broken_reads: usize,
+    /// The table's rows after the load, as `id:label:amount:at`.
+    pub(crate) expected_rows: &'static str,
+    /// The row restriction the load's read session asked for.
+    pub(crate) expected_restriction: &'static str,
+}
+
+/// Two loads from a bigquery source into DuckDB of a one-column table appended by that column as its cursor.
+pub(crate) struct BigQueryCursorTestCase {
+    pub(crate) description: &'static str,
+    /// The table's column and its DDL type in the fake's `marts.values` table.
+    pub(crate) column: (&'static str, &'static str),
+    /// The values the first load reads, then those added before the next.
+    pub(crate) values: (&'static [&'static str], &'static [&'static str]),
+    /// The row restriction of the next load's read session.
+    pub(crate) expected_restriction: &'static str,
+    /// The loaded values, as DuckDB text in order, joined by commas.
+    pub(crate) expected_values: &'static str,
+}

@@ -12,6 +12,7 @@ rust-version.workspace = true
 arrow-array = { workspace = true, features = ["chrono-tz"] }
 arrow-cast.workspace = true
 arrow-ipc.workspace = true
+arrow-schema.workspace = true
 axum.workspace = true
 bytes.workspace = true
 flate2.workspace = true

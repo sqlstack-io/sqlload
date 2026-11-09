@@ -318,6 +318,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "flatbuffers",
+ "lz4_flex",
 ]
 
 [[package]]
@@ -5476,6 +5477,7 @@ version = "0.29.0"
 dependencies = [
  "aes 0.8.4",
  "arrow-array",
+ "arrow-buffer",
  "arrow-cast",
  "arrow-csv",
  "arrow-ipc",
@@ -5568,6 +5570,7 @@ dependencies = [
  "arrow-array",
  "arrow-cast",
  "arrow-ipc",
+ "arrow-schema",
  "axum",
  "bytes",
  "flate2",
