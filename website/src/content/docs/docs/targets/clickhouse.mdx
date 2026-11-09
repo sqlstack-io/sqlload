@@ -145,6 +145,14 @@ SQLLoad must be the only writer of the tables it loads. Rows another writer adds
 publishes can be lost, and a lightweight `UPDATE` run on the table is undone or refused by the next
 publish, as it lives in a patch part that moving partitions does not carry.
 
+A `delete_insert` read in windows (`batch_size`) or [in cursor
+order](/docs/concepts/cursors/#batches) stages everything it reads and publishes the whole range in
+one commit at the end, so readers see the table as it was before the run or after it, never part
+way, and a partition several windows share is rewritten once. `batch_size` then splits only the
+reads. A run stopped part way publishes nothing, and the next run reads the range again, so split a
+long backfill into several runs with `--end-cursor`. A files source still commits each batch of
+partitions as it goes.
+
 `merge` matches rows on `unique_key` exactly, so readers need no `FINAL`. It replaces whole rows,
 so a column the source no longer has is `NULL` on the rows it updates.
 
@@ -155,11 +163,12 @@ partition. Partition large tables by the column new rows arrive on.
 
 The rows of an `append`, `merge` or `delete_insert` go into the table ordered by its partition key,
 so a load makes about one part per partition it fills rather than one per partition for every
-million rows. Sorting holds the load's rows in memory on the server: about 1.5 GiB for 5 million
-rows of four columns over 1,000 daily partitions. ClickHouse sorts on disk instead only once the
-sort reaches half the memory the server and user have free when it starts, not by a per-query
-`max_memory_usage`. Where the sort runs out of memory, SQLLoad inserts the rows unsorted instead,
-as before: more parts, which ClickHouse merges in the background.
+million rows. Sorting holds the rows a publish adds in memory on the server, and a `delete_insert`
+publishes a whole run at once: about 1.5 GiB for 5 million rows of four columns, and about 1.6 GiB
+for 20 million narrower rows, each over 1,000 daily partitions. ClickHouse sorts on disk instead
+only once the sort reaches half the memory the server and user have free when it starts, not by a
+per-query `max_memory_usage`. Where the sort runs out of memory, SQLLoad inserts the rows unsorted
+instead, as before: more parts, which ClickHouse merges in the background.
 
 ## Types
 

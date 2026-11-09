@@ -69,8 +69,10 @@ Every selected table must have the same kind of cursor. Select tables of one cur
 
 ## Batches
 
-A large load commits along the way instead of all at the end, so a failure keeps what committed
-and the next run carries on from there. `plan` shows how each table commits on its `batch` line.
+A large load commits along the way instead of all at the end, so a failure keeps what committed and
+the next run carries on from there. The exception is `delete_insert` into ClickHouse read by cursor,
+which publishes once per run (last row below). `plan` shows how each table commits on its `batch`
+line.
 
 | Table | Commits |
 |-------|---------|
@@ -79,6 +81,7 @@ and the next run carries on from there. `plan` shows how each table commits on i
 | Other cursor tables, text cursors, and `append` without a cursor or logged state | Once per read, since committing part of an unordered read could skip or duplicate rows. |
 | Files sources | At 1,000 files or about 1 GB; under `delete_insert` a partition is never split. |
 | `replace` and `--reload` | Once, at the end: the new table is swapped in. |
+| `delete_insert` into ClickHouse, in windows or cursor order | Once, at the end: everything read is staged and the whole range published together. A stopped run publishes nothing, so split a long backfill with `--end-cursor`. |
 
 With `batch_size`, the first run needs a start, from `cursor_start` or `--start-cursor`. A Postgres
 integer cursor without `--end-cursor` ends at its maximum when `plan` ran.

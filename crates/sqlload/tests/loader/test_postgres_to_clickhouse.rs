@@ -20,6 +20,9 @@ CREATE TABLE public.visits (id int8, day date NOT NULL);
 CREATE TABLE public.views (id int8, day date NOT NULL);
 CREATE TABLE public.clicks (id int8, at timestamptz);
 CREATE TABLE public.pings (id int8, day date NOT NULL);
+CREATE TABLE public.days (id int8, day date NOT NULL);
+CREATE TABLE public.ordered_days (id int8, day date NOT NULL);
+CREATE INDEX ordered_days_day ON public.ordered_days (day);
 CREATE TABLE public.kinds (id int2, tz timestamptz, ntz timestamp, amount numeric(38,9), born date, ref uuid, doc jsonb, raw bytea, opens time, ok bool, ratio float8);
 INSERT INTO public.accounts VALUES
   (1, 'Acme Ltd', 10.50, '2026-10-01 10:00:00+00'),
@@ -44,7 +47,7 @@ const VIEWS_ROWS: &str = "INSERT INTO raw.app__views VALUES (1, '2026-10-20', NU
 const PUBLISH_PATH: &str = "SELECT toString(if((toUInt32(splitByChar('.', version())[1]), toUInt32(splitByChar('.', version())[2])) >= (25, 5), deletes > 0 AND kept = 0, deletes = 0 AND kept > 0)) FROM (SELECT countIf(query LIKE 'DELETE FROM %') AS deletes, countIf(query LIKE 'INSERT INTO % SELECT * FROM `raw`.%') AS kept FROM system.query_log WHERE type = 'QueryFinish')";
 
 /// Whether every finished delta insert into a monthly-partitioned table was ordered by its partition key, and none into an unpartitioned one.
-const SORTED_DELTAS: &str = r"SELECT toString(countIf(partitioned AND NOT sorted) = 0 AND countIf(partitioned AND sorted) > 0 AND countIf(NOT partitioned AND sorted) = 0) FROM (SELECT match(query, '^INSERT INTO `raw`.`app__(accounts|events|visits|views|pings)__') AS partitioned, query LIKE '% ORDER BY toYYYYMM(%' AS sorted FROM system.query_log WHERE type = 'QueryFinish' AND query LIKE 'INSERT INTO `raw`.%\_swap` (%')";
+const SORTED_DELTAS: &str = r"SELECT toString(countIf(partitioned AND NOT sorted) = 0 AND countIf(partitioned AND sorted) > 0 AND countIf(NOT partitioned AND sorted) = 0) FROM (SELECT match(query, '^INSERT INTO `raw`.`app__(accounts|events|visits|views|pings|days|ordered_days)__') AS partitioned, query LIKE '% ORDER BY toYYYYMM(%' AS sorted FROM system.query_log WHERE type = 'QueryFinish' AND query LIKE 'INSERT INTO `raw`.%\_swap` (%')";
 
 /// The tables' settings: monthly partitions for the windowed and merged tables, a sorting key for the merged one, nothing for the rest.
 const TABLES: &str = r#"
@@ -75,6 +78,18 @@ write_strategy = "replace"
 mask = { city = "hash" }
 
 [sources.app.tables."public.pings"]
+write_strategy = "delete_insert"
+cursor_column = "day"
+partition_by = "toYYYYMM(day)"
+
+[sources.app.tables."public.days"]
+write_strategy = "delete_insert"
+cursor_column = "day"
+partition_by = "toYYYYMM(day)"
+batch_size = "3d"
+cursor_start = "2026-10-01"
+
+[sources.app.tables."public.ordered_days"]
 write_strategy = "delete_insert"
 cursor_column = "day"
 partition_by = "toYYYYMM(day)"
@@ -298,6 +313,49 @@ fn given_a_load_stopped_at_every_statement_when_it_runs_again_then_the_table_was
                     (
                         "DELETE FROM public.events; INSERT INTO public.events VALUES (1, 'open', '2026-10-20'), (2, 'shut', '2026-10-30'), (5, 'late', '2026-11-08');",
                         "1:open@2026-10-20,2:shut@2026-10-30,5:late@2026-11-08",
+                    ),
+                ],
+                expected_minimum_stops: 8,
+            },
+            StoppedLoadTestCase {
+                description: "a delete_insert read in six 3-day windows across October and November, whose source changes in the first and the last, published once for the whole read",
+                table: "app__days",
+                options: PlanOptions {
+                    start_cursor: Some("2026-10-25".to_owned()),
+                    end_cursor: Some("2026-11-10".to_owned()),
+                    ..select_only("app__days")
+                },
+                query: "SELECT arrayStringConcat(groupArray(r), ',') FROM (SELECT toString(id) || '@' || toString(day) AS r FROM stops.app__days ORDER BY id)",
+                states: [
+                    (
+                        "DELETE FROM public.days; INSERT INTO public.days VALUES (1, '2026-10-20'), (2, '2026-10-26'), (3, '2026-11-09');",
+                        "1@2026-10-20,2@2026-10-26,3@2026-11-09",
+                    ),
+                    (
+                        "DELETE FROM public.days; INSERT INTO public.days VALUES (1, '2026-10-20'), (4, '2026-10-27'), (5, '2026-11-09');",
+                        "1@2026-10-20,4@2026-10-27,5@2026-11-09",
+                    ),
+                ],
+                expected_minimum_stops: 8,
+            },
+            StoppedLoadTestCase {
+                description: "a delete_insert read in cursor order (an index leads with the cursor), cut at every distinct day, whose source changes at both ends, published once for the whole read",
+                table: "app__ordered_days",
+                options: PlanOptions {
+                    start_cursor: Some("2026-10-25".to_owned()),
+                    end_cursor: Some("2026-11-10".to_owned()),
+                    batch_bytes: Some(1),
+                    ..select_only("app__ordered_days")
+                },
+                query: "SELECT arrayStringConcat(groupArray(r), ',') FROM (SELECT toString(id) || '@' || toString(day) AS r FROM stops.app__ordered_days ORDER BY id)",
+                states: [
+                    (
+                        "DELETE FROM public.ordered_days; INSERT INTO public.ordered_days VALUES (1, '2026-10-20'), (2, '2026-10-26'), (3, '2026-11-09');",
+                        "1@2026-10-20,2@2026-10-26,3@2026-11-09",
+                    ),
+                    (
+                        "DELETE FROM public.ordered_days; INSERT INTO public.ordered_days VALUES (1, '2026-10-20'), (4, '2026-10-27'), (5, '2026-11-09');",
+                        "1@2026-10-20,4@2026-10-27,5@2026-11-09",
                     ),
                 ],
                 expected_minimum_stops: 8,

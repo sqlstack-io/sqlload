@@ -11,7 +11,7 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::sources::source_readers;
-use crate::loader::_helpers::table_plan::{is_direct, pulls_unloaded};
+use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
     CUT_ELEMENTS_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, RESULT_SCHEMA_VERSION,
 };
@@ -567,7 +567,11 @@ fn batch_line(table: &TablePlan) -> String {
                 1 => "1 window".to_owned(),
                 count => format!("{count} windows"),
             };
-            format!("{windows} of {step}, one commit each{end}")
+            let commits = match publishes_once(table) {
+                true => "staged one after another and published in one commit",
+                false => "one commit each",
+            };
+            format!("{windows} of {step}, {commits}{end}")
         }
         (CommitRule::FileGroups(groups), _) => {
             let parquet = spec
@@ -598,6 +602,9 @@ fn batch_line(table: &TablePlan) -> String {
                 .to_owned()
         }
         (_, true) => "about 1 GB at a time into a new table, swapped in once at the end".to_owned(),
+        (CommitRule::Ordered { column, .. }, false) if publishes_once(table) => format!(
+            "in {column} order (an index leads with it, NULLs first), staged about 1 GB at a time and published in one commit replacing the whole range"
+        ),
         (CommitRule::Ordered { column, .. }, false) => format!(
             "about every 1 GB, in {column} order (an index leads with it, NULLs first), between distinct values{}",
             match table.mode {
@@ -625,18 +632,23 @@ fn batch_line(table: &TablePlan) -> String {
                     "committing part of an unordered cursor read could skip rows"
                 }
             };
-            let hint = match (large, reason) {
-                (true, WholeReason::Unordered) => {
+            let once = matches!(table.mode, WriteMode::DeleteInsert { .. })
+                && sql_adapter(spec.warehouse).publishes_ranges_once();
+            let hint = match (large, reason, once) {
+                (true, WholeReason::Unordered, false) => {
                     "; for a large first load, set batch_size (such as batch_size = \"1d\") to commit it window by window"
+                }
+                (true, WholeReason::Unordered, true) => {
+                    "; for a large first load, set batch_size (such as batch_size = \"1d\") to read it window by window, or split it into runs with --end-cursor"
                 }
                 _ => "",
             };
             format!("one commit for the whole read ({why}){hint}")
         }
     };
-    let logged = match table.logged {
-        Some(_) => ", and only when ctx.state has changed",
-        None => "",
+    let logged = match (&table.logged, publishes_once(table)) {
+        (Some(_), false) => ", and only when ctx.state has changed",
+        _ => "",
     };
     format!("{described}{logged}")
 }
