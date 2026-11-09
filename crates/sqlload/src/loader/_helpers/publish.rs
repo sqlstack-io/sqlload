@@ -9,6 +9,7 @@ use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded, UnloadedBatch};
 use crate::adapters::contract::types::TableWriter;
+use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
 use crate::adapters::dispatch::main::session::ddl_guard::ddl_guard;
@@ -66,7 +67,7 @@ use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
-use crate::loader::_helpers::table_plan::{numeric_cursor, source_filter};
+use crate::loader::_helpers::table_plan::source_filter;
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
@@ -1097,7 +1098,7 @@ async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), Stri
         .map_err(|error| error.to_string())
 }
 
-/// The Postgres filter reading one cursor window.
+/// The source filter reading one cursor window, in the source's dialect.
 fn window_filter(table: &TablePlan, window: &CursorWindow) -> Option<String> {
     let cursor = table.spec.cursor.as_ref()?;
     let column = table
@@ -1110,7 +1111,14 @@ fn window_filter(table: &TablePlan, window: &CursorWindow) -> Option<String> {
     };
     source_filter(
         &column.expression,
-        numeric_cursor(&column.output),
+        (
+            Some(&column.output),
+            table
+                .spec
+                .warehouse_source
+                .as_ref()
+                .and_then(|source| source_dialect(source.system)),
+        ),
         window.from.as_deref().map(|from| (operator, from)),
         window.to.as_deref(),
     )
