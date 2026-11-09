@@ -90,7 +90,7 @@ Arrays come from:
 
 A value that doesn't convert to `T`, such as `"abc"` in an `array(int)`, fails the load rather
 than loading as NULL. Elements convert as a pinned column of `T` would: from JSON text, `1.5` in
-an `array(int)` fails; a Parquet list of floats pinned `array(int)` is cut to whole numbers, and
+an `array(int)` fails; a Parquet list of floats pinned `array(int)` is cut to whole numbers (from 0.28.0, not released yet, `plan` notes this on the column), and
 extra decimal places are rounded to the scale of `decimal(p,s)`. A value that isn't a list or a
 JSON array fails. From 0.28.0 (not released yet), a list column of Python Arrow data (pyarrow,
 polars, pandas) pinned as an array converts as a Parquet list does, so NaN and infinities in an

@@ -91,3 +91,7 @@ pub const SNOWFLAKE_SOURCE: &str = "snowflake";
 
 /// The version of the document `apply --json` and `load --json` print; it changes only when a field changes meaning or goes away.
 pub const RESULT_SCHEMA_VERSION: u32 = 1;
+
+/// The loss of an integer array pin over Arrow or Parquet lists.
+pub const CUT_ELEMENTS_NOTE: &str =
+    "float elements of Arrow and Parquet lists are cut to whole numbers";
