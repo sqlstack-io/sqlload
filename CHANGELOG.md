@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.32.0](https://github.com/sqlstack-io/sqlload/compare/v0.31.0...v0.32.0) (2026-11-09)
+
+
+### Features
+
+* **files:** read files sources from an SFTP server ([ec28bb8](https://github.com/sqlstack-io/sqlload/commit/ec28bb8ec15c44d9552f6fdbbf79b342eca423c5))
+* **ssh:** sign in to SSH servers with a password ([3a2ce6e](https://github.com/sqlstack-io/sqlload/commit/3a2ce6e25afef9a625cf5e182607ad84fb35de20))
+
 ## [0.31.0](https://github.com/sqlstack-io/sqlload/compare/v0.30.0...v0.31.0) (2026-11-09)
 
 
