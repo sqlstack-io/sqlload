@@ -16,6 +16,7 @@ const SETUP: &str = "
 CREATE TABLE public.accounts (id int8 PRIMARY KEY, name text, balance numeric(12,2), updated_at timestamptz NOT NULL);
 CREATE TABLE public.events (event_id int8, kind text, day date NOT NULL);
 CREATE TABLE public.stores (code text, city text);
+CREATE TABLE public.visits (id int8, day date NOT NULL);
 CREATE TABLE public.clicks (id int8, at timestamptz);
 CREATE TABLE public.kinds (id int2, tz timestamptz, ntz timestamp, amount numeric(38,9), born date, ref uuid, doc jsonb, raw bytea, opens time, ok bool, ratio float8);
 INSERT INTO public.accounts VALUES
@@ -23,6 +24,7 @@ INSERT INTO public.accounts VALUES
   (2, 'Beta Co', 20.00, '2026-11-02 10:00:00+00');
 INSERT INTO public.events VALUES (1, 'open', '2026-10-20'), (2, 'close', '2026-10-30'), (3, 'open', '2026-11-03');
 INSERT INTO public.stores VALUES ('L1', 'Leeds'), ('Y1', 'York');
+INSERT INTO public.visits VALUES (1, '2026-10-20'), (2, '2026-10-30');
 INSERT INTO public.clicks VALUES (1, '2026-11-01 00:00:00+00');
 INSERT INTO public.kinds VALUES
   (7, '2026-03-29 01:30:00+02', '2026-03-29 01:30:00.123456', 12345678901234567890.123456789, '1960-02-29', '0f8fad5b-d9cb-469f-a165-70867728950e', '{\"a\": 1}', '\\x00ff', '13:04:05.123456', true, 0.5),
@@ -41,6 +43,12 @@ order_by = "id"
 write_strategy = "delete_insert"
 cursor_column = "day"
 partition_by = "toYYYYMM(day)"
+
+[sources.app.tables."public.visits"]
+write_strategy = "delete_insert"
+cursor_column = "day"
+partition_by = "toYYYYMM(day)"
+lookback = "5d"
 
 [sources.app.tables."public.stores"]
 write_strategy = "replace"
@@ -137,6 +145,12 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 source_change: "DELETE FROM public.events WHERE day >= '2026-11-01';",
                 check_query: "SELECT arrayStringConcat(groupArray(r), ',') || ' / ' || toString(uniqExact(_partition_id)) FROM (SELECT toString(event_id) || ':' || kind AS r, _partition_id FROM raw.app__events ORDER BY event_id)",
                 expected_result: "1:open,2:close / 1",
+            },
+            LoadRunTestCase {
+                description: "delete_insert whose window loses its only row upstream still keeps the partition's older rows: it is replaced, not dropped",
+                source_change: "DELETE FROM public.visits WHERE id = 2;",
+                check_query: "SELECT arrayStringConcat(groupArray(toString(id) || '@' || toString(day)), ',') FROM (SELECT id, day FROM raw.app__visits ORDER BY id)",
+                expected_result: "1@2026-10-20",
             },
             LoadRunTestCase {
                 description: "append adds the new rows' partition and keeps the old",

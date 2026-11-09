@@ -36,7 +36,7 @@ pub(crate) fn replace_partition(target: &str, copy: &str, partition: &str) -> St
 /// The query counting `table`'s rows in partition `partition`.
 pub(crate) fn partition_rows_query(table: &str, partition: &str) -> String {
     format!(
-        "SELECT count() FROM {table} WHERE _partition_id = {}",
+        "SELECT count() FROM {table} WHERE _partition_id = {} FORMAT TabSeparated",
         ClickHouseSql.render_loader_value_literal(partition)
     )
 }

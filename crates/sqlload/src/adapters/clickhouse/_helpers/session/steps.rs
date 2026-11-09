@@ -19,7 +19,7 @@ pub(crate) fn publish_step(statement: &str) -> Result<Option<PublishStep>, ApiEr
         .map_err(|error| ApiError::Protocol(format!("a malformed publish step: {error}")))
 }
 
-/// Run one statement, or the exchange it stands for; a partition publish here is a mistake, as it only follows from a write.
+/// Run one statement, or the exchange or partition replace it stands for; a partition publish here is a mistake, as it only follows from a write.
 pub(crate) async fn run_step(
     destination: &ClickHouseDestination,
     statement: &str,

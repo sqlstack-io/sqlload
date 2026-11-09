@@ -41,7 +41,7 @@ SQLLoad is tested against ClickHouse 25.8 and 26.10.
 ## Permissions
 
 SQLLoad creates databases and tables, inserts into its staging tables, moves partitions between
-tables (`ATTACH PARTITION`, `REPLACE PARTITION`), exchanges, renames and drops tables, and reads
+tables (`ATTACH PARTITION`, `REPLACE PARTITION`, `DROP PARTITION`), exchanges, renames and drops tables, and reads
 files with the `s3` table function. The user needs the grants for these in the target's databases.
 
 `sqlload debug` checks the connection, and prints the user, the server's version and its time zone.
@@ -123,7 +123,7 @@ SQLLoad reads the files itself and sends Arrow instead when ClickHouse wouldn't 
 | `replace` | Builds a new table and swaps it in with `EXCHANGE TABLES`. `--reload` does the same. |
 
 `merge` and `delete_insert` rewrite whole partitions. One partition is rebuilt beside the table and
-swapped in with `REPLACE PARTITION`. Several are rebuilt in a copy that hard-links the table's
+swapped in with `REPLACE PARTITION`, or dropped with `DROP PARTITION` when none of its rows remain. Several are rebuilt in a copy that hard-links the table's
 other parts, then exchanged in at once.
 
 `merge` matches rows on `unique_key` exactly, so readers need no `FINAL`. It replaces whole rows,
