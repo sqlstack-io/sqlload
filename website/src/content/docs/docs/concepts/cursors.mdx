@@ -69,9 +69,10 @@ Every selected table must have the same kind of cursor. Select tables of one cur
 
 ## Batches
 
-A large load commits along the way instead of all at the end, so a failure keeps what committed
-and the next run carries on from there. The exception is `delete_insert` into ClickHouse, which
-publishes once per run (last row below). `plan` shows how each table commits on its `batch` line.
+A large load commits along the way instead of all at the end, so a failure keeps what committed and
+the next run carries on from there. The exception is `delete_insert` into ClickHouse read by cursor,
+which publishes once per run (last row below). `plan` shows how each table commits on its `batch`
+line.
 
 | Table | Commits |
 |-------|---------|

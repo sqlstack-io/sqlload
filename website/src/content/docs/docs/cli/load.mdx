@@ -25,11 +25,11 @@ loaded   raw.app__orders     1,000 rows  0.0s
 Each table prints `created`, `altered`, `loaded` or `failed`. A failed table doesn't stop the
 others; the summary counts them and the command exits 1.
 
-Large loads commit along the way, so a failure keeps what committed and the next run carries on
-from there; a `delete_insert` into ClickHouse publishes once per run instead. See
-[Batches](/docs/concepts/cursors/#batches). To read a range instead of continuing
-from the destination's maximum, give `--start-cursor` and `--end-cursor`; see
-[Backfilling a range](/docs/concepts/cursors/#backfilling-a-range).
+Large loads commit along the way, so a failure keeps what committed and the next run carries on from
+there; a `delete_insert` into ClickHouse read by cursor publishes once per run instead. See
+[Batches](/docs/concepts/cursors/#batches). To read a range instead of continuing from the
+destination's maximum, give `--start-cursor` and `--end-cursor`; see [Backfilling a
+range](/docs/concepts/cursors/#backfilling-a-range).
 
 ## Reloading
 
