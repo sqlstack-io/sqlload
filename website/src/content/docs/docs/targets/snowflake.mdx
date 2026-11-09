@@ -39,9 +39,9 @@ See [Signing in](#signing-in).
 |----------|------------|-------|
 | `key_pair` | Unattended runs: schedulers, CI, servers. | The only method Snowpipe `insertFiles` accepts. |
 | `pat` | Unattended runs. | A programmatic access token. |
-| `oauth_authorization_code` | A person running SQLLoad at a terminal. | From 0.27.0 (not released yet). Signs in in the browser. |
+| `oauth_authorization_code` | A person running SQLLoad at a terminal. | From 0.28.0. Signs in in the browser. |
 
-From 0.27.0 (not released yet), `{ method = "oauth_authorization_code" }` signs you in through
+From 0.28.0, `{ method = "oauth_authorization_code" }` signs you in through
 Snowflake's built-in `SNOWFLAKE$LOCAL_APPLICATION` integration, so nobody has to create a security
 integration. The first command that connects prints a sign-in address and opens it in your
 browser. You sign in there as the connection's `user`, with whatever your account asks for:

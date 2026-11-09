@@ -61,7 +61,7 @@ The `ssh` table, from 0.27.0:
 |-----|---------|---------|
 | `account` | required | The account identifier, such as `myorg-myaccount`. |
 | `user` | required | |
-| `auth` | required | `{ method = "key_pair", private_key_file = "..." }`, `{ method = "pat", token = "${ENV:...}" }`, or, from 0.27.0 (not released yet), `{ method = "oauth_authorization_code" }` to sign in in the browser. See [Signing in](/docs/targets/snowflake/#signing-in). |
+| `auth` | required | `{ method = "key_pair", private_key_file = "..." }`, `{ method = "pat", token = "${ENV:...}" }`, or, from 0.28.0, `{ method = "oauth_authorization_code" }` to sign in in the browser. See [Signing in](/docs/targets/snowflake/#signing-in). |
 | `role` | none | |
 | `warehouse` | none | |
 | `database` | required | |
