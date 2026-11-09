@@ -1,7 +1,5 @@
 //! Parquet files in the contract: they plan with Arrow's types, and run no SQL.
 
-use std::borrow::Cow;
-
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::files::models::ParquetFiles;
 use crate::column_types::main::arrow_field::arrow_field;
@@ -24,10 +22,15 @@ impl SqlAdapter for ParquetFiles {
             },
             None => WarehouseType {
                 sql: column_type.to_string(),
-                lossy: Some(Cow::Borrowed(
-                    "a native type has no Arrow type, so Parquet files cannot hold it",
-                )),
+                lossy: None,
             },
         }
+    }
+
+    /// A type with no Arrow type, which only `native(...)` and arrays of it are.
+    fn type_problem(&self, column_type: &ColumnType) -> Option<&'static str> {
+        arrow_field("", column_type).is_none().then_some(
+            "a native type has no Arrow type, so Parquet and CSV files cannot hold it; pin a portable type",
+        )
     }
 }
