@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.33.2](https://github.com/sqlstack-io/sqlload/compare/v0.33.1...v0.33.2) (2026-11-09)
+
+
+### Bug Fixes
+
+* drop the pre-release status from the package metadata ([#171](https://github.com/sqlstack-io/sqlload/issues/171)) ([28a274d](https://github.com/sqlstack-io/sqlload/commit/28a274db8005689bd3f712e45414a1a55f4c0f71))
+
+
+### Documentation
+
+* a short README in the SQLStack style, and the same page on PyPI ([#168](https://github.com/sqlstack-io/sqlload/issues/168)) ([cbb1344](https://github.com/sqlstack-io/sqlload/commit/cbb1344d5d82d942dd332409113f8cb22455ff88))
+* **clickhouse:** drop the ReplacingMergeTree(_sqlload_loaded_at) example, which ClickHouse refuses ([#170](https://github.com/sqlstack-io/sqlload/issues/170)) ([e452d56](https://github.com/sqlstack-io/sqlload/commit/e452d56bed751154cdd3ce9a0ae5ff8455c18198))
+
 ## [0.33.1](https://github.com/sqlstack-io/sqlload/compare/v0.33.0...v0.33.1) (2026-11-09)
 
 
