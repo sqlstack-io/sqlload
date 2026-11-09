@@ -25,7 +25,7 @@ use crate::project::models::MaskMethod;
 use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::run_log::main::describe_state::describe_state;
-use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, TableAction};
+use crate::schema_plan::models::{ColumnChange, ColumnOrigin, DesiredColumn, TableAction};
 
 /// A section: a heading with an optional right-aligned note, then each item as a tree branch; nothing when it has no items.
 pub(crate) fn tree(heading: &str, note: &str, items: &[PlanItem]) -> Vec<String> {
@@ -163,7 +163,11 @@ pub(crate) fn object_item(table: &TablePlan) -> PlanItem {
             details.extend(column_details(table));
         }
         TableAction::Alter(changes) => {
-            details.extend(changes.iter().map(|change| detail("", change.to_string())));
+            details.extend(
+                changes
+                    .iter()
+                    .map(|change| detail("", format!("{change}{}", change_note(table, change)))),
+            );
         }
         _ => {}
     }
@@ -186,6 +190,23 @@ pub(crate) fn object_item(table: &TablePlan) -> PlanItem {
         name,
         action,
         details,
+    }
+}
+
+/// What the type an added or widened column ends up with loses, as `  (...)`, or nothing, as a new table's column lines note it.
+fn change_note(table: &TablePlan, change: &ColumnChange) -> String {
+    let (column_type, cut) = match change {
+        ColumnChange::Add { column, .. } => (&column.column_type, cut_elements(table, column)),
+        ColumnChange::Widen { to, .. } | ColumnChange::Rebuild { to, .. } => (to, None),
+    };
+    let rendered = sql_adapter(table.spec.warehouse).render_loader_logical_type(column_type);
+    let losses: Vec<&str> = [cut, rendered.lossy.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    match losses.is_empty() {
+        true => String::new(),
+        false => format!("  ({})", losses.join("; ")),
     }
 }
 

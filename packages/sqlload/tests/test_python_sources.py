@@ -533,6 +533,17 @@ def test_given_new_fields_when_a_python_table_loads_then_the_changes_are_listed(
 	assert "altered  RAW.shop__rows  add column  extra text -> VARCHAR" in done.stdout, done.stdout
 
 
+def test_given_a_pin_added_to_an_existing_table_when_planning_then_the_add_column_line_notes_what_its_type_loses(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
+	give(project, "rows", [{"id": 1}])
+	load(project)
+	(project / "sources" / "shop.py").write_text(SHOP_MODULE.replace("{tables}", "shop.table(description='Test table.', write_strategy='append', columns={'code': 'varchar(8)'})(rows)\n"))
+	give(project, "rows", [{"id": 2, "code": "x"}])
+	planned = sqlload(project, "plan")
+	assert planned.returncode == 0, planned.stderr
+	assert "add column  code varchar(8) -> VARCHAR  (the length limit is not enforced)" in planned.stdout, planned.stdout
+
+
 @pytest.mark.parametrize(
 	("settings", "rows", "message"),
 	[
