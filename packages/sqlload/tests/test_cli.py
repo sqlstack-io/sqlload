@@ -295,3 +295,29 @@ def test_given_a_column_pinned_to_another_type_when_loading_parquet_into_duckdb_
 	assert run("load", "-c", str(config)).returncode == 0
 	with duckdb.connect(str(tmp_path / "wh.duckdb"), read_only=True) as connection:
 		assert connection.execute('SELECT id, score FROM "RAW"."orders"').fetchall() == [(1, "2.5")]
+
+
+@pytest.mark.parametrize(
+	"setting",
+	[
+		'partition_columns = { day = \'native("HUGEINT")\' }',
+		'path_columns = \'day={day:native("HUGEINT")}/{file}\'',
+		'constant_columns = { day = { value = "7", type = \'native("HUGEINT")\' } }',
+	],
+	ids=["partition column", "path column", "constant column"],
+)
+def test_given_a_native_type_for_a_column_from_paths_or_configuration_when_planning_then_plan_refuses_it(tmp_path: Path, setting: str) -> None:
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	(tmp_path / "data" / "day=7").mkdir(parents=True)
+	pq.write_table(pa.table({"id": pa.array([1], pa.int64())}), tmp_path / "data" / "day=7" / "a.parquet")
+	config = tmp_path / "sqlload.toml"
+	config.write_text(
+		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\n'
+		f'description = "Orders."\n{setting}\n'
+	)
+	planned = run("plan", "-c", str(config))
+	assert planned.returncode == 1, planned.stdout + planned.stderr
+	assert 'column day: native("HUGEINT") has no Arrow type, so a partition, path or constant column cannot be one; pin a portable type' in planned.stdout + planned.stderr, planned.stdout + planned.stderr
