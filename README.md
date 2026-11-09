@@ -85,7 +85,7 @@ versions and how to run them yourself.
 | Snowflake and BigQuery tables and queries | BigQuery (preview) |
 | Google Sheets | ClickHouse (preview) |
 | Python sources and HTTP APIs | DuckDB |
-| Databases with an ODBC driver (builds with the `odbc` feature) | Postgres |
+| Databases with an ODBC driver (in builds with the `odbc` feature) | Postgres |
 | | Parquet or CSV files |
 | | MotherDuck (beta, once MotherDuck accepts DuckDB 2.0 clients) |
 
