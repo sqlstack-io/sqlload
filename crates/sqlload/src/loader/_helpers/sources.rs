@@ -1170,7 +1170,10 @@ pub(crate) async fn read_source(
         }
         #[cfg(feature = "odbc")]
         (SourceReader::Odbc(reader), _) => {
-            let filter = part.filter.or_else(|| table.source_filter.clone());
+            let (filter, parameters) = match part.filter {
+                Some(filter) => (Some(filter), &[][..]),
+                None => (table.source_filter.clone(), &table.source_parameters[..]),
+            };
             let request = crate::odbc_source::models::OdbcReadRequest {
                 table: &table.spec.source_table,
                 sql: table
@@ -1180,6 +1183,7 @@ pub(crate) async fn read_source(
                     .and_then(|source| source.sql.as_deref()),
                 columns: &table.read_columns,
                 filter: filter.as_deref(),
+                parameters,
                 batch_rows: SOURCE_BATCH_ROWS,
             };
             Ok(crate::odbc_source::main::read_rows::read_rows(reader, &request, on_batch).await?)
