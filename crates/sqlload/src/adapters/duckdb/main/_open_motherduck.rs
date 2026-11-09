@@ -36,15 +36,19 @@ pub(in crate::adapters) fn open_motherduck(
         true => '&',
         false => '?',
     };
-    let connection =
-        duckdb::Connection::open(format!("{shown}{separator}motherduck_token={token}"))
-            .map_err(|error| refused(&error.to_string(), &token, &shown))?;
+    let connection = duckdb::Connection::open(format!(
+        "{shown}{separator}motherduck_token={}",
+        query_value(&token)
+    ))
+    .map_err(|error| refused(&error.to_string(), &token, &shown))?;
     shared_destination(connection, true)
 }
 
 /// Why `shown` did not open, from DuckDB's `error` with `token` taken out: MotherDuck's own words when its extension refuses this DuckDB version.
 pub(in crate::adapters::duckdb) fn refused(error: &str, token: &str, shown: &str) -> DuckDbError {
-    let error = error.replace(token, "<redacted>");
+    let error = error
+        .replace(&query_value(token), "<redacted>")
+        .replace(token, "<redacted>");
     if !error.contains(MOTHERDUCK_UNSUPPORTED_DUCKDB) {
         return DuckDbError::MotherDuck(format!("cannot open {shown}: {error}"));
     }
@@ -58,4 +62,17 @@ pub(in crate::adapters::duckdb) fn refused(error: &str, token: &str, shown: &str
     DuckDbError::MotherDuck(format!(
         "cannot open {shown}: MotherDuck doesn't accept the DuckDB version this SQLLoad bundles yet, so no SQLLoad release can connect to it until it does. MotherDuck says: {said}"
     ))
+}
+
+/// `value` percent-encoded for a connection string's query, keeping only unreserved characters, so a token holding `&`, `=` or `#` reaches MotherDuck whole.
+pub(in crate::adapters::duckdb) fn query_value(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                char::from(byte).to_string()
+            }
+            byte => format!("%{byte:02X}"),
+        })
+        .collect()
 }

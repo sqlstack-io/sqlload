@@ -1,7 +1,7 @@
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::duckdb::main::_open_duckdb::open_duckdb;
-use crate::adapters::duckdb::main::_open_motherduck::{open_motherduck, refused};
+use crate::adapters::duckdb::main::_open_motherduck::{open_motherduck, query_value, refused};
 use crate::adapters::duckdb::tests::test_types::{
     MotherDuckRefusalTestCase, MotherDuckTokenTestCase,
 };
@@ -49,17 +49,25 @@ fn given_motherduck_does_not_open_when_reporting_why_then_its_own_words_are_rela
         MotherDuckRefusalTestCase {
             description: "the extension refusing this DuckDB version is relayed on one line",
             error: UNSUPPORTED_VERSION.to_owned(),
+            token: "tok.en-1",
             expected: "MotherDuck: cannot open md:shop: MotherDuck doesn't accept the DuckDB version this SQLLoad bundles yet, so no SQLLoad release can connect to it until it does. MotherDuck says: Your DuckDB version (v2.0.0) is not yet supported by MotherDuck. The latest supported version is v1.5.6. Please downgrade to use MotherDuck. See https://motherduck.com/docs/getting-started/connect-query-from-duckdb-cli for more information.",
         },
         MotherDuckRefusalTestCase {
             description: "another error that quotes the connection string loses the token",
             error: "IO Error: Cannot open md:shop?motherduck_token=tok.en-1".to_owned(),
+            token: "tok.en-1",
+            expected: "MotherDuck: cannot open md:shop: IO Error: Cannot open md:shop?motherduck_token=<redacted>",
+        },
+        MotherDuckRefusalTestCase {
+            description: "the token as sent, percent-encoded, is taken out too",
+            error: "IO Error: Cannot open md:shop?motherduck_token=tok.en-1%26x".to_owned(),
+            token: "tok.en-1&x",
             expected: "MotherDuck: cannot open md:shop: IO Error: Cannot open md:shop?motherduck_token=<redacted>",
         },
     ];
     for test_case in test_cases {
         assert_eq!(
-            refused(&test_case.error, "tok.en-1", "md:shop").to_string(),
+            refused(&test_case.error, test_case.token, "md:shop").to_string(),
             test_case.expected,
             "{}",
             test_case.description
@@ -85,4 +93,12 @@ fn given_a_motherduck_destination_when_routing_then_it_takes_only_arrow_batches(
         "MotherDuck never reads files itself: {motherduck:?}"
     );
     Ok(())
+}
+
+#[test]
+fn given_a_token_with_query_characters_when_opening_then_it_is_percent_encoded() {
+    assert_eq!(
+        query_value("eyJ.a-b_c~d&e=f#g h/+"),
+        "eyJ.a-b_c~d%26e%3Df%23g%20h%2F%2B"
+    );
 }

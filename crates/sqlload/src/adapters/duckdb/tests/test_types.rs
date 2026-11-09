@@ -44,5 +44,6 @@ pub(crate) struct MotherDuckRefusalTestCase {
     pub(crate) description: &'static str,
     /// DuckDB's error opening the database.
     pub(crate) error: String,
+    pub(crate) token: &'static str,
     pub(crate) expected: &'static str,
 }
