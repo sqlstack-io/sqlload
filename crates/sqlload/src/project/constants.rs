@@ -113,6 +113,7 @@ pub const WAREHOUSE_CONNECTION_KINDS: &[&str] = &[
     "bigquery",
     "clickhouse",
     "duckdb",
+    "motherduck",
     "postgres",
 ];
 
@@ -154,3 +155,9 @@ pub const MIN_BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_se
 
 /// The largest percentage a setting such as `max_row_drop` takes.
 pub const MAX_PERCENT: u8 = 100;
+
+/// The start of a MotherDuck database's path.
+pub const MOTHERDUCK_PREFIX: &str = "md:";
+
+/// The starts of a DuckDB path that opens MotherDuck: `md:` and its alias, matched in any case as DuckDB does.
+pub const MOTHERDUCK_PREFIXES: &[&str] = &["md:", "motherduck:"];

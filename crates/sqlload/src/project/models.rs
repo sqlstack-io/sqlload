@@ -207,6 +207,16 @@ pub enum ConnectionConfig {
         /// The database file; `:memory:` for an in-memory database.
         database: String,
     },
+    /// A MotherDuck database, opened through DuckDB's `md:` connection.
+    #[serde(rename = "motherduck")]
+    MotherDuck {
+        /// The database's name, with or without `md:`; the account's default database when unset.
+        #[serde(default)]
+        database: Option<String>,
+        /// The access token; the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable when unset.
+        #[serde(default)]
+        token: Option<crate::auth::models::Secret>,
+    },
     /// A database reached through an ODBC driver: a connection string, or a DSN with an optional user and password.
     Odbc {
         #[serde(default)]
@@ -266,6 +276,7 @@ impl ConnectionConfig {
             Self::ClickHouse { .. } => "clickhouse",
             Self::Postgres { .. } => "postgres",
             Self::DuckDb { .. } => "duckdb",
+            Self::MotherDuck { .. } => "motherduck",
             Self::S3 { .. } => "s3",
             Self::Filesystem { .. } => "filesystem",
             Self::Sftp { .. } => "sftp",
@@ -861,4 +872,15 @@ pub enum Policy {
     #[default]
     RequireConfirmation,
     Deny,
+}
+
+/// A MotherDuck database setting, or a DuckDB path, split into its parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotherDuckPath<'a> {
+    /// It starts with `md:` or `motherduck:`, in any case.
+    pub prefixed: bool,
+    /// The bare database name; `None` for the account's default database.
+    pub name: Option<&'a str>,
+    /// What follows `?`, if anything.
+    pub options: &'a str,
 }

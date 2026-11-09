@@ -7,6 +7,7 @@ use crate::loader::_helpers::specs::{
 };
 use crate::loader::models::{ResolvedTables, SkippedTable, TableSpec};
 use crate::postgres_source::models::SourceTable;
+use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
     ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride,
 };
@@ -164,7 +165,15 @@ pub(crate) fn source_target(
     Ok(ResolvedTarget {
         name,
         warehouse,
-        database: target.database.clone().or(database),
+        database: match connection {
+            ConnectionConfig::MotherDuck { database, .. } => target
+                .database
+                .as_deref()
+                .or(database.as_deref())
+                .and_then(|database| motherduck_path(database).name)
+                .map(str::to_owned),
+            _ => target.database.clone().or(database),
+        },
         schema,
         path: None,
     })

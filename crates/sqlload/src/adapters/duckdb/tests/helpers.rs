@@ -106,6 +106,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
         destination: DuckDbDestination {
             connection: Arc::new(Mutex::new(connection)),
             ddl: Arc::new(tokio::sync::Mutex::new(())),
+            motherduck: false,
         },
         open_transaction: false,
     };

@@ -2,6 +2,7 @@ use crate::project::constants::{
     CLICKHOUSE_CONNECTION_KIND, FILES_CONNECTION_KINDS, STAGE_NAME_PARTS,
     WAREHOUSE_CONNECTION_KINDS,
 };
+use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
     ConnectionConfig, FilesFormat, LoadMethod, ProjectConfig, SourceConfig, TargetConfig,
 };
@@ -106,6 +107,18 @@ pub(crate) fn target_problems(
         (true, _) => {
             if target.loader_schema.is_none() {
                 problems.push(format!("{place} needs a loader_schema"));
+            }
+            if let ConnectionConfig::MotherDuck { database, .. } = connection
+                && target
+                    .database
+                    .as_deref()
+                    .or(database.as_deref())
+                    .and_then(|database| motherduck_path(database).name)
+                    .is_none()
+            {
+                problems.push(format!(
+                    "{place} loads into MotherDuck, which attaches every database in the account: name the database, in the target or its connection"
+                ));
             }
             if kind == CLICKHOUSE_CONNECTION_KIND && target.database.is_some() {
                 problems.push(format!(
