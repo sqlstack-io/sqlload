@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.4](https://github.com/sqlstack-io/sqlload/compare/v0.33.3...v0.33.4) (2026-11-09)
+
+
+### Performance Improvements
+
+* **clickhouse:** send inserts zstd-compressed, and write each insert's rows before it returns ([#175](https://github.com/sqlstack-io/sqlload/issues/175)) ([a7476f0](https://github.com/sqlstack-io/sqlload/commit/a7476f0902a4a960631ebdd8d08ffdb9d651662f))
+
 ## [0.33.3](https://github.com/sqlstack-io/sqlload/compare/v0.33.2...v0.33.3) (2026-11-09)
 
 
