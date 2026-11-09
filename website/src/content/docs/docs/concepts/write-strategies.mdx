@@ -105,7 +105,7 @@ error: --reload rebuilds app__customers from the whole source, replacing what th
 ```
 
 A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` refuses it. See
-[Reloading](/docs/sources/postgres-cdc/#reloading). `--reload` is refused on
+[Reloading](/docs/guides/postgres-cdc/#reloading). `--reload` is refused on
 [Postgres targets](/docs/targets/postgres/), which SQLLoad never drops or recreates.
 
 See [Cursors](/docs/concepts/cursors/) for how a run decides what to read.

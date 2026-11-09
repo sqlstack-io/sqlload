@@ -12,6 +12,8 @@
 	{
 		"label": "Guides",
 		"items": [
+			"docs/guides/postgres-cdc",
+			"docs/guides/python",
 			"docs/guides/kafka"
 		]
 	},

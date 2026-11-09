@@ -25,7 +25,8 @@ Each kind has its own page:
 
 - [Postgres](/docs/sources/postgres/): choosing tables and columns, masking, and how tables are read.
 - [Postgres changes](/docs/sources/postgres-cdc/): streaming changes from a replication slot into
-  DuckDB, Snowflake, Databricks or Parquet files, on a schedule or continuously, and what to watch on the server.
+  DuckDB, Snowflake, Databricks or Parquet files, and what to watch on the server. To set one up,
+  on a schedule or continuously, see [Capture Postgres changes](/docs/guides/postgres-cdc/).
 - [Snowflake](/docs/sources/snowflake/), from 0.26.0: choosing tables, query tables, read windows around the
   time of the run, and where unloaded files go.
 - [ODBC](/docs/sources/odbc/), from 0.27.0: connections, drivers, choosing tables,
@@ -35,5 +36,5 @@ Each kind has its own page:
 - [Files](/docs/sources/files/): formats, partitions, which files load, and files the destination
   reads itself.
 - [Google Sheets](/docs/sources/google-sheets/): tabs and ranges, headers, and how cells are typed.
-- [Python](/docs/sources/python/): any API, SaaS or custom source as a table, including REST APIs
-  that run entirely in Rust.
+- [Python](/docs/guides/python/): any API, SaaS or custom source as a table, including REST APIs
+  that run entirely in Rust. Every function is in the [Python API](/docs/sources/python/).

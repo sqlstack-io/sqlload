@@ -1,6 +1,6 @@
 ---
 title: "Postgres CDC"
-description: "Stream a Postgres database's inserts, updates and deletes from a logical replication slot into DuckDB, Snowflake, Databricks or Parquet files."
+description: "The postgres_cdc source: settings, Databricks and Parquet targets, what a load guarantees, the slot and WAL, schema changes, and what plan refuses."
 ---
 
 A `postgres_cdc` source captures a Postgres database's changes. The first `sqlload load` copies
@@ -14,296 +14,29 @@ load from 0.18.0; in 0.17.0, any change to a table's columns stops the load unti
 From 0.19.0, a table that joins the source is copied on its own, and a first snapshot that
 stopped part-way resumes; in 0.18.0, both needed `--resnapshot`. `load --follow`, which keeps
 streaming, is in 0.20.0 and later, and files targets in 0.21.0 and later. From 0.22.0,
-`--reload` refuses captured tables on every target (see [Reloading](#reloading)); before, a
-warehouse target accepted it but didn't rebuild the tables. Databricks targets are in 0.23.0
-and later. From 0.24.0, a load into a files target names each table by its folder.
+`--reload` refuses captured tables on every target (see
+[Reloading](/docs/guides/postgres-cdc/#reloading)); before, a warehouse target accepted it but
+didn't rebuild the tables. Databricks targets are in 0.23.0 and later. From 0.24.0, a load into a
+files target names each table by its folder.
 
-## Requirements
-
-- **The server** runs with `wal_level = logical`. Changing it needs a restart.
-- **The connection's user** has the `REPLICATION` attribute and can `SELECT` the tables.
-- **A publication** of exactly the source's tables; one that also publishes other tables stops
-  the load. When it's missing, SQLLoad creates `sqlload_<source>`, which needs a user that owns the
-  tables and has `CREATE` on the database. Otherwise, create one as the tables' owner and name it
-  with `publication`; SQLLoad then only checks it.
-- **Every table** has a primary key and a replica identity other than `NOTHING`.
-- **TLS**, when the server needs it, is set on the connection as for any Postgres source, and
-  covers the replication session too. See [TLS](/docs/sources/postgres/#tls).
-- **The target** is DuckDB, Snowflake, Databricks (see [Into Databricks](#into-databricks)), or a
-  files target with `cdc_mode = "changelog"` (see [Into Parquet files](#into-parquet-files)). A
-  BigQuery, ClickHouse or Postgres target is refused at `plan`.
-
-## Set up a source
-
-This example streams a shop database into DuckDB, as a user that doesn't own the tables.
-
-### 1. Prepare Postgres
-
-Save this as `seed.sql`. `orders` has a `text[]` column, `tags`:
-
-```sql
-CREATE TABLE customers (
-    customer_id bigint PRIMARY KEY,
-    email text NOT NULL,
-    country text
-);
-CREATE TABLE orders (
-    order_id bigint PRIMARY KEY,
-    customer_id bigint NOT NULL REFERENCES customers,
-    status text NOT NULL,
-    tags text[],
-    total numeric(12,2) NOT NULL
-);
-INSERT INTO customers
-SELECT i, 'customer' || i || '@example.com', (ARRAY['GB', 'FR', 'DE', 'US'])[1 + i % 4]
-FROM generate_series(1, 50) AS i;
-INSERT INTO orders
-SELECT i, 1 + i % 50, (ARRAY['placed', 'paid', 'shipped'])[1 + i % 3], ARRAY['web'],
-       round(10 + i * 1.37, 2)
-FROM generate_series(1, 1000) AS i;
-```
-
-Start Postgres with logical decoding on, and load the data:
-
-```bash
-docker run -d --name app-db -e POSTGRES_PASSWORD=secret -p 5432:5432 postgres:17 -c wal_level=logical
-docker exec -i app-db psql -q -U postgres < seed.sql
-```
-
-As the tables' owner, create the loader's user and a publication of the tables:
-
-```sql
-CREATE ROLE loader LOGIN REPLICATION PASSWORD 'secret';
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO loader;
-CREATE PUBLICATION app_changes FOR TABLE customers, orders;
-```
-
-### 2. Write `sqlload.toml`
-
-```toml
-default_target = "local"
-
-[connections.app]
-kind = "postgres"
-host = "localhost"
-user = "loader"
-password = "${ENV:PGPASSWORD}"
-database = "postgres"
-
-[connections.warehouse]
-kind = "duckdb"
-database = "shop.duckdb"
-
-[targets.local]
-connection = "warehouse"
-loader_schema = "raw"
-
-[sources.app]
-kind = "postgres_cdc"
-connection = "app"
-description = "The shop's application database, streamed from a replication slot."
-include = ["public.*"]
-publication = "app_changes"
-
-[sources.app.tables."public.customers"]
-description = "Customers, one row per customer."
-
-[sources.app.tables."public.orders"]
-description = "Orders, one row per order."
-columns = { tags = "text" }
-```
-
-The connection is an ordinary [`postgres` connection](/docs/configuration/#postgres). Array and
-`json` columns stream as Postgres writes them, so they must be pinned to text, as `tags` is here.
-`jsonb` needs nothing. Without the pin, `plan` stops:
-
-```console
-Errors (1)
-└── app__orders
-    └── reason  tags: kind = "postgres_cdc" streams text[] values as the source wrote them, which the snapshot normalises as jsonb; pin it with columns = { tags = "text" }, or exclude it
-```
-
-### 3. Plan, apply and load
-
-```bash
-export PGPASSWORD=secret
-```
-
-```console
-$ sqlload plan
-Plan ready  2 selected, 2 objects to create, 2 to load
-
-Objects (2)                                         sqlload apply
-├── raw.app__customers                              create table
-│   ├── customer_id int    -> BIGINT
-│   ├── email       text   -> VARCHAR
-│   ├── country     text   -> VARCHAR
-│   └── + _sqlload_lsn, _op, _committed_at, _deleted_at, _load_id, _loaded_at
-└── raw.app__orders                                 create table
-    ├── order_id    int             -> BIGINT
-    ├── customer_id int             -> BIGINT
-    ├── status      text            -> VARCHAR
-    ├── tags        text            -> VARCHAR
-    ├── total       decimal(12,2)   -> DECIMAL(12,2)
-    └── + _sqlload_lsn, _op, _committed_at, _deleted_at, _load_id, _loaded_at
-
-Loads (2)                                           sqlload load
-├── app__customers                                  snapshot copy, then apply changes, soft deletes (key: customer_id)
-│   ├── source  postgres_cdc  app  public.customers  slot sqlload_app
-│   ├── route   read as Arrow -> DuckDB takes Arrow
-│   └── batch   about every 1 GB
-└── app__orders                                     snapshot copy, then apply changes, soft deletes (key: order_id)
-    ├── source  postgres_cdc  app  public.orders  slot sqlload_app
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    └── batch   about every 1 GB
-
-✓ Plan complete  2 selected, 2 objects to create, 2 to load
-```
-
-`sqlload apply` creates the tables. The first `sqlload load` creates the slot, `sqlload_app`, and
-copies every table under its snapshot (the plan is cut here):
-
-```console
-$ sqlload load
-…
-loaded   raw.app__customers  50 rows  0.2s
-loaded   raw.app__orders     1,000 rows  0.2s
-
-✓ Completed  2 loaded, 1,050 rows, 0.3s
-```
-
-### 4. Load the changes
-
-After an insert, an update and a delete in Postgres:
-
-```sql
-INSERT INTO orders VALUES (1001, 7, 'placed', ARRAY['app'], 25.00);
-UPDATE orders SET status = 'shipped' WHERE order_id = 1;
-DELETE FROM orders WHERE order_id = 2;
-```
-
-the next load reads just those three changes:
-
-```console
-$ sqlload load
-…
-loaded   raw.app__customers  0 rows  0.2s
-loaded   raw.app__orders     3 rows  0.2s
-
-✓ Completed  2 loaded, 3 rows, 0.2s
-```
-
-In `raw.app__orders`, the deleted order is kept and marked:
-
-| `order_id` | `status` | `tags` | `_sqlload_op` | `_sqlload_deleted_at` set |
-|------------|----------|--------|---------------|---------------------------|
-| 1 | shipped | `{web}` | update | no |
-| 2 | shipped | `{web}` | delete | yes |
-| 1001 | placed | `{app}` | insert | no |
-
-Run `sqlload load` on a schedule to keep the tables up to date. Each run stops once it has read
-the changes committed before it started. To load changes as they arrive instead, keep one load
-running with [`--follow`](#keep-streaming).
-
-## Keep streaming
-
-From sqlload 0.20.0, `sqlload load SOURCE --follow` keeps streaming after it catches up. It holds
-one replication session open and writes a batch every `batch_interval` (default `10s`, or `1m` into
-files), at 100,000
-changes, or when it stops. A transaction still open on the server stays buffered until it
-commits. It runs until `--max-duration` passes or it gets Ctrl-C or SIGTERM:
-
-```bash
-sqlload load app --follow                    # until Ctrl-C or SIGTERM
-sqlload load app --follow --max-duration 10m
-```
-
-It logs each batch it writes, with how far it is behind the server. Here an order is inserted and
-then updated while it follows, then Ctrl-C stops it:
-
-```console
-$ sqlload load app --follow
-…
-2026-11-07T11:24:53.505015Z  INFO sqlload::cdc::main::follow_cdc: following
-2026-11-07T11:25:03.555267Z  INFO sqlload::cdc::_helpers::stream: batch written source="app" changes=2 tables=1 lsn=0/15B3720 behind_bytes=0 behind_secs=6
-2026-11-07T11:25:11.518577Z  INFO sqlload::command::_helpers::loader_commands: stopping once the batch or copy under way is written; press Ctrl-C again to stop now
-2026-11-07T11:25:11.520357Z  INFO sqlload::cdc::main::follow_cdc: stopped following rows=1
-loaded   raw.app__customers  0 rows  18.0s
-loaded   raw.app__orders     1 rows  18.0s
-
-✓ Completed  2 loaded, 1 rows, 18.1s
-```
-
-`behind_bytes` is how far the batch is behind the server's WAL position, and `behind_secs` how
-long ago its newest change committed. The two changes to one order load as one row under `merge`.
-
-- **Stopping.** `--max-duration`, or a first Ctrl-C or SIGTERM, writes and confirms what it has
-  read, then exits 0. A snapshot or copy under way finishes first. A second signal stops at once
-  (exit code 130), which is safe: the next load skips what was already written.
-- **While idle** it writes nothing and confirms the server's position, so the slot keeps no WAL for
-  writes to tables it doesn't publish. It sends Snowflake or Databricks no queries, so the warehouse can suspend;
-  each batch written resumes it, and a longer `batch_interval` writes fewer, larger batches.
-- **A column added** while it follows is planned again and added to the destination, and the stream
-  carries on from where it was confirmed:
-
-  ```console
-  2026-11-07T15:03:20.136978Z  INFO sqlload::cdc::_helpers::stream: re-planning gained=public.customers gained column vip
-  2026-11-07T15:03:20.160941Z  INFO sqlload::cdc::_helpers::stream: applied line=altered  raw.app__customers  add column  vip bool -> BOOLEAN
-  2026-11-07T15:03:20.161020Z  INFO sqlload::cdc::main::follow_cdc: following
-  ```
-
-  The same column gained again, with nothing written in between, stops it.
-- **Every other error**, including a re-plan that blocks a table, exits 1 without confirming
-  anything unwritten. Run it under a supervisor that restarts it; the restarted load carries on
-  from the last confirmed position.
-- **A table that joins `include`** while it follows is copied at its next re-plan or restart (see
-  [Adding tables](#adding-tables)).
-- **One source per process.** It follows one `postgres_cdc` source and nothing else, so select
-  that source. A selection with other tables or several `postgres_cdc` sources, `plan --follow`,
-  `apply --follow`, `--reload`, the cursor options, and `--max-duration` without `--follow` are
-  refused. `--resnapshot` applies once, at the start.
+To set one up, and for what the server, user and tables need, follow
+[Capture Postgres changes](/docs/guides/postgres-cdc/).
 
 ## Settings
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `kind` | | `postgres_cdc`. |
-| `connection` | | A `postgres` connection. |
-| `include`, `exclude` | | `schema.table` patterns, as for a [Postgres source](/docs/sources/postgres/#choosing-tables). |
-| `cdc_mode` | `merge` | `merge` keeps one row per key; `changelog` appends every change. |
-| `deletes` | `soft` | `merge` only: `soft` marks a deleted row with `_sqlload_deleted_at`; `hard` removes it. |
-| `slot` | `sqlload_<source>` | The replication slot. |
-| `publication` | `sqlload_<source>` | The publication. SQLLoad creates `sqlload_<source>` when it's missing. |
-| `batch_interval` | `10s`, `1m` into files | With [`load --follow`](#keep-streaming): how often it writes what it has read. At least `1s`. |
-
-Column settings (`columns`, `exclude_columns`, `mask` and the rest) work as for other sources. A
-captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. `merge`
-matches rows on the primary key, and a `unique_key` must lie within it.
-
-## Merge and changelog
-
-Every row carries `_sqlload_lsn` (its transaction's commit LSN), `_sqlload_op` (`snapshot`,
-`insert`, `update`, `delete` or `truncate`) and `_sqlload_committed_at`.
-
-- **`merge`** keeps one row per key. A soft delete sets `_sqlload_deleted_at`, and a truncate
-  soft-deletes every older row. A TOASTed value the change left out keeps its current value.
-- **`changelog`** appends every change. `_sqlload_seq` is its position in the transaction, and
-  `_sqlload_unchanged` lists the values the change left out.
-
-With `cdc_mode = "changelog"`, two updates to order 5 after the snapshot leave three rows:
-
-| `order_id` | `status` | `_sqlload_op` | `_sqlload_seq` |
-|------------|----------|---------------|----------------|
-| 5 | shipped | snapshot | 0 |
-| 5 | paid | update | 1 |
-| 5 | shipped | update | 1 |
+A `postgres_cdc` source takes a `postgres` connection, `include` and `exclude` patterns, and
+`cdc_mode`, `deletes`, `slot`, `publication` and `batch_interval`. Each is in
+[`sqlload.toml`](/docs/configuration/#postgres-cdc-settings), with its default. Column settings work
+as for other sources. A captured table takes no `write_strategy`, `cursor_column`, `batch_size` or
+`state`, and `merge` matches rows on the primary key.
 
 ## Into Databricks
 
 From sqlload 0.23.0, a `postgres_cdc` source loads into a
 [Databricks target](/docs/targets/databricks/), under `merge` (soft or hard deletes) or
 `changelog`. The snapshot copy, schema changes while streaming, tables joining the source and
-`load --follow` work as for DuckDB and Snowflake. With the setup above:
+`load --follow` work as for DuckDB and Snowflake. With the setup from
+[the guide](/docs/guides/postgres-cdc/#set-up-a-source):
 
 ```toml
 default_target = "lakehouse"
@@ -380,7 +113,8 @@ then relies on Delta's conflict detection between the two statements.
 
 From sqlload 0.21.0, a `postgres_cdc` source loads into a [files target](/docs/targets/files/),
 local or S3, as a changelog. Set `cdc_mode = "changelog"`; `merge` is refused at `plan`, since
-Parquet files can't be updated in place. With the setup above and a local folder:
+Parquet files can't be updated in place. With the setup from
+[the guide](/docs/guides/postgres-cdc/#set-up-a-source) and a local folder:
 
 ```toml
 default_target = "files"
@@ -396,7 +130,7 @@ connection = "lake"
 kind = "postgres_cdc"
 connection = "app"
 cdc_mode = "changelog"
-# ...the rest as above
+# ...the rest as in the guide
 ```
 
 ```console
@@ -413,7 +147,7 @@ $ sqlload plan
 Every load adds Parquet files to the folder of each table it changed, and names each table by its
 folder. A snapshot copy (the first load, a table joining the source, or `--resnapshot`) writes its
 files, then deletes the folder's older ones. The first load, then the insert, update and delete
-from [step 4](#4-load-the-changes):
+from [step 4](/docs/guides/postgres-cdc/#4-load-the-changes):
 
 ```console
 $ sqlload load
@@ -480,7 +214,7 @@ These are refused at `plan`:
 ```
 
 `--reload` is refused for a captured table too; `--resnapshot` copies it again (see
-[Reloading](#reloading)).
+[Reloading](/docs/guides/postgres-cdc/#reloading)).
 
 ## What a load guarantees
 
@@ -577,159 +311,10 @@ failed   raw.app__customers  column tier of app__customers was added with a defa
 ```
 
 A column added while a load runs stops that load before anything is written; run it again.
-Under [`--follow`](#keep-streaming), it plans again and carries on.
+Under [`--follow`](/docs/guides/postgres-cdc/#keep-streaming), it plans again and carries on.
 
 A generated column, or one left out of the publication's column list, never streams, so a table
 that loads one is refused. Add it to `exclude_columns`.
-
-## Adding tables
-
-From sqlload 0.19.0, a table that joins a source after its first load, because `include` now
-matches it or was widened, is copied on its own at the start of the next load (under `--follow`,
-at its next re-plan or restart). The other tables
-keep streaming, with their history and soft deletes; they aren't copied again. The copy reads
-under a temporary slot, so one slot under `max_replication_slots` must be free when it starts.
-The table's changes from before its copy are skipped, and from then on it streams with the
-others.
-
-Here a `refunds` table is created, as the tables' owner:
-
-```sql
-CREATE TABLE refunds (
-    refund_id bigint PRIMARY KEY,
-    order_id bigint NOT NULL REFERENCES orders,
-    amount numeric(12,2) NOT NULL
-);
-INSERT INTO refunds SELECT i, i * 10, 5.00 FROM generate_series(1, 20) AS i;
-GRANT SELECT ON refunds TO loader;
-```
-
-`include = ["public.*"]` matches it, and `plan` shows it as a copy before it streams:
-
-```console
-$ sqlload plan
-…
-└── app__refunds                                    snapshot copy, then apply changes, soft deletes (key: refund_id)
-    ├── source  postgres_cdc  app  public.refunds  slot sqlload_app
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    └── batch   about every 1 GB
-```
-
-SQLLoad adds a new table to its own publication, `sqlload_<source>`, which needs a user that owns
-the table. A named publication is yours to change, so until it publishes the table, the load
-stops:
-
-```console
-$ sqlload load
-…
-failed   raw.app__refunds    publication app_changes does not publish "public"."refunds"; add them with ALTER PUBLICATION "app_changes" ADD TABLE "public"."refunds"
-```
-
-After `ALTER PUBLICATION app_changes ADD TABLE refunds;` as the owner, and `sqlload apply` to
-create the destination table, the next load copies `refunds` and applies the other tables'
-changes, here one update to an order:
-
-```console
-$ sqlload load
-…
-loaded   raw.app__customers  0 rows  0.4s
-loaded   raw.app__orders     1 rows  0.4s
-loaded   raw.app__refunds    20 rows  0.4s
-
-✓ Completed  3 loaded, 21 rows, 0.4s
-```
-
-A table leaving `include` still needs `--resnapshot`. If it joins again later while its destination
-table still holds rows captured before that, the load stops rather than replace them without
-asking:
-
-```console
-failed   raw.app__refunds    rows captured before slot sqlload_app was recreated are still in app__refunds; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or drop the tables from the destination to copy them alone
-```
-
-Drop the destination table and run `sqlload apply`, and the next load copies it alone. An empty
-destination table is copied without asking. On a files target, delete the table's folder instead.
-
-From 0.21.0, a table whose destination is gone, because its table was dropped or its folder
-deleted, is copied again alone the same way. After `DROP TABLE raw.app__orders` in DuckDB, `plan`
-creates it again and copies it:
-
-```console
-$ sqlload plan
-…
-└── app__orders                                     snapshot copy, then apply changes, soft deletes (key: order_id)
-```
-
-`sqlload load` creates the table, copies its 1,000 rows, and applies the other tables' changes.
-
-## Re-snapshot
-
-A load stops and names `--resnapshot` as the fix when the slot is lost or gone, after a schema
-change the stream can't carry, or when a table leaves `include` (see above).
-
-A first snapshot that stopped part-way resumes: the next load copies only the tables it hadn't
-finished, and keeps the slot. A `--resnapshot` that stopped part-way needs `--resnapshot` again,
-since its unfinished tables still hold the rows it was replacing.
-
-`sqlload load --resnapshot` drops and recreates the slot and copies every table again, replacing
-what it holds. A `changelog` table loses its history, and a `merge` table its soft-deleted rows.
-SQLLoad's own publication, `sqlload_<source>`, is set to follow `include` again. `plan
---resnapshot` shows what it would do:
-
-```console
-$ sqlload plan --resnapshot
-…
-Warnings (2)
-├── app__customers
-│   └── --resnapshot drops and recreates slot sqlload_app, then copies every table of app again
-└── app__orders
-    └── --resnapshot drops and recreates slot sqlload_app, then copies every table of app again
-
-✓ Plan complete  2 selected, 2 to load
-```
-
-On a terminal, `load --resnapshot` asks first. Elsewhere it needs `--yes`:
-
-```console
-$ sqlload load --resnapshot
-error: --resnapshot rebuilds app__customers, app__orders from the whole source, replacing what they hold; confirm it in a terminal, or add --yes
-$ sqlload load --resnapshot --yes
-…
-loaded   raw.app__customers  50 rows  0.2s
-loaded   raw.app__orders     1,000 rows  0.2s
-
-✓ Completed  2 loaded, 1,050 rows, 0.3s
-```
-
-### Reloading
-
-`--resnapshot`, not `--reload`, copies a captured table again. From sqlload 0.22.0, `--reload`
-refuses captured tables on every target, with or without `--resnapshot`. In a project that also
-has other sources, a bare `load --reload` still rebuilds their tables, but it exits 1. Here `shop`
-is an ordinary `postgres` source next to `app`:
-
-```console
-$ sqlload load --reload --yes
-…
-Errors (1)
-└── app__customers, app__orders
-    └── reason  a postgres_cdc table is copied again with --resnapshot, not --reload
-
-✗ Plan failed with errors  3 selected, 1 object to create, 1 to load
-loaded   raw.shop__products  30 rows  0.0s
-
-✓ Completed  1 loaded, 30 rows, 0.1s
-```
-
-To reload only the other tables, leave the source out:
-
-```console
-$ sqlload load --reload --yes --exclude app
-…
-loaded   raw.shop__products  30 rows  0.0s
-
-✓ Completed  1 loaded, 30 rows, 0.1s
-```
 
 ## Refused at plan
 

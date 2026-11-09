@@ -171,7 +171,7 @@ From 0.27.0. See [ODBC](/docs/sources/odbc/#connection).
 
 ### `http`
 
-For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach table functions as
+For [Python HTTP sources](/docs/guides/python/#http-apis); its settings reach table functions as
 `ctx.connection`.
 
 | Key | Meaning |
@@ -210,10 +210,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `destination_path` | files targets | The folder template for this source's tables, overriding the target's `path`. |
 | `include`, `exclude` | postgres, postgres_cdc, snowflake, odbc, bigquery | `schema.table` patterns to sync and to leave out (`dataset.table` for bigquery). |
 | `new_tables` | postgres | `sync` (default), `skip` or `fail`. See [Sources](/docs/sources/postgres/#choosing-tables). |
-| `cdc_mode` | postgres_cdc | `merge` (default) or `changelog`; a files target takes `changelog` only. See [Postgres changes](/docs/sources/postgres-cdc/#settings). |
-| `deletes` | postgres_cdc | `soft` (default) or `hard`; `merge` only. |
-| `slot`, `publication` | postgres_cdc | The replication slot and publication. Default `sqlload_<source>` for both. |
-| `batch_interval` | postgres_cdc | With `load --follow`: how often it writes what it has read. Default `10s` (`1m` into files), at least `1s`. |
+| `cdc_mode`, `deletes`, `slot`, `publication`, `batch_interval` | postgres_cdc | See [Postgres CDC settings](#postgres-cdc-settings). |
 | `exclude_columns`, `allow_columns` | all | Column patterns to leave out, and to keep anyway. |
 | `skip_tables_with_columns` | postgres | Leave out tables with a column matching one of these patterns. |
 | `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
@@ -235,6 +232,25 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `[sources.NAME.tables."schema.table"]` | all | Per-table settings. A files source's table is named after the source. |
 
 A source can also set any [table setting](#table-settings), as the default for its tables.
+
+### Postgres CDC settings
+
+A [`postgres_cdc`](/docs/sources/postgres-cdc/) source takes these:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `kind` | | `postgres_cdc`. |
+| `connection` | | A `postgres` connection. |
+| `include`, `exclude` | | `schema.table` patterns, as for a [Postgres source](/docs/sources/postgres/#choosing-tables). |
+| `cdc_mode` | `merge` | `merge` keeps one row per key; `changelog` appends every change. A files target takes `changelog` only. |
+| `deletes` | `soft` | `merge` only: `soft` marks a deleted row with `_sqlload_deleted_at`; `hard` removes it. |
+| `slot` | `sqlload_<source>` | The replication slot. |
+| `publication` | `sqlload_<source>` | The publication. SQLLoad creates `sqlload_<source>` when it's missing. |
+| `batch_interval` | `10s`, `1m` into files | With [`load --follow`](/docs/guides/postgres-cdc/#keep-streaming): how often it writes what it has read. At least `1s`. |
+
+Column settings (`columns`, `exclude_columns`, `mask` and the rest) work as for other sources. A
+captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. `merge`
+matches rows on the primary key, and a `unique_key` must lie within it.
 
 ## Table settings
 
@@ -280,4 +296,4 @@ Only in a table entry:
 | `exclude_columns`, `allow_columns`, `destination_path` | As on the source, for this table. |
 
 Python tables take the same settings as decorator arguments, plus `allow_empty`, `state` and
-`flatten`. See [Python sources](/docs/sources/python/#settings).
+`flatten`. See [Python sources](/docs/guides/python/#settings).
