@@ -66,7 +66,7 @@ use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
-use crate::loader::_helpers::table_plan::{numeric_cursor, source_filter};
+use crate::loader::_helpers::table_plan::source_filter;
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
@@ -1110,7 +1110,7 @@ fn window_filter(table: &TablePlan, window: &CursorWindow) -> Option<String> {
     };
     source_filter(
         &column.expression,
-        numeric_cursor(&column.output),
+        (Some(&column.output), None),
         window.from.as_deref().map(|from| (operator, from)),
         window.to.as_deref(),
     )

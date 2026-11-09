@@ -866,3 +866,16 @@ pub(crate) struct BigQuerySourceTestCase {
     /// The row restriction the load's read session asked for.
     pub(crate) expected_restriction: &'static str,
 }
+
+/// Two loads from a bigquery source into DuckDB of a one-column table appended by that column as its cursor.
+pub(crate) struct BigQueryCursorTestCase {
+    pub(crate) description: &'static str,
+    /// The table's column and its DDL type in the fake's `marts.values` table.
+    pub(crate) column: (&'static str, &'static str),
+    /// The values the first load reads, then those added before the next.
+    pub(crate) values: (&'static [&'static str], &'static [&'static str]),
+    /// The row restriction of the next load's read session.
+    pub(crate) expected_restriction: &'static str,
+    /// The loaded values, as DuckDB text in order, joined by commas.
+    pub(crate) expected_values: &'static str,
+}
