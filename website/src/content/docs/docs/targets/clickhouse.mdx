@@ -44,7 +44,8 @@ SQLLoad creates databases and tables, inserts into its staging tables, moves par
 tables (`ATTACH PARTITION`, `REPLACE PARTITION`, `DROP PARTITION`), deletes rows from its own copies
 of tables (`DELETE FROM`, or `ALTER TABLE ... DELETE`), exchanges, renames and drops tables, and
 reads files with the `s3` table function. The user needs the grants for these in the target's
-databases.
+databases, and a profile that lets it set settings per query (not `readonly = 1`, and no
+constraint fixing `async_insert` on).
 
 `sqlload debug` checks the connection, and prints the user, the server's version and its time zone.
 
@@ -80,8 +81,9 @@ sorting or partition key, so a key column whose source type widens fails the loa
 
 ## How rows arrive
 
-- **Arrow over HTTP, into a staging table.** Rows go into a staging table named for the load (a
-  build table for `replace`), never into the table itself.
+- **zstd-compressed Arrow over HTTP, into a staging table.** Rows go into a staging table named for
+  the load (a build table for `replace`), never into the table itself, and each insert writes its
+  rows before it returns (`async_insert = 0`).
 - **One swap per publish.** ClickHouse has no transactions, so each publish is one swap of a whole
   table or of whole partitions. It's atomic in an `Atomic` database, ClickHouse's default. A load
   killed at any point leaves the table as it was or fully published, and the next run converges.

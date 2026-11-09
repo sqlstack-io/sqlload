@@ -17,6 +17,9 @@ pub const SESSION_SETTINGS: &[(&str, &str)] = &[
     ("wait_end_of_query", "1"),
 ];
 
+/// Settings an insert of rows also runs with, so it writes them before it returns: never through the server-side async buffer, which ClickHouse 26.2 and later turn on by default and a profile may set to return before the rows are written. Only inserts send it, so a profile that fixes `async_insert` fails only them, with ClickHouse's own message.
+pub const INSERT_SETTINGS: &[(&str, &str)] = &[("async_insert", "0")];
+
 /// How long one request may run: a statement can copy whole partitions, and an insert carries up to a batch of rows.
 pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
@@ -58,6 +61,9 @@ pub const ASIDE_SUFFIX: &str = "_aside";
 
 /// The most bytes of Arrow rows one insert request carries; a batch's rows go in several.
 pub const INSERT_BYTES: usize = 64 * 1024 * 1024;
+
+/// The zstd level the rows of an insert are compressed with: the fastest, which costs less time than the bytes it saves take to send on a link slower than about 1 GB/s.
+pub const INSERT_COMPRESSION_LEVEL: i32 = 1;
 
 /// The most characters of an error response kept in the error.
 pub const ERROR_PREVIEW: usize = 2_000;
