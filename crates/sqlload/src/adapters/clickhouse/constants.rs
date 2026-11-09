@@ -17,7 +17,7 @@ pub const SESSION_SETTINGS: &[(&str, &str)] = &[
     ("wait_end_of_query", "1"),
 ];
 
-/// Settings an insert of rows also runs with, so it writes them before it returns: never through the server-side async buffer, which ClickHouse 26 turns on by default and a profile may set to return before the rows are written. Only inserts send it, so a profile that fixes `async_insert` fails only them, with ClickHouse's own message.
+/// Settings an insert of rows also runs with, so it writes them before it returns: never through the server-side async buffer, which ClickHouse 26.2 and later turn on by default and a profile may set to return before the rows are written. Only inserts send it, so a profile that fixes `async_insert` fails only them, with ClickHouse's own message.
 pub const INSERT_SETTINGS: &[(&str, &str)] = &[("async_insert", "0")];
 
 /// How long one request may run: a statement can copy whole partitions, and an insert carries up to a batch of rows.
