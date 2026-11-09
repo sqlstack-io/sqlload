@@ -105,7 +105,8 @@ pub(crate) struct ArrayLossTestCase {
     pub(crate) description: &'static str,
     pub(crate) element: ColumnType,
     pub(crate) warehouse: Warehouse,
-    pub(crate) expected_loss: &'static str,
+    /// The array's note; `None` when it loses nothing.
+    pub(crate) expected_loss: Option<&'static str>,
 }
 
 pub(crate) struct LiveTypeTestCase {

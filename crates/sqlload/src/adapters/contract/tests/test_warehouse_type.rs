@@ -211,25 +211,71 @@ fn given_a_portable_type_when_mapping_to_a_warehouse_then_the_sql_name_and_loss_
 }
 
 #[test]
-fn given_an_array_of_a_lossy_element_when_mapping_it_then_its_note_names_both_losses() {
+fn given_an_array_when_mapping_it_then_its_note_names_its_own_loss_and_its_elements_after_one_prefix()
+ {
     let test_cases = [
         ArrayLossTestCase {
             description: "BigQuery: no NULLs, and uuid elements as text",
             element: ColumnType::Uuid,
             warehouse: Warehouse::BigQuery,
-            expected_loss: "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load; elements: stored as text",
+            expected_loss: Some(
+                "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load; elements: stored as text",
+            ),
         },
         ArrayLossTestCase {
             description: "BigQuery: an exact element adds nothing",
             element: ColumnType::Int,
             warehouse: Warehouse::BigQuery,
-            expected_loss: "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load",
+            expected_loss: Some(
+                "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load",
+            ),
         },
         ArrayLossTestCase {
             description: "ClickHouse: a NULL array still loads empty when the element has its own loss",
             element: ColumnType::Date,
             warehouse: Warehouse::ClickHouse,
-            expected_loss: "a NULL array loads as an empty one; elements: holds dates from 1900 to 2299; a date outside them fails the load",
+            expected_loss: Some(
+                "a NULL array loads as an empty one; elements: holds dates from 1900 to 2299; a date outside them fails the load",
+            ),
+        },
+        ArrayLossTestCase {
+            description: "DuckDB: an element's loss has the same elements: prefix as every other warehouse",
+            element: ColumnType::Varchar(20),
+            warehouse: Warehouse::DuckDb,
+            expected_loss: Some("elements: the length limit is not enforced"),
+        },
+        ArrayLossTestCase {
+            description: "Postgres: an exact element adds nothing, so the array has no note",
+            element: ColumnType::Int,
+            warehouse: Warehouse::Postgres,
+            expected_loss: None,
+        },
+        ArrayLossTestCase {
+            description: "Snowflake: an integer element is a JSON number, which keeps its value",
+            element: ColumnType::Int,
+            warehouse: Warehouse::Snowflake,
+            expected_loss: None,
+        },
+        ArrayLossTestCase {
+            description: "Snowflake: a decimal element is a JSON string",
+            element: ColumnType::Decimal {
+                precision: 10,
+                scale: 2,
+            },
+            warehouse: Warehouse::Snowflake,
+            expected_loss: Some("elements: each decimal(10,2) is a JSON string"),
+        },
+        ArrayLossTestCase {
+            description: "Snowflake: a uuid element is a JSON string, which the old generic note left out",
+            element: ColumnType::Uuid,
+            warehouse: Warehouse::Snowflake,
+            expected_loss: Some("elements: each uuid is a JSON string"),
+        },
+        ArrayLossTestCase {
+            description: "Snowflake: a float element can't be NaN or infinite",
+            element: ColumnType::Float,
+            warehouse: Warehouse::Snowflake,
+            expected_loss: Some("elements: NaN and infinities can't be held"),
         },
     ];
     for test_case in test_cases {
@@ -237,7 +283,7 @@ fn given_an_array_of_a_lossy_element_when_mapping_it_then_its_note_names_both_lo
             .render_loader_logical_type(&ColumnType::Array(Box::new(test_case.element)));
         assert_eq!(
             mapped.lossy.as_deref(),
-            Some(test_case.expected_loss),
+            test_case.expected_loss,
             "{}",
             test_case.description
         );

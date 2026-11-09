@@ -68,10 +68,12 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
             let element = logical_type(element);
             WarehouseType {
                 sql: format!("ARRAY<{}>", element.sql),
-                lossy: Some(array_loss(
-                    "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load",
+                lossy: array_loss(
+                    Some(
+                        "BigQuery arrays hold no NULLs: a NULL array loads as an empty one, and a NULL element fails the load",
+                    ),
                     element.lossy,
-                )),
+                ),
             }
         }
     }
