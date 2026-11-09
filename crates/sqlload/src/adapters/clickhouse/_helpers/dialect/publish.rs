@@ -36,6 +36,37 @@ pub(crate) fn displaced_partitions_query(target: &str, displaced: &str) -> Strin
     format!("SELECT DISTINCT _partition_id FROM {target} WHERE ifNull({displaced}, 0) ORDER BY 1")
 }
 
+/// The query answering `table`'s partition key in `database`, empty when it has none.
+pub(crate) fn partition_key_query(database: &str, table: &str) -> String {
+    format!(
+        "SELECT partition_key FROM system.tables WHERE database = {} AND name = {}",
+        ClickHouseSql.render_loader_value_literal(database),
+        ClickHouseSql.render_loader_value_literal(table)
+    )
+}
+
+/// The query listing the columns `table`'s partition key reads.
+pub(crate) fn partition_key_columns_query(database: &str, table: &str) -> String {
+    format!(
+        "SELECT name FROM system.columns WHERE database = {} AND table = {} AND is_in_partition_key ORDER BY name",
+        ClickHouseSql.render_loader_value_literal(database),
+        ClickHouseSql.render_loader_value_literal(table)
+    )
+}
+
+/// `insert` ordered by the partition `key`, unchanged when the key reads no column (there is none, or it is `tuple()` or a constant: every row lands in one partition either way) or a column not among `inserted` (such as a `MATERIALIZED` one), which the inserted rows cannot be ordered by.
+pub(crate) fn sorted_insert(
+    insert: &str,
+    key: &str,
+    key_columns: &[String],
+    inserted: &[String],
+) -> String {
+    match key_columns.is_empty() || !key_columns.iter().all(|column| inserted.contains(column)) {
+        true => insert.to_owned(),
+        false => format!("{insert} ORDER BY {}", key.trim()),
+    }
+}
+
 /// `target`'s partition `partition` replaced by `copy`'s.
 pub(crate) fn replace_partition(target: &str, copy: &str, partition: &str) -> String {
     format!(

@@ -11,7 +11,7 @@ const SF_SWAP_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGI
 
 const BQ_INSERT: &str = "INSERT INTO `raw`.`app__accounts` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, PARSE_JSON(`profile`), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`";
 
-const CH_DELTA_INSERT: &str = "INSERT INTO `raw`.`app__accounts__sqlload_staging_load1_swap` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, CAST(`profile` AS Nullable(String)), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`";
+const CH_DELTA_INSERT: &str = "-- sqlload publish {\"SortedInsert\":{\"database\":\"raw\",\"table\":\"app__accounts__sqlload_staging_load1_swap\",\"columns\":[\"id\",\"profile\",\"updated_at\",\"_sqlload_load_id\",\"_sqlload_loaded_at\"],\"insert\":\"INSERT INTO `raw`.`app__accounts__sqlload_staging_load1_swap` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id` AS `id`, CAST(`profile` AS Nullable(String)) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`\"}}";
 
 const DB_INSERT: &str = "INSERT INTO `raw`.`app__accounts` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id`, parse_json(`profile`), `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`";
 

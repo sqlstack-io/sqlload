@@ -88,7 +88,7 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
                 .iter()
                 .filter(|statement| !statement.starts_with("DELETE"))
                 // ClickHouse's partition publish names the delta in its condition but copies nothing.
-                .filter(|statement| !statement.starts_with("-- sqlload publish "))
+                .filter(|statement| !statement.starts_with("-- sqlload publish {\"Partitions\""))
                 .filter(|statement| sources.iter().any(|source| statement.contains(source)))
                 .count();
             let rewrites = usize::from(

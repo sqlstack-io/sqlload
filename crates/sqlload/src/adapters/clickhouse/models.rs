@@ -58,4 +58,11 @@ pub enum PublishStep {
         aside: String,
         displaced: Option<String>,
     },
+    /// Run `insert` (an `INSERT INTO` `database`.`table` `... SELECT` of `columns`), ordered by the table's partition key when it has one and every column the key reads is inserted, so each insert block fills few partitions and makes few parts.
+    SortedInsert {
+        database: String,
+        table: String,
+        columns: Vec<String>,
+        insert: String,
+    },
 }

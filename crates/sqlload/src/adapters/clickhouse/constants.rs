@@ -32,6 +32,9 @@ pub const EXCHANGE_UNSUPPORTED_CODES: &[&str] = &["1", "48"];
 /// The error code of a lightweight `DELETE` the server or table refuses (lightweight deletes turned off, or a table with projections that is set to refuse them), which `ALTER TABLE ... DELETE` replaces.
 pub const LIGHTWEIGHT_DELETE_REFUSED_CODE: &str = "344";
 
+/// The error code of a query that ran out of memory, such as a sorted delta insert under a per-query `max_memory_usage` (ClickHouse spills a sort to disk by the memory the server and user have free, not by that limit), which the unsorted insert replaces.
+pub const MEMORY_LIMIT_EXCEEDED_CODE: &str = "241";
+
 /// The setting a lightweight `DELETE` runs with, so it marks rows deleted in the parts that hold them: a patch part, as another mode writes, is not carried by `REPLACE PARTITION`. Servers before ClickHouse 25.5 have no such setting, and a profile may pin another value; there the copies are rebuilt from the kept rows instead.
 pub const LIGHTWEIGHT_DELETE_MODE: (&str, &str) = ("lightweight_delete_mode", "alter_update");
 

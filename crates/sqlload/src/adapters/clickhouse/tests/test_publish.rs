@@ -1,10 +1,10 @@
 use crate::adapters::clickhouse::_helpers::dialect::publish::{
-    PartitionPublish, partition_statements,
+    PartitionPublish, partition_statements, sorted_insert,
 };
 use crate::adapters::clickhouse::_helpers::session::steps::publish_step;
 use crate::adapters::clickhouse::models::PublishStep;
 use crate::adapters::clickhouse::tests::test_types::{
-    PartitionStatementsTestCase, PublishStepTestCase,
+    PartitionStatementsTestCase, PublishStepTestCase, SortedInsertTestCase,
 };
 
 const EXCHANGE: &str = "-- sqlload publish {\"Exchange\":{\"target\":\"`raw`.`events`\",\"build\":\"`raw`.`c`\",\"aside\":\"`raw`.`a`\"}}";
@@ -261,6 +261,58 @@ fn given_a_publish_statement_when_running_it_then_the_step_it_names_is_read_back
         assert_eq!(
             publish_step(test_case.statement).map_err(|_| ()),
             test_case.expected_step,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_delta_insert_when_its_table_is_partitioned_then_the_rows_go_in_ordered_by_the_partition_key()
+ {
+    let insert = "INSERT INTO `raw`.`d` (`id`, `day`, `region`) SELECT `id` AS `id`, `day` AS `day`, `region` AS `region` FROM `raw`.`s`";
+    let inserted = ["id".to_owned(), "day".to_owned(), "region".to_owned()];
+    let test_cases = [
+        SortedInsertTestCase {
+            description: "a daily key orders the rows by it",
+            key: "toYYYYMMDD(day)",
+            key_columns: &["day"],
+            expected_insert: "INSERT INTO `raw`.`d` (`id`, `day`, `region`) SELECT `id` AS `id`, `day` AS `day`, `region` AS `region` FROM `raw`.`s` ORDER BY toYYYYMMDD(day)",
+        },
+        SortedInsertTestCase {
+            description: "a tuple key orders the rows by the whole tuple",
+            key: "(toYYYYMM(day), region)",
+            key_columns: &["day", "region"],
+            expected_insert: "INSERT INTO `raw`.`d` (`id`, `day`, `region`) SELECT `id` AS `id`, `day` AS `day`, `region` AS `region` FROM `raw`.`s` ORDER BY (toYYYYMM(day), region)",
+        },
+        SortedInsertTestCase {
+            description: "an unpartitioned table leaves the insert as it is",
+            key: "",
+            key_columns: &[],
+            expected_insert: insert,
+        },
+        SortedInsertTestCase {
+            description: "a key reading no column (tuple() or a constant) leaves the insert as it is",
+            key: "tuple()",
+            key_columns: &[],
+            expected_insert: insert,
+        },
+        SortedInsertTestCase {
+            description: "a key reading a column the insert does not fill (a MATERIALIZED one) leaves the insert as it is",
+            key: "toYYYYMM(created)",
+            key_columns: &["created"],
+            expected_insert: insert,
+        },
+    ];
+    for test_case in test_cases {
+        let key_columns: Vec<String> = test_case
+            .key_columns
+            .iter()
+            .map(|column| (*column).to_owned())
+            .collect();
+        assert_eq!(
+            sorted_insert(insert, test_case.key, &key_columns, &inserted),
+            test_case.expected_insert,
             "{}",
             test_case.description
         );

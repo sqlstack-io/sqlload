@@ -1,12 +1,14 @@
 //! Statements as the runner carries them out: sent as they are, or a publish step it carries out itself.
 
 use crate::adapters::clickhouse::_helpers::dialect::publish::{
-    partition_rows_query, replace_partition,
+    partition_key_columns_query, partition_key_query, partition_rows_query, replace_partition,
+    sorted_insert,
 };
 use crate::adapters::clickhouse::_helpers::session::http::send;
+use crate::adapters::clickhouse::_helpers::session::rows::text_rows;
 use crate::adapters::clickhouse::constants::{
     EXCHANGE_UNSUPPORTED_CODES, LIGHTWEIGHT_DELETE_MODE, LIGHTWEIGHT_DELETE_REFUSED_CODE,
-    PUBLISH_PREFIX,
+    MEMORY_LIMIT_EXCEEDED_CODE, PUBLISH_PREFIX,
 };
 use crate::adapters::clickhouse::models::{ClickHouseDestination, ClickHouseSql, PublishStep};
 use crate::adapters::contract::types::SqlAdapter;
@@ -22,7 +24,7 @@ pub(crate) fn publish_step(statement: &str) -> Result<Option<PublishStep>, ApiEr
         .map_err(|error| ApiError::Protocol(format!("a malformed publish step: {error}")))
 }
 
-/// Run one statement, or the exchange, partition replace or row delete it stands for; a partition publish here is a mistake, as it only follows from a write.
+/// Run one statement, or the exchange, partition replace, row delete or sorted insert it stands for; a partition publish here is a mistake, as it only follows from a write.
 pub(crate) async fn run_step(
     destination: &ClickHouseDestination,
     statement: &str,
@@ -44,9 +46,63 @@ pub(crate) async fn run_step(
         Some(PublishStep::DeleteRows { table, condition }) => {
             delete_rows(destination, (&table, &condition)).await
         }
+        Some(PublishStep::SortedInsert {
+            database,
+            table,
+            columns,
+            insert,
+        }) => insert_sorted(destination, (&database, &table), &columns, &insert).await,
         Some(PublishStep::Partitions { .. }) => Err(ApiError::Protocol(
             "a partition publish cannot run inside another".to_owned(),
         )),
+    }
+}
+
+/// Run `insert` into `database`.`table`, ordered by the partition key the server reports for the table when every column it reads is among `columns` (see [`sorted_insert`]); a sort that runs out of memory is replaced by the unsorted insert into the emptied table.
+async fn insert_sorted(
+    destination: &ClickHouseDestination,
+    (database, table): (&str, &str),
+    columns: &[String],
+    insert: &str,
+) -> Result<(), ApiError> {
+    let first_values = |query: String| async move {
+        let text = send(
+            destination,
+            None,
+            format!("{query} FORMAT JSONCompactStrings").into_bytes(),
+        )
+        .await?;
+        Ok::<Vec<String>, ApiError>(
+            text_rows(&text)?
+                .into_iter()
+                .filter_map(|row| row.into_iter().next().flatten())
+                .collect(),
+        )
+    };
+    let key = first_values(partition_key_query(database, table)).await?;
+    let key_columns = first_values(partition_key_columns_query(database, table)).await?;
+    let key = key.first().map(String::as_str).unwrap_or_default();
+    let sorted = sorted_insert(insert, key, &key_columns, columns);
+    match send(destination, None, sorted.clone().into_bytes()).await {
+        Ok(_) => Ok(()),
+        Err(error) if sorted != insert && error.code() == Some(MEMORY_LIMIT_EXCEEDED_CODE) => {
+            tracing::debug!(%error, "the sorted insert ran out of memory; inserting unsorted");
+            let delta = format!(
+                "{}.{}",
+                ClickHouseSql.render_identifier(database),
+                ClickHouseSql.render_identifier(table)
+            );
+            send(
+                destination,
+                None,
+                format!("TRUNCATE TABLE {delta}").into_bytes(),
+            )
+            .await?;
+            send(destination, None, insert.as_bytes().to_vec())
+                .await
+                .map(|_| ())
+        }
+        Err(error) => Err(error),
     }
 }
 

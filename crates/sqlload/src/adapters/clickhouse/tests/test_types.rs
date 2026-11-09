@@ -70,3 +70,11 @@ pub(crate) struct TextRowsTestCase {
     pub(crate) answer: &'static str,
     pub(crate) expected_rows: &'static [&'static [Option<&'static str>]],
 }
+
+pub(crate) struct SortedInsertTestCase {
+    pub(crate) description: &'static str,
+    /// The partition key `system.tables` reports, empty for an unpartitioned table.
+    pub(crate) key: &'static str,
+    pub(crate) key_columns: &'static [&'static str],
+    pub(crate) expected_insert: &'static str,
+}
