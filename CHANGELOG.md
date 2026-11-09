@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.29.0](https://github.com/sqlstack-io/sqlload/compare/v0.28.0...v0.29.0) (2026-11-09)
+
+
+### Features
+
+* **plan:** note that an integer array pin cuts float list elements ([0721349](https://github.com/sqlstack-io/sqlload/commit/07213496f667534539f29b57be02eeb200791e2b))
+* **plan:** note what each column's destination type loses ([c669c3e](https://github.com/sqlstack-io/sqlload/commit/c669c3e10995870559c2aaba23cf47b25e31c3ca))
+
+
+### Bug Fixes
+
+* **files:** refuse a native type for partition, path and constant columns at plan ([b62459c](https://github.com/sqlstack-io/sqlload/commit/b62459c428742c83ae02ec47112684bd472f5f62))
+* **plan:** keep the files loss note for native path columns, and let mask win ([#147](https://github.com/sqlstack-io/sqlload/issues/147)) ([1b03c8a](https://github.com/sqlstack-io/sqlload/commit/1b03c8a9ad5aaac4d88270c2131ada298e2c042e))
+* **plan:** refuse a native type pinned for a files target at plan ([#146](https://github.com/sqlstack-io/sqlload/issues/146)) ([b0f90e5](https://github.com/sqlstack-io/sqlload/commit/b0f90e510f599601ce526c480f6524377cfdac35))
+* **python:** keep NaN and infinities in Arrow float lists pinned as arrays ([dc85521](https://github.com/sqlstack-io/sqlload/commit/dc8552148180f39382f68f3cacf41b6a8815cd27))
+* **python:** pinned Arrow list columns keep their values across batches ([674c068](https://github.com/sqlstack-io/sqlload/commit/674c0689e58e8f7f1c942f8203d154d2380eaeb0))
+* **snowflake:** refuse an array pin over an existing VARIANT json column ([155384e](https://github.com/sqlstack-io/sqlload/commit/155384e3f7e10176f856e792ab7c90397c2dbb56))
+
+
+### Documentation
+
+* 0.28.0 on sqlload.io: browser sign-in marked as released ([c9117c6](https://github.com/sqlstack-io/sqlload/commit/c9117c62cfb3ef35f2a775febe9bb453b3e4da5f))
+* CSV files targets in the target lists, and BigQuery arrays as shipped in 0.27.0 ([23efee0](https://github.com/sqlstack-io/sqlload/commit/23efee0f2495abc9b91665da1e2af6c736d6f71e))
+
 ## [0.28.0](https://github.com/sqlstack-io/sqlload/compare/v0.27.0...v0.28.0) (2026-11-09)
 
 
