@@ -19,6 +19,7 @@ CREATE TABLE public.stores (code text, city text);
 CREATE TABLE public.visits (id int8, day date NOT NULL);
 CREATE TABLE public.views (id int8, day date NOT NULL);
 CREATE TABLE public.clicks (id int8, at timestamptz);
+CREATE TABLE public.pings (id int8, day date NOT NULL);
 CREATE TABLE public.kinds (id int2, tz timestamptz, ntz timestamp, amount numeric(38,9), born date, ref uuid, doc jsonb, raw bytea, opens time, ok bool, ratio float8);
 INSERT INTO public.accounts VALUES
   (1, 'Acme Ltd', 10.50, '2026-10-01 10:00:00+00'),
@@ -66,6 +67,11 @@ partition_by = "toYYYYMM(day)"
 [sources.app.tables."public.stores"]
 write_strategy = "replace"
 mask = { city = "hash" }
+
+[sources.app.tables."public.pings"]
+write_strategy = "delete_insert"
+cursor_column = "day"
+partition_by = "toYYYYMM(day)"
 
 [sources.app.tables."public.clicks"]
 write_strategy = "append"
@@ -125,6 +131,12 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 source_change: "",
                 check_query: "SELECT partition_key || ' / ' || trim(BOTH '()' FROM sorting_key) || ' / ' || engine FROM system.tables WHERE database = 'raw' AND name = 'app__accounts'",
                 expected_result: "toYYYYMM(updated_at) / id / MergeTree",
+            },
+            LoadRunTestCase {
+                description: "a table whose first load found no rows plans again: its empty table has no cursor maximum, so the next load reads everything",
+                source_change: "INSERT INTO public.pings VALUES (1, '2026-10-20');",
+                check_query: "SELECT arrayStringConcat(groupArray(toString(id) || '@' || toString(day)), ',') FROM (SELECT id, day FROM raw.app__pings ORDER BY id)",
+                expected_result: "1@2026-10-20",
             },
             LoadRunTestCase {
                 description: "the type matrix: each portable type in its ClickHouse column",
