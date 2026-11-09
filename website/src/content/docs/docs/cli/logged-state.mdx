@@ -36,11 +36,11 @@ Nothing is ever deleted from the log.
 
 ```console
 $ sqlload logged-state show
-raw.shop__events  state 4 (run e9f46950-4e6e-4956-ae4f-1fbeb498b3ff at 2026-11-06T23:02:50.939416Z)
-  2026-11-06T23:02:50.785656Z  32e4f7ad-9c92-49d4-9e6e-29c8be864d99  run  - -> -, state 2  6 rows
-  2026-11-06T23:02:50.939416Z  e9f46950-4e6e-4956-ae4f-1fbeb498b3ff  run  - -> -, state 4  6 rows
+raw.shop__events  state 4 (run 54ab366a-bca1-4088-9723-4c6d1723ad02 at 2026-11-09T18:02:47.844103Z)
+  2026-11-09T18:02:47.552256Z  e1bf5051-3333-4fdd-aa31-18bf2d74a51c  run  - -> -, state 2  6 rows
+  2026-11-09T18:02:47.844103Z  54ab366a-bca1-4088-9723-4c6d1723ad02  run  - -> -, state 4  6 rows
 $ sqlload logged-state verify
-raw.shop__events  ok  state 4 (run e9f46950-4e6e-4956-ae4f-1fbeb498b3ff at 2026-11-06T23:02:50.939416Z)
+raw.shop__events  ok  state 4 (run 54ab366a-bca1-4088-9723-4c6d1723ad02 at 2026-11-09T18:02:47.844103Z)
 $ sqlload logged-state reset shop__events --to 0
 would append  raw.shop__events  reset  - -> -, state 0 (add --yes to append it)
 ```

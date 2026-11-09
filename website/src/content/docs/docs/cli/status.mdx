@@ -10,9 +10,11 @@ sqlload status
 `sqlload status` shows how far the [Kafka exporter](/docs/guides/kafka/) has got. For each stream
 it prints one line, then one line per partition:
 
-```text
-<stream> -> <table> (group <consumer group>, lag <records>)
-  <topic>[<partition>] committed <offset> of <high watermark>, lag <records>
+```console
+$ sqlload status
+orders__events -> ORDERS__EVENTS (group sqlload-orders__events, lag 3)
+  shop.orders_v2.events[0] committed 5 of 8, lag 3
+  shop.orders_v2.events[1] committed - of 0, lag 0
 ```
 
 | Field | Meaning |
