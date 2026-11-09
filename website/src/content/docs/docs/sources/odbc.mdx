@@ -88,7 +88,8 @@ with an `ANSI_QUOTES` SQL mode.
 
 A cursor filter compares the cursor column with a quoted literal, such as
 `"updated_at" >= '2026-03-01 10:00:05.123456'`, which the database converts to the column's type.
-Postgres does; check that yours does too before relying on a cursor.
+Postgres does; check that yours does too before relying on a cursor. From 0.29.0 (not released
+yet), a numeric cursor compares with a bare number, such as `"id" > 41`.
 
 ## Choosing tables
 

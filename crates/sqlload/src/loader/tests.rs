@@ -4,6 +4,8 @@ mod helpers;
 mod python_columns;
 #[path = "tests/test_render_tally.rs"]
 mod render_tally;
+#[path = "tests/test_source_filter.rs"]
+mod source_filter;
 #[path = "tests/test_types.rs"]
 mod test_types;
 #[path = "tests/test_view_lines.rs"]
