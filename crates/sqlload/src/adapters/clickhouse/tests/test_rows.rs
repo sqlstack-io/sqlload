@@ -3,7 +3,7 @@ use crate::adapters::clickhouse::tests::test_types::TextRowsTestCase;
 
 #[test]
 fn given_a_clickhouse_answer_when_reading_its_rows_then_null_text_is_null_only_where_the_column_can_hold_null()
- {
+-> Result<(), String> {
     let test_cases = [
         TextRowsTestCase {
             description: "an empty table's maximum, a Nullable column, is NULL",
@@ -26,17 +26,24 @@ fn given_a_clickhouse_answer_when_reading_its_rows_then_null_text_is_null_only_w
             expected_rows: &[&[Some("ᴺᵁᴸᴸ"), None]],
         },
         TextRowsTestCase {
+            description: "a NULL in a Dynamic or a Variant column is NULL",
+            answer: r#"{"meta":[{"name":"d","type":"Dynamic"},{"name":"v","type":"Variant(Int64, String)"}],"data":[["ᴺᵁᴸᴸ","ᴺᵁᴸᴸ"]],"rows":1}"#,
+            expected_rows: &[&[None, None]],
+        },
+        TextRowsTestCase {
             description: "a JSON null is NULL",
             answer: r#"{"meta":[{"name":"s","type":"String"}],"data":[[null]],"rows":1}"#,
             expected_rows: &[&[None]],
         },
     ];
     for test_case in test_cases {
-        let rows = text_rows(test_case.answer).unwrap_or_default();
+        let rows = text_rows(test_case.answer)
+            .map_err(|error| format!("{}: {error}", test_case.description))?;
         let read: Vec<Vec<Option<&str>>> = rows
             .iter()
             .map(|row| row.iter().map(Option::as_deref).collect())
             .collect();
         assert_eq!(read, test_case.expected_rows, "{}", test_case.description);
     }
+    Ok(())
 }
