@@ -54,14 +54,14 @@ pub(crate) fn partition_key_columns_query(database: &str, table: &str) -> String
     )
 }
 
-/// `insert` ordered by the partition `key`, unchanged when there is no key or it reads a column not among `inserted` (such as a `MATERIALIZED` one), which the inserted rows cannot be ordered by.
+/// `insert` ordered by the partition `key`, unchanged when the key reads no column (there is none, or it is `tuple()` or a constant: every row lands in one partition either way) or a column not among `inserted` (such as a `MATERIALIZED` one), which the inserted rows cannot be ordered by.
 pub(crate) fn sorted_insert(
     insert: &str,
     key: &str,
     key_columns: &[String],
     inserted: &[String],
 ) -> String {
-    match key.trim().is_empty() || !key_columns.iter().all(|column| inserted.contains(column)) {
+    match key_columns.is_empty() || !key_columns.iter().all(|column| inserted.contains(column)) {
         true => insert.to_owned(),
         false => format!("{insert} ORDER BY {}", key.trim()),
     }

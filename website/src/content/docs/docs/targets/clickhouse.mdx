@@ -153,8 +153,11 @@ partition. Partition large tables by the column new rows arrive on.
 
 The rows of an `append`, `merge` or `delete_insert` go into the table ordered by its partition key,
 so a load makes about one part per partition it fills rather than one per partition for every
-million rows. Sorting needs memory on the server: about 1.5 GiB for 5 million rows of four columns
-over 1,000 daily partitions. ClickHouse sorts on disk instead once a query uses half its memory.
+million rows. Sorting holds the load's rows in memory on the server: about 1.5 GiB for 5 million
+rows of four columns over 1,000 daily partitions. ClickHouse sorts on disk instead only once the
+sort reaches half the memory the server and user have free when it starts, not by a per-query
+`max_memory_usage`. Where the sort runs out of memory, SQLLoad inserts the rows unsorted instead,
+as before: more parts, which ClickHouse merges in the background.
 
 ## Types
 

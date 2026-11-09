@@ -292,6 +292,12 @@ fn given_a_delta_insert_when_its_table_is_partitioned_then_the_rows_go_in_ordere
             expected_insert: insert,
         },
         SortedInsertTestCase {
+            description: "a key reading no column (tuple() or a constant) leaves the insert as it is",
+            key: "tuple()",
+            key_columns: &[],
+            expected_insert: insert,
+        },
+        SortedInsertTestCase {
             description: "a key reading a column the insert does not fill (a MATERIALIZED one) leaves the insert as it is",
             key: "toYYYYMM(created)",
             key_columns: &["created"],

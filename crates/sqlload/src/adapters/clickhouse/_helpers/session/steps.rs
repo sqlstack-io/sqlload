@@ -8,7 +8,7 @@ use crate::adapters::clickhouse::_helpers::session::http::send;
 use crate::adapters::clickhouse::_helpers::session::rows::text_rows;
 use crate::adapters::clickhouse::constants::{
     EXCHANGE_UNSUPPORTED_CODES, LIGHTWEIGHT_DELETE_MODE, LIGHTWEIGHT_DELETE_REFUSED_CODE,
-    PUBLISH_PREFIX,
+    MEMORY_LIMIT_EXCEEDED_CODE, PUBLISH_PREFIX,
 };
 use crate::adapters::clickhouse::models::{ClickHouseDestination, ClickHouseSql, PublishStep};
 use crate::adapters::contract::types::SqlAdapter;
@@ -58,7 +58,7 @@ pub(crate) async fn run_step(
     }
 }
 
-/// Run `insert` into `database`.`table`, ordered by the partition key the server reports for the table when every column it reads is among `columns` (see [`sorted_insert`]).
+/// Run `insert` into `database`.`table`, ordered by the partition key the server reports for the table when every column it reads is among `columns` (see [`sorted_insert`]); a sort that runs out of memory is replaced by the unsorted insert into the emptied table.
 async fn insert_sorted(
     destination: &ClickHouseDestination,
     (database, table): (&str, &str),
@@ -82,13 +82,30 @@ async fn insert_sorted(
     let key = first_values(partition_key_query(database, table)).await?;
     let key_columns = first_values(partition_key_columns_query(database, table)).await?;
     let key = key.first().map(String::as_str).unwrap_or_default();
-    send(
-        destination,
-        None,
-        sorted_insert(insert, key, &key_columns, columns).into_bytes(),
-    )
-    .await
-    .map(|_| ())
+    let sorted = sorted_insert(insert, key, &key_columns, columns);
+    match send(destination, None, sorted.clone().into_bytes()).await {
+        Ok(_) => Ok(()),
+        Err(error)
+            if sorted != insert && error.code() == Some(MEMORY_LIMIT_EXCEEDED_CODE) =>
+        {
+            tracing::debug!(%error, "the sorted insert ran out of memory; inserting unsorted");
+            let delta = format!(
+                "{}.{}",
+                ClickHouseSql.render_identifier(database),
+                ClickHouseSql.render_identifier(table)
+            );
+            send(
+                destination,
+                None,
+                format!("TRUNCATE TABLE {delta}").into_bytes(),
+            )
+            .await?;
+            send(destination, None, insert.as_bytes().to_vec())
+                .await
+                .map(|_| ())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Swap `build` in for `target` with `EXCHANGE TABLES`, atomic in an `Atomic` database; where the database cannot exchange tables, by one `RENAME TABLE` moving `target` to `aside`, `build` to `target` and `aside` to `build`, so `build` holds the old table either way.
