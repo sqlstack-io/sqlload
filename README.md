@@ -20,7 +20,7 @@
 </p>
 
 SQLLoad loads Postgres and Snowflake tables, files, Google Sheets and Python sources into Snowflake, Databricks, BigQuery
-(preview), ClickHouse (preview), DuckDB, Postgres or Parquet files. `sqlload plan` shows every table, column type, write strategy and route before
+(preview), ClickHouse (preview), DuckDB, MotherDuck (beta, not released yet), Postgres or Parquet files. `sqlload plan` shows every table, column type, write strategy and route before
 anything is created or loaded. Where Snowflake or DuckDB can load your files exactly by itself,
 the files never pass through SQLLoad. It is written in Rust and is open source under Apache-2.0;
 Python is needed only for Python sources.
@@ -81,7 +81,7 @@ Add `--print-toml` to print the same copy as a `sqlload.toml` project, which loa
 | Snowflake tables and query results | Databricks |
 | Parquet, CSV, JSON and NDJSON files in S3, a local folder or an SFTP server | BigQuery (preview) |
 | Google Sheets tabs and ranges | ClickHouse (preview) |
-| Python sources, including HTTP APIs | DuckDB |
+| Python sources, including HTTP APIs | DuckDB, and MotherDuck (beta, not released yet) |
 | Databases with an ODBC driver, in builds with the `odbc` feature | Postgres |
 | BigQuery tables and query results | Parquet or CSV files in S3 or a local folder |
 

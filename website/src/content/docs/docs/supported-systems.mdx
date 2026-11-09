@@ -30,6 +30,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ClickHouse (preview) | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. See [ClickHouse](/docs/targets/clickhouse/). |
 | Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
+| MotherDuck (beta, from 0.33.0, not released yet) | `append`, `merge`, `delete_insert`, `replace` | Arrow appends through DuckDB's `md:` connection; files are read by SQLLoad. MotherDuck doesn't accept DuckDB 2.0 clients yet, so it can't connect until it does. See [MotherDuck](/docs/targets/motherduck/). |
 | Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or, from 0.27.0, CSV: plain, gzip or zstd. |
 | Parquet or CSV files in a local folder | As for S3; from 0.27.0, `replace` swaps the folder in one rename | As for S3 |
 
@@ -61,6 +62,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 | Postgres | Real Postgres in containers, as a source and as a target. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB, Snowflake and Databricks. See [Postgres](/docs/targets/postgres/#tested). |
 | ClickHouse | Real ClickHouse 25.8 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
 | DuckDB | Real, in process. |
+| MotherDuck | Not tested against a live MotherDuck account: the connection settings, the refusals (no token, MotherDuck's version message) and the Arrow-only route are tested offline, and MotherDuck's real extension was checked refusing DuckDB 2.0.0. |
 | ODBC | psqlODBC against real Postgres in containers, into DuckDB. |
 | BigQuery source | A fake Storage Read API in tests (parallel streams, a broken stream resumed, cursor filters), and live loads from a sandbox project into DuckDB: tables, views, query tables, and integer, timestamp, text, `NUMERIC` and `BIGNUMERIC` cursors. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |

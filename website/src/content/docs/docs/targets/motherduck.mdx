@@ -1,0 +1,63 @@
+---
+title: "MotherDuck"
+description: "Load into MotherDuck (beta): DuckDB's md: connection, with rows appended as Arrow."
+---
+
+From 0.33.0 (not released yet). A MotherDuck target loads into a MotherDuck database through
+DuckDB's `md:` connection, with the same SQL, types and write strategies as a
+[DuckDB target](/docs/targets/duckdb/). It's in beta, and it hasn't been tested against a live
+MotherDuck account.
+
+## DuckDB 2.0 isn't supported by MotherDuck yet
+
+SQLLoad bundles DuckDB 2.0. MotherDuck doesn't accept DuckDB 2.0 clients yet: its extension
+supports DuckDB up to 1.5.6 and refuses to load on 2.0. Until MotherDuck supports DuckDB 2.0, a
+MotherDuck target can't connect. `sqlload debug`, `plan` and `load` report MotherDuck's own
+message:
+
+```console
+$ sqlload debug
+fail  target cloud  MotherDuck: cannot open md:analytics: MotherDuck doesn't accept the DuckDB version this SQLLoad bundles yet, so no SQLLoad release can connect to it until it does. MotherDuck says: Your DuckDB version (v2.0.0) is not yet supported by MotherDuck. …
+```
+
+MotherDuck lists the client versions it supports in
+[duckdb-versions.json](https://motherduck.com/docs/duckdb-versions.json).
+
+## Connection
+
+```toml
+[connections.cloud]
+kind = "motherduck"
+database = "analytics"
+token = "${ENV:MOTHERDUCK_TOKEN}"
+
+[targets.cloud]
+connection = "cloud"
+loader_schema = "raw"
+```
+
+| Key | Meaning |
+|-----|---------|
+| `database` | The MotherDuck database, with or without `md:`. Default: the account's default database. |
+| `token` | A MotherDuck access token. Use `${ENV:NAME}`. Default: the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable. |
+
+A target's `database` overrides the connection's, so one connection can serve, say, a `dev` and a
+`prod` database. Without a token SQLLoad refuses the connection rather than wait for MotherDuck's
+browser sign-in. The first connection installs MotherDuck's DuckDB extension into `~/.duckdb`,
+which needs the network once.
+
+## How data arrives
+
+Every row reaches MotherDuck as Arrow batches appended inside the batch's transaction, as on DuckDB.
+Unlike DuckDB, MotherDuck never reads files itself: files sources, including Parquet in S3 or a
+local folder, and a Snowflake source's unloaded files are read by SQLLoad and appended as Arrow.
+`plan` names that route for every table.
+
+`append`, `merge`, `delete_insert` and `replace` run the same statements as on DuckDB.
+
+## Limits
+
+- Not tested against a live MotherDuck account. The tests cover the connection settings, the
+  refusals and the route; the statements are DuckDB's, tested on DuckDB.
+- Each table loads on its own connection, as on DuckDB. Whether MotherDuck runs concurrent schema
+  changes and transactions across those connections exactly as local DuckDB does is untested.
