@@ -151,6 +151,11 @@ the touched partitions to find the rows to delete and a new hard-linked version 
 copy. Before 25.5 it costs as much as the touched partitions. An unpartitioned table is one
 partition. Partition large tables by the column new rows arrive on.
 
+The rows of an `append`, `merge` or `delete_insert` go into the table ordered by its partition key,
+so a load makes about one part per partition it fills rather than one per partition for every
+million rows. Sorting needs memory on the server: about 1.5 GiB for 5 million rows of four columns
+over 1,000 daily partitions. ClickHouse sorts on disk instead once a query uses half its memory.
+
 ## Types
 
 Every column is `Nullable`, as `plan` shows: `int` is `Nullable(Int64)`.
