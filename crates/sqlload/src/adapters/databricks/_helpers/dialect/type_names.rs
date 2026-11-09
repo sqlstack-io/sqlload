@@ -1,5 +1,6 @@
 //! Databricks' spelling of each portable type, and the way back from what it reports.
 
+use crate::column_types::main::array_loss::array_loss;
 use std::borrow::Cow;
 
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
@@ -47,7 +48,7 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
             let element = logical_type(element);
             WarehouseType {
                 sql: format!("ARRAY<{}>", element.sql),
-                lossy: element.lossy,
+                lossy: array_loss(None, element.lossy),
             }
         }
     }

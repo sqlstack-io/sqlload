@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 
+use crate::column_types::main::array_loss::array_loss;
+
 use crate::adapters::snowflake::constants::MAX_TEXT_LENGTH;
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
 use crate::column_types::models::{ColumnType, LiveColumnType, WarehouseType};
@@ -40,10 +42,10 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
         ColumnType::Uuid => lossy("VARCHAR(36)", "stored as text"),
         ColumnType::Binary => exact("BINARY"),
         ColumnType::Native(name) => exact(name.clone()),
-        ColumnType::Array(_) => lossy(
-            "ARRAY",
-            "elements are held as JSON values: numbers, booleans and text as themselves, decimals, dates and timestamps as text",
-        ),
+        ColumnType::Array(element) => WarehouseType {
+            sql: "ARRAY".to_owned(),
+            lossy: array_loss(None, json_element_loss(element)),
+        },
     }
 }
 
@@ -103,5 +105,20 @@ pub(crate) fn widens_in_place(live: &ColumnType, target: &ColumnType) -> bool {
             },
         ) => scale == target_scale,
         _ => false,
+    }
+}
+
+/// What an element of type `element` loses as the JSON value a Snowflake `ARRAY` holds it as: a decimal, date, time, timestamp or uuid becomes a JSON string, a float holds no NaN or infinity, and a `varchar(n)`'s length limit is not enforced; bools, integers and text keep their values.
+fn json_element_loss(element: &ColumnType) -> Option<Cow<'static, str>> {
+    match element {
+        ColumnType::Decimal { .. }
+        | ColumnType::Date
+        | ColumnType::Time
+        | ColumnType::TimestampTz
+        | ColumnType::TimestampNtz
+        | ColumnType::Uuid => Some(Cow::Owned(format!("each {element} is a JSON string"))),
+        ColumnType::Float => Some(Cow::Borrowed("NaN and infinities can't be held")),
+        ColumnType::Varchar(_) => Some(Cow::Borrowed("the length limit is not enforced")),
+        _ => None,
     }
 }

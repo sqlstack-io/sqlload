@@ -65,10 +65,7 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
             let element = logical_type(element);
             WarehouseType {
                 sql: format!("Array({})", element.sql),
-                lossy: Some(array_loss(
-                    "a NULL array loads as an empty one",
-                    element.lossy,
-                )),
+                lossy: array_loss(Some("a NULL array loads as an empty one"), element.lossy),
             }
         }
     }
