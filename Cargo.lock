@@ -5570,6 +5570,7 @@ dependencies = [
  "arrow-array",
  "arrow-cast",
  "arrow-ipc",
+ "arrow-schema",
  "axum",
  "bytes",
  "flate2",

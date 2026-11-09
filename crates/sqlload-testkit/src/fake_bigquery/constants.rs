@@ -12,3 +12,7 @@ pub const INVALID_STREAM_STATE: i32 = 5;
 pub const OUT_OF_RANGE: i32 = 11;
 /// What a commit naming a stream the fake does not hold is refused with: `STREAM_NOT_FOUND`.
 pub const STREAM_NOT_FOUND: i32 = 3;
+/// The Storage Read API's gRPC service.
+pub const READ_SERVICE: &str = "google.cloud.bigquery.storage.v1.BigQueryRead";
+/// How many streams a read session with rows is split into.
+pub const READ_STREAMS: usize = 2;

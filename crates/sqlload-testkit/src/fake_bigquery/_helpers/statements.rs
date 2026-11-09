@@ -138,8 +138,40 @@ pub(crate) fn table_metadata(state: &SharedState, dataset: &str, table: &str) ->
         .collect();
     Ok(json!({
         "tableReference": { "datasetId": dataset, "tableId": table },
+        "type": "TABLE",
+        "numRows": found.rows.len().to_string(),
         "schema": { "fields": fields },
     }))
+}
+
+/// `datasets.list`: every dataset that holds a table, in one page.
+pub(crate) fn list_datasets(state: &SharedState) -> Outcome {
+    let state = state.lock();
+    let mut datasets: Vec<&str> = Vec::new();
+    for key in state.tables.keys() {
+        if let Some((dataset, _)) = key.split_once('.') {
+            datasets.push(dataset);
+        }
+    }
+    datasets.dedup();
+    let mut listed: Vec<Value> = Vec::new();
+    for dataset in datasets {
+        listed.push(json!({ "datasetReference": { "datasetId": dataset } }));
+    }
+    Ok(json!({ "datasets": listed }))
+}
+
+/// `tables.list` for `dataset`, in one page.
+pub(crate) fn list_tables(state: &SharedState, dataset: &str) -> Outcome {
+    let prefix = format!("{}.", dataset.to_ascii_lowercase());
+    let state = state.lock();
+    let listed: Vec<Value> = state
+        .tables
+        .keys()
+        .filter_map(|key| key.strip_prefix(&prefix))
+        .map(|table| json!({ "tableReference": { "datasetId": dataset, "tableId": table }, "type": "TABLE" }))
+        .collect();
+    Ok(json!({ "tables": listed }))
 }
 
 /// `jobs.query`: run the statement and answer with every row at once, or fail it as an invalid query.

@@ -60,7 +60,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 | ClickHouse | Real ClickHouse 25.8 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
 | DuckDB | Real, in process. |
 | ODBC | psqlODBC against real Postgres in containers, into DuckDB. |
-| BigQuery source | Live loads from a sandbox project into DuckDB: tables, views, query tables, and integer and timestamp cursors. |
+| BigQuery source | A fake Storage Read API in tests (parallel streams, a broken stream resumed, cursor filters), and live loads from a sandbox project into DuckDB: tables, views, query tables, and integer and timestamp cursors. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |
 | Kafka | Redpanda in containers. |
