@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.33.0](https://github.com/sqlstack-io/sqlload/compare/v0.32.0...v0.33.0) (2026-11-09)
+
+
+### Features
+
+* **motherduck:** a MotherDuck target (beta; MotherDuck doesn't accept DuckDB 2.0 clients yet, so it can't connect until it does) ([eb4587b](https://github.com/sqlstack-io/sqlload/commit/eb4587b5137b7d5c147d75b4df07b760a1519d93))
+
+
+### Documentation
+
+* 0.31.0 and 0.32.0 on sqlload.io: marks updated as released ([#160](https://github.com/sqlstack-io/sqlload/issues/160)) ([f109c3f](https://github.com/sqlstack-io/sqlload/commit/f109c3fe98215e73b3096f40c1dd65d0ead9fefb))
+
 ## [0.32.0](https://github.com/sqlstack-io/sqlload/compare/v0.31.0...v0.32.0) (2026-11-09)
 
 
