@@ -63,10 +63,11 @@ pub(crate) fn write_statements(
         .iter()
         .map(|column| {
             let value = adapter.render_source_expression_cast(&column.name, &column.column_type);
-            match request.hashed.contains(&column.name) {
+            let value = match request.hashed.contains(&column.name) {
                 true => format!("lower(hex(SHA256({value})))"),
                 false => value,
-            }
+            };
+            format!("{value} AS {}", adapter.render_identifier(&column.name))
         })
         .collect();
     let displaced = match request.mode {
@@ -108,12 +109,21 @@ pub(crate) fn write_statements(
     vec![
         format!("DROP TABLE IF EXISTS {delta}"),
         format!("CREATE TABLE {delta} AS {target}"),
-        format!(
-            "INSERT INTO {delta} ({}) SELECT {} FROM {}",
-            names.join(", "),
-            values.join(", "),
-            adapter.render_qualified_name(staging)
-        ),
+        publish_statement(&PublishStep::SortedInsert {
+            database: delta_table.schema.clone(),
+            table: delta_table.table.clone(),
+            columns: request
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect(),
+            insert: format!(
+                "INSERT INTO {delta} ({}) SELECT {} FROM {}",
+                names.join(", "),
+                values.join(", "),
+                adapter.render_qualified_name(staging)
+            ),
+        }),
         publish_statement(&publish),
         format!("DROP TABLE IF EXISTS {delta}"),
     ]

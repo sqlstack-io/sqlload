@@ -43,6 +43,9 @@ const VIEWS_ROWS: &str = "INSERT INTO raw.app__views VALUES (1, '2026-10-20', NU
 /// `1` when the loads above took the publish path the server allows: only lightweight `DELETE`s on ClickHouse 25.5 and later, only kept rows copied by `INSERT ... SELECT` before.
 const PUBLISH_PATH: &str = "SELECT toString(if((toUInt32(splitByChar('.', version())[1]), toUInt32(splitByChar('.', version())[2])) >= (25, 5), deletes > 0 AND kept = 0, deletes = 0 AND kept > 0)) FROM (SELECT countIf(query LIKE 'DELETE FROM %') AS deletes, countIf(query LIKE 'INSERT INTO % SELECT * FROM `raw`.%') AS kept FROM system.query_log WHERE type = 'QueryFinish')";
 
+/// Whether every finished delta insert into a monthly-partitioned table was ordered by its partition key, and none into an unpartitioned one.
+const SORTED_DELTAS: &str = r"SELECT toString(countIf(partitioned AND NOT sorted) = 0 AND countIf(partitioned AND sorted) > 0 AND countIf(NOT partitioned AND sorted) = 0) FROM (SELECT match(query, '^INSERT INTO `raw`.`app__(accounts|events|visits|views|pings)__') AS partitioned, query LIKE '% ORDER BY toYYYYMM(%' AS sorted FROM system.query_log WHERE type = 'QueryFinish' AND query LIKE 'INSERT INTO `raw`.%\_swap` (%')";
+
 /// The tables' settings: monthly partitions for the windowed and merged tables, a sorting key for the merged one, nothing for the rest.
 const TABLES: &str = r#"
 [sources.app.tables."public.accounts"]
@@ -244,6 +247,12 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
             path.trim(),
             "1",
             "partitions are rebuilt by a lightweight DELETE on hard-linked parts exactly where the server can pin it (ClickHouse 25.5 and later), and from their kept rows before"
+        );
+        let sorted = run_client(&clickhouse, SORTED_DELTAS, &[]).await?;
+        assert_eq!(
+            sorted.trim(),
+            "1",
+            "the staged rows go into a partitioned table's delta ordered by its partition key, so each insert block fills few partitions"
         );
         Ok(())
     })
