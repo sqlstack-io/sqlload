@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.28.0](https://github.com/sqlstack-io/sqlload/compare/v0.27.0...v0.28.0) (2026-11-09)
+
+
+### Features
+
+* **snowflake:** sign in in the browser with OAuth (CHI-1079 slice 1) ([#137](https://github.com/sqlstack-io/sqlload/issues/137)) ([026e2e2](https://github.com/sqlstack-io/sqlload/commit/026e2e21793fdeed89bc52ea378405f023ad86de))
+
+
+### Documentation
+
+* 0.27.0 on sqlload.io: release marks and the full source list ([#142](https://github.com/sqlstack-io/sqlload/issues/142)) ([f06191b](https://github.com/sqlstack-io/sqlload/commit/f06191bc26debe11b3c95953f7cb5fb8b691419b))
+
 ## [0.27.0](https://github.com/sqlstack-io/sqlload/compare/v0.26.0...v0.27.0) (2026-11-08)
 
 
