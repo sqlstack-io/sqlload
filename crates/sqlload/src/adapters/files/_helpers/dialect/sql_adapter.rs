@@ -31,7 +31,7 @@ impl SqlAdapter for ParquetFiles {
         }
     }
 
-    /// A type with no Arrow type, which only `native(...)` and arrays of it are; a pinned one fails `plan` (path and constant columns still only carry the loss note).
+    /// A type with no Arrow type, which only `native(...)` and arrays of it are; a pinned one fails `plan`, as do native partition, path and constant columns, so the loss note only shows for columns read from another tool's Parquet footers.
     fn type_problem(&self, column_type: &ColumnType) -> Option<&'static str> {
         arrow_field("", column_type).is_none().then_some(
             "a native type has no Arrow type, so Parquet and CSV files cannot hold it; pin a portable type",

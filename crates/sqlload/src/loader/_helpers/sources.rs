@@ -7,6 +7,7 @@ use crate::adapters::dispatch::main::dialect::files_destination::files_destinati
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
+use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::config::models::{DestinationConfig, DestinationKind};
@@ -610,7 +611,7 @@ pub(crate) async fn discover_files_table(
     files_source_parts(source_name, source, warehouse, (location, table))
 }
 
-/// What a files source fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then `constant_columns`.
+/// What a files source fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then `constant_columns`; a `native(...)` type, which SQLLoad's reader cannot build, is refused.
 fn path_values(
     source: &SourceConfig,
     warehouse: Warehouse,
@@ -639,6 +640,21 @@ fn path_values(
     );
     let constants =
         constant_columns(&source.constant_columns, &[warehouse]).map_err(LoaderError::Invalid)?;
+    let typed = types
+        .iter()
+        .map(|(name, column_type)| (name, column_type))
+        .chain(
+            constants
+                .iter()
+                .map(|(name, column_type, _)| (name, column_type)),
+        );
+    for (name, column_type) in typed {
+        if arrow_field(name, column_type).is_none() {
+            return Err(LoaderError::Invalid(format!(
+                "column {name}: {column_type} has no Arrow type, so a partition, path or constant column cannot be one; pin a portable type"
+            )));
+        }
+    }
     let values = PathValues {
         partition_columns: source.partition_columns.keys().cloned().collect(),
         template,
