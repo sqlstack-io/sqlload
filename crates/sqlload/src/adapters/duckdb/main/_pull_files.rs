@@ -25,7 +25,7 @@ pub(in crate::adapters) async fn pull_files(
                 .map_err(DuckDbError::Task)?
                 .map(secret_parameters),
         ),
-        StoreKind::Filesystem { .. } => (None, None),
+        StoreKind::Filesystem { .. } | StoreKind::Sftp { .. } => (None, None),
     };
     let region = std::env::var("AWS_REGION")
         .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))

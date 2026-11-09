@@ -135,6 +135,20 @@ delete, set `AWS_DISABLE_BULK_DELETE=true`: SQLLoad then deletes each file with 
 |-----|---------|
 | `root` | A folder on the machine SQLLoad runs on. |
 
+### `sftp`
+
+From 0.32.0 (not released yet). An SFTP server that [files sources](/docs/sources/files/#files-on-an-sftp-server) read from.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `host` | required | |
+| `port` | 22 | |
+| `user` | required | |
+| `private_key_file` | none | The private key to sign in with. `~/` is the home folder. |
+| `private_key_passphrase` | none | Use `${ENV:NAME}`. |
+| `password` | none | Signs in when no `private_key_file` is set. Use `${ENV:NAME}`. Without either, SQLLoad tries each key ssh-agent holds. |
+| `known_hosts` | required | The file the server's host key must be listed in. SQLLoad never trusts a server on first use, and host key checks can't be turned off. |
+
 ### `odbc`
 
 From 0.27.0. See [ODBC](/docs/sources/odbc/#connection).

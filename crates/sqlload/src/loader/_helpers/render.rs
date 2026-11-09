@@ -26,6 +26,7 @@ use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnChange, ColumnOrigin, DesiredColumn, TableAction};
+use crate::store_paths::models::StoreKind;
 
 /// A section: a heading with an optional right-aligned note, then each item as a tree branch; nothing when it has no items.
 pub(crate) fn tree(heading: &str, note: &str, items: &[PlanItem]) -> Vec<String> {
@@ -709,6 +710,11 @@ fn route_text(table: &TablePlan, route: &Route) -> String {
         .files
         .as_ref()
         .map(|files| files.encoding.format.to_string());
+    let over_sftp = table
+        .spec
+        .files
+        .as_ref()
+        .is_some_and(|files| matches!(files.location.store, StoreKind::Sftp { .. }));
     match route.steps.as_slice() {
         [Step::UseFiles(files), Step::DestinationPulls(_)] => {
             format!(
@@ -735,19 +741,24 @@ fn route_text(table: &TablePlan, route: &Route) -> String {
         ] => format!(
             "unload Parquet to {store} -> download unchanged to {folder} -> {warehouse} {load} (nothing through the loader)"
         ),
-        steps => steps
-            .iter()
-            .filter(|step| !matches!(step, Step::UseFiles(_)))
-            .map(|step| match step {
-                Step::ReadArrow => "read as Arrow".to_owned(),
-                Step::ParquetWriter(Store::InternalStage(stage)) => {
-                    format!("Parquet -> PUT to {stage}")
-                }
-                Step::ParquetWriter(store) => format!("Parquet -> {store}"),
-                Step::DestinationPulls(_) => load.to_owned(),
-                Step::DestinationTakesArrow => format!("{warehouse} takes Arrow"),
-                other => other.to_string(),
-            })
+        steps => over_sftp
+            .then(|| "read over SFTP".to_owned())
+            .into_iter()
+            .chain(
+                steps
+                    .iter()
+                    .filter(|step| !matches!(step, Step::UseFiles(_)))
+                    .map(|step| match step {
+                        Step::ReadArrow => "read as Arrow".to_owned(),
+                        Step::ParquetWriter(Store::InternalStage(stage)) => {
+                            format!("Parquet -> PUT to {stage}")
+                        }
+                        Step::ParquetWriter(store) => format!("Parquet -> {store}"),
+                        Step::DestinationPulls(_) => load.to_owned(),
+                        Step::DestinationTakesArrow => format!("{warehouse} takes Arrow"),
+                        other => other.to_string(),
+                    }),
+            )
             .collect::<Vec<_>>()
             .join(" -> "),
     }

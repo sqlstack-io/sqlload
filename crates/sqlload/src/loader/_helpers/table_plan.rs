@@ -754,7 +754,9 @@ fn reader_offer(
 ) -> ReaderOffer {
     let existing_files = spec.files.as_ref().map(|files| FileSet {
         store: match files.location.store {
-            StoreKind::S3 { .. } => Store::ObjectStore(files.location.to_string()),
+            StoreKind::S3 { .. } | StoreKind::Sftp { .. } => {
+                Store::ObjectStore(files.location.to_string())
+            }
             StoreKind::Filesystem { .. } => Store::Local(files.location.to_string()),
         },
         format: match files.encoding.format {
@@ -780,7 +782,11 @@ fn reader_offer(
         (true, false, Some(_)) => {
             Some("the table has checks, which run on the rows SQLLoad stages".to_owned())
         }
-        (true, false, None) => None,
+        (true, false, None) => spec
+            .files
+            .as_ref()
+            .filter(|files| matches!(files.location.store, StoreKind::Sftp { .. }))
+            .map(|_| "no destination reads files over SFTP itself".to_owned()),
     };
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {

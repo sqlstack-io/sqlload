@@ -81,7 +81,7 @@ impl DuckDbWriter {
 fn file_url(location: &Location, key: &str) -> String {
     let path = format!("{location}{key}");
     match location.store {
-        StoreKind::S3 { .. } => path,
+        StoreKind::S3 { .. } | StoreKind::Sftp { .. } => path,
         StoreKind::Filesystem { .. } => {
             std::path::absolute(&path).map_or(path, |absolute| absolute.display().to_string())
         }

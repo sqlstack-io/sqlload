@@ -58,5 +58,6 @@ pub(crate) fn describe(store: &StoreKind) -> String {
     match store {
         StoreKind::S3 { bucket, .. } => format!("S3 bucket {bucket}"),
         StoreKind::Filesystem { root } => format!("filesystem {root}"),
+        StoreKind::Sftp { server, .. } => format!("SFTP server {}", server.host),
     }
 }

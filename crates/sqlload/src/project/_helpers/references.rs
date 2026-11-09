@@ -92,14 +92,14 @@ fn odbc_connection_problems(name: &str, connection: &ConnectionConfig) -> Vec<St
 fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     let place = source_place(project, name);
-    let expected = match source.kind {
-        SourceKind::Postgres | SourceKind::PostgresCdc => "postgres",
-        SourceKind::Snowflake => "snowflake",
-        SourceKind::Odbc => "odbc",
-        SourceKind::BigQuery => "bigquery",
-        SourceKind::Files => "s3 or filesystem",
-        SourceKind::Python => "any",
-        SourceKind::GoogleSheets => "google_sheets",
+    let (kinds, expected): (&[&str], &str) = match source.kind {
+        SourceKind::Postgres | SourceKind::PostgresCdc => (&["postgres"], "postgres"),
+        SourceKind::Snowflake => (&["snowflake"], "snowflake"),
+        SourceKind::Odbc => (&["odbc"], "odbc"),
+        SourceKind::BigQuery => (&["bigquery"], "bigquery"),
+        SourceKind::Files => (&["s3", "filesystem", "sftp"], "s3, filesystem or sftp"),
+        SourceKind::Python => (&[], "any"),
+        SourceKind::GoogleSheets => (&["google_sheets"], "google_sheets"),
     };
     match project.connections.get(&source.connection) {
         None if source.connection.is_empty() && source.kind == SourceKind::Python => {}
@@ -113,12 +113,17 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         Some(connection) if source.kind == SourceKind::Python => {
             problems.extend(shared_warehouse_problems(project, name, source, connection));
         }
-        Some(connection) if !expected.split(" or ").any(|kind| kind == connection.kind()) => {
+        Some(connection) if !kinds.contains(&connection.kind()) => {
             problems.push(format!(
                 "{place} has kind = {:?} but connection {:?} is a {} connection (expected {expected})",
                 source_kind_name(source.kind),
                 source.connection,
                 connection.kind()
+            ));
+        }
+        Some(ConnectionConfig::Sftp { .. }) if source.copy_to_internal_stage => {
+            problems.push(format!(
+                "{place} copy_to_internal_stage is not for an sftp connection: files on an SFTP server always pass through SQLLoad's reader"
             ));
         }
         Some(_) => {}

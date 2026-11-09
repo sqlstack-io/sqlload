@@ -19,6 +19,12 @@ path = "crates/sqlload/src/ssh_tunnel/models.rs"
 symbols = ["TunnelStream"]
 reason = "TunnelStream wraps russh's channel stream and session handle, which implement no Debug; it implements Debug by hand, showing its route."
 
+[[targets.rust.rule_exceptions]]
+rule = "FPRSS201"
+path = "crates/sqlload/src/file_store/models.rs"
+symbols = ["SftpStore", "SftpLink"]
+reason = "SftpLink holds russh-sftp's session and russh's session handle, which implement no Debug; SftpStore holds it and implements Debug by hand, showing its server."
+
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
@@ -53,6 +59,11 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/ssh/main/behind_bastion.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/ssh/main/put_file.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
 
 [[targets.rust.rule_exceptions]]
@@ -159,6 +170,11 @@ reason = "Testkit entry used by sqlload's integration tests, which live outside 
 rule = "FPRSL105"
 path = "crates/sqlload/src/postgres_source/main/decode_copy.rs"
 reason = "Entry used by the hot-path benchmarks (crates/sqlload-benches/benches), which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSN003"
+path = "crates/sqlload/src/file_store/_helpers/sftp.rs"
+reason = "get_opts is object_store's ObjectStore trait method."
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSN003"

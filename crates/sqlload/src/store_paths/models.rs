@@ -11,6 +11,11 @@ pub enum StoreKind {
     },
     /// A directory on the machine SQLLoad runs on.
     Filesystem { root: String },
+    /// A folder on an SFTP server: below `/` when `root` is `/`, otherwise below the user's login folder (`root` empty).
+    Sftp {
+        server: Box<crate::ssh_tunnel::models::SshTunnel>,
+        root: String,
+    },
 }
 
 /// A folder in a store: the store, and a prefix within it that is empty or ends in `/`.
@@ -27,6 +32,14 @@ impl std::fmt::Display for Location {
             StoreKind::Filesystem { root } => {
                 write!(formatter, "{}/{}", root.trim_end_matches('/'), self.prefix)
             }
+            StoreKind::Sftp { server, root } => match root.as_str() {
+                "/" => write!(formatter, "sftp://{}/{}", server.host, self.prefix),
+                _ => write!(
+                    formatter,
+                    "sftp://{}@{}/~/{}",
+                    server.user, server.host, self.prefix
+                ),
+            },
         }
     }
 }

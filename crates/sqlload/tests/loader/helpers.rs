@@ -332,7 +332,7 @@ pub(crate) fn seaweedfs_store(endpoint: &str, _: &std::path::Path) -> (StoreKind
 }
 
 /// A Parquet file of `file`'s rows.
-fn parquet_bytes(file: &ParquetFile) -> Result<bytes::Bytes, String> {
+pub(crate) fn parquet_bytes(file: &ParquetFile) -> Result<bytes::Bytes, String> {
     let mut columns: Vec<(&str, arrow_array::ArrayRef)> = vec![
         (
             "id",

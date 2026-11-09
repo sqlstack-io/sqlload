@@ -46,5 +46,6 @@ fn store_key(folder: &Location) -> String {
             };
             format!("{}/{}", resolved.trim_end_matches('/'), folder.prefix)
         }
+        StoreKind::Sftp { .. } => folder.to_string(),
     }
 }

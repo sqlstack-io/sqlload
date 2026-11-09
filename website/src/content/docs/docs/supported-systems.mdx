@@ -14,6 +14,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | BigQuery (from 0.30.0) | Tables and views, by `include` patterns, and query results | The Storage Read API, as Arrow in parallel streams; views and queries through a query job. See [BigQuery](/docs/sources/bigquery/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
+| Files on an SFTP server (from 0.32.0, not released yet) | As for S3 | SQLLoad's reader, over SFTP. See [Files](/docs/sources/files/#files-on-an-sftp-server). |
 | Google Sheets | From 0.27.0. Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |
 | Python | Dicts, Arrow data (pyarrow, polars, pandas), JSON and NDJSON bytes | The `sqlload` package, in process |
 | HTTP APIs | JSON, through `sl.http` in a Python source | Rust |
@@ -42,6 +43,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ODBC (from 0.27.0) | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
 | BigQuery (from 0.30.0) | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | From 0.27.0, read and rewritten by SQLLoad |
+| Files on an SFTP server (from 0.32.0, not released yet) | Yes, read by SQLLoad, tested live | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
@@ -63,6 +65,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 | BigQuery source | A fake Storage Read API in tests (parallel streams, a broken stream resumed, cursor filters), and live loads from a sandbox project into DuckDB: tables, views, query tables, and integer, timestamp, text, `NUMERIC` and `BIGNUMERIC` cursors. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |
+| SFTP | OpenSSH's SFTP server in a container, into DuckDB: new and rewritten files, gzip CSV and Parquet, key and password sign-in, and unknown or changed host keys refused. |
 | Kafka | Redpanda in containers. |
 | Google Sheets | A local fake Sheets API (OAuth, tabs and A1 ranges, refused tokens), plus a live smoke test on a real spreadsheet with generic contents. |
 | Snowflake | A local fake for protocol and failure tests, plus live tests on a real Snowflake account. |

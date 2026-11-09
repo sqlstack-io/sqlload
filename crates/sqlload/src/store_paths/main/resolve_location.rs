@@ -5,11 +5,25 @@ use crate::store_paths::_helpers::locations::{describe, same_store, url_location
 use crate::store_paths::errors::PathError;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// The folder `path` names: relative to `connection` when there is one, otherwise from its scheme.
+/// The folder `path` names: relative to `connection` when there is one (on an SFTP server, from `/` when it starts with `/`, otherwise from the login folder, which a leading `~/` also names), otherwise from its scheme.
 pub fn resolve_location(
     connection: Option<(&str, &StoreKind)>,
     path: &str,
 ) -> Result<Location, PathError> {
+    if let Some((_, StoreKind::Sftp { server, .. })) = connection
+        && !path.contains("://")
+    {
+        return Ok(Location {
+            store: StoreKind::Sftp {
+                server: server.clone(),
+                root: match path.starts_with('/') {
+                    true => "/".to_owned(),
+                    false => String::new(),
+                },
+            },
+            prefix: folder(&[path.strip_prefix("~/").unwrap_or(path)])?,
+        });
+    }
     let bucket_relative =
         matches!(connection, Some((_, StoreKind::S3 { .. }))) && !path.contains("://");
     let from_url = match bucket_relative {
