@@ -1,13 +1,13 @@
 //! One request to ClickHouse's HTTP interface.
 
 use crate::adapters::clickhouse::constants::{
-    ERROR_PREVIEW, EXCEPTION_CODE_HEADER, FORM_BOUNDARY, REQUEST_TIMEOUT, SESSION_SETTINGS,
-    SUMMARY_HEADER,
+    ERROR_PREVIEW, EXCEPTION_CODE_HEADER, FORM_BOUNDARY, INSERT_COMPRESSION_LEVEL, REQUEST_TIMEOUT,
+    SESSION_SETTINGS, SUMMARY_HEADER,
 };
 use crate::adapters::clickhouse::models::ClickHouseDestination;
 use crate::http::errors::ApiError;
 
-/// Send `body` with the session settings, signed in by headers so the password never sits in a URL: the SQL itself when `query` is `None`, otherwise the data `query` (an `INSERT ... FORMAT`) reads. Returns the response text; a failure carries the server's exception code and message.
+/// Send `body` with the session settings, signed in by headers so the password never sits in a URL: the SQL itself when `query` is `None`, otherwise the data `query` (an `INSERT ... FORMAT`) reads, sent zstd-compressed. Returns the response text; a failure carries the server's exception code and message.
 pub(crate) async fn send(
     destination: &ClickHouseDestination,
     query: Option<&str>,
@@ -84,6 +84,11 @@ async fn request(
     if let Some(query) = query {
         parameters.push(("query", query));
     }
+    let body = match query {
+        Some(_) => zstd::encode_all(body.as_slice(), INSERT_COMPRESSION_LEVEL)
+            .map_err(|error| ApiError::Protocol(format!("cannot compress the rows: {error}")))?,
+        None => body,
+    };
     let mut request = destination
         .http
         .post(&destination.url)
@@ -96,6 +101,9 @@ async fn request(
     }
     if let Some(content_type) = content_type {
         request = request.header(reqwest::header::CONTENT_TYPE, content_type);
+    }
+    if query.is_some() {
+        request = request.header(reqwest::header::CONTENT_ENCODING, "zstd");
     }
     let response = request.send().await?;
     let status = response.status();

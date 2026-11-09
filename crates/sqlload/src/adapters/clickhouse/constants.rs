@@ -4,7 +4,7 @@ pub const DEFAULT_HTTP_PORT: u16 = 8123;
 /// The HTTPS port of a `secure` connection that sets none.
 pub const DEFAULT_HTTPS_PORT: u16 = 8443;
 
-/// Settings every request runs with, so SQLLoad's SQL behaves the same on every server: statements finish before the next starts, a NULL never becomes a default value, wall-clock timestamps read in UTC (as the Arrow values are sent), one insert may fill any number of partitions (a first load of a long history does), and errors come with the response's status.
+/// Settings every request runs with, so SQLLoad's SQL behaves the same on every server: statements finish before the next starts, a NULL never becomes a default value, wall-clock timestamps read in UTC (as the Arrow values are sent), one insert may fill any number of partitions (a first load of a long history does), an insert writes its rows before it returns (never through a server-side async buffer a profile may turn on), and errors come with the response's status.
 pub const SESSION_SETTINGS: &[(&str, &str)] = &[
     ("mutations_sync", "2"),
     ("insert_null_as_default", "0"),
@@ -15,6 +15,7 @@ pub const SESSION_SETTINGS: &[(&str, &str)] = &[
     ("cast_keep_nullable", "1"),
     ("join_use_nulls", "1"),
     ("wait_end_of_query", "1"),
+    ("async_insert", "0"),
 ];
 
 /// How long one request may run: a statement can copy whole partitions, and an insert carries up to a batch of rows.
@@ -55,6 +56,9 @@ pub const ASIDE_SUFFIX: &str = "_aside";
 
 /// The most bytes of Arrow rows one insert request carries; a batch's rows go in several.
 pub const INSERT_BYTES: usize = 64 * 1024 * 1024;
+
+/// The zstd level the rows of an insert are compressed with: the fastest, which costs less time than the bytes it saves take to send on a link slower than about 1 GB/s.
+pub const INSERT_COMPRESSION_LEVEL: i32 = 1;
 
 /// The most characters of an error response kept in the error.
 pub const ERROR_PREVIEW: usize = 2_000;
