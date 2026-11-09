@@ -89,7 +89,8 @@ pub(crate) struct MergedErrorsTestCase {
 
 pub(crate) struct SourceFilterTestCase {
     pub(crate) description: &'static str,
-    pub(crate) numeric: bool,
+    pub(crate) cursor_type: ColumnType,
+    pub(crate) dialect: Option<Warehouse>,
     pub(crate) lower: Option<(&'static str, &'static str)>,
     pub(crate) upper: Option<&'static str>,
     pub(crate) expected_filter: Option<&'static str>,

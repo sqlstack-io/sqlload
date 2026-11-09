@@ -958,16 +958,19 @@ pub(crate) fn source_cursor(
     ))
 }
 
-/// `column >= 'from' AND column < 'to'`, from the bounds that are set; a `numeric` cursor's bounds are bare numbers, as BigQuery compares a number with no string.
+/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds bare, as BigQuery compares a number with no string; any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
 pub(crate) fn source_filter(
     column: &str,
-    numeric: bool,
+    (cursor_type, dialect): (Option<&ColumnType>, Option<Warehouse>),
     lower: Option<(&str, &str)>,
     upper: Option<&str>,
 ) -> Option<String> {
-    let literal = |value: &str| match numeric && is_number(value) {
+    let adapter = sql_adapter(dialect.unwrap_or(Warehouse::Postgres));
+    let literal = |value: &str| match cursor_type
+        .is_some_and(|cursor_type| numeric_cursor(cursor_type) && is_number(value))
+    {
         true => value.to_owned(),
-        false => format!("'{}'", value.replace('\'', "''")),
+        false => adapter.render_loader_value_literal(value),
     };
     let bounds: Vec<String> = lower
         .map(|(operator, value)| format!("{column} {operator} {}", literal(value)))
@@ -978,7 +981,7 @@ pub(crate) fn source_filter(
 }
 
 /// Whether a cursor of `column_type` compares as a number.
-pub(crate) fn numeric_cursor(column_type: &ColumnType) -> bool {
+fn numeric_cursor(column_type: &ColumnType) -> bool {
     matches!(
         column_type,
         ColumnType::SmallInt | ColumnType::Int | ColumnType::Decimal { .. } | ColumnType::Float
@@ -1186,7 +1189,14 @@ pub(crate) async fn cursor_window(
     Ok(Ok(Window {
         filter: source_filter(
             request.cursor_expression.unwrap_or_default(),
-            request.cursor_type.is_some_and(numeric_cursor),
+            (
+                request.cursor_type,
+                request
+                    .spec
+                    .warehouse_source
+                    .as_ref()
+                    .and_then(|source| source_dialect(source.system)),
+            ),
             from.as_deref().map(|from| (operator, from)),
             to.as_deref(),
         ),
