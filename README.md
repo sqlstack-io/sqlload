@@ -83,7 +83,7 @@ Add `--print-toml` to print the same copy as a `sqlload.toml` project, which loa
 | Google Sheets tabs and ranges | ClickHouse (preview) |
 | Python sources, including HTTP APIs | DuckDB |
 | Databases with an ODBC driver, in builds with the `odbc` feature | Postgres |
-| BigQuery tables and query results (not released yet) | Parquet or CSV files in S3 or a local folder |
+| BigQuery tables and query results | Parquet or CSV files in S3 or a local folder |
 
 See [Supported systems](https://sqlload.io/docs/supported-systems/) for which combinations and
 write strategies each supports.
