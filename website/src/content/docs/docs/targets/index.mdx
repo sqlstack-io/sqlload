@@ -13,7 +13,7 @@ names the route for every table.
 | Into | Parquet files in S3 or a folder | CSV, JSON, NDJSON files | Postgres or Python rows |
 |------|---------------------------------|-------------------------|-------------------------|
 | DuckDB | DuckDB reads them with `read_parquet` | Read by SQLLoad, appended as Arrow | Appended as Arrow |
-| MotherDuck (beta, from 0.33.0, not released yet) | Read by SQLLoad, appended as Arrow | Read by SQLLoad, appended as Arrow | Appended as Arrow |
+| MotherDuck (beta, from 0.33.0) | Read by SQLLoad, appended as Arrow | Read by SQLLoad, appended as Arrow | Appended as Arrow |
 | Snowflake | `COPY` from an external stage over the bucket | `COPY` from an external stage over the bucket | Written as Parquet to the `load_method`'s stage, then `COPY` (or streamed or inserted, if the `load_method` says so) |
 | Databricks | Staged by SQLLoad in the volume, then `COPY INTO` | Read by SQLLoad, staged as Parquet in the volume, then `COPY INTO` | Written as Parquet to the volume, then `COPY INTO` |
 | BigQuery (preview) | Read by SQLLoad, streamed as Arrow into a staging table, then one query job | As for Parquet files | Streamed as Arrow into a staging table, then one query job |
@@ -37,7 +37,7 @@ project can have several targets, for example one per environment; each source l
 | [`clickhouse`](/docs/targets/clickhouse/) (preview) | ClickHouse tables | `loader_schema` as the database |
 | [`postgres`](/docs/targets/postgres/) | Postgres tables | `loader_schema`, and optionally `database` |
 | [`duckdb`](/docs/targets/duckdb/) | DuckDB tables | `loader_schema` |
-| [`motherduck`](/docs/targets/motherduck/) (beta, from 0.33.0, not released yet) | MotherDuck tables | `loader_schema`, and optionally `database` |
+| [`motherduck`](/docs/targets/motherduck/) (beta, from 0.33.0) | MotherDuck tables | `loader_schema`, and optionally `database` |
 | [`s3`, `filesystem`](/docs/targets/files/) | Parquet or CSV files, one folder per table | `path` |
 
 ## Warehouse targets
@@ -57,7 +57,7 @@ loader_schema = "raw"
 
 | Key | Meaning |
 |-----|---------|
-| `connection` | A `snowflake`, `databricks`, `bigquery`, `clickhouse`, `postgres` or `duckdb` connection, or from 0.33.0 (not released yet) a `motherduck` connection. |
+| `connection` | A `snowflake`, `databricks`, `bigquery`, `clickhouse`, `postgres` or `duckdb` connection, or from 0.33.0 a `motherduck` connection. |
 | `loader_schema` | The schema for tables whose source sets no `schema`. Required. |
 | `database` | Overrides the connection's database. Not for ClickHouse. |
 

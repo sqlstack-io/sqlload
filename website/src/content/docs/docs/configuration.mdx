@@ -104,7 +104,7 @@ See [ClickHouse](/docs/targets/clickhouse/).
 
 ### `motherduck`
 
-From 0.33.0 (not released yet), in beta. MotherDuck doesn't accept DuckDB 2.0 clients yet, so this
+Available as a beta from 0.33.0. MotherDuck doesn't accept DuckDB 2.0 clients yet, so this
 connection can't connect until it does; see [MotherDuck](/docs/targets/motherduck/).
 
 | Key | Meaning |
@@ -187,7 +187,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 
 | Key | Applies to | Meaning |
 |-----|------------|---------|
-| `connection` | all | A `snowflake`, `databricks`, `bigquery`, `clickhouse`, `postgres`, `duckdb`, `s3` or `filesystem` connection, or from 0.33.0 (not released yet) a `motherduck` connection. |
+| `connection` | all | A `snowflake`, `databricks`, `bigquery`, `clickhouse`, `postgres`, `duckdb`, `s3` or `filesystem` connection, or from 0.33.0 a `motherduck` connection. |
 | `loader_schema` | warehouses, required | The schema for tables whose source sets no `schema`; a BigQuery target's dataset, a ClickHouse target's database. |
 | `database` | warehouses except ClickHouse | Overrides the connection's database. |
 | `path` | files | Each table's folder template, with `{source}`, `{schema}`, `{table}`, `{cursor}` and `{cursor:date}`. Default `{source}/{table}/`. |
