@@ -13,7 +13,7 @@ use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, pulls_unloaded};
 use crate::loader::constants::{
-    LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, RESULT_SCHEMA_VERSION,
+    CUT_ELEMENTS_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
@@ -25,7 +25,7 @@ use crate::project::models::MaskMethod;
 use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::run_log::main::describe_state::describe_state;
-use crate::schema_plan::models::{ColumnOrigin, TableAction};
+use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, TableAction};
 
 /// A section: a heading with an optional right-aligned note, then each item as a tree branch; nothing when it has no items.
 pub(crate) fn tree(heading: &str, note: &str, items: &[PlanItem]) -> Vec<String> {
@@ -152,7 +152,14 @@ pub(crate) fn object_item(table: &TablePlan) -> PlanItem {
     };
     let mut details: Vec<PlanDetail> = Vec::new();
     match &table.schema.action {
-        TableAction::Create | TableAction::Recreate if table.spec.python.is_none() => {
+        TableAction::Create | TableAction::Recreate
+            if table.spec.python.is_none()
+                || table
+                    .schema
+                    .write_columns
+                    .iter()
+                    .any(|column| column.origin != ColumnOrigin::Metadata) =>
+        {
             details.extend(column_details(table));
         }
         TableAction::Alter(changes) => {
@@ -221,10 +228,14 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .iter()
         .map(|column| {
             let rendered = adapter.render_loader_logical_type(&column.column_type);
-            let note = match (from_path(&column.name), &rendered.lossy) {
+            let losses: Vec<&str> = [cut_elements(table, column), rendered.lossy.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect();
+            let note = match (from_path(&column.name), losses.is_empty()) {
                 (path, _) if !path.is_empty() => path.to_owned(),
-                (_, Some(loss)) => format!("  ({loss})"),
-                (_, None) => String::new(),
+                (_, false) => format!("  ({})", losses.join("; ")),
+                (_, true) => String::new(),
             };
             detail(
                 "",
@@ -746,6 +757,22 @@ pub(crate) fn warning_item(table: &TablePlan) -> Option<PlanItem> {
             .map(|warning| detail("", warning.as_str()))
             .collect(),
     })
+}
+
+/// The loss of a column pinned as an integer array when the source reads lists as Arrow (a Python source or Parquet files): float elements are cut to whole numbers, as Arrow casts them.
+fn cut_elements(table: &TablePlan, column: &DesiredColumn) -> Option<&'static str> {
+    let arrow_lists = table.spec.python.is_some()
+        || table
+            .spec
+            .files
+            .as_ref()
+            .is_some_and(|files| files.encoding.format == SourceFormat::Parquet);
+    let integer_array = matches!(
+        &column.column_type,
+        ColumnType::Array(element) if matches!(**element, ColumnType::Int | ColumnType::SmallInt)
+    );
+    (arrow_lists && integer_array && column.origin == ColumnOrigin::Pinned)
+        .then_some(CUT_ELEMENTS_NOTE)
 }
 
 /// A Python table's object line before its first load.

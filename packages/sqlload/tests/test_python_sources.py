@@ -1057,3 +1057,14 @@ def test_given_non_finite_floats_in_an_arrow_list_when_loading_then_a_pinned_arr
 	load(project)
 	assert query(project, 'SELECT id, xs::VARCHAR FROM "RAW".shop__pinned ORDER BY id') == [(1, "[nan, inf, -inf, 1.5]"), (2, None), (3, "[NULL]")]
 	assert query(project, 'SELECT id, xs::VARCHAR FROM "RAW".shop__inferred ORDER BY id') == [(1, "[null,null,null,1.5]"), (2, None), (3, "[null]")]
+
+
+def test_given_an_int_array_pinned_over_arrow_float_lists_when_planning_then_the_cut_is_noted(tmp_path: Path) -> None:
+	data = "__import__('pyarrow').table({'id': [1], 'xs': [[1.5, 2.0]]})"
+	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={{'xs': 'array(int)'}})(lambda ctx: [{data}])\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	planned = sqlload(project, "plan")
+	assert planned.returncode == 0, planned.stderr
+	assert "xs array(int)   -> BIGINT[]  (float elements of Arrow and Parquet lists are cut to whole numbers)" in planned.stdout, planned.stdout
+	load(project)
+	assert query(project, 'SELECT xs::VARCHAR FROM "RAW".shop__t') == [("[1, 2]",)]
