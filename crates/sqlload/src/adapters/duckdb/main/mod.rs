@@ -2,6 +2,7 @@ pub(in crate::adapters) mod _append_batch;
 pub(in crate::adapters) mod _describe_table;
 pub(in crate::adapters) mod _direct_problem;
 pub(in crate::adapters) mod _execute_statements;
+pub(in crate::adapters) mod _open_destination;
 pub(in crate::adapters) mod _open_duckdb;
 pub(in crate::adapters) mod _open_motherduck;
 pub(in crate::adapters) mod _own_connection;

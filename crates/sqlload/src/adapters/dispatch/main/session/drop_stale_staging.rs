@@ -27,7 +27,7 @@ pub async fn drop_stale_staging(
     let adapter = sql_adapter(warehouse);
     let found = text_values(
         destination,
-        adapter.list_staging_relations_sql(name, database),
+        adapter.list_staging_relations_sql(&listed_name(destination, name), database),
     )
     .await?;
     let before = chrono::Utc::now() - chrono::Duration::hours(STALE_STAGING_HOURS);
@@ -35,4 +35,16 @@ pub async fn drop_stale_staging(
     let dropped = drops.len();
     execute(destination, drops).await?;
     Ok(dropped)
+}
+
+/// The name whose schema DuckDB lists staging tables in: without its database, as DuckDB has no `<catalog>.information_schema` and lists only the current database's (where MotherDuck's tables are); `name` elsewhere.
+fn listed_name(destination: &Destination, name: &TableName) -> TableName {
+    match destination {
+        #[cfg(feature = "duckdb")]
+        Destination::DuckDb(_) => TableName {
+            database: None,
+            ..name.clone()
+        },
+        _ => name.clone(),
+    }
 }

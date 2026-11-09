@@ -1,6 +1,5 @@
 use crate::adapters::dispatch::main::dialect::connection_warehouse::connection_warehouse;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
-use crate::adapters::duckdb::_helpers::motherduck_names::motherduck_name;
 use crate::column_types::models::Warehouse;
 use crate::loader::_helpers::specs::ColumnSelection;
 use crate::loader::_helpers::specs::{
@@ -8,6 +7,7 @@ use crate::loader::_helpers::specs::{
 };
 use crate::loader::models::{ResolvedTables, SkippedTable, TableSpec};
 use crate::postgres_source::models::SourceTable;
+use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
     ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableOverride,
 };
@@ -165,13 +165,12 @@ pub(crate) fn source_target(
     Ok(ResolvedTarget {
         name,
         warehouse,
-        // A MotherDuck connection attaches the account's other databases too, so tables are named with the bare name of the one it opens, never by schema alone.
         database: match connection {
             ConnectionConfig::MotherDuck { database, .. } => target
                 .database
                 .as_deref()
                 .or(database.as_deref())
-                .and_then(motherduck_name)
+                .and_then(|database| motherduck_path(database).name)
                 .map(str::to_owned),
             _ => target.database.clone().or(database),
         },

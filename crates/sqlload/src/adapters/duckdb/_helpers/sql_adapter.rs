@@ -1,7 +1,5 @@
 //! DuckDB's SQL: the contract's shared rendering, with DuckDB's types.
 
-use crate::adapters::contract::_helpers::queries::staging_tables_query;
-use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::duckdb::_helpers::type_names::{logical_type, portable_type};
 use crate::adapters::duckdb::models::DuckDbSql;
@@ -26,15 +24,6 @@ impl SqlAdapter for DuckDbSql {
 
     fn widens_in_place(&self, _live: &ColumnType, _target: &ColumnType) -> bool {
         true
-    }
-
-    /// The current database's staging tables, from its own `information_schema` (DuckDB has no `<catalog>.information_schema`), whatever catalog names the table.
-    fn list_staging_relations_sql(&self, table: &TableName, _database: Option<&str>) -> String {
-        let table = TableName {
-            database: None,
-            ..table.clone()
-        };
-        staging_tables_query(self, &table, None)
     }
 
     /// Only the current database's staging tables: MotherDuck attaches the account's other databases too.

@@ -4,9 +4,12 @@ pub(crate) mod blocking;
 pub(crate) mod direct_checks;
 #[cfg(feature = "duckdb")]
 pub(crate) mod direct_load;
-pub(crate) mod motherduck_names;
+#[cfg(feature = "duckdb")]
+pub(crate) mod motherduck_connection;
 #[cfg(feature = "duckdb")]
 pub(crate) mod pull_sql;
+#[cfg(feature = "duckdb")]
+pub(crate) mod shared_destination;
 pub(crate) mod sql_adapter;
 #[cfg(feature = "duckdb")]
 pub(crate) mod table_writer;

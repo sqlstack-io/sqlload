@@ -873,3 +873,14 @@ pub enum Policy {
     RequireConfirmation,
     Deny,
 }
+
+/// A MotherDuck database setting, or a DuckDB path, split into its parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotherDuckPath<'a> {
+    /// It starts with `md:` or `motherduck:`, in any case.
+    pub prefixed: bool,
+    /// The bare database name; `None` for the account's default database.
+    pub name: Option<&'a str>,
+    /// What follows `?`, if anything.
+    pub options: &'a str,
+}

@@ -65,14 +65,19 @@ pub async fn check_destination(destination: Destination) -> Result<String, Loade
         Destination::Postgres(postgres) => check_session(&postgres).await,
         #[cfg(feature = "duckdb")]
         destination @ Destination::DuckDb(_) => {
-            let query = match &destination {
-                Destination::DuckDb(duckdb) if duckdb.motherduck => {
-                    "SELECT 'MotherDuck ' || current_database() || ', DuckDB ' || version()"
-                }
-                _ => "SELECT 'DuckDB ' || version()",
-            };
-            let answer = single_text(&destination, query.to_owned()).await?;
+            let answer = single_text(&destination, version_query(&destination).to_owned()).await?;
             Ok(answer.unwrap_or_default())
         }
+    }
+}
+
+/// The query naming a DuckDB destination's engine: MotherDuck's with its database.
+#[cfg(feature = "duckdb")]
+fn version_query(destination: &Destination) -> &'static str {
+    match destination {
+        Destination::DuckDb(duckdb) if duckdb.motherduck => {
+            "SELECT 'MotherDuck ' || current_database() || ', DuckDB ' || version()"
+        }
+        _ => "SELECT 'DuckDB ' || version()",
     }
 }

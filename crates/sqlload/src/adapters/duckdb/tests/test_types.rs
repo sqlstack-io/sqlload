@@ -37,7 +37,7 @@ pub(crate) struct PulledUnloadedTestCase {
 pub(crate) struct MotherDuckPathTestCase {
     pub(crate) description: &'static str,
     pub(crate) database: &'static str,
-    pub(crate) expected: Result<&'static str, &'static str>,
+    pub(crate) expected_path: Result<&'static str, &'static str>,
 }
 
 pub(crate) struct MotherDuckTokenTestCase {
@@ -45,7 +45,14 @@ pub(crate) struct MotherDuckTokenTestCase {
     pub(crate) token: Option<&'static str>,
     /// The environment variables set, by name.
     pub(crate) variables: &'static [(&'static str, &'static str)],
-    pub(crate) expected: Option<&'static str>,
+    pub(crate) expected_token: Option<&'static str>,
+}
+
+pub(crate) struct ConnectionStringTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) path: &'static str,
+    pub(crate) token: &'static str,
+    pub(crate) expected_string: &'static str,
 }
 
 pub(crate) struct MotherDuckRefusalTestCase {
@@ -53,5 +60,42 @@ pub(crate) struct MotherDuckRefusalTestCase {
     /// DuckDB's error opening the database.
     pub(crate) error: String,
     pub(crate) token: &'static str,
-    pub(crate) expected: &'static str,
+    pub(crate) expected_message: &'static str,
+}
+
+pub(crate) struct MotherDuckOpenTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) connection_database: Option<&'static str>,
+    pub(crate) target_database: Option<&'static str>,
+    pub(crate) expected_error: &'static str,
+}
+
+pub(crate) struct ResolvedDatabaseTestCase {
+    pub(crate) description: &'static str,
+    /// The connection's `database` line, if any.
+    pub(crate) connection_line: &'static str,
+    /// The target's `database` line, if any.
+    pub(crate) target_line: &'static str,
+    /// The tables' database, or the project error.
+    pub(crate) expected_database: Result<&'static str, &'static str>,
+}
+
+pub(crate) struct DuckDbPathTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) path: &'static str,
+    pub(crate) expected_error: Option<&'static str>,
+}
+
+pub(crate) struct MotherDuckRouteTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) motherduck: bool,
+    pub(crate) expected_reads_files: bool,
+}
+
+pub(crate) struct AttachedDatabaseTestCase {
+    pub(crate) description: &'static str,
+    /// Run before reading the schema, beside `raw.orders (id)` in the current database.
+    pub(crate) setup: &'static str,
+    pub(crate) expected_columns: &'static [&'static str],
+    pub(crate) expected_dropped: usize,
 }

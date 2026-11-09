@@ -6,10 +6,6 @@ pub const DEFINITION_QUERY: &str = "SELECT sql FROM duckdb_tables() WHERE databa
 pub const INDEXES_QUERY: &str = "SELECT sql FROM duckdb_indexes() WHERE database_name = current_database() AND lower(schema_name) = lower(?) AND lower(table_name) = lower(?) AND sql IS NOT NULL ORDER BY index_name";
 /// The UTC offset an unloaded timestamp with time zone's text is read with.
 pub const UTC_OFFSET: &str = "+00";
-/// The start of a MotherDuck database's path.
-pub const MOTHERDUCK_PREFIX: &str = "md:";
-/// The starts of a DuckDB path that opens MotherDuck: `md:` and its alias.
-pub const MOTHERDUCK_PREFIXES: &[&str] = &["md:", "motherduck:"];
 /// The environment variables a MotherDuck token is taken from when the connection sets none, in order.
 pub const MOTHERDUCK_TOKEN_VARIABLES: &[&str] = &["motherduck_token", "MOTHERDUCK_TOKEN"];
 /// Part of the message MotherDuck's extension refuses to load with on a DuckDB version it does not support.
