@@ -11,3 +11,6 @@ pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Unanswered keepalives after which the tunnel counts as dropped.
 pub const KEEPALIVE_MAX: usize = 3;
+
+/// How long one SFTP request may wait for its answer: reads queue up to 16 requests of 256 KiB each, so the default 10 seconds fails on links slower than a few Mbit/s.
+pub const SFTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);

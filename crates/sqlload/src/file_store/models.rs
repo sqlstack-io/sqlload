@@ -33,3 +33,34 @@ impl StoredFile {
         }
     }
 }
+
+/// The files on an SFTP server, read over one SFTP session opened on first use: `root` is `/`, or empty for the user's login folder. Reads only: SQLLoad never writes to, renames or deletes from an SFTP server.
+pub struct SftpStore {
+    pub server: crate::ssh_tunnel::models::SshTunnel,
+    pub root: String,
+    pub(crate) link: Arc<tokio::sync::OnceCell<SftpLink>>,
+}
+
+/// The server only: the SFTP session has no `Debug` of its own.
+impl std::fmt::Debug for SftpStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "SftpStore({}, root {:?})",
+            self.server.route(),
+            self.root
+        )
+    }
+}
+
+impl std::fmt::Display for SftpStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "SFTP({})", self.server.route())
+    }
+}
+
+/// An open SFTP session, and the SSH session it runs on, which must outlive it.
+pub(crate) struct SftpLink {
+    pub(crate) sftp: russh_sftp::client::SftpSession,
+    pub(crate) _session: Arc<russh::client::Handle<crate::ssh_tunnel::models::HostCheck>>,
+}

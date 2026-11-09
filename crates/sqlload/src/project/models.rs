@@ -185,6 +185,23 @@ pub enum ConnectionConfig {
     },
     /// A directory on the machine SQLLoad runs on.
     Filesystem { root: String },
+    /// An SFTP server that files sources read from; its host key must be listed in `known_hosts`.
+    Sftp {
+        host: String,
+        /// 22 when unset.
+        #[serde(default)]
+        port: Option<u16>,
+        user: String,
+        /// The private key to sign in with (`~/` is the home folder); `password`, else ssh-agent's keys, when unset.
+        #[serde(default)]
+        private_key_file: Option<PathBuf>,
+        #[serde(default)]
+        private_key_passphrase: Option<crate::auth::models::Secret>,
+        #[serde(default)]
+        password: Option<crate::auth::models::Secret>,
+        /// The file the server's host key must be listed in; required, as SQLLoad never trusts a server on first use.
+        known_hosts: PathBuf,
+    },
     #[serde(rename = "duckdb")]
     DuckDb {
         /// The database file; `:memory:` for an in-memory database.
@@ -251,6 +268,7 @@ impl ConnectionConfig {
             Self::DuckDb { .. } => "duckdb",
             Self::S3 { .. } => "s3",
             Self::Filesystem { .. } => "filesystem",
+            Self::Sftp { .. } => "sftp",
             Self::Odbc { .. } => "odbc",
             Self::GoogleSheets { .. } => "google_sheets",
             Self::Http { .. } => "http",

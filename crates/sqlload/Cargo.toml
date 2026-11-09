@@ -46,6 +46,7 @@ arrow-ord.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true
 async-compression.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 bytes.workspace = true
@@ -71,6 +72,7 @@ reqwest.workspace = true
 rlimit = { workspace = true, optional = true }
 rsa.workspace = true
 russh.workspace = true
+russh-sftp.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true

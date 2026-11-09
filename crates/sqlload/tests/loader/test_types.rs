@@ -879,3 +879,32 @@ pub(crate) struct BigQueryCursorTestCase {
     /// The loaded values, as DuckDB text in order, joined by commas.
     pub(crate) expected_values: &'static str,
 }
+
+/// A file put on the SFTP server: its absolute path there, its bytes and its modification time (Unix seconds).
+pub(crate) struct SftpFile {
+    pub(crate) path: &'static str,
+    pub(crate) bytes: fn() -> Result<bytes::Bytes, String>,
+    pub(crate) mtime: u32,
+}
+
+/// One step against the SFTP server, in order: put `files`, sign in with `sign_in`, run `command`, then check the output and DuckDB.
+pub(crate) struct SftpStepTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) files: &'static [SftpFile],
+    /// The connection's sign-in and host key settings, with `KEYS` for the bastion's key files.
+    pub(crate) sign_in: &'static str,
+    pub(crate) command: &'static str,
+    pub(crate) expected_success: bool,
+    pub(crate) expected_output: &'static str,
+    /// Run on the DuckDB file after the command.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
+/// One plan of SFTP files into the fake Snowflake, with `settings` on the source.
+pub(crate) struct SftpSnowflakePlanTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) expected_success: bool,
+    pub(crate) expected_output: &'static str,
+}

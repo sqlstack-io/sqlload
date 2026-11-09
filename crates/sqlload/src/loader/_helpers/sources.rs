@@ -76,6 +76,7 @@ use crate::snowflake_source::main::read_catalog::read_catalog as read_snowflake_
 use crate::snowflake_source::main::unload_files::unload_files;
 use crate::snowflake_source::main::unload_rows::unload_rows;
 use crate::snowflake_source::models::{UnloadRequest, UnloadedFiles};
+use crate::ssh_tunnel::models::SshTunnel;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
@@ -106,9 +107,29 @@ pub(crate) fn files_location(
             profile: profile.clone(),
         },
         Some(ConnectionConfig::Filesystem { root }) => StoreKind::Filesystem { root: root.clone() },
+        Some(ConnectionConfig::Sftp {
+            host,
+            port,
+            user,
+            private_key_file,
+            private_key_passphrase,
+            password,
+            known_hosts,
+        }) => StoreKind::Sftp {
+            server: Box::new(SshTunnel {
+                host: host.clone(),
+                port: *port,
+                user: user.clone(),
+                private_key_file: private_key_file.clone(),
+                private_key_passphrase: private_key_passphrase.clone(),
+                password: password.clone(),
+                known_hosts: Some(known_hosts.clone()),
+            }),
+            root: String::new(),
+        },
         _ => {
             return Err(LoaderError::Invalid(format!(
-                "connection {:?} is not an s3 or filesystem connection",
+                "connection {:?} is not an s3, filesystem or sftp connection",
                 source.connection
             )));
         }

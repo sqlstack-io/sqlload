@@ -22,7 +22,9 @@ reads the files: in place under an external stage, or uploaded unchanged to its 
 with `copy_to_internal_stage = true`. SQLLoad never downloads, decodes and re-uploads them.
 
 The one exception is a column masked with `hmac`: its key must never appear in SQL, so SQLLoad
-reads those files and masks the column itself. The plan warns when this happens.
+reads those files and masks the column itself. The plan warns when this happens. Files on an SFTP
+server are not an exception: no warehouse reads SFTP, so they never had a direct route, and
+`plan` shows them read over SFTP.
 
 Anything else fails rather than falling back to SQLLoad:
 

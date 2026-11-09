@@ -1,6 +1,6 @@
 ---
 title: "Files"
-description: "Load Parquet, CSV, JSON or NDJSON files from S3 or a local folder, including files the destination reads itself."
+description: "Load Parquet, CSV, JSON or NDJSON files from S3, an SFTP server or a local folder, including files the destination reads itself."
 ---
 
 A files source is one table built from every file under a folder.
@@ -24,7 +24,7 @@ cursor_column = "dt"
 
 | Setting | Meaning |
 |---------|---------|
-| `connection` | An `s3` or `filesystem` connection. |
+| `connection` | An `s3` or `filesystem` connection, or from 0.32.0 (not released yet) an `sftp` connection. |
 | `path` | The folder holding the files, relative to the connection. |
 | `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`. |
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
@@ -161,6 +161,52 @@ the source's tables pin no other `columns`, and `record_column` can't be a name 
 Partition, path and constant columns and the `_sqlload_source_*` columns load beside it as usual.
 The column is `json` in every destination (`VARIANT` in Snowflake), and Snowflake still reads the
 files itself, also from `copy_to_internal_stage`. Parquet files already have typed columns, so they can't use `shape = "record"`.
+
+## Files on an SFTP server
+
+From 0.32.0 (not released yet). An [`sftp` connection](/docs/configuration/#sftp) reads files from
+an SFTP server, such as a partner's daily drop:
+
+```toml
+[connections.partner]
+kind = "sftp"
+host = "sftp.partner.example"
+user = "export"
+private_key_file = "~/.ssh/partner_ed25519"
+known_hosts = "~/.ssh/known_hosts"
+
+[sources.orders]
+kind = "files"
+connection = "partner"
+path = "outgoing/orders/"
+format = "csv"
+write_strategy = "append"
+description = "Orders the partner drops each day."
+```
+
+- `path` is a folder below the user's login folder (`~/` may start it), or from `/` when it starts
+  with `/`. SQLLoad lists it and every folder below it, except hidden ones. It reads regular files
+  only; symbolic links are skipped. A server must give each file's modification time.
+- The server's host key must be in `known_hosts`. An unknown or changed key fails before anything
+  is listed, with the key's fingerprint and the command that adds it.
+- A file's version (`_sqlload_source_version`) is its size and modification time, as
+  `<size>-<mtime in milliseconds>`. So `append` loads only new files, and notices a file
+  rewritten in place when its size or modification time changed. SFTP gives modification times
+  to the second, so a rewrite within the same second that keeps the size isn't noticed.
+- No destination reads files over SFTP itself, so the rows always pass through SQLLoad's reader,
+  even into Snowflake with an external stage; `copy_to_internal_stage` is refused. `plan` shows
+  `read over SFTP` at the start of the route. Text files stream as they arrive, and Parquet is
+  read in ranges, as from S3.
+- `_sqlload_source_file` names the server by its `host`, then the file's path: `sftp://host/path`
+  for a path from `/`, and `sftp://user@host/~/path` for one below the login folder. A change of
+  `host` (an IP address for a name, say), or of `user` for a login-folder path, makes `append`
+  see every file as new and load it again. The port isn't part of it, so two SFTP sources loading
+  into one table must not name the same `host` and path from `/` (two chrooted users, say).
+- SQLLoad only reads from the server: it never writes, moves or deletes files there.
+- Each table being read uses one SFTP channel on the session. OpenSSH allows 10 per connection
+  (`MaxSessions`), so keep `concurrency` at 10 or less for one server.
+- The SSH session is the one [SSH tunnels](/docs/sources/postgres/#ssh-tunnels) use: one session
+  per server and sign-in, kept alive while the run lasts.
 
 ## Files the destination reads itself
 

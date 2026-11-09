@@ -1,4 +1,4 @@
-"""Files a warehouse reads itself go through SQLLoad only for hmac masking (CHI-1044)."""
+"""Files a warehouse reads itself go through SQLLoad only for hmac masking (CHI-1044); files on an SFTP server, which no warehouse reads, always do."""
 
 from __future__ import annotations
 

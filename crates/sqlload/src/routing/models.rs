@@ -71,7 +71,7 @@ pub struct ReaderOffer {
     pub estimated_bytes: Option<u64>,
     /// Why the destination cannot load `existing_files`, or the files a warehouse source unloads, exactly by reading them itself.
     pub direct_blocked: Option<String>,
-    /// Why SQLLoad must read `existing_files` itself even where the destination could: the only case is `hmac` masking, whose key must never appear in SQL.
+    /// Why SQLLoad must read `existing_files` itself even where the destination could read files of their kind: `hmac` masking, whose key must never appear in SQL; table checks; the test-only `test_loader_route`; or files on an SFTP server, which no destination reads.
     pub needs_loader: Option<String>,
     /// `copy_to_internal_stage`: files the destination cannot reach are uploaded unchanged to a store it can, never read by SQLLoad.
     pub copy_to_internal_stage: bool,

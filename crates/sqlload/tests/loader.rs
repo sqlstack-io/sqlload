@@ -17,6 +17,8 @@ mod helpers;
 mod odbc_helpers;
 #[path = "loader/postgres/helpers.rs"]
 mod postgres_helpers;
+#[path = "loader/sftp/helpers.rs"]
+mod sftp_helpers;
 #[path = "loader/sheets/helpers.rs"]
 mod sheets_helpers;
 #[path = "loader/test_batched_loads.rs"]
@@ -66,6 +68,8 @@ mod test_postgres_to_files;
 mod test_publish_checks;
 #[path = "loader/test_s3_profiles.rs"]
 mod test_s3_profiles;
+#[path = "loader/test_sftp_files.rs"]
+mod test_sftp_files;
 #[path = "loader/test_sheets_to_duckdb.rs"]
 mod test_sheets_to_duckdb;
 #[path = "loader/test_snowflake_routes.rs"]
