@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::collections::BTreeMap;
 
 use crate::adapters::dispatch::models::Destination;
+use crate::auth::main::allow_sign_in::allow_sign_in;
 use crate::command::_helpers::output::confirm_reload;
 use crate::command::_helpers::project_file::replace_file;
 use crate::command::_helpers::signals::wait_for_signal;
@@ -104,6 +105,16 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String
         Command::Plan(args) | Command::Apply(args) | Command::Load(args) => args.json,
         _ => false,
     };
+    let contract_json = match &request.command {
+        Command::Contract {
+            action: ContractAction::Diff(args),
+        } => args.json,
+        Command::Contract {
+            action: ContractAction::Generate(chosen),
+        } => chosen.tables.json,
+        _ => false,
+    };
+    allow_sign_in(!(json || contract_json));
     let project = match load_project_config(&request).await {
         Ok(project) => project,
         Err(error) => return config_failure(&request.command, error),

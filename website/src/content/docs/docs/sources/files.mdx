@@ -29,7 +29,7 @@ cursor_column = "dt"
 | `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`. |
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
 | `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … |
-| `shape` | From 0.27.0 (not released yet). `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
+| `shape` | From 0.27.0. `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
 | `record_column` | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
 | `path_columns` | From 0.26.0. A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
@@ -68,7 +68,7 @@ records, unless you pin them with `columns`. Each row also gets `_sqlload_source
 `_sqlload_source_version` and `_sqlload_source_row` ([Columns SQLLoad
 adds](/docs/concepts/projects/#columns-sqlload-adds)).
 
-From sqlload 0.27.0, which isn't released yet, Parquet list, struct and map columns load as `json`.
+From sqlload 0.27.0, Parquet list, struct and map columns load as `json`.
 A list becomes an array, a struct becomes an object with its fields in order, and a map becomes an
 object keyed by its keys' text. Decimals, dates, times and timestamps inside them are strings, such
 as `"1.50"` or `"2026-11-08T10:00:00.123456"`. Before 0.27.0 these columns fail `plan`, and
@@ -77,7 +77,7 @@ conversion differs. In Snowflake, where files under an external stage or copied 
 `copy_to_internal_stage` only load directly, such a column still fails `plan`, so leave it out with
 `exclude_columns`.
 
-From 0.27.0 (not released yet), pin a list column, or a JSON array in a CSV or JSON file, as
+From 0.27.0, pin a list column, or a JSON array in a CSV or JSON file, as
 [`array(T)`](/docs/types/#arrays) to load it as an array instead, such as
 `columns = { tags = "array(text)" }`.
 
@@ -135,7 +135,7 @@ read the files themselves still do: SQLLoad writes each file's values into the `
 
 ## Whole records
 
-From sqlload 0.27.0, which isn't released yet, `shape = "record"` loads each record whole into one
+From sqlload 0.27.0, `shape = "record"` loads each record whole into one
 `json` column instead of typed columns, to land data as it is and parse it in the destination:
 
 ```toml

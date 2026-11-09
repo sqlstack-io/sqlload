@@ -33,12 +33,12 @@ pub(crate) fn script_body(client: &SqlClient, statements: &[String]) -> Value {
 }
 
 /// An authenticated request to the account host.
-pub(crate) fn request(
+pub(crate) async fn request(
     client: &SqlClient,
     method: reqwest::Method,
     path: &str,
 ) -> Result<reqwest::RequestBuilder, ApiError> {
-    let bearer = client.auth.bearer()?;
+    let bearer = client.auth.bearer().await?;
     Ok(client
         .http
         .request(method, format!("{}{path}", client.base_url))
@@ -60,8 +60,13 @@ pub(crate) async fn collect_partitions(
         .map_or(1, Vec::len);
     for partition in 1..partitions {
         let path = format!("/api/v2/statements/{handle}?partition={partition}");
-        let response =
-            check_response(request(client, reqwest::Method::GET, &path)?.send().await?).await?;
+        let response = check_response(
+            request(client, reqwest::Method::GET, &path)
+                .await?
+                .send()
+                .await?,
+        )
+        .await?;
         let page: Value = response.json().await?;
         rows.extend(parse_rows(&page));
     }

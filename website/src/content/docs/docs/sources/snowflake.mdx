@@ -6,7 +6,7 @@ description: "Load Snowflake tables and query results: choosing tables, query ta
 From sqlload 0.26.0, a Snowflake source loads tables and views of one
 database, and the results of queries you write.
 Snowflake unloads each read as Parquet with `COPY INTO`, and SQLLoad reads the files and loads
-them into the source's target. From 0.27.0 (not released yet), a DuckDB target reads them from S3
+them into the source's target. From 0.27.0, a DuckDB target reads them from S3
 itself.
 
 ```toml
@@ -112,7 +112,7 @@ partition.
 | `stage` | Snowflake writes to | SQLLoad reads with |
 |---------|---------------------|--------------------|
 | Omitted | A folder of your user stage, `@~/sqlload_unload/` | The temporary credentials Snowflake hands out, several files at a time |
-| `{ url = "s3://example-bucket/unload/", storage_integration = "S3_UNLOAD", region = "eu-west-2" }` | That S3 folder, through the storage integration | Its AWS credentials, found as for an [`s3` connection](/docs/configuration/#s3) (the shared credentials file from 0.27.0, not released yet) |
+| `{ url = "s3://example-bucket/unload/", storage_integration = "S3_UNLOAD", region = "eu-west-2" }` | That S3 folder, through the storage integration | Its AWS credentials, found as for an [`s3` connection](/docs/configuration/#s3) (the shared credentials file from 0.27.0) |
 | `{ name = "ANALYTICS.SHOP.UNLOAD_STAGE" }` | That stage, internal or external on S3 | As for the rows above |
 
 The user stage and other internal stages work on Snowflake accounts hosted on AWS. A named internal
@@ -129,7 +129,7 @@ storage integration must allow Snowflake to write there.
 
 ### DuckDB reads the files itself
 
-From 0.27.0 (not released yet). With a stage given by `url` and a DuckDB target, DuckDB reads the unloaded files from S3 itself,
+From 0.27.0. With a stage given by `url` and a DuckDB target, DuckDB reads the unloaded files from S3 itself,
 so no rows pass through SQLLoad. `plan` shows it in the route:
 
 ```text
@@ -141,7 +141,7 @@ whatever its session time zone. A load fails before it commits when DuckDB loads
 of rows than `COPY INTO` reports, and the folder is removed either way. A table without a cursor
 commits once per run rather than about every 1 GB.
 
-Without a stage, from 0.27.0 (not released yet), SQLLoad downloads the files from the user stage
+Without a stage, from 0.27.0, SQLLoad downloads the files from the user stage
 unchanged, 16 at a time, into a temporary folder, and DuckDB reads them from there:
 
 ```text

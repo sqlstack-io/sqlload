@@ -13,7 +13,7 @@ pub async fn insert_report(
     target: &PipeTarget<'_>,
     begin_mark: Option<&str>,
 ) -> Result<LoadReport, ApiError> {
-    let mut request = pipe_request(target, reqwest::Method::GET, "insertReport")?;
+    let mut request = pipe_request(target, reqwest::Method::GET, "insertReport").await?;
     if let Some(mark) = begin_mark {
         request = request.query(&[("beginMark", mark)]);
     }
