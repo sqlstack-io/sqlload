@@ -4,63 +4,67 @@
 		"items": [
 			"docs",
 			"docs/install",
-			"docs/quickstart"
+			"docs/quickstart",
+			"docs/compared",
+			"docs/benchmarks"
 		]
 	},
 	{
-		"label": "Sources",
+		"label": "Guides",
 		"items": [
-			{
-				"label": "Overview",
-				"slug": "docs/sources"
-			},
-			"docs/sources/postgres",
-			"docs/sources/postgres-cdc",
-			"docs/sources/snowflake",
-			"docs/sources/odbc",
-			"docs/sources/bigquery",
-			"docs/sources/files",
-			"docs/sources/google-sheets",
-			"docs/sources/python",
-			"docs/sources/logged-state"
+			"docs/guides/kafka"
 		]
 	},
 	{
-		"label": "Targets",
-		"items": [
-			{
-				"label": "Overview",
-				"slug": "docs/targets"
-			},
-			"docs/targets/snowflake",
-			"docs/targets/databricks",
-			"docs/targets/bigquery",
-			"docs/targets/clickhouse",
-			"docs/targets/postgres",
-			"docs/targets/duckdb",
-			"docs/targets/motherduck",
-			"docs/targets/files"
-		]
-	},
-	{
-		"label": "Loading",
+		"label": "Concepts",
 		"items": [
 			"docs/concepts/projects",
 			"docs/concepts/write-strategies",
-			"docs/concepts/checks",
 			"docs/concepts/cursors",
-			"docs/concepts/contracts"
+			"docs/concepts/contracts",
+			"docs/concepts/checks",
+			"docs/concepts/types"
 		]
 	},
 	{
-		"label": "Kafka exporter",
+		"label": "Connectors",
 		"items": [
+			"docs/supported-systems",
 			{
-				"label": "Overview",
-				"slug": "docs/kafka"
+				"label": "Sources",
+				"items": [
+					{
+						"label": "Overview",
+						"slug": "docs/sources"
+					},
+					"docs/sources/postgres",
+					"docs/sources/postgres-cdc",
+					"docs/sources/snowflake",
+					"docs/sources/bigquery",
+					"docs/sources/files",
+					"docs/sources/google-sheets",
+					"docs/sources/odbc",
+					{
+						"label": "Python",
+						"link": "/docs/sources/python/"
+					},
+					"docs/sources/logged-state"
+				]
 			},
-			"docs/kafka/configuration",
-			"docs/kafka/naming"
+			{
+				"label": "Targets",
+				"items": [
+					"docs/targets",
+					"docs/targets/snowflake",
+					"docs/targets/databricks",
+					"docs/targets/bigquery",
+					"docs/targets/clickhouse",
+					"docs/targets/postgres",
+					"docs/targets/duckdb",
+					"docs/targets/motherduck",
+					"docs/targets/files"
+				]
+			}
 		]
 	},
 	{
@@ -77,17 +81,10 @@
 		"label": "Reference",
 		"items": [
 			"docs/configuration",
-			"docs/types",
-			"docs/supported-systems"
-		]
-	},
-	{
-		"label": "About",
-		"items": [
-			"docs/benchmarks",
-			"docs/compared",
-			"docs/troubleshooting",
-			"docs/roadmap"
+			"docs/sources/python",
+			"docs/kafka/configuration",
+			"docs/kafka/naming",
+			"docs/troubleshooting"
 		]
 	}
 ]

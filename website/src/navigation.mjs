@@ -8,5 +8,8 @@ export const redirects = {
 	'/docs/cli/state': '/docs/sources/logged-state/',
 	'/docs/concepts/targets': '/docs/targets/',
 	'/docs/concepts/load-methods': '/docs/targets/',
-	'/docs/cli/exporter': '/docs/kafka/',
+	'/docs/cli/exporter': '/docs/guides/kafka/',
+	'/docs/roadmap': '/docs/supported-systems/',
+	'/docs/kafka': '/docs/guides/kafka/',
+	'/docs/types': '/docs/concepts/types/',
 };

@@ -10,7 +10,7 @@ or from `-c`/`--config` or `SQLLOAD_CONFIG`. Unknown keys are errors. See
 `${ENV:NAME}` anywhere in the file is replaced with the environment variable `NAME`; an unset
 variable is an error. `$${` is a literal `${`.
 
-The [Kafka exporter](/docs/kafka/) uses a different file format.
+The [Kafka exporter](/docs/guides/kafka/) uses a different file format.
 
 ## Top level
 
@@ -275,7 +275,7 @@ Only in a table entry:
 | `description` | The table's description, which becomes its comment. |
 | `name` | The destination table name, overriding `table_name`. |
 | `sql` | A query whose rows are the table (snowflake sources from 0.26.0; odbc sources from 0.27.0; bigquery sources from 0.30.0); the entry's key is its name. |
-| `columns` | Pinned column types, such as `{ total = "decimal(18,2)" }`. See [Types](/docs/types/). |
+| `columns` | Pinned column types, such as `{ total = "decimal(18,2)" }`. See [Types](/docs/concepts/types/). |
 | `mask` | Masked columns: `{ email = "hmac" }` or `"hash"`. |
 | `exclude_columns`, `allow_columns`, `destination_path` | As on the source, for this table. |
 

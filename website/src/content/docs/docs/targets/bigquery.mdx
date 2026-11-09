@@ -170,7 +170,7 @@ as a UTC instant without its offset.
 
 - BigQuery is in preview.
 - Records load as `JSON`, not as typed `STRUCT` columns. From 0.27.0, columns pinned as
-  [`array(T)`](/docs/types/#arrays) load as `ARRAY<T>`, except `array(timestamp_tz)`.
+  [`array(T)`](/docs/concepts/types/#arrays) load as `ARRAY<T>`, except `array(timestamp_tz)`.
 - `copy_to_internal_stage` is for Snowflake and is refused here.
 - A [Postgres CDC](/docs/sources/postgres-cdc/) source can't load into BigQuery; `plan` refuses
   it:
