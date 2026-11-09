@@ -958,19 +958,39 @@ pub(crate) fn source_cursor(
     ))
 }
 
-/// `"column" >= 'from' AND "column" < 'to'` for Postgres, from the bounds that are set.
+/// `column >= 'from' AND column < 'to'`, from the bounds that are set; a `numeric` cursor's bounds are bare numbers, as BigQuery compares a number with no string.
 pub(crate) fn source_filter(
     column: &str,
+    numeric: bool,
     lower: Option<(&str, &str)>,
     upper: Option<&str>,
 ) -> Option<String> {
-    let literal = |value: &str| format!("'{}'", value.replace('\'', "''"));
+    let literal = |value: &str| match numeric && is_number(value) {
+        true => value.to_owned(),
+        false => format!("'{}'", value.replace('\'', "''")),
+    };
     let bounds: Vec<String> = lower
         .map(|(operator, value)| format!("{column} {operator} {}", literal(value)))
         .into_iter()
         .chain(upper.map(|value| format!("{column} < {}", literal(value))))
         .collect();
     (!bounds.is_empty()).then(|| bounds.join(" AND "))
+}
+
+/// Whether a cursor of `column_type` compares as a number.
+pub(crate) fn numeric_cursor(column_type: &ColumnType) -> bool {
+    matches!(
+        column_type,
+        ColumnType::SmallInt | ColumnType::Int | ColumnType::Decimal { .. } | ColumnType::Float
+    )
+}
+
+/// Whether `value` is a plain decimal number, safe to write unquoted.
+fn is_number(value: &str) -> bool {
+    value
+        .chars()
+        .all(|character| character.is_ascii_digit() || "+-.eE".contains(character))
+        && value.parse::<f64>().is_ok()
 }
 
 /// Where the read starts, and why: a `--start-cursor`, the destination's maximum (read after it by `append` from a database or Python source, unless `append_cursor_inclusive`; a files source reads from it, skipping files already loaded), `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
@@ -1160,6 +1180,7 @@ pub(crate) async fn cursor_window(
     Ok(Ok(Window {
         filter: source_filter(
             request.cursor_expression.unwrap_or_default(),
+            request.cursor_type.is_some_and(numeric_cursor),
             from.as_deref().map(|from| (operator, from)),
             to.as_deref(),
         ),
