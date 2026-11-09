@@ -7,14 +7,20 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
 
 use crate::clickhouse::constants::{
-    HTTP_PORT, IMAGE, PASSWORD, READY_ATTEMPTS, READY_RETRY_DELAY, TAG, USER,
+    HTTP_PORT, IMAGE, PASSWORD, READY_ATTEMPTS, READY_RETRY_DELAY, TAG, TAG_VARIABLE, USER,
 };
 use crate::clickhouse::main::run_client::run_client;
 use crate::clickhouse::models::ClickHouse;
 
-/// A ClickHouse server with a password user, its HTTP interface on a free host port, once it answers queries.
+/// A ClickHouse server (`TAG`, or the tag `TAG_VARIABLE` names) with a password user, its HTTP interface on a free host port, once it answers queries.
 pub async fn start_clickhouse() -> Result<ClickHouse, String> {
-    let container = GenericImage::new(IMAGE, TAG)
+    let tag = match std::env::var(TAG_VARIABLE) {
+        Ok(tag) if !tag.is_empty() => tag,
+        Ok(_) | Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => {
+            TAG.to_owned()
+        }
+    };
+    let container = GenericImage::new(IMAGE.to_owned(), tag)
         .with_exposed_port(HTTP_PORT.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Logging errors to"))
         .with_env_var("CLICKHOUSE_USER", USER)

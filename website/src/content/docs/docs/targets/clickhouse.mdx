@@ -36,7 +36,7 @@ The target's `loader_schema` is the ClickHouse database tables load into; a sour
 overrides it. ClickHouse has no level above its databases, so a ClickHouse target takes no
 `database`, and `plan` refuses one. `sqlload apply` creates the database when it doesn't exist.
 
-SQLLoad is tested against ClickHouse 25.8.
+SQLLoad is tested against ClickHouse 25.8 and 26.10.
 
 ## Permissions
 
@@ -176,9 +176,10 @@ incompatible rather than load into them.
 
 ## Tested
 
-Container tests run against ClickHouse 25.8 and an S3-compatible store. They load Postgres tables
-again and again under every write strategy: tables created with their layout, every portable type,
-`merge` moving a row between partitions with no `FINAL` needed, `replace` by exchange and by
+Container tests run against ClickHouse 25.8 and 26.10 and an S3-compatible store. They load
+Postgres tables again and again under every write strategy: tables created with their layout, every
+portable type, `merge` moving a row between partitions with no `FINAL` needed, `delete_insert`
+emptying a partition whose rows were deleted upstream, `replace` by exchange and by
 renames, a new source column, and no staging tables left behind. ClickHouse reads Parquet files in
 S3 itself; a time column goes through SQLLoad, and a folder value too large for its type fails the
 load. Loads and file reads stopped at every statement, then run again, never leave a table half

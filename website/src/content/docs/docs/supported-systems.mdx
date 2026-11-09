@@ -59,7 +59,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 | System | How it's tested |
 |--------|-----------------|
 | Postgres | Real Postgres in containers, as a source and as a target. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB, Snowflake and Databricks. See [Postgres](/docs/targets/postgres/#tested). |
-| ClickHouse | Real ClickHouse 25.8 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
+| ClickHouse | Real ClickHouse 25.8 and 26.10 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
 | DuckDB | Real, in process. |
 | ODBC | psqlODBC against real Postgres in containers, into DuckDB. |
 | BigQuery source | A fake Storage Read API in tests (parallel streams, a broken stream resumed, cursor filters), and live loads from a sandbox project into DuckDB: tables, views, query tables, and integer, timestamp, text, `NUMERIC` and `BIGNUMERIC` cursors. |
