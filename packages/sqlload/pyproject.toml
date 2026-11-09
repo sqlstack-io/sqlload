@@ -5,13 +5,12 @@ build-backend = "maturin"
 [project]
 name = "sqlload"
 version = "0.33.1" # x-release-please-version
-description = "SQL data loading tooling. Pre-release, under development."
+description = "SQL data loading tooling."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",
