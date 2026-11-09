@@ -2,134 +2,99 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/sqlload-logo-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/sqlload-logo-light.png">
-    <img src="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/sqlload-logo-light.png" alt="SQLLoad" width="320">
-  </picture><br>
+    <img src="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/sqlload-logo-light.png" alt="SQLLoad" width="420">
+  </picture>
+  <br>
   <sub>by <a href="https://sqlstack.io">SQLStack</a></sub>
 </p>
 
-<p align="center">
-  <strong>Load data into your warehouse. Fast.</strong><br>
-  <strong>See the plan before any data moves.</strong>
-</p>
+<h2 align="center">The fastest open-source data loader.</h2>
 
 <p align="center">
+  <strong>Up to 2.3× faster than ingestr and 150× faster than dlt. 10 million Parquet rows into DuckDB in 3.2 seconds.</strong> <a href="https://sqlload.io/docs/benchmarks/">Benchmarks</a>
+  <br>
   <a href="https://sqlload.io">Website</a> ·
   <a href="https://sqlload.io/docs/">Docs</a> ·
   <a href="https://sqlload.io/docs/quickstart/">Quickstart</a> ·
   <a href="https://sqlload.io/docs/benchmarks/">Benchmarks</a>
 </p>
 
-SQLLoad loads Postgres and Snowflake tables, files, Google Sheets and Python sources into Snowflake, Databricks, BigQuery
-(preview), ClickHouse (preview), DuckDB, MotherDuck (beta, not released yet), Postgres or Parquet files. `sqlload plan` shows every table, column type, write strategy and route before
-anything is created or loaded. Where Snowflake or DuckDB can load your files exactly by itself,
-the files never pass through SQLLoad. It is written in Rust and is open source under Apache-2.0;
-Python is needed only for Python sources.
+Load Postgres, files, Snowflake, BigQuery, Google Sheets and Python sources into your warehouse.
+SQLLoad is Rust and Arrow end to end, and when your warehouse reads the files itself, rows never
+pass through SQLLoad, so there's no loader bottleneck as your data grows.
+
+```bash
+uv tool install sqlload        # or: pip install sqlload
+```
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/demos/plan-load.gif" alt="sqlload plan lists the two tables it will create from Postgres, their column types in DuckDB, and how each loads; sqlload load then creates them and loads 1,050 rows" width="100%">
 </p>
 
-`sqlload plan` on the [quickstart](https://sqlload.io/docs/quickstart/) project shows the tables it
-would create from Postgres, each column's DuckDB type and how each table loads. `sqlload load`
-then creates and fills them.
+`sqlload plan` shows the tables it will create from Postgres, each column's DuckDB type and how
+each table loads. `sqlload load` then creates and fills them.
 
 ## Quick start
 
-```sh
-uv tool install sqlload
+```bash
+sqlload plan     # every table, column type and route, before anything is created
+sqlload apply    # create the tables
+sqlload load     # load them
+```
+
+A `sqlload.toml` names your sources and targets; the
+[quickstart](https://sqlload.io/docs/quickstart/) builds one. To load one table once with no
+configuration file:
+
+```bash
 sqlload copy orders/ duckdb://shop.duckdb#raw.orders
 ```
 
-`sqlload copy` loads one table once and needs no configuration file. Here a folder of Parquet
-files becomes a DuckDB table; the plan prints first:
+## Speed
 
-```console
-$ sqlload copy orders/ duckdb://shop.duckdb#raw.orders
-Plan ready  1 selected, 1 object to create, 1 to load
+The same data loaded by each tool on a 4-vCPU machine, median of 5 runs:
 
-Objects (1)                                         sqlload apply
-└── raw.orders                                      create table
-    ├── order_id   int            -> BIGINT
-    ├── customer   text           -> VARCHAR
-    ├── total      float          -> DOUBLE
-    ├── ordered_at timestamp_tz   -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
-    └── + _sqlload_source_file, _source_version, _source_row, _load_id, _loaded_at
+| Scenario | SQLLoad | ingestr | dlt |
+|---|---:|---:|---:|
+| Parquet folder into DuckDB, 1M rows | **0.92 s** | 2.12 s | 138 s |
+| Parquet folder into DuckDB, 10M rows | **3.20 s** | 5.85 s | over 20 min |
+| Postgres (40 columns) into DuckDB, 1M rows | **6.84 s** | 8.29 s | 27.2 s |
+| Postgres into Snowflake, 1M rows | **14.56 s** | 16.38 s | 29.4 s |
 
-Loads (1)                                           sqlload load
-└── orders                                          replace
-    ├── source  files  orders/  parquet
-    ├── files   1 to read of 1 listed
-    ├── route   DuckDB reads directly from orders/ (nothing through the loader)
-    └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined, so later batches may add columns
+See the [benchmarks](https://sqlload.io/docs/benchmarks/) for every scenario, the method, the
+versions and how to run them yourself.
 
-✓ Plan complete  1 selected, 1 object to create, 1 to load
-created  raw.orders  9 columns
-loaded   raw.orders  3 rows  0.0s
+## Why SQLLoad
 
-✓ Completed  1 loaded, 3 rows, 0.1s
-```
-
-Add `--print-toml` to print the same copy as a `sqlload.toml` project, which loads its tables with
-`sqlload plan`, `sqlload apply` and `sqlload load`. The
-[quickstart](https://sqlload.io/docs/quickstart/) walks through one.
+- **See the plan before any data moves.** `sqlload plan` shows every table, column type, write
+  strategy and route before anything is created or loaded, so there are no surprises in your
+  warehouse.
+- **Crash-safe loads.** Every commit lands whole, even if a load is killed halfway. A full refresh
+  swaps in one go, so your dashboards see the old table or the new one, never a mix.
+- **Postgres change data capture.** A `postgres_cdc` source copies your tables once, then applies
+  every insert, update and delete from a logical replication slot, in whole source transactions.
+  `sqlload load --follow` keeps streaming. See
+  [Postgres CDC](https://sqlload.io/docs/sources/postgres-cdc/).
 
 ## What it loads
 
 | Sources | Targets |
-|---------|---------|
-| Postgres tables, and Postgres changes from a logical replication slot | Snowflake |
-| Snowflake tables and query results | Databricks |
-| Parquet, CSV, JSON and NDJSON files in S3, a local folder or an SFTP server | BigQuery (preview) |
-| Google Sheets tabs and ranges | ClickHouse (preview) |
-| Python sources, including HTTP APIs | DuckDB, and MotherDuck (beta, not released yet) |
-| Databases with an ODBC driver, in builds with the `odbc` feature | Postgres |
-| BigQuery tables and query results | Parquet or CSV files in S3 or a local folder |
+|---|---|
+| Postgres tables and Postgres changes (CDC) | Snowflake |
+| Parquet, CSV and JSON files in S3, a local folder or SFTP | Databricks |
+| Snowflake and BigQuery tables and queries | BigQuery (preview) |
+| Google Sheets | ClickHouse (preview) |
+| Python sources and HTTP APIs | DuckDB and MotherDuck (beta) |
+| Databases with an ODBC driver | Postgres |
+| | Parquet or CSV files |
 
-See [Supported systems](https://sqlload.io/docs/supported-systems/) for which combinations and
-write strategies each supports.
+See [Supported systems](https://sqlload.io/docs/supported-systems/) for every combination and
+write strategy.
 
-**Postgres change data capture.** A `postgres_cdc` source copies every table under a snapshot on
-the first `sqlload load`. Each later load applies the inserts, updates and deletes committed since
-the last one, from a logical replication slot, as `merge` or `changelog` into DuckDB, Snowflake or
-Databricks, or as a changelog into Parquet files.
-From 0.18.0, columns added, dropped or widened while streaming carry through. From 0.20.0,
-`sqlload load app --follow` keeps streaming, writing a batch every 10 seconds by default.
-See [Postgres CDC](https://sqlload.io/docs/sources/postgres-cdc/).
+---
 
-**Kafka exporter.** A separate mode, `sqlload run`, streams Kafka topics into Snowflake. Its
-configuration is in [sqlload.example.toml](sqlload.example.toml); see the
-[Kafka exporter](https://sqlload.io/docs/kafka/) docs.
+Built in Rust. Free and open source. [Apache 2.0](https://github.com/sqlstack-io/sqlload/blob/main/LICENSE).
+[Contributing](https://github.com/sqlstack-io/sqlload/blob/main/CONTRIBUTING.md) ·
+[Changelog](https://github.com/sqlstack-io/sqlload/blob/main/CHANGELOG.md)
 
-## Install
-
-The `sqlload` package is a native Python extension for CPython 3.10 or newer, and runs Python
-sources in the same process as the loader. `sqlload-cli` is the same command as a standalone
-executable, without Python and without Python sources. Install only one of them, because both
-provide a `sqlload` command (`uv tool install sqlload-cli` for the executable). Both are released
-for Linux (x86_64 and aarch64, glibc 2.28 or newer) and macOS 11 or newer (arm64). See
-[Install](https://sqlload.io/docs/install/).
-
-## Learn more
-
-- [Documentation](https://sqlload.io/docs/): install, quickstart, concepts, the CLI and Python
-  references, configuration and supported systems.
-- [The `sqlload` package README](packages/sqlload/README.md): Python and HTTP sources, batches,
-  logged state, change data capture, and how rows reach Snowflake, Databricks,
-  BigQuery, Postgres, ClickHouse and DuckDB.
-- [Benchmarks](benchmarks/README.md): SQLLoad, dlt and ingestr loading the same data into DuckDB
-  and Snowflake, with the method, versions and figures.
-- [Changelog](CHANGELOG.md).
-
-## Development
-
-```sh
-make check            # fmt, clippy, fensu
-make test-unit
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the container and Python tests and the rules the checks
-enforce.
-
-## License
-
-Apache-2.0.
+Part of [SQLStack](https://sqlstack.io/).
