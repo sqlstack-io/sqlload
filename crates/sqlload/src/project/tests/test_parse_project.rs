@@ -446,7 +446,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "a target cannot load into an HTTP API",
             text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\n[targets.other]\nconnection = \"api\"\nloader_schema = \"RAW\"\n",
-            expected_message: "is a http connection; targets load into snowflake, databricks, bigquery, clickhouse, duckdb, postgres or write files to s3 or filesystem",
+            expected_message: "is a http connection; targets load into snowflake, databricks, bigquery, clickhouse, duckdb, motherduck, postgres or write files to s3 or filesystem",
         },
         ParseProjectErrorTestCase {
             description: "destination_path needs a files target",

@@ -17,5 +17,6 @@ pub(in crate::adapters) fn own_connection(
     Ok(DuckDbDestination {
         connection: Arc::new(Mutex::new(connection)),
         ddl: destination.ddl.clone(),
+        motherduck: destination.motherduck,
     })
 }

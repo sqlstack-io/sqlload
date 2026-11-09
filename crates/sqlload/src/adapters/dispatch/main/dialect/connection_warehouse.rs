@@ -14,7 +14,9 @@ pub fn connection_warehouse(connection: &ConnectionConfig) -> Option<(Warehouse,
         }
         ConnectionConfig::BigQuery { project, .. } => Some((Warehouse::BigQuery, project.clone())),
         ConnectionConfig::ClickHouse { .. } => Some((Warehouse::ClickHouse, None)),
-        ConnectionConfig::DuckDb { .. } => Some((Warehouse::DuckDb, None)),
+        ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. } => {
+            Some((Warehouse::DuckDb, None))
+        }
         ConnectionConfig::S3 { .. } | ConnectionConfig::Filesystem { .. } => {
             Some((Warehouse::Parquet, None))
         }

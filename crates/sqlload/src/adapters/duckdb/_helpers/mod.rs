@@ -4,6 +4,7 @@ pub(crate) mod blocking;
 pub(crate) mod direct_checks;
 #[cfg(feature = "duckdb")]
 pub(crate) mod direct_load;
+pub(crate) mod motherduck_names;
 #[cfg(feature = "duckdb")]
 pub(crate) mod pull_sql;
 pub(crate) mod sql_adapter;

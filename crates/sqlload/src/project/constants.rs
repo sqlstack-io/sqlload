@@ -113,6 +113,7 @@ pub const WAREHOUSE_CONNECTION_KINDS: &[&str] = &[
     "bigquery",
     "clickhouse",
     "duckdb",
+    "motherduck",
     "postgres",
 ];
 

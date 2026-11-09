@@ -3,6 +3,7 @@ pub(in crate::adapters) mod _describe_table;
 pub(in crate::adapters) mod _direct_problem;
 pub(in crate::adapters) mod _execute_statements;
 pub(in crate::adapters) mod _open_duckdb;
+pub(in crate::adapters) mod _open_motherduck;
 pub(in crate::adapters) mod _own_connection;
 pub(in crate::adapters) mod _pull_files;
 pub(in crate::adapters) mod _query_text;

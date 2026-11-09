@@ -8,6 +8,8 @@ pub struct DuckDbDestination {
     pub connection: Arc<Mutex<duckdb::Connection>>,
     /// Held while a load's tables change the schema, one at a time: DuckDB fails concurrent catalog changes with write-write conflicts.
     pub ddl: Arc<tokio::sync::Mutex<()>>,
+    /// A MotherDuck database (`md:`), which only takes Arrow batches: it never reads files itself.
+    pub motherduck: bool,
 }
 
 /// DuckDB's SQL dialect.

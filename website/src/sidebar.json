@@ -38,6 +38,7 @@
 			"docs/targets/clickhouse",
 			"docs/targets/postgres",
 			"docs/targets/duckdb",
+			"docs/targets/motherduck",
 			"docs/targets/files"
 		]
 	},

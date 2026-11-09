@@ -65,8 +65,13 @@ pub async fn check_destination(destination: Destination) -> Result<String, Loade
         Destination::Postgres(postgres) => check_session(&postgres).await,
         #[cfg(feature = "duckdb")]
         destination @ Destination::DuckDb(_) => {
-            let answer =
-                single_text(&destination, "SELECT 'DuckDB ' || version()".to_owned()).await?;
+            let query = match &destination {
+                Destination::DuckDb(duckdb) if duckdb.motherduck => {
+                    "SELECT 'MotherDuck ' || current_database() || ', DuckDB ' || version()"
+                }
+                _ => "SELECT 'DuckDB ' || version()",
+            };
+            let answer = single_text(&destination, query.to_owned()).await?;
             Ok(answer.unwrap_or_default())
         }
     }

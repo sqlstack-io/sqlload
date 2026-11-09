@@ -1,5 +1,7 @@
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_motherduck.rs"]
+mod motherduck;
 #[path = "tests/test_pull_insert.rs"]
 mod pull_insert;
 #[path = "tests/test_pulled_unloaded.rs"]
