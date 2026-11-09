@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.31.0](https://github.com/sqlstack-io/sqlload/compare/v0.30.0...v0.31.0) (2026-11-09)
+
+
+### Features
+
+* **plan:** note what an added or widened column's type loses ([ab20236](https://github.com/sqlstack-io/sqlload/commit/ab20236bfcd1a2bb34b200cb646aee5a7663038d))
+
+
+### Bug Fixes
+
+* **plan:** word every array's loss note one way, and base Snowflake's on its element type ([d8c6acd](https://github.com/sqlstack-io/sqlload/commit/d8c6acd6796e568cf09d2cef1460e6150c861dc5))
+
+
+### Documentation
+
+* 0.29.0 and 0.30.0 on sqlload.io: marks updated as released ([#157](https://github.com/sqlstack-io/sqlload/issues/157)) ([28af43c](https://github.com/sqlstack-io/sqlload/commit/28af43ca267f4727b31e432ec82ecd0f784ce4f9))
+
 ## [0.30.0](https://github.com/sqlstack-io/sqlload/compare/v0.29.0...v0.30.0) (2026-11-09)
 
 
