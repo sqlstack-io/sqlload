@@ -39,6 +39,18 @@ fn given_a_motherduck_database_when_naming_its_path_then_one_md_prefix_leads_and
             expected: Ok("md:shop"),
         },
         MotherDuckPathTestCase {
+            description: "a prefix in any case is MotherDuck's, as DuckDB matches it",
+            database: "MotherDuck:shop",
+            expected: Ok("md:shop"),
+        },
+        MotherDuckPathTestCase {
+            description: "a token option under another spelling is refused too",
+            database: "MD:shop?attach_mode=single&TOKEN=tok.en-1",
+            expected: Err(
+                "MotherDuck: a motherduck connection's database holds a token; set it in token instead",
+            ),
+        },
+        MotherDuckPathTestCase {
             description: "no name opens the account's default database",
             database: "",
             expected: Ok("md:"),
@@ -172,8 +184,27 @@ path = "orders/"
         .ok_or("the source is parsed")?;
     let target = source_target(&project, source)?;
     assert_eq!(
-        target.database, None,
-        "tables name no catalog on MotherDuck"
+        target.database.as_deref(),
+        Some("shop_prod"),
+        "tables are named with the bare name of the target's database"
+    );
+    let unnamed = parse_project(
+        r#"
+[connections.cloud]
+kind = "motherduck"
+
+[targets.prod]
+connection = "cloud"
+loader_schema = "raw"
+"#,
+        &|_| None,
+    )
+    .err()
+    .map(|error| error.to_string())
+    .unwrap_or_default();
+    assert!(
+        unnamed.contains("[targets.prod] loads into MotherDuck, which attaches every database in the account: name the database, in the target or its connection"),
+        "a target naming no database is refused: {unnamed}"
     );
     Ok(())
 }
@@ -241,7 +272,7 @@ fn given_a_token_with_query_characters_when_opening_then_it_is_percent_encoded()
 
 #[test]
 fn given_a_duckdb_connection_when_its_database_is_a_motherduck_path_then_it_is_refused() {
-    for path in ["md:shop", "motherduck:shop"] {
+    for path in ["md:shop", "motherduck:shop", "MD:shop"] {
         let error = open_duckdb(path).err().map(|error| error.to_string());
         assert_eq!(
             error.as_deref(),
@@ -258,10 +289,14 @@ fn given_another_attached_database_with_the_same_table_when_reading_the_schema_t
 -> Result<(), String> {
     let destination = open_duckdb(":memory:").map_err(|error| error.to_string())?;
     let table = TableName {
-        database: None,
+        database: Some("memory".to_owned()),
         schema: "raw".to_owned(),
         table: "orders".to_owned(),
     };
+    let insert = format!(
+        "INSERT INTO {} VALUES (1)",
+        DuckDbSql.render_qualified_name(&table)
+    );
     let staging_query = DuckDbSql.list_staging_relations_sql(&table, None);
     let staged = {
         let connection = destination
@@ -273,9 +308,13 @@ fn given_another_attached_database_with_the_same_table_when_reading_the_schema_t
                 "ATTACH ':memory:' AS other;
                  CREATE SCHEMA raw; CREATE TABLE raw.orders (id INTEGER);
                  CREATE SCHEMA other.raw; CREATE TABLE other.raw.orders (id INTEGER, extra INTEGER);
-                 CREATE TABLE other.raw.orders__sqlload_staging_20260101 (id INTEGER);",
+                 CREATE TABLE other.raw.orders__sqlload_staging_20260101 (id INTEGER);
+                 ATTACH ':memory:' AS raw;",
             )
             .map_err(|error| error.to_string())?;
+        connection
+            .execute(&insert, [])
+            .map_err(|error| format!("the qualified name binds to this database: {error}"))?;
         let mut statement = connection
             .prepare(&staging_query)
             .map_err(|error| error.to_string())?;

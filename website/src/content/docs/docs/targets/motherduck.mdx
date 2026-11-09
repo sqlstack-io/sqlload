@@ -38,12 +38,12 @@ loader_schema = "raw"
 
 | Key | Meaning |
 |-----|---------|
-| `database` | The MotherDuck database, with or without `md:`. Default: the account's default database. It can't hold the token. |
+| `database` | The MotherDuck database, with or without `md:`. Required, here or in the target. It can't hold the token. |
 | `token` | A MotherDuck access token. Use `${ENV:NAME}`. Default: the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable. |
 
 A target's `database` overrides the connection's, so one connection can serve, say, a `shop_dev`
-and a `shop` database. Tables load into that database only, even though MotherDuck attaches the
-account's other databases too. Without a token SQLLoad refuses the connection rather than wait for
+and a `shop` database. MotherDuck attaches the account's other databases too, so SQLLoad names every
+table with its database, and a target that names no database is refused. Without a token SQLLoad refuses the connection rather than wait for
 MotherDuck's browser sign-in. A `duckdb` connection refuses an `md:` path; use
 `kind = "motherduck"`. The first connection installs MotherDuck's DuckDB extension into `~/.duckdb`,
 which needs the network once.

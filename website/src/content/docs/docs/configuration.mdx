@@ -109,7 +109,7 @@ connection can't connect until it does; see [MotherDuck](/docs/targets/motherduc
 
 | Key | Meaning |
 |-----|---------|
-| `database` | The MotherDuck database, with or without `md:`. Default: the account's default database. It can't hold the token. |
+| `database` | The MotherDuck database, with or without `md:`. Required, here or in the target. It can't hold the token. |
 | `token` | A MotherDuck access token. Use `${ENV:NAME}`. Default: the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable. |
 
 ### `s3`

@@ -1,7 +1,8 @@
 //! Open a MotherDuck database.
 
+use crate::adapters::duckdb::_helpers::motherduck_names::without_motherduck_prefix;
 use crate::adapters::duckdb::constants::{
-    EXTENSION_EXCEPTION, MOTHERDUCK_PREFIX, MOTHERDUCK_PREFIXES, MOTHERDUCK_TOKEN_VARIABLES,
+    EXTENSION_EXCEPTION, MOTHERDUCK_PREFIX, MOTHERDUCK_TOKEN_VARIABLES,
     MOTHERDUCK_UNSUPPORTED_DUCKDB,
 };
 use crate::adapters::duckdb::errors::DuckDbError;
@@ -25,13 +26,11 @@ pub(in crate::adapters) fn open_motherduck(
     shared_destination(connection, true)
 }
 
-/// `database` as an `md:` path: its `md:` or `motherduck:` prefix replaced by `md:`. A token written into it is refused, as the path appears in messages.
+/// `database` as an `md:` path: its `md:` or `motherduck:` prefix, in any case, replaced by `md:`. A token in its options is refused, as the path appears in messages.
 pub(in crate::adapters::duckdb) fn motherduck_path(database: &str) -> Result<String, DuckDbError> {
-    let name = MOTHERDUCK_PREFIXES
-        .iter()
-        .find_map(|prefix| database.strip_prefix(prefix))
-        .unwrap_or(database);
-    if name.contains("motherduck_token") {
+    let name = without_motherduck_prefix(database).unwrap_or(database);
+    let options = name.split_once('?').map_or("", |(_, options)| options);
+    if options.to_ascii_lowercase().contains("token") {
         return Err(DuckDbError::MotherDuck(
             "a motherduck connection's database holds a token; set it in token instead".to_owned(),
         ));
