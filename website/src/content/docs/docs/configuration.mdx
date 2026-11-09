@@ -51,8 +51,9 @@ The `ssh` table, from 0.27.0:
 | `host` | required | The bastion. |
 | `port` | 22 | |
 | `user` | required | |
-| `private_key_file` | ssh-agent | The private key to sign in with. `~/` is the home folder. Without it, SQLLoad tries each key ssh-agent holds. |
+| `private_key_file` | ssh-agent | The private key to sign in with. `~/` is the home folder. Without it (and without `password`), SQLLoad tries each key ssh-agent holds. |
 | `private_key_passphrase` | none | Use `${ENV:NAME}`. |
+| `password` | none | From 0.32.0 (not released yet). Signs in when no `private_key_file` is set. Use `${ENV:NAME}`. |
 | `known_hosts` | `~/.ssh/known_hosts` | The file the bastion's host key must be listed in. |
 
 ### `snowflake`
