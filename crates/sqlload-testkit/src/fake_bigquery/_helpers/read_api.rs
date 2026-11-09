@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
+use arrow_array::types::Decimal128Type;
 use arrow_array::{ArrayRef, RecordBatch, StringArray};
+use arrow_cast::parse::parse_decimal;
 use arrow_ipc::writer::{
     DictionaryTracker, IpcDataGenerator, IpcWriteContext, IpcWriteOptions, write_message,
 };
@@ -147,7 +149,48 @@ fn numeric(sql_type: &str) -> bool {
     )
 }
 
-/// Whether `row` passes `restriction`: conditions `` `column` <op> literal `` joined by ` AND `, a literal bare or in single quotes; numbers compare as numbers, anything else as text. A condition the fake cannot read, or a quoted literal against a numeric column (`INT64 >= STRING` has no signature in BigQuery), is refused.
+/// A row restriction's literal: a GoogleSQL string, an exact `CAST('…' AS BIGNUMERIC)` (scale 9 is enough for the fake), or a bare number, which BigQuery reads as FLOAT64 and so compares approximately.
+enum Literal {
+    Text(String),
+    Exact(i128),
+    Approx(f64),
+}
+
+/// `literal` read as BigQuery reads it, or why it is not one whole literal, such as a string that ends early (GoogleSQL has no `''` escape).
+fn read_literal(literal: &str) -> Result<Literal, String> {
+    if let Some(inner) = literal
+        .strip_prefix("CAST('")
+        .and_then(|rest| rest.strip_suffix("' AS BIGNUMERIC)"))
+    {
+        return parse_decimal::<Decimal128Type>(inner, 38, 9)
+            .map(Literal::Exact)
+            .map_err(|error| error.to_string());
+    }
+    let Some(quoted) = literal.strip_prefix('\'') else {
+        return literal
+            .parse()
+            .map(Literal::Approx)
+            .map_err(|error: std::num::ParseFloatError| error.to_string());
+    };
+    let mut text = String::new();
+    let mut characters = quoted.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => text.push(match characters.next() {
+                Some('n') => '\n',
+                Some('r') => '\r',
+                Some(escaped @ ('\\' | '\'' | '"')) => escaped,
+                other => return Err(format!("illegal escape {other:?}")),
+            }),
+            '\'' if characters.as_str().is_empty() => return Ok(Literal::Text(text)),
+            '\'' => return Err(format!("text after the string: {:?}", characters.as_str())),
+            other => text.push(other),
+        }
+    }
+    Err("an unclosed string".to_owned())
+}
+
+/// Whether `row` passes `restriction`: conditions `` `column` <op> literal `` joined by ` AND `, each literal read as BigQuery reads it (`read_literal`). A condition the fake cannot read, or a string literal against a numeric column (`INT64 >= STRING` has no signature in BigQuery), is refused.
 fn passes(row: &Value, restriction: &str, columns: &[(String, String)]) -> Result<bool, Status> {
     for condition in restriction
         .split(" AND ")
@@ -170,19 +213,29 @@ fn passes(row: &Value, restriction: &str, columns: &[(String, String)]) -> Resul
             .find(|(column, _)| column == name)
             .map(|(_, sql_type)| sql_type.as_str())
             .ok_or_else(refused)?;
-        let quoted = literal.starts_with('\'');
-        if quoted && numeric(sql_type) {
+        let literal = read_literal(literal).map_err(|problem| {
+            Status::invalid_argument(format!(
+                "cannot read the row restriction {condition:?}: {problem}"
+            ))
+        })?;
+        if matches!(literal, Literal::Text(_)) && numeric(sql_type) {
             return Err(Status::invalid_argument(format!(
                 "No matching signature for operator {operator} for argument types: {sql_type}, STRING"
             )));
         }
-        let literal = literal.trim_matches('\'').replace("''", "'");
         let Some(value) = row[name].as_str() else {
             return Ok(false);
         };
-        let ordering = match (value.parse::<f64>(), literal.parse::<f64>()) {
-            (Ok(left), Ok(right)) => left.partial_cmp(&right).ok_or_else(refused)?,
-            _ => value.cmp(literal.as_str()),
+        let ordering = match literal {
+            Literal::Text(text) => value.cmp(text.as_str()),
+            Literal::Exact(right) => parse_decimal::<Decimal128Type>(value, 38, 9)
+                .map_err(|_| refused())?
+                .cmp(&right),
+            Literal::Approx(right) => value
+                .parse::<f64>()
+                .map_err(|_| refused())?
+                .partial_cmp(&right)
+                .ok_or_else(refused)?,
         };
         let kept = match operator {
             ">=" => ordering.is_ge(),

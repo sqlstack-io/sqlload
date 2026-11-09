@@ -394,14 +394,19 @@ pub(crate) async fn run_bigquery(
     })
 }
 
-/// A project loading the fake's `marts` dataset into DuckDB at `database`, `marts.orders` appended by its `id` cursor.
-pub(crate) fn source_project(fake: &FakeBigQuery, database: &std::path::Path) -> String {
+/// A project loading the fake's `marts` dataset into DuckDB at `database`, with `tables` (TOML table entries) appended to its source.
+pub(crate) fn source_project(
+    fake: &FakeBigQuery,
+    database: &std::path::Path,
+    tables: &str,
+) -> String {
     format!(
-        "[connections.bq]\nkind = \"bigquery\"\nlocation = \"EU\"\nservice_account_key = '''{}'''\nbase_url = \"{}\"\nstorage_url = \"{}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.marts]\nkind = \"bigquery\"\nconnection = \"bq\"\ninclude = [\"marts.*\"]\n\n[sources.marts.tables.\"marts.orders\"]\ndescription = \"Orders.\"\ncursor_column = \"id\"\nwrite_strategy = \"append\"\n",
+        "[connections.bq]\nkind = \"bigquery\"\nlocation = \"EU\"\nservice_account_key = '''{}'''\nbase_url = \"{}\"\nstorage_url = \"{}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.marts]\nkind = \"bigquery\"\nconnection = \"bq\"\ninclude = [\"marts.*\"]\n\n{}",
         fake.key_json,
         fake.base_url,
         fake.storage_url,
-        database.display()
+        database.display(),
+        tables
     )
 }
 

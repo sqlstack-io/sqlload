@@ -65,6 +65,14 @@ impl SqlAdapter for BigQuerySql {
         )
     }
 
+    /// A decimal bound as a `BIGNUMERIC`, which `NUMERIC` and `BIGNUMERIC` columns compare with exactly; a bare decimal is a `FLOAT64` literal, which rounds.
+    fn render_cursor_number(&self, value: &str, column_type: &ColumnType) -> String {
+        match column_type {
+            ColumnType::Decimal { .. } => format!("CAST('{value}' AS BIGNUMERIC)"),
+            _ => value.to_owned(),
+        }
+    }
+
     /// JSON is parsed from its staged text; a UUID is stored as the text it arrived as.
     fn render_source_expression_cast(&self, name: &str, column_type: &ColumnType) -> String {
         let column = self.render_identifier(name);
