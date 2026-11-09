@@ -25,7 +25,23 @@ pub(crate) fn displaced_partitions_query(target: &str, displaced: &str) -> Strin
     format!("SELECT DISTINCT _partition_id FROM {target} WHERE ifNull({displaced}, 0) ORDER BY 1")
 }
 
-/// The statements publishing the delta's partitions `new` (and, replacing rows, the target's partitions `displaced` that hold them), each partition whole and every one at once: none when nothing is touched; an added single partition attached from the delta (it copies nothing); a single rebuilt partition built beside the table from its kept rows and the delta's and swapped in by `REPLACE PARTITION`; several partitions rebuilt in a copy of the table that hard-links its parts, then swapped in for the table by one `EXCHANGE TABLES`. A run killed at any point leaves the table as it was or with every partition, so the next run converges.
+/// `target`'s partition `partition` replaced by `copy`'s.
+pub(crate) fn replace_partition(target: &str, copy: &str, partition: &str) -> String {
+    format!(
+        "ALTER TABLE {target} REPLACE PARTITION ID {} FROM {copy}",
+        ClickHouseSql.render_loader_value_literal(partition)
+    )
+}
+
+/// The query counting `table`'s rows in partition `partition`.
+pub(crate) fn partition_rows_query(table: &str, partition: &str) -> String {
+    format!(
+        "SELECT count() FROM {table} WHERE _partition_id = {} FORMAT TabSeparated",
+        ClickHouseSql.render_loader_value_literal(partition)
+    )
+}
+
+/// The statements publishing the delta's partitions `new` (and, replacing rows, the target's partitions `displaced` that hold them), each partition whole and every one at once: none when nothing is touched; an added single partition attached from the delta (it copies nothing); a single rebuilt partition built beside the table from its kept rows and the delta's and swapped in by `REPLACE PARTITION`; when the delta adds none of that partition's rows, it is dropped instead if the copy holds none either; several partitions rebuilt in a copy of the table that hard-links its parts, then swapped in for the table by one `EXCHANGE TABLES`. A run killed at any point leaves the table as it was or with every partition, so the next run converges.
 pub(crate) fn partition_statements(
     publish: &PartitionPublish<'_>,
     (new, displaced): (&[String], &[String]),
@@ -65,10 +81,14 @@ pub(crate) fn partition_statements(
             statements.push(format!("CREATE TABLE {copy} AS {target}"));
             statements.push(kept(&listed.join(", ")));
             statements.extend(new.iter().map(|partition| attach(copy, partition)));
-            statements.push(format!(
-                "ALTER TABLE {target} REPLACE PARTITION ID {} FROM {copy}",
-                literal(only)
-            ));
+            statements.push(match new.contains(only) {
+                true => replace_partition(target, copy, only),
+                false => publish_statement(&PublishStep::ReplacePartition {
+                    target: target.to_owned(),
+                    copy: copy.to_owned(),
+                    partition: only.clone(),
+                }),
+            });
         }
         (_, condition) => {
             statements.push(format!("DROP TABLE IF EXISTS {copy}"));

@@ -36,12 +36,12 @@ The target's `loader_schema` is the ClickHouse database tables load into; a sour
 overrides it. ClickHouse has no level above its databases, so a ClickHouse target takes no
 `database`, and `plan` refuses one. `sqlload apply` creates the database when it doesn't exist.
 
-SQLLoad is tested against ClickHouse 25.8.
+SQLLoad is tested against ClickHouse 25.8 and 26.10.
 
 ## Permissions
 
 SQLLoad creates databases and tables, inserts into its staging tables, moves partitions between
-tables (`ATTACH PARTITION`, `REPLACE PARTITION`), exchanges, renames and drops tables, and reads
+tables (`ATTACH PARTITION`, `REPLACE PARTITION`, `DROP PARTITION`), exchanges, renames and drops tables, and reads
 files with the `s3` table function. The user needs the grants for these in the target's databases.
 
 `sqlload debug` checks the connection, and prints the user, the server's version and its time zone.
@@ -123,7 +123,7 @@ SQLLoad reads the files itself and sends Arrow instead when ClickHouse wouldn't 
 | `replace` | Builds a new table and swaps it in with `EXCHANGE TABLES`. `--reload` does the same. |
 
 `merge` and `delete_insert` rewrite whole partitions. One partition is rebuilt beside the table and
-swapped in with `REPLACE PARTITION`. Several are rebuilt in a copy that hard-links the table's
+swapped in with `REPLACE PARTITION`, or dropped with `DROP PARTITION` when none of its rows remain. Several are rebuilt in a copy that hard-links the table's
 other parts, then exchanged in at once.
 
 `merge` matches rows on `unique_key` exactly, so readers need no `FINAL`. It replaces whole rows,
@@ -176,9 +176,10 @@ incompatible rather than load into them.
 
 ## Tested
 
-Container tests run against ClickHouse 25.8 and an S3-compatible store. They load Postgres tables
-again and again under every write strategy: tables created with their layout, every portable type,
-`merge` moving a row between partitions with no `FINAL` needed, `replace` by exchange and by
+Container tests run against ClickHouse 25.8 and 26.10 and an S3-compatible store. They load
+Postgres tables again and again under every write strategy: tables created with their layout, every
+portable type, `merge` moving a row between partitions with no `FINAL` needed, `delete_insert`
+emptying a partition whose rows were deleted upstream, `replace` by exchange and by
 renames, a new source column, and no staging tables left behind. ClickHouse reads Parquet files in
 S3 itself; a time column goes through SQLLoad, and a folder value too large for its type fails the
 load. Loads and file reads stopped at every statement, then run again, never leave a table half

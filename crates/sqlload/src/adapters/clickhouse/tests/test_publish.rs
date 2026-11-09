@@ -61,7 +61,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             ],
         },
         PartitionStatementsTestCase {
-            description: "a partition whose window rows are all gone upstream is still rebuilt, from its kept rows alone",
+            description: "a partition whose window rows are all gone upstream is still rebuilt, from its kept rows alone, and dropped if none are kept",
             displaced: Some(WINDOW),
             new: &[],
             replaced: &["202402"],
@@ -69,7 +69,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
                 "DROP TABLE IF EXISTS `raw`.`c`",
                 "CREATE TABLE `raw`.`c` AS `raw`.`events`",
                 "INSERT INTO `raw`.`c` SELECT * FROM `raw`.`events` WHERE _partition_id IN ('202402') AND NOT ifNull(`day` >= CAST('2024-01-10' AS Date32), 0)",
-                "ALTER TABLE `raw`.`events` REPLACE PARTITION ID '202402' FROM `raw`.`c`",
+                "-- sqlload publish {\"ReplacePartition\":{\"target\":\"`raw`.`events`\",\"copy\":\"`raw`.`c`\",\"partition\":\"202402\"}}",
                 "DROP TABLE IF EXISTS `raw`.`c`",
             ],
         },

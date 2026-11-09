@@ -1,8 +1,12 @@
 //! Statements as the runner carries them out: sent as they are, or a publish step it carries out itself.
 
+use crate::adapters::clickhouse::_helpers::dialect::publish::{
+    partition_rows_query, replace_partition,
+};
 use crate::adapters::clickhouse::_helpers::session::http::send;
 use crate::adapters::clickhouse::constants::{EXCHANGE_UNSUPPORTED_CODES, PUBLISH_PREFIX};
-use crate::adapters::clickhouse::models::{ClickHouseDestination, PublishStep};
+use crate::adapters::clickhouse::models::{ClickHouseDestination, ClickHouseSql, PublishStep};
+use crate::adapters::contract::types::SqlAdapter;
 use crate::http::errors::ApiError;
 
 /// The publish step `statement` stands for, if it is one.
@@ -15,7 +19,7 @@ pub(crate) fn publish_step(statement: &str) -> Result<Option<PublishStep>, ApiEr
         .map_err(|error| ApiError::Protocol(format!("a malformed publish step: {error}")))
 }
 
-/// Run one statement, or the exchange it stands for; a partition publish here is a mistake, as it only follows from a write.
+/// Run one statement, or the exchange or partition replace it stands for; a partition publish here is a mistake, as it only follows from a write.
 pub(crate) async fn run_step(
     destination: &ClickHouseDestination,
     statement: &str,
@@ -29,6 +33,11 @@ pub(crate) async fn run_step(
             build,
             aside,
         }) => exchange(destination, (&target, &build, &aside)).await,
+        Some(PublishStep::ReplacePartition {
+            target,
+            copy,
+            partition,
+        }) => replace_or_drop(destination, (&target, &copy, &partition)).await,
         Some(PublishStep::Partitions { .. }) => Err(ApiError::Protocol(
             "a partition publish cannot run inside another".to_owned(),
         )),
@@ -67,4 +76,27 @@ pub(crate) async fn exchange(
         }
         Err(error) => Err(error),
     }
+}
+
+/// Replace `target`'s `partition` with `copy`'s, or drop it when `copy` holds none of its rows, as ClickHouse 26.6 and later refuse to replace a partition from a table with no parts in it; either way one statement, so readers see the old partition or the new.
+async fn replace_or_drop(
+    destination: &ClickHouseDestination,
+    (target, copy, partition): (&str, &str, &str),
+) -> Result<(), ApiError> {
+    let counted = send(
+        destination,
+        None,
+        partition_rows_query(copy, partition).into_bytes(),
+    )
+    .await?;
+    let statement = match counted.trim() {
+        "0" => format!(
+            "ALTER TABLE {target} DROP PARTITION ID {}",
+            ClickHouseSql.render_loader_value_literal(partition)
+        ),
+        _ => replace_partition(target, copy, partition),
+    };
+    send(destination, None, statement.into_bytes())
+        .await
+        .map(|_| ())
 }
