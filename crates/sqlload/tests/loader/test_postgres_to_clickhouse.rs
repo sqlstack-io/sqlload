@@ -99,7 +99,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
             LoadRunTestCase {
                 description: "the first load creates each table with its layout: partitions, sorting key and Nullable columns",
                 source_change: "",
-                check_query: "SELECT partition_key || ' / ' || sorting_key || ' / ' || engine FROM system.tables WHERE database = 'raw' AND name = 'app__accounts'",
+                check_query: "SELECT partition_key || ' / ' || trim(BOTH '()' FROM sorting_key) || ' / ' || engine FROM system.tables WHERE database = 'raw' AND name = 'app__accounts'",
                 expected_result: "toYYYYMM(updated_at) / id / MergeTree",
             },
             LoadRunTestCase {
@@ -131,6 +131,12 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 source_change: "INSERT INTO public.events VALUES (4, 'reopen', '2026-11-03');",
                 check_query: "SELECT arrayStringConcat(groupArray(r), ',') FROM (SELECT toString(event_id) || ':' || kind AS r FROM raw.app__events ORDER BY event_id)",
                 expected_result: "1:open,2:close,3:open,4:reopen",
+            },
+            LoadRunTestCase {
+                description: "delete_insert empties a month whose rows the source deleted, though the copy then holds none of that partition (which ClickHouse 26.6 and later refuse to replace from)",
+                source_change: "DELETE FROM public.events WHERE day >= '2026-11-01';",
+                check_query: "SELECT arrayStringConcat(groupArray(r), ',') || ' / ' || toString(uniqExact(_partition_id)) FROM (SELECT toString(event_id) || ':' || kind AS r, _partition_id FROM raw.app__events ORDER BY event_id)",
+                expected_result: "1:open,2:close / 1",
             },
             LoadRunTestCase {
                 description: "append adds the new rows' partition and keeps the old",

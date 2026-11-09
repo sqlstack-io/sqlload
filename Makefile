@@ -1,7 +1,9 @@
 SHELL := /bin/bash
 FENSU := uvx --from 'fensu-cli==0.28.3' --with 'fensu==0.28.3' fensu
+# The newer ClickHouse server the ClickHouse tests also run against, beside the oldest one (25.8).
+CLICKHOUSE_LATEST := 26.10
 
-.PHONY: check check-ci clean-partial-duckdb-sources test test-unit test-containers test-python verify bench-perf bench-wheel bench-compare bench-snowflake bench-e2e test-bench-harness
+.PHONY: check check-ci clean-partial-duckdb-sources test test-unit test-containers test-clickhouse-latest test-python verify bench-perf bench-wheel bench-compare bench-snowflake bench-e2e test-bench-harness
 
 # Lints the default build (DuckDB included) and the build without DuckDB, so both keep compiling.
 check:
@@ -35,6 +37,10 @@ clean-partial-duckdb-sources:
 test-containers:
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,odbc --test exporter --quiet -- --test-threads=2
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,odbc --test loader --quiet -- --test-threads=2
+
+# The ClickHouse container tests again, on the newer server.
+test-clickhouse-latest:
+	SQLLOAD_TEST_CLICKHOUSE_TAG=$(CLICKHOUSE_LATEST) AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,odbc --test loader --quiet -- to_clickhouse --test-threads=2
 
 # Builds the sqlload extension (debug) into .venv and runs the package's tests.
 test-python:

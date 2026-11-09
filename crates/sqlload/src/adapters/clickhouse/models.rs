@@ -42,6 +42,12 @@ pub enum PublishStep {
         build: String,
         aside: String,
     },
+    /// Replace `target`'s partition `partition` (its ID) with `copy`'s, or drop it when `copy` holds none of its rows: ClickHouse 26.6 and later refuse to replace a partition from a table with no parts in it.
+    ReplacePartition {
+        target: String,
+        copy: String,
+        partition: String,
+    },
     /// Publish the rows of `delta` (a table in `target`'s shape) into `target`, partition by partition. With `displaced`, a condition on `target`'s rows, the rows it holds are replaced: each partition the delta or those rows touch is rebuilt in `copy` from its kept rows and the delta's, then swapped in. Without it the delta's partitions are added. `aside` is where a rename swap of `copy` moves the old table.
     Partitions {
         target: String,
