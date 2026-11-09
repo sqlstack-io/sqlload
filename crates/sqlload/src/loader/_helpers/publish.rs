@@ -121,7 +121,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use crate::loader::_helpers::table_plan::{is_direct, pulls_unloaded};
+use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself).
 fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
@@ -383,7 +383,7 @@ impl Publisher {
         bytes >= self.batch_bytes
     }
 
-    /// A point where the rows so far may commit, replacing `range` under `delete_insert`: the batch is loaded (one `COPY` for all its files), then committed unless the table commits only at the end, or is logged and its `ctx.state` has not changed since the last commit (its rows then wait in the staging table).
+    /// A point where the rows so far may commit, replacing `range` under `delete_insert`: the batch is loaded (one `COPY` for all its files), then committed unless the table commits only at the end (a `replace`, or a `delete_insert` the warehouse publishes once, see [`publishes_once`]), or is logged and its `ctx.state` has not changed since the last commit (its rows then wait in the staging table).
     pub(crate) async fn cut(&mut self, range: CommitRange) -> Result<(), LoaderError> {
         self.flush_batch().await?;
         let unfinished = self.partition_unfinished(&range)?;
@@ -398,7 +398,7 @@ impl Publisher {
             (_, range) => range,
         });
         let unchanged = self.run.is_some() && self.state == self.committed_state;
-        if self.direct || self.at_end || unchanged || unfinished {
+        if self.direct || self.at_end || unchanged || unfinished || publishes_once(&self.table) {
             return Ok(());
         }
         self.commit(false).await

@@ -824,6 +824,16 @@ fn reader_offer(
     }
 }
 
+/// Whether `table`, a `delete_insert` read in windows or cursor-ordered batches, stages them all and publishes once at the end (see [`publishes_ranges_once`](crate::adapters::contract::types::SqlAdapter::publishes_ranges_once)); a files source's groups still commit one by one, as their values would not fit one statement.
+pub(crate) fn publishes_once(table: &TablePlan) -> bool {
+    matches!(table.mode, WriteMode::DeleteInsert { .. })
+        && matches!(
+            table.commits,
+            CommitRule::Windows(_) | CommitRule::Ordered { .. }
+        )
+        && sql_adapter(table.spec.warehouse).publishes_ranges_once()
+}
+
 /// Whether `route` has the destination load a warehouse source's unloaded files itself.
 pub(crate) fn pulls_unloaded(route: Option<&Route>) -> bool {
     route.is_some_and(|route| {
