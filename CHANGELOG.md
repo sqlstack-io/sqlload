@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.33.1](https://github.com/sqlstack-io/sqlload/compare/v0.33.0...v0.33.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **clickhouse:** drop a partition the window empties instead of replacing it (ClickHouse 26.6 and later refuse the replace) ([#163](https://github.com/sqlstack-io/sqlload/issues/163)) ([36b45b4](https://github.com/sqlstack-io/sqlload/commit/36b45b45e4ee5c3d25cc092863f5c8f99a76cabc))
+* **clickhouse:** keep rebuilding partitions from their kept rows on servers before 25.5 ([#166](https://github.com/sqlstack-io/sqlload/issues/166)) ([4ea0770](https://github.com/sqlstack-io/sqlload/commit/4ea0770425d570f437c45197027d5c93baf80e9a))
+* **clickhouse:** read a NULL as NULL, so plan works on an empty table with a cursor ([#167](https://github.com/sqlstack-io/sqlload/issues/167)) ([238364e](https://github.com/sqlstack-io/sqlload/commit/238364e92dad73cc06c6ff20de64d811ea6f7929))
+
+
+### Performance Improvements
+
+* **clickhouse:** hard-link touched partitions and delete the replaced rows instead of copying kept rows (ClickHouse 25.5 and later) ([8437246](https://github.com/sqlstack-io/sqlload/commit/84372464ff8ae2232ac5a3c88a2367fe55a59155))
+
 ## [0.33.0](https://github.com/sqlstack-io/sqlload/compare/v0.32.0...v0.33.0) (2026-11-09)
 
 
