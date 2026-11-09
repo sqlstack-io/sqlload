@@ -176,10 +176,11 @@ load_method = { type = "external_stage", url = "s3://example-bucket/", storage_i
 ```
 
 Into Snowflake, a column the direct `COPY` can't load exactly, such as `Float16` or a decimal over
-38 digits, fails `plan` and names it; files never fall back to SQLLoad, except `hmac`-masked ones,
-which go through SQLLoad because the key must never appear in SQL. DuckDB and ClickHouse read a
-table they can't load exactly through SQLLoad instead, such as another format or masked columns.
-`plan` warns about each slower route. See [Files into Snowflake](/docs/targets/snowflake/#files-into-snowflake),
-[DuckDB](/docs/targets/duckdb/) and
+38 digits, fails `plan` and names it. Only `hmac`-masked tables, whose key must never appear in SQL,
+and tables with `checks` go through SQLLoad instead. DuckDB and ClickHouse read a table they can't
+load exactly through SQLLoad instead, such as another format or masked columns. `plan` names each
+table's route on its `route` line. See
+[Files into Snowflake](/docs/targets/snowflake/#files-into-snowflake), [DuckDB](/docs/targets/duckdb/)
+and
 [Files ClickHouse reads itself](/docs/targets/clickhouse/#files-clickhouse-reads-itself) for what
 each one reads.
