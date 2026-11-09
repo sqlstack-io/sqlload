@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.30.0](https://github.com/sqlstack-io/sqlload/compare/v0.29.0...v0.30.0) (2026-11-09)
+
+
+### Features
+
+* **bigquery:** a BigQuery source through the Storage Read API ([9e71946](https://github.com/sqlstack-io/sqlload/commit/9e71946e95039b1742ad220f04b0604afb0e9770))
+
+
+### Bug Fixes
+
+* **loader:** numeric cursor bounds compare as bare numbers ([fc91743](https://github.com/sqlstack-io/sqlload/commit/fc91743f63d103695670e47ef38c03a9261b72eb))
+* **odbc:** bind text cursor bounds as parameters (affects 0.27.0–0.29.0: on a database that reads backslash escapes, a text cursor maximum holding a backslash made later incremental loads of that table fail, and other escapes could skip rows or read them again) ([#153](https://github.com/sqlstack-io/sqlload/issues/153)) ([82678f2](https://github.com/sqlstack-io/sqlload/commit/82678f20ae743535cc6eb627171f1c01b9465646))
+* **snowflake:** escape backslashes in source cursor bounds (affects 0.26.0–0.29.0: a text cursor maximum holding a backslash made later incremental loads of that table fail, and other escapes could skip rows or read them again) ([9c97c62](https://github.com/sqlstack-io/sqlload/commit/9c97c62e847ec36374c9c05248459c1dc09d1ad3))
+
 ## [0.29.0](https://github.com/sqlstack-io/sqlload/compare/v0.28.0...v0.29.0) (2026-11-09)
 
 
