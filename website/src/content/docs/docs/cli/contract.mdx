@@ -8,7 +8,8 @@ sqlload contract diff     [SELECTOR ...] [OPTIONS]
 sqlload contract generate [SELECTOR ...] [OPTIONS] [--write [--overwrite]]
 ```
 
-Both read the warehouse's catalog, and list sources to find their tables. They load no rows. See
+Both read the warehouse's catalog, and list sources to find their tables; CSV and JSON files are
+sampled for their columns, as `plan` does. They load no rows. See
 [Contracts](/docs/concepts/contracts/) for what declared columns do.
 
 ## contract diff
@@ -38,10 +39,22 @@ A type agrees when the warehouse stores it the same way, so `varchar(50)` matche
 | `files_type_mismatch` | With `--all-files`: files holding a column as another type. |
 | `files_missing_column` | With `--all-files`: files without a column. |
 | `files_extra_column` | With `--all-files`: a column only older files hold. |
+| `source_new_column` | With `--source`: a column the source has that the table lacks. |
+| `source_type_mismatch` | With `--source`: a column the source would load as a type the live column doesn't hold as it is. |
+| `source_missing_column` | With `--source`: a live column the source no longer has. |
 | `inspection_unavailable` | The table couldn't be read, such as a file or store error. |
 
 It exits 0 when every table agrees, and 1 otherwise, including when a source can't be listed or a
 selector matches nothing.
+
+### Comparing with the source
+
+`--source` also compares what each table's source would load with the live table, for the columns
+no declaration names. It reads the catalog or file footers `plan` lists, and no rows. In `--json`,
+its findings carry a `source_type` field. Tables under `contract = "enforced"` add none, since
+their declaration decides what loads. A Python table's columns are known only when it runs, so it's
+`inspection_unavailable` under `--source`, and the command exits 1: declare its columns, leave it
+out with `--exclude`, or compare after a load.
 
 ## contract generate
 
@@ -74,7 +87,11 @@ Run contract generate --write to update sqlload.toml.
   decorator.
 - A table found by an `include` pattern with no description isn't written, since its new entry
   would need one.
-- Masked columns stay under `mask`.
+- A database or files table declares only columns its source has, spelled as the source spells
+  them. Masked columns stay under `mask`.
+- Adopted columns become pinned types, so a CSV or JSON source converts them while reading.
+- With `--from`, a table whose own target is another kind of warehouse isn't adopted, since its
+  types could be ones its own warehouse can't take.
 
 The exit code is that of `diff`, after the write.
 
@@ -82,9 +99,10 @@ The exit code is that of `diff`, after the write.
 
 | Option | Meaning |
 |--------|---------|
-| `SELECTOR ...`, `-s`, `--select`, `--exclude` | Tables to compare, as for [`plan`](/docs/cli/plan-apply-load/#options). |
+| `SELECTOR ...`, `-s`, `--select`, `--exclude` | Tables to compare, as for [`plan`](/docs/cli/plan/#selecting-tables). |
 | `--from <TARGET>` | Read every table as if its source loaded into this target, in its database and schema. Declared types are read for that warehouse. |
 | `--json` | Print the report as one JSON document. |
+| `--source` | Also report where what each table's source would load differs from the live table, for columns no declaration names. See [Comparing with the source](#comparing-with-the-source). |
 | `--all-files` | On files targets, also read every file's footer under the table's folder, and report files whose columns differ from the newest load. |
 | `--write` | `generate` only: write the declarations into `sqlload.toml`. |
 | `--overwrite` | `generate` only, with `--write`: also retype and remove declared columns. |

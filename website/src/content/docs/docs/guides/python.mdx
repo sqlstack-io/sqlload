@@ -72,7 +72,8 @@ loader_schema = "raw"
 ```
 
 Every `sqlload.source` and `@source.table` found there joins `plan`, `apply` and `load`. Declaring
-one never runs it: the function runs only when its table loads.
+one never runs it: the function runs only when its table loads. `apply` never creates a Python
+table; its first load does.
 
 ```python
 import sqlload as sl
@@ -191,7 +192,7 @@ loaded   raw.shop__orders       5 rows  1.0s
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
 | `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](/docs/sources/python/#fields). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list of values. |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. |
 
 | Paginator | Next page |
 |-----------|-----------|
@@ -219,6 +220,28 @@ loaded   raw.shop__orders       5 rows  1.0s
   body, with the connection's secrets replaced by `***`.
 - A job's rows never come back into Python. Reading a row from a job fails (rule
   `python_row_loop`); filter rows downstream.
+
+### Incremental requests
+
+`params` are query parameters sent with every request. Pass `ctx.cursor_value` to ask the API only
+for what changed since the last load. Dates and timestamps are sent as ISO 8601 text. A parameter
+whose value is `None`, as on the first run, is left out:
+
+```python
+@shop.table(
+    description="Orders, one row per order.",
+    unique_key="order_id",
+    cursor_column="updated_at",
+    columns={"updated_at": "timestamp_tz"},
+)
+def orders(ctx):
+    return api.paginate(
+        "/orders",
+        params={"updated_after": ctx.cursor_value},
+        paginator=sl.next_link("$.next"),
+        select="$.items",
+    )
+```
 
 ### OAuth2
 
