@@ -92,7 +92,7 @@ fn given_a_schema_when_listing_its_staging_tables_then_snowflake_names_its_datab
         StagingIdTestCase {
             description: "DuckDB reads its own catalog",
             load_id: "",
-            expected_name: "SELECT table_name FROM information_schema.tables WHERE table_schema = 'raw' AND table_name ILIKE '%__sqlload_staging_%'",
+            expected_name: "SELECT table_name FROM information_schema.tables WHERE table_schema = 'raw' AND table_catalog = current_database() AND table_name ILIKE '%__sqlload_staging_%'",
         },
         StagingIdTestCase {
             description: "Snowflake names the connection's database and chooses by last_altered, with no wildcards",

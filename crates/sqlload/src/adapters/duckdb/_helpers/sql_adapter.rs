@@ -25,4 +25,12 @@ impl SqlAdapter for DuckDbSql {
     fn widens_in_place(&self, _live: &ColumnType, _target: &ColumnType) -> bool {
         true
     }
+
+    /// Only the current database's staging tables: MotherDuck attaches the account's other databases too.
+    fn render_staging_filter(&self, suffix: &str) -> String {
+        format!(
+            "table_catalog = current_database() AND table_name ILIKE {}",
+            self.render_loader_value_literal(&format!("%{suffix}%"))
+        )
+    }
 }

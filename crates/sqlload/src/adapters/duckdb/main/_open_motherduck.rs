@@ -1,7 +1,7 @@
 //! Open a MotherDuck database.
 
 use crate::adapters::duckdb::constants::{
-    EXTENSION_EXCEPTION, MOTHERDUCK_PREFIX, MOTHERDUCK_TOKEN_VARIABLES,
+    EXTENSION_EXCEPTION, MOTHERDUCK_PREFIX, MOTHERDUCK_PREFIXES, MOTHERDUCK_TOKEN_VARIABLES,
     MOTHERDUCK_UNSUPPORTED_DUCKDB,
 };
 use crate::adapters::duckdb::errors::DuckDbError;
@@ -14,34 +14,52 @@ pub(in crate::adapters) fn open_motherduck(
     database: Option<&str>,
     token: Option<&Secret>,
 ) -> Result<DuckDbDestination, DuckDbError> {
-    let database = database.unwrap_or_default();
-    let shown = format!(
-        "{MOTHERDUCK_PREFIX}{}",
-        database.strip_prefix(MOTHERDUCK_PREFIX).unwrap_or(database)
-    );
-    let token = token
-        .map(|token| token.expose().to_owned())
-        .or_else(|| {
-            MOTHERDUCK_TOKEN_VARIABLES
-                .iter()
-                .find_map(|name| std::env::var(name).ok())
-        })
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| {
-            DuckDbError::MotherDuck(format!(
-                "{shown} needs an access token: set token in the connection, or the motherduck_token environment variable"
-            ))
-        })?;
-    let separator = match shown.contains('?') {
+    let shown = motherduck_path(database.unwrap_or_default())?;
+    let token = chosen_token(token, |name| std::env::var(name).ok()).ok_or_else(|| {
+        DuckDbError::MotherDuck(format!(
+            "{shown} needs an access token: set token in the connection, or the motherduck_token or MOTHERDUCK_TOKEN environment variable"
+        ))
+    })?;
+    let connection = duckdb::Connection::open(connection_string(&shown, &token))
+        .map_err(|error| refused(&error.to_string(), &token, &shown))?;
+    shared_destination(connection, true)
+}
+
+/// `database` as an `md:` path: its `md:` or `motherduck:` prefix replaced by `md:`. A token written into it is refused, as the path appears in messages.
+pub(in crate::adapters::duckdb) fn motherduck_path(database: &str) -> Result<String, DuckDbError> {
+    let name = MOTHERDUCK_PREFIXES
+        .iter()
+        .find_map(|prefix| database.strip_prefix(prefix))
+        .unwrap_or(database);
+    if name.contains("motherduck_token") {
+        return Err(DuckDbError::MotherDuck(
+            "a motherduck connection's database holds a token; set it in token instead".to_owned(),
+        ));
+    }
+    Ok(format!("{MOTHERDUCK_PREFIX}{name}"))
+}
+
+/// The token to sign in with: `token`, else the first non-empty variable of `MOTHERDUCK_TOKEN_VARIABLES` that `variable` reads.
+pub(in crate::adapters::duckdb) fn chosen_token(
+    token: Option<&Secret>,
+    variable: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    match token {
+        Some(token) => Some(token.expose().to_owned()),
+        None => MOTHERDUCK_TOKEN_VARIABLES
+            .iter()
+            .find_map(|name| variable(name).filter(|token| !token.is_empty())),
+    }
+    .filter(|token| !token.is_empty())
+}
+
+/// The connection string DuckDB opens: `path` with the percent-encoded `token` as its `motherduck_token` option.
+pub(in crate::adapters::duckdb) fn connection_string(path: &str, token: &str) -> String {
+    let separator = match path.contains('?') {
         true => '&',
         false => '?',
     };
-    let connection = duckdb::Connection::open(format!(
-        "{shown}{separator}motherduck_token={}",
-        query_value(&token)
-    ))
-    .map_err(|error| refused(&error.to_string(), &token, &shown))?;
-    shared_destination(connection, true)
+    format!("{path}{separator}motherduck_token={}", query_value(token))
 }
 
 /// Why `shown` did not open, from DuckDB's `error` with `token` taken out: MotherDuck's own words when its extension refuses this DuckDB version.

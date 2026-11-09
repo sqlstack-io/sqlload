@@ -48,6 +48,9 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
+A MotherDuck target (beta, from 0.33.0, not released yet) takes every source a DuckDB target
+takes, untested, but always through SQLLoad: files are read by SQLLoad, never by MotherDuck.
+
 From 0.27.0, a files source loads into a files target, read and rewritten
 by SQLLoad. Before, `plan` refused it. `merge` isn't available for files sources or files
 targets. Google Sheets tables reach every target through the same Arrow path; the tests load
@@ -62,7 +65,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 | Postgres | Real Postgres in containers, as a source and as a target. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB, Snowflake and Databricks. See [Postgres](/docs/targets/postgres/#tested). |
 | ClickHouse | Real ClickHouse 25.8 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
 | DuckDB | Real, in process. |
-| MotherDuck | Not tested against a live MotherDuck account: the connection settings, the refusals (no token, MotherDuck's version message) and the Arrow-only route are tested offline, and MotherDuck's real extension was checked refusing DuckDB 2.0.0. |
+| MotherDuck | Not tested against a live MotherDuck account. Offline tests cover the connection's `database` and token settings, the refusals (no token, MotherDuck's version message), the Arrow-only route, and loads naming only the current database. MotherDuck's real extension was checked refusing DuckDB 2.0.0. |
 | ODBC | psqlODBC against real Postgres in containers, into DuckDB. |
 | BigQuery source | A fake Storage Read API in tests (parallel streams, a broken stream resumed, cursor filters), and live loads from a sandbox project into DuckDB: tables, views, query tables, and integer, timestamp, text, `NUMERIC` and `BIGNUMERIC` cursors. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |

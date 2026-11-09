@@ -17,7 +17,7 @@ message:
 
 ```console
 $ sqlload debug
-fail  target cloud  MotherDuck: cannot open md:analytics: MotherDuck doesn't accept the DuckDB version this SQLLoad bundles yet, so no SQLLoad release can connect to it until it does. MotherDuck says: Your DuckDB version (v2.0.0) is not yet supported by MotherDuck. …
+fail  target shop  MotherDuck: cannot open md:shop: MotherDuck doesn't accept the DuckDB version this SQLLoad bundles yet, so no SQLLoad release can connect to it until it does. MotherDuck says: Your DuckDB version (v2.0.0) is not yet supported by MotherDuck. …
 ```
 
 MotherDuck lists the client versions it supports in
@@ -26,24 +26,26 @@ MotherDuck lists the client versions it supports in
 ## Connection
 
 ```toml
-[connections.cloud]
+[connections.shop]
 kind = "motherduck"
-database = "analytics"
+database = "shop"
 token = "${ENV:MOTHERDUCK_TOKEN}"
 
-[targets.cloud]
-connection = "cloud"
+[targets.shop]
+connection = "shop"
 loader_schema = "raw"
 ```
 
 | Key | Meaning |
 |-----|---------|
-| `database` | The MotherDuck database, with or without `md:`. Default: the account's default database. |
+| `database` | The MotherDuck database, with or without `md:`. Default: the account's default database. It can't hold the token. |
 | `token` | A MotherDuck access token. Use `${ENV:NAME}`. Default: the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable. |
 
-A target's `database` overrides the connection's, so one connection can serve, say, a `dev` and a
-`prod` database. Without a token SQLLoad refuses the connection rather than wait for MotherDuck's
-browser sign-in. The first connection installs MotherDuck's DuckDB extension into `~/.duckdb`,
+A target's `database` overrides the connection's, so one connection can serve, say, a `shop_dev`
+and a `shop` database. Tables load into that database only, even though MotherDuck attaches the
+account's other databases too. Without a token SQLLoad refuses the connection rather than wait for
+MotherDuck's browser sign-in. A `duckdb` connection refuses an `md:` path; use
+`kind = "motherduck"`. The first connection installs MotherDuck's DuckDB extension into `~/.duckdb`,
 which needs the network once.
 
 ## How data arrives

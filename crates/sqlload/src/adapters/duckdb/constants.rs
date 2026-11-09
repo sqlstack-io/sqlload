@@ -1,5 +1,5 @@
-/// Columns of one table, in table order.
-pub const DESCRIBE_TABLE_SQL: &str = "SELECT column_name, data_type, numeric_precision, numeric_scale, character_maximum_length FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position";
+/// Columns of one table in the current database (MotherDuck attaches the account's other databases too), in table order.
+pub const DESCRIBE_TABLE_SQL: &str = "SELECT column_name, data_type, numeric_precision, numeric_scale, character_maximum_length FROM information_schema.columns WHERE table_catalog = current_database() AND table_schema = ? AND table_name = ? ORDER BY ordinal_position";
 /// A table's `CREATE TABLE` statement, by schema and name.
 pub const DEFINITION_QUERY: &str = "SELECT sql FROM duckdb_tables() WHERE database_name = current_database() AND lower(schema_name) = lower(?) AND lower(table_name) = lower(?)";
 /// The `CREATE INDEX` statements of a table's indexes, by schema and name.
@@ -8,6 +8,8 @@ pub const INDEXES_QUERY: &str = "SELECT sql FROM duckdb_indexes() WHERE database
 pub const UTC_OFFSET: &str = "+00";
 /// The start of a MotherDuck database's path.
 pub const MOTHERDUCK_PREFIX: &str = "md:";
+/// The starts of a DuckDB path that opens MotherDuck: `md:` and its alias.
+pub const MOTHERDUCK_PREFIXES: &[&str] = &["md:", "motherduck:"];
 /// The environment variables a MotherDuck token is taken from when the connection sets none, in order.
 pub const MOTHERDUCK_TOKEN_VARIABLES: &[&str] = &["motherduck_token", "MOTHERDUCK_TOKEN"];
 /// Part of the message MotherDuck's extension refuses to load with on a DuckDB version it does not support.

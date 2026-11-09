@@ -164,7 +164,11 @@ pub(crate) fn source_target(
     Ok(ResolvedTarget {
         name,
         warehouse,
-        database: target.database.clone().or(database),
+        // A MotherDuck connection opens the target's database as its current one, and its name is no catalog name (`md:` and options), so tables are named without it.
+        database: match connection {
+            ConnectionConfig::MotherDuck { .. } => None,
+            _ => target.database.clone().or(database),
+        },
         schema,
         path: None,
     })
