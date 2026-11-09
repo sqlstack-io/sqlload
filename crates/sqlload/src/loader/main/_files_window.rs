@@ -8,7 +8,7 @@ use crate::adapters::files::main::cursor_maximum::cursor_maximum;
 use crate::adapters::files::main::partition_window::partition_window;
 use crate::adapters::files::models::{PartitionBy, PartitionWindowRequest};
 use crate::column_types::models::ColumnType;
-use crate::loader::_helpers::table_plan::{Window, numeric_cursor, source_cursor, source_filter};
+use crate::loader::_helpers::table_plan::{Window, source_cursor, source_filter};
 use crate::loader::constants::{EXCLUSIVE_BOUND, INCLUSIVE_BOUND};
 use crate::loader::models::FilesWindowRequest;
 use crate::project::models::WriteStrategy;
@@ -136,7 +136,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
     Ok(Window {
         filter: source_filter(
             &expression,
-            numeric_cursor(cursor_type),
+            (Some(cursor_type), None),
             from.as_deref().map(|from| (operator, from)),
             to.as_deref(),
         ),
