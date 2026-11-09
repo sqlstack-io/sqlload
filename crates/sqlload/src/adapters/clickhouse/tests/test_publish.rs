@@ -47,6 +47,21 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             ],
         },
         PartitionStatementsTestCase {
+            description: "a write into two partitions displacing no rows hard-links the table, deletes nothing and exchanges it in",
+            displaced: Some(WINDOW),
+            new: &["202401", "202402"],
+            replaced: &[],
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`c`",
+                "CREATE TABLE `raw`.`c` AS `raw`.`events`",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ALL FROM `raw`.`events`",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ID '202401' FROM `raw`.`d`",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ID '202402' FROM `raw`.`d`",
+                EXCHANGE,
+                "DROP TABLE IF EXISTS `raw`.`c`",
+            ],
+        },
+        PartitionStatementsTestCase {
             description: "a window in one partition hard-links it beside the table, deletes the window there, attaches the delta's rows and replaces it",
             displaced: Some(WINDOW),
             new: &["202401"],
@@ -62,7 +77,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             ],
         },
         PartitionStatementsTestCase {
-            description: "a merge displacing no rows hard-links the partition, deletes nothing and replaces it with the delta's rows added",
+            description: "a write displacing no rows hard-links the partition, deletes nothing and replaces it with the delta's rows added",
             displaced: Some(WINDOW),
             new: &["202401"],
             replaced: &[],
