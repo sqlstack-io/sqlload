@@ -1,0 +1,129 @@
+---
+title: "BigQuery"
+description: "Load BigQuery tables, views and query results through the Storage Read API: connections, choosing tables, query tables, cursors, types, cost and permissions."
+---
+
+From sqlload 0.30.0 (not released yet), a `bigquery` source loads tables, views and query
+results from BigQuery. SQLLoad reads the rows as Arrow through the
+[Storage Read API](https://cloud.google.com/bigquery/docs/reference/storage), several streams at
+once, and loads them into the source's target. No bucket is needed.
+
+```toml
+[connections.bq]
+kind = "bigquery"
+location = "EU"
+service_account_key = "${ENV:BIGQUERY_KEY}"
+
+[sources.marts]
+kind = "bigquery"
+connection = "bq"
+description = "Tables of the marts datasets."
+include = ["marts.*"]
+exclude = ["marts.tmp_*"]
+
+[sources.marts.tables."marts.events"]
+description = "Events, one row per event."
+cursor_column = "event_at"
+write_strategy = "append"
+
+[sources.marts.tables.recent]
+description = "Orders of the last week, with their customer."
+sql = "SELECT o.*, c.name FROM marts.orders o JOIN marts.customers c USING (customer_id)"
+cursor_column = "ordered_at"
+write_strategy = "append"
+```
+
+```console
+$ sqlload plan
+Loads (2)                                           sqlload load
+├── marts__events                                   append (cursor: event_at)
+│   ├── source  bigquery  marts  marts.events
+│   ├── route   read as Arrow -> DuckDB takes Arrow
+│   └── cursor  event_at after 2026-11-08 23:59:58.120000+00 (destination maximum)
+└── marts__recent                                   append (cursor: ordered_at)
+    ├── source  bigquery  marts  query recent
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    └── cursor  ordered_at after 2026-11-08 23:41:07.500000+00 (destination maximum)
+```
+
+## Connection
+
+A source uses a [`bigquery` connection](/docs/targets/bigquery/#connection), the same kind a
+BigQuery target uses. Read sessions and query jobs are billed to the connection's `project`, and
+query jobs run in its `location`. The source's own `project` setting reads tables that live in
+another project:
+
+| Key | Meaning |
+|-----|---------|
+| `project` | The project the tables live in; the connection's when omitted. |
+
+## Choosing tables
+
+`include` and `exclude` are `dataset.table` patterns, such as `marts.*`. BigQuery names are
+case-sensitive, so the patterns are too. SQLLoad lists the datasets and tables from their metadata,
+which bills nothing. A `[sources.marts.tables."dataset.table"]` entry sets options for one table; on
+its own, it doesn't add the table.
+
+A source needs at least one `include` pattern or one query table. A table's primary key, if it
+declares one, becomes the table's default `unique_key`, and its description becomes the table's
+description.
+
+## How tables are read
+
+- **Tables** are read through a read session with the selected columns, split into up to eight
+  streams that SQLLoad reads in parallel. A cursor window becomes the session's row filter, so
+  BigQuery sends only the rows in it. Each table is read as of the moment its load starts, so
+  all of its cursor windows see the same data; different tables of one run can be read moments
+  apart.
+- **Views, materialized views and external tables** are read with a query job, whose result
+  is then read through a read session in the same way. They read the data as it is when the job
+  runs.
+- **Query tables** run as a query job too, and also read the data as it is when the job runs.
+
+## Query tables
+
+A table entry with `sql` is a query table: its rows are the query's result, and the entry's key is
+its name. At `plan`, SQLLoad describes the query with a dry run, which reads and bills nothing.
+
+`cursor_column` names a column of the query's result. SQLLoad wraps the query and filters on the
+cursor outside it, so the query needs no placeholder. Write the query in GoogleSQL, naming tables
+as `dataset.table` in the connection's project, or as `` `project.dataset.table` `` for another
+project, including the source's `project`.
+
+## Types
+
+| BigQuery type | Loads as |
+|---------------|----------|
+| `INT64` | `int` |
+| `NUMERIC(p,s)`, `BIGNUMERIC(p,s)`, p up to 38 | `decimal(p,s)`; a `NUMERIC` with no precision is `decimal(38,9)` |
+| `FLOAT64` | `float` |
+| `BOOL` | `bool` |
+| `STRING`, `STRING(n)` | `text`, `varchar(n)` |
+| `BYTES` | `binary` |
+| `DATE`, `TIME`, `DATETIME` | `date`, `time`, `timestamp_ntz` |
+| `TIMESTAMP` | `timestamp_tz`, in UTC |
+| `JSON`, `STRUCT`, `RANGE` | `json` |
+| `ARRAY<T>` | `json`, or [`array(T)`](/docs/types/#arrays) when pinned |
+| `GEOGRAPHY` | `text`, as WKT |
+| `BIGNUMERIC` with no precision | none: pin a `decimal(p,s)` its values fit, or `text` |
+| `INTERVAL` | none: pin `text`, which writes it as `14 mons 3 days 4 hours 5 mins 6.500000000 secs`, or exclude the column |
+
+Pin a type to load a column another way, such as `columns = { total = "decimal(18,2)" }`. A value
+that doesn't convert to the pinned type fails the read, naming the column, rather than loading as
+NULL. A pinned `decimal` with fewer decimal places than the values rounds them, half away from
+zero; if that column is also the cursor, rows between a value and its rounded maximum are skipped
+by the next read, so pin a cursor's decimal wide enough. NaN and infinities inside a repeated
+`FLOAT64` load as `null` in its JSON. See
+[Types](/docs/types/).
+
+## Cost
+
+Read sessions bill the bytes of the columns and rows they read; the first 300 TB a month are free.
+Views and query tables also bill their query job. Listing tables, describing them and dry runs
+bill nothing.
+
+## Permissions
+
+The service account needs `bigquery.readSessionUser` on the connection's project, and
+`bigquery.dataViewer` on the datasets it reads. Views and query tables also need
+`bigquery.jobUser` on the connection's project.

@@ -119,6 +119,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         string_literal(text)
     }
 
+    /// A numeric cursor's bound `value`, a plain decimal number, as a source filter compares it with a column of `column_type`: bare.
+    fn render_cursor_number(&self, value: &str, _column_type: &ColumnType) -> String {
+        value.to_owned()
+    }
+
     /// How `plan` names the warehouse reading files itself: the verb for reading them in place, and the step loading them from a stage.
     fn render_read_words(&self) -> (&'static str, &'static str) {
         ("reads", "reads them")

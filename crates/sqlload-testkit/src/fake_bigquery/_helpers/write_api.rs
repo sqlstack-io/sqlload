@@ -391,13 +391,3 @@ impl FakeState {
         })
     }
 }
-
-/// Serve the Storage Write API on `listener` in the background.
-pub(crate) fn serve_write_api(listener: tokio::net::TcpListener, state: SharedState) {
-    tokio::spawn(async move {
-        let _ = tonic::transport::Server::builder()
-            .add_service(WriteService(state))
-            .serve_with_incoming(tonic::transport::server::TcpIncoming::from(listener))
-            .await;
-    });
-}
