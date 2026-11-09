@@ -50,7 +50,7 @@ with on the first load, when the table doesn't exist yet.
   the table doesn't load.
 - A source can set `checks` for all its tables. A table's own `checks` replaces the source's whole
   block, as other settings do.
-- [Python tables](/docs/guides/python/#settings) take the same setting, as `checks=`.
+- [Python tables](/docs/sources/python/#settings) take the same setting, as `checks=`.
 - Tables with checks always stage their rows. A files source the destination would read directly
   goes through SQLLoad instead, which is slower, and `plan` warns about it.
 - [Files targets](/docs/targets/files/) and [`postgres_cdc`](/docs/sources/postgres-cdc/) sources

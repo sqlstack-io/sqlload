@@ -171,7 +171,7 @@ From 0.27.0. See [ODBC](/docs/sources/odbc/#connection).
 
 ### `http`
 
-For [Python HTTP sources](/docs/guides/python/#http-apis); its settings reach table functions as
+For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach table functions as
 `ctx.connection`.
 
 | Key | Meaning |
@@ -263,7 +263,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `cursor_column` | none | The column runs continue from. See [Cursors](/docs/concepts/cursors/). |
 | `cursor_start` | none | Where the first run starts. |
 | `lookback` | none | Read this far before the maximum, such as `"2h"`. |
-| `lookback_from` | `destination` | From 0.26.0. `destination` (the destination's maximum) or `now`: what `lookback` counts back from. See [Read windows](/docs/sources/snowflake/#read-windows). |
+| `lookback_from` | `destination` | From 0.26.0. `destination` (the destination's maximum) or `now`: what `lookback` counts back from. See [Reload a window](/docs/guides/reload-a-window/). |
 | `lookahead` | none | From 0.26.0. Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. |
 | `append_cursor_inclusive` | `false` | Whether `append` reads from the maximum itself (inserting its rows again) rather than after it. |
 | `batch_size` | none | Commit one cursor window at a time: a duration (`"1d"`) or an integer step, or `"none"`. |
@@ -295,5 +295,5 @@ Only in a table entry:
 | `mask` | Masked columns: `{ email = "hmac" }` or `"hash"`. |
 | `exclude_columns`, `allow_columns`, `destination_path` | As on the source, for this table. |
 
-Python tables take the same settings as decorator arguments, plus `allow_empty`, `state` and
-`flatten`. See [Python sources](/docs/guides/python/#settings).
+Python tables take the same settings as decorator arguments, except `lookahead` and
+`lookback_from`, which they refuse, plus `allow_empty`, `state` and `flatten`. See [Python sources](/docs/sources/python/#settings).

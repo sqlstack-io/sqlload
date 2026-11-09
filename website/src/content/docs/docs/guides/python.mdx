@@ -39,7 +39,8 @@ def orders(ctx):
 ```
 
 The same holds for JSON you already have as bytes: yield `sl.json(data)` or `sl.ndjson(data)`
-and the bytes are parsed in Rust. See [HTTP APIs](#http-apis) for the full reference.
+and the bytes are parsed in Rust. See [HTTP APIs](#http-apis) below, and the
+[`sl.http` reference](/docs/sources/python/#http-apis).
 
 ## Describe the job, or yield the rows
 
@@ -108,37 +109,15 @@ The table loads into `shop__orders`: `{source}__{table}`, unless the source or t
 `table_name`. A `@sl.table` declared without a source keeps its own name. Table names are unique
 across the project.
 
-## Declaring
-
-| Function | Returns |
-|----------|---------|
-| `sl.source(name, *, description=None, **settings)` | A `Source`. `settings` are its `connection`, `destination`, `schema` and the defaults its tables share. |
-| `@source.table` or `@source.table(*, name=None, description=None, **settings)` | A `Table` attached to the source. |
-| `@sl.table` or `@sl.table(...)` | A standalone `Table`, with the target's defaults. |
-| `@source.client` | Declares a client the source's tables share as `ctx.client`, built once per run. |
-
 A table's description is `description=`, or else the function's docstring; `plan` requires one.
-Unknown settings raise `TypeError` when the module is imported.
-
-### Settings
-
-| Setting | On | Meaning |
-|---------|----|---------|
-| `write_strategy`, `unique_key`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings). |
-| `contract`, `on_schema_change`, `auto_widen`, `type_change_rebuild` | source or table | See [Contracts](/docs/concepts/contracts/). |
-| `checks` | source or table | Checks on the staged rows, such as `{"unique": ["order_id"]}`. See [Checks before publish](/docs/concepts/checks/). |
-| `allow_empty` | source or table | Let `replace` empty a table when the function yields no rows. |
-| `state` | source or table | `"logged"` to keep a position in `ctx.state`. See [Logged state](/docs/concepts/cursors/#logged-state). |
-| `columns` | table | Pinned column types, such as `{"total": "decimal(18,2)"}`. |
-| `flatten` | table | Top-level objects to expand one level into `<object>__<key>` columns. |
-| `mask`, `exclude_columns`, `allow_columns` | table (the last two also source) | As for other sources. |
-| `table_name`, `destination_path` | source or table | Destination name template, and folder in a files target. |
-| `connection`, `destination`, `schema`, `mask_key`, `parallel_tables` | source | Its connection, target, schema, HMAC key, and whether tables sharing a client may load at once. |
+Every declaring function and setting is under [Declaring](/docs/sources/python/#declaring) in the
+Python API.
 
 ## HTTP APIs
 
-The full `sl.http` reference. Every job below runs in Rust, as described in
-[Describe the job, or yield the rows](#describe-the-job-or-yield-the-rows).
+Describe a REST API with `sl.http`, and every request runs in Rust, as described in
+[Describe the job, or yield the rows](#describe-the-job-or-yield-the-rows). The connection holds
+the base URL and credentials:
 
 ```toml
 [connections.shop]
@@ -188,38 +167,9 @@ loaded   raw.shop__orders       5 rows  1.0s
 ✓ Completed  2 loaded, 15 rows, 1.2s
 ```
 
-| Function | Meaning |
-|----------|---------|
-| `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
-| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](/docs/sources/python/#fields). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. |
-
-| Paginator | Next page |
-|-----------|-----------|
-| `sl.single()` | None: one request. |
-| `sl.next_link(pointer)` | The URL at `pointer` in the body, such as `"$.next"`. |
-| `sl.link_header()` | The `Link` header's `rel="next"`. |
-| `sl.offset(param="offset", *, limit, limit_param="limit")` | Counts rows by `limit`; ends at a short page. |
-| `sl.page_number(param="page", *, start=1)` | Counts pages; ends at an empty page. |
-| `sl.cursor(pointer, param)` | The token at `pointer` goes back as `param`. |
-
-| Auth | Sends |
-|------|-------|
-| `sl.bearer()` | `Authorization: Bearer <token>`, the connection's `token`. |
-| `sl.api_key(header=...)` or `sl.api_key(query=...)` | The `token` in that header or query parameter. |
-| `sl.basic()` | Basic auth with the connection's `username` and `password`. |
-| `sl.oauth2_client_credentials(token_url, *, scope=None, client_auth="basic")` | From 0.27.0. `Authorization: Bearer <access token>`, with the token `token_url` issues for the connection's `client_id` and `client_secret`. See [OAuth2](#oauth2). |
-| `sl.oauth2_refresh_token(token_url, *, scope=None, client_auth="basic")` | From 0.27.0. The same, with the token issued for the connection's `refresh_token`. The connection's `client_id` and `client_secret` go along when it has them. |
-
-- Every `paginate` names its paginator; nothing is guessed.
-- Credentials go only to the connection's own scheme, host and port, never to a next-page link
-  elsewhere. The one exception is OAuth2: the client secret and refresh token go to its `token_url`.
-- Transport errors, 429 and 5xx are retried with backoff and jitter, honouring `Retry-After`.
-  Another status fails, unless `on_status` maps it to `"skip"`.
-- The job is checked before any request. Errors name the request, the status and the start of the
-  body, with the connection's secrets replaced by `***`.
-- A job's rows never come back into Python. Reading a row from a job fails (rule
-  `python_row_loop`); filter rows downstream.
+`paginate` reads every page of a path; `fan_out` requests a path once per key, here each order's
+lines. Every function, paginator and auth method, and how requests are retried and checked, are
+under [HTTP APIs](/docs/sources/python/#http-apis) in the Python API.
 
 ### Incremental requests
 
@@ -245,7 +195,8 @@ def orders(ctx):
 
 ### OAuth2
 
-From 0.27.0. For APIs that issue short-lived access tokens:
+From 0.27.0. For APIs that issue short-lived access tokens, give the connection a `client_id`
+and `client_secret`, and the job an OAuth2 auth:
 
 ```toml
 [connections.erp]
@@ -265,19 +216,5 @@ api = sl.http(
 )
 ```
 
-- The token is fetched once per run and shared by every job on the connection with the same auth.
-  It is renewed before it expires (by `expires_in`), and once more when the API answers 401; the
-  request is then retried with the new token. When `on_status` maps 401 to `"skip"`, a 401 renews
-  the token only if it is over 30 seconds old; otherwise the request is skipped.
-- `client_auth="basic"` sends `client_id` and `client_secret` to the token URL with HTTP basic
-  auth, the method RFC 6749 requires servers to support. As the RFC asks, both are form-encoded
-  first, so a secret with characters such as `+` or `/` reaches the server encoded. Use `"post"`
-  for a server that rejects that, or that wants them as form fields.
-- The client secret and refresh token go only to `token_url`, which must be `https` (`http` only on
-  `localhost`). Access tokens go only to the connection's own origin, like every other credential.
-- Token errors name the token URL, the status and the server's `error` and `error_description`.
-  The client secret, refresh token and every access token are shown as `***`.
-- When the server rotates the refresh token, SQLLoad uses the new one for the rest of the run but
-  does not save it, so each run starts from the connection's `refresh_token`. An API that revokes
-  the old refresh token on rotation therefore fails on the next run; use client credentials there
-  when the API offers them.
+SQLLoad fetches the token and renews it before it expires. For `sl.oauth2_refresh_token`, how
+tokens are renewed and where secrets go, see [OAuth2](/docs/sources/python/#oauth2).
