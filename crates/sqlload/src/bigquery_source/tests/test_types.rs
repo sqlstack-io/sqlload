@@ -27,3 +27,10 @@ pub(crate) struct ReadColumnsTestCase {
     /// Each read column's expression and type, or the problems.
     pub(crate) expected_columns: Result<Vec<(&'static str, ColumnType)>, Vec<&'static str>>,
 }
+
+pub(crate) struct SelectQueryTestCase {
+    pub(crate) description: &'static str,
+    /// The query table's `sql`.
+    pub(crate) sql: &'static str,
+    pub(crate) expected_query: &'static str,
+}

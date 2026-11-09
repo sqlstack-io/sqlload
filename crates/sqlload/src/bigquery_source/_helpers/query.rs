@@ -7,7 +7,7 @@ pub(crate) fn quote_identifier(name: &str) -> String {
     format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`"))
 }
 
-/// `SELECT <read columns> FROM <the query or table> [WHERE <filter>]`; the table is `project.dataset.table` in one pair of backticks.
+/// `SELECT <read columns> FROM <the query or table> [WHERE <filter>]`; the table is `project.dataset.table` in one pair of backticks, and the query is in parentheses without its final semicolons, closed on a line of its own so a trailing `--` comment ends first.
 pub(crate) fn select_query(project: &str, request: &BigQueryReadRequest<'_>) -> String {
     let columns: Vec<&str> = request
         .columns
@@ -15,7 +15,11 @@ pub(crate) fn select_query(project: &str, request: &BigQueryReadRequest<'_>) -> 
         .map(|column| column.expression.as_str())
         .collect();
     let from = match request.sql {
-        Some(sql) => format!("({sql})"),
+        Some(sql) => format!(
+            "({}\n)",
+            sql.trim_start()
+                .trim_end_matches(|character: char| character == ';' || character.is_whitespace())
+        ),
         None => quote_identifier(&format!(
             "{project}.{}.{}",
             request.table.schema, request.table.name

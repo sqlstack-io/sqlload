@@ -9,7 +9,7 @@ use crate::http::models::ConnectionCounter;
 use crate::project::models::ConnectionConfig;
 use crate::time_text::main::now_ms::now_ms;
 
-/// A reader for a `bigquery` connection whose tables live in `project` (the connection's own project, or the key's, when `None`); jobs and read sessions are billed to the connection's project, and every table is read as of now. Nothing is sent yet.
+/// A reader for a `bigquery` connection whose tables live in `project` (the connection's own project, or the key's, when `None`); jobs and read sessions are billed to the connection's project, and the tables it reads directly are read as of now, when it is built (once per table load). Nothing is sent yet.
 pub fn bigquery_reader(
     connection: &ConnectionConfig,
     project: Option<&str>,
