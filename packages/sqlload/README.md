@@ -57,7 +57,7 @@ The same data loaded by each tool on a 4-vCPU machine, median of 5 runs:
 | Scenario | SQLLoad | ingestr | dlt |
 |---|---:|---:|---:|
 | Parquet folder into DuckDB, 1M rows | **0.92 s** | 2.12 s | 138 s |
-| Parquet folder into DuckDB, 10M rows | **3.20 s** | 5.85 s | over 20 min |
+| Parquet folder into DuckDB, 10M rows | **3.20 s** | 5.85 s | over 20 min (one run) |
 | Postgres (40 columns) into DuckDB, 1M rows | **6.84 s** | 8.29 s | 27.2 s |
 | Postgres into Snowflake, 1M rows | **14.56 s** | 16.38 s | 29.4 s |
 
@@ -84,9 +84,10 @@ versions and how to run them yourself.
 | Parquet, CSV and JSON files in S3, a local folder or SFTP | Databricks |
 | Snowflake and BigQuery tables and queries | BigQuery (preview) |
 | Google Sheets | ClickHouse (preview) |
-| Python sources and HTTP APIs | DuckDB and MotherDuck (beta) |
-| Databases with an ODBC driver | Postgres |
+| Python sources and HTTP APIs | DuckDB |
+| Databases with an ODBC driver (builds with the `odbc` feature) | Postgres |
 | | Parquet or CSV files |
+| | MotherDuck (beta, once MotherDuck accepts DuckDB 2.0 clients) |
 
 See [Supported systems](https://sqlload.io/docs/supported-systems/) for every combination and
 write strategy.
