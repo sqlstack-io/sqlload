@@ -90,22 +90,10 @@ cursor outside it, so the query itself needs no placeholder.
 
 ## Read windows
 
-A table with a `cursor_column` reads from the destination's maximum, less any `lookback`. Two
-settings move the window to the time of the run instead:
-
-| Setting | Effect |
-|---------|--------|
-| `lookback_from = "now"` | Start `lookback` before now, not before the destination's maximum. Needs a `lookback`. |
-| `lookahead` | Read only cursor values before now plus this. A date cursor reads up to and including today plus that many days. |
-
-`lookback = "7d"`, `lookahead = "7d"` and `lookback_from = "now"` read from 7 days ago to 7 days
-ahead on every run, which suits tables whose rows change for a while and include future dates.
-Use `write_strategy = "delete_insert"` with them, so each run replaces the whole window.
-
-Days are counted in UTC. The first run reads the same window. `--start-cursor` and `--end-cursor`
-override it for one run. `--reload` rebuilds the table from `cursor_start`, or from the first row,
-up to the lookahead. A files target takes neither setting: its window follows its newest
-partition.
+A table with a `cursor_column` filters the query Snowflake unloads, so only the rows in the read
+window leave Snowflake. The window starts at the destination's maximum, less any `lookback`. To
+read a fixed window around the time of the run instead, such as 7 days back to 7 days ahead, set
+`lookback_from = "now"` and `lookahead`; see [Reload a window](/docs/guides/reload-a-window/).
 
 ## Where the files go
 
@@ -178,4 +166,4 @@ views. An external stage given by `url` also needs `USAGE` on the storage integr
 
 Times and timestamps keep their microseconds. Other types, such as `GEOGRAPHY`, need a pinned type,
 such as `columns = { area = "text" }`. Pin `int` on an `INTEGER` column whose values fit 64 bits,
-such as `columns = { order_id = "int" }`. See [Types](/docs/types/).
+such as `columns = { order_id = "int" }`. See [Types](/docs/concepts/types/).

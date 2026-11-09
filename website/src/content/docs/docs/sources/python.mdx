@@ -1,55 +1,10 @@
 ---
-title: "Python sources"
-description: "Any API, SaaS or custom source as a table, with the same plan, apply and load as every other source. REST APIs built with sl.http run entirely in Rust."
+title: "Python API"
+description: "The sqlload package's API for Python sources: declaring tables and their settings, what a table function yields, the run's context, sl.http jobs, logged state and other functions."
 ---
 
-Python sources turn any API, SaaS product or custom system into tables:
-
-- **Any source as a table.** A Python function that fetches the data becomes a table, declared
-  with `sl.source` and `@source.table`.
-- **The same loader as every other source.** Python tables take part in `plan`, `apply` and
-  `load`, with the same [write strategies](/docs/concepts/write-strategies/),
-  [cursors](/docs/concepts/cursors/) and [contracts](/docs/concepts/contracts/) as Postgres tables
-  and files.
-
-They need the `sqlload` package ([Install](/docs/install/)); `sqlload-cli` doesn't run them.
-
-## REST APIs run in Rust
-
-For a predictable REST API (paginated, fanned out over keys, retried, rows picked out of the JSON)
-describe the job with `sl.http`. Python only describes it; SQLLoad runs it entirely in Rust:
-requests, pages, retries, JSON parsing and conversion to Arrow. No row crosses between Python and
-Rust, so there is no per-row Python cost.
-
-```python
-import sqlload as sl
-
-shop = sl.source("shop", connection="shop", write_strategy="merge")
-api = sl.http(shop, auth=sl.bearer(), rate_limit="10/s", retries=5)
-
-
-@shop.table(description="Orders, one row per order.", unique_key="order_id")
-def orders(ctx):
-    return api.paginate(
-        "/orders", paginator=sl.page_number("page"), select="$.items"
-    )
-```
-
-The same holds for JSON you already have as bytes: yield `sl.json(data)` or `sl.ndjson(data)`
-and the bytes are parsed in Rust. See [HTTP APIs](#http-apis) for the full reference.
-
-## Describe the job, or yield the rows
-
-| You have | Yield | Where the work happens |
-|----------|-------|------------------------|
-| A REST API that `sl.http` can describe | An `sl.http` job | Entirely in Rust: requests, pages, parsing, Arrow. |
-| JSON or NDJSON as bytes, such as a response body or a file | `sl.json(data)` or `sl.ndjson(data)` | The bytes cross once; parsing and Arrow conversion run in Rust. |
-| Arrow data: pyarrow, polars or pandas | The table, batch or DataFrame | Python builds it; it crosses as Arrow batches through the Arrow C interface, keeping its types. |
-| Rows built in Python, such as from an SDK | Dicts, or lists of dicts | Python handles every row; SQLLoad types and converts them. |
-
-Pick the first row that fits. Describe the job when `sl.http` covers the API; yield your own rows
-or Arrow data when the source needs Python: an SDK, unusual authentication, or logic between
-requests.
+The `sqlload` package declares Python sources: tables whose rows a Python function yields. To set
+them up, and for HTTP APIs, see [Load from Python and HTTP APIs](/docs/guides/python/).
 
 ## The API at a glance
 
@@ -78,59 +33,6 @@ def orders(ctx: sl.Context):
 | [What a function yields](#what-a-function-yields) | Dicts, Arrow data, `sl.json` and `sl.ndjson` bytes, `sl.http` jobs and `sl.checkpoint` positions, in any mix. |
 | [`sl.http`](#http-apis) | REST jobs that run entirely in Rust. |
 
-## Setting up
-
-List the folders holding them in `sqlload.toml`:
-
-```toml
-python_paths = ["sources"]
-default_target = "local"
-
-[connections.warehouse]
-kind = "duckdb"
-database = "shop.duckdb"
-
-[targets.local]
-connection = "warehouse"
-loader_schema = "raw"
-```
-
-Every `sqlload.source` and `@source.table` found there joins `plan`, `apply` and `load`. Declaring
-one never runs it: the function runs only when its table loads.
-
-```python
-import sqlload as sl
-
-shop = sl.source("shop", write_strategy="merge")
-
-
-@shop.table(unique_key="order_id", cursor_column="updated_at")
-def orders(ctx: sl.Context):
-    """Orders from the shop, one row per order."""
-    yield [
-        {"order_id": 1, "status": "paid", "total": 42.5,
-         "updated_at": "2026-11-01T09:30:00Z"},
-        {"order_id": 2, "status": "placed", "total": 18.0,
-         "updated_at": "2026-11-02T14:05:00Z"},
-    ]
-```
-
-```console
-$ sqlload load
-…
-└── shop__orders                                    merge (unique_key: order_id)
-    ├── source  python  sources/shop.py (shop)
-    ├── schema  columns inferred on first load
-    ├── route   read as Arrow -> DuckDB takes Arrow
-…
-created  raw.shop__orders  6 columns
-loaded   raw.shop__orders  2 rows  0.0s
-```
-
-The table loads into `shop__orders`: `{source}__{table}`, unless the source or table sets
-`table_name`. A `@sl.table` declared without a source keeps its own name. Table names are unique
-across the project.
-
 ## Declaring
 
 | Function | Returns |
@@ -147,7 +49,7 @@ Unknown settings raise `TypeError` when the module is imported.
 
 | Setting | On | Meaning |
 |---------|----|---------|
-| `write_strategy`, `unique_key`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings). |
+| `write_strategy`, `unique_key`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings). Python tables don't take `lookahead` or `lookback_from`. |
 | `contract`, `on_schema_change`, `auto_widen`, `type_change_rebuild` | source or table | See [Contracts](/docs/concepts/contracts/). |
 | `checks` | source or table | Checks on the staged rows, such as `{"unique": ["order_id"]}`. See [Checks before publish](/docs/concepts/checks/). |
 | `allow_empty` | source or table | Let `replace` empty a table when the function yields no rows. |
@@ -175,7 +77,7 @@ A table function is a generator (or returns an iterable). It can yield, in any m
 
 Dict values are typed like JSON: numbers, booleans and text keep their types, and nested dicts and
 lists become JSON columns. From 0.27.0, a list column pinned as
-[`array(T)`](/docs/types/#arrays) loads as an array instead. Also:
+[`array(T)`](/docs/concepts/types/#arrays) loads as an array instead. Also:
 
 | Python value | Column type |
 |--------------|-------------|
@@ -226,8 +128,20 @@ That loads these DuckDB columns: `order_id BIGINT`, `total DECIMAL(18,2)`, `plac
 
 Each listed object is expanded exactly one level. Objects not listed, such as `line_totals`, stay
 JSON; never flatten maps whose keys are data. Lists are never expanded. A missing or null object
-leaves its columns NULL, and new keys become new columns under `on_schema_change`. The load fails
-when a listed value arrives as a scalar or a list.
+leaves its columns NULL, and new keys become new columns under `on_schema_change`. Dicts,
+`sl.json` bytes and Arrow structs flatten the same way, and a typed child of an Arrow struct keeps
+its type.
+
+The load fails when a listed value arrives as a scalar or a list, or when a key's column name is
+also a field of the rows or comes from flattening another object. `plan` refuses:
+
+- `flatten` on tables that aren't Python tables;
+- a dotted path, such as `customer.address`: list `customer`, and its nested values stay JSON;
+- an object that `exclude_columns`, `mask` or `columns` also names. After flattening no column
+  carries the object's own name, so name the `<object>__<key>` columns instead.
+
+Turning `flatten` on for a table that already holds the object as a JSON column leaves that column
+NULL from then on, next to the new key columns.
 
 ### Fields
 
@@ -299,62 +213,15 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 
 ## HTTP APIs
 
-The full `sl.http` reference. Every job below runs in Rust, as described in
-[Describe the job, or yield the rows](#describe-the-job-or-yield-the-rows).
-
-```toml
-[connections.shop]
-kind = "http"
-base_url = "https://api.example.com"
-token = "${ENV:SHOP_TOKEN}"
-```
-
-```python
-import sqlload as sl
-
-shop = sl.source("shop", connection="shop", write_strategy="merge")
-api = sl.http(shop, auth=sl.bearer(), rate_limit="10/s", retries=5)
-
-
-@shop.table(description="Orders, one row per order.", unique_key="order_id")
-def orders(ctx):
-    return api.paginate(
-        "/orders", paginator=sl.page_number("page"), select="$.items"
-    )
-
-
-@shop.table(
-    description="Order lines.", unique_key=["order_id", "line_no"]
-)
-def order_items(ctx):
-    order_ids = api.paginate(
-        "/orders", paginator=sl.page_number("page"), select="$.items[*].order_id"
-    )
-    return api.fan_out(
-        "/orders/{order_id}/items",
-        over=order_ids,
-        concurrency=8,
-        select="$.items",
-        on_status={404: "skip"},
-    )
-```
-
-```console
-$ sqlload load
-…
-created  raw.shop__order_items  5 columns
-loaded   raw.shop__order_items  10 rows  1.2s
-created  raw.shop__orders       5 columns
-loaded   raw.shop__orders       5 rows  1.0s
-
-✓ Completed  2 loaded, 15 rows, 1.2s
-```
+`sl.http` describes REST jobs that run entirely in Rust. For worked examples, see
+[HTTP APIs](/docs/guides/python/#http-apis) in the guide. The connection is an
+[`http` connection](/docs/configuration/#http).
 
 | Function | Meaning |
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
 | `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list of values. |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. |
 
 | Paginator | Next page |
 |-----------|-----------|
@@ -385,25 +252,9 @@ loaded   raw.shop__orders       5 rows  1.0s
 
 ### OAuth2
 
-From 0.27.0. For APIs that issue short-lived access tokens:
-
-```toml
-[connections.erp]
-kind = "http"
-base_url = "https://api.example.com/v2"
-client_id = "loader"
-client_secret = "${ENV:ERP_CLIENT_SECRET}"
-```
-
-```python
-erp = sl.source("erp", connection="erp")
-api = sl.http(
-    erp,
-    auth=sl.oauth2_client_credentials(
-        "https://auth.example.com/oauth/token", scope="accounts:read"
-    ),
-)
-```
+From 0.27.0. `sl.oauth2_client_credentials` and `sl.oauth2_refresh_token` fetch short-lived
+access tokens from `token_url`. See [OAuth2](/docs/guides/python/#oauth2) in the guide for an
+example.
 
 - The token is fetched once per run and shared by every job on the connection with the same auth.
   It is renewed before it expires (by `expires_in`), and once more when the API answers 401; the
@@ -443,7 +294,7 @@ def events(ctx: sl.Context):
 
 `sl.checkpoint(position)` takes any JSON value and covers exactly the rows yielded before it.
 `sl.checkpoint(None)` clears the position. See [Logged state](/docs/concepts/cursors/#logged-state).
-To inspect or correct a logged position, see [Logged state](/docs/sources/logged-state/).
+To inspect or correct a logged position, see [`sqlload logged-state`](/docs/cli/logged-state/).
 
 ## Other functions
 

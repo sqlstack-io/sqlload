@@ -1,5 +1,5 @@
 ---
-title: "Supported systems"
+title: "Connector matrix"
 description: "What SQLLoad reads and writes, by which route, and how each is tested."
 ---
 
@@ -18,7 +18,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Google Sheets | From 0.27.0. Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |
 | Python | Dicts, Arrow data (pyarrow, polars, pandas), JSON and NDJSON bytes | The `sqlload` package, in process |
 | HTTP APIs | JSON, through `sl.http` in a Python source | Rust |
-| Kafka | Topics, through the separate [exporter](/docs/kafka/) | Rust |
+| Kafka | Topics, through the separate [exporter](/docs/guides/kafka/) | Rust |
 
 ## Destinations
 
@@ -30,7 +30,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ClickHouse (preview) | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. See [ClickHouse](/docs/targets/clickhouse/). |
 | Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
-| MotherDuck (beta, from 0.33.0, not released yet) | `append`, `merge`, `delete_insert`, `replace` | Arrow appends through DuckDB's `md:` connection; files are read by SQLLoad. MotherDuck doesn't accept DuckDB 2.0 clients yet, so it can't connect until it does. See [MotherDuck](/docs/targets/motherduck/). |
+| MotherDuck (beta, from 0.33.0) | `append`, `merge`, `delete_insert`, `replace` | Arrow appends through DuckDB's `md:` connection; files are read by SQLLoad. MotherDuck doesn't accept DuckDB 2.0 clients yet, so it can't connect until it does. See [MotherDuck](/docs/targets/motherduck/). |
 | Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or, from 0.27.0, CSV: plain, gzip or zstd. |
 | Parquet or CSV files in a local folder | As for S3; from 0.27.0, `replace` swaps the folder in one rename | As for S3 |
 
@@ -48,15 +48,13 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
-A MotherDuck target (beta, from 0.33.0, not released yet) takes every source a DuckDB target
+A MotherDuck target (beta, from 0.33.0) takes every source a DuckDB target
 takes, untested, but always through SQLLoad: files are read by SQLLoad, never by MotherDuck.
 
 From 0.27.0, a files source loads into a files target, read and rewritten
 by SQLLoad. Before, `plan` refused it. `merge` isn't available for files sources or files
 targets. Google Sheets tables reach every target through the same Arrow path; the tests load
 them into DuckDB.
-
-These are the systems in the current release. Planned ones are on the [roadmap](/docs/roadmap/).
 
 ## Testing
 

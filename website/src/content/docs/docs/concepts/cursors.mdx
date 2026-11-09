@@ -20,13 +20,16 @@ $ sqlload load app__orders
 | `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. |
 | `cursor_start` | Where the first run starts, when the table is empty. Without it, the first run reads everything. |
 | `lookback` | Read this far before the maximum, such as `"1h"` or `"2d"`, to pick up late rows. Date and timestamp cursors only; a date cursor moves back by whole days. Not with `append`. |
+| `lookback_from` | From 0.26.0. `destination` (default) counts `lookback` back from the destination's maximum; `now` counts it back from the time of the run. See [Reload a window](/docs/guides/reload-a-window/). |
+| `lookahead` | From 0.26.0. Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. Date and timestamp cursors only. |
 | `append_cursor_inclusive` | `false` (default) reads strictly after the maximum; `true` reads from the maximum itself, inserting its rows again on every run. See [append](/docs/concepts/write-strategies/#append). |
 
 Where the read starts, in order:
 
 1. `--start-cursor`, when given.
-2. The destination's maximum of `cursor_column`, minus `lookback`. `append` reads strictly after
-   it. From 0.27.0, `plan` prints that read as `after` the maximum; before, it
+2. With `lookback_from = "now"`, now minus `lookback`, on every run, the first one too.
+   Otherwise the destination's maximum of `cursor_column`, minus `lookback`. `append` reads
+   strictly after it. From 0.27.0, `plan` prints that read as `after` the maximum; before, it
    printed `from`.
 3. `cursor_start`, when the table is empty.
 4. Otherwise, everything.
@@ -106,7 +109,8 @@ A Python table with `batch_size` is called once per window, with `ctx.cursor_val
 
 Some positions aren't in the data, such as an API's sync token. A Python table with
 `state="logged"` keeps its position in `ctx.state`, and SQLLoad records it in an append-only run log
-with each commit:
+with each commit. Most projects never need it: a table with a `cursor_column` finds its position in
+the loaded data.
 
 ```python
 @shop.table(write_strategy="append", state="logged")
@@ -126,8 +130,17 @@ def events(ctx: sl.Context):
   `--reload`, or after `sqlload logged-state reset --clear`.
 - `yield sl.checkpoint(token)` after a page's rows marks exactly what those rows cover. A run that
   fails part-way resumes from the last committed checkpoint without loading any row twice.
-- Without checkpoints, assign `ctx.state` once per page. A run that fails part-way never loses rows,
-  but under `append` the next run may load up to about two pages again.
+  `sl.checkpoint` needs `state="logged"` and a JSON value.
+- Rows yielded after the last checkpoint load again on the next run, unless the function leaves
+  the final position in `ctx.state`. Once a function yields a checkpoint, only checkpoints move the
+  position during the run; a value it leaves in `ctx.state` when it finishes still becomes the
+  final one.
+- `sl.checkpoint(None)` clears the position, so the next run starts from the beginning. For an API
+  whose last page has no next token, keep the last real one, as `or token` does above.
+- Without checkpoints, assign `ctx.state` once per page. Each commit records the value `ctx.state`
+  had one assignment before its current one, so a run that fails part-way never loses rows, but
+  under `append` the next run may load up to about two pages again. Assigning more than once per
+  page can lose rows after a crash.
 
 The run log is `_sqlload_runs` in the table's schema, or objects under `<table folder>/_sqlload/runs/`
 on a files target. It's written in the same transaction as the data where the warehouse allows it,
@@ -141,11 +154,17 @@ next run reads as a stateless one would.
 
 ```console
 $ sqlload logged-state show
-raw.shop__events  state 4 (run e9f46950-4e6e-4956-ae4f-1fbeb498b3ff at 2026-11-06T23:02:50.939416Z)
-  2026-11-06T23:02:50.785656Z  32e4f7ad-9c92-49d4-9e6e-29c8be864d99  run  - -> -, state 2  6 rows
-  2026-11-06T23:02:50.939416Z  e9f46950-4e6e-4956-ae4f-1fbeb498b3ff  run  - -> -, state 4  6 rows
+raw.shop__events  state 4 (run 54ab366a-bca1-4088-9723-4c6d1723ad02 at 2026-11-09T18:02:47.844103Z)
+  2026-11-09T18:02:47.552256Z  e1bf5051-3333-4fdd-aa31-18bf2d74a51c  run  - -> -, state 2  6 rows
+  2026-11-09T18:02:47.844103Z  54ab366a-bca1-4088-9723-4c6d1723ad02  run  - -> -, state 4  6 rows
 ```
 
 `logged-state verify` compares the logged cursor with the data. `logged-state reconcile --yes`
 adopts the data's position where they disagree. `logged-state reset --to VALUE --yes` sets the next
-position, and `--clear` forgets it. See [`sqlload logged-state`](/docs/sources/logged-state/).
+position, and `--clear` forgets it. Nothing is ever deleted from the log; each correction is
+appended. `load --reload` also starts a logged table over.
+
+A record SQLLoad can't read, because it's corrupt or written by a newer version, blocks only its
+own table. `logged-state show` lists it, and a `reset ... --yes` starts a new position after it.
+
+See [`sqlload logged-state`](/docs/cli/logged-state/) for every subcommand and flag.

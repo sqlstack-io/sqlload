@@ -1,13 +1,7 @@
 ---
-title: "Logged state"
-description: "The sqlload logged-state command, for Python tables with state=\"logged\": inspect and correct their logged position."
+title: "logged-state"
+description: "Inspect and correct the run log of Python tables with state=\"logged\"."
 ---
-
-This page is only for [Python tables](/docs/sources/python/#logged-state) with `state="logged"`:
-tables that keep a position the data can't carry, such as an API sync token. Most projects never
-use it, because tables with a `cursor_column` find their position in the loaded data.
-
-`sqlload logged-state` shows and corrects that logged position:
 
 ```bash
 sqlload logged-state show      [SELECT ...]
@@ -16,9 +10,10 @@ sqlload logged-state reconcile [SELECT ...] [--yes]
 sqlload logged-state reset     SELECT ... (--to VALUE | --clear) [--yes]
 ```
 
-These commands work on Python tables with `state="logged"`, whose position is kept in an
-append-only run log. See [Cursors and state](/docs/concepts/cursors/#logged-state). With no selector,
-every logged table is selected; `reset` needs the tables or sources named.
+`sqlload logged-state` shows and corrects the position of Python tables with `state="logged"`:
+tables that keep a position the data can't carry, such as an API sync token, in an append-only run
+log. Most projects never use it, because tables with a `cursor_column` find their position in the
+loaded data. See [Logged state](/docs/concepts/cursors/#logged-state).
 
 | Command | Does |
 |---------|------|
@@ -28,21 +23,28 @@ every logged table is selected; `reset` needs the tables or sources named.
 | `reset --to VALUE` | Appends a reset: the next run reads from `VALUE`. On a table with a `cursor_column`, `VALUE` is a cursor value and `ctx.state` is kept; otherwise it's the `ctx.state` value as JSON. |
 | `reset --clear` | Appends a reset that forgets the position, cursor and `ctx.state` both: the next run reads from the beginning (`cursor_start`, or everything). |
 
-`reconcile` and `reset` only show what they would append, unless given `--yes`. Nothing is ever
-deleted from the log.
+## Options
+
+| Option | Meaning |
+|--------|---------|
+| `SELECT ...` | Sources or tables to select. All logged tables when none is given; `reset` needs them named. |
+| `--yes` | `reconcile` and `reset`: append the events. Without it, they only show what they would append. |
+| `--to <TO>` | `reset` only: the position to read from next. |
+| `--clear` | `reset` only: forget the position. Give `--to` or `--clear`, not both. |
+
+Nothing is ever deleted from the log.
 
 ```console
 $ sqlload logged-state show
-raw.shop__events  state 4 (run e9f46950-4e6e-4956-ae4f-1fbeb498b3ff at 2026-11-06T23:02:50.939416Z)
-  2026-11-06T23:02:50.785656Z  32e4f7ad-9c92-49d4-9e6e-29c8be864d99  run  - -> -, state 2  6 rows
-  2026-11-06T23:02:50.939416Z  e9f46950-4e6e-4956-ae4f-1fbeb498b3ff  run  - -> -, state 4  6 rows
+raw.shop__events  state 4 (run 54ab366a-bca1-4088-9723-4c6d1723ad02 at 2026-11-09T18:02:47.844103Z)
+  2026-11-09T18:02:47.552256Z  e1bf5051-3333-4fdd-aa31-18bf2d74a51c  run  - -> -, state 2  6 rows
+  2026-11-09T18:02:47.844103Z  54ab366a-bca1-4088-9723-4c6d1723ad02  run  - -> -, state 4  6 rows
 $ sqlload logged-state verify
-raw.shop__events  ok  state 4 (run e9f46950-4e6e-4956-ae4f-1fbeb498b3ff at 2026-11-06T23:02:50.939416Z)
+raw.shop__events  ok  state 4 (run 54ab366a-bca1-4088-9723-4c6d1723ad02 at 2026-11-09T18:02:47.844103Z)
 $ sqlload logged-state reset shop__events --to 0
 would append  raw.shop__events  reset  - -> -, state 0 (add --yes to append it)
 ```
 
 A record SQLLoad can't read, because it's corrupt or written by a newer version, blocks only its
 own table. `logged-state show` lists it, and a `reset ... --yes` starts a new position after it.
-
 `load --reload` also starts a logged table over.

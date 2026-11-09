@@ -1,0 +1,59 @@
+---
+title: "Stream Kafka topics into Snowflake"
+description: "Stream Kafka topics into Snowflake tables continuously, with Snowpipe Streaming or staged files."
+---
+
+The Kafka exporter is SQLLoad's mode for Kafka. It runs continuously, reads Kafka topics and writes
+each one into a Snowflake table, through Snowpipe Streaming or staged files. It's separate from
+loader projects: its `sqlload.toml` has `[source]` with `kind = "kafka"`, `[destination]`,
+`[staging]` and the sections in [Kafka exporter configuration](/docs/kafka/configuration/), instead
+of `[connections]`, `[targets]` and `[sources]`. The repository's
+[`sqlload.example.toml`](https://github.com/sqlstack-io/sqlload/blob/main/sqlload.example.toml)
+is a complete example.
+
+## Run the exporter
+
+| Step | Command |
+|------|---------|
+| Check the configuration and the connections. | [`sqlload debug`](/docs/cli/debug/) |
+| See how topics map to tables, without connecting to Snowflake. | [`sqlload tables [--topics-file FILE]`](/docs/cli/tables/) |
+| Show each topic's table and the objects it needs. | [`sqlload plan`](/docs/cli/plan/) |
+| Create missing tables, stages and pipes. | [`sqlload apply`](/docs/cli/apply/) |
+| Export until stopped, or for `--max-duration`. | [`sqlload run [--max-duration D] [--shard N]`](/docs/cli/run/) |
+| Show per-partition lag and committed offsets. | [`sqlload status`](/docs/cli/status/) |
+
+`load`, `copy`, `contract` and `logged-state` are for loader projects, and refuse an exporter
+configuration.
+
+## How rows reach Snowflake
+
+`[staging] kind` chooses the route:
+
+| `kind` | Route |
+|--------|-------|
+| `none` | Snowpipe Streaming. |
+| `internal` | Files on a table stage, loaded with Snowpipe or `COPY`. |
+| `s3` | Files in your bucket, loaded with Snowpipe or `COPY`. |
+
+With Snowpipe loads, Kafka offsets are committed only once Snowpipe reports the files loaded.
+Each topic's rows carry the record's envelope (topic, partition, offset, key, value, timestamps);
+see [Envelope columns](/docs/kafka/configuration/#envelope).
+
+## Naming topics
+
+`sqlload tables` shows how topics map to tables before anything connects. With the example
+configuration and a file of topic names:
+
+```console
+$ sqlload tables --topics-file topics.txt
+shop.legacy-orders	ORDERS_V1	orders_v1	sqlload-orders_v1
+shop.orders_v2.events	ORDERS__EVENTS	orders__events	sqlload-orders__events
+shop.payments_v1.events	PAYMENTS__EVENTS	payments__events	sqlload-payments__events
+```
+
+[Kafka topic naming](/docs/kafka/naming/) covers the rules.
+
+## Running several instances
+
+Set `shards` under `[source]` above 1 to split the streams between instances, and run each with
+its own `--shard`, from 0, or `SQLLOAD_SHARD`. See [`sqlload run`](/docs/cli/run/).

@@ -1,0 +1,29 @@
+---
+title: "run"
+description: "Run the Kafka exporter: export topics into Snowflake until stopped."
+---
+
+```bash
+sqlload run [--max-duration DURATION] [--shard N]
+```
+
+`sqlload run` is the [Kafka exporter](/docs/guides/kafka/)'s main command. It reads the topics
+`sqlload.toml` selects from Kafka, by `include` and `exclude`, and writes each one into its
+Snowflake table until it's stopped, or for
+`--max-duration`. Ctrl-C or SIGTERM stops it.
+
+| Option | Meaning |
+|--------|---------|
+| `--max-duration <DURATION>` | Stop after this long, such as `10m`. |
+| `--shard <N>` | This instance's index below `source.shards`, from 0. Also `SQLLOAD_SHARD`. Default: [`shard`](/docs/kafka/configuration/#source) under `[source]`, else 0. |
+
+With `source.shards` above 1, run one instance per shard, each with its own `--shard`; they split
+the streams between them. A `--shard` that isn't below `source.shards` is refused:
+
+```console
+$ sqlload run --shard 2
+error: --shard 2 must be below source.shards 2
+```
+
+Run [`sqlload apply`](/docs/cli/apply/) first, so the tables, stages and pipes exist. See
+[Kafka exporter configuration](/docs/kafka/configuration/) for `[source]` and the other sections.

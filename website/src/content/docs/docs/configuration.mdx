@@ -10,7 +10,7 @@ or from `-c`/`--config` or `SQLLOAD_CONFIG`. Unknown keys are errors. See
 `${ENV:NAME}` anywhere in the file is replaced with the environment variable `NAME`; an unset
 variable is an error. `$${` is a literal `${`.
 
-The [Kafka exporter](/docs/kafka/) uses a different file format.
+The [Kafka exporter](/docs/guides/kafka/) uses a different file format.
 
 ## Top level
 
@@ -104,7 +104,7 @@ See [ClickHouse](/docs/targets/clickhouse/).
 
 ### `motherduck`
 
-From 0.33.0 (not released yet), in beta. MotherDuck doesn't accept DuckDB 2.0 clients yet, so this
+Available as a beta from 0.33.0. MotherDuck doesn't accept DuckDB 2.0 clients yet, so this
 connection can't connect until it does; see [MotherDuck](/docs/targets/motherduck/).
 
 | Key | Meaning |
@@ -187,7 +187,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 
 | Key | Applies to | Meaning |
 |-----|------------|---------|
-| `connection` | all | A `snowflake`, `databricks`, `bigquery`, `clickhouse`, `postgres`, `duckdb`, `s3` or `filesystem` connection, or from 0.33.0 (not released yet) a `motherduck` connection. |
+| `connection` | all | A `snowflake`, `databricks`, `bigquery`, `clickhouse`, `postgres`, `duckdb`, `s3` or `filesystem` connection, or from 0.33.0 a `motherduck` connection. |
 | `loader_schema` | warehouses, required | The schema for tables whose source sets no `schema`; a BigQuery target's dataset, a ClickHouse target's database. |
 | `database` | warehouses except ClickHouse | Overrides the connection's database. |
 | `path` | files | Each table's folder template, with `{source}`, `{schema}`, `{table}`, `{cursor}` and `{cursor:date}`. Default `{source}/{table}/`. |
@@ -210,10 +210,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `destination_path` | files targets | The folder template for this source's tables, overriding the target's `path`. |
 | `include`, `exclude` | postgres, postgres_cdc, snowflake, odbc, bigquery | `schema.table` patterns to sync and to leave out (`dataset.table` for bigquery). |
 | `new_tables` | postgres | `sync` (default), `skip` or `fail`. See [Sources](/docs/sources/postgres/#choosing-tables). |
-| `cdc_mode` | postgres_cdc | `merge` (default) or `changelog`; a files target takes `changelog` only. See [Postgres changes](/docs/sources/postgres-cdc/#settings). |
-| `deletes` | postgres_cdc | `soft` (default) or `hard`; `merge` only. |
-| `slot`, `publication` | postgres_cdc | The replication slot and publication. Default `sqlload_<source>` for both. |
-| `batch_interval` | postgres_cdc | With `load --follow`: how often it writes what it has read. Default `10s` (`1m` into files), at least `1s`. |
+| `cdc_mode`, `deletes`, `slot`, `publication`, `batch_interval` | postgres_cdc | See [Postgres CDC settings](#postgres-cdc-settings). |
 | `exclude_columns`, `allow_columns` | all | Column patterns to leave out, and to keep anyway. |
 | `skip_tables_with_columns` | postgres | Leave out tables with a column matching one of these patterns. |
 | `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
@@ -236,6 +233,25 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 
 A source can also set any [table setting](#table-settings), as the default for its tables.
 
+### Postgres CDC settings
+
+A [`postgres_cdc`](/docs/sources/postgres-cdc/) source takes these:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `kind` | | `postgres_cdc`. |
+| `connection` | | A `postgres` connection. |
+| `include`, `exclude` | | `schema.table` patterns, as for a [Postgres source](/docs/sources/postgres/#choosing-tables). |
+| `cdc_mode` | `merge` | `merge` keeps one row per key; `changelog` appends every change. A files target takes `changelog` only. |
+| `deletes` | `soft` | `merge` only: `soft` marks a deleted row with `_sqlload_deleted_at`; `hard` removes it. |
+| `slot` | `sqlload_<source>` | The replication slot. |
+| `publication` | `sqlload_<source>` | The publication. SQLLoad creates `sqlload_<source>` when it's missing. |
+| `batch_interval` | `10s`, `1m` into files | With [`load --follow`](/docs/guides/postgres-cdc/#keep-streaming): how often it writes what it has read. At least `1s`. |
+
+Column settings (`columns`, `exclude_columns`, `mask` and the rest) work as for other sources. A
+captured table takes no `write_strategy`, `cursor_column`, `batch_size` or `state`. `merge`
+matches rows on the primary key, and a `unique_key` must lie within it.
+
 ## Table settings
 
 Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"]` entry for one.
@@ -247,7 +263,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `cursor_column` | none | The column runs continue from. See [Cursors](/docs/concepts/cursors/). |
 | `cursor_start` | none | Where the first run starts. |
 | `lookback` | none | Read this far before the maximum, such as `"2h"`. |
-| `lookback_from` | `destination` | From 0.26.0. `destination` (the destination's maximum) or `now`: what `lookback` counts back from. See [Read windows](/docs/sources/snowflake/#read-windows). |
+| `lookback_from` | `destination` | From 0.26.0. `destination` (the destination's maximum) or `now`: what `lookback` counts back from. See [Reload a window](/docs/guides/reload-a-window/). |
 | `lookahead` | none | From 0.26.0. Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. |
 | `append_cursor_inclusive` | `false` | Whether `append` reads from the maximum itself (inserting its rows again) rather than after it. |
 | `batch_size` | none | Commit one cursor window at a time: a duration (`"1d"`) or an integer step, or `"none"`. |
@@ -275,9 +291,10 @@ Only in a table entry:
 | `description` | The table's description, which becomes its comment. |
 | `name` | The destination table name, overriding `table_name`. |
 | `sql` | A query whose rows are the table (snowflake sources from 0.26.0; odbc sources from 0.27.0; bigquery sources from 0.30.0); the entry's key is its name. |
-| `columns` | Pinned column types, such as `{ total = "decimal(18,2)" }`. See [Types](/docs/types/). |
+| `columns` | Pinned column types, such as `{ total = "decimal(18,2)" }`. See [Types](/docs/concepts/types/). |
 | `mask` | Masked columns: `{ email = "hmac" }` or `"hash"`. |
 | `exclude_columns`, `allow_columns`, `destination_path` | As on the source, for this table. |
 
-Python tables take the same settings as decorator arguments, plus `allow_empty`, `state` and
-`flatten`. See [Python sources](/docs/sources/python/#settings).
+Python tables take the same settings as decorator arguments, except `lookahead` and
+`lookback_from`, which they refuse, plus `allow_empty`, `state` and `flatten`. See
+[Python sources](/docs/sources/python/#settings).

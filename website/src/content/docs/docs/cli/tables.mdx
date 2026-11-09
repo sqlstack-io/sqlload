@@ -1,0 +1,36 @@
+---
+title: "tables"
+description: "Print how each Kafka topic maps to a Snowflake table, stream and consumer group, without connecting to Snowflake."
+---
+
+```bash
+sqlload tables [--topics-file FILE]
+```
+
+`sqlload tables` shows how the [Kafka exporter](/docs/guides/kafka/) names each topic's table,
+stream and consumer group, before anything connects to Snowflake. It prints one line per topic:
+
+```text
+<topic>	<table>	<stream>	<consumer group>
+```
+
+separated by tabs. A topic a naming rule skips (`skip = true`) prints `-` after its name. Topics
+that `include` doesn't match, or `exclude` does, aren't listed.
+
+| Option | Meaning |
+|--------|---------|
+| `--topics-file <FILE>` | Read topic names, one per line, from this file instead of listing them in Kafka. |
+
+With the repository's
+[`sqlload.example.toml`](https://github.com/sqlstack-io/sqlload/blob/main/sqlload.example.toml) and
+a file of topic names:
+
+```console
+$ sqlload tables --topics-file topics.txt
+shop.legacy-orders	ORDERS_V1	orders_v1	sqlload-orders_v1
+shop.orders_v2.events	ORDERS__EVENTS	orders__events	sqlload-orders__events
+shop.payments_v1.events	PAYMENTS__EVENTS	payments__events	sqlload-payments__events
+```
+
+`shop.orders.dlq` was in the file too, but matches the example's `exclude`, so it isn't listed.
+[Kafka topic naming](/docs/kafka/naming/) covers the rules.

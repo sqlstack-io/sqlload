@@ -22,10 +22,10 @@ Two packages provide the same `sqlload` command. Install only one of them, becau
 
 | Package | What it is | Python sources |
 |---------|------------|----------------|
-| `sqlload` | A native Python extension for CPython 3.10 or newer. Its `sqlload` command runs the loader in the same process as your Python sources. | Yes |
+| `sqlload` | A native Python extension. Each platform has one wheel, built for Python's stable ABI (abi3), which runs on every CPython from 3.10. Its `sqlload` command runs the loader in the same process as your Python sources. | Yes |
 | `sqlload-cli` | The same command as a standalone executable, without Python. | No |
 
-Use `sqlload` if any table is defined in Python ([Python sources](/docs/sources/python/)). Use
+Use `sqlload` if any table is defined in Python ([Python sources](/docs/guides/python/)). Use
 `sqlload-cli` where Python isn't available and every source is declared in `sqlload.toml`.
 
 ```bash
