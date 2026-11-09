@@ -11,7 +11,7 @@ A source is where data comes from. SQLLoad has eight kinds:
 | [`postgres_cdc`](/docs/sources/postgres-cdc/) | A Postgres database's inserts, updates and deletes, from a logical replication slot, after a first snapshot | One per matching source table | `sqlload.toml` |
 | [`snowflake`](/docs/sources/snowflake/) | From 0.26.0. Tables and views of a Snowflake database, and query results, unloaded as Parquet | One per matching table, and one per query | `sqlload.toml` |
 | [`odbc`](/docs/sources/odbc/) | From 0.27.0. Tables, views and query results of any database with an ODBC driver, read as Arrow | One per matching table, and one per query | `sqlload.toml` |
-| [`bigquery`](/docs/sources/bigquery/) | From 0.29.0 (not released yet). Tables, views and query results of BigQuery, read as Arrow through the Storage Read API | One per matching table, and one per query | `sqlload.toml` |
+| [`bigquery`](/docs/sources/bigquery/) | From 0.30.0. Tables, views and query results of BigQuery, read as Arrow through the Storage Read API | One per matching table, and one per query | `sqlload.toml` |
 | [`files`](/docs/sources/files/) | Parquet, CSV, JSON or NDJSON files in S3 or a local folder | One per source | `sqlload.toml` |
 | [`google_sheets`](/docs/sources/google-sheets/) | From 0.27.0. Tabs or ranges of a Google Sheets spreadsheet, typed | One per tab or range | `sqlload.toml` |
 | [Python](/docs/sources/python/) | Whatever a Python function yields: dicts, Arrow data, JSON bytes, HTTP jobs | One per decorated function | Python, under `python_paths` |
@@ -30,7 +30,7 @@ Each kind has its own page:
   time of the run, and where unloaded files go.
 - [ODBC](/docs/sources/odbc/), from 0.27.0: connections, drivers, choosing tables,
   query tables and value sizes.
-- [BigQuery](/docs/sources/bigquery/), from 0.29.0 (not released yet): choosing tables, query
+- [BigQuery](/docs/sources/bigquery/), from 0.30.0: choosing tables, query
   tables, types, cost and permissions.
 - [Files](/docs/sources/files/): formats, partitions, which files load, and files the destination
   reads itself.
