@@ -608,8 +608,9 @@ moves the rows: one `INSERT` for `append`, one `MERGE` for `delete_insert` and `
 its own; the run record commits after it. The staging table is dropped when the load ends, and the
 next load drops what a failed run left after a day.
 
-`replace` keeps the table's description but not its partitioning, clustering or labels. Nested
-values (arrays and records) do not load yet. Postgres change data capture into BigQuery is not
+`replace` keeps the table's description but not its partitioning, clustering or labels. Records
+load as `JSON`, not as typed `STRUCT` columns; from 0.27.0, columns pinned as `array(T)` load as
+`ARRAY<T>`, except `array(timestamp_tz)`. Postgres change data capture into BigQuery is not
 available.
 
 ### How rows reach Postgres
