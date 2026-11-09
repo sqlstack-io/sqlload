@@ -1,8 +1,8 @@
 //! One request to ClickHouse's HTTP interface.
 
 use crate::adapters::clickhouse::constants::{
-    ERROR_PREVIEW, EXCEPTION_CODE_HEADER, FORM_BOUNDARY, INSERT_COMPRESSION_LEVEL, REQUEST_TIMEOUT,
-    SESSION_SETTINGS, SUMMARY_HEADER,
+    ERROR_PREVIEW, EXCEPTION_CODE_HEADER, FORM_BOUNDARY, INSERT_COMPRESSION_LEVEL, INSERT_SETTINGS,
+    REQUEST_TIMEOUT, SESSION_SETTINGS, SUMMARY_HEADER,
 };
 use crate::adapters::clickhouse::models::ClickHouseDestination;
 use crate::http::errors::ApiError;
@@ -82,11 +82,15 @@ async fn request(
     }
     let mut parameters: Vec<(&str, &str)> = SESSION_SETTINGS.to_vec();
     if let Some(query) = query {
+        parameters.extend_from_slice(INSERT_SETTINGS);
         parameters.push(("query", query));
     }
     let body = match query {
-        Some(_) => zstd::encode_all(body.as_slice(), INSERT_COMPRESSION_LEVEL)
-            .map_err(|error| ApiError::Protocol(format!("cannot compress the rows: {error}")))?,
+        Some(_) => {
+            let rows = body;
+            zstd::encode_all(rows.as_slice(), INSERT_COMPRESSION_LEVEL)
+                .map_err(|error| ApiError::Protocol(format!("cannot compress the rows: {error}")))?
+        }
         None => body,
     };
     let mut request = destination

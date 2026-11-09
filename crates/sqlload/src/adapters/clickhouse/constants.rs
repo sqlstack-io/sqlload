@@ -4,7 +4,7 @@ pub const DEFAULT_HTTP_PORT: u16 = 8123;
 /// The HTTPS port of a `secure` connection that sets none.
 pub const DEFAULT_HTTPS_PORT: u16 = 8443;
 
-/// Settings every request runs with, so SQLLoad's SQL behaves the same on every server: statements finish before the next starts, a NULL never becomes a default value, wall-clock timestamps read in UTC (as the Arrow values are sent), one insert may fill any number of partitions (a first load of a long history does), an insert writes its rows before it returns (never through a server-side async buffer a profile may turn on), and errors come with the response's status.
+/// Settings every request runs with, so SQLLoad's SQL behaves the same on every server: statements finish before the next starts, a NULL never becomes a default value, wall-clock timestamps read in UTC (as the Arrow values are sent), one insert may fill any number of partitions (a first load of a long history does), and errors come with the response's status.
 pub const SESSION_SETTINGS: &[(&str, &str)] = &[
     ("mutations_sync", "2"),
     ("insert_null_as_default", "0"),
@@ -15,8 +15,10 @@ pub const SESSION_SETTINGS: &[(&str, &str)] = &[
     ("cast_keep_nullable", "1"),
     ("join_use_nulls", "1"),
     ("wait_end_of_query", "1"),
-    ("async_insert", "0"),
 ];
+
+/// Settings an insert of rows also runs with, so it writes them before it returns: never through the server-side async buffer, which ClickHouse 26 turns on by default and a profile may set to return before the rows are written. Only inserts send it, so a profile that fixes `async_insert` fails only them, with ClickHouse's own message.
+pub const INSERT_SETTINGS: &[(&str, &str)] = &[("async_insert", "0")];
 
 /// How long one request may run: a statement can copy whole partitions, and an insert carries up to a batch of rows.
 pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
