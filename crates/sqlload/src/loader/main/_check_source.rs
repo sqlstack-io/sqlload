@@ -42,7 +42,7 @@ pub(in crate::loader) async fn check_source(
                     "a bigquery source opens as a BigQuery reader".to_owned(),
                 ));
             };
-            let datasets = crate::bigquery_api::main::list_tables::list_datasets(
+            let datasets = crate::bigquery_api::main::list_datasets::list_datasets(
                 &reader.client,
                 &reader.project,
             )

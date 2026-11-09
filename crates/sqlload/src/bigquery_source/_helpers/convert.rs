@@ -9,7 +9,7 @@ use arrow_schema::{DataType, Schema, SchemaRef};
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::ColumnType;
 use crate::postgres_source::models::ReadColumn;
-use crate::row_batches::_helpers::arrow_json::normalise_column;
+use crate::row_batches::main::normalise_batch::normalise_batch;
 
 /// The Arrow schema the read columns are handed on in, with the columns `json` reads from records and lists.
 pub(crate) fn output_schema(columns: &[ReadColumn]) -> Result<(SchemaRef, Vec<bool>), String> {
@@ -20,7 +20,7 @@ pub(crate) fn output_schema(columns: &[ReadColumn]) -> Result<(SchemaRef, Vec<bo
                 .ok_or_else(|| format!("{} has no Arrow representation", column.name))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let json = columns
+    let json: Vec<bool> = columns
         .iter()
         .map(|column| column.output == ColumnType::Json)
         .collect();
@@ -32,6 +32,29 @@ pub(crate) fn convert_batch(
     batch: &RecordBatch,
     (schema, json): (&SchemaRef, &[bool]),
 ) -> Result<RecordBatch, String> {
+    let nested =
+        |array: &ArrayRef| matches!(array.data_type(), DataType::Struct(_) | DataType::List(_));
+    let texts: Vec<(&str, ArrayRef)> = schema
+        .fields()
+        .iter()
+        .zip(json)
+        .filter(|(_, json)| **json)
+        .filter_map(|(field, _)| {
+            Some((
+                field.name().as_str(),
+                batch.column_by_name(field.name())?.clone(),
+            ))
+        })
+        .filter(|(_, array)| nested(array))
+        .collect();
+    let texts = match texts.is_empty() {
+        true => None,
+        false => Some(
+            RecordBatch::try_from_iter(texts)
+                .map_err(|error| error.to_string())
+                .and_then(|nested| normalise_batch(&nested, &[]))?,
+        ),
+    };
     let strict = CastOptions {
         safe: false,
         ..CastOptions::default()
@@ -39,17 +62,13 @@ pub(crate) fn convert_batch(
     let columns: Vec<ArrayRef> = schema
         .fields()
         .iter()
-        .zip(json)
-        .map(|(field, json)| {
-            let read = batch
-                .column_by_name(field.name())
+        .map(|field| {
+            let read = texts
+                .as_ref()
+                .and_then(|texts| texts.column_by_name(field.name()))
+                .or_else(|| batch.column_by_name(field.name()))
                 .ok_or_else(|| format!("the read has no column {}", field.name()))?;
-            let nested = matches!(read.data_type(), DataType::Struct(_) | DataType::List(_));
-            let read = match *json && nested {
-                true => normalise_column(field.name(), read)?.1,
-                false => read.clone(),
-            };
-            cast_with_options(&read, field.data_type(), &strict)
+            cast_with_options(read, field.data_type(), &strict)
                 .map_err(|error| format!("{}: {error}", field.name()))
         })
         .collect::<Result<_, String>>()?;

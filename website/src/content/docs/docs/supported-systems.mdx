@@ -11,6 +11,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Postgres changes (`postgres_cdc`) | Inserts, updates and deletes of tables, by `include` patterns | A snapshot, then a logical replication slot (`pgoutput`), in whole transactions. See [Postgres changes](/docs/sources/postgres-cdc/). |
 | Snowflake (from 0.26.0) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad, or (from 0.27.0) by DuckDB itself from an S3 stage. See [Snowflake](/docs/sources/snowflake/). |
 | Databases with an ODBC driver (from 0.27.0) | Tables and views, by `include` patterns, and query results | The driver, as Arrow, in builds with the `odbc` feature. See [ODBC](/docs/sources/odbc/). |
+| BigQuery (from 0.29.0, not released yet) | Tables and views, by `include` patterns, and query results | The Storage Read API, as Arrow in parallel streams; views and queries through a query job. See [BigQuery](/docs/sources/bigquery/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
 | Google Sheets | From 0.27.0. Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |
@@ -39,6 +40,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Postgres changes (`postgres_cdc`) | Yes | Yes | No | No | No | Yes | Yes, as a changelog |
 | Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | ODBC (from 0.27.0) | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
+| BigQuery (from 0.29.0, not released yet) | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | From 0.27.0, read and rewritten by SQLLoad |
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -58,6 +60,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 | ClickHouse | Real ClickHouse 25.8 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
 | DuckDB | Real, in process. |
 | ODBC | psqlODBC against real Postgres in containers, into DuckDB. |
+| BigQuery source | Live loads from a sandbox project into DuckDB: tables, views, query tables, and integer and timestamp cursors. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |
 | Kafka | Redpanda in containers. |

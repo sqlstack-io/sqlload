@@ -12,3 +12,6 @@ pub const TABLES_AT_ONCE: usize = 8;
 
 /// The table types the Storage Read API reads directly; views and others are read through a query.
 pub const READ_API_TABLES: &[&str] = &["TABLE"];
+
+/// The precision and scale of a `NUMERIC` column declared without them.
+pub const NUMERIC_DEFAULT: (u8, u8) = (38, 9);

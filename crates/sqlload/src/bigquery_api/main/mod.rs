@@ -7,6 +7,7 @@ pub mod create_write_stream;
 pub mod finalize_write_stream;
 pub mod google_answer;
 pub mod google_token;
+pub mod list_datasets;
 pub mod list_tables;
 pub mod parse_key;
 pub mod query_destination;
