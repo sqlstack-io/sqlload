@@ -41,8 +41,9 @@ SQLLoad is tested against ClickHouse 25.8 and 26.10.
 ## Permissions
 
 SQLLoad creates databases and tables, inserts into its staging tables, moves partitions between
-tables (`ATTACH PARTITION`, `REPLACE PARTITION`, `DROP PARTITION`), exchanges, renames and drops tables, and reads
-files with the `s3` table function. The user needs the grants for these in the target's databases.
+tables (`ATTACH PARTITION`, `REPLACE PARTITION`, `DROP PARTITION`), deletes rows from its own copies
+of tables (`DELETE FROM`, or `ALTER TABLE ... DELETE`), exchanges, renames and drops tables, and
+reads files with the `s3` table function. The user needs the grants for these in the target's databases.
 
 `sqlload debug` checks the connection, and prints the user, the server's version and its time zone.
 
@@ -122,15 +123,23 @@ SQLLoad reads the files itself and sends Arrow instead when ClickHouse wouldn't 
 | `delete_insert` | Rewrites each partition holding the cursor range it read. |
 | `replace` | Builds a new table and swaps it in with `EXCHANGE TABLES`. `--reload` does the same. |
 
-`merge` and `delete_insert` rewrite whole partitions. One partition is rebuilt beside the table and
-swapped in with `REPLACE PARTITION`, or dropped with `DROP PARTITION` when none of its rows remain. Several are rebuilt in a copy that hard-links the table's
-other parts, then exchanged in at once.
+`merge` and `delete_insert` publish whole partitions. The touched partitions are hard-linked into a
+copy of the table, so no kept row is copied. The rows being replaced are deleted from the copy with a
+lightweight `DELETE`, and the new rows are attached. One partition is then swapped in with
+`REPLACE PARTITION`, or dropped with `DROP PARTITION` when none of its rows remain. Several are
+exchanged in at once with the rest of the table.
+
+A table with projections refuses a lightweight `DELETE` unless its
+`lightweight_mutation_projection_mode` setting allows one, so SQLLoad then deletes with
+`ALTER TABLE ... DELETE`, which rewrites the touched parts. Deleted rows are hidden from readers
+straight away and removed from disk when ClickHouse next merges the parts.
 
 `merge` matches rows on `unique_key` exactly, so readers need no `FINAL`. It replaces whole rows,
 so a column the source no longer has is `NULL` on the rows it updates.
 
-A rewrite costs as much as the partitions it touches, and an unpartitioned table is one partition.
-Partition large tables by the column new rows arrive on.
+A publish costs about as much as the rows it replaces and adds, plus a scan of the touched
+partitions to find the rows to delete. An unpartitioned table is one partition. Partition large
+tables by the column new rows arrive on.
 
 ## Types
 
