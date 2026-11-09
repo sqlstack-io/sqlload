@@ -79,7 +79,7 @@ Add `--print-toml` to print the same copy as a `sqlload.toml` project, which loa
 |---------|---------|
 | Postgres tables, and Postgres changes from a logical replication slot | Snowflake |
 | Snowflake tables and query results | Databricks |
-| Parquet, CSV, JSON and NDJSON files in S3, a local folder or (not released yet) an SFTP server | BigQuery (preview) |
+| Parquet, CSV, JSON and NDJSON files in S3, a local folder or an SFTP server | BigQuery (preview) |
 | Google Sheets tabs and ranges | ClickHouse (preview) |
 | Python sources, including HTTP APIs | DuckDB |
 | Databases with an ODBC driver, in builds with the `odbc` feature | Postgres |

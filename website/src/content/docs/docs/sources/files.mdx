@@ -24,7 +24,7 @@ cursor_column = "dt"
 
 | Setting | Meaning |
 |---------|---------|
-| `connection` | An `s3` or `filesystem` connection, or from 0.32.0 (not released yet) an `sftp` connection. |
+| `connection` | An `s3` or `filesystem` connection, or from 0.32.0 an `sftp` connection. |
 | `path` | The folder holding the files, relative to the connection. |
 | `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`. |
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
@@ -164,7 +164,7 @@ files itself, also from `copy_to_internal_stage`. Parquet files already have typ
 
 ## Files on an SFTP server
 
-From 0.32.0 (not released yet). An [`sftp` connection](/docs/configuration/#sftp) reads files from
+From 0.32.0. An [`sftp` connection](/docs/configuration/#sftp) reads files from
 an SFTP server, such as a partner's daily drop:
 
 ```toml
