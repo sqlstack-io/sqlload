@@ -96,6 +96,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         SourceKind::Postgres | SourceKind::PostgresCdc => "postgres",
         SourceKind::Snowflake => "snowflake",
         SourceKind::Odbc => "odbc",
+        SourceKind::BigQuery => "bigquery",
         SourceKind::Files => "s3 or filesystem",
         SourceKind::Python => "any",
         SourceKind::GoogleSheets => "google_sheets",
@@ -157,6 +158,7 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::Files => "files",
         SourceKind::Snowflake => "snowflake",
         SourceKind::Odbc => "odbc",
+        SourceKind::BigQuery => "bigquery",
         SourceKind::Python => "python",
         SourceKind::GoogleSheets => "google_sheets",
     }
@@ -211,10 +213,17 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         problems.extend(cdc_problems(place, source));
     }
     let queries = source.tables.values().any(|table| table.sql.is_some());
-    if !matches!(source.kind, SourceKind::Snowflake | SourceKind::Odbc) && queries {
+    if !matches!(
+        source.kind,
+        SourceKind::Snowflake | SourceKind::Odbc | SourceKind::BigQuery
+    ) && queries
+    {
         problems.push(format!(
-            "{place} sql is for kind = \"snowflake\" and kind = \"odbc\""
+            "{place} sql is for kind = \"snowflake\", \"odbc\" and \"bigquery\""
         ));
+    }
+    if source.kind != SourceKind::BigQuery && source.project.is_some() {
+        problems.push(format!("{place} project is for kind = \"bigquery\""));
     }
     if source.kind != SourceKind::Snowflake
         && (source.warehouse.is_some() || source.stage.is_some())
@@ -246,10 +255,11 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         SourceKind::Postgres
         | SourceKind::PostgresCdc
         | SourceKind::Snowflake
-        | SourceKind::Odbc => {
+        | SourceKind::Odbc
+        | SourceKind::BigQuery => {
             if source.include.is_empty() && !queries {
                 let tables = match source.kind {
-                    SourceKind::Snowflake | SourceKind::Odbc => {
+                    SourceKind::Snowflake | SourceKind::Odbc | SourceKind::BigQuery => {
                         "; list tables in include, or give a table a sql query"
                     }
                     _ => "",

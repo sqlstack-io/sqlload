@@ -426,6 +426,9 @@ pub struct SourceConfig {
     /// The largest binary value an `odbc` source's reads hold, in bytes.
     #[serde(default)]
     pub max_binary_size: Option<usize>,
+    /// The project a `bigquery` source's tables live in; the connection's when omitted.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// Where a `snowflake` source's unloads go: an S3 URL with a storage integration, or an existing stage by name.
@@ -469,7 +472,7 @@ pub enum CdcDeletes {
 }
 
 impl SourceConfig {
-    /// Whether the source finds its tables in a database's catalog with `include` patterns (`postgres`, `postgres_cdc`, `snowflake` or `odbc`).
+    /// Whether the source finds its tables in a database's catalog with `include` patterns (`postgres`, `postgres_cdc`, `snowflake`, `odbc` or `bigquery`).
     pub fn discovers_tables(&self) -> bool {
         matches!(
             self.kind,
@@ -477,6 +480,7 @@ impl SourceConfig {
                 | SourceKind::PostgresCdc
                 | SourceKind::Snowflake
                 | SourceKind::Odbc
+                | SourceKind::BigQuery
         )
     }
 
@@ -504,6 +508,7 @@ impl SourceConfig {
                 | SourceKind::PostgresCdc
                 | SourceKind::Snowflake
                 | SourceKind::Odbc
+                | SourceKind::BigQuery
                 | SourceKind::Python,
             ) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
@@ -525,6 +530,9 @@ pub enum SourceKind {
     Snowflake,
     /// Tables and queries of a database with an ODBC driver, read into Arrow.
     Odbc,
+    /// BigQuery tables, views and queries, read as Arrow through the Storage Read API.
+    #[serde(rename = "bigquery")]
+    BigQuery,
     /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
     Python,
     /// Tabs or ranges of a Google Sheets spreadsheet, one table each.

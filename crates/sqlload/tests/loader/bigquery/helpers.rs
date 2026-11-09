@@ -393,3 +393,40 @@ pub(crate) async fn run_bigquery(
         unrouted_calls: state.unrouted_calls,
     })
 }
+
+/// A project loading the fake's `marts` dataset into DuckDB at `database`, with `tables` (TOML table entries) appended to its source.
+pub(crate) fn source_project(
+    fake: &FakeBigQuery,
+    database: &std::path::Path,
+    tables: &str,
+) -> String {
+    format!(
+        "[connections.bq]\nkind = \"bigquery\"\nlocation = \"EU\"\nservice_account_key = '''{}'''\nbase_url = \"{}\"\nstorage_url = \"{}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.marts]\nkind = \"bigquery\"\nconnection = \"bq\"\ninclude = [\"marts.*\"]\n\n{}",
+        fake.key_json,
+        fake.base_url,
+        fake.storage_url,
+        database.display(),
+        tables
+    )
+}
+
+fn order(id: &str, label: &str, amount: &str, at: &str) -> serde_json::Value {
+    serde_json::json!({ "id": id, "label": label, "amount": amount, "at": at })
+}
+
+/// Three orders of 1 November.
+pub(crate) fn first_orders() -> Vec<serde_json::Value> {
+    vec![
+        order("1", "a", "1.25", "2026-11-01T10:00:00Z"),
+        order("2", "b", "2.5", "2026-11-01T11:00:00Z"),
+        order("3", "c", "3.75", "2026-11-01T12:00:00Z"),
+    ]
+}
+
+/// Two orders of 2 November.
+pub(crate) fn later_orders() -> Vec<serde_json::Value> {
+    vec![
+        order("4", "d", "4", "2026-11-02T10:00:00Z"),
+        order("5", "e", "5", "2026-11-02T11:00:00Z"),
+    ]
+}

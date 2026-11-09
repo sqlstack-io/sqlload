@@ -24,6 +24,7 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::WindowSplit;
+use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::models::ColumnType;
@@ -281,6 +282,17 @@ pub(crate) async fn replan_columns(
 pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     match (&spec.files, &spec.python) {
         (Some(_), _) | (_, Some(_)) => files_read_columns(spec),
+        (None, None)
+            if spec
+                .warehouse_source
+                .as_ref()
+                .is_some_and(|source| source.system == BIGQUERY_SOURCE) =>
+        {
+            crate::bigquery_source::main::read_columns::read_columns(
+                &selected_columns(spec),
+                &spec.pinned,
+            )
+        }
         #[cfg(feature = "odbc")]
         (None, None)
             if spec
@@ -958,7 +970,7 @@ pub(crate) fn source_cursor(
     ))
 }
 
-/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds bare, as BigQuery compares a number with no string; any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
+/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; any other bound as a string.
 pub(crate) fn source_filter(
     column: &str,
     (cursor_type, dialect): (Option<&ColumnType>, Option<Warehouse>),
@@ -967,10 +979,10 @@ pub(crate) fn source_filter(
 ) -> Option<String> {
     let adapter = sql_adapter(dialect.unwrap_or(Warehouse::Postgres));
     let literal = |value: &str| match cursor_type
-        .is_some_and(|cursor_type| numeric_cursor(cursor_type) && is_number(value))
+        .filter(|cursor_type| numeric_cursor(cursor_type) && is_number(value))
     {
-        true => value.to_owned(),
-        false => adapter.render_loader_value_literal(value),
+        Some(cursor_type) => adapter.render_cursor_number(value, cursor_type),
+        None => adapter.render_loader_value_literal(value),
     };
     let bounds: Vec<String> = lower
         .map(|(operator, value)| format!("{column} {operator} {}", literal(value)))

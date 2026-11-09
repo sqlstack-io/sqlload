@@ -19,6 +19,22 @@ pub struct FakeStream {
     pub finalized: bool,
 }
 
+/// One read session asked for: the table (`dataset.table`), the columns, the row restriction, and whether it reads as of an instant.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FakeReadSession {
+    pub table: String,
+    pub fields: Vec<String>,
+    pub restriction: String,
+    pub snapshot: bool,
+}
+
+/// One read stream's rows, in the schema its session sends.
+#[derive(Debug, Clone)]
+pub struct FakeStreamRows {
+    pub schema: arrow_schema::SchemaRef,
+    pub rows: Vec<Value>,
+}
+
 /// Everything the fake project remembers.
 #[derive(Debug, Default)]
 pub struct FakeState {
@@ -42,8 +58,18 @@ pub struct FakeState {
     pub refuse_requests: usize,
     /// Tokens refused so far; a request sending one again is refused too.
     pub refused_tokens: Vec<String>,
-    /// Storage Write API calls that came without a routing header.
+    /// Storage Write and Read API calls that came without a routing header.
     pub unrouted_calls: usize,
+    /// Every read session asked for, in order.
+    pub read_sessions: Vec<FakeReadSession>,
+    /// Read sessions created so far.
+    pub read_session_ids: u64,
+    /// Read streams by name.
+    pub read_streams: BTreeMap<String, FakeStreamRows>,
+    /// Every `ReadRows` call: the stream and the offset it starts at.
+    pub read_calls: Vec<(String, i64)>,
+    /// How many of the next read streams break after their first row, with `UNAVAILABLE`.
+    pub broken_reads: usize,
 }
 
 /// Shared fake state.
@@ -92,6 +118,18 @@ impl FakeBigQuery {
             .keys()
             .filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned))
             .collect()
+    }
+
+    /// Append `rows` (objects of column name to text or null) to the table `dataset.table`.
+    pub fn place_rows(&self, table: &str, rows: &[Value]) {
+        if let Some(found) = self
+            .state
+            .lock()
+            .tables
+            .get_mut(&table.to_ascii_lowercase())
+        {
+            found.rows.extend(rows.iter().cloned());
+        }
     }
 
     /// Put an empty table `dataset.table` of `columns` (name, DDL type) in the project.

@@ -34,6 +34,20 @@ pub const FINALIZE_WRITE_STREAM: &str =
 pub const BATCH_COMMIT_WRITE_STREAMS: &str =
     "/google.cloud.bigquery.storage.v1.BigQueryWrite/BatchCommitWriteStreams";
 
+/// The Storage Read API's methods, as gRPC paths.
+pub const CREATE_READ_SESSION: &str =
+    "/google.cloud.bigquery.storage.v1.BigQueryRead/CreateReadSession";
+pub const READ_ROWS: &str = "/google.cloud.bigquery.storage.v1.BigQueryRead/ReadRows";
+
+/// `DataFormat.ARROW`.
+pub const ARROW_FORMAT: i32 = 2;
+
+/// `ArrowSerializationOptions.CompressionCodec.LZ4_FRAME`.
+pub const LZ4_FRAME: i32 = 1;
+
+/// How many times a read stream broken by a retryable error is resumed where it stopped.
+pub const READ_RESUMES: u32 = 3;
+
 /// The metadata Google's front end routes a Storage Write API call by.
 pub const REQUEST_PARAMS: &str = "x-goog-request-params";
 

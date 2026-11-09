@@ -62,6 +62,7 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "stage",
     "max_text_size",
     "max_binary_size",
+    "project",
     "spreadsheet_id",
     "ranges",
 ];

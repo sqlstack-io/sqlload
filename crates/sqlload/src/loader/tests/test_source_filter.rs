@@ -23,6 +23,38 @@ fn given_cursor_bounds_when_rendering_the_source_filter_then_literals_follow_the
             expected_filter: Some("`id` >= '41'"),
         },
         SourceFilterTestCase {
+            description: "a decimal cursor's bounds in BigQuery are BIGNUMERIC, not FLOAT64 literals that round",
+            cursor_type: ColumnType::Decimal {
+                precision: 38,
+                scale: 9,
+            },
+            dialect: Some(Warehouse::BigQuery),
+            lower: Some((">", "1234567890123.000000001")),
+            upper: Some("-0.5"),
+            expected_filter: Some(
+                "`id` > CAST('1234567890123.000000001' AS BIGNUMERIC) AND `id` < CAST('-0.5' AS BIGNUMERIC)",
+            ),
+        },
+        SourceFilterTestCase {
+            description: "a decimal cursor's bounds elsewhere stay bare numbers",
+            cursor_type: ColumnType::Decimal {
+                precision: 38,
+                scale: 9,
+            },
+            dialect: Some(Warehouse::Snowflake),
+            lower: Some((">", "12.5")),
+            upper: None,
+            expected_filter: Some("`id` > 12.5"),
+        },
+        SourceFilterTestCase {
+            description: "a BigQuery text bound escapes quotes and backslashes with a backslash, so a value cannot end the string",
+            cursor_type: ColumnType::Text,
+            dialect: Some(Warehouse::BigQuery),
+            lower: Some((">", r"zz\' UNION ALL SELECT 1 --")),
+            upper: Some(r"o'brien\"),
+            expected_filter: Some(r"`id` > 'zz\\\' UNION ALL SELECT 1 --' AND `id` < 'o\'brien\\'"),
+        },
+        SourceFilterTestCase {
             description: "a Snowflake text maximum ending in a backslash doubles it, so it cannot escape the closing quote",
             cursor_type: ColumnType::Text,
             dialect: Some(Warehouse::Snowflake),
