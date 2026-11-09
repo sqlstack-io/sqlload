@@ -1098,7 +1098,7 @@ async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), Stri
         .map_err(|error| error.to_string())
 }
 
-/// The source filter reading one cursor window, in the source's dialect.
+/// The source filter reading one cursor window, in the source's dialect; its bounds are literals, since `split_windows` cuts only number and time cursors, never a text one.
 fn window_filter(table: &TablePlan, window: &CursorWindow) -> Option<String> {
     let cursor = table.spec.cursor.as_ref()?;
     let column = table
@@ -1119,8 +1119,11 @@ fn window_filter(table: &TablePlan, window: &CursorWindow) -> Option<String> {
                 .as_ref()
                 .and_then(|source| source_dialect(source.system)),
         ),
-        window.from.as_deref().map(|from| (operator, from)),
-        window.to.as_deref(),
+        (
+            window.from.as_deref().map(|from| (operator, from)),
+            window.to.as_deref(),
+        ),
+        None,
     )
 }
 

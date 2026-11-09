@@ -8,7 +8,7 @@ use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::loader::_helpers::resolve::ResolvedTarget;
 use crate::loader::_helpers::sources::sheet_rule;
-use crate::loader::constants::SNOWFLAKE_SOURCE;
+use crate::loader::constants::{ODBC_SOURCE, SNOWFLAKE_SOURCE};
 use crate::loader::models::{
     CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
 };
@@ -280,7 +280,7 @@ pub(crate) fn build_spec(
         cdc,
         warehouse_source: match context.source.kind {
             SourceKind::Odbc => Some(WarehouseSource {
-                system: "odbc",
+                system: ODBC_SOURCE,
                 sql: overrides.sql.clone(),
                 route: WarehouseRoute::Query,
             }),

@@ -89,6 +89,9 @@ pub const CHECKS_LOADER_WARNING: &str = "checks run on rows SQLLoad stages, so e
 /// The `system` of a Snowflake source's tables.
 pub const SNOWFLAKE_SOURCE: &str = "snowflake";
 
+/// The `system` of an ODBC source's tables.
+pub const ODBC_SOURCE: &str = "odbc";
+
 /// The version of the document `apply --json` and `load --json` print; it changes only when a field changes meaning or goes away.
 pub const RESULT_SCHEMA_VERSION: u32 = 1;
 

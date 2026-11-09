@@ -29,6 +29,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             true => Err("--start-cursor/--end-cursor need a cursor_column".to_owned()),
             false => Ok(Window {
                 filter: None,
+                parameters: Vec::new(),
                 bounds: (None, None),
                 mode,
                 note: None,
@@ -137,9 +138,10 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
         filter: source_filter(
             &expression,
             (Some(cursor_type), None),
-            from.as_deref().map(|from| (operator, from)),
-            to.as_deref(),
+            (from.as_deref().map(|from| (operator, from)), to.as_deref()),
+            None,
         ),
+        parameters: Vec::new(),
         bounds: (from, to),
         mode,
         note: Some(note),

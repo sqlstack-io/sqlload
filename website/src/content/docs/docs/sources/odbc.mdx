@@ -89,7 +89,12 @@ with an `ANSI_QUOTES` SQL mode.
 A cursor filter compares the cursor column with a quoted literal, such as
 `"updated_at" >= '2026-03-01 10:00:05.123456'`, which the database converts to the column's type.
 Postgres does; check that yours does too before relying on a cursor. From 0.30.0 (not released
-yet), a numeric cursor compares with a bare number, such as `"id" > 41`.
+yet), a numeric cursor compares with a bare number, such as `"id" > 41`. From 0.30.0 (not released
+yet), a text cursor's bounds are bound parameters, such as `"code" > ?`, so the database's own
+string-literal rules can't change them. Before that, on a database that reads a backslash in a
+string as an escape, a text cursor maximum holding a backslash made
+every later incremental load of the table fail, and other escapes could skip rows or read them
+again.
 
 ## Choosing tables
 

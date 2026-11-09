@@ -91,7 +91,11 @@ pub(crate) struct SourceFilterTestCase {
     pub(crate) description: &'static str,
     pub(crate) cursor_type: ColumnType,
     pub(crate) dialect: Option<Warehouse>,
+    /// Whether text bounds are bound as parameters, as an ODBC source's are.
+    pub(crate) binds: bool,
     pub(crate) lower: Option<(&'static str, &'static str)>,
     pub(crate) upper: Option<&'static str>,
     pub(crate) expected_filter: Option<&'static str>,
+    /// The values bound to the filter's placeholders, in order.
+    pub(crate) expected_parameters: &'static [&'static str],
 }
