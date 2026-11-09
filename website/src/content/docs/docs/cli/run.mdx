@@ -7,14 +7,15 @@ description: "Run the Kafka exporter: export topics into Snowflake until stopped
 sqlload run [--max-duration DURATION] [--shard N]
 ```
 
-`sqlload run` is the [Kafka exporter](/docs/guides/kafka/)'s main command. It reads the topics in
-`sqlload.toml` and writes each one into its Snowflake table until it's stopped, or for
+`sqlload run` is the [Kafka exporter](/docs/guides/kafka/)'s main command. It reads the topics
+`sqlload.toml` selects from Kafka, by `include` and `exclude`, and writes each one into its
+Snowflake table until it's stopped, or for
 `--max-duration`. Ctrl-C or SIGTERM stops it.
 
 | Option | Meaning |
 |--------|---------|
 | `--max-duration <DURATION>` | Stop after this long, such as `10m`. |
-| `--shard <N>` | This instance's index below `source.shards`, from 0. Also `SQLLOAD_SHARD`. Default: `source.shard` in `sqlload.toml`, else 0. |
+| `--shard <N>` | This instance's index below `source.shards`, from 0. Also `SQLLOAD_SHARD`. Default: [`shard`](/docs/kafka/configuration/#source) under `[source]`, else 0. |
 
 With `source.shards` above 1, run one instance per shard, each with its own `--shard`; they split
 the streams between them. A `--shard` that isn't below `source.shards` is refused:

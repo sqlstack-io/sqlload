@@ -27,9 +27,9 @@ $ sqlload load app__orders
 Where the read starts, in order:
 
 1. `--start-cursor`, when given.
-2. With `lookback_from = "now"`, now minus `lookback`, on every run, the first one too. Otherwise the destination's maximum of
-   `cursor_column`, minus `lookback`. `append` reads strictly after
-   it. From 0.27.0, `plan` prints that read as `after` the maximum; before, it
+2. With `lookback_from = "now"`, now minus `lookback`, on every run, the first one too.
+   Otherwise the destination's maximum of `cursor_column`, minus `lookback`. `append` reads
+   strictly after it. From 0.27.0, `plan` prints that read as `after` the maximum; before, it
    printed `from`.
 3. `cursor_start`, when the table is empty.
 4. Otherwise, everything.
@@ -154,9 +154,9 @@ next run reads as a stateless one would.
 
 ```console
 $ sqlload logged-state show
-raw.shop__events  state 4 (run e9f46950-4e6e-4956-ae4f-1fbeb498b3ff at 2026-11-06T23:02:50.939416Z)
-  2026-11-06T23:02:50.785656Z  32e4f7ad-9c92-49d4-9e6e-29c8be864d99  run  - -> -, state 2  6 rows
-  2026-11-06T23:02:50.939416Z  e9f46950-4e6e-4956-ae4f-1fbeb498b3ff  run  - -> -, state 4  6 rows
+raw.shop__events  state 4 (run 54ab366a-bca1-4088-9723-4c6d1723ad02 at 2026-11-09T18:02:47.844103Z)
+  2026-11-09T18:02:47.552256Z  e1bf5051-3333-4fdd-aa31-18bf2d74a51c  run  - -> -, state 2  6 rows
+  2026-11-09T18:02:47.844103Z  54ab366a-bca1-4088-9723-4c6d1723ad02  run  - -> -, state 4  6 rows
 ```
 
 `logged-state verify` compares the logged cursor with the data. `logged-state reconcile --yes`

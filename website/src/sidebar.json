@@ -51,7 +51,7 @@
 					"docs/sources/odbc",
 					{
 						"label": "Python",
-						"link": "/docs/sources/python/"
+						"slug": "docs/sources/python"
 					}
 				]
 			},
@@ -96,7 +96,7 @@
 			"docs/configuration",
 			{
 				"label": "Python API",
-				"slug": "docs/sources/python"
+				"link": "/docs/sources/python/"
 			},
 			"docs/kafka/configuration",
 			"docs/kafka/naming",
