@@ -63,7 +63,7 @@ These are the systems in the current release. Planned ones are on the [roadmap](
 | System | How it's tested |
 |--------|-----------------|
 | Postgres | Real Postgres in containers, as a source and as a target. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB, Snowflake and Databricks. See [Postgres](/docs/targets/postgres/#tested). |
-| ClickHouse | Real ClickHouse 25.8 and 26.10 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
+| ClickHouse | Real ClickHouse 25.3, 25.8 and 26.10 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
 | DuckDB | Real, in process. |
 | MotherDuck | Not tested against a live MotherDuck account. Offline tests cover the connection's `database` and token settings, the refusals (no token, MotherDuck's version message), the Arrow-only route, and loads naming only the current database. MotherDuck's real extension was checked refusing DuckDB 2.0.0. |
 | ODBC | psqlODBC against real Postgres in containers, into DuckDB. |
