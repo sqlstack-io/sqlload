@@ -37,3 +37,39 @@ sql = "SELECT id, name FROM erp.items WHERE id > 2990 -- newest"
         database = database.display(),
     )
 }
+
+/// A project reading `erp.notes` and `erp.codes` over psqlODBC, each appended by its text `label` cursor, into DuckDB.
+pub(crate) fn text_cursor_project(port: u16, database: &std::path::Path) -> String {
+    format!(
+        r#"
+[connections.erp]
+kind = "odbc"
+connection_string = "Driver={{PostgreSQL Unicode}};Server=127.0.0.1;Port={port};Database=app;Uid=sqlload;Pwd=sqlload;"
+
+[connections.local]
+kind = "duckdb"
+database = "{database}"
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.erp]
+kind = "odbc"
+connection = "erp"
+description = "Labelled rows of a generic ERP."
+include = ["erp.*"]
+
+[sources.erp.tables."erp.notes"]
+description = "Notes; the first maximum ends in a backslash."
+cursor_column = "label"
+write_strategy = "append"
+
+[sources.erp.tables."erp.codes"]
+description = "Codes; the first maximum holds a backslash before a quote."
+cursor_column = "label"
+write_strategy = "append"
+"#,
+        database = database.display(),
+    )
+}

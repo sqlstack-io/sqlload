@@ -2,7 +2,7 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
 use crate::helpers::{duckdb_text, run_async, run_sqlload};
-use crate::odbc_helpers::project;
+use crate::odbc_helpers::{project, text_cursor_project};
 use crate::test_types::OdbcLoadTestCase;
 
 const SETUP: &str = r#"
@@ -17,6 +17,8 @@ CREATE TABLE erp.ignored (id int);
 "#;
 
 const ITEMS: &str = "SELECT count(*) || ':' || sum(price) || ':' || count(*) FILTER (WHERE active) || ':' || max(opened) || ':' || max(updated_at) || ':' || count(DISTINCT _sqlload_load_id) FROM raw.erp__items";
+
+const LABELS: &str = "SELECT (SELECT string_agg(label, ',' ORDER BY label) FROM raw.erp__notes) || '|' || (SELECT string_agg(label, ',' ORDER BY label) FROM raw.erp__codes)";
 
 #[test]
 fn given_an_odbc_source_when_loading_through_its_driver_then_tables_and_queries_load_typed_exactly_and_merge_on_their_cursor()
@@ -89,6 +91,65 @@ fn given_an_odbc_source_when_loading_through_its_driver_then_tables_and_queries_
                 succeeded == expected_success && output.contains(expected_text),
                 "{}:\n{output}",
                 test_case.description
+            );
+            assert_eq!(
+                duckdb_text(&database, test_case.check_query)?,
+                test_case.expected_result,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_an_odbc_database_that_reads_backslash_escapes_when_a_text_cursor_maximum_holds_a_quote_and_a_backslash_then_the_next_load_reads_exactly_the_rows_after_it()
+-> Result<(), String> {
+    let test_cases = [
+        OdbcLoadTestCase {
+            description: "the first load reads every row; the maxima are o'brien\\ and zz\\'x",
+            source_change: r"INSERT INTO erp.notes VALUES ('a'), (E'o\'brien\\'); INSERT INTO erp.codes VALUES ('a'), (E'zz\\\'x');",
+            max_text_size: 1000,
+            expected_output: (true, "2 loaded"),
+            check_query: LABELS,
+            expected_result: r"a,o'brien\|a,zz\'x",
+        },
+        OdbcLoadTestCase {
+            description: "the next load reads only the rows after each maximum: its bounds are bound parameters, which the database cannot misread as escapes",
+            source_change: r"INSERT INTO erp.notes VALUES ('p'), (E'o\'brien'); INSERT INTO erp.codes VALUES (E'zz\\\'y'), (E'zz\\\'');",
+            max_text_size: 1000,
+            expected_output: (true, "2 loaded"),
+            check_query: LABELS,
+            expected_result: r"a,o'brien\,p|a,zz\'x,zz\'y",
+        },
+    ];
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(
+                "ALTER DATABASE app SET standard_conforming_strings = off; CREATE SCHEMA erp; CREATE TABLE erp.notes (label text); CREATE TABLE erp.codes (label text);",
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let database = folder.path().join("out.duckdb");
+        let config = folder.path().join("sqlload.toml");
+        std::fs::write(&config, text_cursor_project(postgres.port, &database))
+            .map_err(|error| error.to_string())?;
+        for test_case in test_cases {
+            client
+                .batch_execute(test_case.source_change)
+                .await
+                .map_err(|error| error.to_string())?;
+            let (succeeded, output) = run_sqlload(&config, &["load", "--yes"], ("", ""))?;
+            let (expected_success, expected_text) = test_case.expected_output;
+            assert!(
+                succeeded == expected_success && output.contains(expected_text),
+                "{} (max_text_size {}):\n{output}",
+                test_case.description,
+                test_case.max_text_size
             );
             assert_eq!(
                 duckdb_text(&database, test_case.check_query)?,

@@ -36,6 +36,7 @@ fn given_an_odbc_read_when_writing_its_select_then_names_are_quoted_and_queries_
             sql: test_case.sql,
             columns: &columns,
             filter: test_case.filter,
+            parameters: &[],
             batch_rows: 10,
         };
         assert_eq!(

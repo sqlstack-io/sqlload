@@ -6,6 +6,7 @@ use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::source_binds_text::source_binds_text;
 use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
@@ -166,6 +167,7 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         schema: blocked_plan(reasons),
         mode: WriteMode::Append,
         source_filter: None,
+        source_parameters: Vec::new(),
         cursor_note: None,
         window: None,
         route: None,
@@ -489,6 +491,7 @@ async fn plan_table_once(
                 schema: blocked_plan(problems),
                 mode: WriteMode::Append,
                 source_filter: None,
+                source_parameters: Vec::new(),
                 cursor_note: None,
                 window: None,
                 route: None,
@@ -584,12 +587,17 @@ async fn plan_table_once(
         Ok(Some(window)) => read_window(spec, window),
         _ => None,
     };
-    let (source_filter, bounds, mode, cursor_note) = match window {
-        Ok(Some(window)) => (window.filter, window.bounds, window.mode, window.note),
-        Ok(None) => (None, (None, None), WriteMode::Append, None),
+    let ((source_filter, source_parameters), bounds, mode, cursor_note) = match window {
+        Ok(Some(window)) => (
+            (window.filter, window.parameters),
+            window.bounds,
+            window.mode,
+            window.note,
+        ),
+        Ok(None) => ((None, Vec::new()), (None, None), WriteMode::Append, None),
         Err(problem) => {
             schema = blocked_plan(vec![problem]);
-            (None, (None, None), WriteMode::Append, None)
+            ((None, Vec::new()), (None, None), WriteMode::Append, None)
         }
     };
     let written: Vec<String> = schema
@@ -687,6 +695,7 @@ async fn plan_table_once(
         schema,
         mode,
         source_filter,
+        source_parameters,
         cursor_note,
         window: read,
         route,
@@ -908,6 +917,8 @@ pub(crate) struct WindowRequest<'a> {
 /// The source filter, the write mode and a note for `plan`.
 pub(crate) struct Window {
     pub(crate) filter: Option<String>,
+    /// The values bound to `filter`'s `?` placeholders, in order: an ODBC source's text cursor bounds.
+    pub(crate) parameters: Vec<String>,
     /// The cursor range read: `from <= cursor < to`, each open when `None`.
     pub(crate) bounds: (Option<String>, Option<String>),
     pub(crate) mode: WriteMode,
@@ -970,25 +981,33 @@ pub(crate) fn source_cursor(
     ))
 }
 
-/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; any other bound as a string.
+/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; a text cursor's bounds as `?` placeholders when `parameters` collects their values, in order, to bind; any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
 pub(crate) fn source_filter(
     column: &str,
     (cursor_type, dialect): (Option<&ColumnType>, Option<Warehouse>),
-    lower: Option<(&str, &str)>,
-    upper: Option<&str>,
+    (lower, upper): (Option<(&str, &str)>, Option<&str>),
+    mut parameters: Option<&mut Vec<String>>,
 ) -> Option<String> {
     let adapter = sql_adapter(dialect.unwrap_or(Warehouse::Postgres));
-    let literal = |value: &str| match cursor_type
-        .filter(|cursor_type| numeric_cursor(cursor_type) && is_number(value))
-    {
-        Some(cursor_type) => adapter.render_cursor_number(value, cursor_type),
-        None => adapter.render_loader_value_literal(value),
+    let text = matches!(cursor_type, Some(ColumnType::Text | ColumnType::Varchar(_)));
+    let mut literal = |value: &str| match (
+        cursor_type.filter(|cursor_type| numeric_cursor(cursor_type) && is_number(value)),
+        parameters.as_mut().filter(|_| text),
+    ) {
+        (Some(cursor_type), _) => adapter.render_cursor_number(value, cursor_type),
+        (None, Some(parameters)) => {
+            parameters.push(value.to_owned());
+            "?".to_owned()
+        }
+        (None, None) => adapter.render_loader_value_literal(value),
     };
-    let bounds: Vec<String> = lower
-        .map(|(operator, value)| format!("{column} {operator} {}", literal(value)))
-        .into_iter()
-        .chain(upper.map(|value| format!("{column} < {}", literal(value))))
-        .collect();
+    let mut bounds: Vec<String> = Vec::new();
+    if let Some((operator, value)) = lower {
+        bounds.push(format!("{column} {operator} {}", literal(value)));
+    }
+    if let Some(value) = upper {
+        bounds.push(format!("{column} < {}", literal(value)));
+    }
     (!bounds.is_empty()).then(|| bounds.join(" AND "))
 }
 
@@ -1139,6 +1158,7 @@ pub(crate) async fn cursor_window(
         }
         return Ok(Ok(Window {
             filter: None,
+            parameters: Vec::new(),
             bounds: (None, None),
             mode: write_mode(spec, options.reload, None, None),
             note: None,
@@ -1198,20 +1218,22 @@ pub(crate) async fn cursor_window(
         ),
         (None, None) => (None, note),
     };
-    Ok(Ok(Window {
-        filter: source_filter(
-            request.cursor_expression.unwrap_or_default(),
-            (
-                request.cursor_type,
-                request
-                    .spec
-                    .warehouse_source
-                    .as_ref()
-                    .and_then(|source| source_dialect(source.system)),
-            ),
-            from.as_deref().map(|from| (operator, from)),
-            to.as_deref(),
+    let source = request.spec.warehouse_source.as_ref();
+    let mut parameters: Vec<String> = Vec::new();
+    let filter = source_filter(
+        request.cursor_expression.unwrap_or_default(),
+        (
+            request.cursor_type,
+            source.and_then(|source| source_dialect(source.system)),
         ),
+        (from.as_deref().map(|from| (operator, from)), to.as_deref()),
+        source
+            .is_some_and(|source| source_binds_text(source.system))
+            .then_some(&mut parameters),
+    );
+    Ok(Ok(Window {
+        filter,
+        parameters,
         bounds: (from.clone(), to.clone()),
         mode: write_mode(spec, options.reload, from, to),
         note: Some(note),

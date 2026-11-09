@@ -24,5 +24,7 @@ pub struct OdbcReadRequest<'a> {
     pub columns: &'a [ReadColumn],
     /// A condition on the source's columns, already rendered.
     pub filter: Option<&'a str>,
+    /// The values bound to `filter`'s `?` placeholders, in order, as text.
+    pub parameters: &'a [String],
     pub batch_rows: usize,
 }

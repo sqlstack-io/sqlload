@@ -256,8 +256,10 @@ pub struct TablePlan {
     pub live: Option<Vec<LiveColumn>>,
     pub schema: SchemaPlan,
     pub mode: WriteMode,
-    /// The source filter for incremental reads, already rendered for Postgres.
+    /// The source filter for incremental reads, already rendered in the source's dialect.
     pub source_filter: Option<String>,
+    /// The values bound to `source_filter`'s `?` placeholders, in order: an ODBC source's text cursor bounds.
+    pub source_parameters: Vec<String>,
     /// How the cursor window was chosen, for `plan`.
     pub cursor_note: Option<String>,
     /// The cursor range read, for sources that filter it themselves (Python tables).

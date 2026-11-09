@@ -96,6 +96,7 @@ pub(in crate::loader) async fn plan_files_table(
         schema,
         mode,
         source_filter,
+        source_parameters: vec![],
         cursor_note,
         window: read,
         route: None,
