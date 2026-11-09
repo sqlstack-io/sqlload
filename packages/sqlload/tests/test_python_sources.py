@@ -1068,3 +1068,33 @@ def test_given_an_int_array_pinned_over_arrow_float_lists_when_planning_then_the
 	assert "xs array(int)   -> BIGINT[]  (float elements of Arrow and Parquet lists are cut to whole numbers)" in planned.stdout, planned.stdout
 	load(project)
 	assert query(project, 'SELECT xs::VARCHAR FROM "RAW".shop__t') == [("[1, 2]",)]
+
+
+@pytest.mark.parametrize(
+	("data", "column_type", "expected"),
+	[
+		(
+			"[__import__('pyarrow').table({'id': [1], 'xs': [[]]}), __import__('pyarrow').table({'id': [2], 'xs': [[float('nan'), 1]]}), __import__('pyarrow').table({'id': [3], 'xs': [[float('inf'), 2.5]]})]",
+			"array(float)",
+			[(1, "[]"), (2, "[nan, 1.0]"), (3, "[inf, 2.5]")],
+		),
+		(
+			"[__import__('pyarrow').table({'id': [1], 'xs': __import__('pyarrow').array([[18446744073709551615, 1]], __import__('pyarrow').list_(__import__('pyarrow').uint64()))})]",
+			"array(decimal(20,0))",
+			[(1, "[18446744073709551615, 1]")],
+		),
+		(
+			"[__import__('pyarrow').table({'id': [1, 2], 'xs': [[], None]})]",
+			"array(float)",
+			[(1, "[]"), (2, None)],
+		),
+	],
+	ids=["empty list, then int, then float batches", "uint64 beyond int64", "only empty and NULL lists"],
+)
+def test_given_arrow_list_batches_when_loading_a_pinned_array_then_every_batch_keeps_its_values(
+	tmp_path: Path, data: str, column_type: str, expected: list[tuple[int, str]]
+) -> None:
+	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={{'xs': '{column_type}'}})(lambda ctx: {data})\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	load(project)
+	assert query(project, 'SELECT id, xs::VARCHAR FROM "RAW".shop__t ORDER BY id') == expected

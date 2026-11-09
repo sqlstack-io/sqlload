@@ -65,7 +65,7 @@ pub(crate) fn normalise_column(name: &str, array: &ArrayRef) -> Result<(Field, A
     }
 }
 
-/// Column `name` as a list of the element types the loader carries, when it is a list of scalars; `None` for anything else (it then crosses as JSON text). An element that does not convert exactly is an error.
+/// Column `name` as a list of the element types the loader carries, when it is a list of scalars (a list of only NULLs stays one, for later batches to type); `None` for anything else, and for 64-bit unsigned elements beyond a signed integer (it then crosses as JSON text, as such a column does). An element that does not convert exactly is an error.
 fn scalar_list(name: &str, array: &ArrayRef) -> Result<Option<(Field, ArrayRef)>, String> {
     let element = match array.data_type() {
         DataType::List(element)
@@ -74,7 +74,6 @@ fn scalar_list(name: &str, array: &ArrayRef) -> Result<Option<(Field, ArrayRef)>
         _ => return Ok(None),
     };
     let carried = match normal_form(element) {
-        _ if *element == DataType::Null => return Ok(None),
         Normal::Keep => element.clone(),
         Normal::Cast(data_type) => data_type,
         Normal::Json => return Ok(None),
@@ -84,9 +83,13 @@ fn scalar_list(name: &str, array: &ArrayRef) -> Result<Option<(Field, ArrayRef)>
         safe: false,
         ..CastOptions::default()
     };
-    let cast_array = cast_with_options(array, &list_type, &strict)
-        .map_err(|error| format!("column {name}: an element does not convert: {error}"))?;
-    Ok(Some((Field::new(name, list_type, true), cast_array)))
+    match (cast_with_options(array, &list_type, &strict), element) {
+        (Ok(cast_array), _) => Ok(Some((Field::new(name, list_type, true), cast_array))),
+        (Err(_), DataType::UInt64) => Ok(None),
+        (Err(error), _) => Err(format!(
+            "column {name}: an element does not convert: {error}"
+        )),
+    }
 }
 
 /// Column `name` as a list of carried element types when `lists` names it and it is a list of scalars, otherwise as [`normalise_column`] makes it.
