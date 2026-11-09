@@ -5,7 +5,8 @@ use crate::adapters::clickhouse::_helpers::dialect::publish::{
 };
 use crate::adapters::clickhouse::_helpers::session::http::send;
 use crate::adapters::clickhouse::constants::{
-    EXCHANGE_UNSUPPORTED_CODES, LIGHTWEIGHT_DELETE_REFUSED_CODE, PUBLISH_PREFIX,
+    EXCHANGE_UNSUPPORTED_CODES, LIGHTWEIGHT_DELETE_MODE, LIGHTWEIGHT_DELETE_REFUSED_CODE,
+    PUBLISH_PREFIX,
 };
 use crate::adapters::clickhouse::models::{ClickHouseDestination, ClickHouseSql, PublishStep};
 use crate::adapters::contract::types::SqlAdapter;
@@ -106,7 +107,7 @@ async fn replace_or_drop(
         .map(|_| ())
 }
 
-/// Delete `table`'s rows matching `condition` with a lightweight `DELETE`, which only marks them, or by rewriting their parts with `ALTER TABLE ... DELETE` where the table refuses one.
+/// Delete `table`'s rows matching `condition` with a lightweight `DELETE`, which only marks them (with [`LIGHTWEIGHT_DELETE_MODE`]), or by rewriting their parts with `ALTER TABLE ... DELETE` where the table refuses one.
 async fn delete_rows(
     destination: &ClickHouseDestination,
     (table, condition): (&str, &str),
@@ -114,7 +115,11 @@ async fn delete_rows(
     let deleted = send(
         destination,
         None,
-        format!("DELETE FROM {table} WHERE {condition}").into_bytes(),
+        format!(
+            "DELETE FROM {table} WHERE {condition} SETTINGS {} = '{}'",
+            LIGHTWEIGHT_DELETE_MODE.0, LIGHTWEIGHT_DELETE_MODE.1
+        )
+        .into_bytes(),
     )
     .await;
     match deleted {

@@ -1,7 +1,8 @@
 //! Run SQL statements in order.
 
 use crate::adapters::clickhouse::_helpers::dialect::publish::{
-    PartitionPublish, delta_partitions_query, displaced_partitions_query, partition_statements,
+    PartitionPublish, delta_partitions_query, displaced_partitions_query, lightweight_delete_query,
+    partition_statements,
 };
 use crate::adapters::clickhouse::_helpers::session::steps::{publish_step, run_step};
 use crate::adapters::clickhouse::main::session::_query_rows::query_rows;
@@ -9,7 +10,7 @@ use crate::adapters::clickhouse::models::{ClickHouseDestination, PublishStep};
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::http::errors::ApiError;
 
-/// Run `statements` one after another, each committing on its own (ClickHouse has no transactions, so `BEGIN` and `COMMIT` are refused); a publish step is carried out by asking the server which partitions it touches, then running the statements that swap them in (the copy they are rebuilt in is dropped if one fails).
+/// Run `statements` one after another, each committing on its own (ClickHouse has no transactions, so `BEGIN` and `COMMIT` are refused); a publish step is carried out by asking the server which partitions it touches and whether it can pin a lightweight `DELETE`, then running the statements that swap them in (the copy they are rebuilt in is dropped if one fails).
 pub(in crate::adapters) async fn run_statements(
     destination: &ClickHouseDestination,
     statements: &[String],
@@ -43,9 +44,12 @@ pub(in crate::adapters) async fn run_statements(
             )
         };
         let new = partitions(delta_partitions_query(&delta)).await?;
-        let replaced = match &displaced {
-            Some(condition) => partitions(displaced_partitions_query(&target, condition)).await?,
-            None => Vec::new(),
+        let (replaced, lightweight) = match &displaced {
+            Some(condition) => (
+                partitions(displaced_partitions_query(&target, condition)).await?,
+                !partitions(lightweight_delete_query()).await?.is_empty(),
+            ),
+            None => (Vec::new(), false),
         };
         let publish = PartitionPublish {
             target: &target,
@@ -53,6 +57,7 @@ pub(in crate::adapters) async fn run_statements(
             copy: &copy,
             aside: &aside,
             displaced: displaced.as_deref(),
+            lightweight,
         };
         for step in partition_statements(&publish, (&new, &replaced)) {
             if let Err(error) = run_step(destination, &step).await {

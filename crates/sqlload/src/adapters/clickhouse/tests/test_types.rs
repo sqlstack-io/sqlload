@@ -13,6 +13,8 @@ pub(crate) struct PartitionStatementsTestCase {
     pub(crate) new: &'static [&'static str],
     /// The table's partitions holding rows the delta replaces.
     pub(crate) replaced: &'static [&'static str],
+    /// Whether the server can pin a lightweight `DELETE` (ClickHouse 25.5 and later).
+    pub(crate) lightweight: bool,
     pub(crate) expected_statements: &'static [&'static str],
 }
 

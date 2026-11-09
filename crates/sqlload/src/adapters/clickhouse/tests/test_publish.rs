@@ -20,6 +20,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             displaced: None,
             new: &[],
             replaced: &[],
+            lightweight: true,
             expected_statements: &[],
         },
         PartitionStatementsTestCase {
@@ -27,6 +28,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             displaced: None,
             new: &["202401"],
             replaced: &[],
+            lightweight: true,
             expected_statements: &[
                 "ALTER TABLE `raw`.`events` ATTACH PARTITION ID '202401' FROM `raw`.`d`",
             ],
@@ -36,6 +38,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             displaced: None,
             new: &["202401", "202402"],
             replaced: &[],
+            lightweight: true,
             expected_statements: &[
                 "DROP TABLE IF EXISTS `raw`.`c`",
                 "CREATE TABLE `raw`.`c` AS `raw`.`events`",
@@ -51,6 +54,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             displaced: Some(WINDOW),
             new: &["202401", "202402"],
             replaced: &[],
+            lightweight: true,
             expected_statements: &[
                 "DROP TABLE IF EXISTS `raw`.`c`",
                 "CREATE TABLE `raw`.`c` AS `raw`.`events`",
@@ -66,6 +70,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             displaced: Some(WINDOW),
             new: &["202401"],
             replaced: &["202401"],
+            lightweight: true,
             expected_statements: &[
                 "DROP TABLE IF EXISTS `raw`.`c`",
                 "CREATE TABLE `raw`.`c` AS `raw`.`events`",
@@ -81,6 +86,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             displaced: Some(WINDOW),
             new: &["202401"],
             replaced: &[],
+            lightweight: true,
             expected_statements: &[
                 "DROP TABLE IF EXISTS `raw`.`c`",
                 "CREATE TABLE `raw`.`c` AS `raw`.`events`",
@@ -95,6 +101,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             displaced: Some(WINDOW),
             new: &[],
             replaced: &["202402"],
+            lightweight: true,
             expected_statements: &[
                 "DROP TABLE IF EXISTS `raw`.`c`",
                 "CREATE TABLE `raw`.`c` AS `raw`.`events`",
@@ -109,11 +116,58 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             displaced: Some(WINDOW),
             new: &["202401"],
             replaced: &["202401", "202312"],
+            lightweight: true,
             expected_statements: &[
                 "DROP TABLE IF EXISTS `raw`.`c`",
                 "CREATE TABLE `raw`.`c` AS `raw`.`events`",
                 "ALTER TABLE `raw`.`c` ATTACH PARTITION ALL FROM `raw`.`events`",
                 "-- sqlload publish {\"DeleteRows\":{\"table\":\"`raw`.`c`\",\"condition\":\"_partition_id IN ('202401', '202312') AND ifNull(`day` >= CAST('2024-01-10' AS Date32), 0)\"}}",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ID '202401' FROM `raw`.`d`",
+                EXCHANGE,
+                "DROP TABLE IF EXISTS `raw`.`c`",
+            ],
+        },
+        PartitionStatementsTestCase {
+            description: "before ClickHouse 25.5, a window in one partition is rebuilt beside the table from its kept rows and the delta's, then replaced",
+            displaced: Some(WINDOW),
+            new: &["202401"],
+            replaced: &["202401"],
+            lightweight: false,
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`c`",
+                "CREATE TABLE `raw`.`c` AS `raw`.`events`",
+                "INSERT INTO `raw`.`c` SELECT * FROM `raw`.`events` WHERE _partition_id IN ('202401') AND NOT ifNull(`day` >= CAST('2024-01-10' AS Date32), 0)",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ID '202401' FROM `raw`.`d`",
+                "ALTER TABLE `raw`.`events` REPLACE PARTITION ID '202401' FROM `raw`.`c`",
+                "DROP TABLE IF EXISTS `raw`.`c`",
+            ],
+        },
+        PartitionStatementsTestCase {
+            description: "before ClickHouse 25.5, a partition whose window rows are all gone upstream is rebuilt from its kept rows alone, and dropped if none are kept",
+            displaced: Some(WINDOW),
+            new: &[],
+            replaced: &["202402"],
+            lightweight: false,
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`c`",
+                "CREATE TABLE `raw`.`c` AS `raw`.`events`",
+                "INSERT INTO `raw`.`c` SELECT * FROM `raw`.`events` WHERE _partition_id IN ('202402') AND NOT ifNull(`day` >= CAST('2024-01-10' AS Date32), 0)",
+                "-- sqlload publish {\"ReplacePartition\":{\"target\":\"`raw`.`events`\",\"copy\":\"`raw`.`c`\",\"partition\":\"202402\"}}",
+                "DROP TABLE IF EXISTS `raw`.`c`",
+            ],
+        },
+        PartitionStatementsTestCase {
+            description: "before ClickHouse 25.5, a window over two partitions drops both from a hard-linked copy, refills them from their kept rows and the delta's, and exchanges it in",
+            displaced: Some(WINDOW),
+            new: &["202401"],
+            replaced: &["202401", "202312"],
+            lightweight: false,
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`c`",
+                "CREATE TABLE `raw`.`c` AS `raw`.`events`",
+                "ALTER TABLE `raw`.`c` ATTACH PARTITION ALL FROM `raw`.`events`",
+                "ALTER TABLE `raw`.`c` DROP PARTITION ID '202312', DROP PARTITION ID '202401'",
+                "INSERT INTO `raw`.`c` SELECT * FROM `raw`.`events` WHERE _partition_id IN ('202312', '202401') AND NOT ifNull(`day` >= CAST('2024-01-10' AS Date32), 0)",
                 "ALTER TABLE `raw`.`c` ATTACH PARTITION ID '202401' FROM `raw`.`d`",
                 EXCHANGE,
                 "DROP TABLE IF EXISTS `raw`.`c`",
@@ -133,6 +187,7 @@ fn given_the_partitions_a_write_touches_when_publishing_then_they_are_swapped_in
             copy: "`raw`.`c`",
             aside: "`raw`.`a`",
             displaced: test_case.displaced,
+            lightweight: test_case.lightweight,
         };
         assert_eq!(
             partition_statements(
