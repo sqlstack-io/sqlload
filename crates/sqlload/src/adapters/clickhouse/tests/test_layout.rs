@@ -26,7 +26,7 @@ fn given_a_table_layout_when_creating_a_clickhouse_table_then_its_engine_keys_an
         LayoutTestCase {
             description: "every field as written, expressions unquoted; an explicit allow_nullable_key is kept as set",
             layout: TableLayout {
-                engine: Some("ReplacingMergeTree(_sqlload_loaded_at)".to_owned()),
+                engine: Some("ReplacingMergeTree".to_owned()),
                 order_by: Some(vec!["event_id".to_owned(), "toDate(event_time)".to_owned()]),
                 partition_by: Some("toYYYYMM(event_date)".to_owned()),
                 primary_key: Some(vec!["event_id".to_owned()]),
@@ -36,7 +36,7 @@ fn given_a_table_layout_when_creating_a_clickhouse_table_then_its_engine_keys_an
                 ]),
             },
             unique_key: &["id"],
-            expected_clauses: "ENGINE = ReplacingMergeTree(_sqlload_loaded_at) ORDER BY (event_id, toDate(event_time)) PARTITION BY toYYYYMM(event_date) PRIMARY KEY (event_id) SETTINGS allow_nullable_key = 0, index_granularity = 4096",
+            expected_clauses: "ENGINE = ReplacingMergeTree ORDER BY (event_id, toDate(event_time)) PARTITION BY toYYYYMM(event_date) PRIMARY KEY (event_id) SETTINGS allow_nullable_key = 0, index_granularity = 4096",
         },
         LayoutTestCase {
             description: "a partition alone needs the nullable-key setting too; a text setting is quoted with backslash escapes",

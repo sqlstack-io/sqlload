@@ -58,14 +58,13 @@ table. They use SQLBuild's names for ClickHouse:
 description = "Orders, one row per order."
 partition_by = "toYYYYMM(updated_at)"
 order_by = ["customer_id", "order_id"]
-# engine = "ReplacingMergeTree(_sqlload_loaded_at)"
 # primary_key = ["customer_id"]
 # table_settings = { index_granularity = 4096 }
 ```
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `engine` | `MergeTree` | The table engine, with its arguments. Only engines of the `MergeTree` family on one server; `plan` refuses others. |
+| `engine` | `MergeTree` | The table engine, with its arguments. Only engines of the `MergeTree` family on one server; `plan` refuses others. Every column SQLLoad creates is `Nullable` (other than a `native(...)` pin), and ClickHouse refuses a `Nullable` version column, so give `ReplacingMergeTree` no version argument. |
 | `order_by` | the `unique_key`, else unsorted | The sorting key: an expression or a list of them. |
 | `partition_by` | none | The partitioning expression. |
 | `primary_key` | none | The primary key, a prefix of `order_by`. |

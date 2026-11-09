@@ -82,7 +82,7 @@ pub(crate) fn layout_problems(layout: &TableLayout) -> Vec<String> {
     match name.ends_with(DEFAULT_ENGINE) && !name.starts_with("Replicated") {
         true => Vec::new(),
         false => vec![format!(
-            "engine {engine:?}: SQLLoad loads ClickHouse tables of the MergeTree family on one server (such as MergeTree or ReplacingMergeTree(version)), as it swaps their partitions; replicated and distributed tables are not supported yet"
+            "engine {engine:?}: SQLLoad loads ClickHouse tables of the MergeTree family on one server (such as MergeTree or ReplacingMergeTree), as it swaps their partitions; replicated and distributed tables are not supported yet"
         )],
     }
 }
