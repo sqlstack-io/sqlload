@@ -2,7 +2,6 @@
 
 SQL data loading tooling.
 
-> **Pre-release.** sqlload is under active development and is not yet intended for general use.
 > Commands, configuration, the library API and behaviour can change without notice between
 > releases, and there is no support or stability guarantee.
 

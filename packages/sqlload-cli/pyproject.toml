@@ -5,12 +5,11 @@ build-backend = "maturin"
 [project]
 name = "sqlload-cli"
 version = "0.33.1" # x-release-please-version
-description = "Native executable for sqlload. Pre-release, under development."
+description = "Native executable for sqlload."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Rust",
