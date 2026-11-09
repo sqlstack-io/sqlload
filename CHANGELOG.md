@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.33.3](https://github.com/sqlstack-io/sqlload/compare/v0.33.2...v0.33.3) (2026-11-09)
+
+
+### Performance Improvements
+
+* **clickhouse:** insert the delta ordered by the partition key, so a load makes one part per partition ([#174](https://github.com/sqlstack-io/sqlload/issues/174)) ([7b2529e](https://github.com/sqlstack-io/sqlload/commit/7b2529e1e250be83f90046184ceea8fb52167db2))
+
+
+### Documentation
+
+* reorganise the docs into Getting Started, Guides, Concepts, Connectors and Reference ([#172](https://github.com/sqlstack-io/sqlload/issues/172)) ([22ea3bc](https://github.com/sqlstack-io/sqlload/commit/22ea3bc6a45f0ccc512492cf81e057da41fb67f6))
+
 ## [0.33.2](https://github.com/sqlstack-io/sqlload/compare/v0.33.1...v0.33.2) (2026-11-09)
 
 
