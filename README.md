@@ -87,7 +87,7 @@ versions and how to run them yourself.
 | ClickHouse | | preview |
 | DuckDB | | ✓ |
 | MotherDuck | | beta² |
-| Files | ✓ Parquet, CSV, JSON (S3, local folder, SFTP) | ✓ Parquet, CSV |
+| Files | ✓ Parquet, CSV, JSON (S3, local folder, SFTP) | ✓ Parquet, CSV (S3, local folder) |
 | Google Sheets | ✓ | |
 | HTTP APIs and Python | ✓ | |
 | ODBC databases¹ | ✓ | |
