@@ -78,16 +78,23 @@ versions and how to run them yourself.
 
 ## What it loads
 
-| Sources | Targets |
-|---|---|
-| Postgres tables and Postgres changes (CDC) | Snowflake |
-| Parquet, CSV and JSON files in S3, a local folder or SFTP | Databricks |
-| Snowflake and BigQuery tables and queries | BigQuery (preview) |
-| Google Sheets | ClickHouse (preview) |
-| Python sources and HTTP APIs | DuckDB |
-| Databases with an ODBC driver (in builds with the `odbc` feature) | Postgres |
-| | Parquet or CSV files |
-| | MotherDuck (beta, once MotherDuck accepts DuckDB 2.0 clients) |
+| System | Source | Target |
+|---|---|---|
+| Postgres | ✓ (incl. CDC) | ✓ |
+| Snowflake | ✓ | ✓ |
+| BigQuery | ✓ | preview |
+| Databricks | | ✓ |
+| ClickHouse | | preview |
+| DuckDB | | ✓ |
+| MotherDuck | | beta² |
+| Files | ✓ Parquet, CSV, JSON (S3, local folder, SFTP) | ✓ Parquet, CSV (S3, local folder) |
+| Google Sheets | ✓ | |
+| HTTP APIs and Python | ✓ | |
+| ODBC databases¹ | ✓ | |
+
+¹ In builds with the `odbc` feature.
+
+² Once MotherDuck accepts DuckDB 2.0 clients.
 
 See [Supported systems](https://sqlload.io/docs/supported-systems/) for every combination and
 write strategy.

@@ -275,9 +275,26 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 						<p class="lede">
 							Install it, then copy a folder or a Postgres table with one command. No configuration file needed.
 						</p>
+						<table class="systems">
+							<thead>
+								<tr><th scope="col">System</th><th scope="col">Source</th><th scope="col">Target</th></tr>
+							</thead>
+							<tbody>
+								<tr><th scope="row">Postgres</th><td>✓ (incl. <a href="/docs/sources/postgres-cdc/">CDC</a>)</td><td>✓</td></tr>
+								<tr><th scope="row">Snowflake</th><td>✓</td><td>✓</td></tr>
+								<tr><th scope="row">BigQuery</th><td>✓</td><td>preview</td></tr>
+								<tr><th scope="row">Databricks</th><td></td><td>✓</td></tr>
+								<tr><th scope="row">ClickHouse</th><td></td><td>preview</td></tr>
+								<tr><th scope="row">DuckDB</th><td></td><td>✓</td></tr>
+								<tr><th scope="row">MotherDuck</th><td></td><td>beta²</td></tr>
+								<tr><th scope="row">Files</th><td>✓ Parquet, CSV, JSON (S3, local folder, SFTP)</td><td>✓ Parquet, CSV (S3, local folder)</td></tr>
+								<tr><th scope="row">Google Sheets</th><td>✓</td><td></td></tr>
+								<tr><th scope="row">HTTP APIs and Python</th><td>✓</td><td></td></tr>
+								<tr><th scope="row">ODBC databases¹</th><td>✓</td><td></td></tr>
+							</tbody>
+						</table>
+						<p class="systems-notes">¹ In builds with the <code>odbc</code> feature.<br />² Once MotherDuck accepts DuckDB 2.0 clients.<br />See the <a href="/docs/supported-systems/">connector matrix</a> for every combination and write strategy.</p>
 						<ul>
-							<li>Reads Postgres, including <a href="/docs/sources/postgres-cdc/">change data capture</a>; Snowflake; Parquet, CSV, JSON and NDJSON in S3 or a folder; Google Sheets; Python and HTTP APIs; and, in builds with the <code>odbc</code> feature, databases with an ODBC driver.</li>
-							<li>Writes Snowflake, Databricks, BigQuery (preview), ClickHouse (preview), Postgres, DuckDB, and Parquet or CSV files in S3 or a folder.</li>
 							<li>Linux and macOS; Python only for Python sources.</li>
 							<li>Free and open source, Apache-2.0.</li>
 						</ul>
