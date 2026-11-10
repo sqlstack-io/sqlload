@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.6](https://github.com/sqlstack-io/sqlload/compare/v0.33.5...v0.33.6) (2026-11-10)
+
+
+### Documentation
+
+* list each system once with its source and target support ([#179](https://github.com/sqlstack-io/sqlload/issues/179)) ([a3e319f](https://github.com/sqlstack-io/sqlload/commit/a3e319f7e07fb9ba9b4a689d1a71552faf587921))
+
 ## [0.33.5](https://github.com/sqlstack-io/sqlload/compare/v0.33.4...v0.33.5) (2026-11-09)
 
 
