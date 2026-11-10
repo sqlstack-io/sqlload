@@ -614,6 +614,39 @@ h3 {
 	background: var(--success);
 }
 
+.start .systems {
+	width: 100%;
+	margin-top: 20px;
+	border-collapse: collapse;
+	font-size: 15px;
+}
+
+.start .systems th,
+.start .systems td {
+	padding: 7px 12px 7px 0;
+	border-top: 1px solid var(--inner-line);
+	text-align: left;
+	vertical-align: top;
+	color: var(--muted-foreground);
+	font-weight: 400;
+}
+
+.start .systems thead th {
+	border-top: none;
+	color: var(--foreground);
+	font-weight: 600;
+}
+
+.start .systems tbody th {
+	color: var(--foreground);
+}
+
+.start .systems-notes {
+	margin: 10px 0 0;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
 .start .terminal {
 	border: 1px solid var(--panel-border);
 	border-radius: var(--radius);

@@ -8,10 +8,26 @@ import CardGroup from '../../../components/docs/CardGroup.astro';
 
 SQLLoad loads data into your warehouse, and shows you how before it changes anything.
 
-It reads Postgres and Snowflake tables, files (Parquet, CSV, JSON and NDJSON) in S3 or a local
-folder, Google Sheets, and Python sources, including HTTP APIs. Builds with the `odbc` feature
-also read databases with an ODBC driver. It writes to Snowflake, Databricks, BigQuery
-(preview), ClickHouse (preview), Postgres, DuckDB, or Parquet or CSV files in S3 or a folder.
+| System | Source | Target |
+|---|---|---|
+| Postgres | ✓ (incl. CDC) | ✓ |
+| Snowflake | ✓ | ✓ |
+| BigQuery | ✓ | preview |
+| Databricks | | ✓ |
+| ClickHouse | | preview |
+| DuckDB | | ✓ |
+| MotherDuck | | beta² |
+| Files | ✓ Parquet, CSV, JSON (S3, local folder, SFTP) | ✓ Parquet, CSV |
+| Google Sheets | ✓ | |
+| HTTP APIs and Python | ✓ | |
+| ODBC databases¹ | ✓ | |
+
+¹ In builds with the `odbc` feature.
+
+² Once MotherDuck accepts DuckDB 2.0 clients.
+
+See the [connector matrix](/docs/supported-systems/) for every combination and write strategy.
+
 `sqlload plan` shows each table's columns, write strategy and route before `apply` and `load` run.
 Where Snowflake or DuckDB can load files exactly by itself, the files never pass through SQLLoad.
 SQLLoad is written in Rust. Python is needed only for Python sources.
