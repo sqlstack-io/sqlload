@@ -36,6 +36,7 @@ use crate::column_types::models::Warehouse;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::{Compression, SourceFormat};
+use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
@@ -135,6 +136,7 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             },
         })
         .collect();
+    desired.retain(|column| !spec.unnest.takes(&column.name));
     desired.extend(
         added_constants(spec, read).map(|(name, column_type, _)| DesiredColumn {
             name: name.clone(),
@@ -149,7 +151,7 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     desired.retain(|column| !(merged && column.name == CDC_UNCHANGED_COLUMN));
     for column in desired
         .iter_mut()
-        .filter(|column| column.name.starts_with(CDC_PREFIX))
+        .filter(|column| is_load_column(spec.naming, &column.name))
     {
         column.origin = ColumnOrigin::Metadata;
     }

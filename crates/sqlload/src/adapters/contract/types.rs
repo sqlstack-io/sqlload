@@ -46,6 +46,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         self.runs_sql() || apply == ChangeApply::Changelog
     }
 
+    /// Whether the warehouse's writer has been taught to write the child tables `unnest` makes, beside their parent.
+    fn writes_child_tables(&self) -> bool {
+        false
+    }
+
     /// Whether SQLLoad never drops or recreates the warehouse's tables and never alters one it did not create: `replace` empties and refills the table in one transaction instead of swapping a new one in, `--reload` is refused, and an existing table without `_sqlload_load_id` is loaded as it is.
     fn keeps_tables(&self) -> bool {
         false

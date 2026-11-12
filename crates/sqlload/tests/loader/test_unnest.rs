@@ -90,6 +90,20 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             expected_problem: "unnest does not yet write child tables with a files target",
         },
         UnnestPlanTestCase {
+            description: "the unnested field is not a column of the table: the plan lists id and items only",
+            settings: "[sources.orders.tables.orders]\nunnest = [\"tags\"]\n",
+            files_target: false,
+            expected_ok: true,
+            expected_problem: "├── id    int    -> BIGINT\n    ├── items json   -> JSON\n    └── + _sqlload_source_file",
+        },
+        UnnestPlanTestCase {
+            description: "a merge, until its child rows are replaced by root",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"tags\"]\n",
+            files_target: false,
+            expected_ok: false,
+            expected_problem: "unnest does not yet write child tables with write_strategy = \"merge\"",
+        },
+        UnnestPlanTestCase {
             description: "row ids turned off under dlt naming",
             settings: "naming = \"dlt\"\nrow_id = false\n",
             files_target: false,

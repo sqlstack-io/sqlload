@@ -852,6 +852,8 @@ fn nesting(
         .unwrap_or_default();
     let row_id = layered(&settings.row_id, &defaults.row_id).map(|(value, _)| value);
     let max_depth = overrides.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
+    let logged = layered(&settings.state, &defaults.state)
+        .is_some_and(|(value, _)| value == StateMode::Logged);
     let mut problems: Vec<String> = Vec::new();
     if naming == Naming::Dlt && row_id == Some(false) {
         problems.push("row_id = false: naming = \"dlt\" gives every row its _dlt_id; drop row_id or use naming = \"sqlload\"".to_owned());
@@ -881,6 +883,7 @@ fn nesting(
         Unnest::None => {}
         Unnest::All | Unnest::Paths(_) => {
             problems.extend(refused_writes(context, (strategy, contract)));
+            problems.extend(unbuilt_writes(context, (strategy, &unnest), logged));
             if row_id == Some(false) {
                 problems.push("row_id = false: unnest gives every row an id, which its child rows name as their parent's; drop row_id".to_owned());
             }
@@ -962,6 +965,26 @@ fn matching_pattern<'a>(field: &str, patterns: &[&'a String]) -> Option<&'a Stri
         .iter()
         .find(|pattern| Glob::new(pattern).is_ok_and(|glob| glob.compile_matcher().is_match(field)))
         .copied()
+}
+
+/// What this build cannot yet do with `unnest` while its writers are taught to: `unnest = "all"`, a merge, and warehouses other than DuckDB and Postgres; and a `state = "logged"` table, whose commit can wait on its state while its child rows would not.
+fn unbuilt_writes(
+    context: &SourceContext<'_>,
+    (strategy, unnest): (WriteStrategy, &Unnest),
+    logged: bool,
+) -> Vec<String> {
+    let warehouse = context.target.warehouse;
+    [
+        (*unnest == Unnest::All).then(|| "unnest = \"all\" (list the paths instead)".to_owned()),
+        (strategy == WriteStrategy::Merge).then(|| "write_strategy = \"merge\"".to_owned()),
+        (context.target.path.is_none() && !sql_adapter(warehouse).writes_child_tables())
+            .then(|| format!("a {warehouse} target")),
+        logged.then(|| "state = \"logged\"".to_owned()),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|what| format!("unnest does not yet write child tables with {what}; drop unnest, and its lists stay JSON columns"))
+    .collect()
 }
 
 /// Why this table's writes cannot carry child tables yet: a files target, `delete_insert`, captured changes or an enforced contract.
