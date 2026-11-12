@@ -147,7 +147,9 @@ time (one per tenant, for example) don't wait for each other, so run them one af
 Tables sharing a destination must differ in the value of at least one constant column, and a
 `merge` table in one that is in its `unique_key`. Their cursors are scoped only while they share
 it: adding a constant column to a table that already holds rows leaves those rows `NULL` in it, so
-the next run of a shared table starts from its `cursor_start` again.
+the next run of a shared table starts from its `cursor_start` again. When a source can't be read
+(its database is down, say), SQLLoad can't tell which tables share with it, so every table with
+`constant_columns` reads its cursor within its own values for that run, and `plan` warns.
 
 A value is a string (`text`), an integer, a float, a boolean, a TOML date or date and time, or
 `{ value = "7", type = "int" }` for any other type. A table entry's `constant_columns` replaces its

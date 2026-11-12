@@ -125,6 +125,16 @@ unique_key = ["tenant_id", "id"]
 cursor_column = "updated_at"
 "#;
 
+/// A Postgres connection nothing listens on, for a source that cannot be read.
+const DOWN_CONNECTION: &str = r#"[connections.down_pg]
+kind = "postgres"
+host = "127.0.0.1"
+port = 1
+user = "sqlload"
+password = "sqlload"
+database = "app"
+"#;
+
 const TENANT_VALUES_QUERY: &str = "SELECT string_agg(tenant_id || ':' || id || ':' || label, ',' ORDER BY tenant_id, id) FROM raw.orders";
 
 const TENANT_ROWS_QUERY: &str = "SELECT string_agg(id || ':' || label || ':' || _sqlload_load_id || ':' || CAST(_sqlload_loaded_at AS VARCHAR), ',' ORDER BY id) FROM raw.orders WHERE tenant_id = 'TENANT'";
@@ -355,7 +365,9 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
                 source_change: "",
                 select: "tenant_b",
                 untouched_tenant: "a",
+                unreadable: "",
                 expected_cursor: "cursor  updated_at empty table, everything",
+                expected_warning: "",
                 expected_values: "a:1:a-one,a:2:a-two,b:1:b-one,b:3:b-three",
             },
             TenantStepTestCase {
@@ -363,7 +375,9 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
                 source_change: "UPDATE a.orders SET label = 'a-one-changed', updated_at = '2026-11-07 10:00:00+00' WHERE id = 1;",
                 select: "app",
                 untouched_tenant: "b",
+                unreadable: "",
                 expected_cursor: "cursor  updated_at from 2026-11-06 10:00:00.000000+00 (destination maximum)",
+                expected_warning: "",
                 expected_values: "a:1:a-one-changed,a:2:a-two,b:1:b-one,b:3:b-three",
             },
             TenantStepTestCase {
@@ -371,8 +385,20 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
                 source_change: "INSERT INTO b.orders VALUES (4, 'b-four', '2026-11-03 10:00:00+00');",
                 select: "tenant_b",
                 untouched_tenant: "a",
+                unreadable: "",
                 expected_cursor: "cursor  updated_at from 2026-11-02 10:00:00.000000+00 (destination maximum)",
+                expected_warning: "",
                 expected_values: "a:1:a-one-changed,a:2:a-two,b:1:b-one,b:3:b-three,b:4:b-four",
+            },
+            TenantStepTestCase {
+                description: "with tenant A's source unreadable, tenant B still reads from B's own maximum, not the whole table's",
+                source_change: "INSERT INTO b.orders VALUES (5, 'b-five', '2026-11-03 12:00:00+00');",
+                select: "tenant_b",
+                untouched_tenant: "a",
+                unreadable: "app",
+                expected_cursor: "cursor  updated_at from 2026-11-03 10:00:00.000000+00 (destination maximum)",
+                expected_warning: "app could not be read, so tenant_b.b.orders may share a destination table with it",
+                expected_values: "a:1:a-one-changed,a:2:a-two,b:1:b-one,b:3:b-three,b:4:b-four,b:5:b-five",
             },
         ];
         for test_case in test_cases {
@@ -384,11 +410,25 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
             let before = single_text(duckdb, untouched.clone())
                 .await
                 .map_err(|error| error.to_string())?;
-            let plan = load_selected(&project, &destinations, &[test_case.select])
+            let source = format!(
+                "[sources.{}]\nkind = \"postgres\"\nconnection = \"app_pg\"",
+                test_case.unreadable
+            );
+            let down = format!(
+                "[sources.{}]\nkind = \"postgres\"\nconnection = \"down_pg\"",
+                test_case.unreadable
+            );
+            let stepped = described_project(&format!(
+                "{}\n{DOWN_CONNECTION}",
+                text.replacen(&source, &down, 1)
+            ))
+            .await?;
+            let plan = load_selected(&stepped, &destinations, &[test_case.select])
                 .await
                 .map_err(|error| format!("{}: {error}", test_case.description))?;
             assert!(
-                plan.contains(test_case.expected_cursor),
+                plan.contains(test_case.expected_cursor)
+                    && plan.contains(test_case.expected_warning),
                 "{}:\n{plan}",
                 test_case.description
             );

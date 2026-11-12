@@ -73,8 +73,12 @@ pub(crate) struct TenantStepTestCase {
     pub(crate) select: &'static str,
     /// The other tenant, whose rows, load id and load time must not change.
     pub(crate) untouched_tenant: &'static str,
+    /// A source whose connection is down for this load, or empty.
+    pub(crate) unreadable: &'static str,
     /// The cursor line the plan shows for the loaded tenant.
     pub(crate) expected_cursor: &'static str,
+    /// Text a plan warning must contain, or empty.
+    pub(crate) expected_warning: &'static str,
     /// Every row after the load, as `tenant_id:id:label`.
     pub(crate) expected_values: &'static str,
 }

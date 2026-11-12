@@ -241,6 +241,8 @@ pub struct FoundSources<'a> {
     pub claims: Vec<crate::adapters::files::models::FolderClaim>,
     pub configured: Vec<TableSpec>,
     pub plan: ProjectPlan,
+    /// The sources whose tables could not be listed, selected or not, so the tables they would load are unknown.
+    pub unresolved: Vec<String>,
 }
 
 /// The settings for tables of one project, before any destination is read.

@@ -181,18 +181,46 @@ pub(crate) fn block_shared_destinations(
     plan
 }
 
-/// `specs` with `shared_destination` set on each that another of the `configured` tables loads into the same destination table as.
+/// `specs` with `shared_destination` set on each that another of the `configured` tables loads into the same destination table as, or, when `unknown` (a source's tables could not be listed, so one of them might), on each with constant columns.
 pub(crate) fn mark_shared_destinations(
     specs: Vec<TableSpec>,
     configured: &[TableSpec],
+    unknown: bool,
 ) -> Vec<TableSpec> {
     specs
         .into_iter()
         .map(|spec| TableSpec {
-            shared_destination: shared(&spec, configured),
+            shared_destination: shared(&spec, configured)
+                || (unknown && !spec.constants.is_empty()),
             ..spec
         })
         .collect()
+}
+
+/// A warning naming the `specs` whose cursors read within their constant values only because the `unresolved` sources' tables are unknown, if any do.
+pub(crate) fn unknown_sharing(
+    specs: &[TableSpec],
+    configured: &[TableSpec],
+    unresolved: &[String],
+) -> Option<String> {
+    let names: Vec<String> = specs
+        .iter()
+        .filter(|spec| spec.shared_destination && !shared(spec, configured))
+        .map(|spec| {
+            format!(
+                "{}.{}",
+                spec.source_name,
+                spec.source_table.qualified_name()
+            )
+        })
+        .collect();
+    (!names.is_empty()).then(|| {
+        format!(
+            "{} could not be read, so {} may share a destination table with it: their incremental cursors read only rows with their own constant values",
+            unresolved.join(", "),
+            names.join(", ")
+        )
+    })
 }
 
 /// Whether another of the `configured` tables loads into `spec`'s destination table.

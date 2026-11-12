@@ -1620,6 +1620,7 @@ pub(crate) async fn found_sources<'a>(
             match scoped_tables((project, options), (source_name, source)).await? {
                 Ok(tables) => tables,
                 Err(problem) => {
+                    found.unresolved.push(source_name.clone());
                     if let Some(problem) = problem {
                         if problem.retryable {
                             found.plan.retryable_problems.push(problem.message.clone());
