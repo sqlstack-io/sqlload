@@ -9,6 +9,8 @@ use russh::keys::agent::client::AgentClient;
 use russh::keys::known_hosts::known_host_keys_path;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_secret_key};
 
+#[cfg(windows)]
+use crate::ssh_tunnel::constants::OPENSSH_AGENT_PIPE;
 use crate::ssh_tunnel::constants::{CONNECT_TIMEOUT, KEEPALIVE_INTERVAL, KEEPALIVE_MAX};
 use crate::ssh_tunnel::models::{HostCheck, SshTunnel};
 
@@ -234,13 +236,27 @@ async fn password_sign_in(
     }
 }
 
+/// ssh-agent: the socket `SSH_AUTH_SOCK` names.
+#[cfg(unix)]
+async fn connect_agent() -> Result<AgentClient<tokio::net::UnixStream>, russh::keys::Error> {
+    AgentClient::connect_env().await
+}
+
+/// ssh-agent on Windows: the pipe `SSH_AUTH_SOCK` names, or else the OpenSSH agent service's.
+#[cfg(windows)]
+async fn connect_agent()
+-> Result<AgentClient<tokio::net::windows::named_pipe::NamedPipeClient>, russh::keys::Error> {
+    let pipe = std::env::var("SSH_AUTH_SOCK").unwrap_or_else(|_| OPENSSH_AGENT_PIPE.to_owned());
+    AgentClient::connect_named_pipe(pipe).await
+}
+
 /// `session` signed in as `user` with the first key ssh-agent holds that the bastion accepts.
 async fn agent_sign_in(
     mut session: Handle<HostCheck>,
     user: &str,
     rsa_hash: Option<HashAlg>,
 ) -> Result<Handle<HostCheck>, String> {
-    let mut agent = AgentClient::connect_env().await.map_err(|error| {
+    let mut agent = connect_agent().await.map_err(|error| {
         format!("neither private_key_file nor password is set and ssh-agent is not reachable ({error}); set private_key_file or password")
     })?;
     let identities = agent
