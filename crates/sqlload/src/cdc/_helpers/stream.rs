@@ -44,7 +44,6 @@ use crate::loader::models::{
     CdcSpec, CommitRule, LoadRun, PlanOptions, ProjectPlan, Publisher, TableLoaded, TableOutcome,
     TablePlan, WholeReason,
 };
-use crate::postgres_source::constants::APPLICATION_NAME;
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
@@ -55,6 +54,7 @@ use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::main::postgres_address::postgres_address;
 use crate::project::models::{SourceConfig, TargetConfig};
 use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_PREFIX, CDC_UNCHANGED_COLUMN};
+use crate::session_relay::constants::APPLICATION_NAME;
 use crate::ssh_tunnel::main::tunnel_closed::tunnel_closed;
 
 /// How often the replication session reports the confirmed position.

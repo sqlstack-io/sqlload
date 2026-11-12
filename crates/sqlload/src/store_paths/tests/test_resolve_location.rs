@@ -134,6 +134,14 @@ fn given_windows_paths_when_resolving_then_drives_and_shares_are_local_folders()
             expected_location: Ok(r"\\nas01\exports/daily/orders/"),
         },
         ResolveLocationTestCase {
+            description: "a folder under a drive connection in another case",
+            connection: Some(StoreKind::Filesystem {
+                root: r"C:\Lake".to_owned(),
+            }),
+            path: r"c:\lake\scores",
+            expected_location: Ok(r"C:\Lake/scores/"),
+        },
+        ResolveLocationTestCase {
             description: "another share is not under the connection",
             connection: share(),
             path: r"\\nas02\exports\daily",
@@ -159,14 +167,20 @@ fn given_windows_paths_when_resolving_then_drives_and_shares_are_local_folders()
         let result = resolve_location(connection, test_case.path)
             .map(|location| location.to_string())
             .map_err(|error| error.to_string());
-        match (&result, test_case.expected_location) {
-            (Ok(found), Ok(expected)) => assert_eq!(found, expected, "{}", test_case.description),
-            (Err(found), Err(expected)) => assert!(
-                found.contains(expected),
-                "{}: {found}",
-                test_case.description
-            ),
-            _ => panic!("{}: {result:?}", test_case.description),
-        }
+        assert_eq!(
+            result.as_deref().ok(),
+            test_case.expected_location.ok(),
+            "{}",
+            test_case.description
+        );
+        assert!(
+            result
+                .err()
+                .unwrap_or_default()
+                .contains(test_case.expected_location.err().unwrap_or_default()),
+            "{}: {:?}",
+            test_case.description,
+            test_case.path
+        );
     }
 }

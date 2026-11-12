@@ -1,12 +1,12 @@
 //! Work out which store and folder a path means.
 
 use crate::store_paths::_helpers::folder::folder;
-use crate::store_paths::_helpers::local_root::{local_root, windows_separators};
+use crate::store_paths::_helpers::local_root::{local_root, strip_folders, windows_separators};
 use crate::store_paths::_helpers::locations::{describe, same_store, url_location};
 use crate::store_paths::errors::PathError;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// The folder `path` names: relative to `connection` when there is one (on an SFTP server, from `/` when it starts with `/`, otherwise from the login folder, which a leading `~/` also names), otherwise from its scheme.
+/// The folder `path` names: relative to `connection` when there is one (on an SFTP server, from `/` when it starts with `/`, otherwise from the login folder, which a leading `~/` also names), otherwise from its scheme. Under a filesystem connection, an absolute path must be below its root, matched on the root too unless the connection's root is relative; on Windows roots and folders match ignoring case.
 pub fn resolve_location(
     connection: Option<(&str, &StoreKind)>,
     path: &str,
@@ -43,7 +43,6 @@ pub fn resolve_location(
         (Some((name, StoreKind::Filesystem { root })), Some(location)) => {
             let windows = cfg!(windows);
             let separated = windows_separators(root, windows);
-            // A relative root is matched on its folders alone, whatever the path's root.
             let (same_root, root_folders) = match (local_root(&separated, windows), &location.store)
             {
                 (Some((root, folders)), StoreKind::Filesystem { root: found }) => {
@@ -52,11 +51,7 @@ pub fn resolve_location(
                 _ => (true, separated.as_ref()),
             };
             let root_prefix = folder(&[root_folders])?;
-            match location
-                .prefix
-                .strip_prefix(&root_prefix)
-                .filter(|_| same_root)
-            {
+            match strip_folders(&location.prefix, &root_prefix, windows).filter(|_| same_root) {
                 Some(relative) => Ok(Location {
                     store: StoreKind::Filesystem { root: root.clone() },
                     prefix: relative.to_owned(),

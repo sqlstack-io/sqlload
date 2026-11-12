@@ -7,7 +7,7 @@ use crate::store_paths::main::local_separators::local_separators;
 use crate::store_paths::main::render_template::render_template;
 use crate::store_paths::main::resolve_location::resolve_location;
 
-/// The table's folder and partition folder: placeholders filled, the cursor allowed only in the last folder.
+/// The table's folder and partition folder: placeholders filled, the cursor allowed only in the last folder. A leading `/` (or `//` before a Windows share) is kept as the root; a Windows drive (`C:`) is the first folder.
 pub fn table_path(request: &TablePathRequest<'_>) -> Result<TablePath, String> {
     let template = &*local_separators(request.template);
     if template.contains("://") {
@@ -43,7 +43,6 @@ pub fn table_path(request: &TablePathRequest<'_>) -> Result<TablePath, String> {
             ));
         }
     };
-    // `/`, or `//` before a Windows share; a drive (`C:`) is the first folder.
     let root = &template[..template.len() - template.trim_start_matches('/').len()];
     let rendered = render_template(&format!("{root}{}", folder_segments.join("/")), &values)
         .map_err(|error| error.to_string())?;

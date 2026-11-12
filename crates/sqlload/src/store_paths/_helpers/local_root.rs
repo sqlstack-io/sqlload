@@ -29,14 +29,11 @@ pub(crate) fn local_root(path: &str, windows: bool) -> Option<(String, &str)> {
             });
         }
         let drive = path.strip_prefix('/').unwrap_or(path);
-        let bytes = drive.as_bytes();
-        if bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && bytes[2] == b'/'
+        if let [letter, b':', b'/', ..] = drive.as_bytes()
+            && letter.is_ascii_alphabetic()
         {
             return Some((
-                format!("{}:/", char::from(bytes[0]).to_ascii_uppercase()),
+                format!("{}:/", char::from(letter.to_ascii_uppercase())),
                 &drive[3..],
             ));
         }
@@ -44,12 +41,32 @@ pub(crate) fn local_root(path: &str, windows: bool) -> Option<(String, &str)> {
     path.strip_prefix('/').map(|rest| ("/".to_owned(), rest))
 }
 
-/// The local path a `file://` URL names, given what follows `file://`: on Windows `file:///C:/folder` is `C:/folder` and `file://server/share/folder` is the share `//server/share/folder`.
+/// The local path a `file://` URL names, given what follows `file://`: on Windows `file:///C:/folder` and `file://localhost/C:/folder` are `C:/folder`, and `file://server/share/folder` is the share `//server/share/folder`.
 pub(crate) fn windows_file_url_path(rest: &str, windows: bool) -> Cow<'_, str> {
-    match (windows, rest.strip_prefix('/')) {
-        (false, _) => Cow::Borrowed(rest),
-        (true, Some(path)) if path.as_bytes().get(1) == Some(&b':') => Cow::Borrowed(path),
-        (true, Some(_)) => Cow::Borrowed(rest),
-        (true, None) => Cow::Owned(format!("//{rest}")),
+    let on_localhost = rest
+        .get(.."localhost/".len())
+        .filter(|host| host.eq_ignore_ascii_case("localhost/"))
+        .map(|host| &rest[host.len()..]);
+    match (windows, rest.strip_prefix('/'), on_localhost) {
+        (false, _, _) => Cow::Borrowed(rest),
+        (true, Some(path), _) if is_drive(path) => Cow::Borrowed(path),
+        (true, Some(_), _) => Cow::Borrowed(rest),
+        (true, None, Some(path)) if is_drive(path) => Cow::Borrowed(path),
+        (true, None, _) => Cow::Owned(format!("//{rest}")),
     }
+}
+
+/// Whether `path` starts with a drive letter and its colon.
+fn is_drive(path: &str) -> bool {
+    matches!(path.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic())
+}
+
+/// `prefix` without its leading `folders` (both folder prefixes ending in `/`), whose names match ignoring case when `windows`, as NTFS and SMB shares match them; `None` when `prefix` is not below `folders`.
+pub(crate) fn strip_folders<'a>(prefix: &'a str, folders: &str, windows: bool) -> Option<&'a str> {
+    let head = prefix.get(..folders.len())?;
+    let same = match windows {
+        true => head.eq_ignore_ascii_case(folders),
+        false => head == folders,
+    };
+    same.then(|| &prefix[folders.len()..])
 }

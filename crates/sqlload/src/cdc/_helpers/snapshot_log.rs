@@ -204,10 +204,9 @@ impl SnapshotLog<'_> {
     }
 }
 
-/// The records folder of `source`'s slot `slot` in a files target whose path template is `template`: the template's folders up to the first one naming anything but `{source}`, with `{source}` filled (all but the last when every one is fixed, the table's own folder then), then `_sqlload/cdc/<source>/<slot>/`. Outside every table's folder, and the same whichever tables the source selects; a table's own `destination_path` does not move it.
+/// The records folder of `source`'s slot `slot` in a files target whose path template is `template`: the template's folders up to the first one naming anything but `{source}`, with `{source}` filled (all but the last when every one is fixed, the table's own folder then), then `_sqlload/cdc/<source>/<slot>/`. Outside every table's folder, and the same whichever tables the source selects; a table's own `destination_path` does not move it. A leading `/` (or `//` before a Windows share) is kept as the root.
 pub(crate) fn snapshot_folder(template: &str, source: &str, slot: &str) -> String {
     let template = &*local_separators(template);
-    // `/`, or `//` before a Windows share; a drive (`C:`) is the first folder.
     let root = &template[..template.len() - template.trim_start_matches('/').len()];
     let segments: Vec<String> = template
         .split('/')
