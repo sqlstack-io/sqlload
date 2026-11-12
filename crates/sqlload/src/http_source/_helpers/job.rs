@@ -215,16 +215,17 @@ fn header_problem(name: &str, value: &str) -> Option<String> {
 }
 
 fn fan_out_problems(fan_out: &FanOut) -> Vec<String> {
-    let mut problems = level_problems(fan_out);
+    let mut problems = request_problems(&fan_out.request);
     problems.extend(field_problem(&fan_out.request));
+    problems.extend(level_problems(fan_out));
     problems
 }
 
-/// The problems of a fan-out level and of every level above it, whether it loads rows or feeds keys to the level below.
+/// The problems of a fan-out level apart from its own request's, and of every level above it, whether it loads rows or feeds keys to the level below.
 fn level_problems(fan_out: &FanOut) -> Vec<String> {
     let path = &fan_out.request.path;
     let wanted = placeholders(path);
-    let mut problems = request_problems(&fan_out.request);
+    let mut problems: Vec<String> = Vec::new();
     problems.extend(
         (fan_out.concurrency == 0).then(|| "fan_out concurrency must be at least 1".to_owned()),
     );
@@ -245,20 +246,19 @@ fn level_problems(fan_out: &FanOut) -> Vec<String> {
         }
         Over::Paginate(over) => {
             problems.extend(request_problems(over));
+            problems.extend(picker_problem(over));
             problems.extend(placeholders(&over.path).first().map(|name| {
                 format!("fan_out over path {} has the placeholder {{{name}}}; over must be a plain paginate", over.path)
             }));
             (&**over, "a paginate")
         }
         Over::FanOut(inner) => {
+            problems.extend(request_problems(&inner.request));
             problems.extend(level_problems(inner));
+            problems.extend(picker_problem(&inner.request));
             (&inner.request, "a fan_out")
         }
     };
-    problems.extend(
-        (picker.fields.is_some() || picker.keep_record.is_some())
-            .then(|| "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows".to_owned()),
-    );
     let Some(name) = key_name(picker) else {
         problems.push(format!(
             "fan_out over {kind} needs a select naming each key's field, such as \"$.items[*].id\", not {:?}",
@@ -288,6 +288,12 @@ fn level_problems(fan_out: &FanOut) -> Vec<String> {
             }),
     );
     problems
+}
+
+/// Why `picker`, which feeds keys to the level below, cannot have `fields` or `keep_record`, if it has them.
+fn picker_problem(picker: &Request) -> Option<String> {
+    (picker.fields.is_some() || picker.keep_record.is_some())
+        .then(|| "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows".to_owned())
 }
 
 /// The name the keys `picker` selects fill: its `key`, else the selected field; `None` when its select names no field.
@@ -489,7 +495,7 @@ fn run_fan_out<'a>(
             }
         };
         let wanted = placeholders(&fan_out.request.path);
-        tasks.spawn(feed_keys(feed, wanted, key_sender));
+        tasks.spawn(feed_keys(feed, wanted, key_sender, nested));
         let request = Arc::new(fan_out.request);
         for _ in 0..fan_out.concurrency {
             let (calls, request, keys, sink) =
@@ -498,14 +504,17 @@ fn run_fan_out<'a>(
                 loop {
                     let key = keys.lock().await.recv().await;
                     let Some(key) = key else { return Ok(()) };
-                    let trail = match nested {
-                        true => redacted(&key.trail, &calls.endpoint.current_secrets()),
-                        false => String::new(),
-                    };
                     fan_out_key(&calls, &request, &key, &sink)
                         .await
                         .map_err(|error| ReadError {
-                            message: format!("{trail}{}", error.message),
+                            message: match nested {
+                                true => format!(
+                                    "{}{}",
+                                    redacted(&key.trail, &calls.endpoint.current_secrets()),
+                                    error.message
+                                ),
+                                false => error.message,
+                            },
                             retryable: error.retryable,
                         })?;
                 }
@@ -536,7 +545,8 @@ async fn fan_out_key(
             let (page_sender, page_receiver) = channel::<HttpPage>(PAGES_AHEAD);
             let shown = path.clone();
             let pager = async move { paginate(calls, request, &path, &page_sender).await };
-            let forward = forward_keys(page_receiver, &picker, (key, &shown), keys);
+            let secrets = calls.endpoint.current_secrets();
+            let forward = forward_keys(page_receiver, &picker, (key, &shown, Some(&secrets)), keys);
             let (paged, forwarded) = tokio::join!(pager, forward);
             paged.and(forwarded)
         }
@@ -556,6 +566,7 @@ async fn feed_keys(
     feed: KeyFeed,
     wanted: Vec<String>,
     keys: Sender<FanKey>,
+    nested: bool,
 ) -> Result<(), ReadError> {
     let single = |value: Value| -> FanKey {
         let fields = match value {
@@ -584,10 +595,16 @@ async fn feed_keys(
             let (calls, over) = *pages;
             let picker = key_picker(&over)?;
             let path = over.path.clone();
+            let secrets = nested.then(|| calls.endpoint.current_secrets());
             let (page_sender, page_receiver) = channel::<HttpPage>(PAGES_AHEAD);
             let pager = async move { paginate(&calls, &over, &over.path, &page_sender).await };
             let root = FanKey::default();
-            let forward = forward_keys(page_receiver, &picker, (&root, &path), &keys);
+            let forward = forward_keys(
+                page_receiver,
+                &picker,
+                (&root, &path, secrets.as_deref()),
+                &keys,
+            );
             let (paged, forwarded) = tokio::join!(pager, forward);
             paged.and(forwarded)
         }
@@ -598,11 +615,11 @@ async fn feed_keys(
     }
 }
 
-/// Each page's picked field values as keys named by `picker`, each with `parent`'s fields and its trail extended by the request at `path` that gave it.
+/// Each page's picked field values as keys named by `picker`, each with `parent`'s fields and, when `secrets` is given, its trail extended by the request at `path` that gave it, with `secrets` (that request's) redacted.
 async fn forward_keys(
     mut pages: Receiver<HttpPage>,
     (selected, field, name): &(Selector, String, String),
-    (parent, path): (&FanKey, &str),
+    (parent, path, secrets): (&FanKey, &str, Option<&[String]>),
     keys: &Sender<FanKey>,
 ) -> Result<(), ReadError> {
     while let Some(page) = pages.recv().await {
@@ -614,15 +631,29 @@ async fn forward_keys(
             };
             let mut fields = parent.fields.clone();
             fields.insert(name.clone(), value.clone());
-            let shown = match value {
-                Value::String(text) => text.clone(),
-                other => other.to_string(),
-            };
-            let trail = format!("{}{path} {name}={shown} → ", parent.trail);
+            let trail = secrets.map_or_else(String::new, |secrets| {
+                trail_step(&parent.trail, (path, name, value), secrets)
+            });
             if keys.send(FanKey { fields, trail }).await.is_err() {
                 return Ok(());
             }
         }
     }
     Ok(())
+}
+
+/// `trail` followed by the request at `path` and the key `name` = `value` it gave, with `secrets` redacted from the step.
+fn trail_step(
+    trail: &str,
+    (path, name, value): (&str, &str, &Value),
+    secrets: &[String],
+) -> String {
+    let shown = match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    format!(
+        "{trail}{}",
+        redacted(&format!("{path} {name}={shown} → "), secrets)
+    )
 }

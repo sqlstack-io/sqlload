@@ -270,8 +270,8 @@ def notes(ctx):
 ```
 
 - Every level has its own paginator, `concurrency`, `on_status` and, through the `sl.http` it
-  comes from, its own retries and rate limit. Up to the sum of the levels' `concurrency` requests
-  are in flight at once; a shared `rate_limit` caps them.
+  comes from, its own retries and rate limit. Up to one more request than the sum of the fan-out
+  levels' `concurrency` is in flight at once (the top paginate's); a shared `rate_limit` caps them.
 - An incremental cursor goes on the top level, as above; lower levels only see the keys it picks.
 - Only the last level's rows load. A level that should be a table of its own is a table function
   whose job stops at that level, so the levels above it are requested again for that table.

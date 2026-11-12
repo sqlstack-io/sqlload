@@ -109,6 +109,22 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
                 "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows",
             ],
         },
+        JobProblemsTestCase {
+            description: "a one-level fan-out's own select problem comes before its listed key's, as before multi-level fan-out",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/{region}/orders/{id}","paginator":{"kind":"single"},"select":"$.items[*].sku","concurrency":2,"over":{"kind":"values","values":[{"region":"uk"}]}}"#,
+            expected_problems: &[
+                "select \"$.items[*].sku\" names a key field (sku); that form is for fan_out's over, so select the rows instead",
+                "fan-out path /{region}/orders/{id} needs {id}, which the key {\"region\":\"uk\"} lacks",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a one-level over's fields problem comes before its placeholder problem, as before multi-level fan-out",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/shops/{shop}/orders","paginator":{"kind":"single"},"select":"$.items[*].id","keep_record":"raw"}}"#,
+            expected_problems: &[
+                "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows",
+                "fan_out over path /shops/{shop}/orders has the placeholder {shop}; over must be a plain paginate",
+            ],
+        },
     ];
     for test_case in test_cases {
         let job: HttpJob = serde_json::from_str(test_case.job).expect(test_case.description);

@@ -882,6 +882,19 @@ def test_given_three_fan_out_levels_when_loading_then_each_note_is_read_under_it
 	assert [query["p"] for path, query, _ in api.log if path == "/v1/tree/orders"] == ["1", "2", "3", "4"]  # type: ignore[attr-defined]
 
 
+def test_given_levels_renaming_their_keys_when_loading_then_each_renamed_key_fills_its_placeholder(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = tree_project(tmp_path, api, NOTES.replace("{order_id}/items/{item_id}", "{o}/items/{i}"))
+	shop_py = project / "sources" / "shop.py"
+	renamed = shop_py.read_text().replace("select='$.items[*].order_id')", "select='$.items[*].order_id', key='o')")
+	renamed = renamed.replace("/tree/orders/{order_id}/items', over=orders", "/tree/orders/{o}/items', over=orders").replace("select='$.items[*].item_id',", "select='$.items[*].item_id', key='i',")
+	shop_py.write_text(renamed)
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT note FROM "RAW".shop__notes ORDER BY note') == sorted((f"{item}-{page}-{n}",) for item in TREE_ITEMS for page in (1, 2) for n in range(2))
+	notes = {path for path, _, _ in api.log if path.endswith("/notes")}  # type: ignore[attr-defined]
+	assert notes == {f"/v1/tree/orders/{item // 10}/items/{item}/notes" for item in TREE_ITEMS}
+
+
 @pytest.mark.parametrize(
 	("on_status", "notes", "expected_code", "expected_text"),
 	[
