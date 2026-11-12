@@ -2,12 +2,14 @@
 
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::snowflake::constants::{
-    MAX_JSON_INT, MIN_JSON_INT, MISFIT_MARKER, RFC3339_PATTERN,
+    LATIN1_ENCODING, MAX_JSON_INT, MIN_JSON_INT, MISFIT_MARKER, RFC3339_PATTERN,
+    SNOWFLAKE_ENCODINGS, UTF8_ENCODING,
 };
 use crate::adapters::snowflake::models::SnowflakeSql;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
-use crate::files_source::models::{Compression, CsvOptions};
+use crate::files_source::main::text_charset::text_charset;
+use crate::files_source::models::{Charset, Compression, CsvOptions};
 
 /// The `FILE_FORMAT` a direct `COPY` reads JSON and NDJSON with: one record per object, whether the file holds objects one after another or one top-level array of them; a key given twice keeps its last value, as SQLLoad's reader does.
 pub(crate) fn json_file_format(compression: Compression) -> String {
@@ -89,13 +91,32 @@ pub(crate) fn keys_query(from: &str, format: &str, pattern: &str) -> String {
 /// The `FILE_FORMAT` a direct `COPY` reads CSV with, as SQLLoad's reader does: `options`' delimiter and quote (a quote inside a quoted field written twice, backslashes plain text), the header skipped, every field as text (`csv_field` applies the NULL values, since Snowflake would not turn a quoted empty field into NULL; live, 2026-11-05).
 pub(crate) fn csv_file_format(options: &CsvOptions, compression: Compression) -> String {
     let literal = |text: &str| SnowflakeSql.render_loader_value_literal(text);
+    let encoding = match text_charset(&options.encoding).map(snowflake_encoding) {
+        Ok(Some(encoding)) if encoding != UTF8_ENCODING => {
+            format!(" ENCODING = {}", literal(encoding))
+        }
+        Ok(_) | Err(_) => String::new(),
+    };
     format!(
-        "TYPE = CSV FIELD_DELIMITER = {} FIELD_OPTIONALLY_ENCLOSED_BY = {} ESCAPE = NONE ESCAPE_UNENCLOSED_FIELD = NONE SKIP_HEADER = {} NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = {}",
+        "TYPE = CSV FIELD_DELIMITER = {} FIELD_OPTIONALLY_ENCLOSED_BY = {} ESCAPE = NONE ESCAPE_UNENCLOSED_FIELD = NONE SKIP_HEADER = {} NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = {}{encoding}",
         literal(&options.delimiter.to_string()),
         literal(&options.quote.to_string()),
-        u8::from(options.header),
+        options.skip_rows + u64::from(options.header),
         compression_name(compression)
     )
+}
+
+/// The `ENCODING` a direct `COPY` reads CSV files in `charset` with, when Snowflake decodes them as SQLLoad's reader does; `None` for a charset it does not map (ASCII, the East Asian ones).
+pub(crate) fn snowflake_encoding(charset: Charset) -> Option<&'static str> {
+    match charset {
+        Charset::Utf8 => Some(UTF8_ENCODING),
+        Charset::Latin1 => Some(LATIN1_ENCODING),
+        Charset::Ascii => None,
+        Charset::Other(encoding) => SNOWFLAKE_ENCODINGS
+            .iter()
+            .find(|(name, _)| *name == encoding.name())
+            .map(|(_, snowflake)| *snowflake),
+    }
 }
 
 /// The value of CSV field `field` (`$n`), named `name`, as `column_type` (`sql_type`), as SQLLoad's own reader converts its text; an `inferred` column fails the load on a value sampling would not have inferred it from.

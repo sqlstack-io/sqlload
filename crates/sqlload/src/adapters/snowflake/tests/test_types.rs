@@ -97,3 +97,11 @@ pub(crate) struct ListsAsJsonTestCase {
     /// Each row's JSON text joined by `|`, or the error.
     pub(crate) expected_text: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct SnowflakeEncodingTestCase {
+    pub(crate) description: &'static str,
+    /// The `csv.encoding` label.
+    pub(crate) label: &'static str,
+    /// Snowflake's `ENCODING` for it, or `None` when the direct route refuses it.
+    pub(crate) expected_encoding: Option<&'static str>,
+}

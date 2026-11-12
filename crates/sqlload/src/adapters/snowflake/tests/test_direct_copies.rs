@@ -1,10 +1,14 @@
+use crate::adapters::snowflake::_helpers::dialect::text_values::snowflake_encoding;
 use crate::adapters::snowflake::models::CopyValue;
 use crate::adapters::snowflake::tests::helpers::{
-    EXTERNAL, INTERNAL, column, direct_sql, many_files, order_columns,
+    EXTERNAL, INTERNAL, column, csv_in, direct_sql, many_files, order_columns,
 };
-use crate::adapters::snowflake::tests::test_types::DirectCopiesTestCase;
+use crate::adapters::snowflake::tests::test_types::{
+    DirectCopiesTestCase, SnowflakeEncodingTestCase,
+};
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::RECORD_COLUMN;
+use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{CsvOptions, FilesEncoding, SourceFormat, StoredRead};
 
 const WHOLE_FILE: CopyValue = CopyValue::File {
@@ -159,6 +163,42 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
                 "(SELECT IFF($2 IS NULL OR $3 IS NOT NULL, CAST(TO_VARCHAR(TO_NUMBER('sqlload: a line does not have 2 fields, as the file''s first line does')) AS VARIANT), ARRAY_CONSTRUCT(COALESCE(TO_VARIANT(NULLIF($1, 'NA')), PARSE_JSON('null')), COALESCE(TO_VARIANT(NULLIF($2, 'NA')), PARSE_JSON('null')))) FROM",
             )),
         },
+        DirectCopiesTestCase {
+            description: "csv in cp1252 with two lines before the header: Snowflake decodes WINDOWS1252 and skips the two lines and the header",
+            files: vec![("part-0.csv".to_owned(), "2026-11-04")],
+            columns: vec![column(RECORD_COLUMN, ColumnType::Json, WHOLE_FILE)],
+            from: EXTERNAL,
+            encoding: csv_in("cp1252", true, 2),
+            header: &["column_1"],
+            expected_copies: Ok((
+                1,
+                "SKIP_HEADER = 3 NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = AUTO ENCODING = 'WINDOWS1252')",
+            )),
+        },
+        DirectCopiesTestCase {
+            description: "csv in latin-1 without a header, one line skipped: ISO88591, and only that line skipped",
+            files: vec![("part-0.csv".to_owned(), "2026-11-04")],
+            columns: vec![column(RECORD_COLUMN, ColumnType::Json, WHOLE_FILE)],
+            from: EXTERNAL,
+            encoding: csv_in("latin-1", false, 1),
+            header: &["column_1"],
+            expected_copies: Ok((
+                1,
+                "SKIP_HEADER = 1 NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = AUTO ENCODING = 'ISO88591')",
+            )),
+        },
+        DirectCopiesTestCase {
+            description: "csv in utf-8 under another label leaves ENCODING to its UTF8 default",
+            files: vec![("part-0.csv".to_owned(), "2026-11-04")],
+            columns: vec![column(RECORD_COLUMN, ColumnType::Json, WHOLE_FILE)],
+            from: EXTERNAL,
+            encoding: csv_in("UTF8", true, 0),
+            header: &["column_1"],
+            expected_copies: Ok((
+                1,
+                "SKIP_HEADER = 1 NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = AUTO)",
+            )),
+        },
     ];
     for test_case in test_cases {
         let copies = direct_sql(
@@ -180,6 +220,91 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
                 .err()
                 .unwrap_or_default()
                 .contains(test_case.expected_copies.err().unwrap_or_default()),
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_csv_encoding_when_choosing_snowflakes_then_only_charsets_decoded_alike_map() {
+    let test_cases = [
+        SnowflakeEncodingTestCase {
+            description: "utf-8 is Snowflake's default",
+            label: "utf-8",
+            expected_encoding: Some("UTF8"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "cp1252 is windows-1252",
+            label: "cp1252",
+            expected_encoding: Some("WINDOWS1252"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "windows-1250",
+            label: "windows-1250",
+            expected_encoding: Some("WINDOWS1250"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "latin-1 reads byte for byte, as ISO88591 does",
+            label: "latin-1",
+            expected_encoding: Some("ISO88591"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "ISO-8859-1 is latin-1",
+            label: "ISO-8859-1",
+            expected_encoding: Some("ISO88591"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "iso88591, Snowflake's own spelling, is latin-1",
+            label: "iso88591",
+            expected_encoding: Some("ISO88591"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "iso-8859-9 decodes as windows-1254",
+            label: "iso-8859-9",
+            expected_encoding: Some("WINDOWS1254"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "iso-8859-15",
+            label: "iso-8859-15",
+            expected_encoding: Some("ISO885915"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "koi8-r",
+            label: "koi8-r",
+            expected_encoding: Some("KOI8R"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "utf-16le",
+            label: "utf-16le",
+            expected_encoding: Some("UTF16LE"),
+        },
+        SnowflakeEncodingTestCase {
+            description: "Snowflake has no ASCII",
+            label: "ascii",
+            expected_encoding: None,
+        },
+        SnowflakeEncodingTestCase {
+            description: "shift_jis is not mapped",
+            label: "shift_jis",
+            expected_encoding: None,
+        },
+        SnowflakeEncodingTestCase {
+            description: "gb18030 is not mapped",
+            label: "gb18030",
+            expected_encoding: None,
+        },
+        SnowflakeEncodingTestCase {
+            description: "an unknown label",
+            label: "klingon",
+            expected_encoding: None,
+        },
+    ];
+    for test_case in test_cases {
+        let encoding = text_charset(test_case.label).map(snowflake_encoding);
+        assert_eq!(
+            encoding.unwrap_or_default(),
+            test_case.expected_encoding,
             "{}",
             test_case.description
         );

@@ -55,6 +55,7 @@ chrono-tz.workspace = true
 clap = { workspace = true, optional = true }
 csv-core.workspace = true
 duckdb = { workspace = true, optional = true }
+encoding_rs.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
