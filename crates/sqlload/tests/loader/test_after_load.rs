@@ -65,15 +65,21 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             expected_files: &["done/a.csv=old", "drop/a.csv=id,v\\n1,a\\n"],
         },
         AfterLoadTestCase {
-            description: "a move to another volume copies, checks the size, then deletes",
+            description: "a move to another volume copies, checks the size, then deletes, escaped keys too",
             settings: "write_strategy = \"append\"\nafter_load = { move_to = \"archive\" }\n",
             linked: &[("archive", "/dev/shm")],
             steps: &[AfterLoadStep {
-                files: &[("drop/a.csv", "id,v\n1,a\n")],
+                files: &[
+                    ("drop/a.csv", "id,v\n1,a\n"),
+                    ("drop/ts=00%3A00/b.csv", "id,v\n2,b\n"),
+                ],
                 expected_exit: 0,
-                expected_report: r#"{"after_load":{"action":"move","failed":[],"files":1,"status":"done"},"rows":1,"status":"loaded"}"#,
+                expected_report: r#"{"after_load":{"action":"move","failed":[],"files":2,"status":"done"},"rows":2,"status":"loaded"}"#,
             }],
-            expected_files: &["archive/a.csv=id,v\\n1,a\\n"],
+            expected_files: &[
+                "archive/a.csv=id,v\\n1,a\\n",
+                "archive/ts=00%3A00/b.csv=id,v\\n2,b\\n",
+            ],
         },
         AfterLoadTestCase {
             description: "a failed load deletes nothing",

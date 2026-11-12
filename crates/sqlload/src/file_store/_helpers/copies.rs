@@ -1,10 +1,10 @@
-//! The copies a move makes.
+//! The copies a move makes where the store has no copy that refuses to overwrite.
 
-use futures_util::StreamExt;
+use object_store::local::LocalFileSystem;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt, WriteMultipart};
+use object_store::{ObjectStore, ObjectStoreExt};
 
-use crate::file_store::constants::MOVE_PARTS_IN_FLIGHT;
+use crate::store_paths::main::local_store_root::local_store_root;
 
 /// An `AlreadyExists` error when `to` exists.
 pub(crate) async fn refuse_existing(
@@ -21,48 +21,45 @@ pub(crate) async fn refuse_existing(
     }
 }
 
-/// Copy `from` through this process into a hidden file beside `to`, then link it to `to` without overwriting; the hidden file is removed either way.
-pub(crate) async fn linked_copy(
-    store: &dyn ObjectStore,
+/// Copy `from` to `to` under the local folder `root` into a file created only if none is there, as where a hard link fails (across volumes, or on a filesystem without them); a failed copy removes the file it created.
+pub(crate) async fn exclusive_copy(
+    root: &str,
     from: &Path,
     to: &Path,
 ) -> Result<(), object_store::Error> {
-    let name = to.filename().unwrap_or_default();
-    let hidden = Path::from(to.as_ref().strip_suffix(name).unwrap_or_default())
-        .join(format!(".{name}.sqlload-{}", uuid::Uuid::new_v4()));
-    let linked = match streamed_copy(store, from, &hidden).await {
-        Ok(()) => store.copy_if_not_exists(&hidden, to).await,
-        Err(error) => Err(error),
-    };
-    let removed = store.delete(&hidden).await;
-    linked?;
-    match removed {
-        Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-/// Copy `from` to `to` in parts, holding at most [`MOVE_PARTS_IN_FLIGHT`] in memory; a failed copy is aborted.
-async fn streamed_copy(
-    store: &dyn ObjectStore,
-    from: &Path,
-    to: &Path,
-) -> Result<(), object_store::Error> {
-    let mut parts = store.get(from).await?.into_stream();
-    let mut upload = WriteMultipart::new(store.put_multipart(to).await?);
-    let copied: Result<(), object_store::Error> = async {
-        while let Some(part) = parts.next().await {
-            upload.wait_for_capacity(MOVE_PARTS_IN_FLIGHT).await?;
-            upload.put(part?);
-        }
-        Ok(())
-    }
-    .await;
-    match copied {
-        Ok(()) => upload.finish().await.map(|_| ()),
-        Err(error) => {
-            let _aborted = upload.abort().await;
-            Err(error)
-        }
-    }
+    let local = LocalFileSystem::new_with_prefix(local_store_root(root).as_ref())?;
+    let (source, target) = (
+        local.path_to_filesystem(from)?,
+        local.path_to_filesystem(to)?,
+    );
+    let shown = to.to_string();
+    tokio::task::spawn_blocking(move || {
+        let parent = target.parent().unwrap_or(&target);
+        std::fs::create_dir_all(parent)?;
+        let mut created = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)?;
+        let copied = std::fs::File::open(&source)
+            .and_then(|mut read| std::io::copy(&mut read, &mut created))
+            .and_then(|_| created.sync_all());
+        copied.inspect_err(|_| {
+            let _removed = std::fs::remove_file(&target);
+        })
+    })
+    .await
+    .map_err(|error| object_store::Error::Generic {
+        store: "LocalFileSystem",
+        source: Box::new(error),
+    })?
+    .map_err(|error| match error.kind() {
+        std::io::ErrorKind::AlreadyExists => object_store::Error::AlreadyExists {
+            path: shown,
+            source: "a file is already there; it is never overwritten".into(),
+        },
+        _ => object_store::Error::Generic {
+            store: "LocalFileSystem",
+            source: Box::new(error),
+        },
+    })
 }

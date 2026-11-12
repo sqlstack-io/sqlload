@@ -215,11 +215,13 @@ after_load = { move_to = "loaded" }
   refuses that. Each file keeps its key below `path`, so `drop/2026/a.csv` moves to
   `loaded/2026/a.csv`.
 - A file already at the destination is never replaced: both stay. On a local disk a move is a hard
-  link, then a delete; across volumes the file is copied into a hidden file beside the destination,
-  then linked in the same way. S3 has no copy that refuses to replace a file, so SQLLoad checks the
-  destination is free, then copies on the server: a file written to that same key at that moment
-  would be replaced. Either way the copy's size is checked before the source is deleted.
-- A file that changed since it was read is left where it is, since its new rows aren't loaded.
+  link, then a delete; where a hard link fails, as across volumes, the file is copied into a new
+  file that is created only if none is there. S3 has no copy that refuses to replace a file, so
+  SQLLoad checks the destination is free, then copies on the server: a file written to that same
+  key at that moment would be replaced. S3 copies files of up to 5 GB; a larger one stays where it
+  is and is reported. Either way the copy's size is checked before the source is deleted.
+- Each file's version is checked just before it's deleted or moved, and a file that changed since
+  it was read is left where it is, since its new rows aren't loaded.
 - If a delete or move fails, the load still counts and isn't run again. `load --json` reports
   `after_load` on the table, with `status` `"failed"` and each file left in `failed`, and a
   warning is logged. Its `status` is `"done"` when every file was handled.
