@@ -121,6 +121,12 @@ pub struct TableSpec {
     pub destination_path: Option<String>,
     /// The top-level objects expanded one level into `<object>__<key>` columns (Python tables only).
     pub flatten: Vec<String>,
+    /// Every row gets a unique id column.
+    pub row_id: bool,
+    /// The list fields whose items become rows of child tables.
+    pub unnest: Unnest,
+    /// How many levels of child tables `unnest` makes at most; deeper lists stay JSON.
+    pub max_depth: u32,
     /// The table function behind a Python table; `None` for declarative sources.
     pub python: Option<PythonTable>,
     /// What a Google Sheets table reads; `None` for other sources.
@@ -927,4 +933,16 @@ impl From<crate::loader::errors::LoaderError> for SourceProblem {
             message: error.to_string(),
         }
     }
+}
+
+/// Which list fields of a table's rows become child tables.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Unnest {
+    /// None: lists stay JSON columns.
+    #[default]
+    None,
+    /// Every list field, at every level down to `max_depth`.
+    All,
+    /// The list fields at these dotted paths.
+    Paths(Vec<String>),
 }

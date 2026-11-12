@@ -1094,3 +1094,13 @@ pub(crate) struct DedupeTargetTestCase {
     /// What `check_query` returns after each repeated-key rule, in their order: last row, highest, lowest, fail.
     pub(crate) expected_rows: [&'static str; 4],
 }
+
+/// An NDJSON files source under `drop/` with `settings`, planned by the executable into a DuckDB target, or a filesystem files target when `files_target`.
+pub(crate) struct UnnestPlanTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) files_target: bool,
+    pub(crate) expected_ok: bool,
+    /// Text the plan's output holds; empty when it plans.
+    pub(crate) expected_problem: &'static str,
+}

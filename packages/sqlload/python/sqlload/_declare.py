@@ -29,8 +29,10 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"cursor_start",
 		"dedup_sort",
 		"lookback",
+		"naming",
 		"on_duplicate_keys",
 		"on_schema_change",
+		"row_id",
 		"state",
 		"type_change_rebuild",
 		"unique_key",
@@ -40,7 +42,17 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 
 #: Settings only a table takes.
 TABLE_ONLY_SETTINGS: frozenset[str] = frozenset(
-	{"allow_columns", "columns", "destination_path", "exclude_columns", "flatten", "mask", "table_name"}
+	{
+		"allow_columns",
+		"columns",
+		"destination_path",
+		"exclude_columns",
+		"flatten",
+		"mask",
+		"max_depth",
+		"table_name",
+		"unnest",
+	}
 )
 
 #: Settings only a source takes.

@@ -24,6 +24,8 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "constant_columns",
     "on_duplicate_keys",
     "dedup_sort",
+    "naming",
+    "row_id",
     #[cfg(feature = "container-tests")]
     "test_loader_route",
 ];
@@ -104,6 +106,8 @@ pub const TABLE_ONLY_KEYS: &[&str] = &[
     "exclude_columns",
     "allow_columns",
     "flatten",
+    "unnest",
+    "max_depth",
 ];
 
 /// Top-level keys that mark a file as a loader project rather than an exporter configuration.
