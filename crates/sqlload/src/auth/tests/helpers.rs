@@ -7,7 +7,7 @@ use axum::extract::State;
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::auth::_helpers::google_oauth::{cache_key, google_access_token};
 use crate::auth::_helpers::oauth::{challenge, fresh_access_token, now_secs};
@@ -370,7 +370,7 @@ async fn google_consent(State(state): State<SharedGoogle>, uri: Uri) -> Response
     fake.challenge = field("code_challenge");
     let asked = field("scope") == GOOGLE_TEST_SCOPE
         && field("access_type") == "offline"
-        && field("prompt") == "consent"
+        && field("prompt") == "consent select_account"
         && field("code_challenge_method") == "S256";
     let answer = ["error=invalid_request", "code=fake-code"][usize::from(asked)];
     let location = format!(
@@ -395,31 +395,31 @@ async fn google_token(State(state): State<SharedGoogle>, body: String) -> Respon
     let exchanged = form.contains_key("code");
     let verified =
         field("code") == "fake-code" && challenge(&field("code_verifier")) == fake.challenge;
-    let answers: [(bool, StatusCode, Value); 5] = [
+    let answers: [(bool, StatusCode, String); 5] = [
         (
             field("client_secret") != "secret",
             StatusCode::UNAUTHORIZED,
-            json!({"error": "invalid_client", "error_description": "The OAuth client was not found."}),
+            json!({"error": "invalid_client", "error_description": "The OAuth client was not found."}).to_string(),
         ),
         (
             refresh == "unavailable",
             StatusCode::SERVICE_UNAVAILABLE,
-            json!({"error": "backend_error", "error_description": "try later"}),
+            json!({"error": "backend_error", "error_description": "try later"}).to_string(),
         ),
         (
             refresh == "broken",
             StatusCode::INTERNAL_SERVER_ERROR,
-            json!(format!("<html>{}</html>", "x".repeat(400))),
+            format!("<html>{}</html>", "x".repeat(400)),
         ),
         (
             fake.revoked.contains(&refresh) || (exchanged && !verified),
             StatusCode::BAD_REQUEST,
-            json!({"error": "invalid_grant", "error_description": "Token has been expired or revoked."}),
+            json!({"error": "invalid_grant", "error_description": "Token has been expired or revoked."}).to_string(),
         ),
         (
             true,
             StatusCode::OK,
-            json!({"access_token": format!("access-{issued}"), "expires_in": 3599, "token_type": "Bearer", "scope": GOOGLE_TEST_SCOPE, "refresh_token": exchanged.then(|| format!("refresh-{issued}"))}),
+            json!({"access_token": format!("access-{issued}"), "expires_in": 3599, "token_type": "Bearer", "scope": GOOGLE_TEST_SCOPE, "refresh_token": exchanged.then(|| format!("refresh-{issued}"))}).to_string(),
         ),
     ];
     answers
@@ -427,6 +427,6 @@ async fn google_token(State(state): State<SharedGoogle>, body: String) -> Respon
         .find(|(applies, _, _)| *applies)
         .map_or_else(
             || StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            |(_, status, body)| (status, body.to_string()).into_response(),
+            |(_, status, body)| (status, body).into_response(),
         )
 }

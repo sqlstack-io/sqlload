@@ -165,7 +165,7 @@ async fn consent(
     Ok(tokens)
 }
 
-/// The consent page's address: the user's scope, offline so Google sends a refresh token, with the consent screen shown each time so it always does.
+/// The consent page's address: the user's scope, offline so Google sends a refresh token, with the consent screen shown each time so it always does, and the account chooser so another account can sign in.
 fn authorize_url(user: &GoogleUser, redirect_uri: &str, pkce: &Pkce) -> Result<String, ApiError> {
     let mut url = reqwest::Url::parse(&user.authorize_url)
         .map_err(|error| ApiError::Auth(format!("bad Google authorization URL: {error}")))?;
@@ -178,7 +178,7 @@ fn authorize_url(user: &GoogleUser, redirect_uri: &str, pkce: &Pkce) -> Result<S
         .append_pair("code_challenge_method", "S256")
         .append_pair("state", &pkce.state)
         .append_pair("access_type", "offline")
-        .append_pair("prompt", "consent");
+        .append_pair("prompt", "consent select_account");
     Ok(url.into())
 }
 

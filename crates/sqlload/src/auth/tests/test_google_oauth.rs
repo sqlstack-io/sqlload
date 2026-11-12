@@ -162,14 +162,14 @@ fn given_a_google_user_connection_when_a_token_is_needed_then_it_is_renewed_cons
             expected_repeated: ("HTTP 503", 2),
         },
         UserTokenTestCase {
-            description: "a token endpoint answering 500 with an HTML page fails as a rerun may fix, its text cut short",
+            description: "a token endpoint answering 500 with an HTML page fails as a rerun may fix, the page cut short before its end",
             configured: Some("broken"),
             cached: None,
             refused: None,
             revoked: &[],
             client_secret: "secret",
             terminal: false,
-            expected_outcome: "HTTP 500 : Google's token endpoint: 500: \"<html>xxx",
+            expected_outcome: "HTTP 500 : Google's token endpoint: 500: <html>xxx",
             expected_grants: &["refresh_token"],
             expected_cached_refresh: None,
             expected_retryable: true,
@@ -179,7 +179,7 @@ fn given_a_google_user_connection_when_a_token_is_needed_then_it_is_renewed_cons
     for test_case in test_cases {
         let seen = block_on(user_token_outcome(&test_case))?;
         assert!(
-            seen.outcome.contains(test_case.expected_outcome),
+            seen.outcome.contains(test_case.expected_outcome) && !seen.outcome.contains("</html>"),
             "{}: {}",
             test_case.description,
             seen.outcome
