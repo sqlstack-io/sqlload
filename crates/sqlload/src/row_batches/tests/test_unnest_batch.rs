@@ -29,8 +29,8 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             roots: Some(&["P1"]),
             expected_batches: Ok(&[
                 "id:Int64 / 1",
-                "orders__items = sku:Utf8,_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8,_sqlload_root_id:Utf8 / a|P1|0|kSG+OAUJsLWF8Q|P1",
-                "orders__items__parts = value:Int64,_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8,_sqlload_root_id:Utf8 / 1|kSG+OAUJsLWF8Q|0|8qAwaxawytfkAw|P1",
+                "orders__items = sku:Utf8,_sqlload_root_id:Utf8,_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8 / a|P1|P1|0|kSG+OAUJsLWF8Q",
+                "orders__items__parts = value:Int64,_sqlload_root_id:Utf8,_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8 / 1|P1|kSG+OAUJsLWF8Q|0|8qAwaxawytfkAw",
             ]),
         },
         UnnestBatchTestCase {

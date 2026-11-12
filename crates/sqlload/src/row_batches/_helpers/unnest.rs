@@ -220,29 +220,28 @@ fn raw(text: &str, path: &str) -> Result<Box<RawValue>, String> {
     RawValue::from_string(text.to_owned()).map_err(|error| format!("{path}: {error}"))
 }
 
-/// `level`'s rows as a batch: the items' data columns, then the parent's id, the position, the row's own id and, when it has them, the root's id, named under `naming`; a data column taking one of those names is an error.
+/// `level`'s rows as a batch: the items' data columns, then, in dlt's order, the root's id when it has them, the parent's id, the position and the row's own id, named under `naming`; a data column taking one of those names is an error.
 fn level_batch(level: Level, naming: Naming) -> Result<ChildBatch, String> {
     let data = columns_batch(level.rows)?;
     let schema = data.schema();
     let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
     let mut columns: Vec<ArrayRef> = data.columns().to_vec();
-    let mut linkage: Vec<(MetadataRole, ArrayRef)> = vec![
-        (
-            MetadataRole::ParentId,
-            Arc::new(StringArray::from(level.parents)),
-        ),
-        (
-            MetadataRole::ListIndex,
-            Arc::new(Int64Array::from(level.positions)),
-        ),
-        (MetadataRole::RowId, Arc::new(StringArray::from(level.ids))),
-    ];
+    let mut linkage: Vec<(MetadataRole, ArrayRef)> = Vec::with_capacity(4);
     if !level.roots.is_empty() {
         linkage.push((
             MetadataRole::RootId,
             Arc::new(StringArray::from(level.roots)),
         ));
     }
+    linkage.push((
+        MetadataRole::ParentId,
+        Arc::new(StringArray::from(level.parents)),
+    ));
+    linkage.push((
+        MetadataRole::ListIndex,
+        Arc::new(Int64Array::from(level.positions)),
+    ));
+    linkage.push((MetadataRole::RowId, Arc::new(StringArray::from(level.ids))));
     for (role, column) in linkage {
         let name = metadata_name(naming, role);
         if schema.fields().iter().any(|field| field.name() == name) {
