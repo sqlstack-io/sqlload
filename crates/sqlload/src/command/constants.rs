@@ -11,3 +11,6 @@ pub const FORCED_STOP_EXIT: i32 = 130;
 
 /// The exit code of a run that failed only in ways running it again unchanged may fix (`EX_TEMPFAIL`): a dropped or refused connection, throttling or server errors that outlasted their retries, or a table another run is loading.
 pub const RETRYABLE_EXIT: u8 = 75;
+
+/// The stack a command runs on: a Linux main thread's default, 8 MiB, on every system.
+pub const COMMAND_STACK_BYTES: usize = 8 * 1024 * 1024;
