@@ -71,7 +71,7 @@ async fn once(
     let own = same_origin(&endpoint.base_url, url);
     if !own && call.body.is_some() {
         return Err(format!(
-            "{shown}: the next page is on another origin, and the job's json_body never leaves the connection's origin"
+            "{shown}: the request is on another origin than the connection's base_url, and the job's json_body never leaves the connection's origin"
         ));
     }
     let mut request = match &call.body {
