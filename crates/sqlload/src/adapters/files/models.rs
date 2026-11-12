@@ -197,7 +197,7 @@ pub enum FileBody {
 #[derive(Debug)]
 pub enum CsvOut {
     Plain(Vec<u8>),
-    Gzip(flate2::write::GzEncoder<Vec<u8>>),
+    Gzip(Box<flate2::write::GzEncoder<Vec<u8>>>),
     /// zstd frames compressed so far, and text waiting for the next frame.
     Zstd {
         done: Vec<u8>,

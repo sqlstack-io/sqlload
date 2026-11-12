@@ -38,6 +38,7 @@ pub async fn list_files(folder: &OpenFolder) -> Result<Vec<StoredFile>, StoreErr
             etag: meta.e_tag,
             modified_ms: meta.last_modified.timestamp_millis(),
             path: meta.location,
+            member: None,
         });
     }
     files.sort_by(|left, right| left.relative_key.cmp(&right.relative_key));

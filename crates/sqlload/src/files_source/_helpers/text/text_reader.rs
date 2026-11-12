@@ -2,6 +2,7 @@ use arrow_array::{Array, RecordBatch, StringArray};
 
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
+use crate::files_source::_helpers::cells::cell_reader::{CellReader, cells_batch};
 use crate::files_source::_helpers::text::bytes_reader::{BytesReader, open_bytes};
 use crate::files_source::_helpers::text::checks::{ColumnChecks, misfit, value_fits};
 use crate::files_source::_helpers::text::csv_reader::CsvReader;
@@ -30,6 +31,12 @@ enum Records {
         reader: Box<CsvReader>,
         column: String,
     },
+    /// An xlsx worksheet's rows or an XML document's records, picking out `columns`.
+    Cells {
+        reader: CellReader,
+        columns: Vec<(String, ColumnType)>,
+        batch_rows: usize,
+    },
 }
 
 /// Reads a JSON or CSV file as batches of text columns, which the shape step converts to the planned types.
@@ -49,6 +56,15 @@ impl TextReader {
         let checks = ColumnChecks::new(request)?;
         let bytes = open_bytes(folder, file, codec).await?;
         let records = match (request.encoding.format, &request.encoding.record) {
+            (SourceFormat::Xlsx | SourceFormat::Xml, _) => Records::Cells {
+                reader: CellReader::open(bytes, &request.encoding).await?,
+                columns: request
+                    .columns
+                    .iter()
+                    .map(|column| (column.name.clone(), column.column_type.clone()))
+                    .collect(),
+                batch_rows: request.batch_rows,
+            },
             (SourceFormat::Csv, Some(column)) => Records::CsvWhole {
                 reader: Box::new(
                     CsvReader::open_lines(bytes, &request.encoding.csv, request.batch_rows).await?,
@@ -77,6 +93,17 @@ impl TextReader {
                 match records.is_empty() {
                     true => Ok(None),
                     false => records_batch(&records, columns, &self.checks).map(Some),
+                }
+            }
+            Records::Cells {
+                reader,
+                columns,
+                batch_rows,
+            } => {
+                let records = reader.next_records(*batch_rows);
+                match records.is_empty() {
+                    true => Ok(None),
+                    false => cells_batch(&records, columns, &self.checks).map(Some),
                 }
             }
             Records::JsonWhole {

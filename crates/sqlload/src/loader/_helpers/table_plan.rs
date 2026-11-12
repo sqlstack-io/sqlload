@@ -32,7 +32,7 @@ use crate::column_types::models::ColumnType;
 use crate::column_types::models::Warehouse;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
-use crate::files_source::models::SourceFormat;
+use crate::files_source::models::{Compression, SourceFormat};
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
@@ -763,6 +763,8 @@ fn reader_offer(
             SourceFormat::Parquet => FileFormat::Parquet,
             SourceFormat::Ndjson | SourceFormat::Json => FileFormat::Json,
             SourceFormat::Csv => FileFormat::Csv,
+            SourceFormat::Xlsx => FileFormat::Xlsx,
+            SourceFormat::Xml => FileFormat::Xml,
         },
     });
     let direct_blocked = read.and_then(|read| direct_blocked(spec, read, stage));
@@ -782,11 +784,24 @@ fn reader_offer(
         (true, false, Some(_)) => {
             Some("the table has checks, which run on the rows SQLLoad stages".to_owned())
         }
-        (true, false, None) => spec
-            .files
-            .as_ref()
-            .filter(|files| matches!(files.location.store, StoreKind::Sftp { .. }))
-            .map(|_| "no destination reads files over SFTP itself".to_owned()),
+        (true, false, None) => spec.files.as_ref().and_then(|files| {
+            match (
+                &files.location.store,
+                files.encoding.format,
+                files.encoding.compression,
+            ) {
+                (StoreKind::Sftp { .. }, _, _) => {
+                    Some("no destination reads files over SFTP itself".to_owned())
+                }
+                (_, _, Compression::Zip) => {
+                    Some("no destination reads ZIP archives' members itself".to_owned())
+                }
+                (_, format @ (SourceFormat::Xlsx | SourceFormat::Xml), _) => {
+                    Some(format!("no destination reads {format} files itself"))
+                }
+                _ => None,
+            }
+        }),
     };
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
