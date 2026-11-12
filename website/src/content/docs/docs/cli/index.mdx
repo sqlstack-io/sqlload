@@ -53,8 +53,40 @@ Every command takes these:
 | 0 | Everything selected succeeded, or agreed (`contract diff`, `logged-state verify`). |
 | 1 | A table failed or was left out by a plan error, a contract difference or state disagreement was found, or the configuration is invalid. |
 | 2 | The command line couldn't be parsed. |
+| 75 | From 0.34.0 (not released yet). `plan`, `apply`, `load` or `copy` failed, but only in ways that running it again unchanged may fix. See [Retrying failed runs](#retrying-failed-runs). |
 | 130 | `load --follow` got a second Ctrl-C or SIGTERM and stopped at once. |
 
 `--json` doesn't change the exit code. A declined `--reload` exits 1. From 0.27.0,
 `apply --json` and `load --json` print their result as JSON; see
+[Results as JSON](/docs/cli/load/#results-as-json).
+
+## Retrying failed runs
+
+From 0.34.0 (not released yet), `plan`, `apply`, `load` and `copy` exit 75 instead of 1 when every
+failure may pass on a second try, so a scheduler can retry those runs and alert on the rest. A failure counts as
+retryable when it is one of these:
+
+- A connection that dropped, was refused or timed out, to a target, or to a source while planning
+  or loading.
+- Throttling (429) or a server error (5xx) that outlasted its retries, from a warehouse or an
+  [`sl.http`](/docs/sources/python/) job. An object store failure counts only when it's a
+  connection that dropped or timed out.
+- A Postgres connection failure, out of memory, too many connections, a server shutting down or
+  starting, a serialization failure, a deadlock, or a lock not available.
+- A table that another run is loading.
+- A Python table function that raised `ConnectionError` or `TimeoutError`, or a subclass of either.
+
+Anything else exits 1, including invalid configuration, bad credentials, a missing permission, a
+plan error and data that doesn't fit its column. If any one table fails in one of these ways, the
+whole run exits 1, even when other tables failed in retryable ways.
+
+A rerun after a failure loads no row twice and loses none:
+
+- Tables that load in batches keep the batches that committed and carry on from the destination's
+  cursor.
+- Logged tables resume from their last committed checkpoint.
+- `replace` swaps the new table in only at the end.
+
+See [Batches](/docs/concepts/cursors/#batches) and [Logged state](/docs/concepts/cursors/#logged-state).
+Under `--json`, each failed table, and the run as a whole, says whether it is retryable; see
 [Results as JSON](/docs/cli/load/#results-as-json).

@@ -8,3 +8,6 @@ pub const RELOAD_DECLINED: &str = "✗ Reload cancelled: nothing was changed";
 
 /// The exit code of a `load --follow` stopped by a second Ctrl-C or SIGTERM, as a shell reports SIGINT.
 pub const FORCED_STOP_EXIT: i32 = 130;
+
+/// The exit code of a run that failed only in ways running it again unchanged may fix (`EX_TEMPFAIL`): a dropped or refused connection, throttling or server errors that outlasted their retries, or a table another run is loading.
+pub const RETRYABLE_EXIT: u8 = 75;

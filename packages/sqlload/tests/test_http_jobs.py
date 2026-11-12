@@ -375,9 +375,24 @@ def test_given_a_failing_job_when_loading_then_the_error_names_the_request_and_h
 ) -> None:
 	project = make_project(tmp_path, api, tables)
 	done = sqlload(project, "load")
-	assert done.returncode == 1
+	assert done.returncode == (75 if "(after 4 attempts)" in expected_text else 1)
 	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr
 	assert TOKEN[:4] not in done.stdout + done.stderr
+
+
+@pytest.mark.parametrize(
+	("path", "expected_exit", "expected_retryable"),
+	[("/broken", 75, True), ("/missing", 1, False)],
+	ids=["server-errors-outlast-the-retries", "a-status-that-fails-for-good"],
+)
+def test_given_a_failing_job_when_loading_with_json_then_the_exit_code_and_report_say_whether_to_retry(
+	tmp_path: Path, api: ThreadingHTTPServer, path: str, expected_exit: int, expected_retryable: bool
+) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('{path}', paginator=sl.single())\n")
+	done = sqlload(project, "load", "--json")
+	assert done.returncode == expected_exit, done.stdout + done.stderr
+	result = json.loads(done.stdout)
+	assert (result["ok"], result["retryable"], result["tables"][0]["retryable"]) == (False, expected_retryable, expected_retryable)
 
 
 def test_given_a_bad_definition_when_loading_then_no_request_is_sent(tmp_path: Path, api: ThreadingHTTPServer) -> None:

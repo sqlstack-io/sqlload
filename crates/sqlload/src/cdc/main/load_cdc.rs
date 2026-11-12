@@ -11,17 +11,28 @@ pub async fn load_cdc(run: &LoadRun<'_>, plan: &ProjectPlan) -> Vec<TableOutcome
         let loaded = match blocked.is_empty() {
             true => load_source(run, name, (&tables, None))
                 .await
-                .map(|(rows, _)| rows),
-            false => Err(format!(
-                "source {name} does not load while {} {} blocked: its tables share one slot, so loading the rest would skip the blocked tables' changes",
-                blocked.join(", "),
-                match blocked.len() {
-                    1 => "is",
-                    _ => "are",
-                }
+                .map(|(rows, _)| rows)
+                .map_err(|error| (error.is_retryable(), error.to_string())),
+            false => Err((
+                false,
+                format!(
+                    "source {name} does not load while {} {} blocked: its tables share one slot, so loading the rest would skip the blocked tables' changes",
+                    blocked.join(", "),
+                    match blocked.len() {
+                        1 => "is",
+                        _ => "are",
+                    }
+                ),
             )),
         };
-        outcomes.extend(source_outcomes(&tables, &loaded, started.elapsed()));
+        let retryable = matches!(loaded, Err((true, _)));
+        let loaded = loaded.map_err(|(_, error)| error);
+        outcomes.extend(source_outcomes(
+            &tables,
+            &loaded,
+            retryable,
+            started.elapsed(),
+        ));
     }
     outcomes
 }

@@ -8,7 +8,8 @@ use crate::auth::main::allow_sign_in::allow_sign_in;
 use crate::command::_helpers::output::confirm_reload;
 use crate::command::_helpers::project_file::replace_file;
 use crate::command::_helpers::signals::wait_for_signal;
-use crate::command::constants::{FORCED_STOP_EXIT, RELOAD_DECLINED};
+use crate::command::constants::{FORCED_STOP_EXIT, RELOAD_DECLINED, RETRYABLE_EXIT};
+use crate::command::errors::CommandError;
 use crate::command::models::{Command, ContractAction, LoaderArgs, LoaderRequest, StateAction};
 use crate::contract::main::compare_contracts::compare_contracts;
 use crate::contract::main::render_contract::render_contract;
@@ -25,7 +26,7 @@ use crate::loader::main::render_plan::render_plan;
 use crate::loader::main::render_tally::render_tally;
 use crate::loader::main::state_command::state_command;
 use crate::loader::models::{
-    LoadRun, PlanOptions, ProjectPlan, RunReport, StateKind, StateRequest,
+    LoadRun, PlanOptions, ProjectPlan, RunReport, StateKind, StateRequest, TableOutcome,
 };
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
@@ -87,8 +88,19 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
     parse_python_project(request.text, &lookup, &found).map_err(|error| error.to_string())
 }
 
-/// Run a loader command against the project in `request.text`: the lines to print, and whether it succeeded. Under `--json` every failure is a JSON error document.
-pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String>, bool), String> {
+/// The exit code of a command that succeeded (`ok`), or failed only in `retryable` ways, or failed otherwise.
+pub(crate) fn exit_code(ok: bool, retryable: bool) -> u8 {
+    match (ok, retryable) {
+        (true, _) => 0,
+        (false, true) => RETRYABLE_EXIT,
+        (false, false) => 1,
+    }
+}
+
+/// Run a loader command against the project in `request.text`: the lines to print, and its exit code. Under `--json` every failure is a JSON error document.
+pub(crate) async fn run_loader(
+    request: LoaderRequest<'_>,
+) -> Result<(Vec<String>, u8), CommandError> {
     let name = match &request.command {
         Command::Apply(_) => "apply",
         Command::Load(_) => "load",
@@ -98,8 +110,8 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String
         Command::Plan(args) | Command::Apply(args) if args.follow => {
             let error = "--follow and --max-duration apply to load only";
             return match args.json {
-                true => Ok((vec![json_error(name, error)], false)),
-                false => Err(error.to_owned()),
+                true => Ok((vec![json_error(name, error, false)], 1)),
+                false => Err(error.to_owned().into()),
             };
         }
         Command::Plan(args) | Command::Apply(args) | Command::Load(args) => args.json,
@@ -117,12 +129,15 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String
     allow_sign_in(!(json || contract_json));
     let project = match load_project_config(&request).await {
         Ok(project) => project,
-        Err(error) => return config_failure(&request.command, error),
+        Err(error) => return config_failure(&request.command, error).map_err(Into::into),
     };
     let outcome = match request.command {
         Command::Contract { action } => {
             let file = (request.config, request.text);
-            run_contract(&project, action, file, &request.variables).await
+            run_contract(&project, action, file, &request.variables)
+                .await
+                .map(|(lines, agrees)| (lines, exit_code(agrees, false)))
+                .map_err(Into::into)
         }
         command => run_command(&project, command, request.host.clone(), request.no_color).await,
     };
@@ -130,7 +145,10 @@ pub(crate) async fn run_loader(request: LoaderRequest<'_>) -> Result<(Vec<String
         let _ = tokio::task::spawn_blocking(move || host.finish()).await;
     }
     match (outcome, json) {
-        (Err(error), true) => Ok((vec![json_error(name, &error)], false)),
+        (Err(error), true) => Ok((
+            vec![json_error(name, &error.message, error.retryable)],
+            exit_code(false, error.retryable),
+        )),
         (outcome, _) => outcome,
     }
 }
@@ -143,8 +161,8 @@ fn problems(error: &str) -> Vec<String> {
     }
 }
 
-/// `error` in sqlbuild's error shape, `{"error": {"code", "message", "help"}}`: each problem's reason in `message` and its fix (the text after `Fix:`) in `help`, `null` when none has one.
-pub(crate) fn json_error(code: &str, error: &str) -> String {
+/// `error` in sqlbuild's error shape, `{"error": {"code", "message", "help", "retryable"}}`: each problem's reason in `message` and its fix (the text after `Fix:`) in `help`, `null` when none has one; `retryable` when running the command again unchanged may succeed.
+pub(crate) fn json_error(code: &str, error: &str, retryable: bool) -> String {
     let mut messages: Vec<String> = Vec::new();
     let mut helps: Vec<String> = Vec::new();
     for problem in problems(error) {
@@ -157,21 +175,24 @@ pub(crate) fn json_error(code: &str, error: &str) -> String {
         }
     }
     let help = (!helps.is_empty()).then(|| helps.join("\n"));
-    serde_json::json!({ "error": { "code": code, "message": messages.join("\n"), "help": help } })
+    serde_json::json!({ "error": { "code": code, "message": messages.join("\n"), "help": help, "retryable": retryable } })
         .to_string()
 }
 
 /// A project that does not parse: a failed plan's `Errors` for `plan`, `apply` and `load` (as JSON under `--json`), else the error.
-fn config_failure(command: &Command, error: String) -> Result<(Vec<String>, bool), String> {
+fn config_failure(command: &Command, error: String) -> Result<(Vec<String>, u8), String> {
     let (Command::Plan(args) | Command::Apply(args) | Command::Load(args)) = command else {
         return Err(error);
     };
     match args.json {
-        true => Ok((vec![json_error("config", &error)], false)),
-        false => Ok(render_plan(&ProjectPlan {
-            problems: problems(&error),
-            ..ProjectPlan::default()
-        })),
+        true => Ok((vec![json_error("config", &error, false)], 1)),
+        false => {
+            let (lines, ok) = render_plan(&ProjectPlan {
+                problems: problems(&error),
+                ..ProjectPlan::default()
+            });
+            Ok((lines, exit_code(ok, false)))
+        }
     }
 }
 
@@ -180,22 +201,23 @@ async fn run_command(
     command: Command,
     host: Option<Arc<dyn PythonHost>>,
     no_color: bool,
-) -> Result<(Vec<String>, bool), String> {
+) -> Result<(Vec<String>, u8), CommandError> {
     if let Command::Debug { no_connection } = command {
         let (lines, ok) = debug_project(project, !no_connection).await;
         return match ok {
-            true => Ok((lines, true)),
-            false => Err(lines.join("\n")),
+            true => Ok((lines, 0)),
+            false => Err(lines.join("\n").into()),
         };
     }
-    let destinations = connect_targets(project)
-        .await
-        .map_err(|error| error.to_string())?;
+    let destinations = connect_targets(project).await;
     if let Command::LoggedState { action } = command {
+        let destinations = destinations.map_err(|error| error.to_string())?;
         return run_state(project, &destinations, action)
             .await
-            .map(|lines| (lines, true));
+            .map(|lines| (lines, 0))
+            .map_err(Into::into);
     }
+    let destinations = destinations?;
     let (args, applies, loads) = match command {
         Command::Plan(args) => (args, false, false),
         Command::Apply(args) => (args, true, false),
@@ -203,7 +225,8 @@ async fn run_command(
         _ => {
             return Err(
                 "this command runs on exporter configurations; this file is a loader project"
-                    .to_owned(),
+                    .to_owned()
+                    .into(),
             );
         }
     };
@@ -214,22 +237,21 @@ async fn run_command(
     );
     let started = (chrono::Utc::now(), std::time::Instant::now());
     let options = options(args)?;
-    let plan = plan_project(project, &destinations, &options)
-        .await
-        .map_err(|error| error.to_string())?;
+    let plan = plan_project(project, &destinations, &options).await?;
     if json && !applies {
-        let (text, ok) = json_report(&plan, None);
-        return Ok((vec![text], ok));
+        let (text, ok, retryable) = json_report(&plan, None);
+        return Ok((vec![text], exit_code(ok, retryable)));
     }
     let (mut lines, planned) = match json {
         true => (Vec::new(), true),
         false => render_plan(&plan),
     };
+    let plan_retryable = plan.only_retryable_problems();
     if !applies {
-        return Ok((lines, planned));
+        return Ok((lines, exit_code(planned, plan_retryable)));
     }
     if let Some(problem) = follow.and_then(|_| follow_problem(&plan)) {
-        return Err(problem);
+        return Err(problem.into());
     }
     let flag = match (options.reload, options.resnapshot) {
         (true, true) => "--reload and --resnapshot",
@@ -251,17 +273,16 @@ async fn run_command(
         return Err(format!(
             "{flag} rebuilds {}, replacing what they hold, and --json cannot ask to confirm it; add --yes",
             rebuilt.join(", ")
-        ));
+        )
+        .into());
     }
     if !rebuilt.is_empty() {
         match confirm_reload(&lines, flag, &rebuilt, no_color)? {
             true => lines.clear(),
-            false => return Ok((vec![RELOAD_DECLINED.to_owned()], false)),
+            false => return Ok((vec![RELOAD_DECLINED.to_owned()], 1)),
         }
     }
-    let applied = apply_project(&plan, &destinations)
-        .await
-        .map_err(|error| error.to_string())?;
+    let applied = apply_project(&plan, &destinations).await?;
     let run = LoadRun {
         project,
         destinations: &destinations,
@@ -281,12 +302,16 @@ async fn run_command(
             started: started.0,
             elapsed: started.1.elapsed(),
         };
-        let (text, ok) = json_report(&plan, Some(&run));
-        return Ok((vec![text], ok));
+        let (text, ok, retryable) = json_report(&plan, Some(&run));
+        return Ok((vec![text], exit_code(ok, retryable)));
     }
     let (tallied, completed) = render_tally(&applied, &outcomes, started.1.elapsed());
     lines.extend(tallied);
-    Ok((lines, planned && completed))
+    let retryable = outcomes.iter().all(TableOutcome::passes_on_rerun);
+    Ok((
+        lines,
+        exit_code(planned && completed, plan_retryable && retryable),
+    ))
 }
 
 /// Why `load --follow` cannot follow `plan`: it follows exactly one `postgres_cdc` source, and nothing else, since it never finishes to load other tables after; when it selects none, the plan's problems say why.

@@ -13,6 +13,7 @@ use crate::http_source::_helpers::job::request_projection;
 use crate::http_source::_helpers::selector::{pointer_text, selected_node, selector};
 use crate::http_source::_helpers::urls::{redacted, request_url};
 use crate::http_source::models::{Calls, Fetched, HttpPage, Paginator, Request, Selector};
+use crate::python_sources::errors::ReadError;
 
 /// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is missing or null has no rows and is not sent. Stops quietly once `pages` closes; a page read twice, or a response repeating the previous one, is an error rather than a loop.
 pub(crate) async fn paginate(
@@ -20,7 +21,7 @@ pub(crate) async fn paginate(
     request: &Request,
     path: &str,
     pages: &Sender<HttpPage>,
-) -> Result<(), String> {
+) -> Result<(), ReadError> {
     let rows = selector(request.select.as_deref())?;
     let projection = request_projection(request)?;
     let rows_path = Some(rows.rows.join(".")).filter(|path| !path.is_empty());
@@ -33,7 +34,8 @@ pub(crate) async fn paginate(
         if !seen.insert(url.clone()) {
             return Err(format!(
                 "{shown}: the paginator came back to a page it already read; check its pointer or parameter"
-            ));
+            )
+            .into());
         }
         let Some(fetched) = fetch(calls, &url).await? else {
             return Ok(());
@@ -42,7 +44,8 @@ pub(crate) async fn paginate(
         if digest.is_some() && previous == digest {
             return Err(format!(
                 "{shown}: the response repeats the previous page; the API may ignore the paginator's parameter"
-            ));
+            )
+            .into());
         }
         previous = digest;
         let document = parsed(request, &rows, &fetched.bytes)

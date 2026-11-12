@@ -30,8 +30,13 @@ pub async fn plan_project(
         let (resolved, files) =
             match scoped_tables((project, options), (source_name, source)).await? {
                 Ok(found) => found,
-                Err(problems) => {
-                    plan.problems.extend(problems);
+                Err(problem) => {
+                    if let Some(problem) = problem {
+                        if problem.retryable {
+                            plan.retryable_problems.push(problem.message.clone());
+                        }
+                        plan.problems.push(problem.message);
+                    }
                     continue;
                 }
             };

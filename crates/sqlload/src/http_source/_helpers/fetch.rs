@@ -13,9 +13,10 @@ use crate::http_source::constants::{
     SKIPPED_REFUSAL_RENEWAL_AGE,
 };
 use crate::http_source::models::{Attempt, Calls, Credential, Fetched, StatusAction};
+use crate::python_sources::errors::ReadError;
 
-/// The body at `url`, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times.
-pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, String> {
+/// The body at `url`, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times, and are still worth retrying later once those run out.
+pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, ReadError> {
     let policy = RetryPolicy {
         first_delay: FIRST_RETRY_DELAY,
         max_delay: MAX_RETRY_DELAY,
@@ -43,7 +44,10 @@ pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, S
                 renewed = true;
             }
             Attempt::Retry { reason, .. } if attempt >= policy.max_attempts => {
-                return Err(format!("{reason} (after {} attempts)", policy.max_attempts));
+                return Err(ReadError::transient(format!(
+                    "{reason} (after {} attempts)",
+                    policy.max_attempts
+                )));
             }
             Attempt::Retry { after, .. } => {
                 let delay = after.unwrap_or_else(|| jittered(policy.delay(attempt)));

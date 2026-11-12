@@ -2,7 +2,8 @@ use std::path::Path;
 
 use clap::Parser;
 
-use crate::command::_helpers::loader_commands::{options, run_loader};
+use crate::command::_helpers::loader_commands::{exit_code, options, run_loader};
+use crate::command::errors::CommandError;
 use crate::command::models::{Cli, Command, LoaderRequest};
 
 /// `sqlload debug --no-connection` on `project` without a Python host, as the standalone executable runs it; the error text, or `""`.
@@ -21,12 +22,16 @@ pub(crate) fn debug_without_host(project: &str) -> String {
         .enable_all()
         .build()
         .map_err(|error| error.to_string())
-        .and_then(|runtime| runtime.block_on(run_loader(request)))
+        .and_then(|runtime| {
+            runtime
+                .block_on(run_loader(request))
+                .map_err(|error| error.message)
+        })
         .err()
         .unwrap_or_default()
 }
 
-/// The command line `argv` (after `sqlload`) on `project` without a Python host: its output, or its error, then `exit 0` or `exit 1` on its own line.
+/// The command line `argv` (after `sqlload`) on `project` without a Python host: its output, or its error, then its exit code as `exit N` on its own line.
 pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
     let Ok(cli) = Cli::try_parse_from(["sqlload"].iter().chain(argv)) else {
         return "unparsed".to_owned();
@@ -42,11 +47,14 @@ pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|error| error.to_string())
+        .map_err(|error| CommandError::from(error.to_string()))
         .and_then(|runtime| runtime.block_on(run_loader(request)))
         .map_or_else(
-            |error| format!("{error}\nexit 1"),
-            |(lines, ok)| format!("{}\nexit {}", lines.join("\n"), u8::from(!ok)),
+            |error| {
+                let code = exit_code(false, error.retryable);
+                format!("{}\nexit {code}", error.message)
+            },
+            |(lines, code)| format!("{}\nexit {code}", lines.join("\n")),
         )
 }
 

@@ -216,7 +216,7 @@ def test_given_one_table_failing_when_loading_with_json_then_stdout_is_one_docum
 	done = sqlload(project, "load", "--json")
 	assert done.returncode == 1, done.stdout + done.stderr
 	result = json.loads(done.stdout)
-	assert (result["schema_version"], result["command"], result["ok"]) == (1, "load", False)
+	assert (result["schema_version"], result["command"], result["ok"], result["retryable"]) == (1, "load", False, False)
 	assert result["summary"] == {"created": 1, "altered": 0, "recreated": 0, "loaded": 1, "failed": 1, "rows": 2}
 	assert [(o["action"], o["name"]) for o in result["objects"]] == [("created", "RAW.shop__good")]
 	outcomes = {table["table"]: table for table in result["tables"]}
@@ -225,6 +225,7 @@ def test_given_one_table_failing_when_loading_with_json_then_stdout_is_one_docum
 		"RAW.shop__bad": ("failed", None, "shop", "dev", "replace"),
 	}
 	assert "RuntimeError: the API returned 503" in outcomes["RAW.shop__bad"]["error"]
+	assert {name: t["retryable"] for name, t in outcomes.items()} == {"RAW.shop__good": False, "RAW.shop__bad": False}
 	assert result["plan"]["selected"] == 2
 	reload = sqlload(project, "load", "--json", "--reload")
 	assert reload.returncode == 1, reload.stdout + reload.stderr
@@ -233,6 +234,81 @@ def test_given_one_table_failing_when_loading_with_json_then_stdout_is_one_docum
 	applied = sqlload(project, "apply", "--json")
 	assert applied.returncode == 0, applied.stdout + applied.stderr
 	assert (json.loads(applied.stdout)["command"], json.loads(applied.stdout)["tables"]) == ("apply", [])
+
+
+#: Tables that raise what data/fail.json names: `pages` (logged, a checkpoint per page) at a page, `events` (a cursor) at a value, `broken` at all.
+RETRY_MODULE = """
+import json
+from pathlib import Path
+
+import sqlload as sl
+
+HERE = Path(__file__).resolve().parent.parent
+shop = sl.source("shop")
+
+
+def failure():
+    path = HERE / "data" / "fail.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+@shop.table(description="Pages.", write_strategy="append", state="logged")
+def pages(ctx):
+    page = ctx.state or 0
+    while page < 4:
+        if failure().get("pages") == page:
+            raise ConnectionError("the API dropped the connection")
+        yield [{"n": page * 10 + row} for row in range(3)]
+        page += 1
+        yield sl.checkpoint(page)
+
+
+@shop.table(description="Events.", write_strategy="append", cursor_column="at")
+def events(ctx):
+    for at in range((ctx.cursor_value or 0) + 1, 7):
+        if failure().get("events") == at:
+            raise TimeoutError("the read timed out")
+        yield {"at": at}
+
+
+@shop.table(description="Broken.")
+def broken(ctx):
+    if failure().get("broken"):
+        raise ValueError("a row is malformed")
+    yield {"id": 1}
+"""
+
+
+def test_given_tables_failing_only_on_the_network_when_loading_then_it_exits_75_and_a_rerun_loads_every_row_once(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=RETRY_MODULE)
+	give(project, "fail", {"pages": 2, "events": 4})
+	assert sqlload(project, "load", "shop__pages", "shop__events").returncode == 75
+	done = sqlload(project, "load", "--json", "shop__pages", "shop__events")
+	assert done.returncode == 75, done.stdout + done.stderr
+	result = json.loads(done.stdout)
+	assert (result["ok"], result["retryable"]) == (False, True)
+	assert {t["table"]: (t["status"], t["retryable"]) for t in result["tables"]} == {
+		"RAW.shop__pages": ("failed", True),
+		"RAW.shop__events": ("failed", True),
+	}
+	assert "ConnectionError: the API dropped the connection" in next(t["error"] for t in result["tables"] if t["table"] == "RAW.shop__pages")
+	give(project, "fail", {})
+	again = sqlload(project, "load", "--json", "shop__pages", "shop__events")
+	assert again.returncode == 0, again.stdout + again.stderr
+	assert (json.loads(again.stdout)["ok"], json.loads(again.stdout)["retryable"]) == (True, False)
+	assert query(project, 'SELECT n FROM "RAW".shop__pages ORDER BY n') == [(page * 10 + row,) for page in range(4) for row in range(3)]
+	assert query(project, 'SELECT "at" FROM "RAW".shop__events ORDER BY 1') == [(at,) for at in range(1, 7)]
+
+
+def test_given_a_retryable_and_a_lasting_failure_when_loading_then_it_exits_1_and_says_which_is_which(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=RETRY_MODULE)
+	give(project, "fail", {"pages": 0, "broken": True})
+	assert sqlload(project, "load", "shop__pages", "shop__broken").returncode == 1
+	done = sqlload(project, "load", "--json", "shop__pages", "shop__broken")
+	assert done.returncode == 1, done.stdout + done.stderr
+	result = json.loads(done.stdout)
+	assert (result["ok"], result["retryable"]) == (False, False)
+	assert {t["table"]: t["retryable"] for t in result["tables"]} == {"RAW.shop__pages": True, "RAW.shop__broken": False}
 
 
 def test_given_a_plan_error_and_a_printing_source_when_loading_with_json_then_stdout_parses_and_the_run_is_not_ok(tmp_path: Path) -> None:

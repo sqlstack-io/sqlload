@@ -6,11 +6,14 @@ use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
+use crate::file_store::errors::StoreError;
+use crate::http::errors::ApiError;
 use crate::loader::_helpers::python::bound_array;
 use crate::loader::_helpers::python::{
     YieldedData, declared_problems, inferred_table, python_tables, source_spelling,
 };
 use crate::loader::_helpers::resolve::resolve_tables;
+use crate::loader::errors::LoaderError;
 use crate::loader::models::{PlanDetail, PlanItem, TableSpec};
 use crate::loader::tests::test_types::{
     BoundArrayTestCase, DeclaredProblemsTestCase, InferredTableTestCase, ItemSpec,
@@ -193,4 +196,54 @@ pub(crate) fn plan_items(specs: &[ItemSpec]) -> Vec<PlanItem> {
                 .collect(),
         })
         .collect()
+}
+
+/// A warehouse call that failed with `status` and service `code`.
+pub(crate) fn status(status: u16, code: &str) -> LoaderError {
+    LoaderError::Snowflake(ApiError::Status {
+        status,
+        code: code.to_owned(),
+        message: "m".to_owned(),
+    })
+}
+
+/// An object store failure.
+pub(crate) fn store(source: object_store::Error) -> LoaderError {
+    LoaderError::Store(StoreError::Object {
+        action: "get",
+        key: "k".to_owned(),
+        source,
+    })
+}
+
+/// An object store failure caused by a socket error of `kind`.
+pub(crate) fn io_store(kind: std::io::ErrorKind) -> LoaderError {
+    store(object_store::Error::Generic {
+        store: "S3",
+        source: Box::new(std::io::Error::new(kind, "socket")),
+    })
+}
+
+/// An object store failure whose client reported an HTTP error of `kind`.
+pub(crate) fn http_store(kind: object_store::client::HttpErrorKind) -> LoaderError {
+    store(object_store::Error::Generic {
+        store: "S3",
+        source: Box::new(object_store::client::HttpError::new(
+            kind,
+            std::io::Error::other("http"),
+        )),
+    })
+}
+
+/// A warehouse call whose request could not be built: a header value with a line break, such as a password read with its trailing newline.
+pub(crate) fn unbuildable_request() -> LoaderError {
+    crate::http::main::install_tls_provider::install_tls_provider();
+    let built = reqwest::Client::new()
+        .get("http://127.0.0.1:1/")
+        .header("X-Key", "secret\n")
+        .build();
+    built.map_or_else(
+        |error| LoaderError::Snowflake(ApiError::from(error)),
+        |_| LoaderError::Invalid("the request was built".to_owned()),
+    )
 }

@@ -46,7 +46,7 @@ pub async fn follow_cdc(
         let reason = match next.1 {
             Ok(None) => {
                 tracing::info!(rows = rows.values().sum::<u64>(), "stopped following");
-                let outcomes = source_outcomes(&tables, &Ok(rows), started.elapsed());
+                let outcomes = source_outcomes(&tables, &Ok(rows), false, started.elapsed());
                 return with_changes(outcomes, applied);
             }
             Ok(Some(reason)) => Ok(reason),

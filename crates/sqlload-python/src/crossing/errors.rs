@@ -1,4 +1,5 @@
 use pyo3::PyErr;
+use sqlload::python_sources::errors::ReadError;
 
 /// Why a table generator's data could not be read.
 #[derive(Debug)]
@@ -7,6 +8,8 @@ pub enum CrossError {
     Python(PyErr),
     /// The data could not become Arrow (malformed JSON, a non-object row).
     Data(String),
+    /// An `sl.http` job failed; it says whether running it again may succeed.
+    Http(ReadError),
 }
 
 impl std::fmt::Display for CrossError {
@@ -14,6 +17,7 @@ impl std::fmt::Display for CrossError {
         match self {
             Self::Python(error) => write!(formatter, "{error}"),
             Self::Data(reason) => formatter.write_str(reason),
+            Self::Http(error) => write!(formatter, "{error}"),
         }
     }
 }

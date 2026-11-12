@@ -99,3 +99,9 @@ pub(crate) struct SourceFilterTestCase {
     /// The values bound to the filter's placeholders, in order.
     pub(crate) expected_parameters: &'static [&'static str],
 }
+
+pub(crate) struct RetryableErrorTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) error: fn() -> crate::loader::errors::LoaderError,
+    pub(crate) expected_retryable: bool,
+}

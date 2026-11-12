@@ -19,7 +19,9 @@ pub async fn selected_specs(
             match scoped_tables((project, options), (source_name, source)).await? {
                 Ok(found) => found,
                 Err(problems) => {
-                    chosen.problems.extend(problems);
+                    chosen
+                        .problems
+                        .extend(problems.into_iter().map(|problem| problem.message));
                     continue;
                 }
             };

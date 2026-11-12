@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use arrow_array::RecordBatch;
 
+use crate::python_sources::errors::ReadError;
 use crate::python_sources::models::{PythonSource, TableRead};
 
 /// What a table function's read gives next.
@@ -15,7 +16,7 @@ pub enum Streamed {
 /// A table function's data, one Arrow batch at a time; `next_batch` blocks.
 pub trait BatchStream: Send {
     /// The next batch or state, an error, or `None` at the end.
-    fn next_batch(&mut self) -> Option<Result<Streamed, String>>;
+    fn next_batch(&mut self) -> Option<Result<Streamed, ReadError>>;
 }
 
 /// Runs Python sources: the `sqlload` Python package provides it; the standalone executable has none.
