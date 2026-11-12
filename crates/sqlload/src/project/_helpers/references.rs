@@ -3,12 +3,13 @@ use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{AfterLoad, Compression, RecordShape, SourceFormat};
+use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, RESERVED_COLUMN_PREFIX,
-    STAGE_NAME_PARTS, TABLE_PLACEHOLDER,
+    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, STAGE_NAME_PARTS,
+    TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
     CdcDeletes, CdcMode, ConnectionConfig, ConstantColumns, ProjectConfig, SourceConfig,
@@ -497,9 +498,9 @@ fn constant_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             constants
                 .0
                 .keys()
-                .filter(|name| name.to_ascii_lowercase().starts_with(RESERVED_COLUMN_PREFIX))
+                .filter(|name| name.to_ascii_lowercase().starts_with(SQLLOAD_PREFIX))
                 .map(|name| {
-                    format!("{place} constant column {name}: names starting with {RESERVED_COLUMN_PREFIX} are SQLLoad's own")
+                    format!("{place} constant column {name}: names starting with {SQLLOAD_PREFIX} are SQLLoad's own")
                 }),
         );
     }

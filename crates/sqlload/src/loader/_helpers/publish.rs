@@ -63,6 +63,8 @@ use crate::files_source::models::AfterLoadReport;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
+use crate::load_naming::main::metadata_name::metadata_name;
+use crate::load_naming::models::{MetadataRole, Naming};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_merge_log;
@@ -102,8 +104,6 @@ use crate::run_log::main::runs_location::runs_location;
 use crate::run_log::main::runs_table::runs_table;
 use crate::run_log::models::RunOutcome;
 use crate::run_log::models::RunRecord;
-use crate::schema_plan::constants::LOAD_ID_COLUMN;
-use crate::schema_plan::constants::LOADED_AT_COLUMN;
 use crate::schema_plan::constants::MERGE_ROW_COLUMN;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
@@ -154,6 +154,7 @@ fn write_target<'a>(
         staging,
         columns,
         write_columns: &table.schema.write_columns,
+        naming: table.spec.naming,
         load_id,
         batch,
         direct,
@@ -238,7 +239,7 @@ pub(crate) fn with_constants(
 /// `batch` with this load's `_sqlload_load_id` and `_sqlload_loaded_at` added, so the staged files carry them, and with `first_row` its rows numbered from it in `_sqlload_row`.
 fn with_metadata(
     batch: &RecordBatch,
-    load_id: &str,
+    (naming, load_id): (Naming, &str),
     (loaded_at_micros, first_row): (i64, Option<i64>),
 ) -> Result<RecordBatch, String> {
     let rows = batch.num_rows();
@@ -248,12 +249,12 @@ fn with_metadata(
     let loaded_at =
         TimestampMicrosecondArray::from(vec![loaded_at_micros; rows]).with_timezone("UTC");
     fields.push(Arc::new(Field::new(
-        LOAD_ID_COLUMN,
+        metadata_name(naming, MetadataRole::LoadId),
         arrow_schema::DataType::Utf8,
         true,
     )));
     fields.push(Arc::new(Field::new(
-        LOADED_AT_COLUMN,
+        metadata_name(naming, MetadataRole::LoadedAt),
         loaded_at.data_type().clone(),
         true,
     )));
@@ -445,8 +446,12 @@ impl Publisher {
             .map_err(|error| LoaderError::Invalid(error.to_string()))?;
         let first_row = numbers_rows(&self.table).then_some(self.staged_ordinal);
         self.staged_ordinal += i64::try_from(masked.num_rows()).unwrap_or(i64::MAX);
-        let batch = with_metadata(&masked, &self.load_id, (micros, first_row))
-            .map_err(LoaderError::Invalid)?;
+        let batch = with_metadata(
+            &masked,
+            (self.table.spec.naming, &self.load_id),
+            (micros, first_row),
+        )
+        .map_err(LoaderError::Invalid)?;
         self.batch_rows += batch.num_rows() as u64;
         self.arrow_bytes += batch.get_array_memory_size();
         let columns = staged_columns(&self.table);
@@ -1360,6 +1365,7 @@ impl Publisher {
             path: &sink.output.path,
             cursor_column: spec.cursor.as_ref().map(|cursor| cursor.column.as_str()),
             columns: &self.table.schema.write_columns,
+            naming: self.table.spec.naming,
             load_id: &self.load_id,
             file_id: &file_id,
             loaded_at: &self.loaded_at,
@@ -1498,6 +1504,7 @@ impl Publisher {
             path: &sink.output.path,
             cursor_column,
             columns: &self.table.schema.write_columns,
+            naming: self.table.spec.naming,
             load_id: &self.load_id,
             file_id: &writer.file_id,
             loaded_at: &self.loaded_at,

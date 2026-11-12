@@ -73,21 +73,26 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
         null_columns: &null_columns,
         rows: 1,
     };
-    inferred_table(&planned, &declared, &data, live)
-        .columns
-        .iter()
-        .map(|column| {
-            format!(
-                "{}:{}",
-                column.name,
-                column
-                    .column_type
-                    .as_ref()
-                    .map_or_else(Clone::clone, ToString::to_string)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",")
+    inferred_table(
+        (&planned, crate::load_naming::models::Naming::Sqlload),
+        &declared,
+        &data,
+        live,
+    )
+    .columns
+    .iter()
+    .map(|column| {
+        format!(
+            "{}:{}",
+            column.name,
+            column
+                .column_type
+                .as_ref()
+                .map_or_else(Clone::clone, ToString::to_string)
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(",")
 }
 
 /// A crossing's schema: an int, a float, text, a UTC timestamp, a JSON column, an all-NULL column and a metadata column.

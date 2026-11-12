@@ -1,5 +1,6 @@
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::ChangeApply;
+use crate::load_naming::models::Naming;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -134,6 +135,8 @@ pub struct TableSpec {
     pub warehouse_source: Option<WarehouseSource>,
     /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).
     pub layout: TableLayout,
+    /// How the load names the columns it adds.
+    pub naming: Naming,
 }
 
 /// A warehouse source's table: the query behind it, if any, and the route its warehouse reads it by.

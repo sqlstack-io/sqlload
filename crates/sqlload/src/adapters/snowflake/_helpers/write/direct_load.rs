@@ -25,10 +25,11 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::main::read_file::read_file;
 use crate::files_source::main::batch_refusals::batch_refusals;
 use crate::files_source::models::FilesRead;
+use crate::load_naming::main::metadata_role::metadata_role;
+use crate::load_naming::models::MetadataRole;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::TableSpec;
 use crate::project::models::MaskMethod;
-use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 
 /// Load `batch` by having Snowflake `COPY` its files itself: from the external stage the writer loads through where it covers them, otherwise, with `copy_to_internal_stage`, after uploading them unchanged to `@~` (removed once copied). Fails where the batch's own footers do not allow an exact load: files never fall back to SQLLoad. `None` when neither applies.
@@ -394,7 +395,7 @@ fn filled_columns(
                     .fraction_digits
                     .is_some_and(|digits| digits < i64::from(MAX_FRACTION_DIGITS))
         });
-        let value = match (found, column.name.as_str()) {
+        let value = match (found, metadata_role(spec.naming, &column.name)) {
             (
                 Some(CopyColumn {
                     value:
@@ -410,10 +411,10 @@ fn filled_columns(
                 short,
             },
             (Some(found), _) => found.value.clone(),
-            (None, LOAD_ID_COLUMN) => {
+            (None, Some(MetadataRole::LoadId)) => {
                 CopyValue::Literal(SnowflakeSql.render_loader_value_literal(load_id))
             }
-            (None, LOADED_AT_COLUMN) => CopyValue::Literal(format!(
+            (None, Some(MetadataRole::LoadedAt)) => CopyValue::Literal(format!(
                 "CAST({} AS TIMESTAMP_TZ(6))",
                 SnowflakeSql.render_loader_value_literal(loaded_at)
             )),

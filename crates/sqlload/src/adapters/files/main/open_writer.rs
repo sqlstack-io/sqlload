@@ -8,6 +8,7 @@ use arrow_schema::{Field, Schema};
 use crate::adapters::files::constants::SINGLE_FILE_STEM;
 use crate::adapters::files::models::{FilesWriter, WriterRequest};
 use crate::column_types::main::arrow_field::arrow_field;
+use crate::load_naming::main::metadata_role::metadata_role;
 
 /// A writer for the table's columns; fails for a column with no Arrow type (`native`).
 pub fn open_writer(request: WriterRequest<'_>) -> Result<FilesWriter, String> {
@@ -42,6 +43,11 @@ pub fn open_writer(request: WriterRequest<'_>) -> Result<FilesWriter, String> {
         partition: request.path.partition.clone(),
         cursor_column: request.cursor_column.map(str::to_owned),
         schema: Arc::new(Schema::new(fields)),
+        metadata: request
+            .columns
+            .iter()
+            .map(|column| metadata_role(request.naming, &column.name))
+            .collect(),
         load_id: request.load_id.to_owned(),
         file_id: request.file_id.to_owned(),
         loaded_at_micros,

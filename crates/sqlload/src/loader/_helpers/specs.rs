@@ -9,6 +9,7 @@ use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::models::AfterLoad;
+use crate::load_naming::models::Naming;
 use crate::loader::_helpers::resolve::ResolvedTarget;
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::constants::{ODBC_SOURCE, SNOWFLAKE_SOURCE};
@@ -272,6 +273,7 @@ pub(crate) fn build_spec(
         strategy,
         strategy_origin,
         unique_key,
+        naming: Naming::default(),
         on_duplicate_keys: on_duplicate_keys
             .map(|(value, _)| value)
             .unwrap_or_default(),

@@ -1,4 +1,4 @@
-use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
+use crate::load_naming::constants::{SQLLOAD_LOAD_ID, SQLLOAD_LOADED_AT};
 
 /// The column holding each row's source file, used to skip files already loaded by `append`.
 pub const SOURCE_FILE_COLUMN: &str = "_sqlload_source_file";
@@ -83,8 +83,8 @@ pub const CONCURRENT_TEXT_SAMPLES: usize = 4;
 
 /// Columns the loader writes itself (load metadata and source tracking): a files source drops them from its files, matched ignoring case, and this load fills its own.
 pub const LOADER_COLUMNS: &[&str] = &[
-    LOAD_ID_COLUMN,
-    LOADED_AT_COLUMN,
+    SQLLOAD_LOAD_ID,
+    SQLLOAD_LOADED_AT,
     SOURCE_FILE_COLUMN,
     SOURCE_VERSION_COLUMN,
     SOURCE_ROW_COLUMN,

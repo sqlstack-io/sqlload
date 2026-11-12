@@ -10,6 +10,7 @@ use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
+use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
@@ -220,7 +221,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .schema
         .write_columns
         .iter()
-        .partition(|column| column.name.starts_with("_sqlload_"));
+        .partition(|column| is_load_column(table.spec.naming, &column.name));
     let name_width = data
         .iter()
         .map(|column| column.name.len())

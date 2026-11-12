@@ -109,9 +109,6 @@ pub const TABLE_ONLY_KEYS: &[&str] = &[
 /// Top-level keys that mark a file as a loader project rather than an exporter configuration.
 pub const PROJECT_MARKER_KEYS: &[&str] = &["connections", "targets", "sources"];
 
-/// The prefix of the columns SQLLoad adds itself, which no `constant_columns` entry may take.
-pub const RESERVED_COLUMN_PREFIX: &str = "_sqlload_";
-
 /// The placeholder every destination table name template must contain.
 pub const TABLE_PLACEHOLDER: &str = "{table}";
 
