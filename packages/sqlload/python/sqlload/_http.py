@@ -111,6 +111,16 @@ def oauth2_refresh_token(token_url: str, *, scope: str | None = None, client_aut
 	return Auth(_oauth2("oauth2_refresh_token", token_url, scope, client_auth))
 
 
+def oauth2_password(token_url: str, *, scope: str | None = None, client_auth: str = "basic") -> Auth:
+	"""`Authorization: Bearer <access token>`, the token `token_url` issues for the connection's `username` and `password`.
+
+	The resource-owner password grant. The connection's `client_id` and `client_secret` go along when it has them. The
+	token is renewed before it expires and once after a 401: with the refresh token the server handed out, if it did,
+	and by asking with the password again otherwise or when that refresh token is refused.
+	"""
+	return Auth(_oauth2("oauth2_password", token_url, scope, client_auth))
+
+
 def _oauth2(kind: str, token_url: str, scope: str | None, client_auth: str) -> dict[str, Any]:
 	if client_auth not in ("basic", "post"):
 		raise ValueError(f'client_auth must be "basic" or "post", not {client_auth!r}')
