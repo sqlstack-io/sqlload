@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.37.0](https://github.com/sqlstack-io/sqlload/compare/v0.36.0...v0.37.0) (2026-11-12)
+
+
+### Features
+
+* **http:** cells= pivots rows of cells into typed columns ([#200](https://github.com/sqlstack-io/sqlload/issues/200)) ([2c1b298](https://github.com/sqlstack-io/sqlload/commit/2c1b298947cfe2f4f2ec785723d76248330b37be))
+* **http:** multi-level fan-out for sl.http ([#196](https://github.com/sqlstack-io/sqlload/issues/196)) ([6376092](https://github.com/sqlstack-io/sqlload/commit/6376092503112025ebca95ee0f4225882a2e7fc2))
+* **loader:** constant columns on any table, for several tenants in one table ([#199](https://github.com/sqlstack-io/sqlload/issues/199)) ([c3f997c](https://github.com/sqlstack-io/sqlload/commit/c3f997c30f88e7621ea760cdd33f838e0782b9ea))
+* Windows and macOS Intel wheels and CLI, with Windows CI ([#181](https://github.com/sqlstack-io/sqlload/issues/181)) ([090077f](https://github.com/sqlstack-io/sqlload/commit/090077f4c555d7370ed6151b05ad258e4a813dfe))
+
+
+### Documentation
+
+* drop the not-released marks for 0.36.0 ([#197](https://github.com/sqlstack-io/sqlload/issues/197)) ([3039010](https://github.com/sqlstack-io/sqlload/commit/30390101e915f27d6378f2452b71c9bc3a873d82))
+* **files:** mark 0.35.0 features released; ci(verify): stop cancelling main runs ([#194](https://github.com/sqlstack-io/sqlload/issues/194)) ([1e41a16](https://github.com/sqlstack-io/sqlload/commit/1e41a1614ab575d6c82e0749f66f02c186490d62))
+
 ## [0.36.0](https://github.com/sqlstack-io/sqlload/compare/v0.35.0...v0.36.0) (2026-11-12)
 
 
