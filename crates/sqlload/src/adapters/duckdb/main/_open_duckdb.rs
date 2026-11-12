@@ -16,5 +16,5 @@ pub(in crate::adapters) fn open_duckdb(path: &str) -> Result<DuckDbDestination, 
         ":memory:" => duckdb::Connection::open_in_memory()?,
         path => duckdb::Connection::open(path)?,
     };
-    shared_destination(connection, false)
+    shared_destination(connection)
 }

@@ -4,6 +4,7 @@ use crate::adapters::duckdb::constants::{
     EXTENSION_EXCEPTION, MOTHERDUCK_TOKEN_VARIABLES, MOTHERDUCK_UNSUPPORTED_DUCKDB,
 };
 use crate::adapters::duckdb::errors::DuckDbError;
+use crate::adapters::motherduck_bridge::constants::{PYTHON_VARIABLE, SUPPORTED_DUCKDB};
 use crate::auth::models::Secret;
 use crate::project::constants::MOTHERDUCK_PREFIX;
 use crate::project::main::motherduck_path::motherduck_path;
@@ -65,7 +66,7 @@ pub(in crate::adapters::duckdb) fn connection_string(path: &str, token: &str) ->
     format!("{path}{separator}motherduck_token={}", query_value(token))
 }
 
-/// Why `shown` did not open, from DuckDB's `error` with `token` taken out: MotherDuck's own words when its extension refuses this DuckDB version.
+/// Why `shown` did not open, from the bridge's `error` with `token` taken out: MotherDuck's own words when its extension refuses the bridge's DuckDB version.
 pub(in crate::adapters::duckdb) fn refused(error: &str, token: &str, shown: &str) -> DuckDbError {
     let error = error
         .replace(&query_value(token), "<redacted>")
@@ -81,12 +82,12 @@ pub(in crate::adapters::duckdb) fn refused(error: &str, token: &str, shown: &str
         .collect::<Vec<_>>()
         .join(" ");
     DuckDbError::MotherDuck(format!(
-        "cannot open {shown}: MotherDuck doesn't accept the DuckDB version this SQLLoad bundles yet, so no SQLLoad release can connect to it until it does. MotherDuck says: {said}"
+        "cannot open {shown}: MotherDuck doesn't accept the version of Python's duckdb package that SQLLoad connects through: install {SUPPORTED_DUCKDB} there (pip install 'sqlload[motherduck]'), or set {PYTHON_VARIABLE} to a Python that has it. MotherDuck says: {said}"
     ))
 }
 
 /// `value` percent-encoded for a connection string's query, keeping only unreserved characters, so a token holding `&`, `=` or `#` reaches MotherDuck whole.
-fn query_value(value: &str) -> String {
+pub(in crate::adapters::duckdb) fn query_value(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for byte in value.bytes() {
         match byte {

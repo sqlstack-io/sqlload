@@ -20,6 +20,12 @@ classifiers = [
 # orjson writes gathered dict rows as JSON bytes, which Rust parses without the GIL.
 dependencies = ["orjson>=3.10"]
 
+[project.optional-dependencies]
+# MotherDuck targets: MotherDuck accepts DuckDB 1.4.1 to 1.5.6 (raise the bound as MotherDuck does), not the DuckDB
+# 2.0 SQLLoad bundles, so SQLLoad runs their SQL on this package in a separate Python process. Remove once MotherDuck
+# accepts SQLLoad's DuckDB.
+motherduck = ["duckdb>=1.4.1,<=1.5.6"]
+
 [project.scripts]
 sqlload = "sqlload._cli:main"
 
