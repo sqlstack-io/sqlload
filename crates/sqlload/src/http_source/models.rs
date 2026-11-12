@@ -46,6 +46,39 @@ pub struct Request {
     /// For a job used as a fan-out's `over`: the name its picked values fill as keys, when not the selected field's own (such as `order_id` for `$.items[*].id`).
     #[serde(default)]
     pub key: Option<String>,
+    /// Each row's list of cells, pivoted into one column per named column before the rows load.
+    #[serde(default)]
+    pub cells: Option<Cells>,
+}
+
+/// How each row's list of cells becomes columns: where the cells are, each one's column and value, and where the columns' names come from.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Cells {
+    /// The row's field holding its cells, such as `$.cells`.
+    pub pointer: String,
+    /// The field of each cell holding its column's id; `None` matches cells to columns by position.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Where each cell's value is, such as `$.value`; the first present and not null is used.
+    pub value: Vec<String>,
+    /// Where a response lists its columns, such as `$.columns`; a page without the list keeps the names before it.
+    #[serde(default)]
+    pub names_from: Option<String>,
+    /// The field of each listed column holding its name; `None` when each listed column is its name.
+    #[serde(default)]
+    pub name_key: Option<String>,
+    /// The field of each listed column holding its id, matched against each cell's `key`.
+    pub id_key: String,
+    /// The first row names the columns by its cells' values, and does not load.
+    #[serde(default)]
+    pub header_row: bool,
+}
+
+/// The columns a job's cells pivot into, in order, with each one's position by its id as text.
+#[derive(Debug, Clone, Default)]
+pub struct CellNames {
+    pub names: Vec<String>,
+    pub positions: std::collections::HashMap<String, usize>,
 }
 
 /// The HTTP method of a job's requests.

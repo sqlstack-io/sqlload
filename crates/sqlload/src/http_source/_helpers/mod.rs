@@ -1,3 +1,4 @@
+pub(crate) mod cells;
 pub(crate) mod endpoint;
 pub(crate) mod fetch;
 pub(crate) mod job;
