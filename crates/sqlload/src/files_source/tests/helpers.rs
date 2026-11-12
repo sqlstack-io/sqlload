@@ -17,12 +17,14 @@ use parquet::schema::parser::parse_message_type;
 use parquet::schema::types::TypePtr;
 
 use crate::column_types::models::ColumnType;
+use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
 use crate::files_source::_helpers::text::csv_records::{FirstRecord, QuoteTracker};
 use crate::files_source::_helpers::text::json_records::JsonSplitter;
 use crate::files_source::constants::RECORD_COLUMN;
+use crate::files_source::main::after_load::after_load;
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::models::{
@@ -30,7 +32,7 @@ use crate::files_source::models::{
     SourceFormat, TextChecks, XlsxOptions, XmlOptions,
 };
 use crate::files_source::tests::test_types::{
-    ReadTextFilesTestCase, SplitJsonTestCase, TrackCsvTestCase,
+    AfterLoadTestCase, ReadTextFilesTestCase, SplitJsonTestCase, TrackCsvTestCase,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
@@ -683,4 +685,74 @@ pub(crate) fn xml_at(record_path: &str, lists: &[&str]) -> XmlOptions {
         record_path: record_path.to_owned(),
         lists: lists.iter().map(|name| (*name).to_owned()).collect(),
     }
+}
+
+/// Fresh directories to run a local store case in, each with the root a store opens it at: the path itself, and on Windows also the same folder through the `C$` share on `localhost`, as a UNC path.
+pub(crate) fn local_roots() -> Vec<(std::path::PathBuf, String)> {
+    let fresh = || std::env::temp_dir().join(format!("sqlload-unit-{}", uuid::Uuid::new_v4()));
+    let dir = fresh();
+    let roots = vec![(dir.clone(), dir.display().to_string())];
+    #[cfg(windows)]
+    let roots = {
+        let mut roots = roots;
+        let dir = fresh();
+        let path = dir.display().to_string().replace('\\', "/");
+        let (drive, rest) = path.split_at(1);
+        let share = format!("//localhost/{drive}$/{}", rest.trim_start_matches(":/"));
+        roots.push((dir, share));
+        roots
+    };
+    roots
+}
+
+/// Write `test_case`'s files below `dir`, run its `after_load` on its loaded files under `events/`, opened at `root`, and return the report as `action status files failed` (`none` without one) and every file left below `dir` as `path=contents`, sorted.
+pub(crate) async fn run_after_load(
+    (dir, root): &(std::path::PathBuf, String),
+    test_case: &AfterLoadTestCase,
+) -> Result<(String, Vec<String>), String> {
+    for (key, text) in test_case.files {
+        let path = dir.join(key);
+        std::fs::create_dir_all(path.parent().unwrap_or(dir)).map_err(|error| error.to_string())?;
+        std::fs::write(&path, text).map_err(|error| error.to_string())?;
+    }
+    let folder = open_folder(&Location {
+        store: StoreKind::Filesystem { root: root.clone() },
+        prefix: "events/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    let keys: Vec<String> = test_case
+        .loaded
+        .iter()
+        .map(|key| (*key).to_owned())
+        .collect();
+    let report = after_load(&folder, &test_case.after_load, &keys)
+        .await
+        .map_or("none".to_owned(), |report| {
+            format!(
+                "{} {} {} {}",
+                report.action,
+                report.status,
+                report.files,
+                report.failed.len()
+            )
+        });
+    let everything = open_folder(&Location {
+        store: StoreKind::Filesystem {
+            root: dir.display().to_string(),
+        },
+        prefix: String::new(),
+    })
+    .map_err(|error| error.to_string())?;
+    let mut files = Vec::new();
+    for file in list_files(&everything)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        let text = std::fs::read_to_string(dir.join(&file.relative_key))
+            .map_err(|error| error.to_string())?;
+        files.push(format!("{}={text}", file.relative_key));
+    }
+    files.sort();
+    std::fs::remove_dir_all(dir).map_err(|error| error.to_string())?;
+    Ok((report, files))
 }

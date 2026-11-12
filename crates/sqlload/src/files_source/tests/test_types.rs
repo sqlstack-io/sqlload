@@ -197,3 +197,17 @@ pub(crate) struct FooterColumnsTestCase {
     /// The portable type the footer reads back as.
     pub(crate) expected_type: &'static str,
 }
+
+pub(crate) struct AfterLoadTestCase {
+    /// What the case checks.
+    pub(crate) description: &'static str,
+    pub(crate) after_load: crate::files_source::models::AfterLoad,
+    /// Files written first, by path below the store's root, such as `events/a.csv`.
+    pub(crate) files: &'static [(&'static str, &'static str)],
+    /// The keys below `events/` whose rows committed.
+    pub(crate) loaded: &'static [&'static str],
+    /// The report as `action status files failed`, or `none`.
+    pub(crate) expected_report: &'static str,
+    /// Every file left below the root, sorted, as `path=contents`.
+    pub(crate) expected_files: &'static [&'static str],
+}
