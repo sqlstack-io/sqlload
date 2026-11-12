@@ -11,6 +11,7 @@ use crate::adapters::duckdb::main::_open_duckdb::open_duckdb;
 use crate::adapters::duckdb::main::_open_motherduck::open_motherduck;
 use crate::adapters::duckdb::main::_table_shape::table_shape;
 use crate::adapters::duckdb::models::DuckDbSql;
+use crate::adapters::duckdb::tests::helpers::local;
 use crate::adapters::duckdb::tests::test_types::{
     AttachedDatabaseTestCase, ConnectionStringTestCase, DuckDbPathTestCase, IndexReplayTestCase,
     MotherDuckOpenTestCase, MotherDuckPathTestCase, MotherDuckRefusalTestCase,
@@ -22,7 +23,7 @@ use crate::loader::_helpers::resolve::source_target;
 use crate::project::main::parse_project::parse_project;
 use crate::project::models::ConnectionConfig;
 
-/// What DuckDB 2.0.0 reports when MotherDuck's extension refuses to load on it.
+/// What DuckDB 2.0.0 reports when MotherDuck's extension refuses to load on it, as Python's duckdb package 2.0.0 would in the bridge.
 const UNSUPPORTED_VERSION: &str = "Invalid Input Error: Initialization function \"motherduck_duckdb_cpp_init\" from file \"/home/u/.duckdb/extensions/v2.0.0/linux_amd64/motherduck.duckdb_extension\" threw an exception: \"\nYour DuckDB version (v2.0.0) is not yet supported by MotherDuck. The latest supported version is v1.5.6. Please downgrade to use MotherDuck.\n\nSee https://motherduck.com/docs/getting-started/connect-query-from-duckdb-cli for more information.\"";
 
 /// The refusal of a database setting that holds a token.
@@ -178,7 +179,7 @@ fn given_motherduck_does_not_open_when_reporting_why_then_its_own_words_are_rela
             description: "the extension refusing this DuckDB version is relayed on one line",
             error: UNSUPPORTED_VERSION.to_owned(),
             token: "tok.en-1",
-            expected_message: "MotherDuck: cannot open md:shop: MotherDuck doesn't accept the DuckDB version this SQLLoad bundles yet, so no SQLLoad release can connect to it until it does. MotherDuck says: Your DuckDB version (v2.0.0) is not yet supported by MotherDuck. The latest supported version is v1.5.6. Please downgrade to use MotherDuck. See https://motherduck.com/docs/getting-started/connect-query-from-duckdb-cli for more information.",
+            expected_message: "MotherDuck: cannot open md:shop: MotherDuck doesn't accept the version of Python's duckdb package that SQLLoad connects through: install duckdb 1.4.1 to 1.5.6 there (pip install 'sqlload[motherduck]'), or set SQLLOAD_MOTHERDUCK_PYTHON to a Python that has it. MotherDuck says: Your DuckDB version (v2.0.0) is not yet supported by MotherDuck. The latest supported version is v1.5.6. Please downgrade to use MotherDuck. See https://motherduck.com/docs/getting-started/connect-query-from-duckdb-cli for more information.",
         },
         MotherDuckRefusalTestCase {
             description: "another error that quotes the connection string loses the token",
@@ -231,7 +232,7 @@ fn given_a_motherduck_connection_when_opening_then_the_targets_database_wins_and
             database: test_case.connection_database.map(str::to_owned),
             token: Some(Secret(String::new())),
         };
-        let error = open_motherduck(&connection, test_case.target_database)
+        let error = open_motherduck(&connection, test_case.target_database, None)
             .err()
             .map(|error| error.to_string());
         assert_eq!(
@@ -400,10 +401,8 @@ fn given_other_attached_databases_when_reading_the_schema_and_staging_then_only_
             DuckDbSql.render_qualified_name(&table)
         );
         {
-            let connection = destination
-                .connection
-                .lock()
-                .map_err(|error| error.to_string())?;
+            let connection = local(&destination)?;
+            let connection = connection.lock().map_err(|error| error.to_string())?;
             connection
                 .execute_batch("CREATE SCHEMA raw; CREATE TABLE raw.orders (id INTEGER);")
                 .and_then(|()| connection.execute_batch(test_case.setup))
@@ -453,7 +452,7 @@ fn given_indexes_and_a_database_named_like_the_schema_when_a_rebuild_recreates_t
             schema: "raw".to_owned(),
             table: "orders".to_owned(),
         };
-        let connection = destination.connection.clone();
+        let connection = local(&destination)?;
         connection
             .lock()
             .map_err(|error| error.to_string())?
