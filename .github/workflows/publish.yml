@@ -148,7 +148,7 @@ jobs:
       - name: Build unixODBC for macOS
         if: runner.os == 'macOS'
         run: |
-          brew uninstall --ignore-dependencies unixodbc || true
+          if brew list --versions unixodbc > /dev/null 2>&1; then brew uninstall --ignore-dependencies unixodbc; fi
           bash .github/scripts/build_unixodbc.sh "$RUNNER_TEMP/unixodbc" "$(brew --prefix)/etc" '' "$(brew --prefix)/lib"
           echo "RUSTFLAGS=-L native=$RUNNER_TEMP/unixodbc/lib" >> "$GITHUB_ENV"
       # sqlload-cli ships one standalone Rust executable (OpenSSL built in) and links no libpython,

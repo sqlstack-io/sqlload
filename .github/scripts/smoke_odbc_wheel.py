@@ -75,7 +75,8 @@ def main():
         found = [path for pattern in SYSTEM_LIBODBC for path in glob.glob(pattern)]
         check(not found, "no unixODBC is installed, so only the wheel's driver manager can load", str(found))
     for sqlload in arguments.sqlload:
-        sqlload = shutil.which(sqlload) or sqlload
+        # Absolute, as each plan runs in its own folder and POSIX resolves a relative path from there.
+        sqlload = os.path.abspath(shutil.which(sqlload) or sqlload)
         with tempfile.TemporaryDirectory() as name:
             folder = Path(name)
             if os.name == "nt":
