@@ -14,8 +14,7 @@ use crate::loader::_helpers::resolve::ResolvedTarget;
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::constants::{DEFAULT_MAX_DEPTH, ODBC_SOURCE, SNOWFLAKE_SOURCE, UNNEST_ALL};
 use crate::loader::models::{
-    CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, Unnest, WarehouseRoute,
-    WarehouseSource,
+    CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
 };
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
@@ -26,6 +25,7 @@ use crate::project::models::{
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
+use crate::row_batches::models::Unnest;
 use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::USER_STAGE_FOLDER;
@@ -881,12 +881,15 @@ fn nesting(
         Unnest::None => {}
         Unnest::All | Unnest::Paths(_) => {
             problems.extend(refused_writes(context, (strategy, contract)));
+            if row_id == Some(false) {
+                problems.push("row_id = false: unnest gives every row an id, which its child rows name as their parent's; drop row_id".to_owned());
+            }
         }
     }
     (
         Nesting {
             naming,
-            row_id: row_id.unwrap_or(naming == Naming::Dlt),
+            row_id: row_id.unwrap_or(naming == Naming::Dlt || unnest != Unnest::None),
             unnest,
             max_depth,
         },

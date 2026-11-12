@@ -35,15 +35,16 @@ pub(crate) fn shape_batch(
                 (Some(MetadataRole::RowId), _) => {
                     Ok(Arc::new(StringArray::from(random_row_ids(rows)?)))
                 }
-                (None, Some(column)) => cast_with_options(column, field.data_type(), &strict)
-                    .map_err(|error| {
+                (_, Some(column)) => {
+                    cast_with_options(column, field.data_type(), &strict).map_err(|error| {
                         format!(
                             "{}: cannot convert to {}: {error}",
                             field.name(),
                             field.data_type()
                         )
-                    }),
-                (None, None) => Err(format!("the source batch has no column {}", field.name())),
+                    })
+                }
+                (_, None) => Err(format!("the source batch has no column {}", field.name())),
             }
         })
         .collect::<Result<_, String>>()?;

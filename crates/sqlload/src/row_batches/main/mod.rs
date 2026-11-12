@@ -10,3 +10,4 @@ pub mod projection;
 pub mod projection_problem;
 pub mod settled_schema;
 pub mod text_rows;
+pub mod unnest_batch;

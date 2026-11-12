@@ -18,4 +18,10 @@ pub enum MetadataRole {
     LoadedAt,
     /// The row's own id (`row_id`, and always under dlt's naming).
     RowId,
+    /// A child row's parent row's id.
+    ParentId,
+    /// A child row's position in its parent's list, from 0.
+    ListIndex,
+    /// A child row's root row's id, under a merge.
+    RootId,
 }

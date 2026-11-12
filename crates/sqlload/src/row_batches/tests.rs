@@ -16,3 +16,5 @@ mod projection;
 mod test_types;
 #[path = "tests/test_text_rows.rs"]
 mod text_rows;
+#[path = "tests/test_unnest_batch.rs"]
+mod unnest_batch;

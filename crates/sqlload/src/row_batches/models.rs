@@ -1,5 +1,9 @@
 use std::collections::HashMap;
 
+use arrow_array::RecordBatch;
+
+use crate::load_naming::models::Naming;
+
 /// One value of a yielded row, before its column's type is known.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cell {
@@ -239,4 +243,49 @@ impl JsonWriter {
     pub fn take(&mut self) -> String {
         std::mem::take(&mut self.text)
     }
+}
+
+/// Which list fields of a table's rows become child tables.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Unnest {
+    /// None: lists stay JSON columns.
+    #[default]
+    None,
+    /// Every list field, at every level down to `max_depth`.
+    All,
+    /// The list fields at these dotted paths.
+    Paths(Vec<String>),
+}
+
+/// How [`unnest_batch`](crate::row_batches::main::unnest_batch::unnest_batch) splits a batch's list fields into child tables.
+#[derive(Debug, Clone, Copy)]
+pub struct UnnestRequest<'a> {
+    /// The table the batch loads, whose name its child tables' names start with.
+    pub table: &'a str,
+    pub unnest: &'a Unnest,
+    /// How many levels of child tables to make at most.
+    pub max_depth: u32,
+    pub naming: Naming,
+    /// Each row's id, which its child rows name as their parent's.
+    pub ids: &'a [String],
+    /// Each row's root row's id, which child rows carry under a merge; `None` otherwise.
+    pub roots: Option<&'a [String]>,
+}
+
+/// A batch split by `unnest`: the parent's rows without their unnested list fields, and every child table's rows, parents before their children.
+#[derive(Debug)]
+pub struct Unnested {
+    pub parent: RecordBatch,
+    pub children: Vec<ChildBatch>,
+}
+
+/// The rows of one child table.
+#[derive(Debug)]
+pub struct ChildBatch {
+    /// The dotted path of the list field the rows come from, such as `items.parts`.
+    pub path: String,
+    /// The child table's name, such as `orders__items__parts`.
+    pub table: String,
+    /// The items' data columns, then the parent's id, the position in the list, the row's own id and, under a merge, the root row's id.
+    pub batch: RecordBatch,
 }
