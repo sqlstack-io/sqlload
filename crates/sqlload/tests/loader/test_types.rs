@@ -979,3 +979,32 @@ pub(crate) struct SheetsUserTestCase {
     /// The grant type every token request has (plan and load each ask for a token), or none when no token is asked for.
     pub(crate) expected_grant: Option<&'static str>,
 }
+
+/// A CSV file a files merge reads, with its modified time in seconds since 1970.
+pub(crate) struct MergeFile {
+    pub(crate) key: &'static str,
+    pub(crate) contents: &'static str,
+    pub(crate) modified_secs: u64,
+}
+
+/// One load of a files merge, after writing `files`.
+pub(crate) struct MergeStep {
+    /// SQL run on the target before the step, such as a `DROP TABLE`.
+    pub(crate) before: &'static [&'static str],
+    pub(crate) files: &'static [MergeFile],
+    /// Whether the step loads; `false` plans and applies only, as `sqlload apply` does.
+    pub(crate) loads: bool,
+    /// Text the load's error must contain; empty when it must succeed.
+    pub(crate) expected_error: &'static str,
+    /// Text the plan must contain when the load succeeds.
+    pub(crate) expected_plan: &'static str,
+}
+
+/// A files source loading CSV files with `settings` into one table, step by step, then `check_query`'s single text.
+pub(crate) struct FilesMergeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) steps: &'static [MergeStep],
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}

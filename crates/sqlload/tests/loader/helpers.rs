@@ -25,11 +25,11 @@ use tokio_postgres::Client;
 
 use crate::files_target_helpers::file_batches;
 use crate::test_types::{
-    BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesScenario,
-    FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks,
-    MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome, RouteTestCase,
-    ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase, WrittenPartition,
-    WrittenRow, WrittenRun,
+    BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesMergeTestCase,
+    FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase,
+    LiveDatabricks, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
+    RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase,
+    WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -147,6 +147,26 @@ pub(crate) async fn load_selected(
         .await
         .map_err(|error| error.to_string())?;
     load_with_options(project, &plan, destinations, &options).await?;
+    Ok(lines.join("\n"))
+}
+
+/// Plan and apply once, then load only when `loads` (otherwise as `sqlload apply`): the rendered plan, or the error text.
+async fn run_step(
+    project_text: &str,
+    destinations: &BTreeMap<String, Destination>,
+    loads: bool,
+) -> Result<String, String> {
+    let project = described_project(project_text).await?;
+    let mut plan = plan_project(&project, destinations, &PlanOptions::default())
+        .await
+        .map_err(|error| error.to_string())?;
+    let (lines, ok) = render_plan(&plan);
+    ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+    apply_project(&plan, destinations)
+        .await
+        .map_err(|error| error.to_string())?;
+    plan.tables.retain(|_| loads);
+    load_all(&project, &plan, destinations).await?;
     Ok(lines.join("\n"))
 }
 
@@ -1878,4 +1898,65 @@ pub(crate) fn ssh_settings(
         .replace("SSH_PORT", &bastion.port.to_string())
         .replace("KEYS", &bastion.files.path().display().to_string())
         .replace("FILES", files)
+}
+
+/// Run `test_case` against the target connection `target` (its TOML body), with a `loader_schema` of `schema`: CSV files written to a fresh folder with their modified times, loaded step by step; the check query's result.
+pub(crate) async fn run_merge_case(
+    (target, schema): (&str, &str),
+    test_case: &FilesMergeTestCase,
+) -> Result<Option<String>, String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let root = directory.path().display().to_string();
+    let text = format!(
+        "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.target]\n{target}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{schema}\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"csv\"\n{}\n",
+        test_case.settings
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    std::fs::create_dir_all(directory.path().join("drop")).map_err(|error| error.to_string())?;
+    for (index, step) in test_case.steps.iter().enumerate() {
+        execute(
+            destination,
+            step.before.iter().map(|sql| (*sql).to_owned()).collect(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        for file in step.files {
+            let path = directory.path().join("drop").join(file.key);
+            std::fs::write(&path, file.contents).map_err(|error| error.to_string())?;
+            let modified =
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(file.modified_secs);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|opened| opened.set_modified(modified))
+                .map_err(|error| error.to_string())?;
+        }
+        let outcome = run_step(&text, &destinations, step.loads).await;
+        let (plan, error) = (
+            outcome.clone().unwrap_or_default(),
+            outcome.err().unwrap_or_default(),
+        );
+        assert!(
+            error.contains(step.expected_error)
+                && error.is_empty() == step.expected_error.is_empty(),
+            "{} step {}: {error}",
+            test_case.description,
+            index + 1
+        );
+        assert!(
+            plan.contains(step.expected_plan),
+            "{} step {}: {plan}",
+            test_case.description,
+            index + 1
+        );
+    }
+    single_text(destination, test_case.check_query.to_owned())
+        .await
+        .map_err(|error| error.to_string())
 }

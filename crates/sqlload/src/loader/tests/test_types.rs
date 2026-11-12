@@ -106,6 +106,14 @@ pub(crate) struct RetryableErrorTestCase {
     pub(crate) expected_retryable: bool,
 }
 
+pub(crate) struct MergedFileTestCase {
+    pub(crate) description: &'static str,
+    /// The file's name, then its version, as a merge records them.
+    pub(crate) file: (&'static str, &'static str),
+    /// The name and version the ledger reads back.
+    pub(crate) expected_file: (&'static str, &'static str),
+}
+
 pub(crate) struct ConstantsAddedTestCase {
     pub(crate) description: &'static str,
     /// The constants added: name, type and value as text.

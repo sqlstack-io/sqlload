@@ -22,6 +22,10 @@ fn is_folded(name: &str) -> bool {
 }
 
 impl SqlAdapter for PostgresSql {
+    fn merges_files(&self) -> bool {
+        true
+    }
+
     fn warehouse(&self) -> Warehouse {
         Warehouse::Postgres
     }

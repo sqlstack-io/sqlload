@@ -17,7 +17,9 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
+use crate::files_source::models::LoadedFile;
 use crate::loader::_helpers::python::batch_cursor_max;
+use crate::loader::_helpers::sources::loaded_file;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{PythonLoad, RunEntry, TablePlan, TableSpec};
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
@@ -333,6 +335,105 @@ pub(crate) fn fold_maximum(
     };
     let batch_maximum = batch_cursor_max(batch, column, column_type)?;
     Ok(run.later(maximum, batch_maximum))
+}
+
+/// The files (`name|version`) a files source's merge recorded merging into the table of `spec`, since the table's newest reset; why they cannot be known when a record after it cannot be read; none when the run log does not exist.
+pub(crate) async fn merged_files(
+    spec: &TableSpec,
+    destination: &Destination,
+) -> Result<Result<Vec<LoadedFile>, String>, LoaderError> {
+    let runs = runs_table(&spec.destination);
+    if live_columns(destination, &runs).await?.is_none() {
+        return Ok(Ok(Vec::new()));
+    }
+    let query = select_runs(&runs, &spec.destination.table, spec.warehouse);
+    let decoded = decode_runs(&text_values(destination, query).await?);
+    if let Some(problem) = unreadable_problems(&decoded.unreadable, &decoded.records)
+        .into_iter()
+        .next()
+    {
+        return Ok(Err(format!(
+            "{problem}; until then merge cannot tell which files it merged"
+        )));
+    }
+    let since = decoded
+        .records
+        .iter()
+        .rposition(|record| record.event == RunEvent::Reset)
+        .map_or(0, |reset| reset + 1);
+    let files: Vec<LoadedFile> = decoded.records[since..]
+        .iter()
+        .filter(|record| {
+            record.event == RunEvent::Run
+                && record.source == spec.source_name
+                && record.source_table == spec.source_table.name
+        })
+        .flat_map(|record| record.files.iter().cloned())
+        .map(|text| loaded_file(text, true))
+        .collect();
+    Ok(Ok(files))
+}
+
+/// The record a files source's merge commits with `file` (`name|version`), its `batch`th commit of run `run_id`, which wrote `rows`.
+pub(crate) fn merged_record(
+    spec: &TableSpec,
+    (run_id, batch): (&str, u64),
+    (file, rows): (String, u64),
+) -> RunRecord {
+    let about = record_table(spec);
+    RunRecord {
+        format_version: RECORD_FORMAT_VERSION,
+        run_id: run_id.to_owned(),
+        event: RunEvent::Run,
+        source: about.source,
+        source_table: about.source_table,
+        table_name: about.table_name,
+        cursor_column: about.cursor_column,
+        cursor_before: None,
+        cursor_after: None,
+        state: None,
+        row_count: rows,
+        files: vec![file],
+        note: Some("files source merge".to_owned()),
+        recorded_at: now_utc_text(),
+        batch: Some(batch),
+    }
+}
+
+/// The reset a files source's merge writes when it creates the table: files it merged into an earlier table of the name no longer count.
+pub(crate) fn merge_reset_record(spec: &TableSpec) -> RunRecord {
+    event_record(
+        &record_table(spec),
+        StateEvent {
+            event: RunEvent::Reset,
+            cursor_before: None,
+            cursor_after: None,
+            state: None,
+            note: "table created; files merged before no longer count".to_owned(),
+            recorded_at: now_utc_text(),
+        },
+    )
+}
+
+/// Before a files source's merge creates its table: `_sqlload_runs` when it does not exist yet, and a reset, so records left from an earlier table of the name stop counting; written before the `CREATE TABLE`, so no table exists without it.
+pub(crate) async fn reset_merge_log(
+    table: &TablePlan,
+    destination: &Destination,
+) -> Result<(), LoaderError> {
+    ensure_merge_log(table, destination).await?;
+    append_run(table, destination, &merge_reset_record(&table.spec)).await
+}
+
+/// Before a files source's merge writes: `_sqlload_runs` when it does not exist yet (checked first, so a role without CREATE on the schema loads once it exists).
+pub(crate) async fn ensure_merge_log(
+    table: &TablePlan,
+    destination: &Destination,
+) -> Result<(), LoaderError> {
+    let runs = runs_table(&table.spec.destination);
+    if live_columns(destination, &runs).await?.is_none() {
+        ensure_runs_table(table, destination).await?;
+    }
+    Ok(())
 }
 
 /// What a record says about the table of `spec`.

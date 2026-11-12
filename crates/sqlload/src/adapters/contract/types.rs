@@ -344,6 +344,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         false
     }
 
+    /// Whether a files source may `merge` into this warehouse, file by file with a run record in each file's commit (tested on DuckDB and Postgres so far).
+    fn merges_files(&self) -> bool {
+        false
+    }
+
     /// Whether `statement`, run alone, commits by itself, so a run record cannot share its transaction.
     fn commits_alone(&self, _statement: &str) -> bool {
         false

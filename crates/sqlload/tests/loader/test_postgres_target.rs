@@ -1,11 +1,14 @@
 use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::models::PlanOptions;
+use sqlload_testkit::postgres::constants::PASSWORD;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_tls::start_postgres_tls;
 
-use crate::helpers::{described_project, run_async, run_sqlload};
+use crate::helpers::{described_project, run_async, run_merge_case, run_sqlload};
 use crate::postgres_helpers::{load_once, project_text, text};
+use crate::test_files_to_duckdb::{MERGE_CHECK, MERGE_SETTINGS};
+use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep};
 use crate::test_types::{PostgresTargetTestCase, TargetTlsTestCase};
 
 const SETUP: &str = "
@@ -296,4 +299,189 @@ fn given_a_tls_only_server_when_loading_into_a_postgres_target_then_the_target_c
         })?;
     }
     Ok(())
+}
+
+#[test]
+fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins_and_each_file_merges_once()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        let target = format!(
+            "kind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"sqlload\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"",
+            postgres.port
+        );
+        let test_cases = [
+            FilesMergeTestCase {
+                description: "a key repeated across files ends with the newest modified file's value, whatever the names",
+                settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        MergeFile {
+                            key: "c.csv",
+                            contents: "id,v\n1,c\n2,c\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n3,a\n",
+                            modified_secs: 2_000,
+                        },
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n1,b\n",
+                            modified_secs: 3_000,
+                        },
+                    ],
+                    expected_error: "",
+                    loads: true,
+                    expected_plan: "3 files, one commit each, oldest modified first (ties by path)",
+                }],
+                check_query: MERGE_CHECK,
+                expected_result: "1:b,2:c,3:a|3",
+            },
+            FilesMergeTestCase {
+                description: "files modified at the same time merge in path order",
+                settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n1,b\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n",
+                            modified_secs: 1_000,
+                        },
+                    ],
+                    expected_error: "",
+                    loads: true,
+                    expected_plan: "",
+                }],
+                check_query: MERGE_CHECK,
+                expected_result: "1:b|2",
+            },
+            FilesMergeTestCase {
+                description: "a file repeating a key no row has yet fails before it merges, naming the key",
+                settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[MergeFile {
+                        key: "a.csv",
+                        contents: "id,v\n5,a\n5,b\n6,c\n",
+                        modified_secs: 1_000,
+                    }],
+                    loads: true,
+                    expected_error: "drop/a.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (5)",
+                    expected_plan: "",
+                }],
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",
+                expected_result: "0",
+            },
+            FilesMergeTestCase {
+                description: "a failure in the second file keeps the first committed, names the file, and a rerun merges from it without merging the first again; a run with nothing new merges nothing",
+                settings: MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[
+                            MergeFile {
+                                key: "a.csv",
+                                contents: "id,v\n1,a\n2,a\n",
+                                modified_secs: 1_000,
+                            },
+                            MergeFile {
+                                key: "b.csv",
+                                contents: "id,v\n1,b\n1,bb\n",
+                                modified_secs: 2_000,
+                            },
+                            MergeFile {
+                                key: "c.csv",
+                                contents: "id,v\n2,c\n",
+                                modified_secs: 3_000,
+                            },
+                        ],
+                        expected_error: "drop/b.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)",
+                        loads: true,
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n1,b\n",
+                            modified_secs: 2_000,
+                        }],
+                        expected_error: "",
+                        loads: true,
+                        expected_plan: "2 files, one commit each",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[],
+                        expected_error: "",
+                        loads: true,
+                        expected_plan: "",
+                    },
+                ],
+                check_query: MERGE_CHECK,
+                expected_result: "1:b,2:c|3",
+            },
+            FilesMergeTestCase {
+                description: "a merged file rewritten in place merges again, as the newest",
+                settings: MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[
+                            MergeFile {
+                                key: "a.csv",
+                                contents: "id,v\n1,a\n",
+                                modified_secs: 1_000,
+                            },
+                            MergeFile {
+                                key: "b.csv",
+                                contents: "id,v\n1,b\n",
+                                modified_secs: 2_000,
+                            },
+                        ],
+                        expected_error: "",
+                        loads: true,
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a2\n",
+                            modified_secs: 3_000,
+                        }],
+                        expected_error: "",
+                        loads: true,
+                        expected_plan: "1 file, one commit each",
+                    },
+                ],
+                check_query: MERGE_CHECK,
+                expected_result: "1:a2|3",
+            },
+        ];
+        for test_case in &test_cases {
+            client
+                .batch_execute("DROP SCHEMA IF EXISTS raw CASCADE")
+                .await
+                .map_err(|error| error.to_string())?;
+            let result = run_merge_case((&target, "raw"), test_case).await?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
 }

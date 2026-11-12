@@ -248,6 +248,28 @@ pub(crate) fn unbuildable_request() -> LoaderError {
     )
 }
 
+/// `file` (name, version) as the ledger reads it back from the record a merge commits with it.
+pub(crate) fn merged_file_round_trip(
+    spec: &TableSpec,
+    (name, version): (&str, &str),
+) -> Result<(String, String), String> {
+    let record = crate::loader::_helpers::run_log::merged_record(
+        spec,
+        ("load-1", 1),
+        (format!("{name}|{version}"), 2),
+    );
+    let text = serde_json::to_string(&record).map_err(|error| error.to_string())?;
+    let decoded = crate::run_log::main::decode_runs::decode_runs(&[text]);
+    let file = decoded
+        .records
+        .into_iter()
+        .flat_map(|record| record.files)
+        .next()
+        .ok_or_else(|| format!("no file read back: {:?}", decoded.unreadable))?;
+    let loaded = crate::loader::_helpers::sources::loaded_file(file, true);
+    Ok((loaded.name, loaded.version))
+}
+
 /// A two-row batch with an `id` column and schema metadata through `with_constants`: whether the result equals the batch given, and each of its columns as `name:Arrow type=value,value`; or the error.
 pub(crate) fn constants_added(
     constants: &[(&str, crate::column_types::models::ColumnType, &str)],

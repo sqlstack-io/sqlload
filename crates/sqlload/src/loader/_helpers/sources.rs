@@ -1,6 +1,6 @@
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use arrow_array::RecordBatch;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use tokio_postgres::Client;
 
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
@@ -26,6 +26,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::discover_files::discover_files;
+use crate::files_source::main::merge_order::merge_order;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
@@ -38,6 +39,7 @@ use crate::http::models::ConnectionCounter;
 use crate::loader::_helpers::destination::table_folder;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::resolve::{resolve_tables, source_target};
+use crate::loader::_helpers::run_log::merged_files;
 use crate::loader::_helpers::specs::{missing_description, table_name};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
@@ -965,8 +967,77 @@ pub(crate) enum LoadedSource<'a> {
     Recorded(&'a [LoadedFile]),
 }
 
+/// The files a merge already merged into `request`'s table at the version listed now, which it skips (one rewritten in place since is merged again, as the newest), or why a files source cannot merge into it: only into a DuckDB or Postgres table, never with `--reload` (one commit would lose the files' order) or `state = "logged"`; none while the table does not exist.
+async fn merge_ledger(
+    request: &FilesPlanRequest<'_>,
+) -> Result<Result<Vec<LoadedFile>, String>, LoaderError> {
+    let spec = request.spec;
+    let destination = match request.loaded {
+        LoadedSource::Query(destination) => destination,
+        LoadedSource::Recorded(_) => {
+            return Ok(Err("merge is not supported for files targets".to_owned()));
+        }
+    };
+    if !sql_adapter(spec.warehouse).merges_files() {
+        return Ok(Err(format!(
+            "merge from a files source loads into DuckDB and Postgres targets so far, not {}; use append, or delete_insert on a partition cursor",
+            spec.warehouse
+        )));
+    }
+    if request.options.reload {
+        return Ok(Err(
+            "--reload would merge every file in one commit and lose their order; drop the table and load again to merge every file anew".to_owned(),
+        ));
+    }
+    if spec.logged {
+        return Ok(Err(
+            "state = \"logged\" does not apply to a files source's merge, which records each file it merges".to_owned(),
+        ));
+    }
+    if let Some(cursor) = &spec.cursor {
+        return Ok(Err(format!(
+            "cursor_column {} does not apply to a files source's merge, which picks the files it has not merged from the run log, whatever their partition; remove it and set write_strategy = \"merge\", or keep it and use delete_insert",
+            cursor.column
+        )));
+    }
+    let merged = match request.live {
+        None => return Ok(Ok(Vec::new())),
+        Some(_) => merged_files(spec, destination).await?,
+    };
+    let location = request.files.location.to_string();
+    let listed: HashMap<String, String> = request
+        .files
+        .table
+        .files
+        .iter()
+        .map(|data| {
+            (
+                format!("{location}{}", data.file.relative_key),
+                data.file.version(),
+            )
+        })
+        .collect();
+    Ok(merged.map(|merged| unchanged_files(merged, &listed)))
+}
+
+/// The newest record of each `merged` file (records come oldest first), kept when the file is still listed at that version or no longer listed: a file changed since, even back to an earlier version, merges again.
+fn unchanged_files(merged: Vec<LoadedFile>, listed: &HashMap<String, String>) -> Vec<LoadedFile> {
+    let mut newest: HashMap<String, LoadedFile> = HashMap::new();
+    for file in merged {
+        newest.insert(file.name.clone(), file);
+    }
+    newest
+        .into_values()
+        .filter(|file| {
+            listed
+                .get(&file.name)
+                .is_none_or(|version| *version == file.version)
+        })
+        .collect()
+}
+
 /// A row of the loaded-files query: `file|version`, or just the file when `versioned` is false.
-fn loaded_file(text: String, versioned: bool) -> LoadedFile {
+pub(crate) fn loaded_file(text: String, versioned: bool) -> LoadedFile {
     match (versioned, text.rsplit_once(VERSION_SEPARATOR)) {
         (true, Some((name, version))) => LoadedFile {
             name: name.to_owned(),
@@ -1089,11 +1160,13 @@ pub(crate) async fn plan_files(
             "cursor_column {name} is a constant column, the same in every file, so it cannot pick the files to read; use a partition_columns or path_columns column"
         )));
     }
-    if spec.strategy == WriteStrategy::Merge {
-        return Ok(Err(
-            "merge is not supported for files sources yet (loaded files would be re-read once their rows are updated); use delete_insert on a partition cursor, or append".to_owned(),
-        ));
-    }
+    let merged = match spec.strategy == WriteStrategy::Merge {
+        true => match merge_ledger(request).await? {
+            Ok(merged) => Some(merged),
+            Err(problem) => return Ok(Err(problem)),
+        },
+        false => None,
+    };
     let skips_loaded = spec.strategy == WriteStrategy::Append;
     if skips_loaded
         && request.live.is_some()
@@ -1136,6 +1209,7 @@ pub(crate) async fn plan_files(
             },
             false => Vec::new(),
         };
+    let loaded = merged.clone().unwrap_or(loaded);
     let location = request.files.location.to_string();
     let selection = FileSelection {
         files: &request.files.table.files,
@@ -1171,7 +1245,11 @@ pub(crate) async fn plan_files(
         ..request.files.checks.clone()
     };
     let nanos = nanosecond_columns(spec, &request.files.table.columns, request.live);
-    Ok(select_files(&selection).map(|files| FilesRead {
+    let ordered = select_files(&selection).map(|files| match merged {
+        Some(_) => merge_order(files),
+        None => files,
+    });
+    Ok(ordered.map(|files| FilesRead {
         files,
         encoding: request.files.encoding.clone(),
         checks,
