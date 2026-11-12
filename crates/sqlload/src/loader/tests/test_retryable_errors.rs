@@ -1,6 +1,6 @@
 use crate::http::errors::ApiError;
 use crate::loader::errors::LoaderError;
-use crate::loader::tests::helpers::{io_store, status, store};
+use crate::loader::tests::helpers::{http_store, io_store, status, store, unbuildable_request};
 use crate::loader::tests::test_types::RetryableErrorTestCase;
 use crate::python_sources::errors::ReadError;
 
@@ -80,6 +80,21 @@ fn given_a_failed_load_when_classifying_it_then_only_failures_a_rerun_may_pass_a
         RetryableErrorTestCase {
             description: "an object store refusing the request for another reason is not",
             error: || io_store(std::io::ErrorKind::PermissionDenied),
+            expected_retryable: false,
+        },
+        RetryableErrorTestCase {
+            description: "an object store client that could not connect",
+            error: || http_store(object_store::client::HttpErrorKind::Connect),
+            expected_retryable: true,
+        },
+        RetryableErrorTestCase {
+            description: "an object store answer that could not be decoded is not",
+            error: || http_store(object_store::client::HttpErrorKind::Decode),
+            expected_retryable: false,
+        },
+        RetryableErrorTestCase {
+            description: "a request that cannot be built, such as a credential with a line break, is not",
+            error: unbuildable_request,
             expected_retryable: false,
         },
         RetryableErrorTestCase {

@@ -223,3 +223,27 @@ pub(crate) fn io_store(kind: std::io::ErrorKind) -> LoaderError {
         source: Box::new(std::io::Error::new(kind, "socket")),
     })
 }
+
+/// An object store failure whose client reported an HTTP error of `kind`.
+pub(crate) fn http_store(kind: object_store::client::HttpErrorKind) -> LoaderError {
+    store(object_store::Error::Generic {
+        store: "S3",
+        source: Box::new(object_store::client::HttpError::new(
+            kind,
+            std::io::Error::other("http"),
+        )),
+    })
+}
+
+/// A warehouse call whose request could not be built: a header value with a line break, such as a password read with its trailing newline.
+pub(crate) fn unbuildable_request() -> LoaderError {
+    crate::http::main::install_tls_provider::install_tls_provider();
+    let built = reqwest::Client::new()
+        .get("http://127.0.0.1:1/")
+        .header("X-Key", "secret\n")
+        .build();
+    built.map_or_else(
+        |error| LoaderError::Snowflake(ApiError::from(error)),
+        |_| LoaderError::Invalid("the request was built".to_owned()),
+    )
+}

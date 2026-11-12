@@ -68,10 +68,11 @@ retryable when it is one of these:
 
 - A connection that dropped, was refused or timed out, to a target, or to a source while planning
   or loading.
-- Throttling (429) or a server error (5xx) that outlasted its retries, from a warehouse, an object
-  store or an [`sl.http`](/docs/sources/python/) job.
-- A Postgres error in a connection, resource or shutdown class, a serialization failure or a
-  deadlock.
+- Throttling (429) or a server error (5xx) that outlasted its retries, from a warehouse or an
+  [`sl.http`](/docs/sources/python/) job. An object store failure counts only when it's a
+  connection that dropped or timed out.
+- A Postgres connection failure, out of memory, too many connections, a server shutting down or
+  starting, a serialization failure, a deadlock, or a lock not available.
 - A table that another run is loading.
 - A Python table function that raised `ConnectionError` or `TimeoutError`, or a subclass of either.
 

@@ -209,13 +209,15 @@ async fn run_command(
             false => Err(lines.join("\n").into()),
         };
     }
-    let destinations = connect_targets(project).await?;
+    let destinations = connect_targets(project).await;
     if let Command::LoggedState { action } = command {
+        let destinations = destinations.map_err(|error| error.to_string())?;
         return run_state(project, &destinations, action)
             .await
             .map(|lines| (lines, 0))
             .map_err(Into::into);
     }
+    let destinations = destinations?;
     let (args, applies, loads) = match command {
         Command::Plan(args) => (args, false, false),
         Command::Apply(args) => (args, true, false),

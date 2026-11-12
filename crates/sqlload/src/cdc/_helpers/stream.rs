@@ -1222,16 +1222,16 @@ pub(crate) async fn load_source(
     run: &LoadRun<'_>,
     name: &str,
     (tables, follow): (&[&TablePlan], Option<&CancellationToken>),
-) -> Result<(BTreeMap<String, u64>, Option<String>), String> {
+) -> Result<(BTreeMap<String, u64>, Option<String>), LoaderError> {
     let first = tables.first().map(|table| &table.spec);
     let (Some(source), Some(cdc), Some(destination)) = (
         run.project.sources.get(name),
         first.and_then(|spec| spec.cdc.as_ref()),
         first.and_then(|spec| run.destinations.get(&spec.target)),
     ) else {
-        return Err(format!(
+        return Err(LoaderError::Invalid(format!(
             "source {name} is not a connected postgres_cdc source"
-        ));
+        )));
     };
     let unit = CdcSource {
         run,
@@ -1242,13 +1242,14 @@ pub(crate) async fn load_source(
         destination,
         follow,
     };
-    unit.load().await.map_err(|error| error.to_string())
+    unit.load().await
 }
 
-/// Each table's outcome from its source's load.
+/// Each table's outcome from its source's load; `retryable` when its failure may pass on a rerun.
 pub(crate) fn source_outcomes(
     tables: &[&TablePlan],
     loaded: &Result<BTreeMap<String, u64>, String>,
+    retryable: bool,
     elapsed: Duration,
 ) -> Vec<TableOutcome> {
     let mut outcomes: Vec<TableOutcome> = Vec::with_capacity(tables.len());
@@ -1268,7 +1269,7 @@ pub(crate) fn source_outcomes(
                     ..TableLoaded::default()
                 })
                 .map_err(Clone::clone),
-            retryable: false,
+            retryable: loaded.is_err() && retryable,
             elapsed,
         });
     }
@@ -1361,7 +1362,9 @@ pub(crate) async fn follow_round<'a>(
         );
         return (all, Err(error));
     }
-    let followed = load_source(run, name, (&tables, Some(stop))).await;
+    let followed = load_source(run, name, (&tables, Some(stop)))
+        .await
+        .map_err(|error| error.to_string());
     (tables, followed)
 }
 
@@ -1429,7 +1432,7 @@ pub(crate) fn failed_outcomes(
     error: String,
     elapsed: Duration,
 ) -> Vec<TableOutcome> {
-    let outcomes = source_outcomes(tables, &Err(error.clone()), elapsed);
+    let outcomes = source_outcomes(tables, &Err(error.clone()), false, elapsed);
     match outcomes.is_empty() {
         true => vec![TableOutcome {
             table: "load --follow".to_owned(),

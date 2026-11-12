@@ -1020,26 +1020,26 @@ async fn feed(
                 let mut last: Option<String> = None;
                 let mut cut_from = table.window.as_ref().and_then(|window| window.from.clone());
                 read_source(reader, table, part, async |batch| {
-                    let values = batch
-                        .column_by_name(column)
-                        .cloned()
-                        .ok_or_else(|| format!("the read has no cursor column {column}"))?;
+                    let values = batch.column_by_name(column).cloned().ok_or_else(|| {
+                        LoaderError::Invalid(format!("the read has no cursor column {column}"))
+                    })?;
                     let at = match publisher.full() {
-                        true => cut_index(values.as_ref(), last.as_deref())?,
+                        true => cut_index(values.as_ref(), last.as_deref())
+                            .map_err(LoaderError::Invalid)?,
                         false => batch.num_rows(),
                     };
-                    last = last_value(values.as_ref())?.or(last.take());
+                    last = last_value(values.as_ref())
+                        .map_err(LoaderError::Invalid)?
+                        .or(last.take());
                     stage(&mut publisher, batch.slice(0, at)).await?;
                     if at < batch.num_rows() {
-                        let cut_at = cut_value(values.as_ref(), at, cursor_type)?;
+                        let cut_at = cut_value(values.as_ref(), at, cursor_type)
+                            .map_err(LoaderError::Invalid)?;
                         let range = CommitRange::Window {
                             from: cut_from.replace(cut_at.clone()),
                             to: Some(cut_at),
                         };
-                        publisher
-                            .cut(range)
-                            .await
-                            .map_err(|error| error.to_string())?;
+                        publisher.cut(range).await?;
                         stage(&mut publisher, batch.slice(at, batch.num_rows() - at)).await?;
                     }
                     Ok(())
@@ -1063,10 +1063,7 @@ async fn feed(
                         read_source(reader, table, part, async |batch| {
                             stage(&mut publisher, batch).await?;
                             match publisher.full() {
-                                true => publisher
-                                    .cut(CommitRange::Planned)
-                                    .await
-                                    .map_err(|error| error.to_string()),
+                                true => publisher.cut(CommitRange::Planned).await,
                                 false => Ok(()),
                             }
                         })
@@ -1091,11 +1088,8 @@ async fn feed(
     (publisher, fed)
 }
 
-async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), String> {
-    publisher
-        .stage(batch, None)
-        .await
-        .map_err(|error| error.to_string())
+async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), LoaderError> {
+    publisher.stage(batch, None).await
 }
 
 /// The source filter reading one cursor window, in the source's dialect; its bounds are literals, since `split_windows` cuts only number and time cursors, never a text one.

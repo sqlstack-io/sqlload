@@ -1150,8 +1150,32 @@ pub(crate) struct ReadPart {
     pub(crate) batch_bytes: Option<usize>,
 }
 
-/// Read `part` of `table`'s data from `reader`, passing each batch to `on_batch`; returns the row count.
+/// Read `part` of `table`'s rows from `reader`, handing each batch to `on_batch`; when `on_batch` fails, the read fails with the reader's text, and stays retryable when `on_batch`'s error was.
 pub(crate) async fn read_source(
+    reader: &SourceReader,
+    table: &TablePlan,
+    part: ReadPart,
+    mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), LoaderError>,
+) -> Result<u64, LoaderError> {
+    let mut failed: Option<LoaderError> = None;
+    let read = read_each(reader, table, part, async |batch| {
+        on_batch(batch).await.map_err(|error| {
+            let text = error.to_string();
+            failed = Some(error);
+            text
+        })
+    })
+    .await;
+    match (read, failed) {
+        (Err(read), Some(failed)) if failed.is_retryable() => {
+            Err(LoaderError::Transient(read.to_string()))
+        }
+        (read, _) => read,
+    }
+}
+
+/// Read `part` of `table`'s data from `reader`, passing each batch to `on_batch`; returns the row count.
+async fn read_each(
     reader: &SourceReader,
     table: &TablePlan,
     part: ReadPart,

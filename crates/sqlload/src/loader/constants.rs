@@ -99,9 +99,11 @@ pub const RESULT_SCHEMA_VERSION: u32 = 1;
 pub const CUT_ELEMENTS_NOTE: &str =
     "float elements of Arrow and Parquet lists are cut to whole numbers";
 
-/// The SQLSTATE classes and codes of Postgres errors worth retrying unchanged: connection exceptions, insufficient resources, shutdowns, serialization failures and deadlocks.
-pub const TRANSIENT_SQLSTATES: [&str; 7] =
-    ["08", "53", "57P01", "57P02", "57P03", "40001", "40P01"];
+/// The SQLSTATEs of Postgres errors worth retrying unchanged: a connection that failed or dropped (not 08P01, which PgBouncer also sends for a database it does not know), out of memory, too many connections, a server shutting down or starting, a serialization failure, a deadlock and a lock not available.
+pub const TRANSIENT_SQLSTATES: [&str; 11] = [
+    "08000", "08003", "08006", "53200", "53300", "57P01", "57P02", "57P03", "40001", "40P01",
+    "55P03",
+];
 
 /// HTTP statuses a rerun may get past whatever the service's code says: throttling, a bad gateway, unavailable, a gateway timeout.
 pub const TRANSIENT_STATUSES: [u16; 4] = [429, 502, 503, 504];

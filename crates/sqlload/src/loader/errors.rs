@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::io::ErrorKind;
 
+use object_store::client::HttpErrorKind;
+
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::files::errors::FilesDestinationError;
@@ -105,20 +107,23 @@ impl LoaderError {
             {
                 return true;
             }
+            if let Some(http) = current.downcast_ref::<object_store::client::HttpError>()
+                && matches!(
+                    http.kind(),
+                    HttpErrorKind::Connect | HttpErrorKind::Timeout | HttpErrorKind::Interrupted
+                )
+            {
+                return true;
+            }
             cause = current.source();
         }
         false
     }
 
-    /// Whether a Postgres error may pass on a retry: the connection dropped or timed out, or the server answered with a connection, resource, shutdown, serialization or deadlock SQLSTATE; a server that refused the login or the SQL is not.
+    /// Whether a Postgres error may pass on a retry: the connection dropped or timed out, or the server answered with one of `TRANSIENT_SQLSTATES`; a server that refused the login or the SQL is not.
     fn postgres_transient(error: &tokio_postgres::Error) -> bool {
         match error.as_db_error() {
-            Some(answer) => {
-                let code = answer.code().code();
-                TRANSIENT_SQLSTATES
-                    .iter()
-                    .any(|prefix| code.starts_with(prefix))
-            }
+            Some(answer) => TRANSIENT_SQLSTATES.contains(&answer.code().code()),
             None => error.is_closed() || Self::transient_cause(error),
         }
     }
