@@ -184,6 +184,10 @@ pub enum SourceFormat {
     /// JSON objects one after another (over any number of lines), or one top-level array of objects.
     Json,
     Csv,
+    /// Excel workbooks: one worksheet's rows, each cell typed as the workbook stores it.
+    Xlsx,
+    /// XML documents: each element at `xml.record_path` one row.
+    Xml,
 }
 
 impl std::fmt::Display for SourceFormat {
@@ -193,6 +197,8 @@ impl std::fmt::Display for SourceFormat {
             Self::Ndjson => "ndjson",
             Self::Json => "json",
             Self::Csv => "csv",
+            Self::Xlsx => "xlsx",
+            Self::Xml => "xml",
         })
     }
 }
@@ -207,6 +213,8 @@ pub enum Compression {
     None,
     Gzip,
     Zstd,
+    /// ZIP archives (`.zip`): each member whose name fits the format is a file of its own.
+    Zip,
 }
 
 /// The decompression one file is read with.
@@ -261,12 +269,48 @@ pub enum Charset {
     Other(&'static encoding_rs::Encoding),
 }
 
+/// Which rows of an Excel workbook load.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct XlsxOptions {
+    /// The worksheet, by name; the first one when omitted.
+    pub sheet: Option<String>,
+    /// Whether the first row read holds the column names; without one, columns are `column_1`, `column_2`, ... by their place in the sheet.
+    pub header: bool,
+    /// Rows skipped at the top of the sheet, before the header (or the first row without one).
+    pub skip_rows: u32,
+}
+
+impl Default for XlsxOptions {
+    fn default() -> Self {
+        Self {
+            sheet: None,
+            header: true,
+            skip_rows: 0,
+        }
+    }
+}
+
+/// Which elements of an XML document are rows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct XmlOptions {
+    /// The element names from the root to each row's element, separated by `/`, such as `orders/order`.
+    pub record_path: String,
+    /// Child elements loaded as a JSON array even where one appears only once.
+    pub lists: Vec<String>,
+}
+
 /// How a files source's files are encoded.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilesEncoding {
     pub format: SourceFormat,
     pub compression: Compression,
     pub csv: CsvOptions,
+    pub xlsx: XlsxOptions,
+    pub xml: XmlOptions,
+    /// With `compression = "zip"`, a pattern the members' names must match, beyond the format's suffix.
+    pub members: Option<String>,
     /// With `shape = "record"`, the one column each JSON object or CSV line loads into whole; `None` for typed columns.
     pub record: Option<String>,
 }
@@ -288,6 +332,7 @@ impl std::fmt::Display for FilesEncoding {
             (format, Compression::None) => write!(formatter, "{format}, uncompressed"),
             (format, Compression::Gzip) => write!(formatter, "{format}, gzip"),
             (format, Compression::Zstd) => write!(formatter, "{format}, zstd"),
+            (format, Compression::Zip) => write!(formatter, "{format} in ZIP archives"),
         }?;
         match &self.record {
             Some(column) => write!(formatter, ", each record whole in column {column}"),
@@ -305,6 +350,20 @@ pub(crate) struct ListedFiles {
     /// Files whose keys do not match `path_columns`, skipped.
     pub(crate) unmatched: usize,
     pub(crate) problems: Vec<String>,
+}
+
+/// One value of a spreadsheet row or XML record: its text, which the shape step converts to the column's type, and the type it suggests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Cell {
+    pub(crate) text: String,
+    pub(crate) kind: ColumnType,
+}
+
+/// One spreadsheet row or XML record: its cells by column name, in order, a NULL cell left out; and the row or line it starts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CellRecord {
+    pub(crate) line: u64,
+    pub(crate) cells: Vec<(String, Cell)>,
 }
 
 /// One file of a read, and what its batches are shaped into.

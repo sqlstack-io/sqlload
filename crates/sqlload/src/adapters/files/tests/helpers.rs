@@ -62,6 +62,7 @@ pub(crate) fn stored(key: &str) -> StoredFile {
         size: 1,
         etag: None,
         modified_ms: 0,
+        member: None,
     }
 }
 

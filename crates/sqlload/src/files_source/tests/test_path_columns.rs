@@ -156,6 +156,7 @@ fn given_a_path_template_when_listing_keys_then_captures_become_typed_values() -
             size: 1,
             etag: None,
             modified_ms: 0,
+            member: None,
         };
         let (data, problem) = data_file(file, &values);
         let found: Option<String> = data.map(|data| {

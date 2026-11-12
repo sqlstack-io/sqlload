@@ -94,7 +94,7 @@ versions and how to run them yourself.
 
 ¹ In builds with the `odbc` feature.
 
-² From 0.34.0 (not released yet), through a separate DuckDB 1.5 process: install `sqlload[motherduck]`.
+² From 0.34.0, through a separate DuckDB 1.5 process: install `sqlload[motherduck]`.
 
 See [Supported systems](https://sqlload.io/docs/supported-systems/) for every combination and
 write strategy.

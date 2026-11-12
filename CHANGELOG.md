@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.35.0](https://github.com/sqlstack-io/sqlload/compare/v0.34.0...v0.35.0) (2026-11-12)
+
+
+### Features
+
+* **files:** read CSV in other encodings and skip leading lines ([#185](https://github.com/sqlstack-io/sqlload/issues/185)) ([4fdcd08](https://github.com/sqlstack-io/sqlload/commit/4fdcd08f989b7d1ddebdae08e8f012f4120f1e05))
+* **files:** read Excel, XML and ZIP inputs ([#187](https://github.com/sqlstack-io/sqlload/issues/187)) ([2b496b6](https://github.com/sqlstack-io/sqlload/commit/2b496b69b97b38a55ad9b7465cefec95c076e208))
+
+
+### Documentation
+
+* **cli:** mark exit 75 and retryable as released in 0.34.0 ([#188](https://github.com/sqlstack-io/sqlload/issues/188)) ([121c005](https://github.com/sqlstack-io/sqlload/commit/121c00566b2c8494b7ea863967e665a64e1466ff))
+* **motherduck:** drop the not-released-yet marks now that 0.34.0 is published ([#189](https://github.com/sqlstack-io/sqlload/issues/189)) ([9fce673](https://github.com/sqlstack-io/sqlload/commit/9fce673826f1be9df79473048824b0042a4f4d0a))
+
 ## [0.34.0](https://github.com/sqlstack-io/sqlload/compare/v0.33.6...v0.34.0) (2026-11-12)
 
 
