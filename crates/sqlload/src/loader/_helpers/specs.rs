@@ -8,6 +8,7 @@ use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::files_source::main::constant_columns::constant_columns;
+use crate::files_source::models::AfterLoad;
 use crate::loader::_helpers::resolve::ResolvedTarget;
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::constants::{ODBC_SOURCE, SNOWFLAKE_SOURCE};
@@ -228,6 +229,7 @@ pub(crate) fn build_spec(
         );
     }
     problems.extend(flatten_problems(context, overrides));
+    problems.extend(after_load_problems(context, strategy));
     let layout = table_layout(settings, defaults);
     problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
     if !problems.is_empty() {
@@ -284,6 +286,7 @@ pub(crate) fn build_spec(
             .is_some_and(|(value, _)| value),
         logged: layered(&settings.state, &defaults.state)
             .is_some_and(|(value, _)| value == StateMode::Logged),
+        after_load: context.source.after_load.clone(),
         approved: false,
         tunnel: None,
         new_tables: context.source.new_tables,
@@ -720,6 +723,23 @@ pub(crate) fn strategy_problems(
             "lookback_from = \"now\" counts lookback back from now, so {} needs a lookback",
             cursor.column
         ));
+    }
+    problems
+}
+
+/// Why a files source's `after_load` cannot apply to its table: only `append` and `merge` never read a loaded file again, and a files target commits its own way.
+fn after_load_problems(context: &SourceContext<'_>, strategy: WriteStrategy) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    if context.source.after_load == AfterLoad::Keep {
+        return problems;
+    }
+    if !matches!(strategy, WriteStrategy::Append | WriteStrategy::Merge) {
+        problems.push(format!(
+            "after_load deletes or moves each file once it loads, so it needs write_strategy = \"append\" or \"merge\"; {strategy} reads loaded files again"
+        ));
+    }
+    if context.target.path.is_some() {
+        problems.push("after_load is for database targets so far, not a files target".to_owned());
     }
     problems
 }

@@ -13,9 +13,10 @@ use crate::adapters::snowflake::models::PlannedStage;
 use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::file_store::models::OpenFolder;
+use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::models::{
-    FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile, TextChecks,
+    AfterLoad, AfterLoadReport, FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile,
+    TextChecks,
 };
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
@@ -104,6 +105,8 @@ pub struct TableSpec {
     pub allow_empty: bool,
     /// Whether the table's position is kept in the run log (`state = "logged"`).
     pub logged: bool,
+    /// What a files source does with each file once its rows commit.
+    pub after_load: AfterLoad,
     /// Approved for loading as soon as it appears: named exactly in `include`, or declared (files and Python tables); a `[sources.*.tables]` entry alone never approves.
     pub approved: bool,
     pub new_tables: NewTables,
@@ -520,6 +523,8 @@ pub struct TableLoaded {
     /// `created ...` and `altered ...` lines.
     pub changes: Vec<String>,
     pub note: Option<String>,
+    /// What a files source's `after_load` did with the files it loaded; `None` when it keeps them.
+    pub after_load: Option<AfterLoadReport>,
 }
 
 /// A table's columns planned once more during its load, for rows showing new columns.
@@ -655,6 +660,10 @@ pub struct Publisher {
     pub files: Option<FilesSink>,
     /// A files source's merge: the file (`name|version`) the next commit merges, recorded in the run log with it.
     pub merged_file: Option<String>,
+    /// The files fed since the last commit, as they were read, settled by the next one (`after_load`).
+    pub fed_files: Vec<StoredFile>,
+    /// The files whose rows are committed, as they were read, which `after_load` deletes or moves.
+    pub settled_files: Vec<StoredFile>,
 }
 
 /// A files target table's load: its folder, what the load replaces, and the files of the commit being written.
@@ -881,6 +890,9 @@ pub struct TableResult {
     pub error: Option<String>,
     /// Whether the failure may pass when run again unchanged; `false` once loaded.
     pub retryable: bool,
+    /// What a files source's `after_load` did with the loaded files; left out when it keeps them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_load: Option<AfterLoadReport>,
 }
 
 /// Why a source's tables could not be listed, and whether a rerun may get past it.

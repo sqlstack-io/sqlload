@@ -2,6 +2,7 @@ use crate::column_types::models::ColumnType;
 use crate::files_source::models::{
     Codec, Compression, FilesEncoding, SourceFormat, UnmatchedPaths,
 };
+use crate::store_paths::models::StoreKind;
 
 /// Listed files, as (key, modified ms), and the order a merge applies them in.
 pub(crate) struct MergeOrderTestCase {
@@ -14,6 +15,8 @@ pub(crate) struct SelectFilesTestCase {
     pub(crate) description: &'static str,
     /// Loaded files and their versions.
     pub(crate) loaded: &'static [(&'static str, &'static str)],
+    /// Whether loaded files leave the folder (`after_load`).
+    pub(crate) removed: bool,
     pub(crate) cursor_type: Option<ColumnType>,
     pub(crate) bounds: (Option<&'static str>, Option<&'static str>),
     /// The keys chosen, or the error text.
@@ -194,4 +197,31 @@ pub(crate) struct FooterColumnsTestCase {
     pub(crate) written: arrow_schema::DataType,
     /// The portable type the footer reads back as.
     pub(crate) expected_type: &'static str,
+}
+
+pub(crate) struct AfterLoadTestCase {
+    /// What the case checks.
+    pub(crate) description: &'static str,
+    pub(crate) after_load: crate::files_source::models::AfterLoad,
+    /// Files written first, by path below the store's root, such as `events/a.csv`.
+    pub(crate) files: &'static [(&'static str, &'static str)],
+    /// The keys below `events/` whose rows committed.
+    pub(crate) loaded: &'static [&'static str],
+    /// Files rewritten, by path below the root, after the loaded ones were listed.
+    pub(crate) rewritten: &'static [(&'static str, &'static str)],
+    /// The report as `action status files failed`, or `none`.
+    pub(crate) expected_report: &'static str,
+    /// Every file left below the root, sorted, as `path=contents`.
+    pub(crate) expected_files: &'static [&'static str],
+}
+
+pub(crate) struct MoveToTestCase {
+    /// What the case checks.
+    pub(crate) description: &'static str,
+    /// The connection's store.
+    pub(crate) store: StoreKind,
+    pub(crate) path: &'static str,
+    pub(crate) move_to: &'static str,
+    /// The store key prefix files move below, or `Err(())` when `move_to` is refused.
+    pub(crate) expected_prefix: Result<&'static str, ()>,
 }

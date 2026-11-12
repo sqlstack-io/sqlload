@@ -1,6 +1,8 @@
 pub mod create_file;
+pub mod current_version;
 pub mod delete_files;
 pub mod list_files;
+pub mod move_file;
 pub mod open_folder;
 pub mod probe_folder;
 pub mod read_file;

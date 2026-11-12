@@ -1081,6 +1081,10 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
         note,
         error,
         retryable: outcome.retryable,
+        after_load: match &outcome.loaded {
+            Ok(loaded) => loaded.after_load.clone(),
+            Err(_) => None,
+        },
     }
 }
 

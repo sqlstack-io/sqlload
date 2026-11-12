@@ -2,7 +2,7 @@ use crate::files_source::constants::LOADER_COLUMNS;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::text_charset::text_charset;
-use crate::files_source::models::{Compression, RecordShape, SourceFormat};
+use crate::files_source::models::{AfterLoad, Compression, RecordShape, SourceFormat};
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
@@ -120,6 +120,11 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
                 source_kind_name(source.kind),
                 source.connection,
                 connection.kind()
+            ));
+        }
+        Some(ConnectionConfig::Sftp { .. }) if source.after_load != AfterLoad::Keep => {
+            problems.push(format!(
+                "{place} after_load is not for an sftp connection: SQLLoad only reads from SFTP servers, so it cannot delete or move their files"
             ));
         }
         Some(ConnectionConfig::Sftp { .. }) if source.copy_to_internal_stage => {
@@ -291,6 +296,7 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
             problems.extend(encoding_problems(place, source));
             problems.extend(path_value_problems(place, source));
+            problems.extend(after_load_problems(place, source));
         }
         SourceKind::GoogleSheets => {
             if source.ranges.len() != 1 && !template.contains(TABLE_PLACEHOLDER) {
@@ -352,9 +358,10 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         || source.path_columns.is_some()
         || source.unmatched_paths.is_some()
         || source.copy_to_internal_stage
+        || source.after_load != AfterLoad::Keep
     {
         problems.push(format!(
-            "{place} path, partition_columns, path_columns, unmatched_paths and copy_to_internal_stage are for kind = \"files\""
+            "{place} path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage and after_load are for kind = \"files\""
         ));
     }
     if source.format != SourceFormat::Parquet
@@ -497,6 +504,16 @@ fn constant_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         );
     }
     problems
+}
+
+/// A files source's `after_load` that cannot apply to a ZIP archive's members, which share their archive (another source may still read it); where `move_to` may go is checked once `path` is resolved.
+fn after_load_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    match source.after_load != AfterLoad::Keep && source.compression == Some(Compression::Zip) {
+        true => vec![format!(
+            "{place} after_load is not for compression = \"zip\": an archive's members load one by one, and another source may read the same archive"
+        )],
+        false => Vec::new(),
+    }
 }
 
 /// Settings of the xlsx and xml formats and of ZIP archives that do not fit the source.

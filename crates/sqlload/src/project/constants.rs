@@ -44,6 +44,7 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "xlsx",
     "xml",
     "members",
+    "after_load",
     "shape",
     "record_column",
     "destination_path",

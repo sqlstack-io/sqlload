@@ -1,3 +1,5 @@
+#[path = "tests/test_after_load.rs"]
+mod after_load;
 #[path = "tests/test_batch_footers.rs"]
 mod batch_footers;
 #[path = "tests/test_direct_refusal.rs"]

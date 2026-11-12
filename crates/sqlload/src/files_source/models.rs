@@ -159,6 +159,8 @@ pub struct FileSelection<'a> {
     pub location: &'a str,
     /// Source files already in the destination, with their versions (empty when unknown).
     pub loaded: &'a [LoadedFile],
+    /// Whether loaded files leave the folder once they load (`after_load`), so a loaded name at another version is a new file, not one rewritten in place.
+    pub removed: bool,
     /// The partition column the cursor is on, and its type.
     pub cursor: Option<(&'a str, &'a ColumnType)>,
     pub from: Option<&'a str>,
@@ -201,6 +203,16 @@ impl std::fmt::Display for SourceFormat {
             Self::Xml => "xml",
         })
     }
+}
+
+/// What a files source does with each file once its rows commit: keep it (the default), delete it, or move it to another folder of the connection, keeping its key below `path`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum AfterLoad {
+    #[default]
+    Keep,
+    Delete,
+    MoveTo(String),
 }
 
 /// How the files of a text format are compressed; Parquet compresses inside the file.
@@ -375,4 +387,22 @@ pub(crate) struct FileRead<'a> {
     pub(crate) schema: &'a SchemaRef,
     /// The file as recorded in the source-file column.
     pub(crate) file_name: String,
+}
+
+/// What `after_load` did with a table's loaded files: `status` is `done`, or `failed` when any file stayed where it was (the load still counts, and is not run again).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AfterLoadReport {
+    /// `delete` or `move`.
+    pub action: &'static str,
+    pub status: &'static str,
+    /// Files deleted or moved.
+    pub files: u64,
+    pub failed: Vec<AfterLoadFailure>,
+}
+
+/// A loaded file `after_load` could not delete or move, and why.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AfterLoadFailure {
+    pub file: String,
+    pub error: String,
 }

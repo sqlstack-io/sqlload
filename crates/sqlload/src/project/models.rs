@@ -7,8 +7,8 @@ use serde::Deserialize;
 use crate::config::models::AuthConfig;
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::models::{
-    Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths, XlsxOptions,
-    XmlOptions,
+    AfterLoad, Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
+    XlsxOptions, XmlOptions,
 };
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
@@ -404,6 +404,9 @@ pub struct SourceConfig {
     /// With `compression = "zip"`, a pattern the members' names must match (files sources).
     #[serde(default)]
     pub members: Option<String>,
+    /// What to do with each file once its rows commit (files sources).
+    #[serde(default)]
+    pub after_load: AfterLoad,
     /// Typed columns (default), or each JSON object or CSV line whole in one `json` column (files sources with a text format).
     #[serde(default)]
     pub shape: RecordShape,
