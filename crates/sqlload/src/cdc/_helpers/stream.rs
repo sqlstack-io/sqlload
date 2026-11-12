@@ -54,6 +54,7 @@ use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::main::postgres_address::postgres_address;
 use crate::project::models::{SourceConfig, TargetConfig};
 use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_PREFIX, CDC_UNCHANGED_COLUMN};
+use crate::session_relay::constants::APPLICATION_NAME;
 use crate::ssh_tunnel::main::tunnel_closed::tunnel_closed;
 
 /// How often the replication session reports the confirmed position.
@@ -145,19 +146,27 @@ impl CdcSource<'_> {
     async fn replication_config(&self) -> Result<ReplicationConfig, LoaderError> {
         let address = self.address()?;
         let relay = relay_tls(&address).await?;
+        let (host, port, application_name) = match &relay {
+            Some(relay) => (
+                relay.host.as_str(),
+                relay.port,
+                relay.application_name.expose(),
+            ),
+            None => (address.host, address.port, APPLICATION_NAME),
+        };
         Ok(ReplicationConfig::new(
-            relay.as_deref().unwrap_or(address.host),
+            host,
             address.user,
             address.password.unwrap_or_default(),
             address.database,
             self.cdc.slot.clone(),
             self.cdc.publication.clone(),
         )
-        .with_port(address.port)
+        .with_port(port)
         .with_tls(TlsConfig::disabled())
         .with_status_interval(STATUS_INTERVAL)
         .with_options(REPLICATION_OPTIONS)
-        .with_application_name("sqlload"))
+        .with_application_name(application_name))
     }
 
     /// The source's snapshot records: beside its first table in a warehouse, in the records folder of its path template in a files target (see [`snapshot_folder`]).

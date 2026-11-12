@@ -104,6 +104,11 @@ zstd.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 rustix.workspace = true
 
+# librdkafka's default build runs its mklove `configure` script and `make`, which MSVC has
+# neither of; on Windows it is built with CMake instead.
+[target.'cfg(windows)'.dependencies]
+rdkafka = { workspace = true, features = ["cmake-build"] }
+
 [dev-dependencies]
 bytes.workspace = true
 arrow-array = { workspace = true, features = ["chrono-tz"] }

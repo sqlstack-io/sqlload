@@ -15,6 +15,7 @@ use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
 use crate::loader::errors::LoaderError;
 use crate::schema_plan::constants::CDC_LSN_COLUMN;
+use crate::store_paths::main::local_separators::local_separators;
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
@@ -203,12 +204,10 @@ impl SnapshotLog<'_> {
     }
 }
 
-/// The records folder of `source`'s slot `slot` in a files target whose path template is `template`: the template's folders up to the first one naming anything but `{source}`, with `{source}` filled (all but the last when every one is fixed, the table's own folder then), then `_sqlload/cdc/<source>/<slot>/`. Outside every table's folder, and the same whichever tables the source selects; a table's own `destination_path` does not move it.
+/// The records folder of `source`'s slot `slot` in a files target whose path template is `template`: the template's folders up to the first one naming anything but `{source}`, with `{source}` filled (all but the last when every one is fixed, the table's own folder then), then `_sqlload/cdc/<source>/<slot>/`. Outside every table's folder, and the same whichever tables the source selects; a table's own `destination_path` does not move it. A leading `/` (or `//` before a Windows share) is kept as the root.
 pub(crate) fn snapshot_folder(template: &str, source: &str, slot: &str) -> String {
-    let root = match template.starts_with('/') {
-        true => "/",
-        false => "",
-    };
+    let template = &*local_separators(template);
+    let root = &template[..template.len() - template.trim_start_matches('/').len()];
     let segments: Vec<String> = template
         .split('/')
         .filter(|part| !part.is_empty())

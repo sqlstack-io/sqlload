@@ -4,6 +4,7 @@ use toml::{Table, Value};
 
 use crate::copy::constants::{POSTGRES_SETTINGS, REDACTED, S3_SETTINGS};
 use crate::copy::models::{Endpoint, Role};
+use crate::store_paths::main::file_url_path::file_url_path;
 
 /// The endpoint `text` names at `role`: `connection:locator` for a connection in `connections` (or a bare name), a URI, or a local folder; every message shows `text` with its password redacted.
 pub(crate) fn endpoint(text: &str, role: Role, connections: &Table) -> Result<Endpoint, String> {
@@ -123,7 +124,7 @@ fn uri_endpoint(shown: &str, scheme: &str, rest: &str, role: Role) -> Result<End
             format!("DuckDB table {locator}"),
         )),
         "s3" => s3(shown, body, role),
-        "file" => Ok(folder(body, shown)),
+        "file" => Ok(folder(&file_url_path(body), shown)),
         "snowflake" => Err(format!(
             "the {} {shown}: a Snowflake connection needs auth and a load_method, which a URI does not carry; declare it under [connections] in sqlload.toml and name it, as warehouse:SCHEMA.TABLE",
             role.label()

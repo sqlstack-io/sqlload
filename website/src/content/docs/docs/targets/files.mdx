@@ -95,7 +95,7 @@ table folder, carry over every file of the table folder that the load doesn't re
 `_sqlload/runs/` log, the load's lease, and any file you keep beside the data), then swap the two folders in one rename
 (`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
 reader sees the old files or the new ones, never both. Where the filesystem can't swap folders in one
-rename, SQLLoad moves the old folder aside first and warns, which leaves a moment with no folder. A
+rename, as on Windows, SQLLoad moves the old folder aside first and warns, which leaves a moment with no folder. A
 hidden folder left by a stopped or failed load is deleted by the next load. A table at the root of the
 folder connection has no folder beside it to swap, so it is replaced as in S3.
 

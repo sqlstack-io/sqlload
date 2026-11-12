@@ -9,3 +9,10 @@ pub(crate) fn bucket(name: &str) -> Option<StoreKind> {
         profile: None,
     })
 }
+
+/// The root and folders of `path` as `local_root` finds them, written `root|folders`.
+pub(crate) fn root_of(path: &str, windows: bool) -> Option<String> {
+    let separated = crate::store_paths::_helpers::local_root::windows_separators(path, windows);
+    crate::store_paths::_helpers::local_root::local_root(&separated, windows)
+        .map(|(root, folders)| format!("{root}|{folders}"))
+}

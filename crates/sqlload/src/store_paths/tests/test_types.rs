@@ -32,3 +32,36 @@ pub(crate) struct PartitionValueTestCase {
     pub(crate) value: &'static str,
     pub(crate) expected_escaped: &'static str,
 }
+
+/// How a local path reads on Windows, and on Unix, where only `/` starts an absolute path.
+pub(crate) struct LocalRootTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) path: &'static str,
+    /// The root and the folders below it, as `root|folders`; `None` for a relative path.
+    pub(crate) expected_windows: Option<&'static str>,
+    pub(crate) expected_unix: Option<&'static str>,
+}
+
+/// The local path a `file://` URL names, given what follows `file://`, on Windows and on Unix.
+pub(crate) struct FileUrlPathTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) rest: &'static str,
+    pub(crate) expected_windows: &'static str,
+    pub(crate) expected_unix: &'static str,
+}
+
+/// A folder prefix below a connection's folders, on Windows and on Unix.
+pub(crate) struct StripFoldersTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) prefix: &'static str,
+    pub(crate) folders: &'static str,
+    pub(crate) expected_windows: Option<&'static str>,
+    pub(crate) expected_unix: Option<&'static str>,
+}
+
+/// A filesystem root, as object_store's local store opens it on Windows and on Unix.
+pub(crate) struct ShareByAddressTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) root: &'static str,
+    pub(crate) expected_windows: &'static str,
+}

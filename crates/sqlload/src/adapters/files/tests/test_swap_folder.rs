@@ -7,7 +7,7 @@ use crate::adapters::files::main::repair_table::repair_table;
 use crate::adapters::files::main::swap_folder::swap_folder;
 use crate::adapters::files::models::TablePath;
 use crate::adapters::files::tests::helpers::{
-    NO_FOLDER, block_on, local_files, watch_folder, write_all,
+    MID_SWAP, NO_FOLDER, block_on, local_files, watch_folder, write_all,
 };
 use crate::adapters::files::tests::test_types::{RemoveStagedTestCase, SwapFolderTestCase};
 use crate::file_store::main::open_folder::open_folder;
@@ -99,6 +99,7 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
             .iter()
             .copied()
             .chain(test_case.live.is_empty().then_some(NO_FOLDER))
+            .chain(MID_SWAP.iter().copied())
             .map(str::to_owned)
             .collect();
         let new: Vec<String> = vec!["part-new-0.csv".to_owned()];

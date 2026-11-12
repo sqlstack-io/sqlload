@@ -7,6 +7,24 @@ on:
         description: "Release tag to publish, for example v0.1.0"
         required: true
         type: string
+  # A pull request changing how wheels are built builds and smoke-tests them all, and publishes
+  # nothing.
+  pull_request:
+    paths:
+      - .github/workflows/publish.yml
+      - .github/scripts/assert_*_wheel_tags.sh
+      - .github/scripts/interrupt_python_load.py
+      - packages/*/pyproject.toml
+      - Cargo.toml
+      - Cargo.lock
+      - crates/sqlload/Cargo.toml
+      - crates/sqlload-python/Cargo.toml
+
+# A new push to a pull request cancels its older wheel builds; a release run is a group of its own,
+# so releases never cancel each other.
+concurrency:
+  group: publish-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -22,6 +40,10 @@ jobs:
       - name: Resolve release tag
         id: release-tag
         run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "A pull request: building its head, publishing nothing."
+            exit 0
+          fi
           tag="${{ inputs.tag }}"
 
           if [[ ! "$tag" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
@@ -41,6 +63,7 @@ jobs:
         with:
           ref: ${{ needs.release-tag.outputs.tag }}
       - name: Match package versions to release tag
+        if: github.event_name == 'workflow_dispatch'
         env:
           RELEASE_VERSION: ${{ needs.release-tag.outputs.version }}
         run: |
@@ -84,6 +107,13 @@ jobs:
           - name: macos-arm64
             runner: macos-latest
             target: aarch64
+          # GitHub's last Intel macOS image, available until August 2027.
+          - name: macos-x86_64
+            runner: macos-15-intel
+            target: x86_64
+          - name: windows-x86_64
+            runner: windows-latest
+            target: x86_64
     steps:
       - uses: actions/checkout@v5
         with:
@@ -94,6 +124,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.95.0
+      # Vendored OpenSSL's Configure needs a native Windows Perl; Git Bash's lacks modules it loads.
+      # Without nasm it builds with no-asm.
+      - name: Use Strawberry Perl for vendored OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" >> $env:GITHUB_ENV'
+      # The arm64 wheel's floor already; the Intel one would otherwise get Rust's (10.12), older than
+      # the C++ library DuckDB's bundled build needs.
+      - name: Build for macOS 11 and newer
+        if: runner.os == 'macOS'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
       # sqlload-cli ships one standalone Rust executable (OpenSSL built in) and links no libpython,
       # so maturin tags it py3-none-<platform>. The tag is asserted before release.
       - name: Build native CLI wheel
@@ -124,13 +165,21 @@ jobs:
       - name: Assert Python extension wheel targets the stable ABI
         shell: bash
         run: bash .github/scripts/assert_python_wheel_tags.sh dist
-      - name: Smoke-test the Python extension wheel
+      - name: Smoke-test the wheels
         shell: bash
         run: |
-          python -m venv /tmp/smoke
-          /tmp/smoke/bin/pip install --quiet dist/sqlload-*.whl
-          /tmp/smoke/bin/sqlload --help
-          /tmp/smoke/bin/python -c "import sqlload, sqlload._native"
+          python -m venv smoke
+          bin=smoke/bin
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then bin=smoke/Scripts; fi
+          "${bin}/python" -m pip install --quiet dist/sqlload-*.whl
+          "${bin}/sqlload" --help
+          "${bin}/python" -c "import sqlload, sqlload._native"
+          "${bin}/python" .github/scripts/interrupt_python_load.py
+          python -m venv smoke-cli
+          cli=smoke-cli/bin
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then cli=smoke-cli/Scripts; fi
+          "${cli}/python" -m pip install --quiet dist/sqlload_cli-*.whl
+          "${cli}/sqlload" --version
       - uses: actions/upload-artifact@v5
         with:
           name: wheel-${{ matrix.platform.name }}
@@ -166,6 +215,7 @@ jobs:
 
   pypi:
     name: Publish to PyPI
+    if: github.event_name == 'workflow_dispatch'
     needs:
       - release-tag
       - wheels
@@ -200,6 +250,7 @@ jobs:
 
   crates:
     name: Publish to crates.io
+    if: github.event_name == 'workflow_dispatch'
     needs:
       - release-tag
       - wheels
