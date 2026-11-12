@@ -16,4 +16,6 @@ pub enum MetadataRole {
     LoadId,
     /// When that load started.
     LoadedAt,
+    /// The row's own id (`row_id`, and always under dlt's naming).
+    RowId,
 }

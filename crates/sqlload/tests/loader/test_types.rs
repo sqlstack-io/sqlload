@@ -1104,3 +1104,16 @@ pub(crate) struct UnnestPlanTestCase {
     /// Text the plan's output holds; empty when it plans.
     pub(crate) expected_problem: &'static str,
 }
+
+/// An NDJSON files source under `drop/` with `settings`, loaded by the executable into DuckDB once per run, each run adding its file.
+pub(crate) struct RowIdTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// Each run's new file, as `name`, `contents`.
+    pub(crate) runs: &'static [(&'static str, &'static str)],
+    /// The table's columns in order, joined by `,`.
+    pub(crate) expected_columns: &'static str,
+    /// A query over `raw.orders` returning one text.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}

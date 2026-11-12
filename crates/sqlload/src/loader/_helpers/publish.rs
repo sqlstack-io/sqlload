@@ -98,6 +98,8 @@ use crate::project::models::WriteStrategy;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
 use crate::publish_checks::models::CheckedCommit;
+use crate::row_ids::main::key_row_ids::key_row_ids;
+use crate::row_ids::main::random_row_ids::random_row_ids;
 use crate::run_log::main::insert_run::insert_run;
 use crate::run_log::main::record_object_name::record_object_name;
 use crate::run_log::main::runs_location::runs_location;
@@ -204,6 +206,25 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
     columns
 }
 
+/// Each row's id when the table gives its rows one: under a merge, the hash of its `unique_key` (so a row keeps its id, and its child rows theirs, on every load), otherwise a fresh random id.
+fn row_ids(table: &TablePlan, batch: &RecordBatch) -> Result<Option<Vec<String>>, String> {
+    if !table.spec.row_id {
+        return Ok(None);
+    }
+    let WriteMode::Merge { unique_key, .. } = &table.mode else {
+        return random_row_ids(batch.num_rows()).map(Some);
+    };
+    let schema = batch.schema();
+    let mut key: Vec<(String, usize)> = Vec::with_capacity(unique_key.len());
+    for name in unique_key {
+        let index = schema.index_of(name).map_err(|_| {
+            format!("the staged rows have no unique_key column {name} to give their row ids from")
+        })?;
+        key.push((name.clone(), index));
+    }
+    key_row_ids(batch, &key).map(Some)
+}
+
 /// Whether the table's staged rows carry `_sqlload_row`: a merge keeping the last of the rows sharing a key, from a source without its own row numbers.
 fn numbers_rows(table: &TablePlan) -> bool {
     matches!(&table.mode, WriteMode::Merge { dedupe: Some(dedupe), .. } if dedupe.ordinal == MERGE_ROW_COLUMN)
@@ -236,10 +257,10 @@ pub(crate) fn with_constants(
     RecordBatch::try_new(Arc::new(schema), columns).map_err(|error| error.to_string())
 }
 
-/// `batch` with this load's `_sqlload_load_id` and `_sqlload_loaded_at` added, so the staged files carry them, and with `first_row` its rows numbered from it in `_sqlload_row`.
+/// `batch` with this load's id and load time added under `naming`, so the staged files carry them, then each row's id from `row_ids` when the table gives rows one, and with `first_row` its rows numbered from it in `_sqlload_row`.
 fn with_metadata(
     batch: &RecordBatch,
-    (naming, load_id): (Naming, &str),
+    ((naming, load_id), row_ids): ((Naming, &str), Option<Vec<String>>),
     (loaded_at_micros, first_row): (i64, Option<i64>),
 ) -> Result<RecordBatch, String> {
     let rows = batch.num_rows();
@@ -260,6 +281,14 @@ fn with_metadata(
     )));
     columns.push(Arc::new(StringArray::from(vec![load_id; rows])));
     columns.push(Arc::new(loaded_at));
+    if let Some(ids) = row_ids {
+        fields.push(Arc::new(Field::new(
+            metadata_name(naming, MetadataRole::RowId),
+            arrow_schema::DataType::Utf8,
+            true,
+        )));
+        columns.push(Arc::new(StringArray::from(ids)));
+    }
     if let Some(first) = first_row {
         fields.push(Arc::new(Field::new(
             MERGE_ROW_COLUMN,
@@ -446,9 +475,10 @@ impl Publisher {
             .map_err(|error| LoaderError::Invalid(error.to_string()))?;
         let first_row = numbers_rows(&self.table).then_some(self.staged_ordinal);
         self.staged_ordinal += i64::try_from(masked.num_rows()).unwrap_or(i64::MAX);
+        let ids = row_ids(&self.table, &masked).map_err(LoaderError::Invalid)?;
         let batch = with_metadata(
             &masked,
-            (self.table.spec.naming, &self.load_id),
+            ((self.table.spec.naming, &self.load_id), ids),
             (micros, first_row),
         )
         .map_err(LoaderError::Invalid)?;

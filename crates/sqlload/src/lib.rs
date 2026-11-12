@@ -41,6 +41,7 @@ pub mod publish_checks;
 pub mod python_sources;
 pub mod routing;
 pub mod row_batches;
+pub mod row_ids;
 pub mod run_log;
 pub mod schema_plan;
 pub mod session_relay;
