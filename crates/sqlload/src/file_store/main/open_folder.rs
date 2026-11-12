@@ -9,6 +9,7 @@ use crate::file_store::errors::StoreError;
 use crate::file_store::main::s3_builder::s3_builder;
 use crate::file_store::models::{OpenFolder, SftpStore};
 use crate::http::main::install_tls_provider::install_tls_provider;
+use crate::store_paths::main::local_store_root::local_store_root;
 use crate::store_paths::models::{Location, StoreKind};
 
 /// A client for `location`'s store (an SFTP server is connected to on first use); S3 credentials come from `AWS_*` variables, the shared credentials file, web identity or the instance/container role.
@@ -47,7 +48,8 @@ pub fn open_folder(location: &Location) -> Result<OpenFolder, StoreError> {
                     source: Box::new(error),
                 })
             })?;
-            Arc::new(LocalFileSystem::new_with_prefix(root).map_err(failed)?)
+            let root = local_store_root(root);
+            Arc::new(LocalFileSystem::new_with_prefix(root.as_ref()).map_err(failed)?)
         }
         StoreKind::Sftp { server, root } => Arc::new(SftpStore {
             server: (**server).clone(),
