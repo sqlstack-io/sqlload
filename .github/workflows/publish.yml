@@ -19,6 +19,12 @@ on:
       - crates/sqlload/Cargo.toml
       - crates/sqlload-python/Cargo.toml
 
+# A new push to a pull request cancels its older wheel builds; a release run is a group of its own,
+# so releases never cancel each other.
+concurrency:
+  group: publish-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
