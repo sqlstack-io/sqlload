@@ -5,3 +5,4 @@ pub mod sheet_table;
 pub mod sheets_client;
 pub mod tab_name;
 pub mod tab_ranges;
+pub mod user_sheets_client;

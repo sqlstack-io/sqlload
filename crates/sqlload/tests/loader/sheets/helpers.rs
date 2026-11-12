@@ -164,3 +164,63 @@ header_row = 2
         database = database.display(),
     )
 }
+
+/// A project reading the fake spreadsheet's `Locations` tab as a Google user of an installed app's OAuth client, with the connection's `refresh` token if any, into DuckDB at `database`.
+pub(crate) fn user_project_text(
+    (base_url, token_url): (&str, &str),
+    refresh: Option<&str>,
+    database: &std::path::Path,
+) -> String {
+    let refresh = refresh.map_or_else(String::new, |token| format!("refresh_token = '{token}'\n"));
+    format!(
+        r#"
+[connections.sheets]
+kind = "google_sheets"
+client_id = "client.apps.googleusercontent.com"
+client_secret = "secret"
+{refresh}base_url = '{base_url}'
+token_url = '{token_url}'
+
+[connections.local]
+kind = "duckdb"
+database = '{database}'
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.reference]
+kind = "google_sheets"
+description = "Reference tables kept in a spreadsheet."
+connection = "sheets"
+spreadsheet_id = "fake-sheet"
+ranges = {{ locations = "Locations" }}
+"#,
+        database = database.display()
+    )
+}
+
+/// Run `sqlload` with `args` on `config`, its sign-in cache below `cache`: the exit code and the output.
+pub(crate) fn run_with_cache(
+    config: &std::path::Path,
+    args: &[&str],
+    cache: &std::path::Path,
+) -> Result<(Option<i32>, String), String> {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+        .arg("--config")
+        .arg(config)
+        .arg("--no-color")
+        .args(args)
+        .env("XDG_CACHE_HOME", cache)
+        .env("LOCALAPPDATA", cache)
+        .output()
+        .map_err(|error| error.to_string())?;
+    Ok((
+        output.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    ))
+}

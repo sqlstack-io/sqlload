@@ -229,7 +229,7 @@ pub enum ConnectionConfig {
         #[serde(default)]
         password: Option<crate::auth::models::Secret>,
     },
-    /// Google Sheets, read with a service-account key: at most one of the three key settings, or the key file `GOOGLE_APPLICATION_CREDENTIALS` names.
+    /// Google Sheets, read with a service-account key (at most one of the three key settings, or the key file `GOOGLE_APPLICATION_CREDENTIALS` names), or as a Google user who consents to an installed app's OAuth client (`client_id` and `client_secret`).
     GoogleSheets {
         /// A path to the key file.
         #[serde(default)]
@@ -240,9 +240,20 @@ pub enum ConnectionConfig {
         /// The key file's JSON text, base64-encoded.
         #[serde(default)]
         service_account_json_base64: Option<crate::auth::models::Secret>,
+        /// An installed app's OAuth client, to read as the Google user who consents to it.
+        #[serde(default)]
+        client_id: Option<String>,
+        #[serde(default)]
+        client_secret: Option<crate::auth::models::Secret>,
+        /// The user's refresh token, for unattended runs; without it, the one cached at consent.
+        #[serde(default)]
+        refresh_token: Option<crate::auth::models::Secret>,
         /// Overrides the Sheets API's root, for tests.
         #[serde(default)]
         base_url: Option<String>,
+        /// Overrides Google's OAuth token endpoint, for tests.
+        #[serde(default)]
+        token_url: Option<String>,
     },
     /// An HTTP API, for Python sources; its settings reach table functions as `ctx.connection`.
     Http {

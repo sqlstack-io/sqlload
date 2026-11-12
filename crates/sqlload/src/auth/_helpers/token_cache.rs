@@ -1,13 +1,12 @@
-//! The file browser sign-ins are cached in, readable only by its owner, keyed by account, user, OAuth client and role.
+//! The files browser sign-ins are cached in, readable only by their owner: Snowflake's keyed by account, user, OAuth client and role, Google's by OAuth client and connection.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::auth::constants::TOKEN_CACHE_FILE;
 use crate::auth::models::{CachedTokens, OauthClient, OauthTokens, Secret};
 
-/// The token cache file: below `XDG_CACHE_HOME`, else `~/.cache` (`%LOCALAPPDATA%` on Windows).
-pub(crate) fn token_cache_file() -> Option<PathBuf> {
+/// The token cache file `name`: below `XDG_CACHE_HOME`, else `~/.cache` (`%LOCALAPPDATA%` on Windows).
+pub(crate) fn token_cache_file(name: &str) -> Option<PathBuf> {
     let variable = |name: &str| {
         std::env::var_os(name)
             .filter(|value| !value.is_empty())
@@ -19,7 +18,7 @@ pub(crate) fn token_cache_file() -> Option<PathBuf> {
             variable("XDG_CACHE_HOME").or_else(|| variable("HOME").map(|home| home.join(".cache")))
         }
     };
-    folder.map(|folder| folder.join(TOKEN_CACHE_FILE))
+    folder.map(|folder| folder.join(name))
 }
 
 /// The key one sign-in is cached under.
@@ -39,7 +38,17 @@ pub(crate) fn cache_key(client: &OauthClient) -> String {
 
 /// The cached sign-in for `client`; none when the file is missing or unreadable.
 pub(crate) fn read_cached(client: &OauthClient) -> Option<OauthTokens> {
-    let cached = read_file(&client.cache_file).remove(&cache_key(client))?;
+    read_entry(&client.cache_file, &cache_key(client))
+}
+
+/// Cache `tokens` for `client`, keeping other sign-ins in the file.
+pub(crate) fn write_cached(client: &OauthClient, tokens: &OauthTokens) -> Result<(), String> {
+    write_entry(&client.cache_file, &cache_key(client), tokens)
+}
+
+/// The sign-in cached in `path` under `key`; none when the file is missing or unreadable.
+pub(crate) fn read_entry(path: &Path, key: &str) -> Option<OauthTokens> {
+    let cached = read_file(path).remove(key)?;
     Some(OauthTokens {
         access_token: Secret(cached.access_token),
         renew_after: cached.renew_after,
@@ -48,12 +57,11 @@ pub(crate) fn read_cached(client: &OauthClient) -> Option<OauthTokens> {
     })
 }
 
-/// Cache `tokens` for `client`, keeping other sign-ins in the file: written to a new file only its owner can read, then renamed over the old one.
-pub(crate) fn write_cached(client: &OauthClient, tokens: &OauthTokens) -> Result<(), String> {
-    let path = &client.cache_file;
+/// Cache `tokens` in `path` under `key`, keeping other sign-ins in the file: written to a new file only its owner can read, then renamed over the old one.
+pub(crate) fn write_entry(path: &Path, key: &str, tokens: &OauthTokens) -> Result<(), String> {
     let mut all = read_file(path);
     all.insert(
-        cache_key(client),
+        key.to_owned(),
         CachedTokens {
             access_token: tokens.access_token.expose().to_owned(),
             renew_after: tokens.renew_after,
@@ -89,12 +97,12 @@ fn read_file(path: &Path) -> BTreeMap<String, CachedTokens> {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return BTreeMap::new(),
         Err(error) => {
-            tracing::warn!(%error, file = %path.display(), "cannot read the Snowflake sign-in cache");
+            tracing::warn!(%error, file = %path.display(), "cannot read the sign-in cache");
             return BTreeMap::new();
         }
     };
     serde_json::from_str(&text).unwrap_or_else(|error| {
-        tracing::warn!(%error, file = %path.display(), "the Snowflake sign-in cache is not valid; signing in again");
+        tracing::warn!(%error, file = %path.display(), "the sign-in cache is not valid; signing in again");
         BTreeMap::new()
     })
 }

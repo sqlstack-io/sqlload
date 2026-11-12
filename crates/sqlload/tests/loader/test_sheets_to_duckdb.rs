@@ -1,8 +1,11 @@
 use sqlload_testkit::fake_sheets::main::start_fake_sheets::start_fake_sheets;
 
 use crate::helpers::{duckdb_text, run_async, run_sqlload};
-use crate::sheets_helpers::{duplicated_tabs, edited_tabs, first_tabs, project_text, retyped_tabs};
-use crate::test_types::{SheetsLoadTestCase, SheetsRefusalTestCase};
+use crate::sheets_helpers::{
+    duplicated_tabs, edited_tabs, first_tabs, project_text, retyped_tabs, run_with_cache,
+    user_project_text,
+};
+use crate::test_types::{SheetsLoadTestCase, SheetsRefusalTestCase, SheetsUserTestCase};
 
 const LOCATIONS: &str = "SELECT string_agg(Code || ':' || coalesce(Name, '') || ':' || coalesce(CAST(Opened AS VARCHAR), '') || ':' || coalesce(CAST(Active AS VARCHAR), '') || ':' || coalesce(CAST(Capacity AS VARCHAR), '') || ':' || coalesce(CAST(\"Updated At\" AS VARCHAR), '') || ':' || coalesce(Ref, ''), ',' ORDER BY Code) || '|' || (SELECT string_agg(column_name || ' ' || data_type, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'reference__locations' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\') FROM raw.reference__locations";
 
@@ -98,6 +101,16 @@ fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_rep
                 source: "[sources.keyed]\nkind = \"google_sheets\"\ndescription = \"Codes keyed by code.\"\nconnection = \"sheets\"\nspreadsheet_id = \"fake-sheet\"\nranges = { codes = \"Codes\" }\nunique_key = [\"code\"]\nwrite_strategy = \"merge\"\n",
                 expected_output: "Codes!A2 and Codes!A4 hold the same unique_key (code)",
             },
+            SheetsRefusalTestCase {
+                description: "a connection with both a service-account key and an OAuth client",
+                source: "[connections.mixed]\nkind = \"google_sheets\"\nservice_account_json = '{}'\nclient_id = \"c\"\nclient_secret = \"s\"\n[sources.mixed]\nkind = \"google_sheets\"\ndescription = \"Mixed.\"\nconnection = \"mixed\"\nspreadsheet_id = \"fake-sheet\"\n",
+                expected_output: "connection \"mixed\" sets more than one of service_account_json, service_account_json_base64, service_account_file and client_id; keep one",
+            },
+            SheetsRefusalTestCase {
+                description: "an OAuth client without its secret",
+                source: "[connections.half]\nkind = \"google_sheets\"\nclient_id = \"c\"\n[sources.half]\nkind = \"google_sheets\"\ndescription = \"Half.\"\nconnection = \"half\"\nspreadsheet_id = \"fake-sheet\"\n",
+                expected_output: "connection \"half\" sets client_id without client_secret",
+            },
         ];
         fake.place("fake-sheet", duplicated_tabs());
         for test_case in test_cases {
@@ -107,6 +120,75 @@ fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_rep
             assert!(
                 !succeeded && output.contains(test_case.expected_output),
                 "{}:\n{output}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_google_user_connection_when_loading_then_its_refresh_token_reads_and_a_refused_one_fails_for_good()
+-> Result<(), String> {
+    run_async(async {
+        let fake = start_fake_sheets().await?;
+        fake.place("fake-sheet", first_tabs());
+        let test_cases = [
+            SheetsUserTestCase {
+                description: "the connection's refresh token is exchanged for an access token that reads the sheet",
+                refresh: Some("refresh-own"),
+                revoked: &[],
+                expected_code: 0,
+                expected_output: "\"status\": \"loaded\"",
+                expected_grant: Some("refresh_token"),
+            },
+            SheetsUserTestCase {
+                description: "a revoked refresh token fails with exit 1 and retryable false, saying how to get a new one",
+                refresh: Some("refresh-own"),
+                revoked: &["refresh-own"],
+                expected_code: 1,
+                expected_output: "Google refused the refresh_token of connection \\\"sheets\\\" (invalid_grant: Token has been expired or revoked.)",
+                expected_grant: Some("refresh_token"),
+            },
+            SheetsUserTestCase {
+                description: "with no refresh token and nothing cached, a --json run asks nobody to sign in and fails at once, saying how to",
+                refresh: None,
+                revoked: &[],
+                expected_code: 1,
+                expected_output: "signing in in the browser needs a terminal; run `sqlload plan` from a terminal once to sign in",
+                expected_grant: None,
+            },
+        ];
+        for test_case in test_cases {
+            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let config = folder.path().join("sqlload.toml");
+            let project = user_project_text(
+                (&fake.base_url, &fake.token_url),
+                test_case.refresh,
+                &folder.path().join("out.duckdb"),
+            );
+            std::fs::write(&config, project).map_err(|error| error.to_string())?;
+            {
+                let mut state = fake.state.lock();
+                state.grants.clear();
+                state.revoked_refresh_tokens = test_case
+                    .revoked
+                    .iter()
+                    .map(|token| (*token).to_owned())
+                    .collect();
+            }
+            let (code, output) = run_with_cache(&config, &["load", "--json"], folder.path())?;
+            let grants = fake.state.lock().grants.clone();
+            assert!(
+                code == Some(test_case.expected_code)
+                    && output.contains(test_case.expected_output)
+                    && output
+                        .contains(&format!("\"retryable\": {}", test_case.expected_code == 75))
+                    && grants.is_empty() == test_case.expected_grant.is_none()
+                    && grants
+                        .iter()
+                        .all(|grant| Some(grant.as_str()) == test_case.expected_grant),
+                "{}: exit {code:?}, grants {grants:?}:\n{output}",
                 test_case.description
             );
         }

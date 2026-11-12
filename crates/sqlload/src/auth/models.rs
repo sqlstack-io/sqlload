@@ -7,7 +7,7 @@ use crate::auth::_helpers::sign_in::terminal_io;
 use crate::auth::_helpers::token_cache::token_cache_file;
 use crate::auth::constants::{
     JWT_LIFETIME_SECS, JWT_REFRESH_MARGIN_SECS, KEYPAIR_JWT, LOCAL_APPLICATION, OAUTH,
-    PROGRAMMATIC_ACCESS_TOKEN,
+    PROGRAMMATIC_ACCESS_TOKEN, TOKEN_CACHE_FILE,
 };
 use crate::auth::main::account_url::account_url;
 use crate::config::models::{AuthConfig, DestinationConfig};
@@ -61,6 +61,22 @@ pub struct OauthClient {
     pub role: Option<String>,
     pub cache_file: PathBuf,
     pub http: reqwest::Client,
+}
+
+/// A Google user who consents in the browser to an installed app's OAuth client: the client, a refresh token the connection gives (for unattended runs) or the one cached at consent, and Google's endpoints.
+#[derive(Debug, Clone)]
+pub struct GoogleUser {
+    pub client_id: String,
+    pub client_secret: Secret,
+    /// The connection's `refresh_token`; when unset, the one cached under `cache_key`, or a new consent's.
+    pub refresh_token: Option<Secret>,
+    /// The one scope consent asks for.
+    pub scope: String,
+    /// The connection, as messages and the cache name it.
+    pub connection: String,
+    pub authorize_url: String,
+    pub token_url: String,
+    pub cache_file: std::path::PathBuf,
 }
 
 /// A browser sign-in's tokens in one run, and why signing in failed, after which the run asks nobody again.
@@ -145,7 +161,7 @@ impl Authenticator {
                     redirect_uri: redirect_uri.clone(),
                     user: destination.user.clone(),
                     role: destination.role.clone(),
-                    cache_file: token_cache_file().ok_or_else(|| {
+                    cache_file: token_cache_file(TOKEN_CACHE_FILE).ok_or_else(|| {
                         ApiError::Auth(
                             "no folder to cache the Snowflake sign-in in: set XDG_CACHE_HOME or HOME"
                                 .to_owned(),
