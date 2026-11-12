@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::contract::constants::{
-    MISSING_DECLARATION, MISSING_PHYSICAL_COLUMN, RELATION_MISSING, SQLLOAD_COLUMN_PREFIX,
-    TYPE_MISMATCH,
+    MISSING_DECLARATION, MISSING_PHYSICAL_COLUMN, RELATION_MISSING, TYPE_MISMATCH,
 };
 use crate::contract::models::ContractFinding;
+use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::loader::models::TableSpec;
 use crate::project::models::Contract;
 use crate::schema_plan::models::LiveColumn;
@@ -58,7 +58,7 @@ pub(crate) fn findings(
 
 /// Whether SQLLoad added the column itself (`_sqlload_*`).
 pub(crate) fn is_own(name: &str) -> bool {
-    name.to_ascii_lowercase().starts_with(SQLLOAD_COLUMN_PREFIX)
+    name.to_ascii_lowercase().starts_with(SQLLOAD_PREFIX)
 }
 
 /// Whether `live` has a column named `name`, ignoring case.

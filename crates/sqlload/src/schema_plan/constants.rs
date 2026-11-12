@@ -1,10 +1,5 @@
-/// The load id column every loaded row carries.
-pub const LOAD_ID_COLUMN: &str = "_sqlload_load_id";
 /// A merge's staged rows numbered in source order, so the last of those sharing a key is kept; staging only, never the table.
 pub const MERGE_ROW_COLUMN: &str = "_sqlload_row";
-
-/// The load time column every loaded row carries.
-pub const LOADED_AT_COLUMN: &str = "_sqlload_loaded_at";
 
 /// The command-line flag that allows table rebuilds for one run.
 pub const ALLOW_REBUILD_FLAG: &str = "--allow-type-change-rebuild";

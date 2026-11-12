@@ -152,7 +152,7 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     {
         column.origin = ColumnOrigin::Metadata;
     }
-    desired.extend(metadata_columns());
+    desired.extend(metadata_columns(spec.naming));
     desired
 }
 
@@ -389,6 +389,7 @@ pub(crate) async fn replan_columns(
                 auto_widen: spec.auto_widen,
                 type_change_rebuild: spec.type_change_rebuild,
                 rebuild_allowed: options.rebuild_allowed,
+                naming: spec.naming,
             };
             let compared = live.as_deref().filter(|_| !options.reload);
             let mut schema = plan_schema(&desired, compared, rules);
@@ -648,6 +649,7 @@ async fn plan_table_once(
         auto_widen: spec.auto_widen,
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
+        naming: spec.naming,
     };
     let compared = live.as_deref().filter(|_| !options.reload);
     let mut schema = plan_schema(&desired, compared, rules);

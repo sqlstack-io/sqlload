@@ -50,6 +50,7 @@ pub(crate) fn snowflake_rules() -> SchemaRules {
         on_schema_change: OnSchemaChange::AppendNewColumns,
         type_change_rebuild: Policy::RequireConfirmation,
         rebuild_allowed: false,
+        naming: crate::load_naming::models::Naming::Sqlload,
         auto_widen: false,
     }
 }

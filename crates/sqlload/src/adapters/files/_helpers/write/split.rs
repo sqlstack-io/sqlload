@@ -16,7 +16,7 @@ pub(crate) fn partition_rows(
 ) -> Result<Vec<(String, RecordBatch)>, String> {
     let shaped = shape_batch(
         batch,
-        &writer.schema,
+        (&writer.schema, &writer.metadata),
         &writer.load_id,
         writer.loaded_at_micros,
     )?;

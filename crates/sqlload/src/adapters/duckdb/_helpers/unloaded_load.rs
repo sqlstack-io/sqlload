@@ -38,6 +38,7 @@ impl DuckDbWriter {
                 columns: carried,
                 read: batch.read,
                 constants: target.constants,
+                naming: target.naming,
                 batch: target.batch,
             },
             &urls,

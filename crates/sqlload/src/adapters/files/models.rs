@@ -1,3 +1,4 @@
+use crate::load_naming::models::{MetadataRole, Naming};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -171,6 +172,8 @@ pub struct WriterRequest<'a> {
     /// The cursor column partitions are taken from, when the path has a partition folder.
     pub cursor_column: Option<&'a str>,
     pub columns: &'a [DesiredColumn],
+    /// How the table names the columns a load adds.
+    pub naming: Naming,
     pub load_id: &'a str,
     /// Names the files and the pending marker (see [`FilesWriter::file_id`]).
     pub file_id: &'a str,
@@ -215,7 +218,9 @@ pub struct FilesWriter {
     pub partition: Option<PartitionFolder>,
     pub cursor_column: Option<String>,
     pub schema: SchemaRef,
-    /// The load id the rows carry in `_sqlload_load_id`.
+    /// What each of `schema`'s fields holds when the load adds it.
+    pub metadata: Vec<Option<MetadataRole>>,
+    /// The load id the rows carry in their load id column.
     pub load_id: String,
     /// Names this writer's files and its pending marker: one per commit of a load, so repairing an unfinished commit never touches an earlier one's files.
     pub file_id: String,
