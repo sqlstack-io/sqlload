@@ -60,15 +60,23 @@ pub(crate) fn selected_rows<'a>(document: &'a Value, selector: &Selector) -> Vec
     }
 }
 
-/// The text at `pointer` in `document` (a number as its digits); `None` when missing, null or empty.
-pub(crate) fn pointer_text(document: &Value, pointer: &Selector) -> Option<String> {
+/// The value at `pointer` in `document` when it is a non-empty string or a number; `None` when missing, null, empty or another kind.
+pub(crate) fn pointer_value(document: &Value, pointer: &Selector) -> Option<Value> {
     let node = pointer
         .rows
         .iter()
         .try_fold(document, |node, name| node.get(name))?;
     match node {
-        Value::String(text) if !text.is_empty() => Some(text.clone()),
-        Value::Number(number) => Some(number.to_string()),
+        Value::String(text) if !text.is_empty() => Some(node.clone()),
+        Value::Number(_) => Some(node.clone()),
         _ => None,
+    }
+}
+
+/// The text at `pointer` in `document` (a number as its digits); `None` when missing, null or empty.
+pub(crate) fn pointer_text(document: &Value, pointer: &Selector) -> Option<String> {
+    match pointer_value(document, pointer)? {
+        Value::String(text) => Some(text),
+        other => Some(other.to_string()),
     }
 }

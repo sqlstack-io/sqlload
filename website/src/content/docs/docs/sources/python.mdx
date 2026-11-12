@@ -220,17 +220,17 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | Function | Meaning |
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
-| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. |
+| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.35.0 (not released yet); see [POST with a JSON body](#post-with-a-json-body). |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. |
 
 | Paginator | Next page |
 |-----------|-----------|
 | `sl.single()` | None: one request. |
 | `sl.next_link(pointer)` | The URL at `pointer` in the body, such as `"$.next"`. |
 | `sl.link_header()` | The `Link` header's `rel="next"`. |
-| `sl.offset(param="offset", *, limit, limit_param="limit")` | Counts rows by `limit`; ends at a short page. |
-| `sl.page_number(param="page", *, start=1)` | Counts pages; ends at an empty page. |
-| `sl.cursor(pointer, param)` | The token at `pointer` goes back as `param`. |
+| `sl.offset(param="offset", *, limit, limit_param="limit", location="query")` | Counts rows by `limit`; ends at a short page. |
+| `sl.page_number(param="page", *, start=1, location="query")` | Counts pages; ends at an empty page. |
+| `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. |
 
 | Auth | Sends |
 |------|-------|
@@ -249,6 +249,32 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
   body, with the connection's secrets replaced by `***`.
 - A job's rows never come back into Python. Reading a row from a job fails (rule
   `python_row_loop`); filter rows downstream.
+
+### POST with a JSON body
+
+From 0.35.0 (not released yet). `method="POST"` sends `json_body` with every request, as
+`Content-Type: application/json`; `GET` stays the default, and its requests don't change. With
+`location="body"`, `sl.offset`, `sl.page_number` and `sl.cursor` put their values in the body
+instead of the query string, and `param` (and `limit_param`) are paths such as `"$.page.cursor"`.
+Each request starts from a fresh copy of `json_body`, so one page's values never leak into the
+next, and a retry resends the same body. A POST without `json_body` starts from `{}`.
+
+To send the incremental cursor in the body, put `ctx.cursor_value` in `json_body`, as you would in
+`params`; dates and times go as ISO text.
+
+```python
+@shop.table(description="Orders.", write_strategy="append", cursor_column="updated_at")
+def orders(ctx):
+    return api.paginate(
+        "/orders/search",
+        method="POST",
+        json_body={"filter": {"updated_after": ctx.cursor_value}},
+        paginator=sl.cursor("$.meta.next", "$.page.cursor", location="body"),
+        select="$.items",
+    )
+```
+
+`json_body` on a `GET`, or `location="body"` without `method="POST"`, fails before any request.
 
 ### OAuth2
 
