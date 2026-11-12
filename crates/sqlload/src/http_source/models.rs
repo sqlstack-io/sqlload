@@ -144,6 +144,8 @@ pub enum Auth {
     Oauth2ClientCredentials(OAuth2Spec),
     /// An access token from `token_url` for the connection's `refresh_token`.
     Oauth2RefreshToken(OAuth2Spec),
+    /// An access token from `token_url` for the connection's `username` and `password` (the resource-owner password grant).
+    Oauth2Password(OAuth2Spec),
 }
 
 /// Where an OAuth2 access token comes from and how the client authenticates there.
@@ -173,6 +175,8 @@ pub struct TokenSource {
     pub token_url: reqwest::Url,
     /// `grant_type` and its fields, plus the client's fields under `client_auth = "post"`.
     pub form: Vec<(String, String)>,
+    /// For a grant that starts from something other than a refresh token (the password grant): the `refresh_token` grant's form, used instead of `form` once a token response hands one out.
+    pub refresh_form: Option<Vec<(String, String)>>,
     /// `client_id` and `client_secret` for basic client auth, form-encoded as RFC 6749 asks.
     pub basic: Option<(String, String)>,
     pub state: tokio::sync::Mutex<TokenState>,
@@ -198,6 +202,12 @@ pub enum Grant {
     },
     RefreshToken {
         refresh_token: String,
+        /// `client_id` and `client_secret`, when the connection has them.
+        client: (Option<String>, Option<String>),
+    },
+    Password {
+        username: String,
+        password: String,
         /// `client_id` and `client_secret`, when the connection has them.
         client: (Option<String>, Option<String>),
     },

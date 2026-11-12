@@ -260,12 +260,12 @@ pub enum ConnectionConfig {
         base_url: String,
         #[serde(default)]
         token: Option<crate::auth::models::Secret>,
-        /// For `sl.basic()`.
+        /// For `sl.basic()` and `sl.oauth2_password(...)`.
         #[serde(default)]
         username: Option<String>,
         #[serde(default)]
         password: Option<crate::auth::models::Secret>,
-        /// For `sl.oauth2_client_credentials(...)`, and `sl.oauth2_refresh_token(...)` when the API wants the client too.
+        /// For `sl.oauth2_client_credentials(...)`, and `sl.oauth2_refresh_token(...)` or `sl.oauth2_password(...)` when the API wants the client too.
         #[serde(default)]
         client_id: Option<String>,
         #[serde(default)]

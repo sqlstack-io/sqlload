@@ -88,9 +88,9 @@ fn request_problems(request: &Request) -> Vec<String> {
     problems.extend(paginator_problem(&request.paginator));
     problems.extend(body_problems(request));
     problems.extend(match &request.client.auth {
-        Auth::Oauth2ClientCredentials(spec) | Auth::Oauth2RefreshToken(spec) => {
-            token_url(spec).err()
-        }
+        Auth::Oauth2ClientCredentials(spec)
+        | Auth::Oauth2RefreshToken(spec)
+        | Auth::Oauth2Password(spec) => token_url(spec).err(),
         Auth::None | Auth::Bearer | Auth::ApiKey { .. } | Auth::Basic => None,
     });
     problems.extend(

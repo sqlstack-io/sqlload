@@ -239,6 +239,7 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | `sl.basic()` | Basic auth with the connection's `username` and `password`. |
 | `sl.oauth2_client_credentials(token_url, *, scope=None, client_auth="basic")` | From 0.27.0. `Authorization: Bearer <access token>`, with the token `token_url` issues for the connection's `client_id` and `client_secret`. See [OAuth2](#oauth2). |
 | `sl.oauth2_refresh_token(token_url, *, scope=None, client_auth="basic")` | From 0.27.0. The same, with the token issued for the connection's `refresh_token`. The connection's `client_id` and `client_secret` go along when it has them. |
+| `sl.oauth2_password(token_url, *, scope=None, client_auth="basic")` | From 0.36.0 (not released yet). The same, with the token issued for the connection's `username` and `password` (the resource-owner password grant). The connection's `client_id` and `client_secret` go along when it has them. |
 
 - Every `paginate` names its paginator; nothing is guessed.
 - Credentials go only to the connection's own scheme, host and port, never to a next-page link
@@ -284,7 +285,8 @@ origin, so `json_body` never leaves the connection's origin.
 
 ### OAuth2
 
-From 0.27.0. `sl.oauth2_client_credentials` and `sl.oauth2_refresh_token` fetch short-lived
+From 0.27.0. `sl.oauth2_client_credentials`, `sl.oauth2_refresh_token` and (from 0.36.0, not
+released yet) `sl.oauth2_password` fetch short-lived
 access tokens from `token_url`. See [OAuth2](/docs/guides/python/#oauth2) in the guide for an
 example.
 
@@ -304,6 +306,24 @@ example.
   does not save it, so each run starts from the connection's `refresh_token`. An API that revokes
   the old refresh token on rotation therefore fails on the next run; use client credentials there
   when the API offers them.
+- From 0.36.0 (not released yet), `sl.oauth2_password` posts `grant_type=password` with the
+  connection's `username` and `password`. When the response includes a `refresh_token`, later
+  renewals in the run use it; when it doesn't, or the server refuses it, SQLLoad asks with the
+  password again. The password is shown as `***` like the other secrets, and wrong credentials end
+  the run with exit 1 (not retryable) and the server's `error`.
+
+```toml
+[connections.shop]
+kind = "http"
+base_url = "https://api.example.com/v1"
+username = "loader"
+password = "${ENV:SHOP_PASSWORD}"
+client_id = "sqlload"
+```
+
+```python
+api = sl.http(shop, auth=sl.oauth2_password("https://auth.example.com/oauth/token", client_auth="post"))
+```
 
 ## Logged state
 
