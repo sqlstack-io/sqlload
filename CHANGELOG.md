@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.39.0](https://github.com/sqlstack-io/sqlload/compare/v0.38.0...v0.39.0) (2026-11-12)
+
+
+### Features
+
+* **files:** after_load deletes or moves files once their rows commit ([#204](https://github.com/sqlstack-io/sqlload/issues/204)) ([c50a611](https://github.com/sqlstack-io/sqlload/commit/c50a611d431f8ad2786ea6d9d94964ff4ded0488))
+* **merge:** keep one row per repeated key in a merge commit (on_duplicate_keys, dedup_sort) ([#207](https://github.com/sqlstack-io/sqlload/issues/207)) ([8fbeec1](https://github.com/sqlstack-io/sqlload/commit/8fbeec10ce36f36daf6f92be85b4ace2587d7128))
+* **odbc:** ODBC in the release wheels, typed cursor bounds, live driver tests on Linux and Windows ([#198](https://github.com/sqlstack-io/sqlload/issues/198)) ([332fa27](https://github.com/sqlstack-io/sqlload/commit/332fa274518b9d0ee8cdc2b13ba7ee1172462854))
+
+
+### Documentation
+
+* drop the not-released marks for 0.37.0 and 0.38.0; ODBC wheels ship in 0.39.0 ([#205](https://github.com/sqlstack-io/sqlload/issues/205)) ([d55ff1e](https://github.com/sqlstack-io/sqlload/commit/d55ff1e6a6dda6a4dca9735a0ad794985031d184))
+
 ## [0.38.0](https://github.com/sqlstack-io/sqlload/compare/v0.37.0...v0.38.0) (2026-11-12)
 
 
