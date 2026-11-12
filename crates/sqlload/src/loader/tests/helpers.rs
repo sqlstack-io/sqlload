@@ -247,3 +247,50 @@ pub(crate) fn unbuildable_request() -> LoaderError {
         |_| LoaderError::Invalid("the request was built".to_owned()),
     )
 }
+
+/// A two-row batch with an `id` column and schema metadata through `with_constants`: whether the result equals the batch given, and each of its columns as `name:Arrow type=value,value`; or the error.
+pub(crate) fn constants_added(
+    constants: &[(&str, crate::column_types::models::ColumnType, &str)],
+) -> Result<(bool, String), String> {
+    use crate::loader::_helpers::publish::with_constants;
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+    use std::sync::Arc;
+
+    let schema = Schema::new_with_metadata(
+        vec![Field::new("id", DataType::Int64, true)],
+        HashMap::from([("origin".to_owned(), "test".to_owned())]),
+    );
+    let ids: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+    let batch =
+        RecordBatch::try_new(Arc::new(schema), vec![ids]).map_err(|error| error.to_string())?;
+    let owned: Vec<(String, crate::column_types::models::ColumnType, String)> = constants
+        .iter()
+        .map(|(name, column_type, value)| {
+            ((*name).to_owned(), column_type.clone(), (*value).to_owned())
+        })
+        .collect();
+    let borrowed: Vec<&(String, crate::column_types::models::ColumnType, String)> =
+        owned.iter().collect();
+    let added = with_constants(&batch, &borrowed)?;
+    let options = FormatOptions::default();
+    let columns: Result<Vec<String>, String> = added
+        .schema()
+        .fields()
+        .iter()
+        .zip(added.columns())
+        .map(|(field, array)| {
+            let formatter = ArrayFormatter::try_new(array.as_ref(), &options)
+                .map_err(|error| error.to_string())?;
+            let values: Vec<String> = (0..array.len())
+                .map(|row| formatter.value(row).to_string())
+                .collect();
+            Ok(format!(
+                "{}:{}={}",
+                field.name(),
+                field.data_type(),
+                values.join(",")
+            ))
+        })
+        .collect();
+    Ok((added == batch, columns?.join(" ")))
+}

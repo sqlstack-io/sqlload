@@ -1,4 +1,5 @@
 use crate::adapters::duckdb::_helpers::pull_sql::PulledFile;
+use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::DesiredColumn;
 
 pub(crate) struct PullInsertTestCase {
@@ -106,4 +107,11 @@ pub(crate) struct IndexReplayTestCase {
     pub(crate) indexes: &'static str,
     /// The index names on the rebuilt table, comma-separated in order.
     pub(crate) expected_indexes: &'static str,
+}
+
+pub(crate) struct UnloadedSqlTestCase {
+    pub(crate) description: &'static str,
+    /// The table's constant columns: name, type and value as text.
+    pub(crate) constants: &'static [(&'static str, ColumnType, &'static str)],
+    pub(crate) expected_sql: &'static str,
 }

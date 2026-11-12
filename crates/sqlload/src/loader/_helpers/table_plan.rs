@@ -99,7 +99,7 @@ pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {
     table
 }
 
-/// The columns the table should have: the read columns (pinned, typed by the source, or inferred from sampled values for Python tables and JSON, NDJSON and CSV files, whose partition columns are declared), then the metadata columns.
+/// The columns the table should have: the read columns (pinned, typed by the source, or inferred from sampled values for Python tables and JSON, NDJSON and CSV files, whose partition columns are declared; a files source reads its constant columns itself), then the constant columns the source does not read, then the metadata columns.
 pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<DesiredColumn> {
     let sampled = spec.python.is_some()
         || spec
@@ -130,6 +130,13 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             },
         })
         .collect();
+    desired.extend(
+        added_constants(spec, read).map(|(name, column_type, _)| DesiredColumn {
+            name: name.clone(),
+            column_type: column_type.clone(),
+            origin: ColumnOrigin::Constant,
+        }),
+    );
     let merged = spec
         .cdc
         .as_ref()
@@ -143,6 +150,21 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     }
     desired.extend(metadata_columns());
     desired
+}
+
+/// The table's `constant_columns` the source does not read, which the load adds to every batch: all of them, except a files source's, whose reader fills them.
+pub(crate) fn added_constants<'a>(
+    spec: &'a TableSpec,
+    read: &'a [ReadColumn],
+) -> impl Iterator<Item = &'a (String, ColumnType, String)> {
+    spec.constants
+        .iter()
+        .filter(|(name, _, _)| !is_read(read, name))
+}
+
+/// Whether the source reads a column `name`.
+fn is_read(read: &[ReadColumn], name: &str) -> bool {
+    read.iter().any(|column| column.name == name)
 }
 
 /// A schema plan that stops the table for `reasons`.
@@ -1123,6 +1145,10 @@ async fn lower_bound(
         column: &cursor.column,
         column_type: cursor_type,
         lookback: cursor.lookback,
+        scope: match spec.shared_destination {
+            true => &spec.constants,
+            false => &[],
+        },
     });
     let Some(query) = query else {
         return Ok(Err(format!(

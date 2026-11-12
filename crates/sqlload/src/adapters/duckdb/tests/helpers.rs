@@ -29,7 +29,7 @@ pub(crate) fn unloaded_row_loaded(
     time_zone: Option<&str>,
 ) -> Result<Vec<String>, String> {
     use crate::adapters::contract::models::TableName;
-    use crate::adapters::duckdb::_helpers::pull_sql::unloaded_insert;
+    use crate::adapters::duckdb::_helpers::pull_sql::{UnloadedColumns, unloaded_insert};
     use crate::postgres_source::models::{ReadColumn, WireType};
 
     let failed = |error: duckdb::Error| error.to_string();
@@ -80,7 +80,11 @@ pub(crate) fn unloaded_row_loaded(
     };
     let insert = unloaded_insert(
         &table,
-        (&columns, &read),
+        UnloadedColumns {
+            columns: &columns,
+            read: &read,
+            constants: &[],
+        },
         &[file],
         ("L1", "2026-11-08T00:00:00Z"),
     );
@@ -157,6 +161,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
             batch: 1,
             direct: true,
             builds: false,
+            constants: &[],
         },
         loaded_at: "2026-11-08T00:00:00Z",
     };
@@ -178,4 +183,45 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
         .query_row("SELECT count(*) FROM loaded", [], |row| row.get(0))
         .map_err(failed)?;
     Ok((outcome, held.unsigned_abs()))
+}
+
+/// The statement loading an unload's file into `main.loaded`: its `ID` column, a `tenant_id` and an `n` column the files lack, and the load id; `constants` fill such columns.
+pub(crate) fn unloaded_insert_sql(constants: &[(&str, ColumnType, &str)]) -> String {
+    use crate::adapters::contract::models::TableName;
+    use crate::adapters::duckdb::_helpers::pull_sql::{UnloadedColumns, unloaded_insert};
+    use crate::postgres_source::models::{ReadColumn, WireType};
+
+    let constants: Vec<(String, ColumnType, String)> = constants
+        .iter()
+        .map(|(name, column_type, value)| {
+            ((*name).to_owned(), column_type.clone(), (*value).to_owned())
+        })
+        .collect();
+    let read = [ReadColumn {
+        name: "ID".to_owned(),
+        expression: "\"ID\"".to_owned(),
+        wire: WireType::Int8,
+        output: ColumnType::Int,
+    }];
+    let columns = [
+        column("ID", ColumnType::Int),
+        column("tenant_id", ColumnType::Text),
+        column("n", ColumnType::Int),
+        column("_sqlload_load_id", ColumnType::Text),
+    ];
+    let table = TableName {
+        database: None,
+        schema: "main".to_owned(),
+        table: "loaded".to_owned(),
+    };
+    unloaded_insert(
+        &table,
+        UnloadedColumns {
+            columns: &columns,
+            read: &read,
+            constants: &constants,
+        },
+        &["/unloaded/data_0.parquet".to_owned()],
+        ("L1", "2026-11-08T00:00:00Z"),
+    )
 }

@@ -81,6 +81,10 @@ pub struct TableSpec {
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
+    /// `constant_columns`: each column's name, type and value as text, the same in every row; added after the source's columns (a files source's reader fills them itself).
+    pub constants: Vec<(String, ColumnType, String)>,
+    /// Whether another configured table loads into the same destination table, so this one's incremental cursor reads only the rows of its own `constants`.
+    pub shared_destination: bool,
     /// Tests only (`test_loader_route`, absent from released builds): SQLLoad reads a files source's files itself, the reference side of the live parity test.
     pub test_loader_route: bool,
     /// Where an integer `batch_size`'s windows end without `--end-cursor`: the Postgres source's cursor maximum, read at plan.
@@ -219,6 +223,26 @@ pub struct SkippedTable {
     pub source_name: String,
     pub source_table: String,
     pub reason: String,
+}
+
+/// A source's tables, resolved before any table is planned.
+#[derive(Debug)]
+pub struct FoundSource<'a> {
+    pub name: &'a String,
+    pub source: &'a crate::project::models::SourceConfig,
+    pub resolved: ResolvedTables,
+    pub files: Option<FilesSource>,
+}
+
+/// Every source's resolved tables, the folders they claim, all of them as configured, and the plan holding the problems of sources that could not be read.
+#[derive(Debug, Default)]
+pub struct FoundSources<'a> {
+    pub sources: Vec<FoundSource<'a>>,
+    pub claims: Vec<crate::adapters::files::models::FolderClaim>,
+    pub configured: Vec<TableSpec>,
+    pub plan: ProjectPlan,
+    /// The sources whose tables could not be listed, selected or not, so the tables they would load are unknown.
+    pub unresolved: Vec<String>,
 }
 
 /// The settings for tables of one project, before any destination is read.

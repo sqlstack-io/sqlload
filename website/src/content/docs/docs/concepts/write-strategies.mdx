@@ -111,4 +111,63 @@ A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` r
 [Reloading](/docs/guides/postgres-cdc/#reloading). `--reload` is refused on
 [Postgres targets](/docs/targets/postgres/), which SQLLoad never drops or recreates.
 
+## Several tenants in one table
+
+From 0.37.0 (not released yet), [`constant_columns`](/docs/configuration/#table-settings) gives
+every row of a table the same values, so one table can hold several sources' copies of the same
+data, such as one API pulled for each customer. Put the constant in the `unique_key`:
+
+```toml
+[sources.acme]
+kind = "postgres"
+connection = "acme_db"
+include = ["public.orders"]
+table_name = "{table}"
+constant_columns = { tenant_id = "acme" }
+write_strategy = "merge"
+unique_key = ["tenant_id", "order_id"]
+cursor_column = "updated_at"
+
+[sources.globex]
+kind = "postgres"
+connection = "globex_db"
+include = ["public.orders"]
+table_name = "{table}"
+constant_columns = { tenant_id = "globex" }
+write_strategy = "merge"
+unique_key = ["tenant_id", "order_id"]
+cursor_column = "updated_at"
+```
+
+Both load into `orders`, and each tenant's merge only matches its own rows. Each tenant's cursor
+reads from the maximum of its own rows, `WHERE tenant_id = 'acme'`, so a tenant whose data is
+older than another's still loads it, and a tenant's first load reads from its `cursor_start`.
+Within one run, tables that share a destination load one at a time. Separate runs at the same
+time (one per tenant, for example) don't wait for each other, so run them one after another.
+Tables sharing a destination must differ in the value of at least one constant column, and a
+`merge` table in one that is in its `unique_key`. Their cursors are scoped only while they share
+it: adding a constant column to a table that already holds rows leaves those rows `NULL` in it, so
+the next run of a shared table starts from its `cursor_start` again. When a source can't be read
+(its database is down, say), SQLLoad can't tell which tables share with it, so every table with
+`constant_columns` reads its cursor within its own values for that run, and `plan` warns.
+
+A value is a string (`text`), an integer, a float, a boolean, a TOML date or date and time, or
+`{ value = "7", type = "int" }` for any other type. A table entry's `constant_columns` replaces its
+source's, and `${ENV:NAME}` works in the values. The columns are added before `merge`, checks and
+`unique_key` see the rows, so they can be in either; they can't be the `cursor_column`.
+
+`plan` refuses, when tables with `constant_columns` share a destination table:
+
+- `replace` or `delete_insert` on any of them, and `--reload`, which would remove the other
+  tenants' rows;
+- a `merge` whose `unique_key` holds no constant column, which could overwrite them;
+- `state = "logged"`, whose position is kept per destination table.
+
+A source that already has a column of a constant's name, ignoring case, fails `plan`, naming it,
+before anything is written; exclude the source's column to load the constant instead. A Python
+table that yields such a field fails the same way. Files sources are the exception: a column in
+the files with the same name is replaced, as it always has been, and `plan` notes it. Files
+tenants sharing a destination need their files in distinct locations: which files are already
+loaded is read from the whole destination table. `postgres_cdc` sources refuse `constant_columns`.
+
 See [Cursors](/docs/concepts/cursors/) for how a run decides what to read.

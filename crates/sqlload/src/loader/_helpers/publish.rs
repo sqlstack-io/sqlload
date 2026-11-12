@@ -42,6 +42,7 @@ use crate::batch_plan::main::cut_index::cut_index;
 use crate::batch_plan::main::last_value::last_value;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;
+use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::delete_files::delete_files;
 use crate::file_store::main::open_folder::open_folder;
@@ -113,6 +114,7 @@ use arrow_array::RecordBatch;
 use arrow_array::StringArray;
 use arrow_array::TimestampMicrosecondArray;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
+use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::Field;
 use arrow_schema::Schema;
 use bytes::Bytes;
@@ -121,7 +123,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
+use crate::loader::_helpers::table_plan::{
+    added_constants, is_direct, publishes_once, pulls_unloaded,
+};
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself).
 fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
@@ -144,10 +148,11 @@ fn write_target<'a>(
         batch,
         direct,
         builds,
+        constants: &table.spec.constants,
     }
 }
 
-/// The columns the staged batches carry: the read columns as the source gives them, then the `_sqlload_*` metadata.
+/// The columns the staged batches carry: the read columns as the source gives them, the constant columns the load adds, then the `_sqlload_*` metadata.
 pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
     let mut columns: Vec<DesiredColumn> = table
         .read_columns
@@ -158,6 +163,13 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
             origin: ColumnOrigin::Source,
         })
         .collect();
+    columns.extend(added_constants(&table.spec, &table.read_columns).map(
+        |(name, column_type, _)| DesiredColumn {
+            name: name.clone(),
+            column_type: column_type.clone(),
+            origin: ColumnOrigin::Constant,
+        },
+    ));
     let read: Vec<&str> = table
         .read_columns
         .iter()
@@ -174,6 +186,33 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
             .cloned(),
     );
     columns
+}
+
+/// `batch` with `constants` added after its columns, each its value in every row, converted strictly to its type's Arrow type; the batch's schema metadata is kept.
+pub(crate) fn with_constants(
+    batch: &RecordBatch,
+    constants: &[&(String, ColumnType, String)],
+) -> Result<RecordBatch, String> {
+    let rows = batch.num_rows();
+    let schema = batch.schema();
+    let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
+    let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+    let strict = CastOptions {
+        safe: false,
+        ..CastOptions::default()
+    };
+    for (name, column_type, value) in constants {
+        let field = arrow_field(name, column_type)
+            .ok_or_else(|| format!("constant column {name}: {column_type} has no Arrow type"))?;
+        let text: ArrayRef = Arc::new(StringArray::from(vec![value.as_str(); rows]));
+        let column = cast_with_options(&text, field.data_type(), &strict).map_err(|error| {
+            format!("constant column {name}: {value:?} does not convert to {column_type}: {error}")
+        })?;
+        fields.push(Arc::new(field));
+        columns.push(column);
+    }
+    let schema = Schema::new_with_metadata(fields, schema.metadata().clone());
+    RecordBatch::try_new(Arc::new(schema), columns).map_err(|error| error.to_string())
 }
 
 /// `batch` with this load's `_sqlload_load_id` and `_sqlload_loaded_at` added, so the staged files carry them.
@@ -356,6 +395,9 @@ impl Publisher {
         self.maximum = fold_maximum(self.run.as_ref(), &batch, self.maximum.take())
             .map_err(LoaderError::Invalid)?;
         let masked = mask_batch(batch, &self.table.spec.masked).map_err(LoaderError::Invalid)?;
+        let constants: Vec<&(String, ColumnType, String)> =
+            added_constants(&self.table.spec, &self.table.read_columns).collect();
+        let masked = with_constants(&masked, &constants).map_err(LoaderError::Invalid)?;
         if self.files.is_some() {
             self.batch_rows += masked.num_rows() as u64;
             self.arrow_bytes += masked.get_array_memory_size();

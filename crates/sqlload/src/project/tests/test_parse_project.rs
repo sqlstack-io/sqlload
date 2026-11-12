@@ -4,6 +4,22 @@ use crate::project::tests::helpers::{
 };
 use crate::project::tests::test_types::{ParseProjectErrorTestCase, ParseProjectTestCase};
 
+const CONSTANT_SOURCES: &str = r#"
+[sources.app]
+kind = "postgres"
+connection = "pg"
+include = ["public.*"]
+constant_columns = { tenant_id = "${ENV:TENANT}", region = "eu" }
+
+[sources.app.tables."public.orders"]
+description = "d"
+constant_columns = { tenant_id = { value = "7", type = "int" }, as_of = 2026-11-08 }
+
+[sources.app.tables."public.events"]
+description = "d"
+unique_key = ["tenant_id", "id"]
+"#;
+
 #[test]
 fn given_a_full_project_when_parsing_then_sources_and_table_settings_are_read() -> Result<(), String>
 {
@@ -421,7 +437,32 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "copy_to_internal_stage is for files sources, never silently ignored",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ncopy_to_internal_stage = true\n",
-            expected_message: "[sources.app] path, partition_columns, path_columns, unmatched_paths, constant_columns and copy_to_internal_stage are for kind = \"files\"",
+            expected_message: "[sources.app] path, partition_columns, path_columns, unmatched_paths and copy_to_internal_stage are for kind = \"files\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a postgres_cdc source refuses constant_columns, at source level",
+            text: "[sources.app]\nkind = \"postgres_cdc\"\nconnection = \"pg\"\ninclude = [\"*\"]\nconstant_columns = { tenant_id = \"a\" }\n",
+            expected_message: "[sources.app] constant_columns is not supported for kind = \"postgres_cdc\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a postgres_cdc source refuses constant_columns on one table too",
+            text: "[sources.app]\nkind = \"postgres_cdc\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\nconstant_columns = { tenant_id = \"a\" }\n",
+            expected_message: "[sources.app] constant_columns is not supported for kind = \"postgres_cdc\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a table's constant that does not convert to its type fails parsing, before any source is read",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\nconstant_columns = { n = { value = \"x\", type = \"int\" } }\n",
+            expected_message: "[sources.app] constant column n: \"x\" is not a int",
+        },
+        ParseProjectErrorTestCase {
+            description: "a constant cannot take a name SQLLoad keeps for its own columns, in any case",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nconstant_columns = { _SQLLOAD_load_id = \"x\" }\n",
+            expected_message: "[sources.app] constant column _SQLLOAD_load_id: names starting with _sqlload_ are SQLLoad's own",
+        },
+        ParseProjectErrorTestCase {
+            description: "a files table's own constant clashing with a Hive folder is caught like the source's",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"events/\"\npartition_columns = { day = \"date\" }\n[sources.events.tables.events]\nconstant_columns = { DAY = 2026-11-08 }\n",
+            expected_message: "[sources.events] column DAY is in both partition_columns and constant_columns",
         },
         ParseProjectErrorTestCase {
             description: "a column filled by both a Hive folder and a constant has no single value",
@@ -550,6 +591,54 @@ fn given_a_snowflake_source_when_parsing_then_its_query_tables_and_window_are_re
                 )
             },
             expected_value: "Some(Now)",
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            (test_case.read)(&project),
+            test_case.expected_value,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_constant_columns_on_a_source_and_its_tables_when_parsing_then_a_tables_map_replaces_the_sources()
+-> Result<(), String> {
+    let text = format!("{CONNECTIONS}{CONSTANT_SOURCES}");
+    let project = parse_project(&text, &environment).map_err(|error| error.to_string())?;
+    let test_cases = [
+        ParseProjectTestCase {
+            description: "the source's constants are its tables' default, with ${ENV:NAME} resolved",
+            read: |project| {
+                format!(
+                    "{:?}",
+                    project.sources["app"].table_constants("public.events")
+                )
+            },
+            expected_value: "{\"region\": String(\"eu\"), \"tenant_id\": String(\"<TENANT>\")}",
+        },
+        ParseProjectTestCase {
+            description: "a table's own constants replace the source's whole map, a TOML date typed as a date",
+            read: |project| {
+                format!(
+                    "{:?}",
+                    project.sources["app"].table_constants("public.orders")
+                )
+            },
+            expected_value: "{\"as_of\": Table({\"type\": String(\"date\"), \"value\": String(\"2026-11-08\")}), \"tenant_id\": Table({\"type\": String(\"int\"), \"value\": String(\"7\")})}",
+        },
+        ParseProjectTestCase {
+            description: "a table the configuration does not name takes the source's",
+            read: |project| {
+                format!(
+                    "{:?}",
+                    project.sources["app"].table_constants("public.other")
+                )
+            },
+            expected_value: "{\"region\": String(\"eu\"), \"tenant_id\": String(\"<TENANT>\")}",
         },
     ];
     for test_case in test_cases {
