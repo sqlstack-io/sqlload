@@ -92,7 +92,7 @@ versions and how to run them yourself.
 | HTTP APIs and Python | ✓ | |
 | ODBC databases¹ | ✓ | |
 
-¹ In the published wheels from 0.37.0 (not released yet); before that, in builds with the `odbc` feature.
+¹ In the published wheels from 0.38.0 (not released yet); before that, in builds with the `odbc` feature.
 
 ² From 0.34.0, through a separate DuckDB 1.5 process: install `sqlload[motherduck]`.
 
