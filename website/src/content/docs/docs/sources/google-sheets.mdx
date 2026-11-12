@@ -1,6 +1,6 @@
 ---
 title: "Google Sheets"
-description: "Load a spreadsheet's tabs or ranges as tables, with typed dates, numbers and booleans, read with a service-account key."
+description: "Load a spreadsheet's tabs or ranges as tables, with typed dates, numbers and booleans, read with a service-account key or as a signed-in Google user."
 ---
 
 From 0.27.0. A Google Sheets source loads tabs or ranges of one spreadsheet, one table each. Values arrive typed
@@ -29,10 +29,61 @@ access to spreadsheets and nothing else.
 | `service_account_json` | The service-account key file's JSON text, normally `${ENV:...}`. |
 | `service_account_json_base64` | The same, base64-encoded, for secret stores that dislike newlines and quotes. |
 | `service_account_file` | A path to the key file. |
+| `client_id`, `client_secret` | From 0.36.0 (not released yet). An OAuth client, to read as a Google user instead. See [Sign in as a Google user](#sign-in-as-a-google-user). |
+| `refresh_token` | From 0.36.0 (not released yet). The Google user's refresh token, for unattended runs. |
 
-Set at most one; `plan` refuses more. With none, SQLLoad reads the key file `GOOGLE_APPLICATION_CREDENTIALS` names.
-`sqlload debug` shows which service account reads each source and how many tabs it sees; the key
-itself never appears. Workload identity and user sign-in are not supported yet.
+Set at most one of the three key settings and `client_id`; `plan` refuses more. With none, SQLLoad
+reads the key file `GOOGLE_APPLICATION_CREDENTIALS` names. `sqlload debug` shows which service
+account reads each source and how many tabs it sees; the key itself never appears. Workload identity
+is not supported yet.
+
+## Sign in as a Google user
+
+From 0.36.0 (not released yet).
+Status: user OAuth tested against a simulated Google endpoint, not yet against live Google.
+The service-account route above is tested against live Google.
+
+When spreadsheets can't be shared with a service account, SQLLoad can read them as a Google user
+who consents once in the browser. It asks only for the `spreadsheets.readonly` scope.
+
+1. In the Google Cloud console, enable the Google Sheets API. Then create an OAuth client of type
+   **Desktop app** (APIs & Services → Credentials). Its JSON file holds `client_id` and
+   `client_secret`. A desktop app's secret isn't confidential, but keep it out of the repository
+   anyway.
+2. Set them on the connection:
+
+   ```toml
+   [connections.sheets]
+   kind = "google_sheets"
+   client_id = "${ENV:GOOGLE_OAUTH_CLIENT_ID}"
+   client_secret = "${ENV:GOOGLE_OAUTH_CLIENT_SECRET}"
+   ```
+
+3. Run `sqlload plan` from a terminal. SQLLoad opens the browser at Google's consent page and listens
+   on a local port for the redirect. On a machine without a browser, it prints the address: open it
+   elsewhere, then paste the address the browser ends on. SQLLoad caches the refresh token Google
+   sends in `sqlload/google-tokens.json` below your cache folder (`XDG_CACHE_HOME` or `~/.cache`,
+   or `%LOCALAPPDATA%` on Windows), readable only by you. Later runs on that machine renew access
+   tokens with it.
+
+For scheduled runs on another machine, put the refresh token in a secret and set
+`refresh_token = "${ENV:GOOGLE_REFRESH_TOKEN}"`. SQLLoad then never asks anyone to sign in.
+
+A run that can't ask anyone to sign in fails at once and says how to: no terminal, `--json`, or
+nothing cached. Google may refuse a refresh token: when it's revoked, when the account's password
+changes, or after 7 days for a client whose consent screen is still in testing. The connection's
+own `refresh_token` then fails the table and names the cause; get a new one by signing in from a
+terminal with `refresh_token` unset. A refused cached token leads to a new consent when a terminal
+is there. These failures exit 1, not 75, as running again unchanged won't fix them. A token endpoint
+that is down or throttling is retried like any other Sheets request, and exits 75 if it stays down.
+
+Share the spreadsheet with the signed-in account, or sign in as an account that can open it.
+
+The cache file holds one entry per OAuth client and connection name, keyed `"<client_id> <connection>"`,
+shared by every project on the machine that uses them. Its `refresh_token` field is the token to copy
+for unattended runs. To sign in as another account, delete that entry (or revoke SQLLoad's access at
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions)) and run `sqlload plan`
+from a terminal again; Google's account chooser then lets you pick the account.
 
 ## Source
 

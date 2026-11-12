@@ -8,6 +8,9 @@ use crate::adapters::dispatch::main::dialect::files_destination::files_destinati
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
+use crate::auth::constants::{GOOGLE_AUTHORIZE_URL, GOOGLE_TOKEN_URL};
+use crate::auth::main::google_token_cache_file::google_token_cache_file;
+use crate::auth::models::GoogleUser;
 use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
 use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
@@ -60,7 +63,7 @@ use crate::project::models::{
     TableSettings, WriteStrategy,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
-use crate::sheets_source::constants::{EMPTY_SHEET_COLUMN_KIND, SHEET_COLUMN_KIND};
+use crate::sheets_source::constants::{EMPTY_SHEET_COLUMN_KIND, SCOPE, SHEET_COLUMN_KIND};
 use crate::sheets_source::main::duplicate_key::duplicate_key;
 use crate::sheets_source::main::read_grids::read_grids;
 use crate::sheets_source::main::sheet_batch::sheet_batch;
@@ -68,6 +71,7 @@ use crate::sheets_source::main::sheet_table::sheet_table;
 use crate::sheets_source::main::sheets_client::sheets_client;
 use crate::sheets_source::main::tab_name::tab_name;
 use crate::sheets_source::main::tab_ranges::tab_ranges;
+use crate::sheets_source::main::user_sheets_client::user_sheets_client;
 use crate::sheets_source::models::{Grid, HeaderRule, KeySource, SheetsClient};
 use crate::similar_names::main::close_name::close_name;
 use crate::similar_names::main::nearest_name::nearest_name;
@@ -375,7 +379,7 @@ pub(crate) fn bigquery_source_reader(
     Ok(bigquery_reader(connection, source.project.as_deref())?)
 }
 
-/// A Sheets client for a `google_sheets` source's connection, with the key it names (or `GOOGLE_APPLICATION_CREDENTIALS`'s), and the spreadsheet it reads.
+/// A Sheets client for a `google_sheets` source's connection, with the key it names (or `GOOGLE_APPLICATION_CREDENTIALS`'s) or as the Google user who consents to its OAuth client, and the spreadsheet it reads.
 pub(crate) fn sheets_reader(
     project: &ProjectConfig,
     source: &SourceConfig,
@@ -384,7 +388,11 @@ pub(crate) fn sheets_reader(
         service_account_file,
         service_account_json,
         service_account_json_base64,
+        client_id,
+        client_secret,
+        refresh_token,
         base_url,
+        token_url,
     }) = project.connections.get(&source.connection)
     else {
         return Err(LoaderError::Invalid(format!(
@@ -396,25 +404,60 @@ pub(crate) fn sheets_reader(
         service_account_json.is_some(),
         service_account_json_base64.is_some(),
         service_account_file.is_some(),
+        client_id.is_some(),
     ];
     if given.into_iter().filter(|given| *given).count() > 1 {
         return Err(LoaderError::Invalid(format!(
-            "connection {:?} sets more than one of service_account_json, service_account_json_base64 and service_account_file; keep one",
+            "connection {:?} sets more than one of service_account_json, service_account_json_base64, service_account_file and client_id; keep one",
             source.connection
         )));
     }
-    let key = match (
-        service_account_json,
-        service_account_json_base64,
-        service_account_file,
-    ) {
-        (Some(json), _, _) => KeySource::Json(json.clone()),
-        (None, Some(encoded), _) => KeySource::Base64(encoded.clone()),
-        (None, None, Some(path)) => KeySource::File(path.clone()),
-        (None, None, None) => KeySource::Environment,
-    };
     let http = build_http_client(&ConnectionCounter::default())?;
-    let client = sheets_client(http, &key, base_url.as_deref())?;
+    let client = match (client_id, client_secret) {
+        (Some(client_id), Some(client_secret)) => {
+            let cache_file = google_token_cache_file().ok_or_else(|| {
+                LoaderError::Invalid(
+                    "no cache folder for the Google sign-in: set HOME or XDG_CACHE_HOME (LOCALAPPDATA on Windows)".to_owned(),
+                )
+            })?;
+            let user = GoogleUser {
+                client_id: client_id.clone(),
+                client_secret: client_secret.clone(),
+                refresh_token: refresh_token.clone(),
+                scope: SCOPE.to_owned(),
+                connection: source.connection.clone(),
+                authorize_url: GOOGLE_AUTHORIZE_URL.to_owned(),
+                token_url: token_url.as_deref().unwrap_or(GOOGLE_TOKEN_URL).to_owned(),
+                cache_file,
+            };
+            user_sheets_client(http, user, base_url.as_deref())
+        }
+        (Some(_), None) => {
+            return Err(LoaderError::Invalid(format!(
+                "connection {:?} sets client_id without client_secret; set both, from the OAuth client's JSON file",
+                source.connection
+            )));
+        }
+        (None, _) if client_secret.is_some() || refresh_token.is_some() => {
+            return Err(LoaderError::Invalid(format!(
+                "connection {:?} sets client_secret or refresh_token without client_id; set client_id to read as a Google user",
+                source.connection
+            )));
+        }
+        (None, _) => {
+            let key = match (
+                service_account_json,
+                service_account_json_base64,
+                service_account_file,
+            ) {
+                (Some(json), _, _) => KeySource::Json(json.clone()),
+                (None, Some(encoded), _) => KeySource::Base64(encoded.clone()),
+                (None, None, Some(path)) => KeySource::File(path.clone()),
+                (None, None, None) => KeySource::Environment,
+            };
+            sheets_client(http, &key, base_url.as_deref())?
+        }
+    };
     let spreadsheet_id = source.spreadsheet_id.clone().ok_or_else(|| {
         LoaderError::Invalid("a google_sheets source needs a spreadsheet_id".to_owned())
     })?;

@@ -1,25 +1,36 @@
 use std::sync::Arc;
 
-use crate::auth::models::Secret;
+use crate::auth::models::{GoogleUser, Secret};
 use crate::bigquery_api::models::ServiceAccountKey;
 use crate::column_types::models::ColumnType;
+use crate::sheets_source::constants::GOOGLE_USER;
 
-/// What the Sheets API needs: the shared HTTP pool, the API root, the service-account key and the token it last gave.
+/// What the Sheets API needs: the shared HTTP pool, the API root, who reads (a service account or a signed-in Google user) and the token it last gave.
 #[derive(Debug, Clone)]
 pub struct SheetsClient {
     pub(crate) http: reqwest::Client,
     /// The spreadsheets root, with no trailing `/`.
     pub(crate) base_url: String,
-    pub(crate) key: ServiceAccountKey,
+    pub(crate) credential: SheetsCredential,
     /// The current access token and when it expires, in milliseconds since the epoch.
     pub(crate) token: Arc<tokio::sync::Mutex<Option<(Secret, i64)>>>,
 }
 
 impl SheetsClient {
-    /// The service account the client reads as.
+    /// Who the client reads as: the service account's address, or the Google user who signed in.
     pub fn account(&self) -> &str {
-        &self.key.client_email
+        match &self.credential {
+            SheetsCredential::ServiceAccount(key) => &key.client_email,
+            SheetsCredential::User(_) => GOOGLE_USER,
+        }
     }
+}
+
+/// Who a client reads spreadsheets as.
+#[derive(Debug, Clone)]
+pub enum SheetsCredential {
+    ServiceAccount(ServiceAccountKey),
+    User(Box<GoogleUser>),
 }
 
 /// Where a connection's service-account key comes from.

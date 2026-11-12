@@ -1,7 +1,7 @@
 //! Start the fake Sheets API.
 
 use crate::fake_sheets::_helpers::routing::{fake_key, handle};
-use crate::fake_sheets::constants::SPREADSHEETS_PATH;
+use crate::fake_sheets::constants::{SPREADSHEETS_PATH, TOKEN_PATH};
 use crate::fake_sheets::models::{FakeSheets, SharedSheets};
 
 /// Serve the fake on a free local port, with no spreadsheets.
@@ -23,6 +23,7 @@ pub async fn start_fake_sheets() -> Result<FakeSheets, String> {
     Ok(FakeSheets {
         key_json: fake_key(&root)?,
         base_url: format!("{root}{SPREADSHEETS_PATH}"),
+        token_url: format!("{root}{TOKEN_PATH}"),
         state,
     })
 }

@@ -1,5 +1,6 @@
 //! Reads of a spreadsheet: retried, with a new token when the server refuses one, and the parts of their answers.
 
+use crate::auth::main::google_user_token::google_user_token;
 use crate::bigquery_api::main::google_answer::google_answer;
 use crate::bigquery_api::main::google_token::google_token;
 use crate::http::errors::ApiError;
@@ -7,7 +8,7 @@ use crate::http::models::RetryPolicy;
 use crate::sheets_source::constants::{
     FORBIDDEN, GRID_SHEET_TYPE, NOT_FOUND, RETRY_FIRST_DELAY, SCOPE, UNAUTHORIZED,
 };
-use crate::sheets_source::models::SheetsClient;
+use crate::sheets_source::models::{SheetsClient, SheetsCredential};
 
 /// The spreadsheet's title in a read's answer.
 pub(crate) fn spreadsheet_title(answer: &serde_json::Value) -> String {
@@ -80,13 +81,14 @@ async fn send(
 ) -> Result<serde_json::Value, ApiError> {
     let mut refused = None;
     loop {
-        let token = google_token(
-            &client.http,
-            &client.key,
-            &client.token,
-            (SCOPE, refused.as_ref()),
-        )
-        .await?;
+        let token = match &client.credential {
+            SheetsCredential::ServiceAccount(key) => {
+                google_token(&client.http, key, &client.token, (SCOPE, refused.as_ref())).await?
+            }
+            SheetsCredential::User(user) => {
+                google_user_token(&client.http, user, &client.token, refused.as_ref()).await?
+            }
+        };
         let response = client
             .http
             .get(url.clone())
