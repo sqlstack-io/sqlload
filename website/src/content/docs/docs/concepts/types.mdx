@@ -54,7 +54,8 @@ Every ClickHouse column is `Nullable`, such as `Nullable(Int64)`.
 convert such columns. Files targets can't hold one: from 0.29.0, `plan` fails
 on a native type pinned in `columns` instead of the load failing. A files source's
 `partition_columns`, `path_columns` and `constant_columns` can't be native for any target, and
-`plan` refuses them from 0.29.0 too.
+`plan` refuses them from 0.29.0 too; from 0.36.0 (not released yet), neither can any source's
+`constant_columns`.
 
 ## Arrays
 
