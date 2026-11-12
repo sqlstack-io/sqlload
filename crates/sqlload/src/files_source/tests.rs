@@ -18,6 +18,8 @@ mod merge_columns;
 mod nested_parquet;
 #[path = "tests/test_path_columns.rs"]
 mod path_columns;
+#[path = "tests/test_read_containers.rs"]
+mod read_containers;
 #[path = "tests/test_read_text_files.rs"]
 mod read_text_files;
 #[path = "tests/test_select_files.rs"]

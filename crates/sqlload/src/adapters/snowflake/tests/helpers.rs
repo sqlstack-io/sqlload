@@ -153,6 +153,7 @@ pub(crate) fn data_file(key: &str, day: &str) -> DataFile {
             size: 10,
             etag: Some(format!("\"etag-{day}\"")),
             modified_ms: 0,
+            member: None,
         },
         partitions: vec![("day".to_owned(), day.to_owned())],
     }

@@ -763,6 +763,7 @@ impl Publisher {
                     },
                 )
             }
+            SourceFormat::Xlsx | SourceFormat::Xml => return Ok(BatchFooters::default()),
             SourceFormat::Json | SourceFormat::Ndjson => {
                 let (Some(read), true) = (&self.table.files, is_direct(self.table.route.as_ref()))
                 else {

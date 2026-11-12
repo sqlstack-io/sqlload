@@ -72,6 +72,7 @@ fn data_file(partition: &PartitionFiles, index: usize) -> DataFile {
             size: partition.file_bytes,
             etag: None,
             modified_ms: 0,
+            member: None,
         },
         partitions: vec![
             ("region".to_owned(), partition.region.to_owned()),

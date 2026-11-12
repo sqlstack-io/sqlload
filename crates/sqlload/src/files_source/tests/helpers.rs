@@ -27,7 +27,7 @@ use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::models::{
     BatchFooters, Compression, CsvOptions, FilesEncoding, FilesRead, FilesTable, PathValues,
-    SourceFormat, TextChecks,
+    SourceFormat, TextChecks, XlsxOptions, XmlOptions,
 };
 use crate::files_source::tests::test_types::{
     ReadTextFilesTestCase, SplitJsonTestCase, TrackCsvTestCase,
@@ -53,6 +53,7 @@ pub(crate) fn encoding(format: SourceFormat) -> FilesEncoding {
         compression: Compression::Auto,
         csv: CsvOptions::default(),
         record: None,
+        ..FilesEncoding::default()
     }
 }
 
@@ -63,6 +64,7 @@ pub(crate) fn csv_encoding(csv: CsvOptions) -> FilesEncoding {
         compression: Compression::Auto,
         csv,
         record: None,
+        ..FilesEncoding::default()
     }
 }
 
@@ -73,6 +75,7 @@ pub(crate) fn record_encoding(format: SourceFormat, csv: CsvOptions) -> FilesEnc
         compression: Compression::Auto,
         csv,
         record: Some(RECORD_COLUMN.to_owned()),
+        ..FilesEncoding::default()
     }
 }
 
@@ -81,6 +84,8 @@ type Encoder = fn(&str) -> Result<Vec<u8>, String>;
 
 /// How a test file is written, by a part of its key: the first that matches wins.
 const ENCODERS: &[(&str, Encoder)] = &[
+    (".zip", zip_archive),
+    (".xlsx", workbook),
     (".gz", gzip),
     (".raw.", raw),
     (".utf16.", utf16),
@@ -106,6 +111,82 @@ fn utf16(text: &str) -> Result<Vec<u8>, String> {
         .into_iter()
         .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
         .collect())
+}
+
+/// A ZIP archive of the members `text` lists, separated by `\u{1e}`, each `name\u{1f}content`, with each member written as its own name says (so a member may be a workbook); a name ending in `/` is a folder.
+fn zip_archive(text: &str) -> Result<Vec<u8>, String> {
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    for member in text.split('\u{1e}') {
+        let (name, content) = member.split_once('\u{1f}').unwrap_or((member, ""));
+        if name.ends_with('/') {
+            archive
+                .add_directory(name, options)
+                .map_err(|error| error.to_string())?;
+            continue;
+        }
+        archive
+            .start_file(name, options)
+            .map_err(|error| error.to_string())?;
+        archive
+            .write_all(&file_bytes(name, content)?)
+            .map_err(|error| error.to_string())?;
+    }
+    archive
+        .finish()
+        .map(std::io::Cursor::into_inner)
+        .map_err(|error| error.to_string())
+}
+
+/// An xlsx workbook of the sheets in `text`: each starts with a `[Name]` line, then one line per row (from row 1) with cells separated by `|`. A cell is a string, empty, or typed by a prefix: `n:` number, `b:` boolean, `d:` date, `dt:` date and time, `tm:` time of day, `s:` string as written.
+fn workbook(text: &str) -> Result<Vec<u8>, String> {
+    let failed = |error: rust_xlsxwriter::XlsxError| error.to_string();
+    let mut book = rust_xlsxwriter::Workbook::new();
+    for sheet in text.split('[').filter(|sheet| !sheet.is_empty()) {
+        let (name, rows) = sheet.split_once("]\n").unwrap_or((sheet, ""));
+        let worksheet = book.add_worksheet();
+        worksheet.set_name(name).map_err(failed)?;
+        for (row, line) in rows.lines().enumerate() {
+            for (column, cell) in line.split('|').enumerate() {
+                let (row, column) = (
+                    u32::try_from(row).map_err(|error| error.to_string())?,
+                    u16::try_from(column).map_err(|error| error.to_string())?,
+                );
+                write_cell(worksheet, (row, column), cell).map_err(failed)?;
+            }
+        }
+    }
+    book.save_to_buffer().map_err(failed)
+}
+
+fn write_cell(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    (row, column): (u32, u16),
+    cell: &str,
+) -> Result<(), rust_xlsxwriter::XlsxError> {
+    let formats = [
+        ("d:", "yyyy-mm-dd"),
+        ("dt:", "yyyy-mm-dd hh:mm:ss"),
+        ("tm:", "hh:mm:ss"),
+    ];
+    if let Some((value, format)) = formats
+        .iter()
+        .find_map(|(prefix, format)| cell.strip_prefix(prefix).map(|value| (value, format)))
+    {
+        let moment = rust_xlsxwriter::ExcelDateTime::parse_from_str(value)?;
+        let format = rust_xlsxwriter::Format::new().set_num_format(*format);
+        worksheet.write_datetime_with_format(row, column, moment, &format)?;
+        return Ok(());
+    }
+    if let Some(number) = cell.strip_prefix("n:") {
+        let number: f64 = number.parse().unwrap_or(f64::NAN);
+        worksheet.write_number(row, column, number)?;
+    } else if let Some(flag) = cell.strip_prefix("b:") {
+        worksheet.write_boolean(row, column, flag == "true")?;
+    } else if !cell.is_empty() {
+        worksheet.write_string(row, column, cell.strip_prefix("s:").unwrap_or(cell))?;
+    }
+    Ok(())
 }
 
 fn gzip(text: &str) -> Result<Vec<u8>, String> {
@@ -551,5 +632,34 @@ pub(crate) fn decoded(encoding: &str, skip_rows: u64) -> CsvOptions {
         encoding: encoding.to_owned(),
         skip_rows,
         ..CsvOptions::default()
+    }
+}
+
+/// `format` files, with `xlsx` and `xml` options, in ZIP archives when `members` is set (`Some("")` for any member).
+pub(crate) fn container_encoding(
+    format: SourceFormat,
+    (xlsx, xml): (XlsxOptions, XmlOptions),
+    members: Option<&str>,
+) -> FilesEncoding {
+    FilesEncoding {
+        format,
+        compression: match members {
+            Some(_) => Compression::Zip,
+            None => Compression::Auto,
+        },
+        xlsx,
+        xml,
+        members: members
+            .filter(|pattern| !pattern.is_empty())
+            .map(str::to_owned),
+        ..FilesEncoding::default()
+    }
+}
+
+/// XML options with rows at `record_path` and `lists` loaded as arrays.
+pub(crate) fn xml_at(record_path: &str, lists: &[&str]) -> XmlOptions {
+    XmlOptions {
+        record_path: record_path.to_owned(),
+        lists: lists.iter().map(|name| (*name).to_owned()).collect(),
     }
 }

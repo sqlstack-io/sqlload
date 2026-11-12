@@ -22,6 +22,8 @@ pub struct StoredFile {
     /// The store's version tag, used to notice a file rewritten in place.
     pub etag: Option<String>,
     pub modified_ms: i64,
+    /// A member of the ZIP archive at `path`: its name in the archive, whose key is then the archive's key, `/` and this name.
+    pub member: Option<String>,
 }
 
 impl StoredFile {

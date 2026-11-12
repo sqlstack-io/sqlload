@@ -219,5 +219,7 @@ fn compression_name(compression: Compression) -> &'static str {
         Compression::None => "NONE",
         Compression::Gzip => "GZIP",
         Compression::Zstd => "ZSTD",
+        // Never in a COPY: no warehouse reads ZIP members itself, so SQLLoad reads them.
+        Compression::Zip => "NONE",
     }
 }
