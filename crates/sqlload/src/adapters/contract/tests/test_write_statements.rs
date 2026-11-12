@@ -29,6 +29,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::Merge {
                 unique_key: vec!["id".to_owned()],
+                dedupe: None,
             },
             expected_statements: &[
                 "MERGE INTO \"RAW\".\"APP__ACCOUNTS\" AS __target USING (SELECT \"ID\" AS \"ID\", PARSE_JSON(\"PROFILE\") AS \"PROFILE\", \"UPDATED_AT\" AS \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\" AS \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" AS \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\") AS __source ON __target.\"ID\" = __source.\"ID\" WHEN MATCHED THEN UPDATE SET \"PROFILE\" = __source.\"PROFILE\", \"UPDATED_AT\" = __source.\"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\" = __source.\"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" = __source.\"_SQLLOAD_LOADED_AT\" WHEN NOT MATCHED THEN INSERT (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") VALUES (__source.\"ID\", __source.\"PROFILE\", __source.\"UPDATED_AT\", __source.\"_SQLLOAD_LOAD_ID\", __source.\"_SQLLOAD_LOADED_AT\")",
@@ -251,6 +252,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             warehouse: Warehouse::ClickHouse,
             mode: WriteMode::Merge {
                 unique_key: vec!["id".to_owned()],
+                dedupe: None,
             },
             expected_statements: &[
                 "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",

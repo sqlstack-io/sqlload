@@ -38,6 +38,7 @@ impl DuckDbWriter {
                 columns: carried,
                 read: batch.read,
                 constants: target.constants,
+                batch: target.batch,
             },
             &urls,
             (target.load_id, batch.loaded_at),

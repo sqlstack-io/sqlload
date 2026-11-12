@@ -2,10 +2,11 @@
 
 use crate::adapters::contract::_helpers::identifiers::with_suffix;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
+use crate::adapters::contract::main::_ranked_source::ranked_source;
 use crate::adapters::contract::models::{TableName, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 
-/// One `MERGE`: key matches update every other column, the rest are inserted (sqlbuild `render_merge`).
+/// One `MERGE`: key matches update every other column, the rest are inserted (sqlbuild `render_merge`); the staged rows are first kept to one per key when the mode dedupes.
 pub(crate) fn merge_statement<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
@@ -13,6 +14,10 @@ pub(crate) fn merge_statement<A: SqlAdapter + ?Sized>(
     (source, values): (&str, &[String]),
 ) -> String {
     let target = adapter.render_qualified_name(request.table);
+    let ranked = ranked_source(adapter, request, (source, values));
+    let (source, values) = ranked
+        .as_ref()
+        .map_or((source, values), |(source, names)| (source.as_str(), names.as_slice()));
     let names: Vec<String> = request
         .columns
         .iter()

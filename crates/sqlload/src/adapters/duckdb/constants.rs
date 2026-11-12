@@ -12,3 +12,7 @@ pub const MOTHERDUCK_TOKEN_VARIABLES: &[&str] = &["motherduck_token", "MOTHERDUC
 pub const MOTHERDUCK_UNSUPPORTED_DUCKDB: &str = "is not yet supported by MotherDuck";
 /// What precedes the extension's own message in DuckDB's error.
 pub const EXTENSION_EXCEPTION: &str = "threw an exception: ";
+/// The `_sqlload_row` span of one unloaded batch (2^48): its files' rows number from the batch times this.
+pub const UNLOADED_BATCH_ROWS: i64 = 1 << 48;
+/// The `_sqlload_row` span of one unloaded file in a batch (2^32).
+pub const UNLOADED_FILE_ROWS: i64 = 1 << 32;

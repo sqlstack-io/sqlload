@@ -47,6 +47,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::Merge {
                 unique_key: vec!["id".to_owned()],
+                dedupe: None,
             },
             run_insert: None,
             keep_staging: false,

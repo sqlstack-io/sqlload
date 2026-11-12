@@ -33,6 +33,7 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
     };
     let merge = WriteMode::Merge {
         unique_key: vec!["id".to_owned()],
+        dedupe: None,
     };
     let key_only = [desired("id", ColumnType::Int)];
     let test_cases = [
