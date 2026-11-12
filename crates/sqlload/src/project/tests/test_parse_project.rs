@@ -330,16 +330,6 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.raw] xlsx is for format = \"xlsx\"",
         },
         ParseProjectErrorTestCase {
-            description: "after_load cannot move files back into the folder it reads",
-            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nafter_load = { move_to = \"raw/done\" }\n",
-            expected_message: "[sources.raw] after_load.move_to \"raw/done\" is inside path \"raw\"",
-        },
-        ParseProjectErrorTestCase {
-            description: "after_load needs a folder to move to",
-            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nafter_load = { move_to = \"/\" }\n",
-            expected_message: "[sources.raw] after_load.move_to must name a folder of the connection",
-        },
-        ParseProjectErrorTestCase {
             description: "after_load is not for a ZIP archive's members",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncompression = \"zip\"\nafter_load = \"delete\"\n",
             expected_message: "[sources.raw] after_load is not for compression = \"zip\"",

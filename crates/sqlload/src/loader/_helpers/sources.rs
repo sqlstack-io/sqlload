@@ -27,6 +27,7 @@ use crate::files_source::constants::{
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::merge_order::merge_order;
+use crate::files_source::main::move_to_prefix::move_to_prefix;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
@@ -1159,6 +1160,11 @@ pub(crate) async fn plan_files(
         return Ok(Err(format!(
             "cursor_column {name} is a constant column, the same in every file, so it cannot pick the files to read; use a partition_columns or path_columns column"
         )));
+    }
+    if let AfterLoad::MoveTo(move_to) = &spec.after_load
+        && let Err(problem) = move_to_prefix(&request.files.location, move_to)
+    {
+        return Ok(Err(problem));
     }
     if spec.after_load != AfterLoad::Keep && request.options.reload {
         return Ok(Err(

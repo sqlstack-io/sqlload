@@ -1028,3 +1028,19 @@ pub(crate) struct AfterLoadTestCase {
     /// Every file left below the root, sorted, as `path=contents`.
     pub(crate) expected_files: &'static [&'static str],
 }
+
+/// `after_load` run directly on files in its own folder of an S3 bucket.
+pub(crate) struct S3AfterLoadTestCase {
+    pub(crate) description: &'static str,
+    /// The case's folder in the bucket, such as `move/`; the source reads `drop/` below it.
+    pub(crate) folder: &'static str,
+    pub(crate) after_load: sqlload::files_source::models::AfterLoad,
+    /// Files written first, by key below `folder`.
+    pub(crate) files: &'static [(&'static str, &'static str)],
+    /// Files rewritten, by key below `folder`, after the source's files were listed.
+    pub(crate) rewritten: &'static [(&'static str, &'static str)],
+    /// The report as `action status files failed`.
+    pub(crate) expected_report: &'static str,
+    /// Every file left below `folder`, sorted, as `key=contents`.
+    pub(crate) expected_files: &'static [&'static str],
+}

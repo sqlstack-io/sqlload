@@ -506,29 +506,14 @@ fn constant_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     problems
 }
 
-/// A files source's `after_load` that cannot apply: to a ZIP archive's members, which share their archive (another source may still read it), or moving files to an empty folder or one inside `path`, where they would be listed again.
+/// A files source's `after_load` that cannot apply to a ZIP archive's members, which share their archive (another source may still read it); where `move_to` may go is checked once `path` is resolved.
 fn after_load_problems(place: &str, source: &SourceConfig) -> Vec<String> {
-    let mut problems: Vec<String> = Vec::new();
-    if source.after_load != AfterLoad::Keep && source.compression == Some(Compression::Zip) {
-        problems.push(format!(
+    match source.after_load != AfterLoad::Keep && source.compression == Some(Compression::Zip) {
+        true => vec![format!(
             "{place} after_load is not for compression = \"zip\": an archive's members load one by one, and another source may read the same archive"
-        ));
+        )],
+        false => Vec::new(),
     }
-    if let AfterLoad::MoveTo(folder) = &source.after_load {
-        let folder = folder.trim_matches('/');
-        let path = source.path.as_deref().unwrap_or_default().trim_matches('/');
-        let inside = path.is_empty() || folder == path || folder.starts_with(&format!("{path}/"));
-        match (folder.is_empty(), inside) {
-            (true, _) => problems.push(format!(
-                "{place} after_load.move_to must name a folder of the connection"
-            )),
-            (false, true) => problems.push(format!(
-                "{place} after_load.move_to {folder:?} is inside path {path:?}, so moved files would be listed and loaded again; move them outside it"
-            )),
-            (false, false) => {}
-        }
-    }
-    problems
 }
 
 /// Settings of the xlsx and xml formats and of ZIP archives that do not fit the source.

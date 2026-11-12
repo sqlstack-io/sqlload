@@ -20,12 +20,13 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::write_file::write_file;
-use crate::file_store::models::OpenFolder;
+use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::_helpers::text::csv_records::{FirstRecord, QuoteTracker};
 use crate::files_source::_helpers::text::json_records::JsonSplitter;
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::main::after_load::after_load;
 use crate::files_source::main::discover_files::discover_files;
+use crate::files_source::main::move_to_prefix::move_to_prefix;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::models::{
     BatchFooters, Compression, CsvOptions, FilesEncoding, FilesRead, FilesTable, PathValues,
@@ -35,6 +36,7 @@ use crate::files_source::tests::test_types::{
     AfterLoadTestCase, ReadTextFilesTestCase, SplitJsonTestCase, TrackCsvTestCase,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
+use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
 /// Run `body` to completion on a fresh runtime.
@@ -705,7 +707,7 @@ pub(crate) fn local_roots() -> Vec<(std::path::PathBuf, String)> {
     roots
 }
 
-/// Write `test_case`'s files below `dir`, run its `after_load` on its loaded files under `events/`, opened at `root`, and return the report as `action status files failed` (`none` without one) and every file left below `dir` as `path=contents`, sorted.
+/// Write `test_case`'s files below `dir`, list its loaded files under `events/`, rewrite its `rewritten` files, run its `after_load` on the listed ones, opened at `root`, and return the report as `action status files failed` (`none` without one) and every file left below `dir` as `path=contents`, sorted.
 pub(crate) async fn run_after_load(
     (dir, root): &(std::path::PathBuf, String),
     test_case: &AfterLoadTestCase,
@@ -720,12 +722,16 @@ pub(crate) async fn run_after_load(
         prefix: "events/".to_owned(),
     })
     .map_err(|error| error.to_string())?;
-    let keys: Vec<String> = test_case
-        .loaded
-        .iter()
-        .map(|key| (*key).to_owned())
+    let loaded: Vec<StoredFile> = list_files(&folder)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|file| test_case.loaded.contains(&file.relative_key.as_str()))
         .collect();
-    let report = after_load(&folder, &test_case.after_load, &keys)
+    for (key, text) in test_case.rewritten {
+        std::fs::write(dir.join(key), text).map_err(|error| error.to_string())?;
+    }
+    let report = after_load(&folder, &test_case.after_load, &loaded)
         .await
         .map_or("none".to_owned(), |report| {
             format!(
@@ -755,4 +761,22 @@ pub(crate) async fn run_after_load(
     files.sort();
     std::fs::remove_dir_all(dir).map_err(|error| error.to_string())?;
     Ok((report, files))
+}
+
+/// `move_to_prefix` for `move_to` and the source's `path`, both under the connection `store`.
+pub(crate) fn resolved_move_to(
+    store: &StoreKind,
+    path: &str,
+    move_to: &str,
+) -> Result<String, String> {
+    let location =
+        resolve_location(Some(("lake", store)), path).map_err(|error| error.to_string())?;
+    move_to_prefix(&location, move_to)
+}
+
+/// A filesystem connection's store at `root`.
+pub(crate) fn local(root: &str) -> StoreKind {
+    StoreKind::Filesystem {
+        root: root.to_owned(),
+    }
 }

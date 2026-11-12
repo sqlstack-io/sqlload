@@ -8,6 +8,7 @@ pub mod discover_files;
 pub mod footer_columns;
 pub mod key_columns;
 pub mod merge_order;
+pub mod move_to_prefix;
 pub mod normal_value;
 pub mod path_template;
 pub mod read_files;

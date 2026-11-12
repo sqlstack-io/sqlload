@@ -1059,7 +1059,7 @@ async fn feed(
                     if table.spec.after_load != AfterLoad::Keep {
                         publisher
                             .fed_files
-                            .extend(files.iter().map(|data| data.file.relative_key.clone()));
+                            .extend(files.iter().map(|data| data.file.clone()));
                     }
                     let fed_group = async {
                         let footers = match reader {

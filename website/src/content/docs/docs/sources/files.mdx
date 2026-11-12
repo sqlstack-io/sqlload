@@ -210,15 +210,22 @@ after_load = { move_to = "loaded" }
 - It acts only on files whose rows committed, after the load of the table succeeded. A failed load
   deletes and moves nothing, including files committed before the failure. Those stay where they
   are, and later loads skip them, so delete or move them yourself.
-- `move_to` is a folder of the same connection, outside `path`. Each file keeps its key below
-  `path`, so `drop/2026/a.csv` moves to `loaded/2026/a.csv`. A file is never overwritten: if one is
-  already there, both stay. On a local disk a move is a hard link, then a delete. Across volumes,
-  and on S3, the file is copied, its size checked, and only then deleted.
+- `move_to` is a folder of the same connection, read as `path` is. It can't be inside `path` or
+  hold it, however either is written, or moved files would be listed and loaded again; `plan`
+  refuses that. Each file keeps its key below `path`, so `drop/2026/a.csv` moves to
+  `loaded/2026/a.csv`.
+- A file already at the destination is never replaced: both stay. On a local disk a move is a hard
+  link, then a delete; across volumes the file is copied into a hidden file beside the destination,
+  then linked in the same way. S3 has no copy that refuses to replace a file, so SQLLoad checks the
+  destination is free, then copies on the server: a file written to that same key at that moment
+  would be replaced. Either way the copy's size is checked before the source is deleted.
+- A file that changed since it was read is left where it is, since its new rows aren't loaded.
 - If a delete or move fails, the load still counts and isn't run again. `load --json` reports
   `after_load` on the table, with `status` `"failed"` and each file left in `failed`, and a
   warning is logged. Its `status` is `"done"` when every file was handled.
 - It needs `write_strategy = "append"` or `"merge"`, which never read a loaded file again. A file
-  that reappears under a loaded name is a new file. `--reload` is refused.
+  that reappears under a loaded name is a new file when its version differs; an identical copy,
+  such as the same bytes on S3, is skipped as loaded and stays. `--reload` is refused.
 - It isn't for SFTP connections, which SQLLoad only reads, ZIP archives, whose members another
   source may still read, or files targets.
 

@@ -1,9 +1,12 @@
 use sqlload::file_store::main::list_files::list_files;
 use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::read_file::read_file;
+use sqlload::file_store::main::write_file::write_file;
+use sqlload::files_source::main::after_load::after_load;
 use sqlload::store_paths::models::{Location, StoreKind};
+use sqlload_testkit::seaweedfs::constants::REGION;
 
-use crate::test_types::AfterLoadTestCase;
+use crate::test_types::{AfterLoadTestCase, S3AfterLoadTestCase};
 
 /// Run `test_case`'s steps through the `sqlload` executable (`load --json`), asserting each step's exit code and report; returns the files left below the root as `path=contents`, sorted.
 pub(crate) async fn run_after_load_case(
@@ -97,4 +100,63 @@ pub(crate) async fn run_after_load_case(
     }
     files.sort();
     Ok(files)
+}
+
+/// Write `test_case`'s files into its folder of `bucket` at `endpoint`, list the source's `drop/` files, rewrite its `rewritten` ones, run its `after_load` on the listed files, and return the report as `action status files failed` and every file left in its folder as `key=contents`, sorted.
+pub(crate) async fn run_s3_after_load(
+    (endpoint, bucket): (&str, &str),
+    test_case: &S3AfterLoadTestCase,
+) -> Result<(String, Vec<String>), String> {
+    let store = StoreKind::S3 {
+        bucket: bucket.to_owned(),
+        region: Some(REGION.to_owned()),
+        endpoint: Some(endpoint.to_owned()),
+        profile: None,
+    };
+    let open = |prefix: String| {
+        open_folder(&Location {
+            store: store.clone(),
+            prefix,
+        })
+        .map_err(|error| error.to_string())
+    };
+    let case = open(test_case.folder.to_owned())?;
+    for (key, text) in test_case.files {
+        write_file(&case, key, bytes::Bytes::from(*text))
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let source = open(format!("{}drop/", test_case.folder))?;
+    let listed = list_files(&source)
+        .await
+        .map_err(|error| error.to_string())?;
+    for (key, text) in test_case.rewritten {
+        write_file(&case, key, bytes::Bytes::from(*text))
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let report = after_load(&source, &test_case.after_load, &listed)
+        .await
+        .map_or("none".to_owned(), |report| {
+            format!(
+                "{} {} {} {}",
+                report.action,
+                report.status,
+                report.files,
+                report.failed.len()
+            )
+        });
+    let mut files: Vec<String> = Vec::new();
+    for file in list_files(&case).await.map_err(|error| error.to_string())? {
+        let contents = read_file(&case, &file.relative_key)
+            .await
+            .map_err(|error| error.to_string())?;
+        files.push(format!(
+            "{}={}",
+            file.relative_key,
+            String::from_utf8_lossy(&contents)
+        ));
+    }
+    files.sort();
+    Ok((report, files))
 }

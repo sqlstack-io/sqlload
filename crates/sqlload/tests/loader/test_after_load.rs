@@ -1,6 +1,10 @@
-use crate::after_load_helpers::run_after_load_case;
+use sqlload::files_source::models::AfterLoad;
+use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
+use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
+
+use crate::after_load_helpers::{run_after_load_case, run_s3_after_load};
 use crate::helpers::run_async;
-use crate::test_types::{AfterLoadStep, AfterLoadTestCase};
+use crate::test_types::{AfterLoadStep, AfterLoadTestCase, S3AfterLoadTestCase};
 
 #[test]
 fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_moved_and_never_overwrite()
@@ -87,6 +91,66 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
         for test_case in &test_cases {
             let files = run_after_load_case(test_case).await?;
             assert_eq!(files, test_case.expected_files, "{}", test_case.description);
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_files_on_s3_when_after_load_acts_then_they_move_server_side_or_are_deleted_and_a_taken_or_changed_file_stays()
+-> Result<(), String> {
+    let test_cases = [
+        S3AfterLoadTestCase {
+            description: "moves keep their key below move_to",
+            folder: "move/",
+            after_load: AfterLoad::MoveTo("move/done".to_owned()),
+            files: &[("drop/a.csv", "a"), ("drop/2026/b.csv", "b")],
+            rewritten: &[],
+            expected_report: "move done 2 0",
+            expected_files: &["done/2026/b.csv=b", "done/a.csv=a"],
+        },
+        S3AfterLoadTestCase {
+            description: "a file already at the destination is never replaced, and both stay",
+            folder: "clash/",
+            after_load: AfterLoad::MoveTo("clash/done".to_owned()),
+            files: &[
+                ("drop/a.csv", "new"),
+                ("drop/b.csv", "b"),
+                ("done/a.csv", "old"),
+            ],
+            rewritten: &[],
+            expected_report: "move failed 1 1",
+            expected_files: &["done/a.csv=old", "done/b.csv=b", "drop/a.csv=new"],
+        },
+        S3AfterLoadTestCase {
+            description: "deletes remove only the listed files, not one rewritten since",
+            folder: "delete/",
+            after_load: AfterLoad::Delete,
+            files: &[("drop/a.csv", "a"), ("drop/b.csv", "b")],
+            rewritten: &[("drop/a.csv", "a, longer now")],
+            expected_report: "delete failed 1 1",
+            expected_files: &["drop/a.csv=a, longer now"],
+        },
+    ];
+    run_async(async {
+        let server = start_seaweedfs().await?;
+        create_bucket(&server, "after-load-test").await?;
+        for test_case in &test_cases {
+            let actual =
+                run_s3_after_load((&server.endpoint, "after-load-test"), test_case).await?;
+            assert_eq!(
+                actual,
+                (
+                    test_case.expected_report.to_owned(),
+                    test_case
+                        .expected_files
+                        .iter()
+                        .map(|file| (*file).to_owned())
+                        .collect()
+                ),
+                "{}",
+                test_case.description
+            );
         }
         Ok(())
     })

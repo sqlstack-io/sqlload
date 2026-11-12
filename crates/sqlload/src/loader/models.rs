@@ -12,7 +12,7 @@ use crate::adapters::snowflake::models::PlannedStage;
 use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::file_store::models::OpenFolder;
+use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::models::{
     AfterLoad, AfterLoadReport, FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile,
     TextChecks,
@@ -659,10 +659,10 @@ pub struct Publisher {
     pub files: Option<FilesSink>,
     /// A files source's merge: the file (`name|version`) the next commit merges, recorded in the run log with it.
     pub merged_file: Option<String>,
-    /// Keys of the files fed since the last commit, settled by the next one (`after_load`).
-    pub fed_files: Vec<String>,
-    /// Keys of the files whose rows are committed, which `after_load` deletes or moves.
-    pub settled_files: Vec<String>,
+    /// The files fed since the last commit, as they were read, settled by the next one (`after_load`).
+    pub fed_files: Vec<StoredFile>,
+    /// The files whose rows are committed, as they were read, which `after_load` deletes or moves.
+    pub settled_files: Vec<StoredFile>,
 }
 
 /// A files target table's load: its folder, what the load replaces, and the files of the commit being written.
