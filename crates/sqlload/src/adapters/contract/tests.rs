@@ -1,3 +1,5 @@
+#[path = "tests/test_bound_parameter.rs"]
+mod bound_parameter;
 #[path = "tests/test_build_table.rs"]
 mod build_table;
 #[path = "tests/test_check_query.rs"]

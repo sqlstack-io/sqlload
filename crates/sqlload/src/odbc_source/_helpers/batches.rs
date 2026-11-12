@@ -4,19 +4,19 @@ use std::sync::Arc;
 
 use arrow_odbc::odbc_api::Cursor;
 use arrow_odbc::{ColumnFailure, OdbcReaderBuilder, arrow_schema_from};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use crate::odbc_source::constants::TOO_LARGE_VALUE;
 use crate::odbc_source::errors::OdbcSourceError;
 use crate::odbc_source::models::OdbcReader;
 
-/// The reader of `cursor`'s rows in batches of `batch_rows`, decimals as text, each buffer capped by the reader's limits; a column the driver gives no length for is refused, naming the setting that bounds it.
+/// The reader of `cursor`'s rows in batches of `batch_rows`, as `fetch_schema` fetches them, each buffer capped by the reader's limits; a column the driver gives no length for is refused, naming the setting that bounds it.
 pub(crate) fn batch_reader<C: Cursor>(
     reader: &OdbcReader,
     mut cursor: C,
     (dbms, batch_rows): (String, usize),
 ) -> Result<arrow_odbc::OdbcReader<C>, OdbcSourceError> {
-    let schema = decimals_as_text(&arrow_schema_from(&mut cursor, Some(&dbms), false)?);
+    let schema = fetch_schema(&arrow_schema_from(&mut cursor, Some(&dbms), false)?);
     let mut builder = OdbcReaderBuilder::new();
     builder
         .with_schema(schema)
@@ -51,13 +51,17 @@ pub(crate) fn fetch_error(text: &str) -> OdbcSourceError {
     }
 }
 
-/// `schema` with every decimal field fetched as text instead.
-pub(crate) fn decimals_as_text(schema: &Schema) -> SchemaRef {
+/// `schema` with every decimal field fetched as text, and every timestamp coarser than microseconds fetched in microseconds: a driver may describe fewer fractional digits than its values hold (MySQL Connector/ODBC describes every `DATETIME(n)` with none), and the reader would drop the rest.
+pub(crate) fn fetch_schema(schema: &Schema) -> SchemaRef {
     let fields: Vec<Field> = schema
         .fields()
         .iter()
         .map(|field| match field.data_type() {
             DataType::Decimal128(..) => field.as_ref().clone().with_data_type(DataType::Utf8),
+            DataType::Timestamp(TimeUnit::Second | TimeUnit::Millisecond, zone) => field
+                .as_ref()
+                .clone()
+                .with_data_type(DataType::Timestamp(TimeUnit::Microsecond, zone.clone())),
             _ => field.as_ref().clone(),
         })
         .collect();

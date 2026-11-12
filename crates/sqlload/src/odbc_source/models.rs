@@ -1,3 +1,4 @@
+use crate::adapters::contract::models::BoundParameter;
 use crate::auth::models::Secret;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 
@@ -24,7 +25,7 @@ pub struct OdbcReadRequest<'a> {
     pub columns: &'a [ReadColumn],
     /// A condition on the source's columns, already rendered.
     pub filter: Option<&'a str>,
-    /// The values bound to `filter`'s `?` placeholders, in order, as text.
-    pub parameters: &'a [String],
+    /// The values bound to `filter`'s `?` placeholders, in order, each as its type.
+    pub parameters: &'a [BoundParameter],
     pub batch_rows: usize,
 }

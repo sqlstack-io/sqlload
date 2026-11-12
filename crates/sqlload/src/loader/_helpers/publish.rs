@@ -2,6 +2,7 @@ use crate::adapters::contract::constants::COMMIT_STATEMENT;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::main::staging_id::staging_id;
+use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::TableShape;
 use crate::adapters::contract::models::WriteMode;
@@ -70,7 +71,7 @@ use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
-use crate::loader::_helpers::table_plan::source_filter;
+use crate::loader::_helpers::table_plan::{binds_cursor, source_filter};
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
@@ -1016,8 +1017,10 @@ async fn feed(
                 snapshot(reader, SNAPSHOT_BEGIN).await?;
                 for index in 0..windows.count {
                     let window = &window_at(windows, index).map_err(LoaderError::Invalid)?;
+                    let (filter, parameters) = window_filter(table, window);
                     let part = ReadPart {
-                        filter: window_filter(table, window),
+                        filter,
+                        parameters,
                         batch_bytes,
                         ..ReadPart::default()
                     };
@@ -1215,33 +1218,38 @@ async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), Load
     publisher.stage(batch, None).await
 }
 
-/// The source filter reading one cursor window, in the source's dialect; its bounds are literals, since `split_windows` cuts only number and time cursors, never a text one.
-fn window_filter(table: &TablePlan, window: &CursorWindow) -> Option<String> {
-    let cursor = table.spec.cursor.as_ref()?;
-    let column = table
-        .read_columns
-        .iter()
-        .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))?;
+/// The source filter reading one cursor window, in the source's dialect, and the values bound to its placeholders: an ODBC source's date and timestamp bounds (`split_windows` cuts only number and time cursors, never a text one).
+fn window_filter(
+    table: &TablePlan,
+    window: &CursorWindow,
+) -> (Option<String>, Vec<BoundParameter>) {
+    let mut parameters: Vec<BoundParameter> = Vec::new();
+    let Some(column) = table.spec.cursor.as_ref().and_then(|cursor| {
+        table
+            .read_columns
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
+    }) else {
+        return (None, parameters);
+    };
     let operator = match window.inclusive {
         true => INCLUSIVE_BOUND,
         false => EXCLUSIVE_BOUND,
     };
-    source_filter(
+    let source = table.spec.warehouse_source.as_ref();
+    let filter = source_filter(
         &column.expression,
         (
             Some(&column.output),
-            table
-                .spec
-                .warehouse_source
-                .as_ref()
-                .and_then(|source| source_dialect(source.system)),
+            source.and_then(|source| source_dialect(source.system)),
         ),
         (
             window.from.as_deref().map(|from| (operator, from)),
             window.to.as_deref(),
         ),
-        None,
-    )
+        binds_cursor(&table.spec).then_some(&mut parameters),
+    );
+    (filter, parameters)
 }
 
 /// The replaced files a commit deletes: those of the partitions it wrote, and, at the last commit, every other file the load replaces (everything for `replace`, the window's partitions for `delete_insert`); never one already deleted.

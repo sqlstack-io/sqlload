@@ -1,14 +1,16 @@
 //! Read a table or query through ODBC as Arrow batches.
 
 use arrow_array::RecordBatch;
-use arrow_odbc::odbc_api::IntoParameter;
 use tokio::sync::mpsc::Sender;
 
+use crate::adapters::contract::models::BoundParameter;
 use crate::odbc_source::_helpers::batches::{batch_reader, fetch_error};
 use crate::odbc_source::_helpers::connect::connect;
 use crate::odbc_source::_helpers::convert::{converted, output_schema};
+use crate::odbc_source::_helpers::parameters::bound_parameters;
 use crate::odbc_source::_helpers::query::select_query;
 use crate::odbc_source::constants::BATCHES_AHEAD;
+
 use crate::odbc_source::errors::OdbcSourceError;
 use crate::odbc_source::models::{OdbcReadRequest, OdbcReader};
 
@@ -40,20 +42,18 @@ pub async fn read_rows(
     Ok(rows)
 }
 
-/// Fetch `query`'s rows, with `parameters` bound to its placeholders as text, into `sender` until they end, the receiver goes away, or a fetch fails (sent on as the error). Decimal columns are fetched as text, which `converted` parses without rounding, since drivers round values to the scale they describe (an unbounded `numeric` as `NUMERIC(28,6)`).
+/// Fetch `query`'s rows, with `parameters` bound to its placeholders as `bound_parameters` binds them, into `sender` until they end, the receiver goes away, or a fetch fails (sent on as the error). Decimal columns are fetched as text, which `converted` parses without rounding, since drivers round values to the scale they describe (an unbounded `numeric` as `NUMERIC(28,6)`).
 fn fetch(
     reader: &OdbcReader,
-    (query, parameters): (&str, &[String]),
+    (query, parameters): (&str, &[BoundParameter]),
     batch_rows: usize,
     sender: &Sender<Result<RecordBatch, OdbcSourceError>>,
 ) -> Result<(), OdbcSourceError> {
     let connection = connect(reader)?;
     let dbms: String = connection.database_management_system_name()?;
-    let parameters: Vec<_> = parameters
-        .iter()
-        .map(|value| value.as_str().into_parameter())
-        .collect();
-    let Some(cursor) = connection.execute(query, parameters.as_slice(), None)? else {
+    let mut prepared = connection.prepare(query)?;
+    let parameters = bound_parameters(&mut prepared, &dbms, parameters);
+    let Some(cursor) = prepared.execute(parameters.as_slice())? else {
         return Err(OdbcSourceError::Invalid(
             "the read returned no result set".to_owned(),
         ));

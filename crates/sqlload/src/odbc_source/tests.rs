@@ -8,3 +8,5 @@ mod odbc_reader;
 mod select_query;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_timestamp_text.rs"]
+mod timestamp_text;

@@ -18,6 +18,8 @@ doctest = false
 [features]
 # TLS with OpenSSL built in, as in the sqlload-cli wheels.
 ssl-vendored = ["sqlload/ssl-vendored"]
+# ODBC sources, as in the sqlload-cli wheels.
+odbc = ["sqlload/odbc"]
 
 [dependencies]
 arrow-array.workspace = true

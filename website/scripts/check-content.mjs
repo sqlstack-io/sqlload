@@ -22,7 +22,9 @@ for (const page of pages) {
 	const slug = relative(docs, page).replace(/\.mdx$/, '').replace(/\/index$/, '');
 	if (!listed.has(slug)) problems.push(`${relative(website, page)}: not in src/sidebar.json`);
 }
-for (const path of [...pages, join(website, 'public/index.html')]) {
+// The ODBC source page names the drivers SQLLoad is tested with, which reach these systems through ODBC.
+const odbcPage = join(docs, 'docs/sources/odbc.mdx');
+for (const path of [...pages.filter((page) => page !== odbcPage), join(website, 'public/index.html')]) {
 	readFileSync(path, 'utf8')
 		.split('\n')
 		.forEach((line, index) => {

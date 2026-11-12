@@ -1,7 +1,9 @@
 use crate::column_types::models::Warehouse;
 use std::time::Duration;
 
-use crate::adapters::contract::models::{CheckQuery, CursorValue, NowShift, WriteMode};
+use crate::adapters::contract::models::{
+    BoundParameter, CheckQuery, CursorValue, NowShift, WriteMode,
+};
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit};
 
 pub(crate) struct WriteStatementsTestCase {
@@ -146,6 +148,13 @@ pub(crate) struct CursorFromNowTestCase {
     pub(crate) shift: NowShift,
     /// The cursor text, or text the error contains.
     pub(crate) expected_text: Result<&'static str, &'static str>,
+}
+
+pub(crate) struct BoundParameterTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) value: &'static str,
+    pub(crate) column_type: ColumnType,
+    pub(crate) expected_parameter: Option<BoundParameter>,
 }
 
 pub(crate) struct MaxCursorTestCase {
