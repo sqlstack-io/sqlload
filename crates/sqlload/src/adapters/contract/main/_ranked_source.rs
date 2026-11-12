@@ -29,7 +29,10 @@ pub(in crate::adapters) fn ranked_source<A: SqlAdapter + ?Sized>(
             .and_then(|index| values.get(index).cloned())
             .unwrap_or_else(|| adapter.render_identifier(name))
     };
-    let partition: Vec<String> = unique_key.iter().map(|key| value_of(key)).collect();
+    let partition: Vec<String> = unique_key
+        .iter()
+        .map(|key| partition_key(adapter, request, (key, value_of(key))))
+        .collect();
     let order: Vec<String> = dedupe
         .sort
         .iter()
@@ -68,4 +71,20 @@ pub(in crate::adapters) fn ranked_source<A: SqlAdapter + ?Sized>(
         ),
         names,
     ))
+}
+
+/// Key column `key`'s `value` as the window partitions by it, in the warehouse's terms for the key's type.
+fn partition_key<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    request: &WriteStatementsRequest<'_>,
+    (key, value): (&str, String),
+) -> String {
+    match request
+        .columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(key))
+    {
+        Some(column) => adapter.render_partition_key(&value, &column.column_type),
+        None => value,
+    }
 }

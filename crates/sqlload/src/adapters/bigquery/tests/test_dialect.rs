@@ -1,8 +1,12 @@
 use crate::adapters::bigquery::models::BigQuerySql;
 use crate::adapters::bigquery::tests::helpers::orders;
 use crate::adapters::bigquery::tests::test_types::RenderedTestCase;
-use crate::adapters::contract::models::{CursorValue, TableName};
+use crate::adapters::contract::models::{
+    CursorValue, MergeDedupe, TableName, WriteMode, WriteStatementsRequest,
+};
 use crate::adapters::contract::types::SqlAdapter;
+use crate::column_types::models::ColumnType;
+use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 
 #[test]
 fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_reads_them() {
@@ -11,7 +15,44 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
         table: "orders__sqlload_staging_load1".to_owned(),
         ..orders()
     };
+    let keyed = [
+        DesiredColumn {
+            name: "x".to_owned(),
+            column_type: ColumnType::Float,
+            origin: ColumnOrigin::Source,
+        },
+        DesiredColumn {
+            name: "doc".to_owned(),
+            column_type: ColumnType::Json,
+            origin: ColumnOrigin::Source,
+        },
+    ];
+    let deduped = WriteMode::Merge {
+        unique_key: vec!["x".to_owned(), "doc".to_owned()],
+        dedupe: Some(MergeDedupe {
+            ordinal: "_sqlload_row".to_owned(),
+            sort: None,
+        }),
+    };
     let test_cases = [
+        RenderedTestCase {
+            description: "a merge keyed on FLOAT64 and JSON, which BigQuery refuses in PARTITION BY, ranks repeated keys by their exact text, -0 as 0",
+            rendered: vec![adapter.render_merge(
+                &WriteStatementsRequest {
+                    table: &orders(),
+                    columns: &keyed,
+                    mode: &deduped,
+                    hashed: &[],
+                    built: None,
+                },
+                &["x".to_owned(), "doc".to_owned()],
+                "s",
+                &["`x`".to_owned(), "PARSE_JSON(`doc`)".to_owned()],
+            )],
+            expected_statements: &[
+                "MERGE INTO `p`.`raw`.`orders` AS __target USING (SELECT `x` AS `x`, `doc` AS `doc` FROM (SELECT `x`, `doc` FROM (SELECT `x` AS `x`, PARSE_JSON(`doc`) AS `doc`, ROW_NUMBER() OVER (PARTITION BY FORMAT('%.17g', `x` + 0.0), TO_JSON_STRING(PARSE_JSON(`doc`)) ORDER BY `_sqlload_row` DESC) AS __sqlload_rank FROM s) AS __sqlload_ranked WHERE __sqlload_rank = 1 OR `x` IS NULL OR `doc` IS NULL) AS __sqlload_kept) AS __source ON __target.`x` = __source.`x` AND __target.`doc` = __source.`doc` WHEN NOT MATCHED THEN INSERT (`x`, `doc`) VALUES (__source.`x`, __source.`doc`)",
+            ],
+        },
         RenderedTestCase {
             description: "an identifier escapes backticks and backslashes with a backslash",
             rendered: vec![adapter.render_identifier("a`b\\c")],

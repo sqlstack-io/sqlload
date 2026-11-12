@@ -100,6 +100,16 @@ fn given_a_dedup_sort_column_it_cannot_rank_by_when_planning_then_plan_refuses_t
                 expected_tables: "0",
             },
             DedupeRefusalTestCase {
+                description: "a JSON column, which has no order",
+                rule: DedupeRule {
+                    description: "a JSON column, which has no order",
+                    settings: "dedup_sort = { meta = \"desc\" }",
+                    expected_error: "dedup_sort column meta is json, which has no order to rank rows by",
+                    expected_plan: "",
+                },
+                expected_tables: "0",
+            },
+            DedupeRefusalTestCase {
                 description: "a column the source does not have",
                 rule: DedupeRule {
                     description: "a column the source does not have",

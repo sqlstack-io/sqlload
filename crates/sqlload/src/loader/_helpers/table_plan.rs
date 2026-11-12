@@ -250,13 +250,67 @@ fn unwritten_column(
         ));
     }
     let (name, _) = spec.dedup_sort.as_ref().filter(|_| spec.python.is_none())?;
-    let written = schema
+    let column = schema
         .write_columns
         .iter()
-        .any(|column| column.name.eq_ignore_ascii_case(name));
-    (!written).then(|| format!(
-        "dedup_sort column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
-    ))
+        .find(|column| column.name.eq_ignore_ascii_case(name));
+    match column.map(|column| &column.column_type) {
+        None => Some(format!(
+            "dedup_sort column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
+        )),
+        Some(column_type @ (ColumnType::Json | ColumnType::Array(_))) => Some(format!(
+            "dedup_sort column {name} is {column_type}, which has no order to rank rows by; name a column of another type"
+        )),
+        Some(_) => None,
+    }
+}
+
+/// `mode` and `schema` once `unordered_merge` checked how a files merge orders its rows: its warning added, or the plan blocked by its problem.
+fn ordered_mode(mode: WriteMode, mut schema: SchemaPlan) -> (WriteMode, SchemaPlan) {
+    match unordered_merge(mode, &schema) {
+        Ok((mode, warning)) => {
+            schema.warnings.extend(warning);
+            (mode, schema)
+        }
+        Err(problem) => (WriteMode::Append, blocked_plan(vec![problem])),
+    }
+}
+
+/// `mode` for a files merge whose rows are ranked by `_sqlload_source_row` when that column is not written (excluded, or left out by the contract), so no row is known to be last: without `dedup_sort`, repeated keys fail as before 0.39.0, with a warning saying why; with it, the problem, as ties need that order.
+fn unordered_merge(
+    mode: WriteMode,
+    schema: &SchemaPlan,
+) -> Result<(WriteMode, Option<String>), String> {
+    let WriteMode::Merge {
+        unique_key,
+        dedupe: Some(dedupe),
+    } = &mode
+    else {
+        return Ok((mode, None));
+    };
+    if schema.blocked.is_some() {
+        return Ok((mode, None));
+    }
+    let ordered = dedupe.ordinal != SOURCE_ROW_COLUMN
+        || schema
+            .write_columns
+            .iter()
+            .any(|column| column.name == SOURCE_ROW_COLUMN);
+    match (ordered, &dedupe.sort) {
+        (true, _) => Ok((mode, None)),
+        (false, Some(_)) => Err(format!(
+            "dedup_sort breaks ties by row order, which a files merge takes from {SOURCE_ROW_COLUMN}; stop excluding it"
+        )),
+        (false, None) => Ok((
+            WriteMode::Merge {
+                unique_key: unique_key.clone(),
+                dedupe: None,
+            },
+            Some(format!(
+                "{SOURCE_ROW_COLUMN} is not written, so a file's rows have no order to pick the last of a repeated key by: a file repeating its unique_key fails; write {SOURCE_ROW_COLUMN} to keep its last row instead"
+            )),
+        )),
+    }
 }
 
 /// What `dedup_sort` cannot rank when a merge may commit more than once: each commit ranks only its own rows, so a later commit overwrites a key an earlier one wrote whatever its sort value.
@@ -709,7 +763,7 @@ async fn plan_table_once(
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
     schema.warnings.extend(resnapshot_warning(spec, options));
-    let mode = captured_mode(spec, mode);
+    let (mode, mut schema) = ordered_mode(captured_mode(spec, mode), schema);
     let exists = live.is_some();
     schema = checked_columns(spec, schema);
     if schema.blocked.is_none() && exists {

@@ -76,7 +76,7 @@ never fails on the warehouse's own error about it.
   of a file.
 - With `dedup_sort = { updated_at = "desc" }`, the row with the highest `updated_at` wins, and
   `"asc"` keeps the lowest. A NULL loses to any value, and a tie goes to the row read later.
-  `dedup_sort` takes one column, which can't be in the key or masked.
+  `dedup_sort` takes one column, which can't be in the key, masked, JSON or an array.
 - Rows with a NULL in any key column are never collapsed: each one is inserted.
 - Rows are ranked within one commit. A load that commits more than once, by `batch_size` window,
   about every 1 GB, or one file at a time, merges each commit on its own. So with `dedup_sort`, a
@@ -85,6 +85,8 @@ never fails on the warehouse's own error about it.
   or Python table in one commit.
 - `on_duplicate_keys = "fail"` refuses a commit that repeats a key instead, naming the key's
   columns and examples, before that commit changes anything. Commits before it stay.
+- Set on a source, both apply to its `merge` tables only, and a table's own
+  `on_duplicate_keys = "fail"` drops the source's `dedup_sort`.
 
 ```toml
 [sources.app.tables."public.readings"]

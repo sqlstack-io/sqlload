@@ -1273,3 +1273,22 @@ def test_given_a_python_table_with_a_dedupe_setting_it_cannot_use_when_planning_
 	planned = sqlload(project, "plan")
 	assert planned.returncode == 1, planned.stdout
 	assert expected in planned.stdout + planned.stderr, planned.stdout + planned.stderr
+
+
+def test_given_source_level_dedupe_settings_when_loading_then_only_its_merge_tables_take_them_and_a_table_can_choose_fail(tmp_path: Path) -> None:
+	module = SHOP_MODULE.replace('sl.source("shop", connection="shop")', 'sl.source("shop", connection="shop", dedup_sort={"v": "desc"})')
+	tables = (
+		"shop.table(description='Test table.', name='log', write_strategy='append')(rows)\n"
+		"shop.table(description='Test table.', name='kept', write_strategy='merge', unique_key='id')(rows)\n"
+		"shop.table(description='Test table.', name='strict', write_strategy='merge', unique_key='id', on_duplicate_keys='fail')(rows)\n"
+	)
+	project = make_project(tmp_path, DUCKDB_PROJECT, tables, module=module)
+	repeated = [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 1, "v": "a"}]
+	for table in ("log", "kept", "strict"):
+		give(project, table, repeated)
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "the loaded rows repeat its unique_key" in done.stdout + done.stderr, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW"."shop__log"') == [(3,)]
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__kept"') == [(1, "c")]
+	assert query(project, 'SELECT count(*) FROM "RAW"."shop__strict"') == [(0,)]

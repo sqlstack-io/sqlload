@@ -17,6 +17,10 @@ pub(crate) const MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key 
 pub(crate) const MERGE_FAIL_SETTINGS: &str =
     "write_strategy = \"merge\"\nunique_key = [\"id\"]\non_duplicate_keys = \"fail\"\n";
 
+const UNORDERED_MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\nexclude_columns = [\"_sqlload_source_row\"]\n";
+
+const UNORDERED_SORT_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\nexclude_columns = [\"_sqlload_source_row\"]\ndedup_sort = { v = \"asc\" }\n";
+
 pub(crate) const MERGE_SORT_SETTINGS: &str =
     "write_strategy = \"merge\"\nunique_key = [\"id\"]\ndedup_sort = { v = \"asc\" }\n";
 
@@ -553,6 +557,53 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 }],
                 check_query: MERGE_CHECK,
                 expected_result: "5:a,6:z|2",
+            },
+            FilesMergeTestCase {
+                description: "without _sqlload_source_row a file's rows have no order, so files merge as in 0.38.0: one without repeats merges, one repeating a key fails, and plan says why",
+                settings: UNORDERED_MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n2,a\n",
+                            modified_secs: 1_000,
+                        }],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "_sqlload_source_row is not written, so a file's rows have no order to pick the last of a repeated key by",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n1,b\n1,bb\n",
+                            modified_secs: 2_000,
+                        }],
+                        loads: true,
+                        expected_error: "drop/b.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)",
+                        expected_plan: "",
+                    },
+                ],
+                check_query: MERGE_CHECK,
+                expected_result: "1:a,2:a|1",
+            },
+            FilesMergeTestCase {
+                description: "dedup_sort without _sqlload_source_row is refused at plan, as ties need the file's row order",
+                settings: UNORDERED_SORT_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[MergeFile {
+                        key: "a.csv",
+                        contents: "id,v\n1,a\n",
+                        modified_secs: 1_000,
+                    }],
+                    loads: true,
+                    expected_error: "dedup_sort breaks ties by row order, which a files merge takes from _sqlload_source_row; stop excluding it",
+                    expected_plan: "",
+                }],
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'",
+                expected_result: "0",
             },
             FilesMergeTestCase {
                 description: "with on_duplicate_keys = \"fail\" a file repeating a key no row has yet fails before it merges, naming the key",

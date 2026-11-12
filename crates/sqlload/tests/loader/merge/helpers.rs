@@ -10,7 +10,8 @@ use crate::test_types::{DedupeRule, DedupeTargetTestCase};
 
 /// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor.
 pub(crate) const READINGS_SETUP: &str = "
-CREATE TABLE public.readings (reading_id int8 PRIMARY KEY, sensor text, amount int8, seen_at timestamptz);
+CREATE TABLE public.readings (reading_id int8 PRIMARY KEY, sensor text, amount int8, seen_at timestamptz, meta jsonb);
+CREATE TABLE public.visits (visit_id int8 PRIMARY KEY, sensor text);
 INSERT INTO public.readings VALUES
   (1, 's1', 10, '2026-11-01 00:00:00+00'),
   (2, 's1', 30, '2026-11-03 00:00:00+00'),
