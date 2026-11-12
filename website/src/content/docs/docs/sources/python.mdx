@@ -221,7 +221,7 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
 | `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0 (not released yet); see [POST with a JSON body](#post-with-a-json-body). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. `method` and `json_body` are from 0.36.0 (not released yet), as for `paginate`. |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0 (not released yet), `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0 (not released yet), as for `paginate`. |
 
 | Paginator | Next page |
 |-----------|-----------|
@@ -250,6 +250,36 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
   body, with the connection's secrets replaced by `***`.
 - A job's rows never come back into Python. Reading a row from a job fails (rule
   `python_row_loop`); filter rows downstream.
+
+### Multi-level fan-out
+
+From 0.37.0 (not released yet). A `fan_out` whose `select` picks keys can be the `over` of another
+`fan_out`, as many levels deep as they nest: list → detail → sub-detail. Each key keeps the fields
+of the keys above it, so a third level's path can use `{order_id}` as well as `{item_id}`. When a
+level's field has the same name as one above it (every level calls it `id`), name it apart with
+`key=`, as in `select="$.items[*].id", key="item_id"`.
+
+```python
+@shop.table(description="Order notes.", write_strategy="append", cursor_column="order_id")
+def notes(ctx):
+    orders = api.paginate("/orders", paginator=sl.page_number("p"),
+                          params={"after": ctx.cursor_value}, select="$.items[*].order_id")
+    items = api.fan_out("/orders/{order_id}/items", over=orders, select="$.items[*].item_id")
+    return api.fan_out("/orders/{order_id}/items/{item_id}/notes", over=items,
+                       paginator=sl.page_number("page"), select="$.items")
+```
+
+- Every level has its own paginator, `concurrency`, `on_status` and, through the `sl.http` it
+  comes from, its own retries and rate limit. Up to the sum of the levels' `concurrency` requests
+  are in flight at once; a shared `rate_limit` caps them.
+- An incremental cursor goes on the top level, as above; lower levels only see the keys it picks.
+- Only the last level's rows load. A level that should be a table of its own is a table function
+  whose job stops at that level, so the levels above it are requested again for that table.
+- Rows load as the API returns them: a key's fields are not added to them, so select an ID the
+  response repeats, such as `order_id` above.
+- An error names the keys that led to it, such as `/orders order_id=5 → /orders/5/items item_id=51 →
+  GET .../notes?page=2: HTTP 500`.
+- `plan` checks every level before any request: each placeholder must come from a level above.
 
 ### POST with a JSON body
 

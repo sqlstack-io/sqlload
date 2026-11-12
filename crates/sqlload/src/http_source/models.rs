@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use tokio::sync::mpsc::Sender;
 
 /// A job a table function built with `sl.http(...)`: run entirely in Rust, its pages parsed like `sl.json(...)` bytes.
 #[derive(Debug, Clone, Deserialize)]
@@ -42,6 +43,9 @@ pub struct Request {
     /// A column holding each row's whole object as JSON.
     #[serde(default)]
     pub keep_record: Option<String>,
+    /// For a job used as a fan-out's `over`: the name its picked values fill as keys, when not the selected field's own (such as `order_id` for `$.items[*].id`).
+    #[serde(default)]
+    pub key: Option<String>,
 }
 
 /// The HTTP method of a job's requests.
@@ -106,6 +110,8 @@ pub enum Over {
     Values { values: Vec<Value> },
     /// The values its `select` (`$.items[*].id`) picks from every page, named after the last field.
     Paginate(Box<Request>),
+    /// The values another fan-out's `select` picks from each of its pages, each key keeping the fields of the key above it, so a chain of fan-outs goes as many levels deep as it nests.
+    FanOut(Box<FanOut>),
 }
 
 /// The connection a job uses and how it calls it.
@@ -348,9 +354,24 @@ pub struct Fetched {
     pub url: reqwest::Url,
 }
 
-/// Where a fan-out's keys come from: listed values, or another endpoint's pages.
+/// Where a fan-out's keys come from: listed values, another endpoint's pages, or a fan-out one level up, run with the job's connections and client.
 #[derive(Debug)]
 pub enum KeyFeed {
     Values(Vec<Value>),
     Pages(Box<(Calls, Request)>),
+    FanOut(Box<(FanOut, Map<String, Value>, reqwest::Client)>),
+}
+
+/// A fan-out key: the placeholder values it fills, its ancestors' included, and the trail of requests that produced it (such as `/orders order_id=7 → `), which prefixes a multi-level job's errors.
+#[derive(Debug, Clone, Default)]
+pub struct FanKey {
+    pub fields: Map<String, Value>,
+    pub trail: String,
+}
+
+/// Where a fan-out level's pages go: out as the job's rows, or into keys for the level below.
+#[derive(Debug, Clone)]
+pub enum Sink {
+    Pages(Sender<HttpPage>),
+    Keys(Sender<FanKey>),
 }

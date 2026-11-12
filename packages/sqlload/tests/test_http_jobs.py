@@ -68,6 +68,8 @@ class Api(BaseHTTPRequestHandler):
 		}.get(url.path)
 		if route is not None:
 			return route(query)
+		if url.path.startswith("/v1/tree/"):
+			return self.tree(url.path, query)
 		parts = url.path.split("/")
 		if len(parts) == 5 and parts[2] == "orders" and parts[4] == "items":
 			order = int(parts[3])
@@ -175,6 +177,24 @@ class Api(BaseHTTPRequestHandler):
 	def offset(self, query: dict[str, str]) -> None:
 		start, limit = int(query["offset"]), int(query["limit"])
 		self.reply(200, ORDERS[start : start + limit])
+
+	def tree(self, path: str, query: dict[str, str]) -> None:
+		"""Three levels: orders after `after`, three a page; order o's items `o*10+k` for k < o % 3 (none for 3 and 6, 404 for 4); an item's notes,
+		two a page for pages 1 and 2, a 404 when the item is not the order's, and a 500 on item 51's page 2 with `boom`."""
+		parts = path.split("/")[3:]
+		if len(parts) == 1:
+			page, after = int(query["p"]), int(query.get("after") or 0)
+			return self.reply(200, {"items": [{"order_id": n} for n in range(after + 1, 8)][(page - 1) * 3 : page * 3]})
+		order = int(parts[1])
+		if len(parts) == 3:
+			return self.reply(404, {"message": "no order"}) if order == 4 else self.reply(200, {"items": [{"item_id": order * 10 + k} for k in range(order % 3)]})
+		item, page = int(parts[3]), int(query["page"])
+		if item // 10 != order:
+			return self.reply(404, {"message": f"item {item} is not order {order}'s"})
+		if query.get("boom") and item == 51 and page == 2:
+			return self.reply(500, {"message": "notes are down"})
+		notes = [{"order_id": order, "item_id": item, "note": f"{item}-{page}-{n}"} for n in range(2)] if page <= 2 else []
+		self.reply(200, {"items": notes})
 
 	def page_number(self, query: dict[str, str]) -> None:
 		page = int(query["p"])
@@ -832,3 +852,94 @@ def test_given_a_bad_body_setting_when_loading_then_no_request_is_sent(tmp_path:
 	assert done.returncode != 0
 	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr
 	assert api.log == [] and api.bodies == []  # type: ignore[attr-defined]
+
+
+TREE = """
+orders = api.paginate('/tree/orders', paginator=sl.page_number('p'), params={'after': AFTER}, select='$.items[*].order_id')
+items = api.fan_out('/tree/orders/{order_id}/items', over=orders, concurrency=3, select='$.items[*].item_id', on_status=ON_STATUS)
+"""
+TREE_ITEMS = [10, 20, 21, 50, 51, 70]
+
+
+def tree_project(tmp_path: Path, api: ThreadingHTTPServer, notes: str, *, after: str = "None", on_status: str = "{404: 'skip'}", table: str = "") -> Path:
+	body = TREE.replace("AFTER", after).replace("ON_STATUS", on_status)
+	tables = f"@shop.table(description='Notes.'{table})\ndef notes(ctx):\n" + textwrap.indent(body, "    ") + f"    return {notes}\n"
+	return make_project(tmp_path, api, tables)
+
+
+NOTES = "api.fan_out('/tree/orders/{order_id}/items/{item_id}/notes', over=items, concurrency=3, paginator=sl.page_number('page'), select='$.items')"
+
+
+def test_given_three_fan_out_levels_when_loading_then_each_note_is_read_under_its_own_order_and_item(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = tree_project(tmp_path, api, NOTES)
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	expected = sorted((item // 10, item, f"{item}-{page}-{n}") for item in TREE_ITEMS for page in (1, 2) for n in range(2))
+	assert query(project, 'SELECT order_id, item_id, note FROM "RAW".shop__notes ORDER BY item_id, note') == expected
+	notes = {(path, query["page"]) for path, query, _ in api.log if path.endswith("/notes")}  # type: ignore[attr-defined]
+	assert notes == {(f"/v1/tree/orders/{item // 10}/items/{item}/notes", str(page)) for item in TREE_ITEMS for page in (1, 2, 3)}
+	assert sorted(path for path, _, _ in api.log if path.endswith("/items")) == [f"/v1/tree/orders/{order}/items" for order in range(1, 8)]  # type: ignore[attr-defined]
+	assert [query["p"] for path, query, _ in api.log if path == "/v1/tree/orders"] == ["1", "2", "3", "4"]  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+	("on_status", "notes", "expected_code", "expected_text"),
+	[
+		(
+			"{}",
+			NOTES,
+			1,
+			"/tree/orders order_id=4 → GET http://127.0.0.1:PORT/v1/tree/orders/4/items: HTTP 404",
+		),
+		(
+			"{404: 'skip'}",
+			NOTES.replace("api.fan_out", "once.fan_out").replace("sl.page_number('page')", "sl.page_number('page'), params={'boom': 1}"),
+			75,
+			"/tree/orders order_id=5 → /tree/orders/5/items item_id=51 → GET http://127.0.0.1:PORT/v1/tree/orders/5/items/51/notes?boom=1&page=2: HTTP 500",
+		),
+	],
+	ids=["a-404-at-level-2-names-its-order", "a-500-at-level-3-names-its-order-and-item-and-retries-per-level"],
+)
+def test_given_a_failing_level_when_loading_then_the_error_names_the_keys_that_led_to_it(
+	tmp_path: Path, api: ThreadingHTTPServer, on_status: str, notes: str, expected_code: int, expected_text: str
+) -> None:
+	project = tree_project(tmp_path, api, notes, on_status=on_status)
+	shop_py = project / "sources" / "shop.py"
+	shop_py.write_text(shop_py.read_text().replace("\n\n@shop.table", "\nonce = sl.http(shop, auth=sl.bearer(), retries=0)\n\n@shop.table", 1))
+	done = sqlload(project, "load")
+	output = done.stdout + done.stderr
+	assert done.returncode == expected_code, output
+	assert expected_text.replace("PORT", str(api.server_address[1])) in output, output
+	boomed = [path for path, query, _ in api.log if path.endswith("/51/notes") and query["page"] == "2"]  # type: ignore[attr-defined]
+	assert len(boomed) == (1 if expected_code == 75 else 0)
+
+
+def test_given_a_cursor_on_the_top_level_when_loading_twice_then_the_rerun_requests_no_lower_level(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = tree_project(tmp_path, api, NOTES, after="ctx.cursor_value", table=", write_strategy='append', cursor_column='order_id'")
+	assert sqlload(project, "load").returncode == 0
+	first = len(api.log)  # type: ignore[attr-defined]
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	rerun = api.log[first:]  # type: ignore[attr-defined]
+	assert [(path, query.get("after")) for path, query, _ in rerun] == [("/v1/tree/orders", "7")]
+	assert query(project, 'SELECT count(*), count(DISTINCT note) FROM "RAW".shop__notes') == [(24, 24)]
+
+
+ONE_LEVEL_JOB = (
+	'{"kind": "fan_out", "client": {"connection": "shop", "auth": {"kind": "bearer"}, "rate_limit": null, "retries": 3, "headers": {}}, '
+	'"path": "/orders/{order_id}/items", "params": {}, "method": "GET", "json_body": null, "paginator": {"kind": "single"}, "select": "$.items", '
+	'"on_status": {"404": "skip"}, "fields": null, "keep_record": null, "over": {"kind": "paginate", "client": {"connection": "shop", '
+	'"auth": {"kind": "bearer"}, "rate_limit": null, "retries": 3, "headers": {}}, "path": "/orders", "params": {}, "method": "GET", '
+	'"json_body": null, "paginator": {"kind": "page_number", "param": "p", "start": 1, "location": "query"}, "select": "$.items[*].order_id", '
+	'"on_status": {}, "fields": null, "keep_record": null}, "concurrency": 3}'
+)
+
+
+def test_given_a_one_level_fan_out_when_defined_then_its_job_is_unchanged_by_multi_level_support() -> None:
+	code = (
+		"import sqlload as sl\nshop = sl.source('shop', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=3)\n"
+		"orders = api.paginate('/orders', paginator=sl.page_number('p'), select='$.items[*].order_id')\n"
+		"print(api.fan_out('/orders/{order_id}/items', over=orders, concurrency=3, select='$.items', on_status={404: 'skip'}).__sqlload_http_job__())"
+	)
+	done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+	assert done.stdout.strip() == ONE_LEVEL_JOB, done.stderr

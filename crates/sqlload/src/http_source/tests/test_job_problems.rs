@@ -50,6 +50,25 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
             ],
         },
         JobProblemsTestCase {
+            description: "a third level may use the keys of both levels above it",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i/{item_id}/n","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].item_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
+            expected_problems: &[],
+        },
+        JobProblemsTestCase {
+            description: "a third level's placeholder that no level above gives",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i/{item_id}/n/{customer_id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].item_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
+            expected_problems: &[
+                "fan-out path /o/{order_id}/i/{item_id}/n/{customer_id} needs {customer_id}, but over gives only order_id, item_id",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a level that picks a key name a level above already gives",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/n","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].order_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
+            expected_problems: &[
+                "fan_out over picks order_id, which a level above already gives; name it apart with key=",
+            ],
+        },
+        JobProblemsTestCase {
             description: "a pointer that is not a path, a zero limit and a bad header",
             job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0,"headers":{"X Bad":"1"}},"path":"/o","paginator":{"kind":"next_link","pointer":"next"}}"#,
             expected_problems: &[
