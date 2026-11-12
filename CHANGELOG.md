@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.36.0](https://github.com/sqlstack-io/sqlload/compare/v0.35.0...v0.36.0) (2026-11-12)
+
+
+### Features
+
+* **http:** OAuth2 password grant for sl.http ([#193](https://github.com/sqlstack-io/sqlload/issues/193)) ([f9960a7](https://github.com/sqlstack-io/sqlload/commit/f9960a7b0aebea5271e7f54c8189887ffa5c90a1))
+* **http:** POST with a JSON body, and paging and cursors in the body ([#191](https://github.com/sqlstack-io/sqlload/issues/191)) ([e6ca559](https://github.com/sqlstack-io/sqlload/commit/e6ca559d89048c31323ab2127fde046b573ccfb1))
+* **sheets:** read as a Google user through installed-app OAuth ([#190](https://github.com/sqlstack-io/sqlload/issues/190)) ([8f48b05](https://github.com/sqlstack-io/sqlload/commit/8f48b05490239efd8346447c47af0dd67e84d9dc))
+
 ## [0.35.0](https://github.com/sqlstack-io/sqlload/compare/v0.34.0...v0.35.0) (2026-11-12)
 
 
