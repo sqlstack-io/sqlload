@@ -220,17 +220,17 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | Function | Meaning |
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
-| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0 (not released yet); see [POST with a JSON body](#post-with-a-json-body). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0 (not released yet), `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0 (not released yet), as for `paginate`. |
+| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0 (not released yet), `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. |
 
 | Paginator | Next page |
 |-----------|-----------|
 | `sl.single()` | None: one request. |
 | `sl.next_link(pointer)` | The URL at `pointer` in the body, such as `"$.next"`. |
 | `sl.link_header()` | The `Link` header's `rel="next"`. |
-| `sl.offset(param="offset", *, limit, limit_param="limit", location="query")` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0 (not released yet). |
-| `sl.page_number(param="page", *, start=1, location="query")` | Counts pages; ends at an empty page. `location` is from 0.36.0 (not released yet). |
-| `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. `location` is from 0.36.0 (not released yet). |
+| `sl.offset(param="offset", *, limit, limit_param="limit", location="query")` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0. |
+| `sl.page_number(param="page", *, start=1, location="query")` | Counts pages; ends at an empty page. `location` is from 0.36.0. |
+| `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. `location` is from 0.36.0. |
 
 | Auth | Sends |
 |------|-------|
@@ -239,7 +239,7 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | `sl.basic()` | Basic auth with the connection's `username` and `password`. |
 | `sl.oauth2_client_credentials(token_url, *, scope=None, client_auth="basic")` | From 0.27.0. `Authorization: Bearer <access token>`, with the token `token_url` issues for the connection's `client_id` and `client_secret`. See [OAuth2](#oauth2). |
 | `sl.oauth2_refresh_token(token_url, *, scope=None, client_auth="basic")` | From 0.27.0. The same, with the token issued for the connection's `refresh_token`. The connection's `client_id` and `client_secret` go along when it has them. |
-| `sl.oauth2_password(token_url, *, scope=None, client_auth="basic")` | From 0.36.0 (not released yet). The same, with the token issued for the connection's `username` and `password` (the resource-owner password grant). The connection's `client_id` and `client_secret` go along when it has them. |
+| `sl.oauth2_password(token_url, *, scope=None, client_auth="basic")` | From 0.36.0. The same, with the token issued for the connection's `username` and `password` (the resource-owner password grant). The connection's `client_id` and `client_secret` go along when it has them. |
 
 - Every `paginate` names its paginator; nothing is guessed.
 - Credentials go only to the connection's own scheme, host and port, never to a next-page link
@@ -283,7 +283,7 @@ def notes(ctx):
 
 ### POST with a JSON body
 
-From 0.36.0 (not released yet). `method="POST"` sends `json_body` with every request, as
+From 0.36.0. `method="POST"` sends `json_body` with every request, as
 `Content-Type: application/json`; `GET` stays the default, and its requests don't change. With
 `location="body"`, `sl.offset`, `sl.page_number` and `sl.cursor` put their values in the body
 instead of the query string, and `param` (and `limit_param`) are paths such as `"$.page.cursor"`.
@@ -315,8 +315,7 @@ origin, so `json_body` never leaves the connection's origin.
 
 ### OAuth2
 
-From 0.27.0. `sl.oauth2_client_credentials`, `sl.oauth2_refresh_token` and (from 0.36.0, not
-released yet) `sl.oauth2_password` fetch short-lived
+From 0.27.0. `sl.oauth2_client_credentials`, `sl.oauth2_refresh_token` and (from 0.36.0) `sl.oauth2_password` fetch short-lived
 access tokens from `token_url`. See [OAuth2](/docs/guides/python/#oauth2) in the guide for an
 example.
 
@@ -337,7 +336,7 @@ example.
   does not save it, so each run starts from the connection's `refresh_token`. An API that revokes
   the old refresh token on rotation therefore fails on the next run; use client credentials there
   when the API offers them.
-- From 0.36.0 (not released yet), `sl.oauth2_password` posts `grant_type=password` with the
+- From 0.36.0, `sl.oauth2_password` posts `grant_type=password` with the
   connection's `username` and `password`. When the response includes a `refresh_token`, later
   renewals in the run use it; when it doesn't, or the server refuses it, SQLLoad asks with the
   password again. The password is shown as `***` like the other secrets, and wrong credentials end
