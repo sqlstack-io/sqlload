@@ -931,7 +931,11 @@ pub(crate) struct MergeFile {
 
 /// One load of a files merge, after writing `files`.
 pub(crate) struct MergeStep {
+    /// SQL run on the target before the step, such as a `DROP TABLE`.
+    pub(crate) before: &'static [&'static str],
     pub(crate) files: &'static [MergeFile],
+    /// Whether the step loads; `false` plans and applies only, as `sqlload apply` does.
+    pub(crate) loads: bool,
     /// Text the load's error must contain; empty when it must succeed.
     pub(crate) expected_error: &'static str,
     /// Text the plan must contain when the load succeeds.

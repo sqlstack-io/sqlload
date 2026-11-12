@@ -415,17 +415,23 @@ pub(crate) fn merge_reset_record(spec: &TableSpec) -> RunRecord {
     )
 }
 
-/// Before a files source's merge writes: `_sqlload_runs` when it does not exist yet, and, when the plan found no table (so no merged file counted), a reset, so records left from an earlier table of the name stop counting.
-pub(crate) async fn open_merge_log(
+/// Before a files source's merge creates its table: `_sqlload_runs` when it does not exist yet, and a reset, so records left from an earlier table of the name stop counting; written before the `CREATE TABLE`, so no table exists without it.
+pub(crate) async fn reset_merge_log(
+    table: &TablePlan,
+    destination: &Destination,
+) -> Result<(), LoaderError> {
+    ensure_merge_log(table, destination).await?;
+    append_run(table, destination, &merge_reset_record(&table.spec)).await
+}
+
+/// Before a files source's merge writes: `_sqlload_runs` when it does not exist yet (checked first, so a role without CREATE on the schema loads once it exists).
+pub(crate) async fn ensure_merge_log(
     table: &TablePlan,
     destination: &Destination,
 ) -> Result<(), LoaderError> {
     let runs = runs_table(&table.spec.destination);
     if live_columns(destination, &runs).await?.is_none() {
         ensure_runs_table(table, destination).await?;
-    }
-    if !table.exists {
-        append_run(table, destination, &merge_reset_record(&table.spec)).await?;
     }
     Ok(())
 }

@@ -162,9 +162,10 @@ across commits.
 
 ### Merging files
 
-From 0.37.0 (not released yet), `merge` upserts each new file on its `unique_key`, so a key that
-several files carry ends with the value from the file modified last. Files merge in order of their
-modified time, then path, one commit each. Each commit also records that file and its version in
+From 0.37.0 (not released yet), `merge` upserts each new file on its `unique_key`. A load merges
+its files in order of their modified time, then path, one commit each, so a key that several of them
+carry ends with the value from the file modified last. A file that turns up after others merged, even
+with an older modified time, merges after them. Each commit also records that file and its version in
 `_sqlload_runs`, in the same transaction, and later loads skip the files recorded there. If a file
 fails, the files before it stay merged, and the error names the file that failed. The next load
 continues from that file.
@@ -180,13 +181,14 @@ write_strategy = "merge"
 unique_key = ["sku"]
 ```
 
-- A merged file rewritten in place is merged again, as the newest file.
+- A merged file rewritten in place, even back to an earlier version, is merged again, as the newest
+  file.
 - Stores that keep modified times to the second, as SFTP does, and the members of one ZIP archive,
   which share the archive's time, fall back to path order for files from the same second.
 - A key repeated within one file follows the target's merge: Postgres fails the file, as does
   DuckDB for a key already in the table, while DuckDB inserts a new key once per row.
-- Merging files loads into DuckDB and Postgres targets so far. `--reload` and `state = "logged"`
-  are refused. To merge every file again, drop the table: a table created anew starts a new record.
+- Merging files loads into DuckDB and Postgres targets so far. `--reload`, `state = "logged"` and a
+  `cursor_column` are refused: the run log, not a cursor, picks the files. To merge every file again, drop the table: a table created anew starts a new record.
 
 ## Columns
 

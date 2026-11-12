@@ -60,10 +60,10 @@ use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
+use crate::loader::_helpers::run_log::ensure_merge_log;
 use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::merged_record;
-use crate::loader::_helpers::run_log::open_merge_log;
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
@@ -220,7 +220,7 @@ impl Publisher {
             ensure_runs_table(&table, &destination).await?;
         }
         if merges_files(&table) {
-            open_merge_log(&table, &destination).await?;
+            ensure_merge_log(&table, &destination).await?;
         }
         let load_id = uuid::Uuid::new_v4().to_string();
         let files = match (runs_sql, &table.output) {
@@ -1116,7 +1116,7 @@ async fn feed(
 }
 
 /// Whether `table` merges a files source's files, one commit and run record per file.
-fn merges_files(table: &TablePlan) -> bool {
+pub(crate) fn merges_files(table: &TablePlan) -> bool {
     table.files.is_some()
         && table.spec.files.is_some()
         && table.spec.strategy == WriteStrategy::Merge
