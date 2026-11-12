@@ -52,7 +52,9 @@ fn row_line(columns: &[Vec<Option<String>>], row: usize, csv: &CsvOutput) -> Str
 pub(crate) fn new_csv(compression: OutputCompression) -> CsvOut {
     match compression {
         OutputCompression::None => CsvOut::Plain(Vec::new()),
-        OutputCompression::Gzip => CsvOut::Gzip(GzEncoder::new(Vec::new(), GzipLevel::default())),
+        OutputCompression::Gzip => {
+            CsvOut::Gzip(Box::new(GzEncoder::new(Vec::new(), GzipLevel::default())))
+        }
         OutputCompression::Zstd => CsvOut::Zstd {
             done: Vec::new(),
             pending: Vec::new(),

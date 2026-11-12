@@ -72,6 +72,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
                 size: 1,
                 etag: None,
                 modified_ms: 0,
+                member: None,
             },
             partitions: vec![("day".to_owned(), (*day).to_owned())],
         })

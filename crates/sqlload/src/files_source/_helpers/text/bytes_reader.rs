@@ -9,8 +9,9 @@ use tokio_util::io::StreamReader;
 use encoding_rs::{DecoderResult, Encoding, WINDOWS_1252};
 
 use crate::file_store::models::{OpenFolder, StoredFile};
+use crate::files_source::_helpers::archive::zip_archive::member_bytes;
 use crate::files_source::constants::{
-    CP1252_UNDEFINED, ENCODING_HINT, READ_CHUNK_BYTES, UTF16_BOMS,
+    CP1252_UNDEFINED, ENCODING_HINT, MAX_WHOLE_FILE_BYTES, READ_CHUNK_BYTES, UTF16_BOMS,
 };
 use crate::files_source::models::{Charset, Codec};
 
@@ -33,6 +34,37 @@ pub(crate) struct BytesReader {
 }
 
 impl BytesReader {
+    /// A reader of `inner`'s bytes as UTF-8, as they are.
+    fn new(inner: Pin<Box<dyn AsyncRead + Send>>) -> Self {
+        Self {
+            inner,
+            started: false,
+            charset: Charset::Utf8,
+            decoder: None,
+            read: 0,
+            lines: 0,
+            skip: 0,
+            skipped_breaks: (false, false),
+        }
+    }
+
+    /// The rest of the file, whole, decoded.
+    pub(crate) async fn whole(&mut self) -> Result<Vec<u8>, String> {
+        let mut all: Vec<u8> = Vec::new();
+        loop {
+            let chunk = self.next_chunk().await?;
+            if chunk.is_empty() {
+                return Ok(all);
+            }
+            all.extend(chunk);
+            if all.len() as u64 > MAX_WHOLE_FILE_BYTES {
+                return Err(format!(
+                    "the file is over {MAX_WHOLE_FILE_BYTES} bytes; SQLLoad reads workbooks and XML documents whole, up to that size"
+                ));
+            }
+        }
+    }
+
     /// This reader, decoding the file from `charset` and dropping its first `skip_rows` lines.
     pub(crate) fn decoding(mut self, charset: Charset, skip_rows: u64) -> Self {
         self.charset = charset;
@@ -203,6 +235,10 @@ pub(crate) async fn open_bytes(
     file: &StoredFile,
     codec: Codec,
 ) -> Result<BytesReader, String> {
+    if let Some(name) = &file.member {
+        let member = member_bytes(folder, file, name).await?;
+        return Ok(BytesReader::new(Box::pin(std::io::Cursor::new(member))));
+    }
     let stream = folder
         .store
         .get(&file.path)
@@ -224,16 +260,7 @@ pub(crate) async fn open_bytes(
             Box::pin(decoder)
         }
     };
-    Ok(BytesReader {
-        inner,
-        started: false,
-        charset: Charset::Utf8,
-        decoder: None,
-        read: 0,
-        lines: 0,
-        skip: 0,
-        skipped_breaks: (false, false),
-    })
+    Ok(BytesReader::new(inner))
 }
 
 /// The error for a record longer than `max_record_bytes`, starting on `line`.

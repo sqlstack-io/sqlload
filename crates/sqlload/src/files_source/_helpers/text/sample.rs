@@ -5,6 +5,7 @@ use arrow_array::{Array, RecordBatch, StringArray};
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
+use crate::files_source::_helpers::cells::cell_reader::{CellReader, cell_type};
 use crate::files_source::_helpers::plan::columns::SampledColumn;
 use crate::files_source::_helpers::text::bytes_reader::open_bytes;
 use crate::files_source::_helpers::text::csv_reader::CsvReader;
@@ -12,7 +13,7 @@ use crate::files_source::_helpers::text::inference::{csv_value_type, json_value_
 use crate::files_source::_helpers::text::json_reader::JsonReader;
 use crate::files_source::_helpers::text::json_records::JsonRecord;
 use crate::files_source::constants::SAMPLE_ROWS;
-use crate::files_source::models::{Codec, FilesEncoding, SourceFormat, StoredRead};
+use crate::files_source::models::{CellRecord, Codec, FilesEncoding, SourceFormat, StoredRead};
 
 /// The columns in the first records of a JSON or CSV `file`, with the types their values suggest.
 pub(crate) async fn sample_file(
@@ -23,6 +24,11 @@ pub(crate) async fn sample_file(
 ) -> Result<Vec<SampledColumn>, String> {
     let bytes = open_bytes(folder, file, codec).await?;
     match encoding.format {
+        SourceFormat::Xlsx | SourceFormat::Xml => {
+            let mut reader = CellReader::open(bytes, encoding).await?;
+            let records = reader.next_records(SAMPLE_ROWS);
+            Ok(cell_columns(reader.names(), &records))
+        }
         SourceFormat::Csv => {
             let mut reader = CsvReader::open(bytes, &encoding.csv, SAMPLE_ROWS).await?;
             let batch = reader.next_batch().await?.map(|(batch, _)| batch);
@@ -55,6 +61,38 @@ pub(crate) fn json_columns(records: &[JsonRecord]) -> Vec<SampledColumn> {
         }
     }
     columns
+}
+
+/// A worksheet's columns `names`, then any other key in `records` in first-seen order, each with the type its cells suggest.
+pub(crate) fn cell_columns(names: &[String], records: &[CellRecord]) -> Vec<SampledColumn> {
+    let mut columns: Vec<SampledColumn> = names.iter().map(|name| text_column(name)).collect();
+    for record in records {
+        for (name, cell) in &record.cells {
+            let position = match columns.iter().position(|column| column.name == *name) {
+                Some(position) => position,
+                None => {
+                    columns.push(text_column(name));
+                    columns.len() - 1
+                }
+            };
+            let column = &mut columns[position];
+            column.column_type = match column.column_type.take() {
+                Some(Ok(seen)) => Some(Ok(cell_type(seen, cell.kind.clone()))),
+                seen => observe(seen, Some(cell.kind.clone())),
+            };
+        }
+    }
+    columns
+}
+
+/// A sampled column `name` with no value seen yet.
+fn text_column(name: &str) -> SampledColumn {
+    SampledColumn {
+        name: name.to_owned(),
+        column_type: None,
+        direct_refusal: None,
+        stored_read: StoredRead::Plain,
+    }
 }
 
 /// CSV columns `names`, with the type the values in `batch` (text columns) suggest.
