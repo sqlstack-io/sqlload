@@ -12,6 +12,8 @@ pub enum ColumnOrigin {
     Inferred,
     /// A `_sqlload_*` column SQLLoad adds.
     Metadata,
+    /// A `constant_columns` entry: the same value in every row of this load.
+    Constant,
 }
 
 /// A column the load wants the table to have.

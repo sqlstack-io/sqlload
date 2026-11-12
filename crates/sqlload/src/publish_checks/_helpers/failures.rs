@@ -55,7 +55,7 @@ pub(crate) async fn failures(
 }
 
 /// The `unique` failure for `key`, with up to five repeated values, each cut short; `None` when no value repeats.
-async fn repeated_keys(
+pub(crate) async fn repeated_keys(
     commit: &CheckedCommit<'_>,
     key: &[String],
 ) -> Result<Option<(CheckName, String)>, LoaderError> {

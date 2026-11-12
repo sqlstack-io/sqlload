@@ -1,5 +1,6 @@
-use crate::adapters::duckdb::tests::helpers::unloaded_row_loaded;
-use crate::adapters::duckdb::tests::test_types::UnloadedInsertTestCase;
+use crate::adapters::duckdb::tests::helpers::{unloaded_insert_sql, unloaded_row_loaded};
+use crate::adapters::duckdb::tests::test_types::{UnloadedInsertTestCase, UnloadedSqlTestCase};
+use crate::column_types::models::ColumnType;
 
 #[test]
 fn given_unloaded_microseconds_when_duckdb_reads_the_files_itself_then_times_and_timestamps_are_exact()
@@ -70,6 +71,33 @@ fn given_unloaded_microseconds_when_duckdb_reads_the_files_itself_then_times_and
                 .iter()
                 .map(|value| (*value).to_owned())
                 .collect()),
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_an_unload_when_rendering_its_insert_then_only_constant_columns_change_it() {
+    let test_cases = [
+        UnloadedSqlTestCase {
+            description: "without constant columns the statement is as before, a column the files lack being NULL",
+            constants: &[],
+            expected_sql: "INSERT INTO \"main\".\"loaded\" (\"ID\", \"tenant_id\", \"n\", \"_sqlload_load_id\") SELECT CAST(f.\"ID\" AS BIGINT), NULL, NULL, CAST('L1' AS VARCHAR) FROM read_parquet(['/unloaded/data_0.parquet'], hive_partitioning = false) AS f",
+        },
+        UnloadedSqlTestCase {
+            description: "constant columns are their literals cast to their types, every other column as before",
+            constants: &[
+                ("tenant_id", ColumnType::Text, "it's"),
+                ("n", ColumnType::Int, "7"),
+            ],
+            expected_sql: "INSERT INTO \"main\".\"loaded\" (\"ID\", \"tenant_id\", \"n\", \"_sqlload_load_id\") SELECT CAST(f.\"ID\" AS BIGINT), CAST('it''s' AS VARCHAR), CAST('7' AS BIGINT), CAST('L1' AS VARCHAR) FROM read_parquet(['/unloaded/data_0.parquet'], hive_partitioning = false) AS f",
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            unloaded_insert_sql(test_case.constants),
+            test_case.expected_sql,
             "{}",
             test_case.description
         );

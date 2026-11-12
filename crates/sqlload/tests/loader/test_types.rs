@@ -51,6 +51,64 @@ pub(crate) struct LoadRunTestCase {
     pub(crate) expected_result: &'static str,
 }
 
+/// One `plan` + `apply` + `load` whose plan text, table shape and rows are pinned exactly.
+pub(crate) struct PinnedRunTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run in Postgres before this load.
+    pub(crate) source_change: &'static str,
+    /// The rendered plan, line by line.
+    pub(crate) expected_plan: &'static str,
+    /// `DESCRIBE` of the loaded table: each column's name, type and nullability.
+    pub(crate) expected_describe: &'static str,
+    /// Every row, as DuckDB prints it, without the load's own id and time.
+    pub(crate) expected_rows: &'static str,
+}
+
+/// One tenant's load into a table two tenants share.
+pub(crate) struct TenantStepTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run in Postgres before this load.
+    pub(crate) source_change: &'static str,
+    /// The source loaded, one tenant's.
+    pub(crate) select: &'static str,
+    /// The other tenant, whose rows, load id and load time must not change.
+    pub(crate) untouched_tenant: &'static str,
+    /// A source whose connection is down for this load, or empty.
+    pub(crate) unreadable: &'static str,
+    /// The cursor line the plan shows for the loaded tenant.
+    pub(crate) expected_cursor: &'static str,
+    /// Text a plan warning must contain, or empty.
+    pub(crate) expected_warning: &'static str,
+    /// Every row after the load, as `tenant_id:id:label`.
+    pub(crate) expected_values: &'static str,
+}
+
+/// A table loaded once, then again after its settings change.
+pub(crate) struct SettingsChangeTestCase {
+    pub(crate) description: &'static str,
+    /// Settings after the `app` source's for the first load, starting with its `include` line.
+    pub(crate) before: &'static str,
+    /// The settings for the second load.
+    pub(crate) after: &'static str,
+    /// The cursor line the second plan shows.
+    pub(crate) expected_cursor: &'static str,
+    /// A query on the DuckDB destination after the second load, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
+/// One project with constant columns planned and loaded once on a fresh Postgres.
+pub(crate) struct ConstantLoadTestCase {
+    pub(crate) description: &'static str,
+    /// Settings after the `app` source's, starting with its `include` line.
+    pub(crate) settings: &'static str,
+    /// Text the plan's or the load's error must contain; empty when the load must succeed.
+    pub(crate) expected_error: &'static str,
+    /// A query on the DuckDB destination and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// One `plan` + `apply` + `load` within a scenario.
 pub(crate) struct ScenarioRun {
     /// SQL run in Postgres first.

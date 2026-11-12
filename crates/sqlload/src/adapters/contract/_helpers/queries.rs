@@ -12,7 +12,7 @@ use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::DesiredColumn;
 
-/// A query for `MAX(column)` whose text never depends on session time zones or output formats; `None` if a lookback needs a time column.
+/// A query for `MAX(column)` over the rows of the request's scope, whose text never depends on session time zones or output formats; `None` if a lookback needs a time column.
 pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &CursorQuery<'_>,
@@ -31,9 +31,25 @@ pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
         _ if request.lookback.is_some() => return None,
         _ => CursorValue::Plain,
     };
+    let scope: Vec<String> = request
+        .scope
+        .iter()
+        .map(|(name, column_type, text)| {
+            format!(
+                "{} = CAST({} AS {})",
+                adapter.render_identifier(name),
+                adapter.render_loader_value_literal(text),
+                adapter.render_loader_logical_type(column_type).sql
+            )
+        })
+        .collect();
+    let filter = match scope.is_empty() {
+        true => String::new(),
+        false => format!(" WHERE {}", scope.join(" AND ")),
+    };
     Some(CursorRead {
         sql: format!(
-            "SELECT {} FROM {target}",
+            "SELECT {} FROM {target}{filter}",
             adapter.render_cursor_text(&column, value)
         ),
         value,

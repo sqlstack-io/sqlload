@@ -21,6 +21,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "table_settings",
     "header",
     "header_row",
+    "constant_columns",
     #[cfg(feature = "container-tests")]
     "test_loader_route",
 ];
@@ -50,7 +51,6 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "partition_columns",
     "path_columns",
     "unmatched_paths",
-    "constant_columns",
     "copy_to_internal_stage",
     "exclude_columns",
     "skip_tables_with_columns",
@@ -106,6 +106,9 @@ pub const TABLE_ONLY_KEYS: &[&str] = &[
 
 /// Top-level keys that mark a file as a loader project rather than an exporter configuration.
 pub const PROJECT_MARKER_KEYS: &[&str] = &["connections", "targets", "sources"];
+
+/// The prefix of the columns SQLLoad adds itself, which no `constant_columns` entry may take.
+pub const RESERVED_COLUMN_PREFIX: &str = "_sqlload_";
 
 /// The placeholder every destination table name template must contain.
 pub const TABLE_PLACEHOLDER: &str = "{table}";

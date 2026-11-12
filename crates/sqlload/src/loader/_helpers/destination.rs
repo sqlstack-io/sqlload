@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::adapters::contract::models::WriteMode;
 use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
@@ -10,9 +11,11 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
+use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec};
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
+use crate::project::models::WriteStrategy;
 use crate::schema_plan::models::LiveColumn;
 
 /// Before a load: drop the staging tables crashed loads left in the schemas it writes to. A failure only warns.
@@ -149,4 +152,186 @@ pub(crate) fn parquet_files(files: &[StoredFile]) -> Vec<StoredFile> {
         })
         .cloned()
         .collect()
+}
+
+/// The plan with every selected table blocked that shares its destination table with another configured table (selected or not) when either sets `constant_columns` and the load could remove or overwrite the other's rows: either uses `replace` or `delete_insert`, this run reloads it, it keeps its position in the run log (which is per destination table), or it merges on a `unique_key` without a constant column.
+pub(crate) fn block_shared_destinations(
+    mut plan: ProjectPlan,
+    configured: &[TableSpec],
+) -> ProjectPlan {
+    for table in plan
+        .tables
+        .iter_mut()
+        .filter(|table| table.schema.blocked.is_none())
+    {
+        let others: Vec<&TableSpec> = configured
+            .iter()
+            .filter(|other| shares_destination(&table.spec, other))
+            .collect();
+        let opted_in = !table.spec.constants.is_empty()
+            || others.iter().any(|other| !other.constants.is_empty());
+        if others.is_empty() || !opted_in {
+            continue;
+        }
+        let reasons = shared_problems(table, &others);
+        if !reasons.is_empty() {
+            table.schema = blocked_plan(reasons);
+        }
+    }
+    plan
+}
+
+/// `specs` with `shared_destination` set on each that another of the `configured` tables loads into the same destination table as, or, when `unknown` (a source's tables could not be listed, so one of them might), on each with constant columns.
+pub(crate) fn mark_shared_destinations(
+    specs: Vec<TableSpec>,
+    configured: &[TableSpec],
+    unknown: bool,
+) -> Vec<TableSpec> {
+    specs
+        .into_iter()
+        .map(|spec| TableSpec {
+            shared_destination: shared(&spec, configured)
+                || (unknown && !spec.constants.is_empty()),
+            ..spec
+        })
+        .collect()
+}
+
+/// A warning naming the `specs` whose cursors read within their constant values only because the `unresolved` sources' tables are unknown, if any do.
+pub(crate) fn unknown_sharing(
+    specs: &[TableSpec],
+    configured: &[TableSpec],
+    unresolved: &[String],
+) -> Option<String> {
+    let names: Vec<String> = specs
+        .iter()
+        .filter(|spec| spec.shared_destination && !shared(spec, configured))
+        .map(|spec| {
+            format!(
+                "{}.{}",
+                spec.source_name,
+                spec.source_table.qualified_name()
+            )
+        })
+        .collect();
+    (!names.is_empty()).then(|| {
+        format!(
+            "{} could not be read, so {} may share a destination table with it: their incremental cursors read only rows with their own constant values",
+            unresolved.join(", "),
+            names.join(", ")
+        )
+    })
+}
+
+/// Whether another of the `configured` tables loads into `spec`'s destination table.
+fn shared(spec: &TableSpec, configured: &[TableSpec]) -> bool {
+    configured
+        .iter()
+        .any(|other| shares_destination(spec, other))
+}
+
+/// Whether `other` is a different table loading into `spec`'s destination table.
+fn shares_destination(spec: &TableSpec, other: &TableSpec) -> bool {
+    other.target == spec.target
+        && other.destination == spec.destination
+        && (other.source_name != spec.source_name
+            || other.source_table.qualified_name() != spec.source_table.qualified_name())
+}
+
+/// Why `table` cannot load into a destination table `others` also load.
+fn shared_problems(table: &TablePlan, others: &[&TableSpec]) -> Vec<String> {
+    let spec = &table.spec;
+    let names: Vec<String> = others
+        .iter()
+        .map(|other| {
+            format!(
+                "{}.{}",
+                other.source_name,
+                other.source_table.qualified_name()
+            )
+        })
+        .collect();
+    let place = format!(
+        "{} is also loaded by {}, and constant_columns tell their rows apart",
+        spec.destination.table,
+        names.join(", ")
+    );
+    let mut problems: Vec<String> = Vec::new();
+    let removes = std::iter::once(spec)
+        .chain(others.iter().copied())
+        .find(|each| {
+            matches!(
+                each.strategy,
+                WriteStrategy::Replace | WriteStrategy::DeleteInsert
+            )
+        });
+    if let Some(removing) = removes {
+        problems.push(format!(
+            "{place}; {}.{} uses write_strategy = \"{}\", which would remove the other tables' rows: use merge on a unique_key that includes a constant column, or append",
+            removing.source_name,
+            removing.source_table.qualified_name(),
+            removing.strategy
+        ));
+    }
+    if table.mode == WriteMode::Recreate {
+        problems.push(format!(
+            "{place}; --reload would drop the other tables' rows"
+        ));
+    }
+    if spec.logged {
+        problems.push(format!(
+            "{place}; state = \"logged\" keeps one position per destination table, which they would share"
+        ));
+    }
+    let keyed = spec.unique_key.iter().any(|key| is_constant(spec, key));
+    if spec.strategy == WriteStrategy::Merge && !keyed {
+        problems.push(format!(
+            "{place}; its unique_key ({}) has no constant column, so its merge could overwrite their rows: put a constant column in it",
+            spec.unique_key.join(", ")
+        ));
+    }
+    let merges = spec.strategy == WriteStrategy::Merge;
+    let alike = others.iter().find(|other| !told_apart(spec, other, merges));
+    if let Some(other) = alike.filter(|_| keyed || !merges) {
+        problems.push(format!(
+            "{place}; {}.{} has the same values for {}, so their rows and incremental cursors can't be told apart: give each table a different value",
+            other.source_name,
+            other.source_table.qualified_name(),
+            match merges {
+                true => "the constant columns in the unique_key",
+                false => "every constant column",
+            }
+        ));
+    }
+    problems
+}
+
+/// Whether some constant column of `spec` (in its unique_key, when `in_key`) holds a different value in `other`.
+fn told_apart(spec: &TableSpec, other: &TableSpec, in_key: bool) -> bool {
+    spec.constants
+        .iter()
+        .filter(|(name, _, _)| !in_key || keyed_by(spec, name))
+        .any(|(name, _, value)| differs(other, name, value))
+}
+
+/// Whether `name` is one of `spec`'s unique_key columns, ignoring case.
+fn keyed_by(spec: &TableSpec, name: &str) -> bool {
+    spec.unique_key
+        .iter()
+        .any(|key| key.eq_ignore_ascii_case(name))
+}
+
+/// Whether `other` has the constant column `name` with a value other than `value`.
+fn differs(other: &TableSpec, name: &str, value: &str) -> bool {
+    other
+        .constants
+        .iter()
+        .any(|(theirs, _, their_value)| theirs.eq_ignore_ascii_case(name) && their_value != value)
+}
+
+/// Whether `name` is one of `spec`'s constant columns, ignoring case.
+fn is_constant(spec: &TableSpec, name: &str) -> bool {
+    spec.constants
+        .iter()
+        .any(|(constant, _, _)| constant.eq_ignore_ascii_case(name))
 }

@@ -54,6 +54,18 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
     }
 }
 
+/// The destination table `table` loads into, as one key: its target and its qualified name.
+fn destination_key(table: &TablePlan) -> String {
+    let destination = &table.spec.destination;
+    format!(
+        "{}\u{0}{}\u{0}{}\u{0}{}",
+        table.spec.target,
+        destination.database.as_deref().unwrap_or_default(),
+        destination.schema,
+        destination.table
+    )
+}
+
 /// The plan's unblocked tables as they load: which may start next, and the outcomes so far.
 pub(crate) struct TableQueue<'a> {
     project: &'a ProjectConfig,
@@ -61,6 +73,8 @@ pub(crate) struct TableQueue<'a> {
     waiting: Vec<usize>,
     /// Sources whose shared client is in use.
     busy: BTreeSet<&'a str>,
+    /// Destination tables a table is loading into, so tables sharing one (tenants told apart by `constant_columns`) never change it at the same time.
+    writing: BTreeSet<String>,
     started: BTreeMap<Id, usize>,
     outcomes: Vec<(usize, TableOutcome)>,
 }
@@ -77,21 +91,25 @@ impl<'a> TableQueue<'a> {
             waiting: (0..tables.len()).collect(),
             tables,
             busy: BTreeSet::new(),
+            writing: BTreeSet::new(),
             started: BTreeMap::new(),
             outcomes: Vec::new(),
         }
     }
 
-    /// The next table that may start, with its place in the queue: the first waiting whose source's shared client (unless `parallel_tables`) is free.
+    /// The next table that may start, with its place in the queue: the first waiting whose source's shared client (unless `parallel_tables`) is free, and whose destination table no other table is loading.
     pub(crate) fn next(&mut self) -> Option<(usize, &'a TablePlan)> {
         let tables = &self.tables;
         let busy = &self.busy;
-        let position = self
-            .waiting
-            .iter()
-            .position(|index| !busy.contains(tables[*index].spec.source_name.as_str()))?;
+        let writing = &self.writing;
+        let position = self.waiting.iter().position(|index| {
+            let table = tables[*index];
+            !busy.contains(table.spec.source_name.as_str())
+                && !writing.contains(&destination_key(table))
+        })?;
         let index = self.waiting.remove(position);
         let table = self.tables[index];
+        self.writing.insert(destination_key(table));
         let source = self.project.sources.get(&table.spec.source_name);
         if source.is_some_and(|source| source.shared_client && !source.parallel_tables) {
             self.busy.insert(table.spec.source_name.as_str());
@@ -114,6 +132,7 @@ impl<'a> TableQueue<'a> {
         };
         let table = self.tables[index];
         self.busy.remove(table.spec.source_name.as_str());
+        self.writing.remove(&destination_key(table));
         self.outcomes.push((
             index,
             outcome.unwrap_or_else(|reason| TableOutcome {
