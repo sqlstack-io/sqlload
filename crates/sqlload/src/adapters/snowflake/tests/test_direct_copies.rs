@@ -1,6 +1,7 @@
+use crate::adapters::snowflake::_helpers::dialect::text_values::snowflake_encoding;
 use crate::adapters::snowflake::models::CopyValue;
 use crate::adapters::snowflake::tests::helpers::{
-    EXTERNAL, INTERNAL, column, direct_sql, many_files, order_columns,
+    EXTERNAL, INTERNAL, column, csv_in, direct_sql, many_files, order_columns,
 };
 use crate::adapters::snowflake::tests::test_types::DirectCopiesTestCase;
 use crate::column_types::models::ColumnType;
@@ -159,6 +160,42 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
                 "(SELECT IFF($2 IS NULL OR $3 IS NOT NULL, CAST(TO_VARCHAR(TO_NUMBER('sqlload: a line does not have 2 fields, as the file''s first line does')) AS VARIANT), ARRAY_CONSTRUCT(COALESCE(TO_VARIANT(NULLIF($1, 'NA')), PARSE_JSON('null')), COALESCE(TO_VARIANT(NULLIF($2, 'NA')), PARSE_JSON('null')))) FROM",
             )),
         },
+        DirectCopiesTestCase {
+            description: "csv in cp1252 with two lines before the header: Snowflake decodes WINDOWS1252 and skips the two lines and the header",
+            files: vec![("part-0.csv".to_owned(), "2026-11-04")],
+            columns: vec![column(RECORD_COLUMN, ColumnType::Json, WHOLE_FILE)],
+            from: EXTERNAL,
+            encoding: csv_in("cp1252", true, 2),
+            header: &["column_1"],
+            expected_copies: Ok((
+                1,
+                "SKIP_HEADER = 3 NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = AUTO ENCODING = 'WINDOWS1252')",
+            )),
+        },
+        DirectCopiesTestCase {
+            description: "csv in latin-1 without a header, one line skipped: ISO88591, and only that line skipped",
+            files: vec![("part-0.csv".to_owned(), "2026-11-04")],
+            columns: vec![column(RECORD_COLUMN, ColumnType::Json, WHOLE_FILE)],
+            from: EXTERNAL,
+            encoding: csv_in("latin-1", false, 1),
+            header: &["column_1"],
+            expected_copies: Ok((
+                1,
+                "SKIP_HEADER = 1 NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = AUTO ENCODING = 'ISO88591')",
+            )),
+        },
+        DirectCopiesTestCase {
+            description: "csv in utf-8 under another label leaves ENCODING to its UTF8 default",
+            files: vec![("part-0.csv".to_owned(), "2026-11-04")],
+            columns: vec![column(RECORD_COLUMN, ColumnType::Json, WHOLE_FILE)],
+            from: EXTERNAL,
+            encoding: csv_in("UTF8", true, 0),
+            header: &["column_1"],
+            expected_copies: Ok((
+                1,
+                "SKIP_HEADER = 1 NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = AUTO)",
+            )),
+        },
     ];
     for test_case in test_cases {
         let copies = direct_sql(
@@ -183,5 +220,27 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             "{}",
             test_case.description
         );
+    }
+}
+
+#[test]
+fn given_a_csv_encoding_when_choosing_snowflakes_then_only_charsets_decoded_alike_map() {
+    let test_cases = [
+        ("utf-8", Some("UTF8")),
+        ("cp1252", Some("WINDOWS1252")),
+        ("windows-1250", Some("WINDOWS1250")),
+        ("latin-1", Some("ISO88591")),
+        ("ISO-8859-1", Some("ISO88591")),
+        ("iso-8859-9", Some("WINDOWS1254")),
+        ("iso-8859-15", Some("ISO885915")),
+        ("koi8-r", Some("KOI8R")),
+        ("utf-16le", Some("UTF16LE")),
+        ("ascii", None),
+        ("shift_jis", None),
+        ("gb18030", None),
+        ("klingon", None),
+    ];
+    for (label, expected) in test_cases {
+        assert_eq!(snowflake_encoding(label), expected, "{label}");
     }
 }

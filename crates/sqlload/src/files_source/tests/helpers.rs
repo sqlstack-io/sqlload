@@ -79,11 +79,33 @@ pub(crate) fn record_encoding(format: SourceFormat, csv: CsvOptions) -> FilesEnc
 /// Turns a test file's text into its bytes.
 type Encoder = fn(&str) -> Result<Vec<u8>, String>;
 
-/// How a test file is written, by key suffix: the first suffix that matches wins.
-const ENCODERS: &[(&str, Encoder)] = &[(".gz", gzip), ("", plain)];
+/// How a test file is written, by a part of its key: the first that matches wins.
+const ENCODERS: &[(&str, Encoder)] = &[
+    (".gz", gzip),
+    (".raw.", raw),
+    (".utf16.", utf16),
+    ("", plain),
+];
 
 fn plain(text: &str) -> Result<Vec<u8>, String> {
     Ok(text.as_bytes().to_vec())
+}
+
+/// Each character as the one byte of the same number, so `\u{e9}` writes byte 0xE9.
+fn raw(text: &str) -> Result<Vec<u8>, String> {
+    text.chars()
+        .map(|character| {
+            u8::try_from(u32::from(character)).map_err(|_| format!("{character:?} is not one byte"))
+        })
+        .collect()
+}
+
+/// UTF-16LE with its byte order mark.
+fn utf16(text: &str) -> Result<Vec<u8>, String> {
+    Ok([0xFF, 0xFE]
+        .into_iter()
+        .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
+        .collect())
 }
 
 fn gzip(text: &str) -> Result<Vec<u8>, String> {
@@ -94,11 +116,11 @@ fn gzip(text: &str) -> Result<Vec<u8>, String> {
     encoder.finish().map_err(|error| error.to_string())
 }
 
-/// `text` gzip-compressed when the key ends in `.gz`, as written otherwise.
+/// `text` gzip-compressed when the key has `.gz`, byte for byte with `.raw.`, as UTF-16LE with `.utf16.`, as written otherwise.
 fn file_bytes(key: &str, text: &str) -> Result<Bytes, String> {
     let encode = ENCODERS
         .iter()
-        .find(|(suffix, _)| key.ends_with(suffix))
+        .find(|(part, _)| key.contains(part))
         .map_or(plain as Encoder, |(_, encode)| *encode);
     encode(text).map(Bytes::from)
 }

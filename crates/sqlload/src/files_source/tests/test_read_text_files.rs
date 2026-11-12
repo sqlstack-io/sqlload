@@ -420,3 +420,154 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
     }
     Ok(())
 }
+
+/// CSV options reading `encoding`, skipping `skip_rows` lines.
+fn decoded(encoding: &str, skip_rows: u64) -> CsvOptions {
+    CsvOptions {
+        encoding: encoding.to_owned(),
+        skip_rows,
+        ..CsvOptions::default()
+    }
+}
+
+#[test]
+fn given_csv_files_in_other_encodings_or_with_leading_lines_when_reading_then_text_decodes_or_the_error_names_the_byte()
+-> Result<(), String> {
+    let test_cases = [
+        ReadTextFilesTestCase {
+            description: "cp1252: 0xE9 is \u{e9} and 0x80 the euro sign",
+            encoding: csv_encoding(decoded("cp1252", 0)),
+            files: &[("a.raw.csv", "id,name\n1,Caf\u{e9} \u{80}5\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|Caf\u{e9} \u{20ac}5"),
+        },
+        ReadTextFilesTestCase {
+            description: "latin-1 is ISO-8859-1 byte for byte: 0x80 stays U+0080, unlike cp1252",
+            encoding: csv_encoding(decoded("Latin-1", 0)),
+            files: &[("a.raw.csv", "id,name\n1,Caf\u{e9} \u{80}5\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|Caf\u{e9} \u{80}5"),
+        },
+        ReadTextFilesTestCase {
+            description: "utf-16le with its byte order mark and CRLF line ends",
+            encoding: csv_encoding(decoded("utf-16le", 0)),
+            files: &[("a.utf16.csv", "id,name\r\n1,Zo\u{eb}\r\n2,\u{4e2d}\r\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|Zo\u{eb}\n2|\u{4e2d}"),
+        },
+        ReadTextFilesTestCase {
+            description: "the default UTF-8 refuses a cp1252 byte, naming the encoding setting",
+            encoding: csv_encoding(CsvOptions::default()),
+            files: &[("a.raw.csv", "id,name\n1,ok\n2,Caf\u{e9}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "field 2: the bytes are not valid UTF-8; set csv.encoding to the files' encoding",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "a byte cp1252 leaves undefined fails, with its line and offset, as Python's cp1252 does",
+            encoding: csv_encoding(decoded("cp1252", 0)),
+            files: &[("a.raw.csv", "id,name\n1,a\n2,b\u{81}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "a.raw.csv: line 3, byte 15: 0x81 is not valid windows-1252; set csv.encoding",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "ascii refuses any byte above 127",
+            encoding: csv_encoding(decoded("ascii", 0)),
+            files: &[("a.raw.csv", "id\n7\n\u{e9}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err("line 3, byte 5: 0xE9 is not valid ASCII"),
+        },
+        ReadTextFilesTestCase {
+            description: "shift_jis decodes, and a lead byte without its trail fails",
+            encoding: csv_encoding(decoded("shift_jis", 0)),
+            files: &[("a.raw.csv", "id,name\n1,\u{93}\u{fa}\n2,\u{93}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err("line 3, byte 15: 0x93 is not valid Shift_JIS"),
+        },
+        ReadTextFilesTestCase {
+            description: "an encoding SQLLoad does not know",
+            encoding: csv_encoding(decoded("klingon", 0)),
+            files: &[("a.csv", "id\n1\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err("csv encoding \"klingon\" is not an encoding SQLLoad knows"),
+        },
+        ReadTextFilesTestCase {
+            description: "skip_rows drops lines before the header, even one with an unclosed quote",
+            encoding: csv_encoding(decoded("utf-8", 2)),
+            files: &[(
+                "a.csv",
+                "Report run 2026-11-12\n\"unclosed, title\nid,name\n1,a\n2,b\n",
+            )],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|a\n2|b"),
+        },
+        ReadTextFilesTestCase {
+            description: "skip_rows without a header drops lines before the first record",
+            encoding: csv_encoding(CsvOptions {
+                header: false,
+                ..decoded("utf-8", 1)
+            }),
+            files: &[("a.csv", "totals\n1,a\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|a"),
+        },
+        ReadTextFilesTestCase {
+            description: "errors after skipped lines count the file's own lines",
+            encoding: csv_encoding(decoded("utf-8", 1)),
+            files: &[("a.csv", "junk\nid,n\n1,2\n3,4,5\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err("line 4"),
+        },
+        ReadTextFilesTestCase {
+            description: "a skipped cp1252 file still counts skipped lines in where a byte fails",
+            encoding: csv_encoding(decoded("cp1252", 1)),
+            files: &[("a.raw.csv", "x\nid\n\u{9d}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err("line 3, byte 5: 0x9D is not valid windows-1252"),
+        },
+    ];
+    for test_case in test_cases {
+        let rows = block_on(async { Ok(read_rows(&test_case).await) })?;
+        assert_eq!(
+            rows.as_deref().ok(),
+            test_case.expected_rows.ok(),
+            "{}: {rows:?}",
+            test_case.description
+        );
+        assert!(
+            rows.as_ref().err().is_none_or(
+                |error| error.contains(test_case.expected_rows.err().unwrap_or_default())
+            ),
+            "{}: {rows:?}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
