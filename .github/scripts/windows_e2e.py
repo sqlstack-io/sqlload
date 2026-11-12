@@ -190,6 +190,9 @@ description = "Orders, captured."
 
 
 def main():
+    # sqlload prints UTF-8 (box drawing, check marks); a Windows console or pipe defaults to cp1252.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
     parser.add_argument("exe")
     parser.add_argument("work", type=pathlib.Path)
