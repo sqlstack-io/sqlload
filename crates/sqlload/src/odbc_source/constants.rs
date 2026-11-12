@@ -10,6 +10,10 @@ pub const ANY_NAME: &str = "%";
 /// The identifier quote SQLLoad writes, ANSI SQL's.
 pub const IDENTIFIER_QUOTE: char = '"';
 
+/// A query returning one row only when the database reads `"name"` as a name rather than a string.
+pub const ANSI_QUOTES_PROBE: &str =
+    "SELECT 1 FROM (SELECT 1 AS sqlload_probe) sqlload_query WHERE \"sqlload_probe\" = 1";
+
 /// The driver's answer when it does not quote identifiers.
 pub const NO_QUOTE: char = ' ';
 
