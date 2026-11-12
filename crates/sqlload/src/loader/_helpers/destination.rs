@@ -237,7 +237,7 @@ fn shared_problems(table: &TablePlan, others: &[&TableSpec]) -> Vec<String> {
     let keyed = spec.unique_key.iter().any(|key| is_constant(spec, key));
     if spec.strategy == WriteStrategy::Merge && !keyed {
         problems.push(format!(
-            "{place}; its unique_key ({}) has no constant column, so its merge could overwrite their rows: add one of its constant columns to it",
+            "{place}; its unique_key ({}) has no constant column, so its merge could overwrite their rows: put a constant column in it",
             spec.unique_key.join(", ")
         ));
     }

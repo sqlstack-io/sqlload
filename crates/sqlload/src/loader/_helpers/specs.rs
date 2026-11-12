@@ -318,7 +318,7 @@ pub(crate) fn build_spec(
     })
 }
 
-/// The table's `constant_columns` (its own map, else its source's), each with its type for the target and its value as text; or why they cannot load: a type with no Arrow type or one the target cannot load, an array, and, except for a files source (whose reader replaces a file column of the same name, and `plan` says so), a name the source table already has among its loaded columns, ignoring case.
+/// The table's `constant_columns` (its own map, else its source's), each with its type for the target and its value as text; or why they cannot load: a name the source table already has among its loaded columns, ignoring case, a type with no Arrow type or one the target cannot load, or an array. A files source's are checked as before by its reader, which fills them and replaces a file column of the same name (`plan` notes it).
 fn table_constants(
     context: &SourceContext<'_>,
     table: &SourceTable,
@@ -330,19 +330,20 @@ fn table_constants(
     };
     let warehouse = context.target.warehouse;
     let constants = constant_columns(&written.0, &[warehouse]).map_err(|problem| vec![problem])?;
-    let clashes: Vec<String> = match context.source.kind {
+    let problems: Vec<String> = match context.source.kind {
         SourceKind::Files => Vec::new(),
         _ => table
             .columns
             .iter()
             .filter(|column| !is_excluded(excluded, &column.name))
             .filter_map(|column| clash(&constants, &column.name))
+            .chain(
+                constants
+                    .iter()
+                    .filter_map(|constant| constant_type_problem(constant, warehouse)),
+            )
             .collect(),
     };
-    let types = constants
-        .iter()
-        .filter_map(|constant| constant_type_problem(constant, warehouse));
-    let problems: Vec<String> = clashes.into_iter().chain(types).collect();
     match problems.is_empty() {
         true => Ok(constants),
         false => Err(problems),
