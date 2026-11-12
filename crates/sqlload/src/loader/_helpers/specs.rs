@@ -18,8 +18,8 @@ use crate::loader::models::{
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
-    CdcDeletes, CdcMode, LookbackFrom, MaskMethod, SourceConfig, SourceKind, StateMode,
-    TableOverride, TableSettings, UnloadStage, WriteStrategy,
+    CdcDeletes, CdcMode, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection, SourceConfig,
+    SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
@@ -189,6 +189,24 @@ pub(crate) fn build_spec(
                 format!("constant column {name} cannot be the cursor_column: it holds one value")
             }),
     );
+    let merges = strategy == WriteStrategy::Merge;
+    let table_sorts = settings.dedup_sort.is_some();
+    let on_duplicate_keys = layered(&settings.on_duplicate_keys, &defaults.on_duplicate_keys)
+        .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_sorts));
+    let table_fails = on_duplicate_keys == Some((OnDuplicateKeys::Fail, SettingOrigin::Table));
+    let dedup_sort = layered(&settings.dedup_sort, &defaults.dedup_sort)
+        .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_fails))
+        .map(|(value, _)| value);
+    let (dedup_sort, found) = dedupe_settings(
+        strategy,
+        &unique_key,
+        (
+            on_duplicate_keys.map(|(value, _)| value),
+            dedup_sort.as_ref(),
+        ),
+        overrides,
+    );
+    problems.extend(found);
     let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
     problems.extend(
         checks
@@ -254,6 +272,10 @@ pub(crate) fn build_spec(
         strategy,
         strategy_origin,
         unique_key,
+        on_duplicate_keys: on_duplicate_keys
+            .map(|(value, _)| value)
+            .unwrap_or_default(),
+        dedup_sort,
         cursor,
         batch,
         constants,
@@ -693,6 +715,60 @@ pub(crate) fn default_strategy(cursor: Option<&CursorSpec>, has_key: bool) -> Wr
         (Some(_), true) => WriteStrategy::Merge,
         (Some(_), false) => WriteStrategy::DeleteInsert,
     }
+}
+
+/// The `dedup_sort` column and direction of a merge, and the problems with `on_duplicate_keys` and `dedup_sort` (a source's apply only to its merge tables, and either one set on a table drops the other from its source): both are for `merge`, `dedup_sort` names one column that is neither in the key nor masked, and has nothing to pick under `on_duplicate_keys = "fail"`.
+fn dedupe_settings(
+    strategy: WriteStrategy,
+    unique_key: &[String],
+    (on_duplicate_keys, dedup_sort): (
+        Option<OnDuplicateKeys>,
+        Option<&BTreeMap<String, SortDirection>>,
+    ),
+    overrides: &TableOverride,
+) -> (Option<(String, SortDirection)>, Vec<String>) {
+    let mut problems: Vec<String> = Vec::new();
+    if strategy != WriteStrategy::Merge {
+        problems.extend(
+            [
+                on_duplicate_keys.map(|_| "on_duplicate_keys"),
+                dedup_sort.map(|_| "dedup_sort"),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|name| format!("{name} is for write_strategy = \"merge\", which matches rows on unique_key; {strategy} keeps every row")),
+        );
+        return (None, problems);
+    }
+    let Some(sort) = dedup_sort else {
+        return (None, problems);
+    };
+    let mut entries = sort.iter();
+    let (column, direction) = match (entries.next(), entries.next()) {
+        (Some((column, direction)), None) => (column.clone(), *direction),
+        _ => {
+            problems.push(
+                "dedup_sort names one column and its direction, such as { updated_at = \"desc\" }"
+                    .to_owned(),
+            );
+            return (None, problems);
+        }
+    };
+    if unique_key
+        .iter()
+        .any(|key| key.eq_ignore_ascii_case(&column))
+    {
+        problems.push(format!("dedup_sort column {column} is in the unique_key, so it is the same in every row it would rank; name another column"));
+    }
+    if overrides.mask.contains_key(&column) {
+        problems.push(format!(
+            "dedup_sort column {column} is masked, so its values cannot rank rows"
+        ));
+    }
+    if on_duplicate_keys == Some(OnDuplicateKeys::Fail) {
+        problems.push("dedup_sort picks which repeated row a merge keeps, but on_duplicate_keys = \"fail\" keeps none; set one of them".to_owned());
+    }
+    (Some((column, direction)), problems)
 }
 
 /// Problems with a strategy and the keys and cursor it is given.

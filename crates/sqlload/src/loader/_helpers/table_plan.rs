@@ -4,6 +4,7 @@ use crate::adapters::contract::main::cursor_from_now::cursor_from_now;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::CursorQuery;
+use crate::adapters::contract::models::MergeDedupe;
 use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
@@ -66,6 +67,7 @@ use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::project::models::{FilesFormat, OutputEncoding};
+use crate::project::models::{OnDuplicateKeys, SortDirection};
 use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -75,7 +77,7 @@ use crate::routing::models::Route;
 use crate::routing::models::RouteOverrides;
 use crate::routing::models::Step;
 use crate::routing::models::Store;
-use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN};
+use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN, MERGE_ROW_COLUMN};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
@@ -229,7 +231,117 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
+    plan.schema.warnings.extend(split_ranking(&plan));
     with_run_log(plan, destination, options).await
+}
+
+/// Why the plan cannot write `spec` as `schema` plans it, when nothing blocked it first: its `cursor_column`, when `unwritten_cursor` names it, or its `dedup_sort` column is not among the columns written. A Python table's columns are known only once it yields, so its `dedup_sort` is not checked here.
+fn unwritten_column(
+    spec: &TableSpec,
+    schema: &SchemaPlan,
+    unwritten_cursor: Option<&str>,
+) -> Option<String> {
+    if schema.blocked.is_some() {
+        return None;
+    }
+    if let Some(name) = unwritten_cursor {
+        return Some(format!(
+            "cursor_column {name} is not written to the table (excluded, not in the enforced contract, or ignored by on_schema_change)"
+        ));
+    }
+    let (name, _) = spec.dedup_sort.as_ref().filter(|_| spec.python.is_none())?;
+    let column = schema
+        .write_columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(name));
+    match column.map(|column| &column.column_type) {
+        None => Some(format!(
+            "dedup_sort column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
+        )),
+        Some(column_type @ (ColumnType::Json | ColumnType::Array(_))) => Some(format!(
+            "dedup_sort column {name} is {column_type}, which has no order to rank rows by; name a column of another type"
+        )),
+        Some(_) => None,
+    }
+}
+
+/// `mode` and `schema` once `unordered_merge` checked how a files merge orders its rows: its warning added, or the plan blocked by its problem.
+fn ordered_mode(mode: WriteMode, mut schema: SchemaPlan) -> (WriteMode, SchemaPlan) {
+    match unordered_merge(mode, &schema) {
+        Ok((mode, warning)) => {
+            schema.warnings.extend(warning);
+            (mode, schema)
+        }
+        Err(problem) => (WriteMode::Append, blocked_plan(vec![problem])),
+    }
+}
+
+/// `mode` for a files merge whose rows are ranked by `_sqlload_source_row` when that column is not written (excluded, or left out by the contract), so no row is known to be last: without `dedup_sort`, repeated keys fail as before 0.39.0, with a warning saying why; with it, the problem, as ties need that order.
+fn unordered_merge(
+    mode: WriteMode,
+    schema: &SchemaPlan,
+) -> Result<(WriteMode, Option<String>), String> {
+    let WriteMode::Merge {
+        unique_key,
+        dedupe: Some(dedupe),
+    } = &mode
+    else {
+        return Ok((mode, None));
+    };
+    if schema.blocked.is_some() {
+        return Ok((mode, None));
+    }
+    let ordered = dedupe.ordinal != SOURCE_ROW_COLUMN
+        || schema
+            .write_columns
+            .iter()
+            .any(|column| column.name == SOURCE_ROW_COLUMN);
+    match (ordered, &dedupe.sort) {
+        (true, _) => Ok((mode, None)),
+        (false, Some(_)) => Err(format!(
+            "dedup_sort breaks ties by row order, which a files merge takes from {SOURCE_ROW_COLUMN}; stop excluding it"
+        )),
+        (false, None) => Ok((
+            WriteMode::Merge {
+                unique_key: unique_key.clone(),
+                dedupe: None,
+            },
+            Some(format!(
+                "{SOURCE_ROW_COLUMN} is not written, so a file's rows have no order to pick the last of a repeated key by: a file repeating its unique_key fails; write {SOURCE_ROW_COLUMN} to keep its last row instead"
+            )),
+        )),
+    }
+}
+
+/// What `dedup_sort` cannot rank when a merge may commit more than once: each commit ranks only its own rows, so a later commit overwrites a key an earlier one wrote whatever its sort value.
+fn split_ranking(plan: &TablePlan) -> Option<String> {
+    let WriteMode::Merge {
+        dedupe: Some(MergeDedupe {
+            sort: Some((column, _)),
+            ..
+        }),
+        ..
+    } = &plan.mode
+    else {
+        return None;
+    };
+    let (commits, remedy) = match &plan.commits {
+        CommitRule::Windows(windows) if windows.count > 1 => (
+            format!("once per window ({} windows)", windows.count),
+            "; set batch_size = \"none\" to load it in one commit",
+        ),
+        CommitRule::FileGroups(groups) if groups.len() > 1 => {
+            (format!("once per file ({} files)", groups.len()), "")
+        }
+        CommitRule::Ordered { .. } | CommitRule::Size => (
+            "about every 1 GB".to_owned(),
+            "; set batch_size = \"none\" to load it in one commit",
+        ),
+        _ => return None,
+    };
+    Some(format!(
+        "dedup_sort ranks repeated keys within one commit, and this table commits {commits}: a later commit still overwrites a key an earlier one wrote, whatever its {column} value{remedy}"
+    ))
 }
 
 /// Why the table's `batch_size` setting has no effect, if it has none: a files source commits by whole partitions, `replace` and `--reload` swap the whole table in once, and windows need a cursor.
@@ -566,10 +678,8 @@ async fn plan_table_once(
                 .iter()
                 .any(|column| column.name.eq_ignore_ascii_case(name))
         });
-    if let Some(name) = cursor_name.filter(|_| !written && schema.blocked.is_none()) {
-        schema = blocked_plan(vec![format!(
-            "cursor_column {name} is not written to the table (excluded, not in the enforced contract, or ignored by on_schema_change)"
-        )]);
+    if let Some(problem) = unwritten_column(spec, &schema, cursor_name.filter(|_| !written)) {
+        schema = blocked_plan(vec![problem]);
     }
     let cursor_in_table = live.as_deref().is_some_and(|live| {
         live.iter()
@@ -653,7 +763,7 @@ async fn plan_table_once(
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
     schema.warnings.extend(resnapshot_warning(spec, options));
-    let mode = captured_mode(spec, mode);
+    let (mode, mut schema) = ordered_mode(captured_mode(spec, mode), schema);
     let exists = live.is_some();
     schema = checked_columns(spec, schema);
     if schema.blocked.is_none() && exists {
@@ -748,7 +858,7 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
                 adapter.render_create_schema(&spec.destination),
                 adapter.render_create_loaded_table(spec, &table.schema.write_columns),
             ];
-            if let WriteMode::Merge { unique_key } = &table.mode {
+            if let WriteMode::Merge { unique_key, .. } = &table.mode {
                 statements.extend(adapter.render_key_index(&spec.destination, unique_key));
             }
             statements.extend(adapter.render_table_comment(&spec.destination, &spec.description));
@@ -1006,6 +1116,16 @@ fn write_mode(
         (false, WriteStrategy::Replace) => WriteMode::Replace,
         (false, WriteStrategy::Merge) => WriteMode::Merge {
             unique_key: spec.unique_key.clone(),
+            dedupe: (spec.on_duplicate_keys == OnDuplicateKeys::Dedupe).then(|| MergeDedupe {
+                ordinal: match spec.files.is_some() {
+                    true => SOURCE_ROW_COLUMN.to_owned(),
+                    false => MERGE_ROW_COLUMN.to_owned(),
+                },
+                sort: spec
+                    .dedup_sort
+                    .as_ref()
+                    .map(|(column, direction)| (column.clone(), *direction == SortDirection::Desc)),
+            }),
         },
         (false, WriteStrategy::DeleteInsert) => WriteMode::DeleteInsert {
             cursor_column: spec

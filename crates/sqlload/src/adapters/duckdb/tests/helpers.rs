@@ -84,6 +84,7 @@ pub(crate) fn unloaded_row_loaded(
             columns: &columns,
             read: &read,
             constants: &[],
+            batch: 1,
         },
         &[file],
         ("L1", "2026-11-08T00:00:00Z"),
@@ -220,8 +221,82 @@ pub(crate) fn unloaded_insert_sql(constants: &[(&str, ColumnType, &str)]) -> Str
             columns: &columns,
             read: &read,
             constants: &constants,
+            batch: 1,
         },
         &["/unloaded/data_0.parquet".to_owned()],
         ("L1", "2026-11-08T00:00:00Z"),
     )
+}
+
+/// The rows, as `id:name` sorted, of `raw.app__accounts (id, name, score)` holding `existing` after DuckDB runs the merge on `id` that SQLLoad renders, with dedupe on (ranking by `_sqlload_row`, and by `score` when `sort` says which end wins), from a staging table holding `staged` with its `_sqlload_row`.
+pub(crate) fn merged_rows(
+    sort: Option<bool>,
+    (existing, staged): (&[&str], &[&str]),
+) -> Result<Vec<String>, String> {
+    use crate::adapters::contract::models::{
+        MergeDedupe, TableName, WriteMode, WriteStatementsRequest,
+    };
+    use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+    use crate::column_types::models::Warehouse;
+
+    let failed = |error: duckdb::Error| error.to_string();
+    let table = TableName {
+        database: None,
+        schema: "raw".to_owned(),
+        table: "app__accounts".to_owned(),
+    };
+    let staging = TableName {
+        table: "app__accounts__sqlload_staging_load1".to_owned(),
+        ..table.clone()
+    };
+    let columns = [
+        column("id", ColumnType::Int),
+        column("name", ColumnType::Text),
+        column("score", ColumnType::Int),
+    ];
+    let mode = WriteMode::Merge {
+        unique_key: vec!["id".to_owned()],
+        dedupe: Some(MergeDedupe {
+            ordinal: "_sqlload_row".to_owned(),
+            sort: sort.map(|highest| ("score".to_owned(), highest)),
+        }),
+    };
+    let statements = sql_adapter(Warehouse::DuckDb).render_commit(
+        &WriteStatementsRequest {
+            table: &table,
+            columns: &columns,
+            mode: &mode,
+            hashed: &[],
+            built: None,
+        },
+        &staging,
+        (None, false),
+    );
+    let inserts: Vec<String> = existing
+        .iter()
+        .map(|row| format!("INSERT INTO raw.app__accounts VALUES {row};"))
+        .chain(staged.iter().map(|row| {
+            format!("INSERT INTO raw.app__accounts__sqlload_staging_load1 VALUES {row};")
+        }))
+        .collect();
+    let connection = duckdb::Connection::open_in_memory().map_err(failed)?;
+    connection
+        .execute_batch(&format!(
+            "CREATE SCHEMA raw;
+             CREATE TABLE raw.app__accounts (id BIGINT, name VARCHAR, score BIGINT);
+             CREATE TABLE raw.app__accounts__sqlload_staging_load1 (id BIGINT, name VARCHAR, score BIGINT, _sqlload_row BIGINT);
+             {}
+             {};",
+            inserts.join("\n"),
+            statements.join(";\n")
+        ))
+        .map_err(failed)?;
+    let mut query = connection
+        .prepare("SELECT COALESCE(CAST(id AS VARCHAR), 'NULL') || ':' || name FROM raw.app__accounts ORDER BY 1")
+        .map_err(failed)?;
+    query
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(failed)?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(failed)
 }

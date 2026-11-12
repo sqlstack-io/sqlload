@@ -97,8 +97,8 @@ fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_rep
                 expected_output: "table_name \"fixed\" must contain {table}",
             },
             SheetsRefusalTestCase {
-                description: "merge on a key the sheet repeats, naming both rows",
-                source: "[sources.keyed]\nkind = \"google_sheets\"\ndescription = \"Codes keyed by code.\"\nconnection = \"sheets\"\nspreadsheet_id = \"fake-sheet\"\nranges = { codes = \"Codes\" }\nunique_key = [\"code\"]\nwrite_strategy = \"merge\"\n",
+                description: "merge on a key the sheet repeats, under on_duplicate_keys = \"fail\", naming both rows",
+                source: "[sources.keyed]\nkind = \"google_sheets\"\ndescription = \"Codes keyed by code.\"\nconnection = \"sheets\"\nspreadsheet_id = \"fake-sheet\"\nranges = { codes = \"Codes\" }\nunique_key = [\"code\"]\nwrite_strategy = \"merge\"\non_duplicate_keys = \"fail\"\n",
                 expected_output: "Codes!A2 and Codes!A4 hold the same unique_key (code)",
             },
             SheetsRefusalTestCase {

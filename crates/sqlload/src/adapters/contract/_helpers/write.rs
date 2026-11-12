@@ -53,7 +53,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
         WriteMode::Recreate => {
             return adapter.render_replace_table_from_relation(request, &source, &values);
         }
-        WriteMode::Merge { unique_key } => {
+        WriteMode::Merge { unique_key, .. } => {
             return vec![adapter.render_merge(request, unique_key, &source, &values)];
         }
         WriteMode::Replace => return adapter.render_replace(request, staging, &insert_from),

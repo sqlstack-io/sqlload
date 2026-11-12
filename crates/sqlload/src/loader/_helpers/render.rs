@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use chrono::SecondsFormat;
 
-use crate::adapters::contract::models::{ChangeApply, WriteMode};
+use crate::adapters::contract::models::{ChangeApply, MergeDedupe, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
 use crate::adapters::files::models::{PendingLoad, PendingPhase};
@@ -303,7 +303,21 @@ pub(crate) fn stage_item(stage: &PlannedStage) -> PlanItem {
 pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let spec = &table.spec;
     let action = match &table.mode {
-        WriteMode::Merge { unique_key } => format!("merge (unique_key: {})", unique_key.join(", ")),
+        WriteMode::Merge { unique_key, dedupe } => {
+            let repeats = match dedupe {
+                None => "; repeated keys fail".to_owned(),
+                Some(MergeDedupe {
+                    sort: Some((column, true)),
+                    ..
+                }) => format!("; repeated keys: highest {column} wins"),
+                Some(MergeDedupe {
+                    sort: Some((column, false)),
+                    ..
+                }) => format!("; repeated keys: lowest {column} wins"),
+                Some(_) => String::new(),
+            };
+            format!("merge (unique_key: {}{repeats})", unique_key.join(", "))
+        }
         WriteMode::DeleteInsert { cursor_column, .. } => {
             format!("delete_insert (cursor: {cursor_column})")
         }

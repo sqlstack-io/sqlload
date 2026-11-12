@@ -65,8 +65,8 @@ use crate::postgres_source::models::{
 };
 use crate::project::main::postgres_address::postgres_address;
 use crate::project::models::{
-    BatchStep, ConnectionConfig, NewTables, ProjectConfig, SourceConfig, SourceKind, TableOverride,
-    TableSettings, WriteStrategy,
+    BatchStep, ConnectionConfig, NewTables, OnDuplicateKeys, ProjectConfig, SourceConfig,
+    SourceKind, TableOverride, TableSettings, WriteStrategy,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::sheets_source::constants::{EMPTY_SHEET_COLUMN_KIND, SCOPE, SHEET_COLUMN_KIND};
@@ -539,7 +539,11 @@ async fn sheets_tables(
             .and_then(|settings| settings.write_strategy)
             .or(source.defaults.write_strategy)
             == Some(WriteStrategy::Merge);
-        let duplicate = key.filter(|_| merge).and_then(|key| {
+        let fails = settings
+            .and_then(|settings| settings.on_duplicate_keys)
+            .or(source.defaults.on_duplicate_keys)
+            == Some(OnDuplicateKeys::Fail);
+        let duplicate = key.filter(|_| merge && fails).and_then(|key| {
             let problem = duplicate_key(&grid, sheet_rule(source, &name), &read, key)?;
             Some((problem, key.first()?.clone()))
         });

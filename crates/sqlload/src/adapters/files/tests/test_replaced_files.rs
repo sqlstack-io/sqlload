@@ -48,6 +48,7 @@ fn given_a_write_when_planning_the_replaced_files_then_they_are_known_before_wri
             description: "merge is refused",
             mode: WriteMode::Merge {
                 unique_key: vec!["id".to_owned()],
+                dedupe: None,
             },
             written: &[],
             expected_keys: Err("merge is not supported"),

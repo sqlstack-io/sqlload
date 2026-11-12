@@ -83,7 +83,7 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
         },
         AfterLoadTestCase {
             description: "a failed load deletes nothing",
-            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\nafter_load = \"delete\"\n",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\non_duplicate_keys = \"fail\"\nafter_load = \"delete\"\n",
             linked: &[],
             steps: &[AfterLoadStep {
                 files: &[("drop/a.csv", "id,v\n1,a\n1,b\n")],

@@ -104,6 +104,7 @@ use crate::run_log::models::RunOutcome;
 use crate::run_log::models::RunRecord;
 use crate::schema_plan::constants::LOAD_ID_COLUMN;
 use crate::schema_plan::constants::LOADED_AT_COLUMN;
+use crate::schema_plan::constants::MERGE_ROW_COLUMN;
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
@@ -118,6 +119,7 @@ use crate::table_lease::models::Lease;
 use crate::time_text::main::now_utc_text::now_utc_text;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
+use arrow_array::Int64Array;
 use arrow_array::RecordBatch;
 use arrow_array::StringArray;
 use arrow_array::TimestampMicrosecondArray;
@@ -193,7 +195,17 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
             })
             .cloned(),
     );
+    columns.extend(numbers_rows(table).then(|| DesiredColumn {
+        name: MERGE_ROW_COLUMN.to_owned(),
+        column_type: ColumnType::Int,
+        origin: ColumnOrigin::Metadata,
+    }));
     columns
+}
+
+/// Whether the table's staged rows carry `_sqlload_row`: a merge keeping the last of the rows sharing a key, from a source without its own row numbers.
+fn numbers_rows(table: &TablePlan) -> bool {
+    matches!(&table.mode, WriteMode::Merge { dedupe: Some(dedupe), .. } if dedupe.ordinal == MERGE_ROW_COLUMN)
 }
 
 /// `batch` with `constants` added after its columns, each its value in every row, converted strictly to its type's Arrow type; the batch's schema metadata is kept.
@@ -223,11 +235,11 @@ pub(crate) fn with_constants(
     RecordBatch::try_new(Arc::new(schema), columns).map_err(|error| error.to_string())
 }
 
-/// `batch` with this load's `_sqlload_load_id` and `_sqlload_loaded_at` added, so the staged files carry them.
+/// `batch` with this load's `_sqlload_load_id` and `_sqlload_loaded_at` added, so the staged files carry them, and with `first_row` its rows numbered from it in `_sqlload_row`.
 fn with_metadata(
     batch: &RecordBatch,
     load_id: &str,
-    loaded_at_micros: i64,
+    (loaded_at_micros, first_row): (i64, Option<i64>),
 ) -> Result<RecordBatch, String> {
     let rows = batch.num_rows();
     let schema = batch.schema();
@@ -247,6 +259,16 @@ fn with_metadata(
     )));
     columns.push(Arc::new(StringArray::from(vec![load_id; rows])));
     columns.push(Arc::new(loaded_at));
+    if let Some(first) = first_row {
+        fields.push(Arc::new(Field::new(
+            MERGE_ROW_COLUMN,
+            arrow_schema::DataType::Int64,
+            false,
+        )));
+        columns.push(Arc::new(Int64Array::from_iter_values(
+            (0..i64::try_from(rows).unwrap_or(i64::MAX)).map(|row| first + row),
+        )));
+    }
     RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).map_err(|error| error.to_string())
 }
 
@@ -379,6 +401,7 @@ impl Publisher {
             batch: 1,
             arrow_bytes: 0,
             batch_rows: 0,
+            staged_ordinal: 0,
             waiting_rows: 0,
             waiting_range: None,
             committed_rows: 0,
@@ -420,7 +443,10 @@ impl Publisher {
         let micros = DateTime::parse_from_rfc3339(&self.loaded_at)
             .map(|time| time.timestamp_micros())
             .map_err(|error| LoaderError::Invalid(error.to_string()))?;
-        let batch = with_metadata(&masked, &self.load_id, micros).map_err(LoaderError::Invalid)?;
+        let first_row = numbers_rows(&self.table).then_some(self.staged_ordinal);
+        self.staged_ordinal += i64::try_from(masked.num_rows()).unwrap_or(i64::MAX);
+        let batch = with_metadata(&masked, &self.load_id, (micros, first_row))
+            .map_err(LoaderError::Invalid)?;
         self.batch_rows += batch.num_rows() as u64;
         self.arrow_bytes += batch.get_array_memory_size();
         let columns = staged_columns(&self.table);
@@ -726,7 +752,11 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
-        if merging_file && let WriteMode::Merge { unique_key } = &mode {
+        if let WriteMode::Merge {
+            unique_key,
+            dedupe: None,
+        } = &mode
+        {
             let commit = CheckedCommit {
                 destination: &self.destination,
                 warehouse,
@@ -736,7 +766,7 @@ impl Publisher {
                 columns: &self.table.schema.write_columns,
                 committed: self.committed_rows,
             };
-            refuse_repeated_keys(&commit, unique_key).await?;
+            refuse_repeated_keys(&commit, unique_key, merging_file).await?;
         }
         if let Some(checks) = &spec.checks {
             let commit = CheckedCommit {

@@ -185,8 +185,13 @@ unique_key = ["sku"]
   newest file.
 - Stores that keep modified times to the second, as SFTP does, and the members of one ZIP archive,
   which share the archive's time, fall back to path order for files from the same second.
-- A file that holds one `unique_key` value in more than one row fails, naming the key's columns
-  and examples, before anything of it merges. Rows with an empty key are not compared.
+- From 0.39.0 (not released yet), a file that holds one `unique_key` value in more than one row
+  merges the last of those rows, or the one `dedup_sort` picks; see
+  [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). With
+  `on_duplicate_keys = "fail"`, as in 0.38.0, such a file fails instead, naming the key's columns
+  and examples, before anything of it merges. Rows with an empty key are never collapsed. The
+  order of a file's rows comes from `_sqlload_source_row`: when `exclude_columns` drops it, a file
+  repeating a key fails as in 0.38.0, `plan` says so, and `dedup_sort` is refused.
 - Merging files loads into DuckDB and Postgres targets so far, and MotherDuck through its DuckDB
   connection, which isn't tested live. `--reload`, `state = "logged"` and a
   `cursor_column` are refused: the run log, not a cursor, picks the files. To merge every file again, drop the table: a table created anew starts a new record.

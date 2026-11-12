@@ -1235,3 +1235,68 @@ def test_given_a_table_yielding_its_constant_column_when_loading_then_it_fails_a
 	assert done.returncode == 1
 	assert "constant column tenant_id: the source already has a column tenant_id, and a constant never replaces it" in done.stdout + done.stderr, done.stdout + done.stderr
 	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
+
+
+def test_given_a_python_table_repeating_a_merge_key_when_loading_then_dedup_sort_picks_the_row_and_no_row_number_lands(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', dedup_sort={'v': 'desc'})(rows)\n")
+	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 1, "v": "a"}, {"id": 2, "v": "x"}])
+	load(project)
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows" ORDER BY id') == [(1, "c"), (2, "x")]
+	columns = query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
+	assert [name for (name,) in columns] == ["id", "v", "_sqlload_load_id", "_sqlload_loaded_at"]
+
+
+def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_load_names_the_key_and_merges_nothing(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', on_duplicate_keys='fail')(rows)\n")
+	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 2, "v": "x"}])
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "the loaded rows repeat its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)" in done.stdout + done.stderr, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW"."shop__rows"') == [(0,)]
+
+
+@pytest.mark.parametrize(
+	("settings", "expected"),
+	[
+		("write_strategy='append', dedup_sort={'v': 'desc'}", 'dedup_sort is for write_strategy = "merge", which matches rows on unique_key; append keeps every row'),
+		("write_strategy='merge', unique_key='id', dedup_sort={'v': 'desc', 'w': 'asc'}", 'dedup_sort names one column and its direction, such as { updated_at = "desc" }'),
+		("write_strategy='merge', unique_key='id', dedup_sort={'id': 'desc'}", "dedup_sort column id is in the unique_key"),
+		(
+			"write_strategy='merge', unique_key='id', dedup_sort={'v': 'desc'}, on_duplicate_keys='fail'",
+			'dedup_sort picks which repeated row a merge keeps, but on_duplicate_keys = "fail" keeps none',
+		),
+	],
+	ids=["not_merge", "two_columns", "key_column", "with_fail"],
+)
+def test_given_a_python_table_with_a_dedupe_setting_it_cannot_use_when_planning_then_plan_refuses_it(tmp_path: Path, settings: str, expected: str) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
+	planned = sqlload(project, "plan")
+	assert planned.returncode == 1, planned.stdout
+	assert expected in planned.stdout + planned.stderr, planned.stdout + planned.stderr
+
+
+def test_given_source_level_dedupe_settings_when_loading_then_only_its_merge_tables_take_them_and_a_table_can_choose_fail(tmp_path: Path) -> None:
+	module = SHOP_MODULE.replace('sl.source("shop", connection="shop")', 'sl.source("shop", connection="shop", dedup_sort={"v": "desc"})')
+	tables = (
+		"shop.table(description='Test table.', name='log', write_strategy='append')(rows)\n"
+		"shop.table(description='Test table.', name='kept', write_strategy='merge', unique_key='id')(rows)\n"
+		"shop.table(description='Test table.', name='strict', write_strategy='merge', unique_key='id', on_duplicate_keys='fail')(rows)\n"
+	)
+	project = make_project(tmp_path, DUCKDB_PROJECT, tables, module=module)
+	repeated = [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 1, "v": "a"}]
+	for table in ("log", "kept", "strict"):
+		give(project, table, repeated)
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "the loaded rows repeat its unique_key" in done.stdout + done.stderr, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW"."shop__log"') == [(3,)]
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__kept"') == [(1, "c")]
+	assert query(project, 'SELECT count(*) FROM "RAW"."shop__strict"') == [(0,)]
+
+
+def test_given_a_source_that_fails_on_repeated_keys_when_a_table_sets_dedup_sort_then_that_table_keeps_its_ranked_row(tmp_path: Path) -> None:
+	module = SHOP_MODULE.replace('sl.source("shop", connection="shop")', 'sl.source("shop", connection="shop", on_duplicate_keys="fail")')
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', dedup_sort={'v': 'asc'})(rows)\n", module=module)
+	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "a"}, {"id": 1, "v": "c"}])
+	load(project)
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows"') == [(1, "a")]

@@ -149,6 +149,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         source_expression_cast(self, name, column_type)
     }
 
+    /// `value`, a merge key of `column_type`, as a window can be partitioned by it.
+    fn render_partition_key(&self, value: &str, _column_type: &ColumnType) -> String {
+        value.to_owned()
+    }
+
     /// `expression` as text.
     fn render_text_cast(&self, expression: &str) -> String {
         format!("CAST({expression} AS VARCHAR)")

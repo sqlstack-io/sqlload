@@ -4,6 +4,7 @@ use crate::adapters::clickhouse::_helpers::dialect::type_names::unwrapped;
 use crate::adapters::clickhouse::constants::{ASIDE_SUFFIX, COPY_SUFFIX, PUBLISH_PREFIX};
 use crate::adapters::clickhouse::models::{ClickHouseSql, PublishStep};
 use crate::adapters::contract::constants::SWAP_SUFFIX;
+use crate::adapters::contract::main::_ranked_source::ranked_source;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
@@ -63,17 +64,24 @@ pub(crate) fn write_statements(
         .iter()
         .map(|column| {
             let value = adapter.render_source_expression_cast(&column.name, &column.column_type);
-            let value = match request.hashed.contains(&column.name) {
+            match request.hashed.contains(&column.name) {
                 true => format!("lower(hex(SHA256({value})))"),
                 false => value,
-            };
-            format!("{value} AS {}", adapter.render_identifier(&column.name))
+            }
         })
+        .collect();
+    let staged = adapter.render_qualified_name(staging);
+    let (from, values) =
+        ranked_source(adapter, request, (&staged, &values)).unwrap_or((staged, values));
+    let values: Vec<String> = values
+        .iter()
+        .zip(&names)
+        .map(|(value, name)| format!("{value} AS {name}"))
         .collect();
     let displaced = match request.mode {
         WriteMode::Replace | WriteMode::Recreate => None,
         WriteMode::Append => None,
-        WriteMode::Merge { unique_key } => {
+        WriteMode::Merge { unique_key, .. } => {
             let keys: Vec<String> = unique_key
                 .iter()
                 .map(|key| adapter.render_identifier(key))
@@ -118,10 +126,9 @@ pub(crate) fn write_statements(
                 .map(|column| column.name.clone())
                 .collect(),
             insert: format!(
-                "INSERT INTO {delta} ({}) SELECT {} FROM {}",
+                "INSERT INTO {delta} ({}) SELECT {} FROM {from}",
                 names.join(", "),
-                values.join(", "),
-                adapter.render_qualified_name(staging)
+                values.join(", ")
             ),
         }),
         publish_statement(&publish),

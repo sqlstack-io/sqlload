@@ -115,3 +115,15 @@ pub(crate) struct UnloadedSqlTestCase {
     pub(crate) constants: &'static [(&'static str, ColumnType, &'static str)],
     pub(crate) expected_sql: &'static str,
 }
+
+pub(crate) struct MergeDedupeTestCase {
+    pub(crate) description: &'static str,
+    /// The `dedup_sort` on `score`: `Some(true)` keeps the highest.
+    pub(crate) sort: Option<bool>,
+    /// Rows already in the table, as `(id, name, score)` SQL values.
+    pub(crate) existing: &'static [&'static str],
+    /// Staged rows, as `(id, name, score, _sqlload_row)` SQL values, in the order they are inserted.
+    pub(crate) staged: &'static [&'static str],
+    /// The table's rows after the merge, as `id:name`, sorted.
+    pub(crate) expected_rows: &'static [&'static str],
+}

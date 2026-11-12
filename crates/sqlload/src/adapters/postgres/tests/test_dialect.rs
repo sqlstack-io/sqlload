@@ -1,4 +1,6 @@
-use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
+use crate::adapters::contract::models::{
+    MergeDedupe, TableName, WriteMode, WriteStatementsRequest,
+};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::postgres::models::PostgresSql;
 use crate::adapters::postgres::tests::helpers::{desired, orders};
@@ -33,6 +35,14 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
     };
     let merge = WriteMode::Merge {
         unique_key: vec!["id".to_owned()],
+        dedupe: None,
+    };
+    let deduped = WriteMode::Merge {
+        unique_key: vec!["id".to_owned()],
+        dedupe: Some(MergeDedupe {
+            ordinal: "_sqlload_row".to_owned(),
+            sort: Some(("note".to_owned(), false)),
+        }),
     };
     let key_only = [desired("id", ColumnType::Int)];
     let test_cases = [
@@ -58,6 +68,13 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
             rendered: adapter.render_write(&request(&merge), &staging),
             expected_statements: &[
                 "INSERT INTO \"app\".\"orders\" (\"id\", \"doc\", \"note\") SELECT \"id\", CAST(\"doc\" AS jsonb), \"note\" FROM \"pg_temp\".\"orders__sqlload_staging_20261108000000_ab12\" ON CONFLICT (\"id\") DO UPDATE SET \"doc\" = EXCLUDED.\"doc\", \"note\" = EXCLUDED.\"note\"",
+            ],
+        },
+        RenderedTestCase {
+            description: "merge with dedupe upserts one staged row per non-NULL key, the lowest dedup_sort value first, NULLs last, then the later row, so ON CONFLICT never meets a key twice",
+            rendered: adapter.render_write(&request(&deduped), &staging),
+            expected_statements: &[
+                "INSERT INTO \"app\".\"orders\" (\"id\", \"doc\", \"note\") SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\" AS \"id\", CAST(\"doc\" AS jsonb) AS \"doc\", \"note\" AS \"note\", ROW_NUMBER() OVER (PARTITION BY \"id\" ORDER BY \"note\" ASC NULLS LAST, \"_sqlload_row\" DESC) AS __sqlload_rank FROM \"pg_temp\".\"orders__sqlload_staging_20261108000000_ab12\") AS __sqlload_ranked WHERE __sqlload_rank = 1 OR \"id\" IS NULL) AS __sqlload_kept ON CONFLICT (\"id\") DO UPDATE SET \"doc\" = EXCLUDED.\"doc\", \"note\" = EXCLUDED.\"note\"",
             ],
         },
         RenderedTestCase {

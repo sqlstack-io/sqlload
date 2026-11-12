@@ -63,7 +63,42 @@ unique_key = ["order_id", "line_no"]
 A Postgres table's primary key is the default key. With a `cursor_column`, `merge` reads from the
 destination's maximum (minus any `lookback`); without one, it reads the whole table each run.
 
-`merge` isn't available for files sources or files targets.
+`merge` isn't available for files targets. A files source merges one file at a time; see
+[Merging files](/docs/sources/files/#merging-files).
+
+### Repeated keys
+
+From 0.39.0 (not released yet), when the rows of one commit hold a `unique_key` value more than
+once, `merge` keeps one row for each value. The destination never gets the key twice, and the load
+never fails on the warehouse's own error about it.
+
+- Without `dedup_sort`, the row read last wins: the last one the source returned, or the last row
+  of a file.
+- With `dedup_sort = { updated_at = "desc" }`, the row with the highest `updated_at` wins, and
+  `"asc"` keeps the lowest. A NULL loses to any value, and a tie goes to the row read later.
+  `dedup_sort` takes one column, which can't be in the key, masked, JSON or an array.
+- Rows with a NULL in any key column are never collapsed: each one is inserted.
+- Rows are ranked within one commit. A load that commits more than once, by `batch_size` window,
+  about every 1 GB, or one file at a time, merges each commit on its own. So with `dedup_sort`, a
+  later batch in the same load still overwrites an earlier one, whatever its `dedup_sort` value.
+  `plan` warns when a table can commit more than once, and `batch_size = "none"` loads a database
+  or Python table in one commit.
+- `on_duplicate_keys = "fail"` refuses a commit that repeats a key instead, naming the key's
+  columns and examples, before that commit changes anything. Commits before it stay.
+- Set on a source, both apply to its `merge` tables only. A table that sets one of them drops the
+  other from its source, so a table can choose `"fail"` under a source's `dedup_sort`, or the
+  reverse.
+
+```toml
+[sources.app.tables."public.readings"]
+write_strategy = "merge"
+unique_key = ["sensor_id"]
+dedup_sort = { read_at = "desc" }
+```
+
+The plan line names the rule when it isn't the default, as in
+`merge (unique_key: sensor_id; repeated keys: highest read_at wins)` or
+`merge (unique_key: sensor_id; repeated keys fail)`.
 
 ## delete_insert
 

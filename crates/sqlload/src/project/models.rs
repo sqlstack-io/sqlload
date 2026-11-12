@@ -734,6 +734,40 @@ pub struct TableSettings {
     /// Columns with the same value in every row, typed by their TOML values; a table's map replaces its source's.
     #[serde(default)]
     pub constant_columns: Option<ConstantColumns>,
+    /// What a merge does with rows of one commit that share a `unique_key`: keep one (default) or fail.
+    #[serde(default)]
+    pub on_duplicate_keys: Option<OnDuplicateKeys>,
+    /// Which of the rows sharing a `unique_key` a merge keeps: the one with the highest (`desc`) or lowest (`asc`) value of the one column named.
+    #[serde(default)]
+    pub dedup_sort: Option<BTreeMap<String, SortDirection>>,
+}
+
+/// What a merge does with rows of one commit that share a `unique_key`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnDuplicateKeys {
+    /// Keep one row per key: the last in source order, or the one `dedup_sort` ranks first.
+    #[default]
+    Dedupe,
+    /// Fail the commit, naming some of the repeated keys.
+    Fail,
+}
+
+/// Which way `dedup_sort` ranks its column: `desc` keeps the highest value, `asc` the lowest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+impl std::fmt::Display for SortDirection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        })
+    }
 }
 
 /// `constant_columns`: each column's value as written, by name.

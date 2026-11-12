@@ -1061,3 +1061,36 @@ pub(crate) struct S3AfterLoadTestCase {
     /// Every file left below `folder`, sorted, as `key=contents`.
     pub(crate) expected_files: &'static [&'static str],
 }
+
+/// One repeated-key rule: a load of `public.readings`, merged on `sensor` with `reading_id` as cursor, from a fresh target table.
+pub(crate) struct DedupeRule {
+    pub(crate) description: &'static str,
+    /// Table settings after the merge's own, such as `dedup_sort`.
+    pub(crate) settings: &'static str,
+    /// Text the plan's or the load's error must contain; empty when the load must succeed.
+    pub(crate) expected_error: &'static str,
+    /// Text the plan must contain when the load succeeds.
+    pub(crate) expected_plan: &'static str,
+}
+
+/// A `dedup_sort` plan refuses.
+pub(crate) struct DedupeRefusalTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) rule: DedupeRule,
+    /// How many tables named `app__readings` the target has afterwards.
+    pub(crate) expected_tables: &'static str,
+}
+
+/// A target the repeated-key rules are checked on.
+pub(crate) struct DedupeTargetTestCase {
+    pub(crate) description: &'static str,
+    /// The target connection's TOML lines.
+    pub(crate) connection: String,
+    pub(crate) schema: &'static str,
+    /// A statement run on the target before each rule, so each starts from no table.
+    pub(crate) reset: &'static str,
+    /// The table's rows as one text value, `sensor:amount` ordered by sensor (NULLs last) and amount.
+    pub(crate) check_query: &'static str,
+    /// What `check_query` returns after each repeated-key rule, in their order: last row, highest, lowest, fail.
+    pub(crate) expected_rows: [&'static str; 4],
+}
