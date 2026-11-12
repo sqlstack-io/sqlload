@@ -235,6 +235,30 @@ pub(crate) async fn plan_table(
     with_run_log(plan, destination, options).await
 }
 
+/// Why the plan cannot write `spec` as `schema` plans it, when nothing blocked it first: its `cursor_column`, when `unwritten_cursor` names it, or its `dedup_sort` column is not among the columns written. A Python table's columns are known only once it yields, so its `dedup_sort` is not checked here.
+fn unwritten_column(
+    spec: &TableSpec,
+    schema: &SchemaPlan,
+    unwritten_cursor: Option<&str>,
+) -> Option<String> {
+    if schema.blocked.is_some() {
+        return None;
+    }
+    if let Some(name) = unwritten_cursor {
+        return Some(format!(
+            "cursor_column {name} is not written to the table (excluded, not in the enforced contract, or ignored by on_schema_change)"
+        ));
+    }
+    let (name, _) = spec.dedup_sort.as_ref().filter(|_| spec.python.is_none())?;
+    let written = schema
+        .write_columns
+        .iter()
+        .any(|column| column.name.eq_ignore_ascii_case(name));
+    (!written).then(|| format!(
+        "dedup_sort column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
+    ))
+}
+
 /// What `dedup_sort` cannot rank when a merge may commit more than once: each commit ranks only its own rows, so a later commit overwrites a key an earlier one wrote whatever its sort value.
 fn split_ranking(plan: &TablePlan) -> Option<String> {
     let WriteMode::Merge {
@@ -600,22 +624,8 @@ async fn plan_table_once(
                 .iter()
                 .any(|column| column.name.eq_ignore_ascii_case(name))
         });
-    if let Some(name) = cursor_name.filter(|_| !written && schema.blocked.is_none()) {
-        schema = blocked_plan(vec![format!(
-            "cursor_column {name} is not written to the table (excluded, not in the enforced contract, or ignored by on_schema_change)"
-        )]);
-    }
-    if let Some((name, _)) = spec.dedup_sort.as_ref().filter(|(name, _)| {
-        schema.blocked.is_none()
-            && spec.python.is_none()
-            && !schema
-                .write_columns
-                .iter()
-                .any(|column| column.name.eq_ignore_ascii_case(name))
-    }) {
-        schema = blocked_plan(vec![format!(
-            "dedup_sort column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
-        )]);
+    if let Some(problem) = unwritten_column(spec, &schema, cursor_name.filter(|_| !written)) {
+        schema = blocked_plan(vec![problem]);
     }
     let cursor_in_table = live.as_deref().is_some_and(|live| {
         live.iter()

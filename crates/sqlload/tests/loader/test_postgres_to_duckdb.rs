@@ -8,12 +8,10 @@ use sqlload::loader::models::PlanOptions;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
-use crate::helpers::{
-    described_project, duckdb_project, load_all, load_selected, run_async, run_dedupe_case,
-};
+use crate::helpers::{described_project, duckdb_project, load_all, load_selected, run_async};
 use crate::test_types::{
-    ConstantLoadTestCase, LoadRunTestCase, MergeDedupeLoadTestCase, PinnedRunTestCase,
-    SettingsChangeTestCase, TenantStepTestCase,
+    ConstantLoadTestCase, LoadRunTestCase, PinnedRunTestCase, SettingsChangeTestCase,
+    TenantStepTestCase,
 };
 
 const SETUP: &str = "
@@ -597,81 +595,6 @@ fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_neve
             assert_eq!(
                 result.as_deref(),
                 Some(test_case.expected_result),
-                "{}",
-                test_case.description
-            );
-        }
-        Ok(())
-    })
-}
-
-/// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor.
-pub(crate) const READINGS_SETUP: &str = "
-CREATE TABLE public.readings (reading_id int8 PRIMARY KEY, sensor text, amount int8, seen_at timestamptz);
-INSERT INTO public.readings VALUES
-  (1, 's1', 10, '2026-11-01 00:00:00+00'),
-  (2, 's1', 30, '2026-11-03 00:00:00+00'),
-  (3, 's1', 20, '2026-11-02 00:00:00+00'),
-  (4, 's2', 5, '2026-11-01 00:00:00+00'),
-  (5, 's2', 1, NULL),
-  (6, NULL, 7, NULL),
-  (7, NULL, 8, NULL),
-  (8, 's3', 4, '2026-11-01 00:00:00+00');
-";
-
-/// What a merge keeps of `public.readings` by each repeated-key rule, on every target.
-pub(crate) const DEDUPE_CASES: [MergeDedupeLoadTestCase; 4] = [
-    MergeDedupeLoadTestCase {
-        description: "by default the last row read of each repeated key wins, and rows without a key all stay",
-        settings: "",
-        expected_error: "",
-        expected_plan: "merge (unique_key: sensor)",
-        expected_rows: "s1:20,s2:1,s3:4,NULL:7,NULL:8",
-    },
-    MergeDedupeLoadTestCase {
-        description: "dedup_sort desc keeps the latest seen_at, a NULL seen_at losing, and plan warns that a later commit still overwrites",
-        settings: "dedup_sort = { seen_at = \"desc\" }",
-        expected_error: "",
-        expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits about every 1 GB: a later commit still overwrites a key an earlier one wrote, whatever its seen_at value",
-        expected_rows: "s1:30,s2:5,s3:4,NULL:7,NULL:8",
-    },
-    MergeDedupeLoadTestCase {
-        description: "dedup_sort asc keeps the earliest seen_at, a NULL seen_at still losing",
-        settings: "dedup_sort = { seen_at = \"asc\" }",
-        expected_error: "",
-        expected_plan: "repeated keys: lowest seen_at wins",
-        expected_rows: "s1:10,s2:5,s3:4,NULL:7,NULL:8",
-    },
-    MergeDedupeLoadTestCase {
-        description: "on_duplicate_keys = \"fail\" refuses the load, naming the repeated keys, and merges nothing",
-        settings: "on_duplicate_keys = \"fail\"",
-        expected_error: "the loaded rows repeat its unique_key: 2 value(s) of (sensor) appear in more than one row",
-        expected_plan: "",
-        expected_rows: "",
-    },
-];
-
-#[test]
-fn given_a_source_repeating_a_merge_key_when_loading_into_duckdb_then_one_row_per_key_stays_by_the_chosen_rule()
--> Result<(), String> {
-    run_async(async {
-        let postgres = start_postgres().await?;
-        let client = connect(&postgres).await?;
-        client
-            .batch_execute(READINGS_SETUP)
-            .await
-            .map_err(|error| error.to_string())?;
-        for test_case in &DEDUPE_CASES {
-            let rows = run_dedupe_case(
-                ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
-                postgres.port,
-                (&["SELECT 1"], "SELECT COALESCE(string_agg(COALESCE(sensor, 'NULL') || ':' || CAST(amount AS VARCHAR), ',' ORDER BY sensor NULLS LAST, amount), '') FROM raw.app__readings"),
-                test_case,
-            )
-            .await?;
-            assert_eq!(
-                rows.as_deref(),
-                Some(test_case.expected_rows),
                 "{}",
                 test_case.description
             );

@@ -272,10 +272,13 @@ pub(crate) fn merged_rows(
         &staging,
         (None, false),
     );
-    let values = |rows: &[&str]| match rows.is_empty() {
-        true => String::new(),
-        false => format!("VALUES {}", rows.join(", ")),
-    };
+    let inserts: Vec<String> = existing
+        .iter()
+        .map(|row| format!("INSERT INTO raw.app__accounts VALUES {row};"))
+        .chain(staged.iter().map(|row| {
+            format!("INSERT INTO raw.app__accounts__sqlload_staging_load1 VALUES {row};")
+        }))
+        .collect();
     let connection = duckdb::Connection::open_in_memory().map_err(failed)?;
     connection
         .execute_batch(&format!(
@@ -283,16 +286,8 @@ pub(crate) fn merged_rows(
              CREATE TABLE raw.app__accounts (id BIGINT, name VARCHAR, score BIGINT);
              CREATE TABLE raw.app__accounts__sqlload_staging_load1 (id BIGINT, name VARCHAR, score BIGINT, _sqlload_row BIGINT);
              {}
-             {}
              {};",
-            existing
-                .first()
-                .map(|_| format!("INSERT INTO raw.app__accounts {};", values(existing)))
-                .unwrap_or_default(),
-            format_args!(
-                "INSERT INTO raw.app__accounts__sqlload_staging_load1 {};",
-                values(staged)
-            ),
+            inserts.join("\n"),
             statements.join(";\n")
         ))
         .map_err(failed)?;

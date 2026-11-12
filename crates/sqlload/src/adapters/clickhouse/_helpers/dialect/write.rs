@@ -64,11 +64,10 @@ pub(crate) fn write_statements(
         .iter()
         .map(|column| {
             let value = adapter.render_source_expression_cast(&column.name, &column.column_type);
-            let value = match request.hashed.contains(&column.name) {
+            match request.hashed.contains(&column.name) {
                 true => format!("lower(hex(SHA256({value})))"),
                 false => value,
-            };
-            value
+            }
         })
         .collect();
     let staged = adapter.render_qualified_name(staging);
