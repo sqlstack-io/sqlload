@@ -56,7 +56,7 @@ fn cell_field(cells: &Cells) -> Option<String> {
     }
 }
 
-/// The rows `rows` selects in `document` as a JSON list, each with its cells as columns, and the names they used: this page's own when it lists them, else `names` from an earlier page.
+/// The rows `rows` selects in `document` as a JSON list (until names are known, a page whose rows all lack the cells' field fails, catching a mistyped pointer, while later pages of blank rows load), each with its cells as columns, and the names they used: this page's own when it lists them, else `names` from an earlier page.
 pub(crate) fn pivoted_rows(
     document: &Value,
     (rows, cells): (&Selector, &Cells),
@@ -67,7 +67,7 @@ pub(crate) fn pivoted_rows(
         return Ok(("[]".to_owned(), names));
     };
     let field = cell_field(cells).unwrap_or_default();
-    if !listed.iter().any(|row| row.get(&field).is_some()) {
+    if names.is_none() && !listed.iter().any(|row| row.get(&field).is_some()) {
         return Err(format!(
             "no row has a {field} field, so cells pointer {:?} finds no cells; check it",
             cells.pointer
@@ -136,17 +136,19 @@ fn column_names(columns: &[Value], cells: &Cells, source: &str) -> Result<CellNa
     named(found, source)
 }
 
-/// The names the header row's cells hold, matched by each cell's `cells.key` or position.
+/// The names the header row's cells hold, matched by each cell's `cells.key` or position; empty cells after the last name (a formatted row) name nothing.
 fn header_names(row: &Value, (field, cells): (&str, &Cells)) -> Result<CellNames, String> {
     let mut found: Vec<(String, String)> = Vec::new();
+    let mut unnamed: Option<usize> = None;
     for (position, cell) in row_cells(row, field)?.iter().enumerate() {
         let name = text_of(&cell_value(cell, cells)?).filter(|name| !name.trim().is_empty());
         let Some(name) = name else {
-            return Err(format!(
-                "the header row's cell {} has no name",
-                position + 1
-            ));
+            unnamed = unnamed.or(Some(position));
+            continue;
         };
+        if let Some(blank) = unnamed {
+            return Err(format!("the header row's cell {} has no name", blank + 1));
+        }
         found.push((cell_id(cell, cells, position)?, name));
     }
     named(found, "the header row")

@@ -25,6 +25,9 @@ REFRESH_TOKEN = "r3fresh-first"
 PASSWORD = "pa55+word/x"
 
 
+#: A later page of Google grid data holding only a blank row, then the end.
+GRID_BLANK_PAGE = {"sheets": [{"data": [{"rowData": [{}]}]}]}
+GRID_END = {"sheets": [{"data": [{}]}]}
 SHEET_ROWS = [
 	{"id": 1, "rowNumber": 1, "cells": [{"columnId": 7001, "value": "Bolt"}, {"columnId": 7002, "value": 3}, {"columnId": 7003, "value": 0.25}, {"columnId": 7004, "value": True}]},
 	{"id": 2, "rowNumber": 2, "cells": [{"columnId": 7003, "value": 1.5}, {"columnId": 7001, "value": "Nut"}]},
@@ -39,7 +42,7 @@ GRID = {
 			"data": [
 				{
 					"rowData": [
-						{"values": [{"effectiveValue": {"stringValue": "Name"}}, {"effectiveValue": {"stringValue": "Qty"}}, {"effectiveValue": {"stringValue": "Done"}}]},
+						{"values": [{"effectiveValue": {"stringValue": "Name"}}, {"effectiveValue": {"stringValue": "Qty"}}, {"effectiveValue": {"stringValue": "Done"}}, {"userEnteredFormat": {}}]},
 						{"values": [{"effectiveValue": {"stringValue": "Bolt"}}, {"effectiveValue": {"numberValue": 3}}, {"effectiveValue": {"boolValue": True}}, {"userEnteredFormat": {}}]},
 						{"values": [{"effectiveValue": {"stringValue": "Nut"}}, {}, {"effectiveValue": {"boolValue": False}}]},
 						{"values": [{"effectiveValue": {"stringValue": "Washer"}}]},
@@ -81,7 +84,7 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/gap": lambda query: self.reply(200, {"items": ORDERS[:3]} if query["p"] == "1" else {}),
 			"/v1/comma": self.comma,
 			"/v1/sheet": self.sheet,
-			"/v1/grid": lambda query: self.reply(200, GRID),
+			"/v1/grid": lambda query: self.reply(200, [GRID, GRID_BLANK_PAGE, GRID_END][int(query["page"]) - 1]),
 			"/v1/moved": lambda query: self.reply(302, {}, {"Location": "/v1/landed/"}),
 			"/v1/landed/": lambda query: self.reply(200, {"items": ORDERS[:3], "next": "more"}),
 			"/v1/landed/more": lambda query: self.reply(200, {"items": ORDERS[3:], "next": None}),
@@ -1002,7 +1005,7 @@ def test_given_a_one_level_fan_out_when_defined_then_its_job_is_unchanged_by_mul
 
 SHEET = "api.paginate('/sheet', paginator=sl.page_number('page'), select='$.rows', cells=sl.cells(value=['$.value', '$.displayValue']){extra})"
 GRID_JOB = (
-	"api.paginate('/grid', paginator=sl.single(), select='$.sheets[0].data[0].rowData', cells=sl.cells('$.values', key=None, "
+	"api.paginate('/grid', paginator=sl.page_number('page'), select='$.sheets[0].data[0].rowData', cells=sl.cells('$.values', key=None, "
 	"value=['$.effectiveValue.stringValue', '$.effectiveValue.numberValue', '$.effectiveValue.boolValue'], header_row=True))"
 )
 
@@ -1027,7 +1030,7 @@ def table_project(tmp_path: Path, api: ThreadingHTTPServer, job: str, settings: 
 		(
 			GRID_JOB,
 			[("Name", "VARCHAR"), ("Qty", "BIGINT"), ("Done", "BOOLEAN")],
-			[("Bolt", 3, True), ("Nut", None, False), ("Washer", None, None)],
+			[("Bolt", 3, True), ("Nut", None, False), ("Washer", None, None), (None, None, None)],
 		),
 	],
 	ids=["smartsheet-value-then-display-value", "smartsheet-value-only", "google-grid-header-row"],
