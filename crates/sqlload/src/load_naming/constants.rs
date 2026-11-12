@@ -10,7 +10,8 @@ pub const SQLLOAD_LOAD_ID: &str = "_sqlload_load_id";
 pub const SQLLOAD_LOADED_AT: &str = "_sqlload_loaded_at";
 
 /// Each column a load adds, as `(role, name under naming = "sqlload", name under naming = "dlt")`.
-pub const METADATA_NAMES: [(MetadataRole, &str, &str); 2] = [
+pub const METADATA_NAMES: [(MetadataRole, &str, &str); 3] = [
     (MetadataRole::LoadId, SQLLOAD_LOAD_ID, "_dlt_load_id"),
     (MetadataRole::LoadedAt, SQLLOAD_LOADED_AT, SQLLOAD_LOADED_AT),
+    (MetadataRole::RowId, "_sqlload_row_id", "_dlt_id"),
 ];

@@ -390,9 +390,13 @@ fn python_column(name: &str, column_type: ColumnType) -> SourceColumn {
 
 /// Whether `name` is a column the load adds under `naming`.
 fn is_metadata(naming: Naming, name: &str) -> bool {
-    [MetadataRole::LoadId, MetadataRole::LoadedAt]
-        .into_iter()
-        .any(|role| name.eq_ignore_ascii_case(metadata_name(naming, role)))
+    [
+        MetadataRole::LoadId,
+        MetadataRole::LoadedAt,
+        MetadataRole::RowId,
+    ]
+    .into_iter()
+    .any(|role| name.eq_ignore_ascii_case(metadata_name(naming, role)))
 }
 
 /// Call the table function on a blocking thread; the host holds the GIL only to start it.

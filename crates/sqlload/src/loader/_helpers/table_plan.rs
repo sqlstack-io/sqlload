@@ -57,6 +57,7 @@ use crate::loader::models::ReplannedColumns;
 use crate::loader::models::SourceEnd;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
+use crate::loader::models::Unnest;
 use crate::loader::models::WholeReason;
 use crate::loader::models::{WarehouseRoute, WarehouseSource};
 use crate::postgres_source::main::plan_read::plan_read;
@@ -152,7 +153,7 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     {
         column.origin = ColumnOrigin::Metadata;
     }
-    desired.extend(metadata_columns(spec.naming));
+    desired.extend(metadata_columns(spec.naming, spec.row_id));
     desired
 }
 
@@ -911,6 +912,11 @@ fn reader_offer(
         .filter(|(_, method)| **method == MaskMethod::Hmac)
         .map(|(name, _)| name.as_str())
         .collect();
+    let nesting = match (spec.unnest == Unnest::None, spec.row_id) {
+        (false, _) => Some("the table unnests lists into child tables, which SQLLoad writes"),
+        (true, true) => Some("the table gives each row an id, which SQLLoad makes"),
+        (true, false) => None,
+    };
     let needs_loader = match (hmac.is_empty(), spec.test_loader_route, &spec.checks) {
         (false, _, _) => Some(format!(
             "{} masked with hmac, whose key must never appear in SQL",
@@ -920,6 +926,7 @@ fn reader_offer(
         (true, false, Some(_)) => {
             Some("the table has checks, which run on the rows SQLLoad stages".to_owned())
         }
+        (true, false, None) if nesting.is_some() => nesting.map(str::to_owned),
         (true, false, None) => spec.files.as_ref().and_then(|files| {
             match (
                 &files.location.store,

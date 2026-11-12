@@ -5,6 +5,7 @@ use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::SchemaRef;
 
 use crate::load_naming::models::MetadataRole;
+use crate::row_ids::main::random_row_ids::random_row_ids;
 
 /// `batch` as the table's columns: each cast to the file type, and the load id and time filled in where `metadata`, aligned with `schema`'s fields, says the load adds them.
 pub(crate) fn shape_batch(
@@ -31,6 +32,9 @@ pub(crate) fn shape_batch(
                     TimestampMicrosecondArray::from(vec![loaded_at_micros; rows])
                         .with_timezone("UTC"),
                 )),
+                (Some(MetadataRole::RowId), _) => {
+                    Ok(Arc::new(StringArray::from(random_row_ids(rows)?)))
+                }
                 (None, Some(column)) => cast_with_options(column, field.data_type(), &strict)
                     .map_err(|error| {
                         format!(

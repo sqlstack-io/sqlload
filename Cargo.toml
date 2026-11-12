@@ -67,6 +67,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value", "arbitrary_precision"] }
 sha2 = "0.10"
+shake = "0.1"
 sqlload = { path = "crates/sqlload", default-features = false }
 sqlload-testkit = { path = "crates/sqlload-testkit" }
 tempfile = "3"
