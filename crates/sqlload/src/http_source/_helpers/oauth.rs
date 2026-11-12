@@ -132,7 +132,7 @@ fn token_source(token_url: Url, spec: &OAuth2Spec, grant: Grant) -> TokenSource 
 }
 
 impl TokenSource {
-    /// Every secret of the token flow so far: the client secret, refresh tokens and each access token issued.
+    /// Every secret of the token flow so far: the client secret, password, refresh tokens and each access token issued.
     pub(crate) fn secrets(&self) -> Vec<String> {
         self.secrets
             .lock()
@@ -269,8 +269,7 @@ impl TokenSource {
         let secrets = self.secrets();
         let failed = |status: u16| {
             let reason = match serde_json::from_slice::<Value>(&body) {
-                Ok(document) => oauth_error(&document)
-                    .unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned()),
+                Ok(document) => oauth_error(&document).unwrap_or_else(|| document.to_string()),
                 Err(_) => String::from_utf8_lossy(&body).into_owned(),
             };
             let reason = redacted(&reason, &secrets)
@@ -349,12 +348,18 @@ pub(crate) fn renewal_delay(expires_in: Option<&Value>) -> Result<Option<Duratio
         }))
 }
 
-/// `secret` as sent and as it appears in a URL or a form body, for redaction.
-fn secret_forms(secret: &str) -> [String; 3] {
+/// `secret` as sent, as it appears in a URL or a form body, and inside a JSON string, for redaction; a JSON error body is re-serialised before it is shown, so any escaping the server chose (`\/`, `\u00e9`) becomes this one.
+fn secret_forms(secret: &str) -> [String; 4] {
     let percent = encoded(secret);
     let form = percent
         .replace("%20", "+")
         .replace("%2A", "*")
         .replace('~', "%7E");
-    [secret.to_owned(), percent, form]
+    let quoted = serde_json::to_string(secret).unwrap_or_default();
+    let json = quoted
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .unwrap_or(secret)
+        .to_owned();
+    [secret.to_owned(), percent, form, json]
 }
