@@ -190,8 +190,9 @@ pub(crate) fn build_spec(
             }),
     );
     let merges = strategy == WriteStrategy::Merge;
+    let table_sorts = settings.dedup_sort.is_some();
     let on_duplicate_keys = layered(&settings.on_duplicate_keys, &defaults.on_duplicate_keys)
-        .filter(|(_, origin)| merges || *origin == SettingOrigin::Table);
+        .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_sorts));
     let table_fails = on_duplicate_keys == Some((OnDuplicateKeys::Fail, SettingOrigin::Table));
     let dedup_sort = layered(&settings.dedup_sort, &defaults.dedup_sort)
         .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_fails))
@@ -716,7 +717,7 @@ pub(crate) fn default_strategy(cursor: Option<&CursorSpec>, has_key: bool) -> Wr
     }
 }
 
-/// The `dedup_sort` column and direction of a merge, and the problems with `on_duplicate_keys` and `dedup_sort` (a source's apply only to its merge tables, and a table's `on_duplicate_keys = "fail"` drops its source's `dedup_sort`): both are for `merge`, `dedup_sort` names one column that is neither in the key nor masked, and has nothing to pick under `on_duplicate_keys = "fail"`.
+/// The `dedup_sort` column and direction of a merge, and the problems with `on_duplicate_keys` and `dedup_sort` (a source's apply only to its merge tables, and either one set on a table drops the other from its source): both are for `merge`, `dedup_sort` names one column that is neither in the key nor masked, and has nothing to pick under `on_duplicate_keys = "fail"`.
 fn dedupe_settings(
     strategy: WriteStrategy,
     unique_key: &[String],

@@ -142,10 +142,12 @@ impl SqlAdapter for BigQuerySql {
         format!("CAST({expression} AS STRING)")
     }
 
-    /// BigQuery refuses FLOAT64 and JSON in `PARTITION BY`, so those keys are partitioned by their text: 17 significant digits tell any two doubles apart, which `CAST` to STRING does not promise, and adding `0.0` first turns `-0.0` into `0.0`, as `MERGE ... ON` compares them equal.
+    /// BigQuery refuses FLOAT64 and JSON in `PARTITION BY`, so those keys are partitioned by their text: 17 significant digits tell any two doubles apart, which `CAST` to STRING does not promise, adding `0.0` first turns `-0.0` into `0.0`, as `MERGE ... ON` compares them equal, and each NaN key gets a partition of its own, as no NaN matches another there.
     fn render_partition_key(&self, value: &str, column_type: &ColumnType) -> String {
         match column_type {
-            ColumnType::Float => format!("FORMAT('%.17g', {value} + 0.0)"),
+            ColumnType::Float => {
+                format!("IF(IS_NAN({value}), GENERATE_UUID(), FORMAT('%.17g', {value} + 0.0))")
+            }
             ColumnType::Json => format!("TO_JSON_STRING({value})"),
             _ => value.to_owned(),
         }

@@ -1,5 +1,6 @@
 //! Refuse a merge batch that repeats its key.
 
+use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::loader::errors::LoaderError;
 use crate::publish_checks::_helpers::failures::repeated_keys;
 use crate::publish_checks::models::CheckedCommit;
@@ -17,7 +18,7 @@ pub async fn refuse_repeated_keys(
     match repeated_keys(commit, unique_key).await? {
         None => Ok(()),
         Some((_, detail)) => Err(LoaderError::Invalid(format!(
-            "{subject} its unique_key: {detail}; on_duplicate_keys = \"fail\" refuses a key held more than once, so remove the repeats, or drop that setting to keep the last row of each key"
+            "{subject} its unique_key: {detail}; this merge keeps no row of a repeated key (on_duplicate_keys = \"fail\", or a files source that does not write {SOURCE_ROW_COLUMN}), so remove the repeats"
         ))),
     }
 }

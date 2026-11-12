@@ -1292,3 +1292,11 @@ def test_given_source_level_dedupe_settings_when_loading_then_only_its_merge_tab
 	assert query(project, 'SELECT count(*) FROM "RAW"."shop__log"') == [(3,)]
 	assert query(project, 'SELECT id, v FROM "RAW"."shop__kept"') == [(1, "c")]
 	assert query(project, 'SELECT count(*) FROM "RAW"."shop__strict"') == [(0,)]
+
+
+def test_given_a_source_that_fails_on_repeated_keys_when_a_table_sets_dedup_sort_then_that_table_keeps_its_ranked_row(tmp_path: Path) -> None:
+	module = SHOP_MODULE.replace('sl.source("shop", connection="shop")', 'sl.source("shop", connection="shop", on_duplicate_keys="fail")')
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', dedup_sort={'v': 'asc'})(rows)\n", module=module)
+	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "a"}, {"id": 1, "v": "c"}])
+	load(project)
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows"') == [(1, "a")]

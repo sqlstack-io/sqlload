@@ -85,8 +85,9 @@ never fails on the warehouse's own error about it.
   or Python table in one commit.
 - `on_duplicate_keys = "fail"` refuses a commit that repeats a key instead, naming the key's
   columns and examples, before that commit changes anything. Commits before it stay.
-- Set on a source, both apply to its `merge` tables only, and a table's own
-  `on_duplicate_keys = "fail"` drops the source's `dedup_sort`.
+- Set on a source, both apply to its `merge` tables only. A table that sets one of them drops the
+  other from its source, so a table can choose `"fail"` under a source's `dedup_sort`, or the
+  reverse.
 
 ```toml
 [sources.app.tables."public.readings"]

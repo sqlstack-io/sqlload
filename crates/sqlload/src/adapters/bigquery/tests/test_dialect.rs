@@ -36,7 +36,7 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
     };
     let test_cases = [
         RenderedTestCase {
-            description: "a merge keyed on FLOAT64 and JSON, which BigQuery refuses in PARTITION BY, ranks repeated keys by their exact text, -0 as 0",
+            description: "a merge keyed on FLOAT64 and JSON, which BigQuery refuses in PARTITION BY, ranks repeated keys by their exact text, -0 as 0, and keeps every NaN key, as MERGE matches none",
             rendered: vec![adapter.render_merge(
                 &WriteStatementsRequest {
                     table: &orders(),
@@ -50,7 +50,7 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
                 &["`x`".to_owned(), "PARSE_JSON(`doc`)".to_owned()],
             )],
             expected_statements: &[
-                "MERGE INTO `p`.`raw`.`orders` AS __target USING (SELECT `x` AS `x`, `doc` AS `doc` FROM (SELECT `x`, `doc` FROM (SELECT `x` AS `x`, PARSE_JSON(`doc`) AS `doc`, ROW_NUMBER() OVER (PARTITION BY FORMAT('%.17g', `x` + 0.0), TO_JSON_STRING(PARSE_JSON(`doc`)) ORDER BY `_sqlload_row` DESC) AS __sqlload_rank FROM s) AS __sqlload_ranked WHERE __sqlload_rank = 1 OR `x` IS NULL OR `doc` IS NULL) AS __sqlload_kept) AS __source ON __target.`x` = __source.`x` AND __target.`doc` = __source.`doc` WHEN NOT MATCHED THEN INSERT (`x`, `doc`) VALUES (__source.`x`, __source.`doc`)",
+                "MERGE INTO `p`.`raw`.`orders` AS __target USING (SELECT `x` AS `x`, `doc` AS `doc` FROM (SELECT `x`, `doc` FROM (SELECT `x` AS `x`, PARSE_JSON(`doc`) AS `doc`, ROW_NUMBER() OVER (PARTITION BY IF(IS_NAN(`x`), GENERATE_UUID(), FORMAT('%.17g', `x` + 0.0)), TO_JSON_STRING(PARSE_JSON(`doc`)) ORDER BY `_sqlload_row` DESC) AS __sqlload_rank FROM s) AS __sqlload_ranked WHERE __sqlload_rank = 1 OR `x` IS NULL OR `doc` IS NULL) AS __sqlload_kept) AS __source ON __target.`x` = __source.`x` AND __target.`doc` = __source.`doc` WHEN NOT MATCHED THEN INSERT (`x`, `doc`) VALUES (__source.`x`, __source.`doc`)",
             ],
         },
         RenderedTestCase {
