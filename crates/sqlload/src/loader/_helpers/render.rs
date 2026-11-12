@@ -303,7 +303,7 @@ pub(crate) fn stage_item(stage: &PlannedStage) -> PlanItem {
 pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let spec = &table.spec;
     let action = match &table.mode {
-        WriteMode::Merge { unique_key } => format!("merge (unique_key: {})", unique_key.join(", ")),
+        WriteMode::Merge { unique_key, .. } => format!("merge (unique_key: {})", unique_key.join(", ")),
         WriteMode::DeleteInsert { cursor_column, .. } => {
             format!("delete_insert (cursor: {cursor_column})")
         }

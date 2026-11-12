@@ -22,6 +22,8 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "header",
     "header_row",
     "constant_columns",
+    "on_duplicate_keys",
+    "dedup_sort",
     #[cfg(feature = "container-tests")]
     "test_loader_route",
 ];

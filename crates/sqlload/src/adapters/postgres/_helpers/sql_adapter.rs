@@ -1,5 +1,6 @@
 //! Postgres's SQL: the contract's shared rendering, with Postgres's types, a temporary staging table, `replace` in place and `merge` by `ON CONFLICT`.
 
+use crate::adapters::contract::main::_ranked_source::ranked_source;
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT, STAGING_SUFFIX};
 use crate::adapters::contract::models::{
     ChangeApply, CursorValue, TableName, WriteStatementsRequest,
@@ -171,7 +172,7 @@ impl SqlAdapter for PostgresSql {
         format!("TRUNCATE {}", self.render_qualified_name(staging))
     }
 
-    /// `INSERT ... ON CONFLICT (key) DO UPDATE`, which needs a unique index or constraint on exactly the key; a key repeated within the staged rows fails the statement, changing nothing.
+    /// `INSERT ... ON CONFLICT (key) DO UPDATE`, which needs a unique index or constraint on exactly the key; the staged rows are first kept to one per key when the mode dedupes; otherwise a key repeated within them fails the statement, changing nothing.
     fn render_merge(
         &self,
         request: &WriteStatementsRequest<'_>,
@@ -179,6 +180,10 @@ impl SqlAdapter for PostgresSql {
         source: &str,
         values: &[String],
     ) -> String {
+        let ranked = ranked_source(self, request, (source, values));
+        let (source, values) = ranked
+            .as_ref()
+            .map_or((source, values), |(source, names)| (source.as_str(), names.as_slice()));
         let names: Vec<String> = request
             .columns
             .iter()

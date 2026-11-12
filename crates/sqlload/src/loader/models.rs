@@ -19,8 +19,8 @@ use crate::files_source::models::{
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, OnSchemaChange, OutputEncoding, Policy, ProjectConfig,
-    TableChecks, WriteStrategy,
+    BatchStep, Contract, NewTables, OnDuplicateKeys, OnSchemaChange, OutputEncoding, Policy,
+    ProjectConfig, SortDirection, TableChecks, WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};
@@ -78,6 +78,10 @@ pub struct TableSpec {
     pub strategy: WriteStrategy,
     pub strategy_origin: SettingOrigin,
     pub unique_key: Vec<String>,
+    /// What a merge does with rows of one commit sharing `unique_key`.
+    pub on_duplicate_keys: OnDuplicateKeys,
+    /// The column and direction that pick which of the rows sharing a key a merge keeps; without it, the last in source order.
+    pub dedup_sort: Option<(String, SortDirection)>,
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
@@ -637,6 +641,8 @@ pub struct Publisher {
     /// Arrow bytes of the batch so far, which measure it when the writer stages no files.
     pub arrow_bytes: usize,
     pub batch_rows: u64,
+    /// Rows staged so far, the next row's `_sqlload_row` when a merge dedupes by source order.
+    pub staged_ordinal: i64,
     /// Rows in `staging` not committed yet, and what they replace.
     pub waiting_rows: u64,
     pub waiting_range: Option<CommitRange>,

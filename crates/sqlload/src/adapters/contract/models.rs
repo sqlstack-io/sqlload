@@ -20,9 +20,10 @@ pub struct TableName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteMode {
     Append,
-    /// Upsert: rows whose key matches a staged row are replaced.
+    /// Upsert: rows whose key matches a staged row are replaced; with `dedupe`, of the staged rows sharing a key only the one it ranks first is merged.
     Merge {
         unique_key: Vec<String>,
+        dedupe: Option<MergeDedupe>,
     },
     /// Rows with `from <= cursor_column < to` (open-ended when `None`) are replaced by the staged rows; with `values`, the rows whose cursor is one of them (a files source's partitions) instead.
     DeleteInsert {
@@ -37,6 +38,15 @@ pub enum WriteMode {
     Recreate,
     /// Captured changes (`kind = "postgres_cdc"`), applied only where their `_sqlload_lsn` is newer than what the table holds, so a replayed batch changes nothing.
     Changes(ChangeWrite),
+}
+
+/// Which of a commit's staged rows sharing a merge key is kept: the first by `sort` (a column, and whether its highest value wins; a NULL never wins), then the one with the largest `ordinal`, the last in source order. Rows with a NULL in the key are all kept, as they match nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeDedupe {
+    /// The staged column numbering rows in source order.
+    pub ordinal: String,
+    /// The `dedup_sort` column, and `true` when its highest value wins.
+    pub sort: Option<(String, bool)>,
 }
 
 /// How a batch of captured changes is applied.

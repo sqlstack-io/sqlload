@@ -4,6 +4,7 @@ use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::CursorQuery;
 use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::MergeDedupe;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::source_binds_text::source_binds_text;
@@ -63,6 +64,7 @@ use crate::project::models::BatchStep;
 use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
+use crate::project::models::{OnDuplicateKeys, SortDirection};
 use crate::project::models::{FilesFormat, OutputEncoding};
 use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
@@ -73,7 +75,7 @@ use crate::routing::models::Route;
 use crate::routing::models::RouteOverrides;
 use crate::routing::models::Step;
 use crate::routing::models::Store;
-use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN};
+use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN, MERGE_ROW_COLUMN};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
@@ -569,6 +571,18 @@ async fn plan_table_once(
             "cursor_column {name} is not written to the table (excluded, not in the enforced contract, or ignored by on_schema_change)"
         )]);
     }
+    if let Some((name, _)) = spec.dedup_sort.as_ref().filter(|(name, _)| {
+        schema.blocked.is_none()
+            && spec.python.is_none()
+            && !schema
+                .write_columns
+                .iter()
+                .any(|column| column.name.eq_ignore_ascii_case(name))
+    }) {
+        schema = blocked_plan(vec![format!(
+            "dedup_sort column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
+        )]);
+    }
     let cursor_in_table = live.as_deref().is_some_and(|live| {
         live.iter()
             .any(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
@@ -746,7 +760,7 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
                 adapter.render_create_schema(&spec.destination),
                 adapter.render_create_loaded_table(spec, &table.schema.write_columns),
             ];
-            if let WriteMode::Merge { unique_key } = &table.mode {
+            if let WriteMode::Merge { unique_key, .. } = &table.mode {
                 statements.extend(adapter.render_key_index(&spec.destination, unique_key));
             }
             statements.extend(adapter.render_table_comment(&spec.destination, &spec.description));
@@ -1004,6 +1018,15 @@ fn write_mode(
         (false, WriteStrategy::Replace) => WriteMode::Replace,
         (false, WriteStrategy::Merge) => WriteMode::Merge {
             unique_key: spec.unique_key.clone(),
+            dedupe: (spec.on_duplicate_keys == OnDuplicateKeys::Dedupe).then(|| MergeDedupe {
+                ordinal: match spec.files.is_some() {
+                    true => SOURCE_ROW_COLUMN.to_owned(),
+                    false => MERGE_ROW_COLUMN.to_owned(),
+                },
+                sort: spec.dedup_sort.as_ref().map(|(column, direction)| {
+                    (column.clone(), *direction == SortDirection::Desc)
+                }),
+            }),
         },
         (false, WriteStrategy::DeleteInsert) => WriteMode::DeleteInsert {
             cursor_column: spec

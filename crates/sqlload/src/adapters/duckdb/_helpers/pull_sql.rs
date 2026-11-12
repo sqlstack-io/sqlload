@@ -2,12 +2,12 @@
 
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
-use crate::adapters::duckdb::constants::UTC_OFFSET;
+use crate::adapters::duckdb::constants::{UNLOADED_BATCH_ROWS, UNLOADED_FILE_ROWS, UTC_OFFSET};
 use crate::adapters::duckdb::models::DuckDbSql;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::postgres_source::models::ReadColumn;
-use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
+use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN, MERGE_ROW_COLUMN};
 use crate::schema_plan::models::DesiredColumn;
 
 /// One file DuckDB reads: where it reads it, and the values SQLLoad gives every row of it (its name and version as the files source records them, and its partition values), by column (`None` for a partition folder the file lacks).
@@ -100,6 +100,8 @@ pub(crate) struct UnloadedColumns<'a> {
     pub columns: &'a [DesiredColumn],
     pub read: &'a [ReadColumn],
     pub constants: &'a [(String, ColumnType, String)],
+    /// The batch, from 1: a merge's `_sqlload_row` numbers its rows after earlier batches', by file and row in file.
+    pub batch: u64,
 }
 
 /// `INSERT INTO into` every one of `columns` from a warehouse's unloaded Parquet files at `urls`: a column of `read` from the files, turned back from whole microseconds where it is read as a time or timestamp, then cast to its type, exactly whatever the session's time zone; a column of `constants` from its value; the load id and load time are the batch's; any other column is NULL.
@@ -109,6 +111,7 @@ pub(crate) fn unloaded_insert(
         columns,
         read,
         constants,
+        batch,
     }: UnloadedColumns<'_>,
     urls: &[String],
     (load_id, loaded_at): (&str, &str),
@@ -118,7 +121,7 @@ pub(crate) fn unloaded_insert(
     let values: Vec<String> = columns
         .iter()
         .map(
-            |column| match column_value(column, (read, constants), (load_id, loaded_at)) {
+            |column| match column_value(column, (read, constants), (load_id, loaded_at), batch) {
                 Some(value) => format!(
                     "CAST({value} AS {})",
                     DuckDbSql
@@ -134,8 +137,12 @@ pub(crate) fn unloaded_insert(
         .map(|column| identifier(&column.name))
         .collect();
     let urls: Vec<String> = urls.iter().map(|url| literal(url)).collect();
+    let numbered = match columns.iter().any(|column| column.name == MERGE_ROW_COLUMN) {
+        true => ", file_row_number = true",
+        false => "",
+    };
     format!(
-        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], hive_partitioning = false) AS f",
+        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], hive_partitioning = false{numbered}) AS f",
         DuckDbSql.render_qualified_name(into),
         targets.join(", "),
         values.join(", "),
@@ -143,11 +150,12 @@ pub(crate) fn unloaded_insert(
     )
 }
 
-/// Where an unloaded batch's `column` comes from: the batch's load id or load time, the value of the constant it is, or the files' column of `read` it is, before its cast; `None` when the files lack it.
+/// Where an unloaded batch's `column` comes from: the batch's load id or load time, a merge's row number (`batch`, then the file, then the row in it), the value of the constant it is, or the files' column of `read` it is, before its cast; `None` when the files lack it.
 fn column_value(
     column: &DesiredColumn,
     (read, constants): (&[ReadColumn], &[(String, ColumnType, String)]),
     (load_id, loaded_at): (&str, &str),
+    batch: u64,
 ) -> Option<String> {
     let constant = constants
         .iter()
@@ -156,6 +164,9 @@ fn column_value(
     match column.name.as_str() {
         LOAD_ID_COLUMN => Some(DuckDbSql.render_loader_value_literal(load_id)),
         LOADED_AT_COLUMN => Some(DuckDbSql.render_loader_value_literal(loaded_at)),
+        MERGE_ROW_COLUMN => Some(format!(
+            "{batch} * {UNLOADED_BATCH_ROWS} + CAST(f.file_index AS BIGINT) * {UNLOADED_FILE_ROWS} + f.file_row_number"
+        )),
         _ if constant.is_some() => constant,
         name => read
             .iter()

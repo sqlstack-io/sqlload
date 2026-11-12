@@ -19,6 +19,7 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
             description: "merge copies the staged rows in",
             mode: WriteMode::Merge {
                 unique_key: vec!["id".to_owned()],
+                dedupe: None,
             },
             built: false,
             expected_copies: 1,

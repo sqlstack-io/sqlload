@@ -22,7 +22,7 @@ pub(in crate::adapters) async fn write_problems(
     let schema = PostgresSql.stored_name(&table.schema);
     let name = PostgresSql.stored_name(&table.table);
     match mode {
-        WriteMode::Merge { unique_key } => Ok((
+        WriteMode::Merge { unique_key, .. } => Ok((
             key_problem(client, (&schema, &name), unique_key)
                 .await?
                 .into_iter()
