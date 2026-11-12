@@ -112,8 +112,11 @@ pub(crate) fn redirect_state(redirected: &str) -> Option<String> {
     }
 }
 
-/// The authorization code in the address the sign-in redirected to, checked against `state`; Snowflake's own error when it sent one, with control characters dropped so it cannot drive the terminal.
-pub(crate) fn redirect_code(redirected: &str, state: &str) -> Result<String, ApiError> {
+/// The authorization code in the address the sign-in redirected to, checked against `state`; `provider`'s own error when it sent one, with control characters dropped so it cannot drive the terminal.
+pub(crate) fn redirect_code(
+    redirected: &str,
+    (state, provider): (&str, &str),
+) -> Result<String, ApiError> {
     let url = redirect_url(redirected)?;
     let printable = |text: String| -> String {
         text.chars()
@@ -123,7 +126,7 @@ pub(crate) fn redirect_code(redirected: &str, state: &str) -> Result<String, Api
     if let Some(error) = query_value(&url, "error") {
         let description = query_value(&url, "error_description").unwrap_or_default();
         return Err(ApiError::Auth(format!(
-            "Snowflake refused the sign-in: {} {}",
+            "{provider} refused the sign-in: {} {}",
             printable(error),
             printable(description)
         )));

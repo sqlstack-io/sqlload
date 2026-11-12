@@ -55,8 +55,8 @@ fn given_where_a_sign_in_ended_when_reading_its_code_then_only_a_code_for_this_r
         },
     ];
     for test_case in &test_cases {
-        let found =
-            redirect_code(test_case.redirected, "s1").unwrap_or_else(|error| error.to_string());
+        let found = redirect_code(test_case.redirected, ("s1", "Snowflake"))
+            .unwrap_or_else(|error| error.to_string());
         assert!(
             found.contains(test_case.expected_outcome),
             "{}: {found}",

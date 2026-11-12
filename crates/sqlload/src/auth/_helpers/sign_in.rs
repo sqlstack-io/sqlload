@@ -9,12 +9,12 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
 use crate::auth::_helpers::oauth::{
-    authorize_url, new_pkce, redirect_code, redirect_state, token_request,
+    Pkce, authorize_url, new_pkce, redirect_code, redirect_state, token_request,
 };
 use crate::auth::constants::{
     BROWSER_CHECK_MILLIS, BROWSER_CHECKS, LOOPBACK_HOST, LOOPBACK_SCHEME, NOT_THIS_SIGN_IN_PAGE,
-    REDIRECT_READ_TIMEOUT_SECS, REDIRECT_REQUEST_LIMIT, SIGN_IN_FAILED_PAGE, SIGN_IN_TIMEOUT_SECS,
-    SIGNED_IN_PAGE,
+    PROVIDER_PLACEHOLDER, REDIRECT_READ_TIMEOUT_SECS, REDIRECT_REQUEST_LIMIT, SIGN_IN_FAILED_PAGE,
+    SIGN_IN_TIMEOUT_SECS, SIGNED_IN_PAGE, SNOWFLAKE_PROVIDER,
 };
 use crate::auth::errors::TokenError;
 use crate::auth::models::{OauthClient, OauthTokens};
@@ -46,27 +46,77 @@ pub(crate) fn terminal_io() -> SignInIo {
     }
 }
 
+/// A browser sign-in to one provider: who signs in, the redirect URI an OAuth client registered (a free loopback port when `None`), and what to use instead when no terminal is there.
+pub(crate) struct Consent<'a> {
+    pub(crate) provider: &'a str,
+    pub(crate) who: &'a str,
+    pub(crate) redirect_uri: Option<&'a str>,
+    pub(crate) unattended: &'a str,
+}
+
+/// What a browser sign-in returned: the authorization code, the redirect URI it was sent to, and the PKCE verifier that goes with it.
+pub(crate) struct SignedCode {
+    pub(crate) code: String,
+    pub(crate) redirect_uri: String,
+    pub(crate) verifier: String,
+}
+
 /// Sign in through the browser and exchange the code for tokens. Without a terminal this fails at once, as nobody is there to sign in.
 pub(crate) async fn sign_in(client: &OauthClient, io: &SignInIo) -> Result<OauthTokens, ApiError> {
+    let unattended = "run `sqlload debug` from a terminal once, or use auth = { method = \"key_pair\" } or { method = \"pat\" } for unattended runs";
+    let consent = Consent {
+        provider: SNOWFLAKE_PROVIDER,
+        who: &client.user,
+        redirect_uri: client.redirect_uri.as_deref(),
+        unattended,
+    };
+    let signed = browser_code(&consent, io, |redirect_uri, pkce| {
+        authorize_url(client, redirect_uri, pkce)
+    })
+    .await?;
+    let grant = [
+        ("grant_type", "authorization_code"),
+        ("code", signed.code.as_str()),
+        ("redirect_uri", signed.redirect_uri.as_str()),
+        ("code_verifier", signed.verifier.as_str()),
+    ];
+    let tokens = token_request(client, &grant)
+        .await
+        .map_err(|error| match error {
+            TokenError::Refused(reason) => {
+                ApiError::Auth(format!("Snowflake refused the sign-in code: {reason}"))
+            }
+            TokenError::Failed(error) => error,
+        })?;
+    say(&format!("Signed in to Snowflake as {}.", client.user));
+    Ok(tokens)
+}
+
+/// Have the person sign in to `consent.provider` in the browser, at the address `authorize` builds for a redirect URI and PKCE pair, and return the code it redirected back with: by a redirect to a loopback port, or by the person pasting the address the browser ended on. Without a terminal this fails at once.
+pub(crate) async fn browser_code(
+    consent: &Consent<'_>,
+    io: &SignInIo,
+    authorize: impl FnOnce(&str, &Pkce) -> Result<String, ApiError>,
+) -> Result<SignedCode, ApiError> {
+    let Consent { provider, who, .. } = consent;
     if !(io.terminal)() {
         return Err(ApiError::Auth(format!(
-            "no usable Snowflake sign-in is cached for {}, and signing in in the browser needs a terminal; run `sqlload debug` from a terminal once, or use auth = {{ method = \"key_pair\" }} or {{ method = \"pat\" }} for unattended runs",
-            client.user
+            "no usable {provider} sign-in is cached for {who}, and signing in in the browser needs a terminal; {}",
+            consent.unattended
         )));
     }
     let pkce = new_pkce()?;
-    let (listener, redirect_uri) = loopback(client.redirect_uri.as_deref()).await?;
-    let url = authorize_url(client, &redirect_uri, &pkce)?;
+    let (listener, redirect_uri) = loopback(consent.redirect_uri).await?;
+    let url = authorize(&redirect_uri, &pkce)?;
     say(&format!(
-        "Sign in to Snowflake as {} in your browser:\n  {url}",
-        client.user
+        "Sign in to {provider} as {who} in your browser:\n  {url}"
     ));
     let redirected = match (io.open_browser)(&url) {
         true => {
             say("Waiting for the browser to finish signing in...");
             tokio::time::timeout(
                 Duration::from_secs(SIGN_IN_TIMEOUT_SECS),
-                receive_redirect(&listener, &pkce.state),
+                receive_redirect(&listener, (&pkce.state, provider)),
             )
             .await
             .map_err(|_| {
@@ -85,23 +135,11 @@ pub(crate) async fn sign_in(client: &OauthClient, io: &SignInIo) -> Result<Oauth
             })?
         }
     };
-    let code = redirect_code(&redirected, &pkce.state)?;
-    let grant = [
-        ("grant_type", "authorization_code"),
-        ("code", code.as_str()),
-        ("redirect_uri", redirect_uri.as_str()),
-        ("code_verifier", pkce.verifier.as_str()),
-    ];
-    let tokens = token_request(client, &grant)
-        .await
-        .map_err(|error| match error {
-            TokenError::Refused(reason) => {
-                ApiError::Auth(format!("Snowflake refused the sign-in code: {reason}"))
-            }
-            TokenError::Failed(error) => error,
-        })?;
-    say(&format!("Signed in to Snowflake as {}.", client.user));
-    Ok(tokens)
+    Ok(SignedCode {
+        code: redirect_code(&redirected, (&pkce.state, provider))?,
+        redirect_uri,
+        verifier: pkce.verifier,
+    })
 }
 
 /// A listener on the loopback address and the redirect URI that reaches it: the configured one (which must be `http://127.0.0.1[:port][/path]`), else a free port.
@@ -142,13 +180,20 @@ async fn loopback(configured: Option<&str>) -> Result<(TcpListener, String), Api
 }
 
 /// The path and query of the first request to `listener` that carries this sign-in's `state`. Each connection is read on its own task with a time limit, so one that sends nothing or garbage holds nothing up; a request for another sign-in or with no state (another local process, or a web page probing the port) gets a 400 and is otherwise ignored.
-async fn receive_redirect(listener: &TcpListener, state: &str) -> Result<String, ApiError> {
+async fn receive_redirect(
+    listener: &TcpListener,
+    (state, provider): (&str, &str),
+) -> Result<String, ApiError> {
     let (found, mut received) = mpsc::channel::<String>(1);
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
-                    tokio::spawn(answer_redirect(stream, state.to_owned(), found.clone()));
+                    tokio::spawn(answer_redirect(
+                        stream,
+                        (state.to_owned(), provider.to_owned()),
+                        found.clone(),
+                    ));
                 }
                 Err(error) => {
                     tracing::debug!(%error, "a connection to the sign-in listener failed");
@@ -161,7 +206,11 @@ async fn receive_redirect(listener: &TcpListener, state: &str) -> Result<String,
 }
 
 /// Answer one connection to the sign-in listener, and pass its request target on when it carries this sign-in's `state`.
-async fn answer_redirect(mut stream: TcpStream, state: String, found: mpsc::Sender<String>) {
+async fn answer_redirect(
+    mut stream: TcpStream,
+    (state, provider): (String, String),
+    found: mpsc::Sender<String>,
+) {
     let read = tokio::time::timeout(
         Duration::from_secs(REDIRECT_READ_TIMEOUT_SECS),
         request_target(&mut stream),
@@ -173,7 +222,7 @@ async fn answer_redirect(mut stream: TcpStream, state: String, found: mpsc::Send
     let returned = redirect_state(&target);
     let ours = returned.as_deref() == Some(state.as_str());
     let unstated_error = returned.is_none() && target.contains("error=");
-    if let (true, Err(error)) = (unstated_error, redirect_code(&target, &state)) {
+    if let (true, Err(error)) = (unstated_error, redirect_code(&target, (&state, &provider))) {
         say(&format!(
             "An error came back without the sign-in's state, so SQLLoad keeps waiting: {error}. If it came from your sign-in, press Ctrl-C and fix that."
         ));
@@ -184,6 +233,7 @@ async fn answer_redirect(mut stream: TcpStream, state: String, found: mpsc::Send
         (true, true) => ("200 OK", SIGN_IN_FAILED_PAGE),
         (true, false) => ("200 OK", SIGNED_IN_PAGE),
     };
+    let page = page.replace(PROVIDER_PLACEHOLDER, &provider);
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
         page.len()
