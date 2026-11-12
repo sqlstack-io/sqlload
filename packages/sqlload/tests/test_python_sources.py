@@ -1193,3 +1193,45 @@ def test_given_a_native_type_pinned_for_a_files_target_when_planning_then_plan_r
 	planned = sqlload(project, "plan")
 	assert planned.returncode == 1, planned.stdout
 	assert "column n: a native type has no Arrow type, so Parquet and CSV files cannot hold it; pin a portable type" in planned.stdout + planned.stderr, planned.stdout + planned.stderr
+
+
+#: Two tenants' tables of one API merged into one table, told apart by their constant `tenant_id`.
+TENANT_TABLES = """\
+for tenant in ("a", "b"):
+    shop.table(
+        description="Test table.",
+        name=f"orders_{tenant}",
+        table_name="orders",
+        constant_columns={"tenant_id": tenant},
+        write_strategy="merge",
+        unique_key=["tenant_id", "id"],
+        cursor_column="at",
+    )(rows)
+"""
+
+TENANT_ROWS = 'SELECT tenant_id, id, v, _sqlload_load_id, CAST(_sqlload_loaded_at AS VARCHAR) FROM "RAW"."orders" WHERE tenant_id = ? ORDER BY id'
+
+
+def test_given_two_tenants_with_constant_columns_when_merging_into_one_table_then_each_keeps_its_own_rows_and_cursor(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, TENANT_TABLES)
+	give(project, "orders_a", [{"id": 1, "v": "a1", "at": "2026-01-05T00:00:00Z"}, {"id": 2, "v": "a2", "at": "2026-01-06T00:00:00Z"}])
+	give(project, "orders_b", [{"id": 1, "v": "b1", "at": "2026-01-01T00:00:00Z"}])
+	load(project)
+	assert query(project, 'SELECT tenant_id, id, v FROM "RAW"."orders" ORDER BY tenant_id, id') == [("a", 1, "a1"), ("a", 2, "a2"), ("b", 1, "b1")]
+	tenant_a = query(project, TENANT_ROWS.replace("?", "'a'"))
+	give(project, "orders_b", [{"id": 1, "v": "b1-changed", "at": "2026-01-02T00:00:00Z"}])
+	load(project, "orders_b")
+	assert seen(project, "orders_b")["cursor_value"] == "datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)"
+	assert query(project, TENANT_ROWS.replace("?", "'a'")) == tenant_a
+	assert query(project, 'SELECT tenant_id, id, v FROM "RAW"."orders" ORDER BY tenant_id, id') == [("a", 1, "a1"), ("a", 2, "a2"), ("b", 1, "b1-changed")]
+	columns = query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'orders' ORDER BY ordinal_position")
+	assert [name for (name,) in columns] == ["id", "v", "at", "tenant_id", "_sqlload_load_id", "_sqlload_loaded_at"]
+
+
+def test_given_a_table_yielding_its_constant_column_when_loading_then_it_fails_and_nothing_loads(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', constant_columns={'tenant_id': 'a'})(rows)\n")
+	give(project, "rows", [{"id": 1, "tenant_id": "x"}])
+	done = sqlload(project, "load")
+	assert done.returncode == 1
+	assert "constant column tenant_id: the source already has a column tenant_id, and a constant never replaces it" in done.stdout + done.stderr, done.stdout + done.stderr
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]

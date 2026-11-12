@@ -64,6 +64,18 @@ pub(crate) struct PinnedRunTestCase {
     pub(crate) expected_rows: &'static str,
 }
 
+/// One project with constant columns planned and loaded once on a fresh Postgres.
+pub(crate) struct ConstantLoadTestCase {
+    pub(crate) description: &'static str,
+    /// Settings after the `app` source's, starting with its `include` line.
+    pub(crate) settings: &'static str,
+    /// Text the plan's or the load's error must contain; empty when the load must succeed.
+    pub(crate) expected_error: &'static str,
+    /// A query on the DuckDB destination and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// One `plan` + `apply` + `load` within a scenario.
 pub(crate) struct ScenarioRun {
     /// SQL run in Postgres first.
