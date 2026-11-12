@@ -4,7 +4,7 @@ use std::time::Duration;
 pub const SSH_PORT: u16 = 22;
 
 /// Where Windows's OpenSSH agent service listens when `SSH_AUTH_SOCK` names no other pipe.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub const OPENSSH_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
 
 /// How long to wait for the bastion to answer and sign the client in.

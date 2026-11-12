@@ -194,6 +194,11 @@ and `port` are then the database as the bastion sees it. To set one up, see
 - It signs in with `private_key_file` (with `private_key_passphrase` if the key has one), or with
   each key ssh-agent holds when no file is set. From 0.32.0, `password` signs in when no key file
   is set; before, passwords aren't supported.
+- On Windows, ssh-agent is the pipe `SSH_AUTH_SOCK` names, or else the OpenSSH agent service's
+  (`\\.\pipe\openssh-ssh-agent`). Windows ssh-agent (OpenSSH agent pipe): compiles and
+  unit-tested, not live-tested. Key-file and password sign-in run the same code as on Linux and
+  macOS, but on Windows they're not covered by an end-to-end test: no Windows test goes through a
+  bastion.
 - The bastion's host key must be in `known_hosts` (`~/.ssh/known_hosts` by default). An unknown or
   changed key fails with its SHA256 fingerprint and the fix; a key is never accepted on first use.
 - TLS still runs end to end with the database, so `verify-full` checks the database's own name.
