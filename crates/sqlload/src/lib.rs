@@ -26,6 +26,7 @@ pub mod files_source;
 pub mod http;
 pub mod http_source;
 pub mod kafka;
+pub mod load_naming;
 pub mod loader;
 pub mod masking;
 pub mod metrics;

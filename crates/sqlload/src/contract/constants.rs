@@ -1,6 +1,3 @@
-/// Columns SQLLoad adds itself start with this; they are never findings.
-pub const SQLLOAD_COLUMN_PREFIX: &str = "_sqlload_";
-
 /// A live column no declaration names, on a `contract = "enforced"` table.
 pub const MISSING_DECLARATION: &str = "missing_declaration";
 

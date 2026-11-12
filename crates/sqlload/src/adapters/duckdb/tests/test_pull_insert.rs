@@ -39,7 +39,11 @@ fn given_parquet_files_when_duckdb_reads_them_itself_then_each_column_comes_from
                 &table,
                 (&test_case.columns, &test_case.in_files),
                 &test_case.files,
-                ("L1", "2026-11-06T00:00:00Z"),
+                (
+                    crate::load_naming::models::Naming::Sqlload,
+                    "L1",
+                    "2026-11-06T00:00:00Z"
+                ),
             ),
             test_case.expected_sql,
             "{}",

@@ -11,6 +11,8 @@ use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
+use crate::load_naming::main::metadata_name::metadata_name;
+use crate::load_naming::models::{MetadataRole, Naming};
 use crate::loader::_helpers::publish::staged_columns;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
@@ -53,8 +55,6 @@ use crate::row_batches::main::flattened_columns::flattened_columns;
 use crate::row_batches::main::json_lists::json_lists;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
-use crate::schema_plan::constants::LOAD_ID_COLUMN;
-use crate::schema_plan::constants::LOADED_AT_COLUMN;
 use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::TableAction;
 use crate::similar_names::main::close_name::close_name;
@@ -134,7 +134,7 @@ pub(crate) fn with_live_columns(
             .any(|(constant, _, _)| constant.eq_ignore_ascii_case(name))
     };
     for column in live? {
-        if !is_metadata(&column.name)
+        if !is_metadata(spec.naming, &column.name)
             && !constant(&column.name)
             && !has_column(&spec.source_table, &column.name)
         {
@@ -168,14 +168,14 @@ pub(crate) struct YieldedData<'a> {
 
 /// A Python table as its yielded data shows it: every column of the data typed by inference (the live table's type when the inferred one fits it, or when the column only held NULL), plus declared columns no row had.
 pub(crate) fn inferred_table(
-    planned: &SourceTable,
+    (planned, naming): (&SourceTable, Naming),
     declared: &[String],
     data: &YieldedData<'_>,
     live: Option<&[LiveColumn]>,
 ) -> SourceTable {
     let mut columns: Vec<SourceColumn> = Vec::new();
     for field in data.schema.fields() {
-        if !is_metadata(field.name()) {
+        if !is_metadata(naming, field.name()) {
             let live_type = live_type(live, field.name());
             let column_type = match (data.null_columns.contains(field.name()), live_type) {
                 (true, Some(live_type)) => live_type,
@@ -206,7 +206,7 @@ pub(crate) fn declared_problems(spec: &TableSpec, data: &YieldedData<'_>) -> Vec
         .fields()
         .iter()
         .map(|field| field.name().as_str())
-        .filter(|name| !is_metadata(name))
+        .filter(|name| !is_metadata(spec.naming, name))
         .collect();
     let keys = spec
         .pinned
@@ -388,8 +388,11 @@ fn python_column(name: &str, column_type: ColumnType) -> SourceColumn {
     }
 }
 
-fn is_metadata(name: &str) -> bool {
-    name.eq_ignore_ascii_case(LOAD_ID_COLUMN) || name.eq_ignore_ascii_case(LOADED_AT_COLUMN)
+/// Whether `name` is a column the load adds under `naming`.
+fn is_metadata(naming: Naming, name: &str) -> bool {
+    [MetadataRole::LoadId, MetadataRole::LoadedAt]
+        .into_iter()
+        .any(|role| name.eq_ignore_ascii_case(metadata_name(naming, role)))
 }
 
 /// Call the table function on a blocking thread; the host holds the GIL only to start it.
@@ -886,7 +889,7 @@ async fn replan(
         .map(|python| python.declared.clone())
         .unwrap_or_default();
     let table = inferred_table(
-        &load.table.spec.source_table,
+        (&load.table.spec.source_table, load.table.spec.naming),
         &declared,
         data,
         planned.live.as_deref(),

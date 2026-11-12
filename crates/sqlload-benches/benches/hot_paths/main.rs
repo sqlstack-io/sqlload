@@ -175,6 +175,7 @@ fn write_parquet((runtime, folder, columns, batch): ParquetInput) -> (u64, Vec<S
         path: &path,
         cursor_column: None,
         columns: &columns,
+        naming: sqlload::load_naming::models::Naming::Sqlload,
         load_id: "20261105T000000Z",
         file_id: "20261105T000000Z",
         loaded_at: "2026-11-05T00:00:00Z",
