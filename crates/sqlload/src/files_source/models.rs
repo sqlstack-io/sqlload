@@ -388,3 +388,21 @@ pub(crate) struct FileRead<'a> {
     /// The file as recorded in the source-file column.
     pub(crate) file_name: String,
 }
+
+/// What `after_load` did with a table's loaded files: `status` is `done`, or `failed` when any file stayed where it was (the load still counts, and is not run again).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AfterLoadReport {
+    /// `delete` or `move`.
+    pub action: &'static str,
+    pub status: &'static str,
+    /// Files deleted or moved.
+    pub files: u64,
+    pub failed: Vec<AfterLoadFailure>,
+}
+
+/// A loaded file `after_load` could not delete or move, and why.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AfterLoadFailure {
+    pub file: String,
+    pub error: String,
+}

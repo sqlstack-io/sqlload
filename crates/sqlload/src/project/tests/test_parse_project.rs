@@ -330,6 +330,31 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.raw] xlsx is for format = \"xlsx\"",
         },
         ParseProjectErrorTestCase {
+            description: "after_load cannot move files back into the folder it reads",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nafter_load = { move_to = \"raw/done\" }\n",
+            expected_message: "[sources.raw] after_load.move_to \"raw/done\" is inside path \"raw\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "after_load needs a folder to move to",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nafter_load = { move_to = \"/\" }\n",
+            expected_message: "[sources.raw] after_load.move_to must name a folder of the connection",
+        },
+        ParseProjectErrorTestCase {
+            description: "after_load is not for a ZIP archive's members",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncompression = \"zip\"\nafter_load = \"delete\"\n",
+            expected_message: "[sources.raw] after_load is not for compression = \"zip\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "after_load is for files sources",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.*\"]\nafter_load = \"delete\"\n",
+            expected_message: "copy_to_internal_stage and after_load are for kind = \"files\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "an unknown after_load is refused",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nafter_load = \"archive\"\n",
+            expected_message: "unknown variant `archive`",
+        },
+        ParseProjectErrorTestCase {
             description: "members need compression = zip",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nmembers = \"*.csv\"\n",
             expected_message: "[sources.raw] members is for compression = \"zip\"",
@@ -437,7 +462,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "copy_to_internal_stage is for files sources, never silently ignored",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ncopy_to_internal_stage = true\n",
-            expected_message: "[sources.app] path, partition_columns, path_columns, unmatched_paths and copy_to_internal_stage are for kind = \"files\"",
+            expected_message: "[sources.app] path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage and after_load are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "a postgres_cdc source refuses constant_columns, at source level",

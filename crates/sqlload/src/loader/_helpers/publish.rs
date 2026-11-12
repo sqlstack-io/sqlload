@@ -52,10 +52,13 @@ use crate::file_store::models::OpenFolder as StoreFolder;
 use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
 };
+use crate::files_source::main::after_load::after_load;
 use crate::files_source::main::batch_columns::batch_columns;
 use crate::files_source::main::batch_footers::batch_footers;
 use crate::files_source::main::batch_headers::batch_headers;
 use crate::files_source::main::key_columns::key_columns;
+use crate::files_source::models::AfterLoad;
+use crate::files_source::models::AfterLoadReport;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
@@ -385,6 +388,8 @@ impl Publisher {
             batch_bytes: options.batch_bytes.unwrap_or(BATCH_BYTES),
             files,
             merged_file: None,
+            fed_files: Vec::new(),
+            settled_files: Vec::new(),
         })
     }
 
@@ -671,6 +676,7 @@ impl Publisher {
             DirectLoaded::Committed(rows) => {
                 self.committed_rows += rows;
                 self.commits += 1;
+                self.settled_files.append(&mut self.fed_files);
             }
             DirectLoaded::Staged(rows) => self.waiting_rows += rows,
         }
@@ -752,6 +758,7 @@ impl Publisher {
         self.waiting_rows = 0;
         self.commits += 1;
         self.committed_state = self.state.clone();
+        self.settled_files.append(&mut self.fed_files);
         Ok(())
     }
 
@@ -994,12 +1001,19 @@ pub(crate) async fn publish_table(
     reader: &SourceReader,
     table: &TablePlan,
     (destination, run): (&Destination, &LoadRun<'_>),
-) -> Result<u64, LoaderError> {
+) -> Result<(u64, Option<AfterLoadReport>), LoaderError> {
     let publisher = Publisher::open(table.clone(), (destination, run.options), None).await?;
     let published = feed(reader, table, publisher, run).await;
     let (mut publisher, result) = published;
     publisher.close().await;
-    result
+    let rows = result?;
+    let report = match reader {
+        SourceReader::Files(folder) => {
+            after_load(folder, &table.spec.after_load, &publisher.settled_files).await
+        }
+        _ => None,
+    };
+    Ok((rows, report))
 }
 
 /// Pass the rows to `publisher`, cutting commits where the plan says; returns the publisher for its clean-up, and the rows committed.
@@ -1042,6 +1056,11 @@ async fn feed(
                         .collect();
                     let merged = merging.then(|| merged_file_text(table, &files));
                     publisher.merged_file = merged.clone();
+                    if table.spec.after_load != AfterLoad::Keep {
+                        publisher
+                            .fed_files
+                            .extend(files.iter().map(|data| data.file.relative_key.clone()));
+                    }
                     let fed_group = async {
                         let footers = match reader {
                             SourceReader::Files(folder) => {
@@ -1165,7 +1184,10 @@ async fn feed(
                 }
             }
         }
-        publisher.finish(None).await
+        let rows = publisher.finish(None).await?;
+        let fed_files = std::mem::take(&mut publisher.fed_files);
+        publisher.settled_files.extend(fed_files);
+        Ok(rows)
     }
     .await;
     (publisher, fed)

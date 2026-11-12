@@ -637,6 +637,7 @@ impl PythonFeed {
                 rows: 0,
                 changes: Vec::new(),
                 note: Some(NO_DATA_NOTE.to_owned()),
+                after_load: None,
             });
         }
         let unsettled = self.publisher.is_none()
@@ -654,6 +655,7 @@ impl PythonFeed {
             rows,
             changes: std::mem::take(&mut self.changes),
             note: None,
+            after_load: None,
         })
     }
 

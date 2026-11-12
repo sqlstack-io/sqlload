@@ -1,5 +1,7 @@
 //! Docker-backed loader tests against real systems.
 
+#[path = "loader/after_load/helpers.rs"]
+mod after_load_helpers;
 #[path = "loader/bigquery/helpers.rs"]
 mod bigquery_helpers;
 #[path = "loader/clickhouse/helpers.rs"]
@@ -21,6 +23,8 @@ mod postgres_helpers;
 mod sftp_helpers;
 #[path = "loader/sheets/helpers.rs"]
 mod sheets_helpers;
+#[path = "loader/test_after_load.rs"]
+mod test_after_load;
 #[path = "loader/test_batched_loads.rs"]
 mod test_batched_loads;
 #[path = "loader/test_bigquery_loads.rs"]

@@ -1008,3 +1008,23 @@ pub(crate) struct FilesMergeTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// One `sqlload load --json` of an `after_load` case.
+pub(crate) struct AfterLoadStep {
+    /// Files written first, by path below the connection's root, such as `drop/a.csv`.
+    pub(crate) files: &'static [(&'static str, &'static str)],
+    pub(crate) expected_exit: i32,
+    /// The table's `status`, `rows` and `after_load` in the report, as compact JSON.
+    pub(crate) expected_report: &'static str,
+}
+
+/// A CSV files source under `drop/` with `settings`, loaded step by step into DuckDB by the executable, then the files left below the root.
+pub(crate) struct AfterLoadTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// Folders below the root made links to a fresh folder in another directory, such as `/dev/shm`, which may be another volume.
+    pub(crate) linked: &'static [(&'static str, &'static str)],
+    pub(crate) steps: &'static [AfterLoadStep],
+    /// Every file left below the root, sorted, as `path=contents`.
+    pub(crate) expected_files: &'static [&'static str],
+}
