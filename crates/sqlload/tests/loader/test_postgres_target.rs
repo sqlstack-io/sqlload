@@ -316,6 +316,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                 description: "a key repeated across files ends with the newest modified file's value, whatever the names",
                 settings: MERGE_SETTINGS,
                 steps: &[MergeStep {
+                    before: &[],
                     files: &[
                         MergeFile {
                             key: "c.csv",
@@ -334,6 +335,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                         },
                     ],
                     expected_error: "",
+                    loads: true,
                     expected_plan: "3 files, one commit each, oldest modified first (ties by path)",
                 }],
                 check_query: MERGE_CHECK,
@@ -343,6 +345,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                 description: "files modified at the same time merge in path order",
                 settings: MERGE_SETTINGS,
                 steps: &[MergeStep {
+                    before: &[],
                     files: &[
                         MergeFile {
                             key: "b.csv",
@@ -356,6 +359,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                         },
                     ],
                     expected_error: "",
+                    loads: true,
                     expected_plan: "",
                 }],
                 check_query: MERGE_CHECK,
@@ -366,6 +370,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                 settings: MERGE_SETTINGS,
                 steps: &[
                     MergeStep {
+                        before: &[],
                         files: &[
                             MergeFile {
                                 key: "a.csv",
@@ -384,20 +389,25 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                             },
                         ],
                         expected_error: "drop/b.csv: ",
+                        loads: true,
                         expected_plan: "",
                     },
                     MergeStep {
+                        before: &[],
                         files: &[MergeFile {
                             key: "b.csv",
                             contents: "id,v\n1,b\n",
                             modified_secs: 2_000,
                         }],
                         expected_error: "",
+                        loads: true,
                         expected_plan: "2 files, one commit each",
                     },
                     MergeStep {
+                        before: &[],
                         files: &[],
                         expected_error: "",
+                        loads: true,
                         expected_plan: "",
                     },
                 ],
@@ -409,6 +419,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                 settings: MERGE_SETTINGS,
                 steps: &[
                     MergeStep {
+                        before: &[],
                         files: &[
                             MergeFile {
                                 key: "a.csv",
@@ -422,15 +433,18 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                             },
                         ],
                         expected_error: "",
+                        loads: true,
                         expected_plan: "",
                     },
                     MergeStep {
+                        before: &[],
                         files: &[MergeFile {
                             key: "a.csv",
                             contents: "id,v\n1,a2\n",
                             modified_secs: 3_000,
                         }],
                         expected_error: "",
+                        loads: true,
                         expected_plan: "1 file, one commit each",
                     },
                 ],

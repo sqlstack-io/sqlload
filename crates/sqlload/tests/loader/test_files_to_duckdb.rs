@@ -177,6 +177,17 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
             expected_result: "4:6.0:-,-,y,y",
         },
         FilesScenarioTestCase {
+            description: "a files merge refuses a cursor_column, as its run log picks the files",
+            store: local_store,
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\npartition_columns = { day = \"date\" }\ncursor_column = \"day\"\n",
+            runs: &[FilesRun {
+                files: &[NOV_3],
+                expected_error: "does not apply to a files source's merge",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        FilesScenarioTestCase {
             description: "a source with no files is an error, never an empty load",
             store: local_store,
             settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\n",
@@ -409,6 +420,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 description: "a key repeated across files ends with the newest modified file's value, whatever the names",
                 settings: MERGE_SETTINGS,
                 steps: &[MergeStep {
+                    before: &[],
                     files: &[
                         MergeFile {
                             key: "c.csv",
@@ -427,6 +439,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         },
                     ],
                     expected_error: "",
+                    loads: true,
                     expected_plan: "3 files, one commit each, oldest modified first (ties by path)",
                 }],
                 check_query: MERGE_CHECK,
@@ -436,6 +449,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 description: "files modified at the same time merge in path order",
                 settings: MERGE_SETTINGS,
                 steps: &[MergeStep {
+                    before: &[],
                     files: &[
                         MergeFile {
                             key: "b.csv",
@@ -449,6 +463,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         },
                     ],
                     expected_error: "",
+                    loads: true,
                     expected_plan: "",
                 }],
                 check_query: MERGE_CHECK,
@@ -459,6 +474,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 settings: MERGE_SETTINGS,
                 steps: &[
                     MergeStep {
+                        before: &[],
                         files: &[
                             MergeFile {
                                 key: "a.csv",
@@ -477,20 +493,25 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                             },
                         ],
                         expected_error: "drop/b.csv: ",
+                        loads: true,
                         expected_plan: "",
                     },
                     MergeStep {
+                        before: &[],
                         files: &[MergeFile {
                             key: "b.csv",
                             contents: "id,v\n1,b\n",
                             modified_secs: 2_000,
                         }],
                         expected_error: "",
+                        loads: true,
                         expected_plan: "2 files, one commit each",
                     },
                     MergeStep {
+                        before: &[],
                         files: &[],
                         expected_error: "",
+                        loads: true,
                         expected_plan: "",
                     },
                 ],
@@ -498,10 +519,92 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 expected_result: "1:b,2:c|3",
             },
             FilesMergeTestCase {
+                description: "a table dropped, then created again by apply alone, merges every file again",
+                settings: MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[
+                            MergeFile {
+                                key: "a.csv",
+                                contents: "id,v\n1,a\n",
+                                modified_secs: 1_000,
+                            },
+                            MergeFile {
+                                key: "b.csv",
+                                contents: "id,v\n1,b\n",
+                                modified_secs: 2_000,
+                            },
+                        ],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &["DROP TABLE raw.scores"],
+                        files: &[],
+                        loads: false,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "2 files, one commit each",
+                    },
+                ],
+                check_query: MERGE_CHECK,
+                expected_result: "1:b|4",
+            },
+            FilesMergeTestCase {
+                description: "a file changed back to a version merged before merges again, as the newest",
+                settings: MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n",
+                            modified_secs: 1_000,
+                        }],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,c\n",
+                            modified_secs: 2_000,
+                        }],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "1 file, one commit each",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n",
+                            modified_secs: 1_000,
+                        }],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "1 file, one commit each",
+                    },
+                ],
+                check_query: MERGE_CHECK,
+                expected_result: "1:a|3",
+            },
+            FilesMergeTestCase {
                 description: "a merged file rewritten in place merges again, as the newest",
                 settings: MERGE_SETTINGS,
                 steps: &[
                     MergeStep {
+                        before: &[],
                         files: &[
                             MergeFile {
                                 key: "a.csv",
@@ -515,15 +618,18 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                             },
                         ],
                         expected_error: "",
+                        loads: true,
                         expected_plan: "",
                     },
                     MergeStep {
+                        before: &[],
                         files: &[MergeFile {
                             key: "a.csv",
                             contents: "id,v\n1,a2\n",
                             modified_secs: 3_000,
                         }],
                         expected_error: "",
+                        loads: true,
                         expected_plan: "1 file, one commit each",
                     },
                 ],
@@ -556,6 +662,7 @@ fn given_files_appended_when_their_modified_times_are_shuffled_then_the_load_is_
             description: "append ignores modified times and keeps no run log",
             settings: "write_strategy = \"append\"\n",
             steps: &[MergeStep {
+                before: &[],
                 files: &[
                     MergeFile {
                         key: "a.csv",
@@ -569,6 +676,7 @@ fn given_files_appended_when_their_modified_times_are_shuffled_then_the_load_is_
                     },
                 ],
                 expected_error: "",
+                loads: true,
                 expected_plan: "1 batch of whole partitions, up to 1,000 files or about 1 GB per commit",
             }],
             check_query: "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY v) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = '_sqlload_runs')",

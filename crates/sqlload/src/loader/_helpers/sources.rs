@@ -991,6 +991,12 @@ async fn merge_ledger(
             "state = \"logged\" does not apply to a files source's merge, which records each file it merges".to_owned(),
         ));
     }
+    if let Some(cursor) = &spec.cursor {
+        return Ok(Err(format!(
+            "cursor_column {} does not apply to a files source's merge, which picks the files it has not merged from the run log, whatever their partition; remove it",
+            cursor.column
+        )));
+    }
     let merged = match request.live {
         None => return Ok(Ok(Vec::new())),
         Some(_) => merged_files(spec, destination).await?,
@@ -1011,18 +1017,20 @@ async fn merge_ledger(
     Ok(merged.map(|merged| unchanged_files(merged, &listed)))
 }
 
-/// The `merged` files still listed at the version they were merged at, or no longer listed.
+/// The newest record of each `merged` file (records come oldest first), kept when the file is still listed at that version or no longer listed: a file changed since, even back to an earlier version, merges again.
 fn unchanged_files(merged: Vec<LoadedFile>, listed: &HashMap<String, String>) -> Vec<LoadedFile> {
-    let mut kept: Vec<LoadedFile> = Vec::new();
+    let mut newest: HashMap<String, LoadedFile> = HashMap::new();
     for file in merged {
-        if listed
-            .get(&file.name)
-            .is_none_or(|version| *version == file.version)
-        {
-            kept.push(file);
-        }
+        newest.insert(file.name.clone(), file);
     }
-    kept
+    newest
+        .into_values()
+        .filter(|file| {
+            listed
+                .get(&file.name)
+                .is_none_or(|version| *version == file.version)
+        })
+        .collect()
 }
 
 /// A row of the loaded-files query: `file|version`, or just the file when `versioned` is false.

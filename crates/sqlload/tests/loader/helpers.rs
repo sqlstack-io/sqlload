@@ -128,6 +128,26 @@ pub(crate) async fn run_once(
     Ok(lines.join("\n"))
 }
 
+/// Plan and apply once, then load only when `loads` (otherwise as `sqlload apply`): the rendered plan, or the error text.
+async fn run_step(
+    project_text: &str,
+    destinations: &BTreeMap<String, Destination>,
+    loads: bool,
+) -> Result<String, String> {
+    let project = described_project(project_text).await?;
+    let mut plan = plan_project(&project, destinations, &PlanOptions::default())
+        .await
+        .map_err(|error| error.to_string())?;
+    let (lines, ok) = render_plan(&plan);
+    ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+    apply_project(&plan, destinations)
+        .await
+        .map_err(|error| error.to_string())?;
+    plan.tables.retain(|_| loads);
+    load_all(&project, &plan, destinations).await?;
+    Ok(lines.join("\n"))
+}
+
 /// Load every table of `plan`; the first table that failed is the error.
 pub(crate) async fn load_all(
     project: &ProjectConfig,
@@ -1878,6 +1898,12 @@ pub(crate) async fn run_merge_case(
         .ok_or_else(|| "no dev destination".to_owned())?;
     std::fs::create_dir_all(directory.path().join("drop")).map_err(|error| error.to_string())?;
     for (index, step) in test_case.steps.iter().enumerate() {
+        execute(
+            destination,
+            step.before.iter().map(|sql| (*sql).to_owned()).collect(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         for file in step.files {
             let path = directory.path().join("drop").join(file.key);
             std::fs::write(&path, file.contents).map_err(|error| error.to_string())?;
@@ -1889,7 +1915,7 @@ pub(crate) async fn run_merge_case(
                 .and_then(|opened| opened.set_modified(modified))
                 .map_err(|error| error.to_string())?;
         }
-        let outcome = run_once(&text, &destinations, &PlanOptions::default()).await;
+        let outcome = run_step(&text, &destinations, step.loads).await;
         let (plan, error) = (
             outcome.clone().unwrap_or_default(),
             outcome.err().unwrap_or_default(),
