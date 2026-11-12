@@ -3,7 +3,7 @@ use crate::project::models::{Contract, OnSchemaChange, Policy};
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::SchemaRules;
 use crate::schema_plan::tests::helpers::{
-    inferred, live, pinned, postgres_rules, snowflake_rules, source,
+    constant, inferred, live, pinned, postgres_rules, snowflake_rules, source,
 };
 use crate::schema_plan::tests::test_types::PlanSchemaTestCase;
 
@@ -371,6 +371,106 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             rules: postgres_rules(),
             expected_action: &["widen  amount int -> decimal(18,2) (numeric(21,2))  in place"],
             expected_written: &["amount"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "an enforced contract keeps a constant column, which is declared, and drops an undeclared source column",
+            desired: vec![
+                pinned("id", ColumnType::Int),
+                source("extra", ColumnType::Date),
+                constant("tenant_id", ColumnType::Text),
+            ],
+            live: None,
+            rules: SchemaRules {
+                contract: Contract::Enforced,
+                ..snowflake_rules()
+            },
+            expected_action: &["create"],
+            expected_written: &["id", "tenant_id"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 1,
+        },
+        PlanSchemaTestCase {
+            description: "an enforced contract adds a constant column the live table lacks",
+            desired: vec![
+                pinned("id", ColumnType::Int),
+                constant("tenant_id", ColumnType::Text),
+            ],
+            live: Some(vec![live("ID", ColumnType::Int)]),
+            rules: SchemaRules {
+                contract: Contract::Enforced,
+                ..snowflake_rules()
+            },
+            expected_action: &["add column  tenant_id text -> VARCHAR"],
+            expected_written: &["id", "tenant_id"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "on_schema_change = fail still adds a constant column, which is configured rather than a new field",
+            desired: vec![
+                source("id", ColumnType::Int),
+                constant("tenant_id", ColumnType::Int),
+            ],
+            live: Some(vec![live("ID", ColumnType::Int)]),
+            rules: SchemaRules {
+                on_schema_change: OnSchemaChange::Fail,
+                ..snowflake_rules()
+            },
+            expected_action: &["add column  tenant_id int -> NUMBER(38,0)"],
+            expected_written: &["id", "tenant_id"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "on_schema_change = ignore still adds and loads a constant column",
+            desired: vec![
+                source("id", ColumnType::Int),
+                constant("tenant_id", ColumnType::Text),
+            ],
+            live: Some(vec![live("ID", ColumnType::Int)]),
+            rules: SchemaRules {
+                on_schema_change: OnSchemaChange::Ignore,
+                ..snowflake_rules()
+            },
+            expected_action: &["add column  tenant_id text -> VARCHAR"],
+            expected_written: &["id", "tenant_id"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a Postgres table SQLLoad did not create that lacks a constant column fails, rather than load rows that cannot be told apart",
+            desired: vec![
+                source("id", ColumnType::Int),
+                constant("tenant_id", ColumnType::Text),
+            ],
+            live: Some(vec![live("id", ColumnType::Int)]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &["id"],
+            expected_blocked: "tenant_id is not in the table, which SQLLoad did not create and does not alter; add it to the table, or remove it from constant_columns",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a Postgres table SQLLoad did not create that has the constant column loads into it",
+            desired: vec![
+                source("id", ColumnType::Int),
+                constant("tenant_id", ColumnType::Text),
+            ],
+            live: Some(vec![
+                live("id", ColumnType::Int),
+                live("tenant_id", ColumnType::Text),
+            ]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &["id", "tenant_id"],
             expected_blocked: "",
             expected_fix_flag: None,
             expected_warnings: 0,

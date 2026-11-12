@@ -6,7 +6,7 @@ response once into the table's rows.
 """
 
 import json
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,6 +34,40 @@ class Auth:
 	"""Which of the connection's settings authenticate requests."""
 
 	spec: Mapping[str, Any]
+
+
+#: `cells(names_from=...)` left unset: `"$.columns"`, or none with `header_row=True`.
+_LISTED_COLUMNS: Any = object()
+
+
+@dataclass(frozen=True)
+class Cells:
+	"""How each row's list of cells becomes columns; `paginate` and `fan_out` take it as `cells=`."""
+
+	spec: Mapping[str, Any]
+
+
+def cells(
+	pointer: str = "$.cells",
+	*,
+	key: str | None = "columnId",
+	value: str | Sequence[str] = "$.value",
+	names_from: str | None = _LISTED_COLUMNS,
+	name_key: str | None = "title",
+	id_key: str = "id",
+	header_row: bool = False,
+) -> Cells:
+	"""Each row's cells at `pointer` as one column per named column, typed like any other value; a missing cell loads NULL.
+
+	A cell's column is its `key` field, matched to the `id_key` of the columns the response lists at `names_from`,
+	named by their `name_key` (Smartsheet: the defaults). With `key=None` cells match columns by position, and with
+	`header_row=True` the first row's cells name them (Google's grid data). `value` is where
+	a cell's value is, or several places tried in turn. A cell whose column is not named fails the load."""
+	values = [value] if isinstance(value, str) else list(value)
+	if names_from is _LISTED_COLUMNS:
+		names_from = None if header_row else "$.columns"
+	spec: dict[str, Any] = {"pointer": pointer, "key": key, "value": values, "names_from": names_from, "name_key": name_key, "id_key": id_key}
+	return Cells({**spec, "header_row": header_row})
 
 
 def single() -> Paginator:
@@ -193,6 +227,7 @@ class Http:
 		method: str = "GET",
 		json_body: Mapping[str, Any] | None = None,
 		key: str | None = None,
+		cells: Cells | None = None,
 	) -> Job:
 		"""Every page of `path`; `select` (such as `"$.items"`) is where the rows are, `on_status={404: "skip"}` treats a status as no rows.
 
@@ -201,7 +236,7 @@ class Http:
 		holding the paginator's values when its `location` is `"body"`. As a fan-out's `over`, `key` names the
 		placeholder the selected values fill when it is not the field's own name (`select="$.items[*].id", key="order_id"`)."""
 		request = self._request(path, paginator, params, select, on_status, (method, json_body))
-		return Job({"kind": "paginate", **request, **_projection(fields, keep_record), **_key(key)})
+		return Job({"kind": "paginate", **request, **_projection(fields, keep_record), **_key(key), **_cells(cells)})
 
 	def fan_out(
 		self,
@@ -218,6 +253,7 @@ class Http:
 		method: str = "GET",
 		json_body: Mapping[str, Any] | None = None,
 		key: str | None = None,
+		cells: Cells | None = None,
 	) -> Job:
 		"""Every page of `path` once per key of `over`, up to `concurrency` at a time: `over` is a paginate whose
 		`select` picks the keys (`"$.items[*].id"` fills `{id}`), or values (`["uk", "fr"]` fill the one placeholder;
@@ -231,7 +267,7 @@ class Http:
 		over_spec = dict(over._definition) if isinstance(over, Job) else {"kind": "values", "values": list(over)}
 		request = self._request(path, paginator or single(), params, select, on_status, (method, json_body))
 		projected = _projection(fields, keep_record)
-		return Job({"kind": "fan_out", **request, **projected, **_key(key), "over": over_spec, "concurrency": concurrency})
+		return Job({"kind": "fan_out", **request, **projected, **_key(key), **_cells(cells), "over": over_spec, "concurrency": concurrency})
 
 	def _request(
 		self,
@@ -260,6 +296,11 @@ class Http:
 def _key(key: str | None) -> dict[str, Any]:
 	"""`key` as a job field, left out when unset so jobs without it are unchanged."""
 	return {} if key is None else {"key": key}
+
+
+def _cells(cells: Cells | None) -> dict[str, Any]:
+	"""`cells` as a job field, left out when unset so jobs without it are unchanged."""
+	return {} if cells is None else {"cells": dict(cells.spec)}
 
 
 def _projection(fields: Fields | None, keep_record: str | None) -> dict[str, Any]:

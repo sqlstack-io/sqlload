@@ -8,7 +8,7 @@ use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::models::FilesDestination;
 use crate::column_types::models::ColumnType;
 use crate::contract::_helpers::adopt::adoption;
-use crate::contract::_helpers::compare::findings;
+use crate::contract::_helpers::compare::{declared_columns, findings};
 use crate::contract::_helpers::file_drift::file_drift;
 use crate::contract::_helpers::read_from::{other_warehouse, read_from};
 use crate::contract::_helpers::source_drift::source_drift;
@@ -88,7 +88,7 @@ async fn resource(
         Ok(live) => (
             [
                 findings(
-                    &spec.pinned,
+                    &declared_columns(spec),
                     spec.contract,
                     live.as_deref(),
                     (spec.warehouse, &relation),
@@ -161,7 +161,7 @@ async fn files_resource(
     let readable = read.problems.is_empty();
     if readable {
         found.extend(findings(
-            &spec.pinned,
+            &declared_columns(spec),
             spec.contract,
             read.live.as_deref(),
             (spec.warehouse, &relation),

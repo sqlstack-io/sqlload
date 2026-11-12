@@ -52,6 +52,7 @@ Unknown settings raise `TypeError` when the module is imported.
 | `write_strategy`, `unique_key`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings). Python tables don't take `lookahead` or `lookback_from`. |
 | `contract`, `on_schema_change`, `auto_widen`, `type_change_rebuild` | source or table | See [Contracts](/docs/concepts/contracts/). |
 | `checks` | source or table | Checks on the staged rows, such as `{"unique": ["order_id"]}`. See [Checks before publish](/docs/concepts/checks/). |
+| `constant_columns` | source or table | From 0.37.0 (not released yet). Columns with the same value in every row, such as `{"tenant_id": "acme"}` or `{"shard": {"value": "7", "type": "int"}}`; a table's replace its source's. A yielded field of the same name, ignoring case, fails the table before anything is written. See [Several tenants in one table](/docs/concepts/write-strategies/#several-tenants-in-one-table). |
 | `allow_empty` | source or table | Let `replace` empty a table when the function yields no rows. |
 | `state` | source or table | `"logged"` to keep a position in `ctx.state`. See [Logged state](/docs/concepts/cursors/#logged-state). |
 | `columns` | table | Pinned column types, such as `{"total": "decimal(18,2)"}`. |
@@ -220,8 +221,8 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | Function | Meaning |
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
-| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0 (not released yet), `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. |
+| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). From 0.37.0 (not released yet), `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0 (not released yet), `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. |
 
 | Paginator | Next page |
 |-----------|-----------|
@@ -231,6 +232,10 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | `sl.offset(param="offset", *, limit, limit_param="limit", location="query")` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0. |
 | `sl.page_number(param="page", *, start=1, location="query")` | Counts pages; ends at an empty page. `location` is from 0.36.0. |
 | `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. `location` is from 0.36.0. |
+
+| Cells | Columns |
+|-------|---------|
+| `sl.cells(pointer="$.cells", *, key="columnId", value="$.value", names_from="$.columns", name_key="title", id_key="id", header_row=False)` | From 0.37.0 (not released yet). Each row's cells at `pointer`, one column per column the response names. See [Rows of cells](#rows-of-cells). |
 
 | Auth | Sends |
 |------|-------|
@@ -280,6 +285,51 @@ def notes(ctx):
 - An error names the keys that led to it, such as `/orders order_id=5 → /orders/5/items item_id=51 →
   GET .../notes?page=2: HTTP 500`.
 - `plan` checks every level before any request: each placeholder must come from a level above.
+
+### Rows of cells
+
+From 0.37.0 (not released yet). Some APIs return each row as a list of cells, such as
+`[{"columnId": 7001, "value": "Bolt"}]`, and list the column names separately (Smartsheet), or
+name them in the first row (Google's grid data). `cells=sl.cells(...)` on `paginate` or `fan_out`
+turns each row into one column per named column, in Rust, before the rows load:
+
+```python
+@sheets.table(description="Parts.")
+def parts(ctx):
+    return api.paginate("/sheets/123", paginator=sl.page_number("page"), select="$.rows",
+                        cells=sl.cells(value=["$.value", "$.displayValue"]))
+```
+
+- A cell's column is its `key` field (`columnId`), matched to the `id_key` (`id`) of the columns
+  listed at `names_from` (`$.columns`), named by their `name_key` (`title`). These defaults fit
+  Smartsheet.
+- `key=None` matches cells to columns by position. `header_row=True` takes the names from the first
+  row's cells instead of `names_from`, and that row doesn't load. For Google's grid data:
+
+  ```python
+  api.paginate("/spreadsheets/ID", paginator=sl.single(), select="$.sheets[0].data[0].rowData",
+               cells=sl.cells("$.values", key=None, header_row=True,
+                              value=["$.effectiveValue.stringValue", "$.effectiveValue.numberValue",
+                                     "$.effectiveValue.boolValue"]))
+  ```
+
+- `value` is where each cell's value is, or a list of places tried in turn; the first present and
+  not null wins. Values are typed like any other JSON value: a number loads as a number, `true` as
+  a boolean. Paths in `select` and here may index a list, as in `$.sheets[0]`.
+- A row with no cell for a column loads `NULL` in it. The row's other fields, such as its `id` or
+  `modifiedAt`, load beside the cells' columns; one with the name of a cells' column fails the load.
+- A cell whose column the response doesn't name fails the load, naming its id, unless it has no
+  value (Google returns formatted empty cells past the last column). Two cells for one column in a
+  row fail it too, as does a page whose rows have no field at `pointer`. Names are read again
+  from every page that lists them; a page that doesn't keeps the names of the page before it.
+- `header_row` reads the first row of a paginate's first page. In a `fan_out`, that is each key's
+  first page, which suits one sheet per key; a fan-out that splits one sheet into ranges would lose
+  each range's first row, so list the names with `names_from` instead.
+- A column renamed in the source is a new column to the destination, so
+  [`on_schema_change`](/docs/configuration/#table-settings) decides: by default it is added, and
+  earlier rows hold `NULL` in it.
+- `fields=` picks from the pivoted columns, by their names (`{"qty": "$.Qty"}`), and `keep_record`
+  keeps the pivoted row, not the cells as the API sent them.
 
 ### POST with a JSON body
 

@@ -71,12 +71,28 @@ pub(crate) fn select_path<'a>(bytes: &'a [u8], path: &str) -> Result<&'a [u8], S
         serde_json::from_slice(bytes).map_err(|error| located(&error, 1))?;
     let mut walked: Vec<&str> = Vec::new();
     for segment in path.split('.') {
-        let object: HashMap<String, &RawValue> = serde_json::from_str(current.get())
-            .map_err(|_| format!("path {path}: {} is not a JSON object", shown(&walked)))?;
-        current = object
-            .get(segment)
-            .copied()
-            .ok_or_else(|| format!("path {path}: {} has no key {segment:?}", shown(&walked)))?;
+        let listed = current.get().trim_start().starts_with('[');
+        let index = segment
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+            .filter(|_| listed)
+            .map(str::parse::<usize>);
+        current = match index {
+            Some(Err(_)) | None => {
+                let object: HashMap<String, &RawValue> = serde_json::from_str(current.get())
+                    .map_err(|_| format!("path {path}: {} is not a JSON object", shown(&walked)))?;
+                object.get(segment).copied().ok_or_else(|| {
+                    format!("path {path}: {} has no key {segment:?}", shown(&walked))
+                })?
+            }
+            Some(Ok(index)) => {
+                let items: Vec<&RawValue> = serde_json::from_str(current.get())
+                    .map_err(|_| format!("path {path}: {} is not a JSON list", shown(&walked)))?;
+                items.get(index).copied().ok_or_else(|| {
+                    format!("path {path}: {} has no item {segment}", shown(&walked))
+                })?
+            }
+        };
         walked.push(segment);
     }
     Ok(current.get().as_bytes())

@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::task::JoinSet;
 
+use crate::http_source::_helpers::cells::cells_problem;
 use crate::http_source::_helpers::endpoint::{endpoint, interval, shared_limiter};
 use crate::http_source::_helpers::oauth::token_url;
 use crate::http_source::_helpers::pages::{paginate, set_at};
@@ -92,6 +93,7 @@ fn request_problems(request: &Request) -> Vec<String> {
     problems.extend(selector(request.select.as_deref()).err());
     problems.extend(paginator_problem(&request.paginator));
     problems.extend(body_problems(request));
+    problems.extend(request.cells.as_ref().and_then(cells_problem));
     problems.extend(match &request.client.auth {
         Auth::Oauth2ClientCredentials(spec)
         | Auth::Oauth2RefreshToken(spec)
@@ -182,7 +184,7 @@ fn body_problems(request: &Request) -> Vec<String> {
         );
     }
     problems.extend(paths.iter().filter_map(|path| match selector(Some(path)) {
-        Ok(parsed) if parsed.field.is_none() && !parsed.rows.is_empty() => None,
+        Ok(parsed) if parsed.field.is_none() && named_fields(&parsed.rows) => None,
         Ok(_) | Err(_) => Some(format!(
             "body path {path:?} is not a path such as \"$.page.cursor\""
         )),
@@ -199,6 +201,11 @@ fn body_problems(request: &Request) -> Vec<String> {
         );
     }
     problems
+}
+
+/// Whether `segments` are one or more field names, with no list index such as `[0]`.
+fn named_fields(segments: &[String]) -> bool {
+    !segments.is_empty() && !segments.iter().any(|segment| segment.starts_with('['))
 }
 
 /// Why a header cannot be sent, if it cannot.
@@ -292,8 +299,11 @@ fn level_problems(fan_out: &FanOut) -> Vec<String> {
 
 /// Why `picker`, which feeds keys to the level below, cannot have `fields` or `keep_record`, if it has them.
 fn picker_problem(picker: &Request) -> Option<String> {
-    (picker.fields.is_some() || picker.keep_record.is_some())
-        .then(|| "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows".to_owned())
+    match (picker.fields.is_some() || picker.keep_record.is_some(), picker.cells.is_some()) {
+        (true, _) => Some("fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows".to_owned()),
+        (false, true) => Some("fan_out's over picks keys with its select; cells are for the fan-out's own rows".to_owned()),
+        (false, false) => None,
+    }
 }
 
 /// The name the keys `picker` selects fill: its `key`, else the selected field; `None` when its select names no field.

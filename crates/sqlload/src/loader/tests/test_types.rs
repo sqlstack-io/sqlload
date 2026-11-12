@@ -113,3 +113,11 @@ pub(crate) struct MergedFileTestCase {
     /// The name and version the ledger reads back.
     pub(crate) expected_file: (&'static str, &'static str),
 }
+
+pub(crate) struct ConstantsAddedTestCase {
+    pub(crate) description: &'static str,
+    /// The constants added: name, type and value as text.
+    pub(crate) constants: &'static [(&'static str, ColumnType, &'static str)],
+    /// Whether the batch comes back equal, and its columns as `name:Arrow type=values`; or the error.
+    pub(crate) expected_outcome: Result<(bool, &'static str), &'static str>,
+}

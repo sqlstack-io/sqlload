@@ -97,6 +97,8 @@ pub struct CursorQuery<'a> {
     pub column: &'a str,
     pub column_type: &'a ColumnType,
     pub lookback: Option<Duration>,
+    /// The table's `constant_columns` (name, type and value as text): only the rows holding these values count, so tables sharing a destination each read from their own maximum.
+    pub scope: &'a [(String, ColumnType, String)],
 }
 
 /// Which way a cursor bound counted from now moves.
@@ -144,6 +146,8 @@ pub struct WriteTarget<'a> {
     pub direct: bool,
     /// The batches land in a build table in their final types.
     pub builds: bool,
+    /// The table's `constant_columns`: name, type and value as text, for a destination that loads the rows without SQLLoad seeing them.
+    pub constants: &'a [(String, ColumnType, String)],
 }
 
 /// What a direct batch's load did (the destination reading the files itself), with the rows it loaded.
