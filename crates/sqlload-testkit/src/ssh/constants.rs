@@ -1,6 +1,11 @@
-/// An OpenSSH server image whose init takes the user, keys and extra settings from its environment and `/config`.
-pub const IMAGE: &str = "lscr.io/linuxserver/openssh-server";
-pub const TAG: &str = "10.3_p1-r2-ls242";
+/// An OpenSSH server image whose init takes the user, keys and extra settings from its environment and `/config`, pulled from GHCR (which lscr.io redirects to, with lower anonymous limits).
+pub const IMAGE: &str = "ghcr.io/linuxserver/openssh-server";
+/// The image's tag, pinned to its digest so every run pulls the same image.
+pub const TAG: &str =
+    "10.3_p1-r2-ls242@sha256:aa4e1b3916e8555f24e574e6108b0b89a1b20362b0a11800a71280b45999649e";
+
+/// How long pulling and starting the bastion may take before the test fails, naming it.
+pub const START_LIMIT: std::time::Duration = std::time::Duration::from_secs(240);
 
 /// The port sshd listens on inside the container.
 pub const SSH_PORT: u16 = 2222;
