@@ -27,7 +27,7 @@ use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::models::{
     BatchFooters, Compression, CsvOptions, FilesEncoding, FilesRead, FilesTable, PathValues,
-    SourceFormat, TextChecks,
+    SourceFormat, TextChecks, XlsxOptions, XmlOptions,
 };
 use crate::files_source::tests::test_types::{
     ReadTextFilesTestCase, SplitJsonTestCase, TrackCsvTestCase,
@@ -53,6 +53,7 @@ pub(crate) fn encoding(format: SourceFormat) -> FilesEncoding {
         compression: Compression::Auto,
         csv: CsvOptions::default(),
         record: None,
+        ..FilesEncoding::default()
     }
 }
 
@@ -63,6 +64,7 @@ pub(crate) fn csv_encoding(csv: CsvOptions) -> FilesEncoding {
         compression: Compression::Auto,
         csv,
         record: None,
+        ..FilesEncoding::default()
     }
 }
 
@@ -73,6 +75,7 @@ pub(crate) fn record_encoding(format: SourceFormat, csv: CsvOptions) -> FilesEnc
         compression: Compression::Auto,
         csv,
         record: Some(RECORD_COLUMN.to_owned()),
+        ..FilesEncoding::default()
     }
 }
 
@@ -81,6 +84,8 @@ type Encoder = fn(&str) -> Result<Vec<u8>, String>;
 
 /// How a test file is written, by a part of its key: the first that matches wins.
 const ENCODERS: &[(&str, Encoder)] = &[
+    (".zip", zip_archive),
+    (".xlsx", workbook),
     (".gz", gzip),
     (".raw.", raw),
     (".utf16.", utf16),
@@ -106,6 +111,106 @@ fn utf16(text: &str) -> Result<Vec<u8>, String> {
         .into_iter()
         .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
         .collect())
+}
+
+/// A ZIP archive of the members `text` lists, separated by `\u{1e}`, each `name\u{1f}content`, with each member written as its own name says (so a member may be a workbook); a name ending in `/` is a folder.
+fn zip_archive(text: &str) -> Result<Vec<u8>, String> {
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    let members: Vec<(&str, &str)> = text
+        .split('\u{1e}')
+        .map(|member| member.split_once('\u{1f}').unwrap_or((member, "")))
+        .collect();
+    for (name, _) in members.iter().filter(|(name, _)| name.ends_with('/')) {
+        archive
+            .add_directory(*name, options)
+            .map_err(|error| error.to_string())?;
+    }
+    for (name, content) in members.iter().filter(|(name, _)| !name.ends_with('/')) {
+        archive
+            .start_file(*name, options)
+            .map_err(|error| error.to_string())?;
+        archive
+            .write_all(&file_bytes(name, content)?)
+            .map_err(|error| error.to_string())?;
+    }
+    archive
+        .finish()
+        .map(std::io::Cursor::into_inner)
+        .map_err(|error| error.to_string())
+}
+
+/// Writes one workbook cell's text, its type prefix removed.
+type CellWriter =
+    fn(&mut rust_xlsxwriter::Worksheet, (u32, u16), &str) -> Result<(), rust_xlsxwriter::XlsxError>;
+
+/// How a workbook cell is written, by its prefix: the first that matches wins, and a cell without one is a string.
+const CELL_WRITERS: &[(&str, CellWriter)] = &[
+    ("n:", |sheet, (row, column), text| {
+        sheet
+            .write_number(row, column, text.parse::<f64>().unwrap_or(f64::NAN))
+            .map(|_| ())
+    }),
+    ("b:", |sheet, (row, column), text| {
+        sheet.write_boolean(row, column, text == "true").map(|_| ())
+    }),
+    ("dt:", |sheet, place, text| {
+        moment(sheet, place, (text, "yyyy-mm-dd hh:mm:ss"))
+    }),
+    ("d:", |sheet, place, text| {
+        moment(sheet, place, (text, "yyyy-mm-dd"))
+    }),
+    ("tm:", |sheet, place, text| {
+        moment(sheet, place, (text, "hh:mm:ss"))
+    }),
+    ("s:", |sheet, (row, column), text| {
+        sheet.write_string(row, column, text).map(|_| ())
+    }),
+    ("", |sheet, (row, column), text| {
+        sheet.write_string(row, column, text).map(|_| ())
+    }),
+];
+
+/// An xlsx workbook of the sheets in `text`: each starts with a `[Name]` line, then one line per row (from row 1) with cells separated by `|`. A cell is a string, empty, or typed by a prefix: `n:` number, `b:` boolean, `d:` date, `dt:` date and time, `tm:` time of day, `s:` string as written.
+fn workbook(text: &str) -> Result<Vec<u8>, String> {
+    let failed = |error: rust_xlsxwriter::XlsxError| error.to_string();
+    let mut book = rust_xlsxwriter::Workbook::new();
+    for sheet in text.split('[').filter(|sheet| !sheet.is_empty()) {
+        let (name, rows) = sheet.split_once("]\n").unwrap_or((sheet, ""));
+        let worksheet = book.add_worksheet();
+        worksheet.set_name(name).map_err(failed)?;
+        for (row, line) in rows.lines().enumerate() {
+            let cells = line
+                .split('|')
+                .enumerate()
+                .filter(|(_, cell)| !cell.is_empty());
+            for (column, cell) in cells {
+                let place = (
+                    u32::try_from(row).map_err(|error| error.to_string())?,
+                    u16::try_from(column).map_err(|error| error.to_string())?,
+                );
+                let (prefix, write) = CELL_WRITERS
+                    .iter()
+                    .find(|(prefix, _)| cell.starts_with(prefix))
+                    .ok_or_else(|| format!("no writer for cell {cell:?}"))?;
+                write(worksheet, place, &cell[prefix.len()..]).map_err(failed)?;
+            }
+        }
+    }
+    book.save_to_buffer().map_err(failed)
+}
+
+/// A date, time or both, written with number `format`.
+fn moment(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    (row, column): (u32, u16),
+    (text, format): (&str, &str),
+) -> Result<(), rust_xlsxwriter::XlsxError> {
+    let value = rust_xlsxwriter::ExcelDateTime::parse_from_str(text)?;
+    let format = rust_xlsxwriter::Format::new().set_num_format(format);
+    sheet
+        .write_datetime_with_format(row, column, value, &format)
+        .map(|_| ())
 }
 
 fn gzip(text: &str) -> Result<Vec<u8>, String> {
@@ -551,5 +656,31 @@ pub(crate) fn decoded(encoding: &str, skip_rows: u64) -> CsvOptions {
         encoding: encoding.to_owned(),
         skip_rows,
         ..CsvOptions::default()
+    }
+}
+
+/// `format` files, with `xlsx` and `xml` options, in ZIP archives when `members` is set (`Some("")` for any member).
+pub(crate) fn container_encoding(
+    format: SourceFormat,
+    (xlsx, xml): (XlsxOptions, XmlOptions),
+    members: Option<&str>,
+) -> FilesEncoding {
+    FilesEncoding {
+        format,
+        compression: members.map_or(Compression::Auto, |_| Compression::Zip),
+        xlsx,
+        xml,
+        members: members
+            .filter(|pattern| !pattern.is_empty())
+            .map(str::to_owned),
+        ..FilesEncoding::default()
+    }
+}
+
+/// XML options with rows at `record_path` and `lists` loaded as arrays.
+pub(crate) fn xml_at(record_path: &str, lists: &[&str]) -> XmlOptions {
+    XmlOptions {
+        record_path: record_path.to_owned(),
+        lists: lists.iter().map(|name| (*name).to_owned()).collect(),
     }
 }

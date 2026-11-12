@@ -5,6 +5,10 @@ pub enum FileFormat {
     /// Newline-delimited JSON, optionally gzip-compressed.
     Json,
     Csv,
+    /// Excel workbooks, which only SQLLoad reads.
+    Xlsx,
+    /// XML documents, which only SQLLoad reads.
+    Xml,
 }
 
 impl std::fmt::Display for FileFormat {
@@ -13,6 +17,8 @@ impl std::fmt::Display for FileFormat {
             Self::Parquet => "parquet",
             Self::Json => "json",
             Self::Csv => "csv",
+            Self::Xlsx => "xlsx",
+            Self::Xml => "xml",
         })
     }
 }

@@ -2,7 +2,7 @@ use crate::files_source::constants::LOADER_COLUMNS;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::text_charset::text_charset;
-use crate::files_source::models::{RecordShape, SourceFormat};
+use crate::files_source::models::{Compression, RecordShape, SourceFormat};
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
@@ -360,11 +360,14 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if source.format != SourceFormat::Parquet
         || source.compression.is_some()
         || source.csv.is_some()
+        || source.xlsx.is_some()
+        || source.xml.is_some()
+        || source.members.is_some()
         || source.shape != RecordShape::Columns
         || source.record_column.is_some()
     {
         problems.push(format!(
-            "{place} format, compression, csv, shape and record_column are for kind = \"files\""
+            "{place} format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\""
         ));
     }
     problems
@@ -454,6 +457,41 @@ fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     problems
 }
 
+/// Settings of the xlsx and xml formats and of ZIP archives that do not fit the source.
+fn container_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let zip = source.compression == Some(Compression::Zip);
+    if source.xlsx.is_some() && source.format != SourceFormat::Xlsx {
+        problems.push(format!("{place} xlsx is for format = \"xlsx\""));
+    }
+    match (&source.xml, source.format) {
+        (Some(_), format) if format != SourceFormat::Xml => {
+            problems.push(format!("{place} xml is for format = \"xml\""));
+        }
+        (Some(xml), _) if !xml.record_path.trim_matches('/').is_empty() => {}
+        (_, SourceFormat::Xml) => problems.push(format!(
+            "{place} format = \"xml\" needs xml.record_path, the element names from the root to each row's element, such as \"orders/order\""
+        )),
+        _ => {}
+    }
+    match (&source.members, zip) {
+        (Some(_), false) => problems.push(format!("{place} members is for compression = \"zip\"")),
+        (Some(pattern), true) => {
+            if let Err(error) = globset::Glob::new(pattern) {
+                problems.push(format!("{place} members {pattern:?}: {error}"));
+            }
+        }
+        (None, _) => {}
+    }
+    let loader_only = zip || matches!(source.format, SourceFormat::Xlsx | SourceFormat::Xml);
+    if source.copy_to_internal_stage && loader_only {
+        problems.push(format!(
+            "{place} copy_to_internal_stage is for files Snowflake reads itself; SQLLoad reads xlsx and xml files and ZIP archives' members"
+        ));
+    }
+    problems
+}
+
 /// Settings that do not fit a files source's format.
 fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
@@ -461,6 +499,11 @@ fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         (RecordShape::Record, SourceFormat::Parquet, _) => problems.push(format!(
             "{place} shape = \"record\" is for ndjson, json and csv files; Parquet files already have typed columns"
         )),
+        (RecordShape::Record, format @ (SourceFormat::Xlsx | SourceFormat::Xml), _) => {
+            problems.push(format!(
+                "{place} shape = \"record\" is for ndjson, json and csv files, not {format}"
+            ));
+        }
         (RecordShape::Columns, _, Some(_)) => problems.push(format!(
             "{place} record_column is for shape = \"record\", which is not set"
         )),
@@ -494,9 +537,10 @@ fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
         }
     }
+    problems.extend(container_problems(place, source));
     if source.format == SourceFormat::Parquet && source.compression.is_some() {
         problems.push(format!(
-            "{place} compression is for ndjson, json and csv files; Parquet files compress inside the file"
+            "{place} compression is for ndjson, json, csv, xlsx and xml files; Parquet files compress inside the file, and SQLLoad does not read them from ZIP archives"
         ));
     }
     match (&source.csv, source.format) {

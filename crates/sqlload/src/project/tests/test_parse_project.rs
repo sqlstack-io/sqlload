@@ -149,7 +149,7 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
         ParseProjectTestCase {
             description: "a files source reads its format, compression and CSV options; unset options keep their defaults",
             read: |project| format!("{:?}", project.sources["events"].files_encoding()),
-            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0 }, record: None }",
+            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0 }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0 }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None }",
         },
         ParseProjectTestCase {
             description: "a files source without settings reads Parquet",
@@ -296,12 +296,42 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "compression is for text formats",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\ncompression = \"gzip\"\n",
-            expected_message: "[sources.raw] compression is for ndjson, json and csv files; Parquet files compress inside the file",
+            expected_message: "[sources.raw] compression is for ndjson, json, csv, xlsx and xml files; Parquet files compress inside the file",
         },
         ParseProjectErrorTestCase {
             description: "csv options need format = csv",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"ndjson\"\ncsv = { header = false }\n",
             expected_message: "[sources.raw] csv is for format = \"csv\", not \"ndjson\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "xml files need a record path",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"xml\"\n",
+            expected_message: "[sources.raw] format = \"xml\" needs xml.record_path",
+        },
+        ParseProjectErrorTestCase {
+            description: "xlsx options need format = xlsx",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nxlsx = { sheet = \"Orders\" }\n",
+            expected_message: "[sources.raw] xlsx is for format = \"xlsx\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "members need compression = zip",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nmembers = \"*.csv\"\n",
+            expected_message: "[sources.raw] members is for compression = \"zip\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "whole records are not for spreadsheets",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"xlsx\"\nshape = \"record\"\n",
+            expected_message: "[sources.raw] shape = \"record\" is for ndjson, json and csv files, not xlsx",
+        },
+        ParseProjectErrorTestCase {
+            description: "ZIP archives' members never go to a warehouse stage",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncompression = \"zip\"\ncopy_to_internal_stage = true\n",
+            expected_message: "[sources.raw] copy_to_internal_stage is for files Snowflake reads itself",
+        },
+        ParseProjectErrorTestCase {
+            description: "an unknown xlsx option is rejected",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"xlsx\"\nxlsx = { tab = \"Orders\" }\n",
+            expected_message: "unknown field `tab`",
         },
         ParseProjectErrorTestCase {
             description: "a csv delimiter is one ASCII character",
@@ -376,7 +406,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "format settings are for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nformat = \"csv\"\n",
-            expected_message: "[sources.app] format, compression, csv, shape and record_column are for kind = \"files\"",
+            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "batch_interval is for postgres_cdc sources, never silently ignored",
@@ -436,7 +466,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "shape is for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshape = \"record\"\n",
-            expected_message: "[sources.app] format, compression, csv, shape and record_column are for kind = \"files\"",
+            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "unmatched_paths without path_columns is never silently ignored",

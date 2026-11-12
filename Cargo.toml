@@ -32,6 +32,7 @@ async-trait = "0.1.92"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64 = "0.22"
 bytes = "1"
+calamine = { version = "0.38", default-features = false, features = ["chrono"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false }
 duckdb = { version = "1.20000", features = ["bundled", "appender-arrow", "parquet"] }
@@ -50,6 +51,7 @@ object_store = { version = "0.14", default-features = false, features = ["aws-ba
 jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
 parquet = { version = "60", default-features = false, features = ["arrow", "zstd", "async", "object_store", "snap", "lz4", "flate2", "flate2-rust_backend"] }
 prometheus-client = "0.25"
+quick-xml = "0.42"
 pyo3 = { version = "0.29", features = ["abi3-py310"] }
 rdkafka = { version = "0.39", default-features = false, features = ["tokio", "libz", "zstd"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
@@ -57,6 +59,7 @@ regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json", "form", "query", "gzip"] }
 rlimit = "0.11"
 rsa = { version = "0.9", features = ["pem"] }
+rust_xlsxwriter = { version = "0.102", default-features = false }
 russh = { version = "0.65", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = { version = "3.0.1", default-features = false }
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
@@ -86,6 +89,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"]
 uuid = { version = "1", features = ["v4"] }
 webpki-roots = "1"
 zstd = "0.14"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

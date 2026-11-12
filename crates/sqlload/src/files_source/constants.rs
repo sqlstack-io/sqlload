@@ -24,6 +24,36 @@ pub const JSON_SUFFIXES: &[&str] = &[".ndjson", ".jsonl", ".json"];
 /// The file name suffix of CSV data files.
 pub const CSV_SUFFIX: &str = ".csv";
 
+/// The suffix of Excel workbooks.
+pub const XLSX_SUFFIX: &str = ".xlsx";
+
+/// The suffix of XML documents.
+pub const XML_SUFFIX: &str = ".xml";
+
+/// The suffix of ZIP archives.
+pub const ZIP_SUFFIX: &str = ".zip";
+
+/// The largest xlsx workbook, XML document or ZIP archive member read: each is read whole into memory.
+pub const MAX_WHOLE_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// The bytes of a ZIP archive each range request reads: its index, at its end, then one member.
+pub const ZIP_READ_BLOCK_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The most non-empty cells read from one worksheet, each held in memory.
+pub const MAX_SHEET_CELLS: usize = 20_000_000;
+
+/// The key an XML element's own text loads under when it also has attributes or child elements.
+pub const XML_TEXT_KEY: &str = "#text";
+
+/// The XML Schema instance namespace, whose attributes such as `xsi:type` describe an element rather than hold data.
+pub const XSI_NAMESPACE: &str = "http://www.w3.org/2001/XMLSchema-instance";
+
+/// The `xsi:` attribute that marks an element NULL.
+pub const XSI_NIL: &str = "nil";
+
+/// The values of `xsi:nil` that make an element NULL.
+pub const XML_NIL_VALUES: [&str; 2] = ["true", "1"];
+
 /// The file name suffix of gzip-compressed files.
 pub const GZIP_SUFFIX: &str = ".gz";
 
@@ -121,3 +151,9 @@ pub const CP1252_UNDEFINED: [u8; 5] = [0x81, 0x8D, 0x8F, 0x90, 0x9D];
 /// The fix an error about bytes that do not decode ends with.
 pub const ENCODING_HINT: &str =
     "set csv.encoding to the files' encoding, such as \"cp1252\", \"latin-1\" or \"utf-16le\"";
+
+/// Floats below this hold every whole number exactly: 2^53.
+pub const MAX_EXACT_FLOAT_INT: f64 = 9_007_199_254_740_992.0;
+
+/// One day in Excel's date numbers; a date-formatted value below it is a time of day.
+pub const EXCEL_DAY: f64 = 1.0;

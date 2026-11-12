@@ -3,6 +3,7 @@
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::models::OpenFolder;
+use crate::files_source::_helpers::archive::zip_archive::archive_members;
 use crate::files_source::_helpers::plan::columns::{
     ColumnMerge, SampledColumn, case_problems, drop_loader_columns, file_columns, merge_columns,
 };
@@ -14,7 +15,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::errors::FilesError;
 use crate::files_source::models::{
-    FilesEncoding, FilesTable, ListedFiles, PathValues, SourceFormat, StoredRead,
+    Compression, FilesEncoding, FilesTable, ListedFiles, PathValues, SourceFormat, StoredRead,
 };
 
 /// The `encoding` files under `folder` with their path `values`, and the schema of the newest ones without the loader's own columns, which this load fills; when a file's path lacks a value, only the listing and its problems, before any file is read.
@@ -110,11 +111,24 @@ async fn listed_files(
             listed.skipped += 1;
             continue;
         };
-        let (data, problem) = data_file(file, values);
-        listed.problems.extend(problem);
-        match data {
-            Some(data) => listed.files.push((data, codec)),
-            None => listed.unmatched += 1,
+        let files = match encoding.compression {
+            Compression::Zip => {
+                archive_members(folder, &file, encoding)
+                    .await
+                    .map_err(|reason| FilesError::File {
+                        key: file.relative_key.clone(),
+                        reason,
+                    })?
+            }
+            _ => vec![file],
+        };
+        for file in files {
+            let (data, problem) = data_file(file, values);
+            listed.problems.extend(problem);
+            match data {
+                Some(data) => listed.files.push((data, codec)),
+                None => listed.unmatched += 1,
+            }
         }
     }
     let unmatched = match listed.unmatched {

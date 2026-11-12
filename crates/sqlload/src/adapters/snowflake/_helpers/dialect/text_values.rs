@@ -213,11 +213,13 @@ fn misfit(
     )
 }
 
+/// The `COMPRESSION` of a `COPY` of files compressed as `compression`; ZIP archives never reach a `COPY`, as SQLLoad reads their members itself.
 fn compression_name(compression: Compression) -> &'static str {
     match compression {
         Compression::Auto => "AUTO",
         Compression::None => "NONE",
         Compression::Gzip => "GZIP",
         Compression::Zstd => "ZSTD",
+        Compression::Zip => "NONE",
     }
 }

@@ -27,9 +27,12 @@ cursor_column = "dt"
 |---------|---------|
 | `connection` | An `s3` or `filesystem` connection, or from 0.32.0 an `sftp` connection. |
 | `path` | The folder holding the files, relative to the connection. |
-| `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`. |
-| `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
+| `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`; from 0.35.0 (not released yet), also `xlsx` and `xml`. See [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
+| `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`; from 0.35.0 (not released yet), also `zip`, which reads the `format`'s files inside `.zip` archives. Parquet compresses inside the file. |
 | `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … From 0.35.0 (not released yet), also `encoding = "utf-8"` and `skip_rows = 0`; see [CSV encodings](#csv-encodings). |
+| `xlsx` | From 0.35.0 (not released yet). `{ sheet = "...", header = true, skip_rows = 0 }`: the worksheet (the first when omitted), whether its first row read names the columns, and rows skipped above it. |
+| `xml` | From 0.35.0 (not released yet). `{ record_path = "orders/order", lists = [] }`: the elements from the root to each row's element (required), and child elements always loaded as a JSON array. |
+| `members` | From 0.35.0 (not released yet). With `compression = "zip"`, a pattern the members' names must match, such as `"exports/*.csv"`. |
 | `shape` | From 0.27.0. `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
 | `record_column` | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
@@ -66,6 +69,73 @@ Snowflake reading CSV files itself decodes them and skips the lines in its `COPY
 `koi8-r`, `utf-16le` and `utf-16be`. Any other encoding fails `plan` for that route. Snowflake loads
 a byte the encoding leaves undefined, such as `0x81` in cp1252, as a control character rather than
 failing; `plan` finds one only in the rows it samples.
+
+## Excel, XML and ZIP files
+
+From 0.35.0 (not released yet). SQLLoad reads these itself on every destination, as no warehouse
+does; `copy_to_internal_stage` and `shape = "record"` don't apply.
+
+**Excel (`format = "xlsx"`).** One worksheet loads per source: `xlsx.sheet`, or the first sheet.
+`xlsx.skip_rows` skips rows at the top, such as a title; the next row names the columns unless
+`header = false`, when columns are `column_1`, `column_2`, … by their place in the sheet. Empty rows
+are left out. Cells keep the type the workbook stores: a whole number is `int`, other numbers
+`float`, `TRUE`/`FALSE` `bool`, and a date-formatted cell `date`, `timestamp_ntz` or `time` (a
+column holding dates and timestamps is `timestamp_ntz`). An empty cell or an error such as `#N/A` is
+NULL. Columns are typed from a sample, as for CSV, and a later value that doesn't fit fails with its
+row; pin a type in `columns` to convert instead. Formulas load their cached values. Older `.xls`
+workbooks aren't read. A headerless column whose `column_N` name the header already uses fails, and
+so does a sheet holding over 20 million values.
+
+**XML (`format = "xml"`).** Each element at `xml.record_path` is a row. Its attributes and child
+elements are its columns, by name without a namespace prefix. A child that appears more than once
+in a row, or one `xml.lists` names, loads as a JSON array; a child with attributes or children of
+its own loads as a JSON object, keys in document order. Text is trimmed of surrounding whitespace and
+typed as CSV fields are; an element with `xsi:nil="true"` is NULL. Namespace declarations and other
+`xsi:` attributes aren't columns. `record_path` may name prefixes, which are ignored. These fail,
+with the line where it applies: malformed XML, a document that ends inside an element, an element
+with two attributes of one name or an attribute and a child of one name, a UTF-16 document, and a
+`record_path` whose parent elements the document doesn't have.
+
+```toml
+[sources.customers]
+kind = "files"
+connection = "lake"
+path = "drop/"
+format = "xml"
+xml = { record_path = "customers/customer", lists = ["phone"] }
+description = "Customers from the nightly XML export."
+```
+
+**ZIP archives (`compression = "zip"`).** Each `.zip` file under `path` is opened, and each member
+whose name ends with the format's suffix (`.csv`, `.xlsx`, `.xml`, …) and matches `members` loads
+as a file of its own, recorded in `_sqlload_source_file` as `<archive>.zip/<member>`. Other members
+are left out. For an archive holding several formats, define one source per format over the same
+path:
+
+```toml
+[sources.orders]
+kind = "files"
+connection = "lake"
+path = "drop/"
+format = "csv"
+compression = "zip"
+members = "*.csv"
+description = "Orders from the nightly ZIP export."
+
+[sources.lines]
+kind = "files"
+connection = "lake"
+path = "drop/"
+format = "xlsx"
+compression = "zip"
+xlsx = { sheet = "Lines" }
+description = "Order lines from the workbook in the nightly ZIP export."
+```
+
+A member's version is its archive's, so with `append` an archive rewritten in place fails the table,
+as any rewritten file does. Only an archive's index and the members read are fetched, with range
+requests. Workbooks, XML documents and ZIP members are read whole, up to 1 GiB each; a larger member,
+or an archive naming two members alike, fails.
 
 ## Which files load
 

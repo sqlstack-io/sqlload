@@ -7,7 +7,8 @@ use serde::Deserialize;
 use crate::config::models::AuthConfig;
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::models::{
-    Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
+    Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths, XlsxOptions,
+    XmlOptions,
 };
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
@@ -383,6 +384,15 @@ pub struct SourceConfig {
     /// How CSV files are written (files sources with `format = "csv"`).
     #[serde(default)]
     pub csv: Option<CsvOptions>,
+    /// Which worksheet rows load (files sources with `format = "xlsx"`).
+    #[serde(default)]
+    pub xlsx: Option<XlsxOptions>,
+    /// Which elements are rows (files sources with `format = "xml"`).
+    #[serde(default)]
+    pub xml: Option<XmlOptions>,
+    /// With `compression = "zip"`, a pattern the members' names must match (files sources).
+    #[serde(default)]
+    pub members: Option<String>,
     /// Typed columns (default), or each JSON object or CSV line whole in one `json` column (files sources with a text format).
     #[serde(default)]
     pub shape: RecordShape,
@@ -519,6 +529,9 @@ impl SourceConfig {
             format: self.format,
             compression: self.compression.unwrap_or_default(),
             csv: self.csv.clone().unwrap_or_default(),
+            xlsx: self.xlsx.clone().unwrap_or_default(),
+            xml: self.xml.clone().unwrap_or_default(),
+            members: self.members.clone(),
             record: (self.shape == RecordShape::Record).then(|| {
                 self.record_column
                     .clone()
