@@ -77,24 +77,33 @@ against) plus the driver's package, such as `odbc-postgresql`.
 
 ## Drivers
 
-SQLLoad writes names in ANSI double quotes (`"sales"."items"`). A driver that quotes them another
-way is refused when the source is read; switch such a database to ANSI quoting, for example
-with an `ANSI_QUOTES` SQL mode.
+SQLLoad writes names in ANSI double quotes (`"sales"."items"`). A database that doesn't read them
+as names is refused when the source is read; switch it to ANSI quoting. For MySQL, add
+`INITSTMT=SET SESSION sql_mode=CONCAT(@@SESSION.sql_mode,',ANSI_QUOTES');` to the connection string.
 
 | Driver | Tested |
 |--------|--------|
-| psqlODBC (`PostgreSQL Unicode`) | Yes, in containers. Add `BoolsAsChar=0` to the connection string so `boolean` columns load as `bool` rather than text. |
+| psqlODBC (`PostgreSQL Unicode`) | Yes, against Postgres 17 in containers on Linux and on Windows. Add `BoolsAsChar=0` to the connection string so `boolean` columns load as `bool` rather than text. |
+| Microsoft ODBC Driver 18 for SQL Server | Yes, against SQL Server 2022 in containers on Linux and against SQL Server LocalDB on Windows, `datetime2` and legacy `datetime` cursors included. |
+| MySQL Connector/ODBC (`MySQL ODBC Unicode Driver`) | Yes, against MySQL 8.4 in containers on Linux and MySQL 8.0 on Windows, in an `ANSI_QUOTES` session (above). |
+| OpenEdge (Progress) | Tested for timestamp handling (parsing `{ts}` values and binding timestamp bounds), not against a live server. |
 | Others | Not yet. A driver needs to describe prepared statements and list tables; run `sqlload plan` to see the types it reports. |
 
-A cursor filter compares the cursor column with a quoted literal, such as
-`"updated_at" >= '2026-03-01 10:00:05.123456'`, which the database converts to the column's type.
-Postgres does; check that yours does too before relying on a cursor. From 0.30.0 (not released
-yet), a numeric cursor compares with a bare number, such as `"id" > 41`. From 0.30.0 (not released
-yet), a text cursor's bounds are bound parameters, such as `"code" > ?`, so the database's own
-string-literal rules can't change them. Before that, on a database that reads a backslash in a
-string as an escape, a text cursor maximum holding a backslash made
-every later incremental load of the table fail, and other escapes could skip rows or read them
-again.
+From 0.35.0 (not released yet), a cursor filter compares the cursor column with bound parameters,
+such as `"updated_at" > ?`, each passed as the cursor's own type: a timestamp without a time zone as
+an ODBC `TIMESTAMP`, with every fractional digit; a date as a `DATE`; text as text. No database's
+literal rules can change a bound, and a millisecond maximum such as `23:59:59.997` resumes exactly.
+SQL Server's legacy `datetime` is the one exception: it stores 1/300 s ticks, which its driver reads
+rounded to milliseconds, so its bounds go as text in the column's own precision, which SQL Server
+converts to the column's type. A numeric cursor compares with a bare number, such as `"id" > 41`.
+Any other cursor, a timestamp with a time zone for one, still compares with a quoted literal,
+which the database converts to the column's type; check that yours does before relying on it.
+`--start-cursor`, `--end-cursor` and `cursor_start` also take ODBC escape values, such as
+`{ts '2026-01-31 23:59:59.997'}` or `{d '2026-01-31'}`.
+
+From 0.35.0 (not released yet), a timestamp column is read in microseconds whatever precision the
+driver describes: MySQL Connector/ODBC describes every `DATETIME(n)` with none, and its fractional
+seconds were dropped before.
 
 ## Choosing tables
 
