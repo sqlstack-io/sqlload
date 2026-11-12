@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.34.0](https://github.com/sqlstack-io/sqlload/compare/v0.33.6...v0.34.0) (2026-11-12)
+
+
+### Features
+
+* **load:** exit 75 and report retryable when a rerun may fix every failure ([#183](https://github.com/sqlstack-io/sqlload/issues/183)) ([74d1abe](https://github.com/sqlstack-io/sqlload/commit/74d1abeef9ea786bcf8a8ee83953b34ba518d6f0))
+* **motherduck:** connect through a separate DuckDB 1.5 process (install sqlload[motherduck]), as MotherDuck doesn't accept DuckDB 2.0 clients yet ([#182](https://github.com/sqlstack-io/sqlload/issues/182)) ([2a11162](https://github.com/sqlstack-io/sqlload/commit/2a1116263935728bf6545d116444e69208e6fc82))
+
 ## [0.33.6](https://github.com/sqlstack-io/sqlload/compare/v0.33.5...v0.33.6) (2026-11-10)
 
 
