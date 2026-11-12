@@ -548,14 +548,24 @@ impl SourceConfig {
         )
     }
 
-    /// How a files source's files are encoded, with defaults for what is not set.
+    /// How a files source's files are encoded, with defaults for what is not set; the elements a table's `unnest` paths end in are XML `lists`, so one that appears once still lands in its child table.
     pub fn files_encoding(&self) -> FilesEncoding {
+        let mut xml = self.xml.clone().unwrap_or_default();
+        for path in self.tables.values().flat_map(|table| match &table.unnest {
+            Some(UnnestSetting::Paths(paths)) => paths.as_slice(),
+            Some(UnnestSetting::Word(_)) | None => &[],
+        }) {
+            let element = path.rsplit('.').next().unwrap_or_default().to_owned();
+            if !xml.lists.contains(&element) {
+                xml.lists.push(element);
+            }
+        }
         FilesEncoding {
             format: self.format,
             compression: self.compression.unwrap_or_default(),
             csv: self.csv.clone().unwrap_or_default(),
             xlsx: self.xlsx.clone().unwrap_or_default(),
-            xml: self.xml.clone().unwrap_or_default(),
+            xml,
             members: self.members.clone(),
             record: (self.shape == RecordShape::Record).then(|| {
                 self.record_column
