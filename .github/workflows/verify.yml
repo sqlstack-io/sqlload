@@ -101,6 +101,10 @@ jobs:
     runs-on: ubuntu-24.04
     # A cold cache compiles DuckDB from source (about 25 minutes); warm runs take a few.
     timeout-minutes: 60
+    # packages: read lets the job sign in to GHCR, whose anonymous pull limit the bastion image hit.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -110,7 +114,11 @@ jobs:
         with:
           shared-key: containers
       - run: make clean-partial-duckdb-sources
+      - name: Sign in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      # The SSH bastion's image, as crates/sqlload-testkit/src/ssh/constants.rs pins it, pulled signed in so the tests find it here.
       - run: |
+          docker pull ghcr.io/linuxserver/openssh-server:10.3_p1-r2-ls242@sha256:aa4e1b3916e8555f24e574e6108b0b89a1b20362b0a11800a71280b45999649e
           docker pull redpandadata/redpanda:v25.1.4
           docker pull postgres:17-alpine
           docker pull chrislusf/seaweedfs:3.97
