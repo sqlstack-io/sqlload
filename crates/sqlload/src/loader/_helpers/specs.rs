@@ -4,8 +4,10 @@ use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
 };
+use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::files_source::main::constant_columns::constant_columns;
 use crate::loader::_helpers::resolve::ResolvedTarget;
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::constants::{ODBC_SOURCE, SNOWFLAKE_SOURCE};
@@ -166,6 +168,26 @@ pub(crate) fn build_spec(
         ),
     };
     problems.extend(column_reference_problems(table, overrides));
+    let constants = match table_constants(context, table, (settings, defaults), &columns.excluded) {
+        Ok(constants) => constants,
+        Err(found) => {
+            problems.extend(found);
+            Vec::new()
+        }
+    };
+    problems.extend(
+        constants
+            .iter()
+            .filter(|(name, _, _)| {
+                context.source.kind != SourceKind::Files
+                    && cursor
+                        .as_ref()
+                        .is_some_and(|cursor| cursor.column.eq_ignore_ascii_case(name))
+            })
+            .map(|(name, _, _)| {
+                format!("constant column {name} cannot be the cursor_column: it holds one value")
+            }),
+    );
     let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
     problems.extend(
         checks
@@ -232,6 +254,7 @@ pub(crate) fn build_spec(
         unique_key,
         cursor,
         batch,
+        constants,
         #[cfg(feature = "container-tests")]
         test_loader_route: layered(&settings.test_loader_route, &defaults.test_loader_route)
             .is_some_and(|(value, _)| value),
@@ -293,6 +316,57 @@ pub(crate) fn build_spec(
         },
         layout,
     })
+}
+
+/// The table's `constant_columns` (its own map, else its source's), each with its type for the target and its value as text; or why they cannot load: a type with no Arrow type or one the target cannot load, an array, and, except for a files source (whose reader replaces a file column of the same name, and `plan` says so), a name the source table already has among its loaded columns, ignoring case.
+fn table_constants(
+    context: &SourceContext<'_>,
+    table: &SourceTable,
+    (settings, defaults): (&TableSettings, &TableSettings),
+    excluded: &[(String, String)],
+) -> Result<Vec<(String, ColumnType, String)>, Vec<String>> {
+    let Some((written, _)) = layered(&settings.constant_columns, &defaults.constant_columns) else {
+        return Ok(Vec::new());
+    };
+    let warehouse = context.target.warehouse;
+    let constants = constant_columns(&written.0, &[warehouse]).map_err(|problem| vec![problem])?;
+    let loaded = table.columns.iter().filter(|column| {
+        !excluded
+            .iter()
+            .any(|(excluded, _)| *excluded == column.name)
+    });
+    let clashes: Vec<String> = match context.source.kind {
+        SourceKind::Files => Vec::new(),
+        _ => loaded
+            .filter_map(|column| {
+                constants
+                    .iter()
+                    .find(|(name, _, _)| name.eq_ignore_ascii_case(&column.name))
+                    .map(|(name, _, _)| {
+                        format!(
+                            "constant column {name}: the source already has a column {}, and a constant never replaces it; rename the constant, or exclude the source's column",
+                            column.name
+                        )
+                    })
+            })
+            .collect(),
+    };
+    let types = constants.iter().filter_map(|(name, column_type, _)| {
+        match (column_type, arrow_field(name, column_type)) {
+            (ColumnType::Array(_), _) => Some(format!("constant column {name}: an array cannot be a constant")),
+            (_, None) => Some(format!(
+                "constant column {name}: {column_type} has no Arrow type, so a constant cannot be one; pin a portable type"
+            )),
+            _ => sql_adapter(warehouse)
+                .type_problem(column_type)
+                .map(|problem| format!("constant column {name}: {problem}")),
+        }
+    });
+    let problems: Vec<String> = clashes.into_iter().chain(types).collect();
+    match problems.is_empty() {
+        true => Ok(constants),
+        false => Err(problems),
+    }
 }
 
 /// How a `snowflake` source's table is read: unloaded to the source's `stage`, or to the user stage when it sets none.

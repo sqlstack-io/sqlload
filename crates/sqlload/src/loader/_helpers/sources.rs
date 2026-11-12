@@ -665,7 +665,7 @@ pub(crate) async fn discover_files_table(
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
-    let (values, _) = path_values(source, warehouse)?;
+    let (values, _) = path_values((source_name, source), warehouse)?;
     let encoding = source.files_encoding();
     let table = discover_files(&folder, &values, &encoding).await?;
     if let Some(problem) = table.problems.first() {
@@ -674,9 +674,9 @@ pub(crate) async fn discover_files_table(
     files_source_parts(source_name, source, warehouse, (location, table))
 }
 
-/// What a files source fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then `constant_columns`; a `native(...)` type, which SQLLoad's reader cannot build, is refused.
+/// What files source `source_name` fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then its table's `constant_columns`; a `native(...)` type, which SQLLoad's reader cannot build, is refused.
 fn path_values(
-    source: &SourceConfig,
+    (source_name, source): (&str, &SourceConfig),
     warehouse: Warehouse,
 ) -> Result<(PathValues, Vec<(String, ColumnType)>), LoaderError> {
     let mut types: Vec<(String, ColumnType)> = Vec::new();
@@ -701,8 +701,8 @@ fn path_values(
             .iter()
             .flat_map(|template| template.captures.clone()),
     );
-    let constants =
-        constant_columns(&source.constant_columns, &[warehouse]).map_err(LoaderError::Invalid)?;
+    let constants = constant_columns(&source.table_constants(source_name), &[warehouse])
+        .map_err(LoaderError::Invalid)?;
     let typed = types
         .iter()
         .map(|(name, column_type)| (name, column_type))
@@ -743,7 +743,7 @@ pub(crate) fn files_source_parts(
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let encoding = source.files_encoding();
-    let (values, partition_types) = path_values(source, warehouse)?;
+    let (values, partition_types) = path_values((source_name, source), warehouse)?;
     let added: Vec<&str> = partition_types
         .iter()
         .map(|(name, _)| name.as_str())

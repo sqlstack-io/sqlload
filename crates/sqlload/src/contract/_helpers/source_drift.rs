@@ -11,7 +11,7 @@ use crate::loader::models::TableSpec;
 use crate::project::models::Contract;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 
-/// The findings for `spec`, whose source would load `source_columns`, against `live` (`None` before the table exists, which gives none): source columns the live table lacks or holds as a type they do not fit, then undeclared live columns the source no longer has. Declared, SQLLoad's own and enforced tables' columns are left to the declaration comparison; a Python table, whose columns are inferred only when it runs, and a source whose columns cannot be read are one `inspection_unavailable`.
+/// The findings for `spec`, whose source would load `source_columns`, against `live` (`None` before the table exists, which gives none): source columns the live table lacks or holds as a type they do not fit, then undeclared live columns the source no longer has. Declared, constant, SQLLoad's own and enforced tables' columns are left to the declaration comparison; a Python table, whose columns are inferred only when it runs, and a source whose columns cannot be read are one `inspection_unavailable`.
 pub(crate) fn source_drift(
     (spec, source_columns): (&TableSpec, &Result<Vec<DesiredColumn>, Vec<String>>),
     live: Option<&[LiveColumn]>,
@@ -44,6 +44,7 @@ pub(crate) fn source_drift(
             && !spec
                 .pinned
                 .keys()
+                .chain(spec.constants.iter().map(|(constant, _, _)| constant))
                 .any(|declared| declared.eq_ignore_ascii_case(name))
     };
     let loaded: Vec<&DesiredColumn> = desired

@@ -121,15 +121,23 @@ pub(crate) fn python_table(module: &str, table: &SourceTable) -> PythonTable {
     }
 }
 
-/// A Python table's spec with the live table's data columns added (as the source has them, so `plan` shows no change for them), or `None` when there are none to add.
+/// A Python table's spec with the live table's data columns added (as the source has them, so `plan` shows no change for them), or `None` when there are none to add; its `constant_columns` are never the source's.
 pub(crate) fn with_live_columns(
     spec: &TableSpec,
     live: Option<&[LiveColumn]>,
 ) -> Option<TableSpec> {
     spec.python.as_ref()?;
     let mut added: Vec<SourceColumn> = Vec::new();
+    let constant = |name: &str| {
+        spec.constants
+            .iter()
+            .any(|(constant, _, _)| constant.eq_ignore_ascii_case(name))
+    };
     for column in live? {
-        if !is_metadata(&column.name) && !has_column(&spec.source_table, &column.name) {
+        if !is_metadata(&column.name)
+            && !constant(&column.name)
+            && !has_column(&spec.source_table, &column.name)
+        {
             let name = source_spelling(&column.name, spec);
             added.push(python_column(&name, column.column_type.clone()));
         }

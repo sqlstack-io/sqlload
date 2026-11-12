@@ -17,7 +17,7 @@ use crate::contract::models::{ContractFinding, ContractReport, ContractRequest, 
 use crate::loader::errors::LoaderError;
 use crate::loader::main::files_columns::files_columns;
 use crate::loader::main::selected_specs::selected_specs;
-use crate::loader::models::{FilesColumns, PlanOptions, SelectedTable};
+use crate::loader::models::{FilesColumns, PlanOptions, SelectedTable, TableSpec};
 use crate::project::models::ProjectConfig;
 
 /// Each selected table's differences, reading only the destinations (sources are listed for their tables, never read); `request.from` reads every table from that target instead of its own, resolving its database and schema there as if the source loaded into it, and `request.generate` adds each table's adoption, except for tables whose own target is another kind of warehouse than `from`, which are problems. A table on a files target is compared with its newest load's footers, as `plan` reads them, and with `request.all_files` every file's footer is compared with that load too. With `request.source`, what each table's source would load, from the catalog or footers already listed, is compared with its live table for undeclared columns.
@@ -88,7 +88,7 @@ async fn resource(
         Ok(live) => (
             [
                 findings(
-                    &spec.pinned,
+                    &declared_columns(spec),
                     spec.contract,
                     live.as_deref(),
                     (spec.warehouse, &relation),
@@ -161,7 +161,7 @@ async fn files_resource(
     let readable = read.problems.is_empty();
     if readable {
         found.extend(findings(
-            &spec.pinned,
+            &declared_columns(spec),
             spec.contract,
             read.live.as_deref(),
             (spec.warehouse, &relation),
@@ -191,4 +191,15 @@ async fn files_resource(
         resource_type: "table",
         adoption,
     }
+}
+
+/// The columns `spec` declares, by name: its pinned types and its constant columns' types (a pin of a constant's name wins).
+fn declared_columns(spec: &TableSpec) -> BTreeMap<String, ColumnType> {
+    let mut declared: BTreeMap<String, ColumnType> = spec
+        .constants
+        .iter()
+        .map(|(name, column_type, _)| (name.clone(), column_type.clone()))
+        .collect();
+    declared.extend(spec.pinned.clone());
+    declared
 }

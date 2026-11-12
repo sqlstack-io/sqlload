@@ -94,10 +94,14 @@ fn constant_list(files: &[PulledFile], name: &str) -> String {
         .join(", ")
 }
 
-/// `INSERT INTO into` every one of `columns` from a warehouse's unloaded Parquet files at `urls`: a column of `read` from the files, turned back from whole microseconds where it is read as a time or timestamp, then cast to its type, exactly whatever the session's time zone; the load id and load time are the batch's; any other column is NULL.
+/// `INSERT INTO into` every one of `columns` from a warehouse's unloaded Parquet files at `urls`: a column of `read` from the files, turned back from whole microseconds where it is read as a time or timestamp, then cast to its type, exactly whatever the session's time zone; a column of `constants` from its value; the load id and load time are the batch's; any other column is NULL.
 pub(crate) fn unloaded_insert(
     into: &TableName,
-    (columns, read): (&[DesiredColumn], &[ReadColumn]),
+    (columns, read, constants): (
+        &[DesiredColumn],
+        &[ReadColumn],
+        &[(String, ColumnType, String)],
+    ),
     urls: &[String],
     (load_id, loaded_at): (&str, &str),
 ) -> String {
@@ -106,7 +110,7 @@ pub(crate) fn unloaded_insert(
     let values: Vec<String> = columns
         .iter()
         .map(
-            |column| match column_value(column, read, (load_id, loaded_at)) {
+            |column| match column_value(column, (read, constants), (load_id, loaded_at)) {
                 Some(value) => format!(
                     "CAST({value} AS {})",
                     DuckDbSql
@@ -131,15 +135,20 @@ pub(crate) fn unloaded_insert(
     )
 }
 
-/// Where an unloaded batch's `column` comes from: the batch's load id or load time, or the files' column of `read` it is, before its cast; `None` when the files lack it.
+/// Where an unloaded batch's `column` comes from: the batch's load id or load time, the value of the constant it is, or the files' column of `read` it is, before its cast; `None` when the files lack it.
 fn column_value(
     column: &DesiredColumn,
-    read: &[ReadColumn],
+    (read, constants): (&[ReadColumn], &[(String, ColumnType, String)]),
     (load_id, loaded_at): (&str, &str),
 ) -> Option<String> {
+    let constant = constants
+        .iter()
+        .find(|(name, _, _)| *name == column.name)
+        .map(|(_, _, value)| DuckDbSql.render_loader_value_literal(value));
     match column.name.as_str() {
         LOAD_ID_COLUMN => Some(DuckDbSql.render_loader_value_literal(load_id)),
         LOADED_AT_COLUMN => Some(DuckDbSql.render_loader_value_literal(loaded_at)),
+        _ if constant.is_some() => constant,
         name => read
             .iter()
             .find(|read| read.name == name)

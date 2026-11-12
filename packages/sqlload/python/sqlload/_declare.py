@@ -23,6 +23,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"auto_widen",
 		"batch_size",
 		"checks",
+		"constant_columns",
 		"contract",
 		"cursor_column",
 		"cursor_start",

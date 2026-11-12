@@ -8,7 +8,7 @@ use sqlload::loader::models::PlanOptions;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
-use crate::helpers::{described_project, duckdb_project, load_all, run_async};
+use crate::helpers::{described_project, duckdb_project, load_all, load_selected, run_async};
 use crate::test_types::{LoadRunTestCase, PinnedRunTestCase};
 
 const SETUP: &str = "
@@ -260,6 +260,148 @@ fn given_a_table_without_constant_columns_when_planning_and_loading_twice_then_i
                 );
             }
         }
+        Ok(())
+    })
+}
+
+/// Two tenants' copies of one table, tenant A's rows newer than all of tenant B's, and both with id 1.
+const TENANTS_SETUP: &str = "
+CREATE SCHEMA a;
+CREATE SCHEMA b;
+CREATE TABLE a.orders (id int8 PRIMARY KEY, label text, updated_at timestamptz NOT NULL);
+CREATE TABLE b.orders (id int8 PRIMARY KEY, label text, updated_at timestamptz NOT NULL);
+INSERT INTO a.orders VALUES (1, 'a-one', '2026-11-05 10:00:00+00'), (2, 'a-two', '2026-11-06 10:00:00+00');
+INSERT INTO b.orders VALUES (1, 'b-one', '2026-11-01 10:00:00+00'), (3, 'b-three', '2026-11-02 10:00:00+00');
+";
+
+/// Source `app` is tenant A, `tenant_b` tenant B: one destination table, told apart by `tenant_id`.
+const TENANTS_TABLES: &str = r#"include = ["a.orders"]
+table_name = "{table}"
+constant_columns = { tenant_id = "a" }
+
+[sources.app.tables."a.orders"]
+write_strategy = "merge"
+unique_key = ["tenant_id", "id"]
+cursor_column = "updated_at"
+
+[sources.tenant_b]
+kind = "postgres"
+connection = "app_pg"
+include = ["b.orders"]
+table_name = "{table}"
+constant_columns = { tenant_id = "b" }
+
+[sources.tenant_b.tables."b.orders"]
+write_strategy = "merge"
+unique_key = ["tenant_id", "id"]
+cursor_column = "updated_at"
+"#;
+
+const TENANT_VALUES_QUERY: &str = "SELECT string_agg(tenant_id || ':' || id || ':' || label, ',' ORDER BY tenant_id, id) FROM raw.orders";
+
+const TENANT_A_ROWS_QUERY: &str = "SELECT string_agg(id || ':' || label || ':' || _sqlload_load_id || ':' || CAST(_sqlload_loaded_at AS VARCHAR), ',' ORDER BY id) FROM raw.orders WHERE tenant_id = 'a'";
+
+const TENANT_B_ROWS_QUERY: &str = "SELECT string_agg(id || ':' || label || ':' || _sqlload_load_id || ':' || CAST(_sqlload_loaded_at AS VARCHAR), ',' ORDER BY id) FROM raw.orders WHERE tenant_id = 'b'";
+
+const TENANT_B_FIRST_CURSOR: &str = "cursor  updated_at empty table, everything";
+
+const TENANT_B_NEXT_CURSOR: &str =
+    "cursor  updated_at from 2026-11-02 10:00:00.000000+00 (destination maximum)";
+
+#[test]
+fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from_its_own_maximum_and_never_touches_the_others_rows()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(TENANTS_SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let text = duckdb_project(postgres.port, TENANTS_TABLES);
+        let project = described_project(&text).await?;
+        let destinations = connect_targets(&project)
+            .await
+            .map_err(|error| error.to_string())?;
+        let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
+            return Err("no DuckDB destination".to_owned());
+        };
+        let text_of = async |query: &str| {
+            single_text(duckdb, query.to_owned())
+                .await
+                .map_err(|error| error.to_string())
+        };
+
+        load_selected(&project, &destinations, &["app"]).await?;
+        assert_eq!(
+            text_of(TENANT_VALUES_QUERY).await?.as_deref(),
+            Some("a:1:a-one,a:2:a-two"),
+            "tenant A's first load creates the table with its constant"
+        );
+        let a_after_first = text_of(TENANT_A_ROWS_QUERY).await?;
+
+        let plan = load_selected(&project, &destinations, &["tenant_b"]).await?;
+        assert!(
+            plan.contains(TENANT_B_FIRST_CURSOR),
+            "tenant B's first run reads everything, not from tenant A's maximum:\n{plan}"
+        );
+        assert_eq!(
+            text_of(TENANT_VALUES_QUERY).await?.as_deref(),
+            Some("a:1:a-one,a:2:a-two,b:1:b-one,b:3:b-three"),
+            "tenant B's rows, all older than tenant A's maximum, load beside A's with the same id"
+        );
+        assert_eq!(
+            text_of(TENANT_A_ROWS_QUERY).await?,
+            a_after_first,
+            "tenant B's merge leaves tenant A's rows, their load id and load time unchanged"
+        );
+        let b_after_first = text_of(TENANT_B_ROWS_QUERY).await?;
+
+        client
+            .batch_execute("UPDATE a.orders SET label = 'a-one-changed', updated_at = '2026-11-07 10:00:00+00' WHERE id = 1;")
+            .await
+            .map_err(|error| error.to_string())?;
+        load_selected(&project, &destinations, &["app"]).await?;
+        assert_eq!(
+            text_of(TENANT_VALUES_QUERY).await?.as_deref(),
+            Some("a:1:a-one-changed,a:2:a-two,b:1:b-one,b:3:b-three"),
+            "tenant A's update merges into A's id 1 only"
+        );
+        assert_eq!(
+            text_of(TENANT_B_ROWS_QUERY).await?,
+            b_after_first,
+            "tenant A's merge leaves tenant B's rows, their load id and load time unchanged"
+        );
+        let a_after_update = text_of(TENANT_A_ROWS_QUERY).await?;
+
+        client
+            .batch_execute("INSERT INTO b.orders VALUES (4, 'b-four', '2026-11-03 10:00:00+00');")
+            .await
+            .map_err(|error| error.to_string())?;
+        let plan = load_selected(&project, &destinations, &["tenant_b"]).await?;
+        assert!(
+            plan.contains(TENANT_B_NEXT_CURSOR),
+            "tenant B's incremental read starts from B's own maximum:\n{plan}"
+        );
+        assert_eq!(
+            text_of(TENANT_VALUES_QUERY).await?.as_deref(),
+            Some("a:1:a-one-changed,a:2:a-two,b:1:b-one,b:3:b-three,b:4:b-four"),
+            "tenant B's new row, older than tenant A's maximum, loads"
+        );
+        assert_eq!(
+            text_of(TENANT_A_ROWS_QUERY).await?,
+            a_after_update,
+            "tenant B's incremental merge leaves tenant A's rows unchanged"
+        );
+
+        load_selected(&project, &destinations, &[]).await?;
+        assert_eq!(
+            text_of("SELECT count(*) || '/' || count(DISTINCT (tenant_id, id)) FROM raw.orders")
+                .await?
+                .as_deref(),
+            Some("5/5"),
+            "a rerun of both tenants keeps one row per tenant and id"
+        );
         Ok(())
     })
 }

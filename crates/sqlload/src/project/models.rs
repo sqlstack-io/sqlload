@@ -411,9 +411,6 @@ pub struct SourceConfig {
     /// What a file whose key does not match `path_columns` does: fail `plan` (default) or be skipped.
     #[serde(default)]
     pub unmatched_paths: Option<UnmatchedPaths>,
-    /// Columns with the same value in every row, typed by their TOML values (files sources).
-    #[serde(default)]
-    pub constant_columns: BTreeMap<String, toml::Value>,
     /// For files no external stage of the warehouse can read: download them and upload them unchanged to the user stage `@~`, where the warehouse loads them itself (much slower than an external stage; files sources).
     #[serde(default)]
     pub copy_to_internal_stage: bool,
@@ -511,6 +508,16 @@ pub enum CdcDeletes {
 }
 
 impl SourceConfig {
+    /// The `constant_columns` of table `table` (its key under `tables`): its own map, else the source's; a table's map replaces the source's.
+    pub fn table_constants(&self, table: &str) -> BTreeMap<String, toml::Value> {
+        self.tables
+            .get(table)
+            .and_then(|overrides| overrides.settings.constant_columns.as_ref())
+            .or(self.defaults.constant_columns.as_ref())
+            .map(|constants| constants.0.clone())
+            .unwrap_or_default()
+    }
+
     /// Whether the source finds its tables in a database's catalog with `include` patterns (`postgres`, `postgres_cdc`, `snowflake`, `odbc` or `bigquery`).
     pub fn discovers_tables(&self) -> bool {
         matches!(
@@ -710,7 +717,18 @@ pub struct TableSettings {
     /// Which row of a sheet's range holds the header, counting from 1 (`google_sheets`); rows above it are skipped.
     #[serde(default)]
     pub header_row: Option<u32>,
+    /// Columns with the same value in every row, typed by their TOML values; a table's map replaces its source's.
+    #[serde(default)]
+    pub constant_columns: Option<ConstantColumns>,
 }
+
+/// `constant_columns`: each column's value as written, by name.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(transparent)]
+pub struct ConstantColumns(pub BTreeMap<String, toml::Value>);
+
+/// For the settings that derive `Eq`; a `nan` constant is never equal to itself, which only makes two settings compare unequal.
+impl Eq for ConstantColumns {}
 
 /// A table setting's value in a ClickHouse layout.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
