@@ -1,6 +1,9 @@
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::models::PlanOptions;
+use sqlload_testkit::clickhouse::constants::{
+    PASSWORD as CLICKHOUSE_PASSWORD, USER as CLICKHOUSE_USER,
+};
 use sqlload_testkit::clickhouse::main::run_client::run_client;
 use sqlload_testkit::clickhouse::main::start_clickhouse::start_clickhouse;
 use sqlload_testkit::postgres::main::connect::connect;
@@ -9,7 +12,8 @@ use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use crate::clickhouse_helpers::{
     clickhouse_project, plan_apply_load_with, run_clickhouse_stops, select_only,
 };
-use crate::helpers::{described_project, run_async};
+use crate::helpers::{described_project, run_async, run_dedupe_case};
+use crate::test_postgres_to_duckdb::{DEDUPE_CASES, READINGS_SETUP};
 use crate::test_types::{LoadRunTestCase, StoppedLoadTestCase};
 
 const SETUP: &str = "
@@ -392,6 +396,41 @@ fn given_a_load_stopped_at_every_statement_when_it_runs_again_then_the_table_was
             assert!(
                 unstopped.is_some_and(|stops| stops >= test_case.expected_minimum_stops),
                 "{}: a run finished unstopped after {unstopped:?} stop points",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_source_repeating_a_merge_key_when_loading_into_clickhouse_then_one_row_per_key_stays_by_the_chosen_rule()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let clickhouse = start_clickhouse().await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(READINGS_SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        run_client(&clickhouse, "CREATE DATABASE dedupe", &[]).await?;
+        let target = format!(
+            "kind = \"clickhouse\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"{CLICKHOUSE_USER}\"\npassword = \"{CLICKHOUSE_PASSWORD}\"",
+            clickhouse.port
+        );
+        for test_case in &DEDUPE_CASES {
+            let rows = run_dedupe_case(
+                (&target, "dedupe"),
+                postgres.port,
+                (&["DROP TABLE IF EXISTS dedupe.app__readings"], "SELECT arrayStringConcat(arrayMap(row -> if(row.1, 'NULL', row.2) || ':' || toString(row.3), arraySort(groupArray((isNull(sensor), ifNull(sensor, ''), amount)))), ',') FROM dedupe.app__readings"),
+                test_case,
+            )
+            .await?;
+            assert_eq!(
+                rows.as_deref(),
+                Some(test_case.expected_rows),
+                "{}",
                 test_case.description
             );
         }

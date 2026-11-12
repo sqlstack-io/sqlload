@@ -14,6 +14,12 @@ pub(crate) const MERGE_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCH
 
 pub(crate) const MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\n";
 
+pub(crate) const MERGE_FAIL_SETTINGS: &str =
+    "write_strategy = \"merge\"\nunique_key = [\"id\"]\non_duplicate_keys = \"fail\"\n";
+
+pub(crate) const MERGE_SORT_SETTINGS: &str =
+    "write_strategy = \"merge\"\nunique_key = [\"id\"]\ndedup_sort = { v = \"asc\" }\n";
+
 const NOV_3: ParquetFile = ParquetFile {
     key: "day=2026-11-03/part-0.parquet",
     ids: &[1, 2],
@@ -508,8 +514,49 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 expected_result: "1:b|2",
             },
             FilesMergeTestCase {
-                description: "a file repeating a key no row has yet fails before it merges, naming the key",
+                description: "by default a file repeating a key merges its last row of that key",
                 settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[MergeFile {
+                        key: "a.csv",
+                        contents: "id,v\n5,b\n6,c\n5,a\n",
+                        modified_secs: 1_000,
+                    }],
+                    loads: true,
+                    expected_error: "",
+                    expected_plan: "merge (unique_key: id)",
+                }],
+                check_query: MERGE_CHECK,
+                expected_result: "5:a,6:c|1",
+            },
+            FilesMergeTestCase {
+                description: "with dedup_sort a file repeating a key merges the row that sorts first, and plan warns that a later file still overwrites it",
+                settings: MERGE_SORT_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n5,b\n5,a\n5,c\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n6,z\n",
+                            modified_secs: 2_000,
+                        },
+                    ],
+                    loads: true,
+                    expected_error: "",
+                    expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits once per file (2 files)",
+                }],
+                check_query: MERGE_CHECK,
+                expected_result: "5:a,6:z|2",
+            },
+            FilesMergeTestCase {
+                description: "with on_duplicate_keys = \"fail\" a file repeating a key no row has yet fails before it merges, naming the key",
+                settings: MERGE_FAIL_SETTINGS,
                 steps: &[MergeStep {
                     before: &[],
                     files: &[MergeFile {
@@ -526,7 +573,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
             },
             FilesMergeTestCase {
                 description: "a failure in the second file keeps the first committed, names the file, and a rerun merges from it without merging the first again; a run with nothing new merges nothing",
-                settings: MERGE_SETTINGS,
+                settings: MERGE_FAIL_SETTINGS,
                 steps: &[
                     MergeStep {
                         before: &[],

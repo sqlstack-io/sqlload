@@ -1061,3 +1061,16 @@ pub(crate) struct S3AfterLoadTestCase {
     /// Every file left below `folder`, sorted, as `key=contents`.
     pub(crate) expected_files: &'static [&'static str],
 }
+
+/// One load of `public.readings`, merged on `sensor` with `reading_id` as cursor, from a fresh target table.
+pub(crate) struct MergeDedupeLoadTestCase {
+    pub(crate) description: &'static str,
+    /// Table settings after the merge's own, such as `dedup_sort`.
+    pub(crate) settings: &'static str,
+    /// Text the plan's or the load's error must contain; empty when the load must succeed.
+    pub(crate) expected_error: &'static str,
+    /// Text the plan must contain when the load succeeds.
+    pub(crate) expected_plan: &'static str,
+    /// The table's rows as `sensor:amount`, ordered by sensor (NULLs last) and amount.
+    pub(crate) expected_rows: &'static str,
+}

@@ -27,9 +27,9 @@ use crate::files_target_helpers::file_batches;
 use crate::test_types::{
     BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesMergeTestCase,
     FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase,
-    LiveDatabricks, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
-    RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase,
-    WrittenPartition, WrittenRow, WrittenRun,
+    LiveDatabricks, MergeDedupeLoadTestCase, MetadataRoundTripTestCase, ParquetFile, RouteFiles,
+    RouteOutcome, RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase,
+    TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -1957,6 +1957,51 @@ pub(crate) async fn run_merge_case(
         );
     }
     single_text(destination, test_case.check_query.to_owned())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Load `public.readings` from Postgres on `postgres_port` into the `target` connection (its TOML lines) under `schema` as `test_case` says, after the `reset` statements on the target: the table's rows as `check_query` renders them, once the error and plan matched.
+pub(crate) async fn run_dedupe_case(
+    (target, schema): (&str, &str),
+    postgres_port: u16,
+    (reset, check_query): (&[&str], &str),
+    test_case: &MergeDedupeLoadTestCase,
+) -> Result<Option<String>, String> {
+    let text = format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{target}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{schema}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.readings\"]\n\n[sources.app.tables.\"public.readings\"]\nwrite_strategy = \"merge\"\nunique_key = [\"sensor\"]\ncursor_column = \"reading_id\"\n{}\n",
+        test_case.settings
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    execute(
+        destination,
+        reset.iter().map(|sql| (*sql).to_owned()).collect(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let outcome = load_selected(&project, &destinations, &[]).await;
+    let (plan, error) = (
+        outcome.clone().unwrap_or_default(),
+        outcome.err().unwrap_or_default(),
+    );
+    assert!(
+        error.contains(test_case.expected_error)
+            && error.is_empty() == test_case.expected_error.is_empty(),
+        "{}: {error}",
+        test_case.description
+    );
+    assert!(
+        plan.contains(test_case.expected_plan),
+        "{}: {plan}",
+        test_case.description
+    );
+    single_text(destination, check_query.to_owned())
         .await
         .map_err(|error| error.to_string())
 }

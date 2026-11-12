@@ -5,9 +5,12 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_tls::start_postgres_tls;
 
-use crate::helpers::{described_project, run_async, run_merge_case, run_sqlload};
+use crate::helpers::{described_project, run_async, run_dedupe_case, run_merge_case, run_sqlload};
 use crate::postgres_helpers::{load_once, project_text, text};
-use crate::test_files_to_duckdb::{MERGE_CHECK, MERGE_SETTINGS};
+use crate::test_files_to_duckdb::{
+    MERGE_CHECK, MERGE_FAIL_SETTINGS, MERGE_SETTINGS, MERGE_SORT_SETTINGS,
+};
+use crate::test_postgres_to_duckdb::{DEDUPE_CASES, READINGS_SETUP};
 use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep};
 use crate::test_types::{PostgresTargetTestCase, TargetTlsTestCase};
 
@@ -366,8 +369,49 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                 expected_result: "1:b|2",
             },
             FilesMergeTestCase {
-                description: "a file repeating a key no row has yet fails before it merges, naming the key",
+                description: "by default a file repeating a key merges its last row of that key",
                 settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[MergeFile {
+                        key: "a.csv",
+                        contents: "id,v\n5,b\n6,c\n5,a\n",
+                        modified_secs: 1_000,
+                    }],
+                    loads: true,
+                    expected_error: "",
+                    expected_plan: "merge (unique_key: id)",
+                }],
+                check_query: MERGE_CHECK,
+                expected_result: "5:a,6:c|1",
+            },
+            FilesMergeTestCase {
+                description: "with dedup_sort a file repeating a key merges the row that sorts first, and plan warns that a later file still overwrites it",
+                settings: MERGE_SORT_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n5,b\n5,a\n5,c\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n6,z\n",
+                            modified_secs: 2_000,
+                        },
+                    ],
+                    loads: true,
+                    expected_error: "",
+                    expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits once per file (2 files)",
+                }],
+                check_query: MERGE_CHECK,
+                expected_result: "5:a,6:z|2",
+            },
+            FilesMergeTestCase {
+                description: "with on_duplicate_keys = \"fail\" a file repeating a key no row has yet fails before it merges, naming the key",
+                settings: MERGE_FAIL_SETTINGS,
                 steps: &[MergeStep {
                     before: &[],
                     files: &[MergeFile {
@@ -384,7 +428,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
             },
             FilesMergeTestCase {
                 description: "a failure in the second file keeps the first committed, names the file, and a rerun merges from it without merging the first again; a run with nothing new merges nothing",
-                settings: MERGE_SETTINGS,
+                settings: MERGE_FAIL_SETTINGS,
                 steps: &[
                     MergeStep {
                         before: &[],
@@ -478,6 +522,39 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
             assert_eq!(
                 result.as_deref(),
                 Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_source_repeating_a_merge_key_when_upserting_into_postgres_then_one_row_per_key_stays_by_the_chosen_rule()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(READINGS_SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let target = format!(
+            "kind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"sqlload\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"",
+            postgres.port
+        );
+        for test_case in &DEDUPE_CASES {
+            let rows = run_dedupe_case(
+                (&target, "dedupe"),
+                postgres.port,
+                (&["DROP TABLE IF EXISTS dedupe.app__readings"], "SELECT COALESCE(string_agg(COALESCE(sensor, 'NULL') || ':' || amount, ',' ORDER BY sensor NULLS LAST, amount), '') FROM dedupe.app__readings"),
+                test_case,
+            )
+            .await?;
+            assert_eq!(
+                rows.as_deref(),
+                Some(test_case.expected_rows),
                 "{}",
                 test_case.description
             );
