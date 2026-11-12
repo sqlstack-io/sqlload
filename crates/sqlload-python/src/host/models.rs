@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use pyo3::types::PyAnyMethods;
 use pyo3::{PyResult, Python};
+use sqlload::python_sources::errors::ReadError;
 use sqlload::python_sources::models::{PythonSource, TableRead};
 use sqlload::python_sources::types::{BatchStream, PythonHost, Streamed};
 
@@ -13,7 +14,7 @@ use crate::crossing::errors::CrossError;
 use crate::crossing::main::default_parse_threads::default_parse_threads;
 use crate::crossing::main::table_batches::table_batches;
 use crate::crossing::models::{CrossingOptions, Polled, ReadContext, TableBatches};
-use crate::host::_helpers::python_errors::error_text;
+use crate::host::_helpers::python_errors::{error_text, read_error};
 use crate::host::constants::RUNTIME_MODULE;
 
 /// Runs Python sources in this interpreter through `sqlload._runtime`.
@@ -99,13 +100,14 @@ impl PythonHost for ExtensionHost {
 pub struct PythonBatches(TableBatches);
 
 impl BatchStream for PythonBatches {
-    fn next_batch(&mut self) -> Option<Result<Streamed, String>> {
+    fn next_batch(&mut self) -> Option<Result<Streamed, ReadError>> {
         loop {
             match self.0.poll(Duration::from_secs(3600)) {
                 Polled::Batch(batch) => return Some(Ok(Streamed::Batch(batch))),
                 Polled::State(state) => return Some(Ok(Streamed::State(state))),
-                Polled::Failed(CrossError::Python(error)) => return Some(Err(error_text(&error))),
-                Polled::Failed(CrossError::Data(reason)) => return Some(Err(reason)),
+                Polled::Failed(CrossError::Python(error)) => return Some(Err(read_error(&error))),
+                Polled::Failed(CrossError::Data(reason)) => return Some(Err(reason.into())),
+                Polled::Failed(CrossError::Http(error)) => return Some(Err(error)),
                 Polled::Pending => {}
                 Polled::Finished => return None,
             }

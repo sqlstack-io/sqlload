@@ -912,6 +912,7 @@ pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
     );
     PlanView {
         ok: errors.is_empty(),
+        retryable: !errors.is_empty() && plan.only_retryable_problems(),
         summary: summary.join(", "),
         selected: plan.tables.len(),
         objects: stages
@@ -1025,10 +1026,14 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
     };
     let view = plan_view(plan);
     let finished = started + chrono::Duration::from_std(elapsed).unwrap_or_default();
+    let ok = view.ok && summary.failed == 0;
     RunResult {
         schema_version: RESULT_SCHEMA_VERSION,
         command,
-        ok: view.ok && summary.failed == 0,
+        ok,
+        retryable: !ok
+            && (view.ok || view.retryable)
+            && outcomes.iter().all(TableOutcome::passes_on_rerun),
         started_at: started.to_rfc3339_opts(SecondsFormat::Millis, true),
         finished_at: finished.to_rfc3339_opts(SecondsFormat::Millis, true),
         duration_seconds: seconds(elapsed),
@@ -1058,6 +1063,7 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
         duration_seconds: seconds(outcome.elapsed),
         note,
         error,
+        retryable: outcome.retryable,
     }
 }
 

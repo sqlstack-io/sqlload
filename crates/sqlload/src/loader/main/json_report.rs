@@ -5,16 +5,16 @@ use serde::Serialize;
 use crate::loader::_helpers::render::{plan_view, run_result};
 use crate::loader::models::{ProjectPlan, RunReport};
 
-/// The plan as one indented JSON document, or, with `run`, what `apply` or `load` did after it; and whether every selected table can load (and, after a run, loaded).
-pub fn json_report(plan: &ProjectPlan, run: Option<&RunReport<'_>>) -> (String, bool) {
+/// The plan as one indented JSON document, or, with `run`, what `apply` or `load` did after it; whether every selected table can load (and, after a run, loaded); and whether the run failed only in ways a rerun may fix.
+pub fn json_report(plan: &ProjectPlan, run: Option<&RunReport<'_>>) -> (String, bool, bool) {
     match run {
         None => {
             let view = plan_view(plan);
-            (pretty(&view), view.ok)
+            (pretty(&view), view.ok, view.retryable)
         }
         Some(run) => {
             let result = run_result(plan, run);
-            (pretty(&result), result.ok)
+            (pretty(&result), result.ok, result.retryable)
         }
     }
 }

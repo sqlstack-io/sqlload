@@ -3,15 +3,18 @@
 use std::io::Write;
 
 use crate::command::_helpers::loader_commands::run_loader;
+use crate::command::errors::CommandError;
 use crate::command::models::{Command, LoaderArgs, LoaderRequest};
 use crate::copy::constants::PROJECT_HEADER;
 use crate::copy::main::copy_project::copy_project;
 use crate::copy::models::CopyRequest;
 
 /// Run `request`'s `copy`: its source into its destination with `request.text`'s connections (empty when there is no sqlload.toml), or print the copy as a project with `--print-toml`.
-pub(crate) async fn run_copy(request: LoaderRequest<'_>) -> Result<(Vec<String>, bool), String> {
+pub(crate) async fn run_copy(
+    request: LoaderRequest<'_>,
+) -> Result<(Vec<String>, u8), CommandError> {
     let Command::Copy(args) = request.command else {
-        return Err("copy runs only for sqlload copy".to_owned());
+        return Err("copy runs only for sqlload copy".to_owned().into());
     };
     let copy_request = CopyRequest {
         source: args.source,
@@ -26,7 +29,7 @@ pub(crate) async fn run_copy(request: LoaderRequest<'_>) -> Result<(Vec<String>,
         let _ = writeln!(std::io::stderr(), "warning: {warning}");
     }
     if args.print_toml {
-        return Ok((vec![format!("{PROJECT_HEADER}{}", copy.printed)], true));
+        return Ok((vec![format!("{PROJECT_HEADER}{}", copy.printed)], 0));
     }
     run_loader(LoaderRequest {
         text: &copy.text,

@@ -41,11 +41,13 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
             table: name,
             origin: Some(table.origin()),
             loaded: Ok(loaded),
+            retryable: false,
             elapsed: started.elapsed(),
         },
         Err(error) => TableOutcome {
             table: table.outcome_name(),
             origin: Some(table.origin()),
+            retryable: error.is_retryable(),
             loaded: Err(error.to_string()),
             elapsed: started.elapsed(),
         },
@@ -118,6 +120,7 @@ impl<'a> TableQueue<'a> {
                 table: table.outcome_name(),
                 origin: Some(table.origin()),
                 loaded: Err(reason),
+                retryable: false,
                 elapsed: std::time::Duration::ZERO,
             }),
         ));

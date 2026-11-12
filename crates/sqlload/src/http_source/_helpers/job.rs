@@ -13,6 +13,7 @@ use crate::http_source::_helpers::oauth::token_url;
 use crate::http_source::_helpers::pages::paginate;
 use crate::http_source::_helpers::selector::{selected_rows, selector};
 use crate::http_source::_helpers::urls::{filled_path, placeholders};
+use crate::python_sources::errors::ReadError;
 use crate::row_batches::main::projection::projection;
 use crate::row_batches::main::projection_problem::projection_problem;
 use crate::row_batches::models::{Projection, ProjectionRules};
@@ -219,7 +220,7 @@ pub(crate) fn drive_job(
     job: HttpJob,
     connections: &Map<String, Value>,
     mut deliver: impl FnMut(HttpPage) -> bool,
-) -> Result<(), String> {
+) -> Result<(), ReadError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(JOB_THREADS)
         .enable_all()
@@ -237,7 +238,7 @@ pub(crate) fn drive_job(
     match runtime.block_on(task) {
         Ok(result) => result,
         Err(error) if error.is_cancelled() => Ok(()),
-        Err(error) => Err(format!("the sl.http job stopped: {error}")),
+        Err(error) => Err(format!("the sl.http job stopped: {error}").into()),
     }
 }
 
@@ -246,7 +247,7 @@ async fn run_job(
     job: HttpJob,
     connections: Map<String, Value>,
     pages: Sender<HttpPage>,
-) -> Result<(), String> {
+) -> Result<(), ReadError> {
     let http = job_client()?;
     match job {
         HttpJob::Paginate(request) => {
@@ -318,11 +319,11 @@ async fn run_fan_out(
     connections: &Map<String, Value>,
     http: &reqwest::Client,
     pages: Sender<HttpPage>,
-) -> Result<(), String> {
+) -> Result<(), ReadError> {
     let calls = request_calls(&fan_out.request, connections, http)?;
     let (key_sender, key_receiver) = channel::<Map<String, Value>>(fan_out.concurrency * 2);
     let keys = Arc::new(Mutex::new(key_receiver));
-    let mut tasks: JoinSet<Result<(), String>> = JoinSet::new();
+    let mut tasks: JoinSet<Result<(), ReadError>> = JoinSet::new();
     let feed = match fan_out.over.clone() {
         Over::Values { values } => KeyFeed::Values(values),
         Over::Paginate(over) => {
@@ -355,7 +356,7 @@ async fn feed_keys(
     feed: KeyFeed,
     wanted: Vec<String>,
     keys: Sender<Map<String, Value>>,
-) -> Result<(), String> {
+) -> Result<(), ReadError> {
     let single = |value: Value| -> Map<String, Value> {
         match value {
             Value::Object(key) => key,
@@ -393,7 +394,7 @@ async fn forward_keys(
     mut pages: Receiver<HttpPage>,
     (selected, field): (&Selector, &str),
     keys: &Sender<Map<String, Value>>,
-) -> Result<(), String> {
+) -> Result<(), ReadError> {
     while let Some(page) = pages.recv().await {
         let document: Value = serde_json::from_slice(&page.bytes)
             .map_err(|error| format!("the fan-out's over response is not JSON: {error}"))?;

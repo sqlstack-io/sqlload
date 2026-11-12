@@ -47,7 +47,16 @@ impl ApiError {
 }
 
 impl From<reqwest::Error> for ApiError {
+    /// A request that could not be built, or an answer that is not the JSON expected, is a protocol error, which retrying would not change; anything else is transport, including a body cut off mid-read (which reqwest also calls a decode error).
     fn from(error: reqwest::Error) -> Self {
-        Self::Transport(error.without_url().to_string())
+        let not_json = error.is_decode()
+            && std::error::Error::source(&error)
+                .is_some_and(|source| source.is::<serde_json::Error>());
+        let protocol = error.is_builder() || not_json;
+        let text = error.without_url().to_string();
+        match protocol {
+            true => Self::Protocol(text),
+            false => Self::Transport(text),
+        }
     }
 }

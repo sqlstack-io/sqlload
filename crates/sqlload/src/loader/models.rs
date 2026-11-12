@@ -356,9 +356,22 @@ pub struct ProjectPlan {
     pub problems: Vec<String>,
     /// Things to know that block nothing, such as a selector matching no table.
     pub warnings: Vec<String>,
+    /// The `problems` a rerun may get past: a source that could not be reached.
+    pub retryable_problems: Vec<String>,
 }
 
 impl ProjectPlan {
+    /// Whether everything that stops the plan is something a rerun may get past: no table is blocked, and every problem is a source that could not be reached.
+    pub fn only_retryable_problems(&self) -> bool {
+        self.tables
+            .iter()
+            .all(|table| table.schema.blocked.is_none())
+            && self
+                .problems
+                .iter()
+                .all(|problem| self.retryable_problems.contains(problem))
+    }
+
     /// The plan without its `postgres_cdc` tables, which load together per source rather than one by one.
     pub fn uncaptured(&self) -> Self {
         Self {
@@ -452,7 +465,19 @@ pub struct TableOutcome {
     /// The table's source, target and write strategy; `None` for a failure of no one table (a `load --follow` with none).
     pub origin: Option<OutcomeOrigin>,
     pub loaded: Result<TableLoaded, String>,
+    /// Whether a failed load may succeed when run again unchanged; `false` once loaded.
+    pub retryable: bool,
     pub elapsed: std::time::Duration,
+}
+
+impl TableOutcome {
+    /// Whether this table needs nothing a rerun cannot give it: it loaded, or its failure is retryable.
+    pub fn passes_on_rerun(&self) -> bool {
+        match &self.loaded {
+            Ok(_) => true,
+            Err(_) => self.retryable,
+        }
+    }
 }
 
 /// Where a loaded table comes from and goes, and how it is written.
@@ -722,6 +747,8 @@ pub struct PlanDetail {
 pub struct PlanView {
     /// Whether every selected table can load.
     pub ok: bool,
+    /// Whether the plan failed only in ways a rerun may get past, such as a source that could not be reached.
+    pub retryable: bool,
     /// The counts after `Plan ready`, nonzero clauses only.
     pub summary: String,
     pub selected: usize,
@@ -781,6 +808,8 @@ pub struct RunResult {
     pub command: &'static str,
     /// Whether every selected table planned, and every table loaded.
     pub ok: bool,
+    /// Whether the run failed only in ways that running it again unchanged may fix: every selected table planned, and each failed table's failure is retryable.
+    pub retryable: bool,
     pub started_at: String,
     pub finished_at: String,
     pub duration_seconds: f64,
@@ -823,4 +852,31 @@ pub struct TableResult {
     pub duration_seconds: f64,
     pub note: Option<String>,
     pub error: Option<String>,
+    /// Whether the failure may pass when run again unchanged; `false` once loaded.
+    pub retryable: bool,
+}
+
+/// Why a source's tables could not be listed, and whether a rerun may get past it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceProblem {
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl From<String> for SourceProblem {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            retryable: false,
+        }
+    }
+}
+
+impl From<crate::loader::errors::LoaderError> for SourceProblem {
+    fn from(error: crate::loader::errors::LoaderError) -> Self {
+        Self {
+            retryable: error.is_retryable(),
+            message: error.to_string(),
+        }
+    }
 }

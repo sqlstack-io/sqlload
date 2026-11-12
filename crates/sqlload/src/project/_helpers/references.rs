@@ -1,6 +1,7 @@
 use crate::files_source::constants::LOADER_COLUMNS;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
+use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{RecordShape, SourceFormat};
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
@@ -510,6 +511,9 @@ fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
             if csv.delimiter == csv.quote {
                 problems.push(format!("{place} csv delimiter and quote must differ"));
+            }
+            if let Err(problem) = text_charset(&csv.encoding) {
+                problems.push(format!("{place} {problem}"));
             }
         }
         (Some(_), format) => problems.push(format!(

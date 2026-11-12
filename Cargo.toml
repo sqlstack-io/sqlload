@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.33.6" # x-release-please-version
+version = "0.34.0" # x-release-please-version
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -35,6 +35,7 @@ bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false }
 duckdb = { version = "1.20000", features = ["bundled", "appender-arrow", "parquet"] }
+encoding_rs = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 csv-core = "0.1"
 flate2 = "1"

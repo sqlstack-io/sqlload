@@ -351,3 +351,23 @@ pub(crate) fn staged_float_lists(rows: Vec<Option<Vec<Option<f64>>>>) -> Result<
         .collect::<Vec<_>>()
         .join("|"))
 }
+
+/// CSV files in `encoding`, with or without a header, and `skip_rows` lines before it, read whole into the record column.
+pub(crate) fn csv_in(
+    encoding: &str,
+    header: bool,
+    skip_rows: u64,
+) -> crate::files_source::models::FilesEncoding {
+    use crate::files_source::models::{CsvOptions, FilesEncoding, SourceFormat};
+    FilesEncoding {
+        format: SourceFormat::Csv,
+        csv: CsvOptions {
+            header,
+            encoding: encoding.to_owned(),
+            skip_rows,
+            ..CsvOptions::default()
+        },
+        record: Some(crate::files_source::constants::RECORD_COLUMN.to_owned()),
+        ..FilesEncoding::default()
+    }
+}

@@ -29,7 +29,7 @@ cursor_column = "dt"
 | `path` | The folder holding the files, relative to the connection. |
 | `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`. |
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`. Parquet compresses inside the file. |
-| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … |
+| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … From 0.35.0 (not released yet), also `encoding = "utf-8"` and `skip_rows = 0`; see [CSV encodings](#csv-encodings). |
 | `shape` | From 0.27.0. `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
 | `record_column` | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
@@ -37,6 +37,35 @@ cursor_column = "dt"
 | `unmatched_paths` | From 0.26.0. What a file whose path doesn't match `path_columns` does: `fail` (default) fails `plan` and names it, `skip` leaves it out. |
 | `constant_columns` | From 0.26.0. Columns with the same value in every row, such as `{ region = "eu", as_of = 2026-11-08 }`. See [Columns from paths](#columns-from-paths). |
 | `copy_to_internal_stage` | Snowflake only: upload files no external stage covers to the user stage. See [Load methods](/docs/targets/snowflake/#files-into-snowflake). |
+
+## CSV encodings
+
+From 0.35.0 (not released yet). `csv.encoding` names the files' character encoding: `utf-8` (the
+default), `cp1252` (Windows Western European), `latin-1` (ISO-8859-1, each byte read as the code
+point of the same number), `ascii`, `utf-16le`, `utf-16be`, or any other label of the
+[Encoding Standard](https://encoding.spec.whatwg.org/#names-and-labels), such as `windows-1250`,
+`iso-8859-15` or `shift_jis`. An unknown name fails `plan`.
+
+A byte the encoding doesn't define, such as `0x81` in cp1252 or any byte over 127 in `ascii`, fails
+the table with the file, line and byte, such as
+`a.csv: line 3, byte 15: 0x81 is not valid windows-1252`. A UTF-8 file with other bytes fails the
+same way, with a hint to set `csv.encoding`. A UTF-16 file whose byte order mark names the other
+byte order fails too, naming the encoding to set.
+
+`csv.skip_rows` skips that many lines at the start of each file, before the header (or the first
+record without one), such as a report title. A line ends at `\n` or `\r\n`, so quotes in a skipped
+line don't matter, and a file whose lines end in a bare `\r` fails rather than being skipped whole.
+Line numbers in errors count the skipped lines.
+
+```toml
+csv = { encoding = "cp1252", skip_rows = 2 }
+```
+
+Snowflake reading CSV files itself decodes them and skips the lines in its `COPY`, which supports
+`utf-8`, `latin-1`, `windows-1250` to `windows-1256`, `iso-8859-2`, `-5`, `-6`, `-7` and `-15`,
+`koi8-r`, `utf-16le` and `utf-16be`. Any other encoding fails `plan` for that route. Snowflake loads
+a byte the encoding leaves undefined, such as `0x81` in cp1252, as a control character rather than
+failing; `plan` finds one only in the rows it samples.
 
 ## Which files load
 

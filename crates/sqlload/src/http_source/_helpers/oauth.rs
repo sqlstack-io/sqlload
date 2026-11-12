@@ -18,6 +18,7 @@ use crate::http_source::constants::{
     MAX_TOKEN_RENEWAL_MARGIN,
 };
 use crate::http_source::models::{ClientAuth, Grant, Issued, OAuth2Spec, TokenSource, TokenState};
+use crate::python_sources::errors::ReadError;
 
 /// `spec`'s token URL, which must be `https`, or `http` on a loopback host, because the client's secret goes there.
 pub(crate) fn token_url(spec: &OAuth2Spec) -> Result<Url, String> {
@@ -129,7 +130,7 @@ impl TokenSource {
         http: &reqwest::Client,
         retries: u32,
         refused: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<String, ReadError> {
         let mut state = self.state.lock().await;
         let fresh = state
             .renew_at
@@ -163,7 +164,7 @@ impl TokenSource {
         http: &reqwest::Client,
         retries: u32,
         state: &TokenState,
-    ) -> Result<Issued, String> {
+    ) -> Result<Issued, ReadError> {
         let policy = RetryPolicy {
             first_delay: FIRST_RETRY_DELAY,
             max_delay: MAX_RETRY_DELAY,
@@ -194,10 +195,10 @@ impl TokenSource {
                 ),
             };
             if attempt >= policy.max_attempts {
-                return Err(format!(
+                return Err(ReadError::transient(format!(
                     "{failure} (after {} attempts)",
                     policy.max_attempts
-                ));
+                )));
             }
             tokio::time::sleep(jittered(policy.delay(attempt))).await;
             attempt += 1;

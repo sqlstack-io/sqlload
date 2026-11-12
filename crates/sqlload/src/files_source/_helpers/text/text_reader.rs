@@ -119,7 +119,7 @@ async fn typed_records(
         SourceFormat::Csv => {
             let reader = CsvReader::open(bytes, &request.encoding.csv, request.batch_rows).await?;
             for name in reader.names() {
-                checks.check_name("header", name, 1)?;
+                checks.check_name("header", name, 1 + request.encoding.csv.skip_rows)?;
             }
             Records::Csv(Box::new(reader))
         }

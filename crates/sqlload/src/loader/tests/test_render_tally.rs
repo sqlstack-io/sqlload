@@ -57,6 +57,7 @@ fn given_a_load_when_rendering_its_tally_then_lines_align_and_the_last_counts_th
                         ..TableLoaded::default()
                     })
                     .map_err(ToString::to_string),
+                retryable: false,
                 elapsed: Duration::from_millis(*elapsed_ms),
             })
             .collect();

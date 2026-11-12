@@ -98,3 +98,25 @@ pub const RESULT_SCHEMA_VERSION: u32 = 1;
 /// The loss of an integer array pin over Arrow or Parquet lists.
 pub const CUT_ELEMENTS_NOTE: &str =
     "float elements of Arrow and Parquet lists are cut to whole numbers";
+
+/// The SQLSTATEs of Postgres errors worth retrying unchanged: a connection that failed or dropped (not 08P01, which PgBouncer also sends for a database it does not know), out of memory, too many connections, a server shutting down or starting, a serialization failure, a deadlock and a lock not available.
+pub const TRANSIENT_SQLSTATES: [&str; 11] = [
+    "08000", "08003", "08006", "53200", "53300", "57P01", "57P02", "57P03", "40001", "40P01",
+    "55P03",
+];
+
+/// HTTP statuses a rerun may get past whatever the service's code says: throttling, a bad gateway, unavailable, a gateway timeout.
+pub const TRANSIENT_STATUSES: [u16; 4] = [429, 502, 503, 504];
+
+/// Service codes that make an HTTP 500 worth retrying: ClickHouse's timeouts, socket and network errors, too many queries or parts, and memory limits; BigQuery's backend and internal errors. A 500 with any other code (ClickHouse answers a bad query with one) is not.
+pub const TRANSIENT_SERVER_CODES: [&str; 9] = [
+    "159",
+    "202",
+    "209",
+    "210",
+    "241",
+    "252",
+    "backendError",
+    "internalError",
+    "rateLimitExceeded",
+];

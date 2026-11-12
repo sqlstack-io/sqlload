@@ -42,7 +42,7 @@ use crate::loader::constants::{
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
     CommitRule, FilesSource, PlanOptions, ProjectPlan, ResolvedTables, SkippedTable, SourceEnd,
-    SourceReader, TablePlan, TableSpec,
+    SourceProblem, SourceReader, TablePlan, TableSpec,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
@@ -196,16 +196,17 @@ pub(crate) async fn source_tables(
     project: &ProjectConfig,
     source_name: &str,
     source: &SourceConfig,
-) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>, Vec<String>), String>, LoaderError> {
+) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>, Vec<String>), SourceProblem>, LoaderError>
+{
     match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => {
             let address = match postgres_address(project, &source.connection) {
                 Ok(address) => address,
-                Err(problem) => return Ok(Err(problem)),
+                Err(problem) => return Ok(Err(problem.into())),
             };
             let (client, encryption) = match connect_postgres(address.clone()).await {
                 Ok(connected) => connected,
-                Err(error) => return Ok(Err(LoaderError::from(error).to_string())),
+                Err(error) => return Ok(Err(LoaderError::from(error).into())),
             };
             let warnings: Vec<String> =
                 plain_text_warning((source_name, &source.connection), &address, encryption)
@@ -214,19 +215,19 @@ pub(crate) async fn source_tables(
             Ok(
                 match read_catalog(&client, &source.include, &source.exclude).await {
                     Ok(discovered) => Ok((discovered, None, warnings)),
-                    Err(error) => Err(LoaderError::from(error).to_string()),
+                    Err(error) => Err(LoaderError::from(error).into()),
                 },
             )
         }
         SourceKind::Files => {
             let warehouse = match source_target(project, source) {
                 Ok(target) => target.warehouse,
-                Err(problem) => return Ok(Err(problem)),
+                Err(problem) => return Ok(Err(problem.into())),
             };
             Ok(
                 match discover_files_table(project, source_name, source, warehouse).await {
                     Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
-                    Err(error) => Err(error.to_string()),
+                    Err(error) => Err(error.into()),
                 },
             )
         }
@@ -235,7 +236,7 @@ pub(crate) async fn source_tables(
                 .and_then(|session| Ok(connect_snowflake_source(session, None)?))
             {
                 Ok(reader) => reader,
-                Err(error) => return Ok(Err(error.to_string())),
+                Err(error) => return Ok(Err(error.into())),
             };
             let queries: Vec<(String, String)> = source
                 .tables
@@ -247,7 +248,7 @@ pub(crate) async fn source_tables(
                     .await
                 {
                     Ok(discovered) => Ok((discovered, None, Vec::new())),
-                    Err(error) => Err(error.to_string()),
+                    Err(error) => Err(LoaderError::from(error).into()),
                 },
             )
         }
@@ -259,12 +260,13 @@ pub(crate) async fn source_tables(
                 .collect();
             Ok(discover_odbc(project, source, &queries)
                 .await
-                .map(|discovered| (discovered, None, Vec::new())))
+                .map(|discovered| (discovered, None, Vec::new()))
+                .map_err(SourceProblem::from))
         }
         SourceKind::BigQuery => {
             let reader = match bigquery_source_reader(project, source) {
                 Ok(reader) => reader,
-                Err(error) => return Ok(Err(error.to_string())),
+                Err(error) => return Ok(Err(error.into())),
             };
             let queries: Vec<(String, String)> = source
                 .tables
@@ -276,14 +278,14 @@ pub(crate) async fn source_tables(
                     .await
                 {
                     Ok(discovered) => Ok((discovered, None, Vec::new())),
-                    Err(error) => Err(error.to_string()),
+                    Err(error) => Err(LoaderError::from(error).into()),
                 },
             )
         }
         SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
         SourceKind::GoogleSheets => Ok(match sheets_tables(project, source).await {
             Ok((tables, warnings)) => Ok((tables, None, warnings)),
-            Err(error) => Err(error.to_string()),
+            Err(error) => Err(error.into()),
         }),
     }
 }
@@ -1148,8 +1150,32 @@ pub(crate) struct ReadPart {
     pub(crate) batch_bytes: Option<usize>,
 }
 
-/// Read `part` of `table`'s data from `reader`, passing each batch to `on_batch`; returns the row count.
+/// Read `part` of `table`'s rows from `reader`, handing each batch to `on_batch`; when `on_batch` fails, the read fails with the reader's text, and stays retryable when `on_batch`'s error was.
 pub(crate) async fn read_source(
+    reader: &SourceReader,
+    table: &TablePlan,
+    part: ReadPart,
+    mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), LoaderError>,
+) -> Result<u64, LoaderError> {
+    let mut failed: Option<LoaderError> = None;
+    let read = read_each(reader, table, part, async |batch| {
+        on_batch(batch).await.map_err(|error| {
+            let text = error.to_string();
+            failed = Some(error);
+            text
+        })
+    })
+    .await;
+    match (read, failed) {
+        (Err(read), Some(failed)) if failed.is_retryable() => {
+            Err(LoaderError::Transient(read.to_string()))
+        }
+        (read, _) => read,
+    }
+}
+
+/// Read `part` of `table`'s data from `reader`, passing each batch to `on_batch`; returns the row count.
+async fn read_each(
     reader: &SourceReader,
     table: &TablePlan,
     part: ReadPart,
@@ -1359,19 +1385,19 @@ pub(crate) fn selected(
         && !options.exclude.iter().any(picks)
 }
 
-/// Source `source_name`'s tables resolved to their settings, with its files for a files source, or `Err` with its problem when it cannot list them; its problems count only when the selection in `options` takes something from it (see [`source_in_scope`]), and are dropped otherwise.
+/// Source `source_name`'s tables resolved to their settings, with its files for a files source, or `Err` with its problem when it cannot list them (`None` when out of scope); its problems count only when the selection in `options` takes something from it (see [`source_in_scope`]), and are dropped otherwise.
 pub(crate) async fn scoped_tables(
     (project, options): (&ProjectConfig, &PlanOptions),
     (source_name, source): (&str, &SourceConfig),
-) -> Result<Result<(ResolvedTables, Option<FilesSource>), Vec<String>>, LoaderError> {
+) -> Result<Result<(ResolvedTables, Option<FilesSource>), Option<SourceProblem>>, LoaderError> {
     let (discovered, files, warnings) = match source_tables(project, source_name, source).await? {
         Ok(found) => found,
         Err(problem) => {
             let in_scope = source_in_scope((project, options), (source_name, source), None);
-            return Ok(Err(in_scope
-                .then(|| format!("[sources.{source_name}]: {problem}"))
-                .into_iter()
-                .collect()));
+            return Ok(Err(in_scope.then(|| SourceProblem {
+                message: format!("[sources.{source_name}]: {}", problem.message),
+                retryable: problem.retryable,
+            })));
         }
     };
     let mut resolved = resolve_tables(project, source_name, &discovered);

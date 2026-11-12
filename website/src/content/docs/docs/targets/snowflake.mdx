@@ -100,5 +100,8 @@ this gives the same values as SQLLoad's own reader.
 - A `hash`-masked column reaches Snowflake in plain text, in a temporary table that ends with the
   session, and is hashed there. An `hmac` key must never appear in SQL, so `hmac`-masked files go
   through SQLLoad instead, which `plan` warns is much slower.
+- From 0.35.0 (not released yet), CSV `encoding` and `skip_rows` go into the `COPY` as `ENCODING`
+  and `SKIP_HEADER`. An encoding Snowflake doesn't support fails `plan`. See
+  [CSV encodings](/docs/sources/files/#csv-encodings).
 
 Files are never read and re-uploaded by SQLLoad otherwise.

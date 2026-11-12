@@ -1,27 +1,39 @@
 ---
 title: "MotherDuck"
-description: "Load into MotherDuck (beta): DuckDB's md: connection, with rows appended as Arrow."
+description: "Load into MotherDuck (beta) through a separate DuckDB 1.5 process, with the same SQL and write strategies as DuckDB."
 ---
 
-Available as a beta from 0.33.0. A MotherDuck target loads into a MotherDuck database through
-DuckDB's `md:` connection, with the same SQL, types and write strategies as a
-[DuckDB target](/docs/targets/duckdb/). It's in beta, and it hasn't been tested against a live
-MotherDuck account.
+Available as a beta from 0.33.0; working against a live MotherDuck account from 0.34.0 (not released yet).
+A MotherDuck target loads into a MotherDuck database with the same SQL, types and write strategies as a
+[DuckDB target](/docs/targets/duckdb/).
 
-## DuckDB 2.0 isn't supported by MotherDuck yet
+## Install
 
-SQLLoad bundles DuckDB 2.0. MotherDuck doesn't accept DuckDB 2.0 clients yet: its extension
-supports DuckDB up to 1.5.6 and refuses to load on 2.0. Until MotherDuck supports DuckDB 2.0, a
-MotherDuck target can't connect. `sqlload debug`, `plan` and `load` report MotherDuck's own
-message:
+SQLLoad bundles DuckDB 2.0, and MotherDuck doesn't accept DuckDB 2.0 clients yet: it supports
+DuckDB 1.4.1 to 1.5.6 ([duckdb-versions.json](https://motherduck.com/docs/duckdb-versions.json)).
+So SQLLoad sends a MotherDuck target's SQL to a separate Python process running Python's `duckdb`
+package at a version MotherDuck accepts. The two DuckDB versions never share a process, and every
+other target still uses SQLLoad's own DuckDB.
+
+Install the `motherduck` extra, which adds `duckdb>=1.4.1,<=1.5.6`:
+
+```bash
+uv tool install 'sqlload[motherduck]'
+# or, in a virtual environment
+pip install 'sqlload[motherduck]'
+```
+
+The `sqlload` command runs that process on its own Python. With `sqlload-cli`, or to use another
+Python, set `SQLLOAD_MOTHERDUCK_PYTHON` to a Python that has `duckdb` 1.4.1 to 1.5.6; without it,
+`sqlload-cli` uses `python3` on `PATH` (`python` on Windows).
+
+If the Python can't run, lacks `duckdb`, or has a version MotherDuck refuses, `sqlload debug`,
+`plan` and `load` say so and how to fix it:
 
 ```console
 $ sqlload debug
-fail  target shop  MotherDuck: cannot open md:shop: MotherDuck doesn't accept the DuckDB version this SQLLoad bundles yet, so no SQLLoad release can connect to it until it does. MotherDuck says: Your DuckDB version (v2.0.0) is not yet supported by MotherDuck. …
+fail  target shop  MotherDuck: cannot open md:shop: MotherDuck doesn't accept the version of Python's duckdb package that SQLLoad connects through: install duckdb 1.4.1 to 1.5.6 there (pip install 'sqlload[motherduck]'), or set SQLLOAD_MOTHERDUCK_PYTHON to a Python that has it. MotherDuck says: Your DuckDB version (v2.0.0) is not yet supported by MotherDuck. …
 ```
-
-MotherDuck lists the client versions it supports in
-[duckdb-versions.json](https://motherduck.com/docs/duckdb-versions.json).
 
 ## Connection
 
@@ -42,24 +54,44 @@ loader_schema = "raw"
 | `token` | A MotherDuck access token. Use `${ENV:NAME}`. Default: the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable. |
 
 A target's `database` overrides the connection's, so one connection can serve, say, a `shop_dev`
-and a `shop` database. MotherDuck attaches the account's other databases too, so SQLLoad names every
-table with its database, and a target that names no database is refused. Without a token SQLLoad refuses the connection rather than wait for
-MotherDuck's browser sign-in. A `duckdb` connection refuses an `md:` path; use
-`kind = "motherduck"`. The first connection installs MotherDuck's DuckDB extension into `~/.duckdb`,
-which needs the network once.
+and a `shop` database. The database must exist. MotherDuck attaches the account's other databases
+too, so SQLLoad names every table with its database, and a target that names no database is refused.
+Without a token SQLLoad refuses the connection rather than wait for MotherDuck's browser sign-in.
+The token reaches the separate process over a pipe, never in its command line, and is taken out of
+every error. A `duckdb` connection refuses an `md:` path; use `kind = "motherduck"`. The first
+connection installs MotherDuck's DuckDB extension into `~/.duckdb`, which needs the network once.
 
 ## How data arrives
 
-Every row reaches MotherDuck as Arrow batches appended inside the batch's transaction, as on DuckDB.
-Unlike DuckDB, MotherDuck never reads files itself: files sources, including Parquet in S3 or a
-local folder, and a Snowflake source's unloaded files are read by SQLLoad and appended as Arrow.
-`plan` names that route for every table.
+SQLLoad writes each batch to a temporary Parquet file on this machine, and the separate process
+inserts it with `read_parquet` inside the batch's transaction, then the file is removed. MotherDuck
+never reads your source files itself: files sources, including Parquet in S3 or a local folder, and a
+Snowflake source's unloaded files are read by SQLLoad. `plan` names that route for every table.
 
-`append`, `merge`, `delete_insert` and `replace` run the same statements as on DuckDB.
+`append`, `merge`, `delete_insert` and `replace` run the same statements as on DuckDB. Each table
+loads on its own connection in the separate process, so one table's transaction never mixes with
+another's. If the process ends mid-load, the open batch isn't committed, the table fails, and the next
+load picks up from the table's committed rows.
 
-## Limits
+## Tested
 
-- Not tested against a live MotherDuck account. The tests cover the connection settings, the
-  refusals and the route; the statements are DuckDB's, tested on DuckDB.
-- Each table loads on its own connection, as on DuckDB. Whether MotherDuck runs concurrent schema
-  changes and transactions across those connections exactly as local DuckDB does is untested.
+- Live, against a MotherDuck account on DuckDB 1.5.6: create, load, every write strategy, an
+  incremental load and a rerun that adds nothing, a new column, every portable type, and dropping
+  the test databases afterwards.
+- Offline, on every change: every write strategy and portable type loaded through the separate
+  process into a stand-in for MotherDuck and compared with the same load into DuckDB, an incremental
+  rerun, the process ending mid-load, a value MotherDuck rejects, and the setup errors.
+
+## Removing the separate process
+
+Once MotherDuck accepts the DuckDB version SQLLoad bundles, the separate process is no longer needed.
+Everything specific to it is behind one interface, the `Bridge` connection of the DuckDB adapter:
+
+1. Delete `crates/sqlload/src/adapters/motherduck_bridge/` and its `mod` line in `adapters/mod.rs`.
+2. In `adapters/duckdb`, remove `DuckDbConnection::Bridge` (keeping `Local` as the connection), the
+   `Bridge` branches in `main/`, the `Bridge` error, and open MotherDuck with
+   `duckdb::Connection::open(connection_string(...))` as 0.33.0 did.
+3. Remove the `motherduck` extra from `packages/sqlload/pyproject.toml`, the
+   `SQLLOAD_MOTHERDUCK_PYTHON` line in `packages/sqlload/python/sqlload/_cli.py`, and
+   `packages/sqlload/tests/test_motherduck.py`.
+4. Rewrite the Install section of this page.

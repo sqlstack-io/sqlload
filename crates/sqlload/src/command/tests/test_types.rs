@@ -46,3 +46,13 @@ pub(crate) struct FolderOverlapTestCase {
     /// The last line: `exit 0` or `exit 1`.
     pub(crate) expected_exit: &'static str,
 }
+
+pub(crate) struct ExitCodeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) project: &'static str,
+    pub(crate) argv: &'static [&'static str],
+    /// Text the output holds.
+    pub(crate) expected_output: &'static str,
+    /// The last line: `exit 1` or `exit 75`.
+    pub(crate) expected_exit: &'static str,
+}

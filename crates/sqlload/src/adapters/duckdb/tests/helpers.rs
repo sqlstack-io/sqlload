@@ -1,5 +1,18 @@
+use std::sync::{Arc, Mutex};
+
+use crate::adapters::duckdb::models::{DuckDbConnection, DuckDbDestination};
 use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
+
+/// The connection of a destination on SQLLoad's own DuckDB.
+pub(crate) fn local(
+    destination: &DuckDbDestination,
+) -> Result<Arc<Mutex<duckdb::Connection>>, String> {
+    let DuckDbConnection::Local(connection) = &destination.connection else {
+        return Err("the destination is MotherDuck's".to_owned());
+    };
+    Ok(connection.clone())
+}
 
 /// A column read from the source, as a load writes it.
 pub(crate) fn column(name: &str, column_type: ColumnType) -> DesiredColumn {
@@ -83,11 +96,9 @@ pub(crate) fn unloaded_row_loaded(
 
 /// An unload of two rows written as one Parquet file in a local folder (no file at all when not `with_files`), said to hold `reported` rows, loaded by DuckDB reading it itself straight into the table; then any open batch rolled back, as a load's close does. What the load returned (`failed` for an error), and the rows the table holds afterwards.
 pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String, u64), String> {
-    use std::sync::{Arc, Mutex};
-
     use crate::adapters::contract::models::{TableName, UnloadedBatch, WriteTarget};
     use crate::adapters::contract::types::TableWriter;
-    use crate::adapters::duckdb::models::{DuckDbDestination, DuckDbWriter};
+    use crate::adapters::duckdb::models::DuckDbWriter;
     use crate::postgres_source::models::{ReadColumn, WireType};
     use crate::snowflake_source::models::UnloadedFiles;
     use crate::store_paths::models::{Location, StoreKind};
@@ -104,7 +115,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
         .map_err(failed)?;
     let mut writer = DuckDbWriter {
         destination: DuckDbDestination {
-            connection: Arc::new(Mutex::new(connection)),
+            connection: DuckDbConnection::Local(Arc::new(Mutex::new(connection))),
             ddl: Arc::new(tokio::sync::Mutex::new(())),
             motherduck: false,
         },
@@ -161,9 +172,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
         writer.rollback_batch().await;
         outcome
     });
-    let held: i64 = writer
-        .destination
-        .connection
+    let held: i64 = local(&writer.destination)?
         .lock()
         .map_err(|error| error.to_string())?
         .query_row("SELECT count(*) FROM loaded", [], |row| row.get(0))
