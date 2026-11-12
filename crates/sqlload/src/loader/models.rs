@@ -1,6 +1,7 @@
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::ChangeApply;
 use crate::load_naming::models::Naming;
+use crate::row_batches::models::Unnest;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -933,16 +934,4 @@ impl From<crate::loader::errors::LoaderError> for SourceProblem {
             message: error.to_string(),
         }
     }
-}
-
-/// Which list fields of a table's rows become child tables.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum Unnest {
-    /// None: lists stay JSON columns.
-    #[default]
-    None,
-    /// Every list field, at every level down to `max_depth`.
-    All,
-    /// The list fields at these dotted paths.
-    Paths(Vec<String>),
 }

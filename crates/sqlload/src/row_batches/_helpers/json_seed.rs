@@ -181,7 +181,7 @@ impl<'de> Visitor<'de> for KeyVisitor {
 }
 
 /// The cell for one raw JSON value; objects and lists become compact JSON text, keys in source order.
-fn raw_cell(text: &str) -> Result<Cell, serde_json::Error> {
+pub(crate) fn raw_cell(text: &str) -> Result<Cell, serde_json::Error> {
     match text.as_bytes().first() {
         Some(b'n') => Ok(Cell::Null),
         Some(b't') => Ok(Cell::Bool(true)),
