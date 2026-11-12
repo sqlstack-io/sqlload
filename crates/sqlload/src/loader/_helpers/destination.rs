@@ -181,6 +181,27 @@ pub(crate) fn block_shared_destinations(
     plan
 }
 
+/// `specs` with `shared_destination` set on each that another of the `configured` tables loads into the same destination table as.
+pub(crate) fn mark_shared_destinations(
+    specs: Vec<TableSpec>,
+    configured: &[TableSpec],
+) -> Vec<TableSpec> {
+    specs
+        .into_iter()
+        .map(|spec| TableSpec {
+            shared_destination: shared(&spec, configured),
+            ..spec
+        })
+        .collect()
+}
+
+/// Whether another of the `configured` tables loads into `spec`'s destination table.
+fn shared(spec: &TableSpec, configured: &[TableSpec]) -> bool {
+    configured
+        .iter()
+        .any(|other| shares_destination(spec, other))
+}
+
 /// Whether `other` is a different table loading into `spec`'s destination table.
 fn shares_destination(spec: &TableSpec, other: &TableSpec) -> bool {
     other.target == spec.target
@@ -241,7 +262,43 @@ fn shared_problems(table: &TablePlan, others: &[&TableSpec]) -> Vec<String> {
             spec.unique_key.join(", ")
         ));
     }
+    let merges = spec.strategy == WriteStrategy::Merge;
+    let alike = others.iter().find(|other| !told_apart(spec, other, merges));
+    if let Some(other) = alike.filter(|_| keyed || !merges) {
+        problems.push(format!(
+            "{place}; {}.{} has the same values for {}, so their rows and incremental cursors can't be told apart: give each table a different value",
+            other.source_name,
+            other.source_table.qualified_name(),
+            match merges {
+                true => "the constant columns in the unique_key",
+                false => "every constant column",
+            }
+        ));
+    }
     problems
+}
+
+/// Whether some constant column of `spec` (in its unique_key, when `in_key`) holds a different value in `other`.
+fn told_apart(spec: &TableSpec, other: &TableSpec, in_key: bool) -> bool {
+    spec.constants
+        .iter()
+        .filter(|(name, _, _)| !in_key || keyed_by(spec, name))
+        .any(|(name, _, value)| differs(other, name, value))
+}
+
+/// Whether `name` is one of `spec`'s unique_key columns, ignoring case.
+fn keyed_by(spec: &TableSpec, name: &str) -> bool {
+    spec.unique_key
+        .iter()
+        .any(|key| key.eq_ignore_ascii_case(name))
+}
+
+/// Whether `other` has the constant column `name` with a value other than `value`.
+fn differs(other: &TableSpec, name: &str, value: &str) -> bool {
+    other
+        .constants
+        .iter()
+        .any(|(theirs, _, their_value)| theirs.eq_ignore_ascii_case(name) && their_value != value)
 }
 
 /// Whether `name` is one of `spec`'s constant columns, ignoring case.

@@ -7,6 +7,7 @@ use crate::adapters::dispatch::main::dialect::files_destination::files_destinati
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
+use crate::adapters::files::models::FolderClaim;
 use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
 use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
@@ -31,6 +32,7 @@ use crate::files_source::models::{
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
+use crate::loader::_helpers::destination::table_folder;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::resolve::{resolve_tables, source_target};
 use crate::loader::_helpers::specs::{missing_description, table_name};
@@ -44,6 +46,7 @@ use crate::loader::models::{
     CommitRule, FilesSource, PlanOptions, ProjectPlan, ResolvedTables, SkippedTable, SourceEnd,
     SourceProblem, SourceReader, TablePlan, TableSpec,
 };
+use crate::loader::models::{FoundSource, FoundSources};
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
@@ -1560,4 +1563,69 @@ async fn first_load(
         }
     }
     Ok(true)
+}
+
+/// Every source's tables, resolved before any is planned so each knows which others share its destination table, with the folders they claim; a source whose tables cannot be read is a problem in the plan.
+pub(crate) async fn found_sources<'a>(
+    project: &'a ProjectConfig,
+    destinations: &BTreeMap<String, Destination>,
+    options: &PlanOptions,
+) -> Result<FoundSources<'a>, LoaderError> {
+    let mut found = FoundSources::default();
+    for (source_name, source) in &project.sources {
+        let (resolved, files) =
+            match scoped_tables((project, options), (source_name, source)).await? {
+                Ok(tables) => tables,
+                Err(problem) => {
+                    if let Some(problem) = problem {
+                        if problem.retryable {
+                            found.plan.retryable_problems.push(problem.message.clone());
+                        }
+                        found.plan.problems.push(problem.message);
+                    }
+                    continue;
+                }
+            };
+        found
+            .claims
+            .extend(folder_claims(&resolved.specs, files.as_ref(), destinations));
+        found.configured.extend(resolved.specs.iter().cloned());
+        found.sources.push(FoundSource {
+            name: source_name,
+            source,
+            resolved,
+            files,
+        });
+    }
+    Ok(found)
+}
+
+/// The folders files tables write to, whether or not they are selected, with the folder their files source (`files`) reads; warehouse tables and paths that do not resolve claim none.
+fn folder_claims(
+    specs: &[TableSpec],
+    files: Option<&FilesSource>,
+    destinations: &BTreeMap<String, Destination>,
+) -> Vec<FolderClaim> {
+    let mut claims: Vec<FolderClaim> = Vec::new();
+    for spec in specs {
+        let Some(target) = destinations.get(&spec.target).and_then(files_destination) else {
+            continue;
+        };
+        let name = format!(
+            "{}.{}",
+            spec.source_name,
+            spec.source_table.qualified_name()
+        );
+        if let Ok(path) = table_folder(spec, target) {
+            claims.push(FolderClaim {
+                id: name.clone(),
+                name,
+                folder: path.folder,
+                template: spec.destination_path.clone().unwrap_or_default(),
+                schema: spec.source_table.schema.clone(),
+                source: files.map(|files| files.location.clone()),
+            });
+        }
+    }
+    claims
 }

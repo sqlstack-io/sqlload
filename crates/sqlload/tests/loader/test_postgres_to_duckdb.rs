@@ -10,7 +10,8 @@ use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
 use crate::helpers::{described_project, duckdb_project, load_all, load_selected, run_async};
 use crate::test_types::{
-    ConstantLoadTestCase, LoadRunTestCase, PinnedRunTestCase, TenantStepTestCase,
+    ConstantLoadTestCase, LoadRunTestCase, PinnedRunTestCase, SettingsChangeTestCase,
+    TenantStepTestCase,
 };
 
 const SETUP: &str = "
@@ -138,6 +139,21 @@ INSERT INTO public.other_items VALUES (1, 'other');
 ";
 
 const NO_SUCH_TABLE: &str = "0";
+
+const ADDED_CONSTANT_BEFORE: &str = r#"include = ["public.items"]
+[sources.app.tables."public.items"]
+write_strategy = "append"
+cursor_column = "id"
+"#;
+
+const ADDED_CONSTANT_AFTER: &str = r#"include = ["public.items"]
+[sources.app.tables."public.items"]
+write_strategy = "append"
+cursor_column = "id"
+constant_columns = { run_tag = "second" }
+"#;
+
+const ADDED_CONSTANT_ROWS_QUERY: &str = "SELECT string_agg(id || ':' || label || ':' || coalesce(run_tag, ''), ',' ORDER BY id) FROM raw.app__items";
 
 #[test]
 fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_keeps_the_table_right()
@@ -399,6 +415,56 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
 }
 
 #[test]
+fn given_a_table_of_its_own_with_rows_when_a_constant_is_added_then_its_cursor_keeps_the_destination_maximum()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(CONSTANTS_SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let test_cases = [SettingsChangeTestCase {
+            description: "a constant added to an append table of its own: its NULLs in earlier rows don't restart the cursor, so no row loads twice",
+            before: ADDED_CONSTANT_BEFORE,
+            after: ADDED_CONSTANT_AFTER,
+            expected_cursor: "cursor  id after 2 (destination maximum)",
+            check_query: ADDED_CONSTANT_ROWS_QUERY,
+            expected_result: "1:one:,2:two:",
+        }];
+        for test_case in test_cases {
+            let before = duckdb_project(postgres.port, test_case.before);
+            let project = described_project(&before).await?;
+            let destinations = connect_targets(&project)
+                .await
+                .map_err(|error| error.to_string())?;
+            let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
+                return Err("no DuckDB destination".to_owned());
+            };
+            load_selected(&project, &destinations, &[]).await?;
+            let after = duckdb_project(postgres.port, test_case.after);
+            let project = described_project(&after).await?;
+            let plan = load_selected(&project, &destinations, &[]).await?;
+            assert!(
+                plan.contains(test_case.expected_cursor),
+                "{}:\n{plan}",
+                test_case.description
+            );
+            let result = single_text(duckdb, test_case.check_query.to_owned())
+                .await
+                .map_err(|error| error.to_string())?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
 fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_never_replace_or_remove_other_rows()
 -> Result<(), String> {
     run_async(async {
@@ -455,6 +521,13 @@ fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_neve
                 description: "tables with constant columns sharing a destination cannot merge on a key without a constant",
                 settings: "include = [\"public.item*\"]\ntable_name = \"{table}\"\nconstant_columns = { tenant_id = \"a\" }\nwrite_strategy = \"merge\"\n[sources.other]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.other_item*\"]\nconstant_columns = { tenant_id = \"b\" }\nwrite_strategy = \"merge\"\nunique_key = [\"tenant_id\", \"id\"]\n[sources.other.tables.\"public.other_items\"]\nname = \"items\"\n",
                 expected_error: "its unique_key (id) has no constant column, so its merge could overwrite their rows",
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'items'",
+                expected_result: NO_SUCH_TABLE,
+            },
+            ConstantLoadTestCase {
+                description: "tables sharing a destination with the same constant values cannot merge, as their rows and cursors can't be told apart",
+                settings: "include = [\"public.item*\"]\ntable_name = \"{table}\"\nconstant_columns = { tenant_id = \"a\", region = \"eu\" }\nwrite_strategy = \"merge\"\nunique_key = [\"region\", \"id\"]\n[sources.other]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.other_item*\"]\nconstant_columns = { tenant_id = \"b\", region = \"eu\" }\nwrite_strategy = \"merge\"\nunique_key = [\"region\", \"id\"]\n[sources.other.tables.\"public.other_items\"]\nname = \"items\"\n",
+                expected_error: "has the same values for the constant columns in the unique_key, so their rows and incremental cursors can't be told apart",
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'items'",
                 expected_result: NO_SUCH_TABLE,
             },
