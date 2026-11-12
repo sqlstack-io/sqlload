@@ -113,7 +113,7 @@ A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` r
 
 ## Several tenants in one table
 
-From 0.36.0 (not released yet), [`constant_columns`](/docs/configuration/#table-settings) gives
+From 0.37.0 (not released yet), [`constant_columns`](/docs/configuration/#table-settings) gives
 every row of a table the same values, so one table can hold several sources' copies of the same
 data, such as one API pulled for each customer. Put the constant in the `unique_key`:
 
@@ -142,7 +142,12 @@ cursor_column = "updated_at"
 Both load into `orders`, and each tenant's merge only matches its own rows. Each tenant's cursor
 reads from the maximum of its own rows, `WHERE tenant_id = 'acme'`, so a tenant whose data is
 older than another's still loads it, and a tenant's first load reads from its `cursor_start`.
-Tables that share a destination load one at a time.
+Within one run, tables that share a destination load one at a time. Separate runs at the same
+time (one per tenant, for example) don't wait for each other, so run them one after another.
+Tables sharing a destination must differ in the value of at least one constant column, and a
+`merge` table in one that is in its `unique_key`. Their cursors are scoped only while they share
+it: adding a constant column to a table that already holds rows leaves those rows `NULL` in it, so
+the next run of a shared table starts from its `cursor_start` again.
 
 A value is a string (`text`), an integer, a float, a boolean, a TOML date or date and time, or
 `{ value = "7", type = "int" }` for any other type. A table entry's `constant_columns` replaces its

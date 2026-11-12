@@ -79,6 +79,20 @@ pub(crate) struct TenantStepTestCase {
     pub(crate) expected_values: &'static str,
 }
 
+/// A table loaded once, then again after its settings change.
+pub(crate) struct SettingsChangeTestCase {
+    pub(crate) description: &'static str,
+    /// Settings after the `app` source's for the first load, starting with its `include` line.
+    pub(crate) before: &'static str,
+    /// The settings for the second load.
+    pub(crate) after: &'static str,
+    /// The cursor line the second plan shows.
+    pub(crate) expected_cursor: &'static str,
+    /// A query on the DuckDB destination after the second load, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// One project with constant columns planned and loaded once on a fresh Postgres.
 pub(crate) struct ConstantLoadTestCase {
     pub(crate) description: &'static str,

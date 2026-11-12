@@ -124,7 +124,6 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
                 spec.pinned.contains_key(&column.name),
             ) {
                 (true, _) => ColumnOrigin::Metadata,
-                _ if is_constant(spec, &column.name) => ColumnOrigin::Constant,
                 (false, true) => ColumnOrigin::Pinned,
                 (false, false) if sampled && !partition(&column.name) => ColumnOrigin::Inferred,
                 (false, false) => ColumnOrigin::Source,
@@ -151,13 +150,6 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     }
     desired.extend(metadata_columns());
     desired
-}
-
-/// Whether `name` is one of the table's `constant_columns`.
-fn is_constant(spec: &TableSpec, name: &str) -> bool {
-    spec.constants
-        .iter()
-        .any(|(constant, _, _)| constant == name)
 }
 
 /// The table's `constant_columns` the source does not read, which the load adds to every batch: all of them, except a files source's, whose reader fills them.
@@ -1153,7 +1145,10 @@ async fn lower_bound(
         column: &cursor.column,
         column_type: cursor_type,
         lookback: cursor.lookback,
-        scope: &spec.constants,
+        scope: match spec.shared_destination {
+            true => &spec.constants,
+            false => &[],
+        },
     });
     let Some(query) = query else {
         return Ok(Err(format!(

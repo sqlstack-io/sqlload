@@ -112,13 +112,18 @@ fn live_finding(
     }
 }
 
-/// The columns `spec` declares, by name: its pinned types and its constant columns' types (a pin of a constant's name wins).
+/// The columns `spec` declares, by name: its pinned types and, except for a files source (whose reader fills its constants as it always has), its constant columns' types (a pin of a constant's name wins).
 pub(crate) fn declared_columns(spec: &TableSpec) -> BTreeMap<String, ColumnType> {
-    let mut declared: BTreeMap<String, ColumnType> = spec
-        .constants
-        .iter()
+    let mut declared: BTreeMap<String, ColumnType> = added_constants(spec)
         .map(|(name, column_type, _)| (name.clone(), column_type.clone()))
         .collect();
     declared.extend(spec.pinned.clone());
     declared
+}
+
+/// The constant columns SQLLoad adds to `spec`'s rows: none for a files source, whose reader fills them as source columns.
+pub(crate) fn added_constants(
+    spec: &TableSpec,
+) -> impl Iterator<Item = &(String, ColumnType, String)> {
+    spec.constants.iter().filter(|_| spec.files.is_none())
 }

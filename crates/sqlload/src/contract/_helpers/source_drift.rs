@@ -2,6 +2,7 @@
 
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::TypeFit;
+use crate::contract::_helpers::compare::added_constants;
 use crate::contract::_helpers::compare::is_own;
 use crate::contract::constants::{
     INSPECTION_UNAVAILABLE, SOURCE_MISSING_COLUMN, SOURCE_NEW_COLUMN, SOURCE_TYPE_MISMATCH,
@@ -44,7 +45,7 @@ pub(crate) fn source_drift(
             && !spec
                 .pinned
                 .keys()
-                .chain(spec.constants.iter().map(|(constant, _, _)| constant))
+                .chain(added_constants(spec).map(|(constant, _, _)| constant))
                 .any(|declared| declared.eq_ignore_ascii_case(name))
     };
     let loaded: Vec<&DesiredColumn> = desired

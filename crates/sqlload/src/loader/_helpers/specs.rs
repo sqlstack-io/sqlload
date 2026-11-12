@@ -255,6 +255,7 @@ pub(crate) fn build_spec(
         cursor,
         batch,
         constants,
+        shared_destination: false,
         #[cfg(feature = "container-tests")]
         test_loader_route: layered(&settings.test_loader_route, &defaults.test_loader_route)
             .is_some_and(|(value, _)| value),

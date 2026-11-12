@@ -2,19 +2,18 @@
 
 use std::collections::BTreeMap;
 
-use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::folder_conflict::folder_conflict;
 use crate::adapters::files::models::FolderClaim;
-use crate::loader::_helpers::destination::{block_shared_destinations, table_folder};
+use crate::loader::_helpers::destination::{block_shared_destinations, mark_shared_destinations};
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::sources::{
-    admit_tables, destination_names, scoped_tables, selected, source_ends, unmatched_selectors,
+    admit_tables, destination_names, found_sources, selected, source_ends, unmatched_selectors,
 };
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
-use crate::loader::models::{FilesSource, PlanOptions, ProjectPlan, TablePlan, TableSpec};
+use crate::loader::models::{FoundSource, PlanOptions, ProjectPlan, TablePlan, TableSpec};
 use crate::project::models::ProjectConfig;
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
@@ -23,30 +22,21 @@ pub async fn plan_project(
     destinations: &BTreeMap<String, Destination>,
     options: &PlanOptions,
 ) -> Result<ProjectPlan, LoaderError> {
-    let mut plan = ProjectPlan::default();
-    let mut claims: Vec<FolderClaim> = Vec::new();
-    let mut configured: Vec<TableSpec> = Vec::new();
-    for (source_name, source) in &project.sources {
-        let (resolved, files) =
-            match scoped_tables((project, options), (source_name, source)).await? {
-                Ok(found) => found,
-                Err(problem) => {
-                    if let Some(problem) = problem {
-                        if problem.retryable {
-                            plan.retryable_problems.push(problem.message.clone());
-                        }
-                        plan.problems.push(problem.message);
-                    }
-                    continue;
-                }
-            };
+    let found = found_sources(project, destinations, options).await?;
+    let (mut plan, claims, configured) = (found.plan, found.claims, found.configured);
+    for FoundSource {
+        name: source_name,
+        source,
+        mut resolved,
+        files,
+    } in found.sources
+    {
         let module = project.python_modules.get(source_name);
         plan.problems.extend(resolved.problems);
         plan.warnings.extend(resolved.warnings);
         plan.skipped.extend(resolved.skipped);
-        claims.extend(folder_claims(&resolved.specs, files.as_ref(), destinations));
-        configured.extend(resolved.specs.iter().cloned());
-        let specs = source_ends(project, (source_name, source), resolved.specs, options).await?;
+        let shared = mark_shared_destinations(std::mem::take(&mut resolved.specs), &configured);
+        let specs = source_ends(project, (source_name, source), shared, options).await?;
         let mut planned: Vec<TablePlan> = Vec::new();
         let mut unselected: Vec<TableSpec> = Vec::new();
         for mut spec in specs {
@@ -75,36 +65,6 @@ pub async fn plan_project(
         (&claims, &configured),
         (project, options),
     ))
-}
-
-/// The folders files tables write to, whether or not they are selected, with the folder their files source (`files`) reads; warehouse tables and paths that do not resolve claim none.
-fn folder_claims(
-    specs: &[TableSpec],
-    files: Option<&FilesSource>,
-    destinations: &BTreeMap<String, Destination>,
-) -> Vec<FolderClaim> {
-    let mut claims: Vec<FolderClaim> = Vec::new();
-    for spec in specs {
-        let Some(target) = destinations.get(&spec.target).and_then(files_destination) else {
-            continue;
-        };
-        let name = format!(
-            "{}.{}",
-            spec.source_name,
-            spec.source_table.qualified_name()
-        );
-        if let Ok(path) = table_folder(spec, target) {
-            claims.push(FolderClaim {
-                id: name.clone(),
-                name,
-                folder: path.folder,
-                template: spec.destination_path.clone().unwrap_or_default(),
-                schema: spec.source_table.schema.clone(),
-                source: files.map(|files| files.location.clone()),
-            });
-        }
-    }
-    claims
 }
 
 /// The plan with a warning for each selector matching none of the `configured` tables, every selected files table blocked whose folder clashes with any other configured table's, every selected table blocked whose destination table it shares with configured tables it could remove or overwrite rows of (see [`block_shared_destinations`]), and every cursor table blocked when a cursor range meets cursors of different kinds.
