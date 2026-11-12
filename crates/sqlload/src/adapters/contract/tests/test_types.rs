@@ -147,3 +147,11 @@ pub(crate) struct CursorFromNowTestCase {
     /// The cursor text, or text the error contains.
     pub(crate) expected_text: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct MaxCursorTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    /// The table's constant columns: name, type and value as text.
+    pub(crate) scope: Vec<(String, ColumnType, String)>,
+    pub(crate) expected_query: &'static str,
+}
