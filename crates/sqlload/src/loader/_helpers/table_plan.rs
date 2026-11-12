@@ -1045,14 +1045,15 @@ pub(crate) fn source_filter(
     (!bounds.is_empty()).then(|| bounds.join(" AND "))
 }
 
-/// Whether `spec`'s cursor bounds bind as parameters of the cursor's type: on a source that binds them (ODBC), unless the cursor column is pinned to a type, which may not be the source column's own (a `varchar` read as a timestamp), so its bounds stay literals the database converts.
+/// Whether `spec`'s cursor bounds bind as parameters of the cursor's type: on a source that binds them (ODBC), unless the cursor column is pinned to a type other than text, which may not be the source column's own (a `varchar` read as a timestamp), so its bounds stay literals the database converts; text binds as text whatever the column, as a literal would convert, without a database reading its backslashes.
 pub(crate) fn binds_cursor(spec: &TableSpec) -> bool {
-    let pinned = spec.cursor.as_ref().is_some_and(|cursor| {
-        spec.pinned
-            .keys()
-            .any(|name| name.eq_ignore_ascii_case(&cursor.column))
+    let pinned_other = spec.cursor.as_ref().is_some_and(|cursor| {
+        spec.pinned.iter().any(|(name, column_type)| {
+            name.eq_ignore_ascii_case(&cursor.column)
+                && !matches!(column_type, ColumnType::Text | ColumnType::Varchar(_))
+        })
     });
-    !pinned
+    !pinned_other
         && spec
             .warehouse_source
             .as_ref()

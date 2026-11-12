@@ -1,13 +1,15 @@
 """Smoke-test the driver manager an installed wheel's `sqlload` reaches ODBC drivers through.
 
-Usage: python smoke_odbc_wheel.py SQLLOAD... [--default-ini PATH]
+Usage: python smoke_odbc_wheel.py SQLLOAD... [--default-ini PATH] [--driver-folder DIR]
 
 Each SQLLOAD is an installed `sqlload` command (the sqlload wheel's and the sqlload-cli wheel's).
 On Linux and macOS it must run where no unixODBC is installed, so the wheel's bundled driver
 manager is the only one; it must find a driver registered in an odbcinst.ini named by ODBCSYSINI
 and, with --default-ini, one registered in the default odbcinst.ini (/etc on Linux, Homebrew's etc
 on macOS). The drivers don't exist, so the driver manager reports the library it tried to load,
-which shows the registration it read. On Windows, the driver manager built in (odbc32.dll) reports
+which shows the registration it read. With --driver-folder (Linux), a plain shared library placed in
+DIR and registered by file name alone, as Debian and Ubuntu driver packages register theirs
+(Driver=psqlodbcw.so), must load: it then fails as no driver (IM004), not as a missing file. On Windows, the driver manager built in (odbc32.dll) reports
 an unregistered driver.
 """
 
@@ -67,6 +69,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("sqlload", nargs="+")
     parser.add_argument("--default-ini", type=Path)
+    parser.add_argument("--driver-folder", type=Path)
     arguments = parser.parse_args()
     if os.name != "nt":
         found = [path for pattern in SYSTEM_LIBODBC for path in glob.glob(pattern)]
@@ -83,6 +86,14 @@ def main():
             registered(ini, "SQLLoad Smoke", "/nonexistent/libsmoke-odbcsysini.so")
             code, output = plan(sqlload, folder, "SQLLoad Smoke", {**os.environ, "ODBCSYSINI": str(ini.parent)})
             check(code == 1 and "Can't open lib '/nonexistent/libsmoke-odbcsysini.so'" in output, f"{sqlload}: the bundled driver manager finds a driver registered under ODBCSYSINI", output)
+            if arguments.driver_folder:
+                arguments.driver_folder.mkdir(parents=True, exist_ok=True)
+                plain = sorted(glob.glob("/usr/lib/*-linux-gnu/libz.so.1") + glob.glob("/lib/*-linux-gnu/libz.so.1"))
+                check(bool(plain), "a plain shared library to stand in for a driver")
+                shutil.copy(plain[0], arguments.driver_folder / "libsqlload-smoke.so")
+                registered(ini, "SQLLoad Smoke Bare", "libsqlload-smoke.so")
+                code, output = plan(sqlload, folder, "SQLLoad Smoke Bare", {**os.environ, "ODBCSYSINI": str(ini.parent)})
+                check(code == 1 and "IM004" in output and "file not found" not in output, f"{sqlload}: the bundled driver manager finds a driver registered by file name in {arguments.driver_folder}", output)
             if arguments.default_ini:
                 previous = registered(arguments.default_ini, "SQLLoad Smoke Default", "/nonexistent/libsmoke-default.so")
                 try:

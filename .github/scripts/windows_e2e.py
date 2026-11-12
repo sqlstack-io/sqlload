@@ -16,8 +16,8 @@ duckdb Python package to read the results back.
 import argparse
 import json
 import os
-import re
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -32,7 +32,7 @@ def sqlload(exe, *args, config=None):
         command += ["--config", str(config)]
     command += list(args)
     print("$", subprocess.list2cmdline(command), flush=True)
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     print(result.stdout + result.stderr, flush=True)
     if result.returncode != 0:
         sys.exit(f"sqlload exited {result.returncode}")

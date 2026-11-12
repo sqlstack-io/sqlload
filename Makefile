@@ -52,7 +52,7 @@ test-clickhouse-older:
 test-python:
 	uv venv --quiet --allow-existing --python 3.12 .venv
 	uv pip install --quiet --python .venv/bin/python 'maturin>=1.9,<2' pytest pytest-xdist pyarrow polars pandas orjson duckdb
-	cd packages/sqlload && VIRTUAL_ENV=$(CURDIR)/.venv $(CURDIR)/.venv/bin/maturin develop --uv --quiet
+	cd packages/sqlload && VIRTUAL_ENV=$(CURDIR)/.venv $(CURDIR)/.venv/bin/maturin develop --uv --quiet --features odbc
 	.venv/bin/python -m pytest packages/sqlload/tests -n auto --dist loadfile
 
 test: test-unit test-containers

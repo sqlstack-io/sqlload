@@ -15,6 +15,8 @@ on:
       - .github/scripts/assert_*_wheel_tags.sh
       - .github/scripts/interrupt_python_load.py
       - .github/scripts/build_unixodbc.sh
+      - .github/scripts/unixodbc_source.sh
+      - .github/scripts/assert_sdist_sources.sh
       - .github/scripts/assert_wheel_notices.sh
       - .github/scripts/smoke_odbc_wheel.py
       - packages/*/licenses/**
@@ -147,7 +149,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew uninstall --ignore-dependencies unixodbc || true
-          bash .github/scripts/build_unixodbc.sh "$RUNNER_TEMP/unixodbc" "$(brew --prefix)/etc"
+          bash .github/scripts/build_unixodbc.sh "$RUNNER_TEMP/unixodbc" "$(brew --prefix)/etc" '' "$(brew --prefix)/lib"
           echo "RUSTFLAGS=-L native=$RUNNER_TEMP/unixodbc/lib" >> "$GITHUB_ENV"
       # sqlload-cli ships one standalone Rust executable (OpenSSL built in) and links no libpython,
       # so maturin tags it py3-none-<platform>. The tag is asserted before release.
@@ -155,8 +157,9 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          # repair copies unixODBC into the Linux and macOS wheels; Windows uses odbc32.dll.
-          args: --release --out ../../dist ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
+          # The wheels build ODBC (sdists don't, so building one needs no driver manager); repair copies
+          # unixODBC into the Linux and macOS wheels; Windows uses odbc32.dll.
+          args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
           working-directory: packages/sqlload-cli
@@ -164,7 +167,7 @@ jobs:
           # manylinux image leaves out. unixODBC reads /etc, where distribution drivers register.
           before-script-linux: |
             dnf install -y perl-IPC-Cmd perl-Time-Piece
-            bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64
+            bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
       - name: Assert native CLI wheel is interpreter-agnostic
         shell: bash
         run: bash .github/scripts/assert_cli_wheel_tags.sh dist
@@ -174,14 +177,15 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          # repair copies unixODBC into the Linux and macOS wheels; Windows uses odbc32.dll.
-          args: --release --out ../../dist ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
+          # The wheels build ODBC (sdists don't, so building one needs no driver manager); repair copies
+          # unixODBC into the Linux and macOS wheels; Windows uses odbc32.dll.
+          args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
           working-directory: packages/sqlload
           before-script-linux: |
             dnf install -y perl-IPC-Cmd perl-Time-Piece
-            bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64
+            bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
       - name: Assert Python extension wheel targets the stable ABI
         shell: bash
         run: bash .github/scripts/assert_python_wheel_tags.sh dist
@@ -210,7 +214,7 @@ jobs:
               docker run --rm -v "$PWD:/w" -w /w python:3.12-slim bash -c '
                 python -m venv /v && /v/bin/pip install --quiet dist/sqlload-*.whl &&
                 python -m venv /c && /c/bin/pip install --quiet dist/sqlload_cli-*.whl &&
-                /v/bin/python .github/scripts/smoke_odbc_wheel.py /v/bin/sqlload /c/bin/sqlload --default-ini /etc/odbcinst.ini'
+                /v/bin/python .github/scripts/smoke_odbc_wheel.py /v/bin/sqlload /c/bin/sqlload --default-ini /etc/odbcinst.ini --driver-folder "/usr/lib/$(uname -m)-linux-gnu/odbc"'
               ;;
             macOS)
               rm -rf "$RUNNER_TEMP/unixodbc"
@@ -236,6 +240,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.95.0
+      # unixODBC's source, SHA-checked, into each package: the sdists carry it as the corresponding
+      # source of the driver manager the Linux and macOS wheels bundle (LGPL-2.1 section 4).
+      - name: Fetch unixODBC's source for the sdists
+        run: bash .github/scripts/unixodbc_source.sh packages/sqlload packages/sqlload-cli
       - name: Build Python extension sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -248,6 +256,8 @@ jobs:
           command: sdist
           args: --out ../../dist
           working-directory: packages/sqlload-cli
+      - name: Assert every sdist carries unixODBC's source, unchanged
+        run: bash .github/scripts/assert_sdist_sources.sh dist
       - uses: actions/upload-artifact@v5
         with:
           name: sdist
@@ -285,6 +295,10 @@ jobs:
       - name: Assert every wheel carries unixODBC's notice, and Linux and macOS wheels bundle it
         shell: bash
         run: bash .github/scripts/assert_wheel_notices.sh dist
+
+      - name: Assert every sdist carries unixODBC's source, unchanged
+        shell: bash
+        run: bash .github/scripts/assert_sdist_sources.sh dist
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

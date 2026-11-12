@@ -66,9 +66,10 @@ cursor_column = "label"
 write_strategy = "append"
 
 [sources.erp.tables."erp.codes"]
-description = "Codes; the first maximum holds a backslash before a quote."
+description = "Codes; the first maximum holds a backslash before a quote. Pinned as text, which still binds."
 cursor_column = "label"
 write_strategy = "append"
+columns = {{ label = "text" }}
 "#,
         database = database.display(),
     )

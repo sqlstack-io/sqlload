@@ -19,6 +19,8 @@ target/
 
 # Python packaging
 dist/
+# unixODBC's source, fetched into each package for its release sdist
+packages/*/unixODBC-*.tar.gz
 .venv/
 __pycache__/
 

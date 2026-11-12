@@ -38,10 +38,13 @@ Repository = "https://github.com/sqlstack-io/sqlload"
 manifest-path = "../../crates/sqlload-python/Cargo.toml"
 module-name = "sqlload._native"
 python-source = "python"
-# Kafka TLS with OpenSSL built in, as in sqlload-cli; SASL PLAIN and SCRAM need nothing else. ODBC
-# sources through the system's driver manager: unixODBC, which the Linux and macOS wheels bundle
-# (licenses/), or Windows's odbc32.dll.
-features = ["ssl-vendored", "odbc"]
+# Kafka TLS with OpenSSL built in, as in sqlload-cli; SASL PLAIN and SCRAM need nothing else.
+# The published wheels also build `odbc` (publish.yml's --features odbc), bundling unixODBC on Linux
+# and macOS (licenses/); a build from this sdist leaves it out, so it needs no driver manager.
+features = ["ssl-vendored"]
+# unixODBC's source, which the release sdist carries as the corresponding source of the library the
+# Linux and macOS wheels bundle; publish.yml fetches it (unixodbc_source.sh) and checks it is there.
+include = [{ path = "unixODBC-*.tar.gz", format = "sdist" }]
 
 [tool.uv]
 cache-keys = [

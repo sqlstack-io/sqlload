@@ -83,10 +83,13 @@ pub(crate) fn catalog_tables(
     let exclude = table_matcher(exclude)?;
     let mut names: Vec<(String, String)> = Vec::new();
     let listed = match connection.tables("", ANY_NAME, ANY_NAME, TABLE_TYPES) {
-        Err(_) if connection.max_schema_name_len()? == 0 => {
-            connection.tables("", "", ANY_NAME, TABLE_TYPES)?
-        }
-        listed => listed?,
+        Ok(listed) => listed,
+        Err(refused) => match connection.max_schema_name_len() {
+            Ok(0) => connection
+                .tables("", "", ANY_NAME, TABLE_TYPES)
+                .map_err(|_| refused)?,
+            _ => return Err(refused.into()),
+        },
     };
     for row in listed {
         let row = row?;

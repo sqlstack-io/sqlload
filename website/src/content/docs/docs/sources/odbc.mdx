@@ -8,8 +8,9 @@ results from any database that has an ODBC driver. SQLLoad reads the rows as Arr
 driver and loads them into the source's target.
 
 From 0.37.0 (not released yet), the `sqlload` and `sqlload-cli` wheels include ODBC on every
-platform. Before that, and in a `cargo install` without it, ODBC is built only with the `odbc`
-feature (`cargo install sqlload --features odbc`); without it, `plan` refuses an `odbc` source.
+platform. Before that, and in a build from source (`cargo install`, or pip building an sdist where
+no wheel fits), ODBC is built only with the `odbc` feature (`cargo install sqlload --features odbc`);
+without it, `plan` refuses an `odbc` source.
 
 ```toml
 [connections.erp]
@@ -80,7 +81,11 @@ SQLLoad runs on; SQLLoad reaches it through a driver manager:
   system DSNs from `odbcinst.ini` and `odbc.ini` in `/etc` on Linux, where distribution driver
   packages register, and in Homebrew's `etc` on macOS (`/opt/homebrew/etc` on Apple silicon,
   `/usr/local/etc` on Intel), or in the folder `ODBCSYSINI` names; user DSNs from `~/.odbc.ini`.
-  unixODBC is LGPL-2.1; its notice and licence are in each wheel's `.dist-info/licenses`.
+  A driver registered by file name alone, as Debian and Ubuntu packages register theirs
+  (`Driver=psqlodbcw.so`), is looked for in `/usr/lib/<arch>-linux-gnu/odbc` and
+  `/usr/lib/<arch>-linux-gnu` (then `/usr/lib64/odbc` and `/usr/lib64`) on Linux, and Homebrew's
+  `lib` on macOS. unixODBC is LGPL-2.1: its notice and licence are in each wheel's
+  `.dist-info/licenses`, and its source is in the package's sdist on PyPI.
 - **`cargo install --features odbc`:** the system's unixODBC, which it links against: `unixodbc-dev`
   on Debian and Ubuntu, `unixodbc` with Homebrew.
 
