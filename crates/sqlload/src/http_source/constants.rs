@@ -33,6 +33,9 @@ pub const RELATION_PARAMETER: &str = "rel";
 /// Redirects followed within the connection's origin before a request fails.
 pub const MAX_REDIRECTS: usize = 10;
 
+/// Redirects a client follows by resending a `POST` as a `GET` without its body.
+pub const BODY_DROPPING_REDIRECTS: [u16; 3] = [301, 302, 303];
+
 /// The `Link` relation of the next page.
 pub const NEXT_RELATION: &str = "next";
 

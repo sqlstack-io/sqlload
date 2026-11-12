@@ -51,19 +51,29 @@ def link_header() -> Paginator:
 	return Paginator({"kind": "link_header"})
 
 
-def offset(param: str = "offset", *, limit: int, limit_param: str = "limit") -> Paginator:
-	"""`param` counts rows from 0 by `limit`; ends at a page with fewer than `limit` rows."""
-	return Paginator({"kind": "offset", "param": param, "limit_param": limit_param, "limit": limit})
+def offset(param: str = "offset", *, limit: int, limit_param: str = "limit", location: str = "query") -> Paginator:
+	"""`param` counts rows from 0 by `limit`; ends at a page with fewer than `limit` rows.
+
+	With `location="body"`, `param` and `limit_param` are paths in the POST's JSON body, such as `"$.page.offset"`."""
+	return Paginator({"kind": "offset", "param": param, "limit_param": limit_param, "limit": limit, "location": _location(location)})
 
 
-def page_number(param: str = "page", *, start: int = 1) -> Paginator:
-	"""`param` counts pages from `start`; ends at an empty page."""
-	return Paginator({"kind": "page_number", "param": param, "start": start})
+def page_number(param: str = "page", *, start: int = 1, location: str = "query") -> Paginator:
+	"""`param` counts pages from `start`; ends at an empty page. With `location="body"`, `param` is a path in the JSON body."""
+	return Paginator({"kind": "page_number", "param": param, "start": start, "location": _location(location)})
 
 
-def cursor(pointer: str, param: str) -> Paginator:
-	"""The token at `pointer` in the body goes back as query parameter `param`; ends when missing, null or empty."""
-	return Paginator({"kind": "cursor", "pointer": pointer, "param": param})
+def cursor(pointer: str, param: str, *, location: str = "query") -> Paginator:
+	"""The token at `pointer` in the response goes back as query parameter `param`; ends when missing, null or empty.
+
+	With `location="body"`, `param` is a path in the POST's JSON body, such as `"$.page.cursor"`."""
+	return Paginator({"kind": "cursor", "pointer": pointer, "param": param, "location": _location(location)})
+
+
+def _location(location: str) -> str:
+	if location not in ("query", "body"):
+		raise ValueError(f'location must be "query" or "body", not {location!r}')
+	return location
 
 
 def bearer() -> Auth:
@@ -170,12 +180,16 @@ class Http:
 		on_status: Mapping[int, str] | None = None,
 		fields: Fields | None = None,
 		keep_record: str | None = None,
+		method: str = "GET",
+		json_body: Mapping[str, Any] | None = None,
 	) -> Job:
 		"""Every page of `path`; `select` (such as `"$.items"`) is where the rows are, `on_status={404: "skip"}` treats a status as no rows.
 
 		`fields` loads only those values of each row, renamed (`{"account_code": "$.code"}`); `keep_record` adds each
-		row's whole object as a JSON column."""
-		return Job({"kind": "paginate", **self._request(path, paginator, params, select, on_status), **_projection(fields, keep_record)})
+		row's whole object as a JSON column. `method="POST"` sends `json_body` as JSON with every page, each page's copy
+		holding the paginator's values when its `location` is `"body"`."""
+		request = self._request(path, paginator, params, select, on_status, (method, json_body))
+		return Job({"kind": "paginate", **request, **_projection(fields, keep_record)})
 
 	def fan_out(
 		self,
@@ -189,6 +203,8 @@ class Http:
 		on_status: Mapping[int, str] | None = None,
 		fields: Fields | None = None,
 		keep_record: str | None = None,
+		method: str = "GET",
+		json_body: Mapping[str, Any] | None = None,
 	) -> Job:
 		"""Every page of `path` once per key of `over`, up to `concurrency` at a time: `over` is a paginate whose
 		`select` picks the keys (`"$.items[*].id"` fills `{id}`), or values (`["uk", "fr"]` fill the one placeholder;
@@ -202,7 +218,7 @@ class Http:
 			if isinstance(over, Job)
 			else {"kind": "values", "values": list(over)}
 		)
-		request = self._request(path, paginator or single(), params, select, on_status)
+		request = self._request(path, paginator or single(), params, select, on_status, (method, json_body))
 		projected = _projection(fields, keep_record)
 		return Job({"kind": "fan_out", **request, **projected, "over": over_spec, "concurrency": concurrency})
 
@@ -213,11 +229,17 @@ class Http:
 		params: Mapping[str, Any] | None,
 		select: str | None,
 		on_status: Mapping[int, str] | None,
+		body: tuple[str, Mapping[str, Any] | None],
 	) -> dict[str, Any]:
+		method, json_body = body
+		if method.upper() not in ("GET", "POST"):
+			raise ValueError(f'method must be "GET" or "POST", not {method!r}')
 		return {
 			"client": self._client,
 			"path": path,
 			"params": dict(params or {}),
+			"method": method.upper(),
+			"json_body": None if json_body is None else json.loads(json.dumps(json_body, default=_param_text)),
 			"paginator": dict(paginator.spec),
 			"select": select,
 			"on_status": {str(status): action for status, action in (on_status or {}).items()},

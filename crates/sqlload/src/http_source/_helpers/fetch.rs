@@ -1,8 +1,7 @@
-//! One GET with the shared rate limit, retries with backoff, `Retry-After`, and `on_status`.
+//! One request with the shared rate limit, retries with backoff, `Retry-After`, and `on_status`.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use reqwest::Url;
 use reqwest::header::{LINK, RETRY_AFTER};
 
 use crate::http::constants::{FIRST_SERVER_ERROR, TOO_MANY_REQUESTS, UNAUTHORIZED};
@@ -12,11 +11,11 @@ use crate::http_source::constants::{
     ERROR_EXCERPT_CHARS, FIRST_RETRY_DELAY, MAX_REDIRECTS, MAX_RETRY_AFTER, MAX_RETRY_DELAY,
     SKIPPED_REFUSAL_RENEWAL_AGE,
 };
-use crate::http_source::models::{Attempt, Calls, Credential, Fetched, StatusAction};
+use crate::http_source::models::{Attempt, Calls, Credential, Fetched, PageCall, StatusAction};
 use crate::python_sources::errors::ReadError;
 
-/// The body at `url`, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times, and are still worth retrying later once those run out.
-pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, ReadError> {
+/// The response to `call`, its JSON body resent on every retry, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times, and are still worth retrying later once those run out.
+pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetched>, ReadError> {
     let policy = RetryPolicy {
         first_delay: FIRST_RETRY_DELAY,
         max_delay: MAX_RETRY_DELAY,
@@ -37,7 +36,7 @@ pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, R
             ),
             _ => None,
         };
-        match once(calls, url, access.as_deref(), !renewed).await? {
+        match once(calls, call, access.as_deref(), !renewed).await? {
             Attempt::Done(fetched) => return Ok(fetched),
             Attempt::Refused => {
                 refused = access;
@@ -58,18 +57,27 @@ pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, R
     }
 }
 
-/// One try at `url`, with the OAuth2 `access` token when the connection uses one; a 401 from the connection's origin comes back as `Refused` while `may_renew`, unless `on_status` skips 401 and the token is younger than `SKIPPED_REFUSAL_RENEWAL_AGE`.
+/// One try at `call`, with the OAuth2 `access` token when the connection uses one; a 401 from the connection's origin comes back as `Refused` while `may_renew`, unless `on_status` skips 401 and the token is younger than `SKIPPED_REFUSAL_RENEWAL_AGE`.
 async fn once(
     calls: &Calls,
-    url: &Url,
+    call: &PageCall,
     access: Option<&str>,
     may_renew: bool,
 ) -> Result<Attempt, String> {
     let endpoint = &calls.endpoint;
     let secrets = endpoint.current_secrets();
-    let shown = redacted(&format!("GET {url}"), &secrets);
+    let url = &call.url;
+    let shown = redacted(&format!("{} {url}", call.method.as_str()), &secrets);
     let own = same_origin(&endpoint.base_url, url);
-    let mut request = calls.http.get(url.clone());
+    if !own && call.body.is_some() {
+        return Err(format!(
+            "{shown}: the request is on another origin than the connection's base_url, and the job's json_body never leaves the connection's origin"
+        ));
+    }
+    let mut request = match &call.body {
+        Some(_) => calls.http.post(url.clone()),
+        None => calls.http.get(url.clone()),
+    };
     for (name, value) in endpoint.headers.iter().filter(|_| own) {
         request = request.header(name, value);
     }
@@ -79,6 +87,9 @@ async fn once(
         (Credential::OAuth2(_), true) => request.bearer_auth(access.unwrap_or_default()),
         _ => request,
     };
+    if let Some(body) = &call.body {
+        request = request.json(body);
+    }
     let response = match request.send().await {
         Ok(response) => response,
         Err(error) if error.is_builder() => {
@@ -138,7 +149,7 @@ async fn once(
         _ if skipped => Attempt::Done(None),
         300..=399 => {
             return Err(format!(
-                "{shown}: HTTP {status}: the redirect was not followed: it leads to another origin, has no Location, or goes past {MAX_REDIRECTS} hops; credentials never leave the connection's origin, so use the final URL as base_url"
+                "{shown}: HTTP {status}: the redirect was not followed: it leads to another origin, has no Location, goes past {MAX_REDIRECTS} hops, or is a 301, 302 or 303 after a POST, which would drop its body; credentials never leave the connection's origin, so use the final URL as base_url"
             ));
         }
         TOO_MANY_REQUESTS | FIRST_SERVER_ERROR.. => Attempt::Retry {
