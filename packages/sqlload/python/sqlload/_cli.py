@@ -1,6 +1,7 @@
 """The `sqlload` console script: the native command line, run in this Python process."""
 
 import contextlib
+import os
 import signal
 import sys
 import threading
@@ -13,6 +14,9 @@ def main() -> None:
 	if threading.current_thread() is threading.main_thread():
 		# Python's handler only sets a flag, which the native command never checks while it runs; Ctrl-C ends it as it ends the binary.
 		signal.signal(signal.SIGINT, signal.SIG_DFL)
+	# A MotherDuck target runs its SQL on this Python's duckdb package (the sqlload[motherduck] extra), in a process of its own.
+	if not os.environ.get("SQLLOAD_MOTHERDUCK_PYTHON") and sys.executable:
+		os.environ["SQLLOAD_MOTHERDUCK_PYTHON"] = sys.executable
 	sys.stdout.flush()
 	sys.stderr.flush()
 	args = ["sqlload", *sys.argv[1:]]

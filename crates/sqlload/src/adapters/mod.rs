@@ -7,5 +7,7 @@ pub mod databricks;
 pub mod dispatch;
 pub mod duckdb;
 pub mod files;
+#[cfg(feature = "duckdb")]
+pub mod motherduck_bridge;
 pub mod postgres;
 pub mod snowflake;
