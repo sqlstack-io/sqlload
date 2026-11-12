@@ -30,11 +30,13 @@ from importlib.metadata import version
 
 from sqlload._data import checkpoint, field, json, ndjson
 from sqlload._http import (
+	Cells,
 	Http,
 	Job,
 	api_key,
 	basic,
 	bearer,
+	cells,
 	cursor,
 	http,
 	link_header,
@@ -51,6 +53,7 @@ from sqlload._declare import Context, Source, Table, source, table
 __version__: str = version("sqlload")
 
 __all__ = [
+	"Cells",
 	"Context",
 	"Http",
 	"Job",
@@ -60,6 +63,7 @@ __all__ = [
 	"api_key",
 	"basic",
 	"bearer",
+	"cells",
 	"checkpoint",
 	"cursor",
 	"executable",

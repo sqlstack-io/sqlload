@@ -8,6 +8,7 @@ use reqwest::Url;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::Sender;
 
+use crate::http_source::_helpers::cells::pivoted_rows;
 use crate::http_source::_helpers::fetch::fetch;
 use crate::http_source::_helpers::job::request_projection;
 use crate::http_source::_helpers::selector::{
@@ -15,7 +16,7 @@ use crate::http_source::_helpers::selector::{
 };
 use crate::http_source::_helpers::urls::{redacted, request_url};
 use crate::http_source::models::{
-    Calls, Fetched, HttpPage, Location, Method, PageCall, Paginator, Request, Selector,
+    Calls, CellNames, Fetched, HttpPage, Location, Method, PageCall, Paginator, Request, Selector,
 };
 use crate::python_sources::errors::ReadError;
 
@@ -33,6 +34,7 @@ pub(crate) async fn paginate(
     let mut call = page_call(request, &first, start_values(&request.paginator))?;
     let mut seen: HashSet<(Url, Option<String>)> = HashSet::new();
     let mut previous: Option<u64> = None;
+    let mut names: Option<CellNames> = None;
     for step in 1_u64.. {
         let shown = redacted(
             &format!("{} {}", call.method.as_str(), call.url),
@@ -67,9 +69,18 @@ pub(crate) async fn paginate(
         let has_rows = document.as_ref().is_none_or(|document| {
             selected_node(document, &rows).is_some_and(|node| !node.is_null())
         });
+        let (bytes, path) = match (&request.cells, document.as_ref()) {
+            (Some(cells), Some(document)) => {
+                let (text, used) = pivoted_rows(document, (&rows, cells), names.take())
+                    .map_err(|error| format!("{shown}: cells: {error}"))?;
+                names = used;
+                (text.into_bytes(), None)
+            }
+            (Some(_), None) | (None, _) => (fetched.bytes, rows_path.clone()),
+        };
         let page = HttpPage {
-            bytes: fetched.bytes,
-            path: rows_path.clone(),
+            bytes,
+            path,
             source: shown,
             projection: projection.clone(),
         };
@@ -92,7 +103,7 @@ fn parsed(request: &Request, rows: &Selector, bytes: &[u8]) -> Result<Option<Val
         | Paginator::Cursor { .. }
         | Paginator::Offset { .. }
         | Paginator::PageNumber { .. } => true,
-    };
+    } || request.cells.is_some();
     match reads_body {
         true => serde_json::from_slice(bytes)
             .map(Some)
