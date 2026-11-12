@@ -9,6 +9,7 @@ use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded, UnloadedBatch};
 use crate::adapters::contract::types::TableWriter;
+use crate::adapters::dispatch::main::dialect::source_binds_text::source_binds_text;
 use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
@@ -1103,15 +1104,13 @@ fn window_filter(table: &TablePlan, window: &CursorWindow) -> Option<String> {
         true => INCLUSIVE_BOUND,
         false => EXCLUSIVE_BOUND,
     };
+    let source = table.spec.warehouse_source.as_ref();
     source_filter(
         &column.expression,
         (
             Some(&column.output),
-            table
-                .spec
-                .warehouse_source
-                .as_ref()
-                .and_then(|source| source_dialect(source.system)),
+            source.and_then(|source| source_dialect(source.system)),
+            source.is_some_and(|source| source_binds_text(source.system)),
         ),
         (
             window.from.as_deref().map(|from| (operator, from)),

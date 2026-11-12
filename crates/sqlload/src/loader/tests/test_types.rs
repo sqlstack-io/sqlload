@@ -91,8 +91,8 @@ pub(crate) struct SourceFilterTestCase {
     pub(crate) description: &'static str,
     pub(crate) cursor_type: ColumnType,
     pub(crate) dialect: Option<Warehouse>,
-    /// Whether text bounds are bound as parameters, as an ODBC source's are.
-    pub(crate) binds: bool,
+    /// Whether the source is an ODBC source: text bounds bound as parameters, date and timestamp bounds as escape literals.
+    pub(crate) odbc: bool,
     pub(crate) lower: Option<(&'static str, &'static str)>,
     pub(crate) upper: Option<&'static str>,
     pub(crate) expected_filter: Option<&'static str>,

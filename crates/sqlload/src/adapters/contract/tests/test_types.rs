@@ -147,3 +147,10 @@ pub(crate) struct CursorFromNowTestCase {
     /// The cursor text, or text the error contains.
     pub(crate) expected_text: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct OdbcLiteralTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) value: &'static str,
+    pub(crate) column_type: ColumnType,
+    pub(crate) expected_literal: Option<&'static str>,
+}

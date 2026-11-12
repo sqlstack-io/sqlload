@@ -10,6 +10,9 @@ pub const SECONDS_PER_DAY: u64 = 86_400;
 /// How cursor timestamps are written in literals (microseconds, no offset).
 pub const CURSOR_TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.6f";
 
+/// A timestamp inside an ODBC `{ts '...'}` literal: fractional seconds in groups of three, so a millisecond value keeps the `.fff` every driver reads, and none when whole.
+pub const ODBC_TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
+
 /// Timestamps without an offset accepted on the command line.
 pub const NAIVE_TIMESTAMP_FORMATS: &[&str] = &["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"];
 

@@ -4,4 +4,5 @@ pub(in crate::adapters) mod _footer_rows;
 pub mod cursor_bound;
 pub mod cursor_from_now;
 pub mod cursor_text;
+pub mod odbc_literal;
 pub mod staging_id;
