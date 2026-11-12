@@ -98,6 +98,7 @@ use crate::project::models::WriteStrategy;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
 use crate::publish_checks::models::CheckedCommit;
+use crate::row_batches::models::Unnest;
 use crate::row_ids::main::key_row_ids::key_row_ids;
 use crate::row_ids::main::random_row_ids::random_row_ids;
 use crate::run_log::main::insert_run::insert_run;
@@ -175,6 +176,7 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
             column_type: column.output.clone(),
             origin: ColumnOrigin::Source,
         })
+        .filter(|column| !table.spec.unnest.takes(&column.name))
         .collect();
     columns.extend(added_constants(&table.spec, &table.read_columns).map(
         |(name, column_type, _)| DesiredColumn {
@@ -369,8 +371,10 @@ impl Publisher {
             }
             _ => None,
         };
-        let direct =
-            files.is_none() && table.spec.checks.is_none() && writes_directly(&table, &writer);
+        let direct = files.is_none()
+            && table.spec.checks.is_none()
+            && table.spec.unnest == Unnest::None
+            && writes_directly(&table, &writer);
         let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
         let keeps_tables = sql_adapter(table.spec.warehouse).keeps_tables();
         let builds =
@@ -470,12 +474,21 @@ impl Publisher {
             self.arrow_bytes += masked.get_array_memory_size();
             return self.stage_files(masked).await;
         }
+        let ids = row_ids(&self.table, &masked).map_err(LoaderError::Invalid)?;
+        self.stage_rows(masked, ids).await
+    }
+
+    /// Stage `masked`, rows as the table's columns hold them, with this load's metadata and each row's id from `ids` when the table gives rows one (a child table's are its parent's to give).
+    pub(crate) async fn stage_rows(
+        &mut self,
+        masked: RecordBatch,
+        ids: Option<Vec<String>>,
+    ) -> Result<(), LoaderError> {
         let micros = DateTime::parse_from_rfc3339(&self.loaded_at)
             .map(|time| time.timestamp_micros())
             .map_err(|error| LoaderError::Invalid(error.to_string()))?;
         let first_row = numbers_rows(&self.table).then_some(self.staged_ordinal);
         self.staged_ordinal += i64::try_from(masked.num_rows()).unwrap_or(i64::MAX);
-        let ids = row_ids(&self.table, &masked).map_err(LoaderError::Invalid)?;
         let batch = with_metadata(
             &masked,
             ((self.table.spec.naming, &self.load_id), ids),

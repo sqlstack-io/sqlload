@@ -257,6 +257,16 @@ pub enum Unnest {
     Paths(Vec<String>),
 }
 
+impl Unnest {
+    /// Whether the loaded table's own column `name` is a list field its child tables take, so the table itself has no such column.
+    pub fn takes(&self, name: &str) -> bool {
+        match self {
+            Self::Paths(paths) => paths.iter().any(|path| path == name),
+            Self::None | Self::All => false,
+        }
+    }
+}
+
 /// How [`unnest_batch`](crate::row_batches::main::unnest_batch::unnest_batch) splits a batch's list fields into child tables.
 #[derive(Debug, Clone, Copy)]
 pub struct UnnestRequest<'a> {
