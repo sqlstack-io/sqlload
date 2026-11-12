@@ -27,12 +27,12 @@ cursor_column = "dt"
 |---------|---------|
 | `connection` | An `s3` or `filesystem` connection, or from 0.32.0 an `sftp` connection. |
 | `path` | The folder holding the files, relative to the connection. |
-| `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`; from 0.35.0 (not released yet), also `xlsx` and `xml`. See [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
-| `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`; from 0.35.0 (not released yet), also `zip`, which reads the `format`'s files inside `.zip` archives. Parquet compresses inside the file. |
-| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … From 0.35.0 (not released yet), also `encoding = "utf-8"` and `skip_rows = 0`; see [CSV encodings](#csv-encodings). |
-| `xlsx` | From 0.35.0 (not released yet). `{ sheet = "...", header = true, skip_rows = 0 }`: the worksheet (the first when omitted), whether its first row read names the columns, and rows skipped above it. |
-| `xml` | From 0.35.0 (not released yet). `{ record_path = "orders/order", lists = [] }`: the elements from the root to each row's element (required), and child elements always loaded as a JSON array. |
-| `members` | From 0.35.0 (not released yet). With `compression = "zip"`, a pattern the members' names must match, such as `"exports/*.csv"`. |
+| `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`; from 0.35.0, also `xlsx` and `xml`. See [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
+| `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`; from 0.35.0, also `zip`, which reads the `format`'s files inside `.zip` archives. Parquet compresses inside the file. |
+| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … From 0.35.0, also `encoding = "utf-8"` and `skip_rows = 0`; see [CSV encodings](#csv-encodings). |
+| `xlsx` | From 0.35.0. `{ sheet = "...", header = true, skip_rows = 0 }`: the worksheet (the first when omitted), whether its first row read names the columns, and rows skipped above it. |
+| `xml` | From 0.35.0. `{ record_path = "orders/order", lists = [] }`: the elements from the root to each row's element (required), and child elements always loaded as a JSON array. |
+| `members` | From 0.35.0. With `compression = "zip"`, a pattern the members' names must match, such as `"exports/*.csv"`. |
 | `shape` | From 0.27.0. `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
 | `record_column` | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
@@ -43,7 +43,7 @@ cursor_column = "dt"
 
 ## CSV encodings
 
-From 0.35.0 (not released yet). `csv.encoding` names the files' character encoding: `utf-8` (the
+From 0.35.0. `csv.encoding` names the files' character encoding: `utf-8` (the
 default), `cp1252` (Windows Western European), `latin-1` (ISO-8859-1, each byte read as the code
 point of the same number), `ascii`, `utf-16le`, `utf-16be`, or any other label of the
 [Encoding Standard](https://encoding.spec.whatwg.org/#names-and-labels), such as `windows-1250`,
@@ -72,7 +72,7 @@ failing; `plan` finds one only in the rows it samples.
 
 ## Excel, XML and ZIP files
 
-From 0.35.0 (not released yet). SQLLoad reads these itself on every destination, as no warehouse
+From 0.35.0. SQLLoad reads these itself on every destination, as no warehouse
 does; `copy_to_internal_stage` and `shape = "record"` don't apply.
 
 **Excel (`format = "xlsx"`).** One worksheet loads per source: `xlsx.sheet`, or the first sheet.
