@@ -672,9 +672,19 @@ def test_given_a_token_endpoint_down_once_when_refreshing_after_a_password_grant
 	assert [(request["grant_type"], request.get("refresh_token")) for request in api.token_requests] == expected  # type: ignore[attr-defined]
 
 
+def test_given_a_token_endpoint_down_when_refreshing_without_retries_then_the_run_is_retryable_and_the_password_is_not_resent(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	api.oauth = {"uses": 3, "rotate": True, "refresh_503_once": True}  # type: ignore[attr-defined]
+	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL), retries=0", "paginate('/offset', paginator=sl.offset(limit=1))")
+	done = sqlload(project, "load")
+	assert done.returncode == 75, done.stdout + done.stderr
+	assert [(request["grant_type"], request.get("refresh_token")) for request in api.token_requests] == [("password", None), ("refresh_token", "r3fresh-2")]  # type: ignore[attr-defined]
+
+
 def test_given_a_wrong_password_when_loading_with_json_then_it_fails_for_good_and_hides_the_password(tmp_path: Path, api: ThreadingHTTPServer) -> None:
 	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL)", "paginate('/offset', paginator=sl.offset(limit=10))")
-	(project / "sqlload.toml").write_text((project / "sqlload.toml").read_text().replace("${ENV:SHOP_PASSWORD}", "wr0ng+p\u00e4ss/word"))
+	(project / "sqlload.toml").write_text((project / "sqlload.toml").read_text().replace("${ENV:SHOP_PASSWORD}", "wr0ng+p\u00e4ss\\\\word"))
 	done = sqlload(project, "load", "--json")
 	assert done.returncode == 1, done.stdout + done.stderr
 	result = json.loads(done.stdout)
