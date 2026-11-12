@@ -85,7 +85,7 @@ as names is refused when the source is read; switch it to ANSI quoting. For MySQ
 |--------|--------|
 | psqlODBC (`PostgreSQL Unicode`) | Yes, against Postgres 17 in containers on Linux and on Windows. Add `BoolsAsChar=0` to the connection string so `boolean` columns load as `bool` rather than text. |
 | Microsoft ODBC Driver 18 for SQL Server | Yes, against SQL Server 2022 in containers on Linux and against SQL Server LocalDB on Windows, `datetime2` and legacy `datetime` cursors included. |
-| MySQL Connector/ODBC (`MySQL ODBC Unicode Driver`) | Yes, against MySQL 8.4 in containers on Linux and MySQL 8.0 on Windows, in an `ANSI_QUOTES` session (above). On Linux, install MySQL's package for your distribution rather than the generic glibc tarball: the tarball's own OpenSSL fails to load once another driver, such as SQL Server's or psqlODBC, has loaded the system one in the same run. |
+| MySQL Connector/ODBC (`MySQL ODBC Unicode Driver`) | Yes, against MySQL 8.4 in containers on Linux and MySQL 8.4 on Windows, in an `ANSI_QUOTES` session (above). On Linux, install MySQL's package for your distribution rather than the generic glibc tarball: the tarball's own OpenSSL fails to load once another driver, such as SQL Server's or psqlODBC, has loaded the system one in the same run. |
 | OpenEdge (Progress) | Tested for timestamp handling (parsing `{ts}` values and binding timestamp bounds), not against a live server. |
 | Others | Not yet. A driver needs to describe prepared statements and list tables; run `sqlload plan` to see the types it reports. |
 

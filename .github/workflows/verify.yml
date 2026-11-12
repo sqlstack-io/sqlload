@@ -190,8 +190,9 @@ jobs:
       - name: Install the ODBC drivers
         shell: pwsh
         run: .github/scripts/install_odbc_drivers.ps1
-      # The image's SQL Server LocalDB and MySQL 8.0, for the ODBC drivers' cursor checks. MySQL gets a
-      # data folder and port of its own, its root user without a password.
+      # The image's SQL Server LocalDB and MySQL 8.4, for the ODBC drivers' cursor checks. MySQL gets a
+      # data folder and port of its own, its root user without a password, and runs as a service: the
+      # runner ends the processes a step starts when the step ends.
       - name: Start SQL Server LocalDB and MySQL
         shell: pwsh
         run: |
@@ -200,15 +201,19 @@ jobs:
           & $localdb create sqlload -s
           if ($LASTEXITCODE -ne 0) { throw "SqlLocalDB exited $LASTEXITCODE" }
           $mysqld = (Get-ChildItem "C:\Program Files\MySQL" -Recurse -Filter mysqld.exe | Select-Object -First 1).FullName
-          & $mysqld --initialize-insecure --datadir=C:\mysql-data --console
+          $ini = "C:\mysql-sqlload.ini"
+          Set-Content -Path $ini -Value "[mysqld]`ndatadir=C:/mysql-data`nport=3307`nmysqlx=OFF`n"
+          & $mysqld --defaults-file=$ini --initialize-insecure --console
           if ($LASTEXITCODE -ne 0) { throw "mysqld --initialize-insecure exited $LASTEXITCODE" }
-          Start-Process $mysqld -ArgumentList "--datadir=C:\mysql-data", "--port=3307", "--mysqlx=OFF" -RedirectStandardError "$env:RUNNER_TEMP\mysqld.err" -RedirectStandardOutput "$env:RUNNER_TEMP\mysqld.out"
+          & $mysqld --install sqlload-mysql --defaults-file=$ini
+          if ($LASTEXITCODE -ne 0) { throw "mysqld --install exited $LASTEXITCODE" }
+          Start-Service -Name sqlload-mysql
           foreach ($attempt in 1..60) {
             if ((Test-NetConnection 127.0.0.1 -Port 3307 -WarningAction SilentlyContinue).TcpTestSucceeded) { break }
             Start-Sleep -Seconds 2
           }
           if (-not (Test-NetConnection 127.0.0.1 -Port 3307 -WarningAction SilentlyContinue).TcpTestSucceeded) {
-            Get-Content "$env:RUNNER_TEMP\mysqld.err"
+            Get-ChildItem C:\mysql-data -Filter *.err | Get-Content
             throw "MySQL never listened on 3307"
           }
       - name: Share a folder as \\localhost\sqlload-e2e
