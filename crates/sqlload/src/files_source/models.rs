@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
+use crate::files_source::constants::DEFAULT_CSV_ENCODING;
 use crate::schema_plan::models::DesiredColumn;
 
 /// A data file and its partition values.
@@ -228,6 +229,10 @@ pub struct CsvOptions {
     pub quote: char,
     /// Field values read as NULL.
     pub null_values: Vec<String>,
+    /// The files' character encoding, such as `utf-8` (the default), `cp1252` or `latin-1`; see [`text_charset`](crate::files_source::main::text_charset::text_charset).
+    pub encoding: String,
+    /// Lines skipped at the start of each file, before the header (or the first record without one).
+    pub skip_rows: u64,
 }
 
 impl Default for CsvOptions {
@@ -237,8 +242,23 @@ impl Default for CsvOptions {
             header: true,
             quote: '"',
             null_values: vec![String::new()],
+            encoding: DEFAULT_CSV_ENCODING.to_owned(),
+            skip_rows: 0,
         }
     }
+}
+
+/// How CSV bytes decode to text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Charset {
+    /// UTF-8, read as it is.
+    Utf8,
+    /// ISO-8859-1: each byte is the character of the same number.
+    Latin1,
+    /// US-ASCII: a byte above 127 is an error.
+    Ascii,
+    /// Any other encoding the WHATWG Encoding Standard names, such as windows-1252 or UTF-16LE.
+    Other(&'static encoding_rs::Encoding),
 }
 
 /// How a files source's files are encoded.

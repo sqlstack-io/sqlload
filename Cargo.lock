@@ -980,6 +980,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4558,6 +4567,7 @@ version = "4.10.0+2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e234cf318915c1059d4921ef7f75616b5219b10b46e9f3a511a15eb4b56a3f77"
 dependencies = [
+ "cmake",
  "libc",
  "libz-sys",
  "num_enum",
@@ -5538,7 +5548,7 @@ checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
 
 [[package]]
 name = "sqlload"
-version = "0.33.6"
+version = "0.34.0"
 dependencies = [
  "aes 0.8.4",
  "arrow-array",
@@ -5560,6 +5570,7 @@ dependencies = [
  "clap",
  "csv-core",
  "duckdb",
+ "encoding_rs",
  "flate2",
  "futures-util",
  "getrandom 0.3.4",
@@ -5607,7 +5618,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-benches"
-version = "0.33.6"
+version = "0.34.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -5619,7 +5630,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-python"
-version = "0.33.6"
+version = "0.34.0"
 dependencies = [
  "arrow-array",
  "arrow-pyarrow",
@@ -5632,7 +5643,7 @@ dependencies = [
 
 [[package]]
 name = "sqlload-testkit"
-version = "0.33.6"
+version = "0.34.0"
 dependencies = [
  "arrow-array",
  "arrow-cast",

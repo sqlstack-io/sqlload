@@ -89,3 +89,35 @@ pub const NESTED_JSON_SLICE_ROWS: usize = 1024;
 
 /// The most text one Arrow text array holds: its offsets are 32-bit.
 pub const MAX_TEXT_ARRAY_BYTES: usize = i32::MAX as usize;
+
+/// The encoding CSV files are read in unless `csv.encoding` says otherwise.
+pub const DEFAULT_CSV_ENCODING: &str = "utf-8";
+
+/// `csv.encoding` labels read as ISO-8859-1 itself, byte for byte; the Encoding Standard reads these as windows-1252, which differs in bytes 0x80 to 0x9F.
+pub const LATIN1_LABELS: [&str; 12] = [
+    "latin-1",
+    "latin1",
+    "iso-8859-1",
+    "iso8859-1",
+    "iso88591",
+    "iso_8859-1",
+    "iso_8859-1:1987",
+    "iso-ir-100",
+    "csisolatin1",
+    "ibm819",
+    "cp819",
+    "l1",
+];
+
+/// The UTF-16 byte order marks, little-endian then big-endian.
+pub const UTF16_BOMS: [[u8; 2]; 2] = [[0xFF, 0xFE], [0xFE, 0xFF]];
+
+/// `csv.encoding` labels read as US-ASCII itself, failing on any byte above 127; the Encoding Standard reads these as windows-1252.
+pub const ASCII_LABELS: [&str; 3] = ["ascii", "us-ascii", "ansi_x3.4-1968"];
+
+/// The windows-1252 bytes no character is assigned to, which Python's cp1252 refuses to decode.
+pub const CP1252_UNDEFINED: [u8; 5] = [0x81, 0x8D, 0x8F, 0x90, 0x9D];
+
+/// The fix an error about bytes that do not decode ends with.
+pub const ENCODING_HINT: &str =
+    "set csv.encoding to the files' encoding, such as \"cp1252\", \"latin-1\" or \"utf-16le\"";

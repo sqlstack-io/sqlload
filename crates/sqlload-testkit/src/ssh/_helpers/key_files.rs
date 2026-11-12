@@ -47,8 +47,11 @@ pub(crate) async fn key_files(
     ] {
         let path = files.path().join(name);
         std::fs::write(&path, text).map_err(|error| error.to_string())?;
+        #[cfg(unix)]
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(mode))
             .map_err(|error| error.to_string())?;
+        #[cfg(not(unix))]
+        let _ = mode;
     }
     Ok(files)
 }

@@ -123,9 +123,6 @@ pub const SPLIT_READ_MIN_PAGES: i64 = 16_384;
 /// Postgres's `SSLRequest`: length 8, then code 80877103.
 pub const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
 
-/// How long a TLS relay waits for its replication client to connect.
-pub const RELAY_ACCEPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
 /// Signature algorithm OIDs (DER contents) whose certificates bind with SHA-256: sha256WithRSAEncryption, sha1WithRSAEncryption, md5WithRSAEncryption, ecdsa-with-SHA256, ecdsa-with-SHA1.
 pub const SHA256_SIGNATURES: &[&[u8]] = &[
     &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b],

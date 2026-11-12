@@ -4,6 +4,8 @@ mod folder;
 mod helpers;
 #[path = "tests/test_hive_values.rs"]
 mod hive_values;
+#[path = "tests/test_local_root.rs"]
+mod local_root;
 #[path = "tests/test_partition_value.rs"]
 mod partition_value;
 #[path = "tests/test_render_template.rs"]

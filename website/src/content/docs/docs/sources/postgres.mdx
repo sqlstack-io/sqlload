@@ -163,6 +163,23 @@ libpq does by default. That stops an attacker who only relays the password excha
 who changes how the client signs in. Only `verify-full`, or `verify-ca` on a private network, keeps
 a man in the middle out.
 
+### Replication sessions on Windows
+
+A `postgres_cdc` source's replication client speaks plain text only, so its session reaches the
+database through a relay inside SQLLoad, which adds TLS and the SSH tunnel. On Linux and macOS the
+relay is a Unix socket in a folder only your user can enter. On Windows the replication client can
+only connect over TCP, so the relay listens on a random port on 127.0.0.1, for at most 30 seconds.
+
+- Any local process can connect to that port. SQLLoad makes a random secret for each session and
+  relays only the connection whose startup message carries it. It drops every other connection
+  before a byte of it reaches the database, gives each one 5 seconds to send its startup message,
+  and closes the port once its own client is in. The database never sees the secret.
+- What remains: between the replication client and the relay, the sign-in exchange and then every
+  replicated row cross the loopback interface in plain text. SCRAM never sends the password
+  itself, but row data can be read by anyone who can capture loopback traffic. On Windows that
+  takes an administrator, who could also read SQLLoad's memory.
+- From the relay to the database, the connection is encrypted as the TLS settings above say.
+
 ## SSH tunnels
 
 From 0.27.0. A connection with an `ssh` table reaches the database through a bastion host. `host`
@@ -170,12 +187,18 @@ and `port` are then the database as the bastion sees it. To set one up, see
 [Connect through an SSH tunnel](/docs/guides/postgres/#connect-through-an-ssh-tunnel).
 
 - SQLLoad opens the tunnel itself, with no `ssh` program needed. It keeps one session to the
-  bastion per run, shared by every table, and closes it when the run ends. It opens no local
-  TCP port: direct reads use the tunnel in process, and a `postgres_cdc` source's replication
-  session reaches it through a Unix socket in a folder only your user can enter.
+  bastion per run, shared by every table, and closes it when the run ends. Direct reads use the
+  tunnel in process. A `postgres_cdc` source's replication session reaches it through a Unix
+  socket in a folder only your user can enter, or on Windows through a loopback port guarded by a
+  secret (see [Replication sessions on Windows](#replication-sessions-on-windows)).
 - It signs in with `private_key_file` (with `private_key_passphrase` if the key has one), or with
   each key ssh-agent holds when no file is set. From 0.32.0, `password` signs in when no key file
   is set; before, passwords aren't supported.
+- On Windows, ssh-agent is the pipe `SSH_AUTH_SOCK` names, or else the OpenSSH agent service's
+  (`\\.\pipe\openssh-ssh-agent`). Windows ssh-agent (OpenSSH agent pipe): compiles and
+  unit-tested, not live-tested. Key-file and password sign-in run the same code as on Linux and
+  macOS, but on Windows they're not covered by an end-to-end test: no Windows test goes through a
+  bastion.
 - The bastion's host key must be in `known_hosts` (`~/.ssh/known_hosts` by default). An unknown or
   changed key fails with its SHA256 fingerprint and the fix; a key is never accepted on first use.
 - TLS still runs end to end with the database, so `verify-full` checks the database's own name.
