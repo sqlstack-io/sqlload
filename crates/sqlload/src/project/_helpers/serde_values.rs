@@ -63,18 +63,40 @@ pub(crate) fn deserialize_optional_keys<'de, D: Deserializer<'de>>(
     )
 }
 
-/// Each source's `constant_columns` dates and times as `{ value, type }`: deserializing turns a TOML date or time into a plain string, which would load as text.
+/// Each source's and each of its tables' `constant_columns` dates and times as `{ value, type }`: deserializing turns a TOML date or time into a plain string, which would load as text.
 pub(crate) fn typed_constants(mut value: toml::Value) -> toml::Value {
     let Some(toml::Value::Table(sources)) = value.get_mut("sources") else {
         return value;
     };
-    for (_, source) in sources.iter_mut() {
-        let Some(toml::Value::Table(constants)) = source.get_mut("constant_columns") else {
-            continue;
-        };
-        for (_, constant) in constants.iter_mut() {
+    for source in sources
+        .iter_mut()
+        .filter_map(|(_, source)| source.as_table_mut())
+    {
+        if let Some(toml::Value::Table(constants)) = source.get_mut("constant_columns") {
+            *constants = typed_dates(std::mem::take(constants));
+        }
+        let tables = source
+            .get_mut("tables")
+            .and_then(toml::Value::as_table_mut)
+            .into_iter()
+            .flat_map(|tables| tables.iter_mut())
+            .filter_map(|(_, table)| table.as_table_mut());
+        for table in tables {
+            if let Some(toml::Value::Table(constants)) = table.get_mut("constant_columns") {
+                *constants = typed_dates(std::mem::take(constants));
+            }
+        }
+    }
+    value
+}
+
+/// `constants` with each date or time as `{ value, type }`.
+fn typed_dates(constants: toml::Table) -> toml::Table {
+    constants
+        .into_iter()
+        .map(|(name, constant)| {
             let toml::Value::Datetime(datetime) = constant else {
-                continue;
+                return (name, constant);
             };
             let written = match (datetime.date, datetime.time, datetime.offset) {
                 (Some(_), None, _) => "date",
@@ -82,16 +104,16 @@ pub(crate) fn typed_constants(mut value: toml::Value) -> toml::Value {
                 (Some(_), Some(_), None) => "timestamp_ntz",
                 (None, _, _) => "time",
             };
-            *constant = toml::Value::Table(toml::Table::from_iter([
+            let typed = toml::Table::from_iter([
                 (
                     "value".to_owned(),
                     toml::Value::String(datetime.to_string()),
                 ),
                 ("type".to_owned(), toml::Value::String(written.to_owned())),
-            ]));
-        }
-    }
-    value
+            ]);
+            (name, toml::Value::Table(typed))
+        })
+        .collect()
 }
 
 /// Deserialize an optional percentage written as text such as `"20%"`: a whole number from 0 to 100.

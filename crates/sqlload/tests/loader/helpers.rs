@@ -128,6 +128,28 @@ pub(crate) async fn run_once(
     Ok(lines.join("\n"))
 }
 
+/// Plan, apply and load the tables `select` picks (every table when empty) of an already parsed `project`: the rendered plan, or the error text when any step fails.
+pub(crate) async fn load_selected(
+    project: &ProjectConfig,
+    destinations: &BTreeMap<String, Destination>,
+    select: &[&str],
+) -> Result<String, String> {
+    let options = PlanOptions {
+        select: select.iter().map(|name| (*name).to_owned()).collect(),
+        ..PlanOptions::default()
+    };
+    let plan = plan_project(project, destinations, &options)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (lines, ok) = render_plan(&plan);
+    ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+    apply_project(&plan, destinations)
+        .await
+        .map_err(|error| error.to_string())?;
+    load_with_options(project, &plan, destinations, &options).await?;
+    Ok(lines.join("\n"))
+}
+
 /// Load every table of `plan`; the first table that failed is the error.
 pub(crate) async fn load_all(
     project: &ProjectConfig,

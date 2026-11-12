@@ -105,3 +105,11 @@ pub(crate) struct RetryableErrorTestCase {
     pub(crate) error: fn() -> crate::loader::errors::LoaderError,
     pub(crate) expected_retryable: bool,
 }
+
+pub(crate) struct ConstantsAddedTestCase {
+    pub(crate) description: &'static str,
+    /// The constants added: name, type and value as text.
+    pub(crate) constants: &'static [(&'static str, ColumnType, &'static str)],
+    /// Whether the batch comes back equal, and its columns as `name:Arrow type=values`; or the error.
+    pub(crate) expected: Result<(bool, &'static str), &'static str>,
+}

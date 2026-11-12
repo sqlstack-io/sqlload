@@ -34,7 +34,7 @@ impl DuckDbWriter {
             .collect();
         let insert = unloaded_insert(
             target.staging.unwrap_or(target.table),
-            (carried, batch.read),
+            (carried, batch.read, target.constants),
             &urls,
             (target.load_id, batch.loaded_at),
         );

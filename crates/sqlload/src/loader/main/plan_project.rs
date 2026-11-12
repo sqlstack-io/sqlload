@@ -14,6 +14,7 @@ use crate::loader::_helpers::sources::{
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
+use crate::loader::main::_shared_destinations::block_shared_destinations;
 use crate::loader::models::{FilesSource, PlanOptions, ProjectPlan, TablePlan, TableSpec};
 use crate::project::models::ProjectConfig;
 
@@ -26,6 +27,7 @@ pub async fn plan_project(
     let mut plan = ProjectPlan::default();
     let mut claims: Vec<FolderClaim> = Vec::new();
     let mut names: Vec<(String, String)> = Vec::new();
+    let mut configured: Vec<TableSpec> = Vec::new();
     for (source_name, source) in &project.sources {
         let (resolved, files) =
             match scoped_tables((project, options), (source_name, source)).await? {
@@ -45,6 +47,7 @@ pub async fn plan_project(
         plan.warnings.extend(resolved.warnings);
         plan.skipped.extend(resolved.skipped);
         claims.extend(folder_claims(&resolved.specs, files.as_ref(), destinations));
+        configured.extend(resolved.specs.iter().cloned());
         names.extend(resolved.specs.iter().map(|spec| {
             (
                 spec.destination.table.clone(),
@@ -77,6 +80,7 @@ pub async fn plan_project(
     }
     plan.warnings
         .extend(unmatched_selectors(project, options, &names));
+    let plan = block_shared_destinations(plan, &configured);
     Ok(block_conflicts(plan, &claims, options))
 }
 
