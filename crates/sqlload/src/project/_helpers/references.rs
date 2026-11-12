@@ -7,12 +7,12 @@ use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, STAGE_NAME_PARTS,
-    TABLE_PLACEHOLDER,
+    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, RESERVED_COLUMN_PREFIX,
+    STAGE_NAME_PARTS, TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
-    CdcDeletes, CdcMode, ConnectionConfig, ProjectConfig, SourceConfig, SourceKind, TableSettings,
-    WriteStrategy,
+    CdcDeletes, CdcMode, ConnectionConfig, ConstantColumns, ProjectConfig, SourceConfig,
+    SourceKind, TableSettings, WriteStrategy,
 };
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
@@ -218,6 +218,7 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if source.kind == SourceKind::PostgresCdc {
         problems.extend(cdc_problems(place, source));
     }
+    problems.extend(constant_problems(place, source));
     let queries = source.tables.values().any(|table| table.sql.is_some());
     if !matches!(
         source.kind,
@@ -350,11 +351,10 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         || !source.partition_columns.is_empty()
         || source.path_columns.is_some()
         || source.unmatched_paths.is_some()
-        || !source.constant_columns.is_empty()
         || source.copy_to_internal_stage
     {
         problems.push(format!(
-            "{place} path, partition_columns, path_columns, unmatched_paths, constant_columns and copy_to_internal_stage are for kind = \"files\""
+            "{place} path, partition_columns, path_columns, unmatched_paths and copy_to_internal_stage are for kind = \"files\""
         ));
     }
     if source.format != SourceFormat::Parquet
@@ -436,23 +436,65 @@ fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if let Some(record) = &source.files_encoding().record {
         names.push((record.clone(), "record_column"));
     }
-    match constant_columns(&source.constant_columns, &[]) {
-        Ok(constants) => names.extend(
-            constants
+    problems.extend(clashes(place, &names, 0));
+    let filled = names.len();
+    for constants in
+        sheet_settings(source).filter_map(|settings| settings.constant_columns.as_ref())
+    {
+        let mut named = names.clone();
+        named.extend(
+            constant_columns(&constants.0, &[])
                 .into_iter()
+                .flatten()
                 .map(|(name, _, _)| (name, "constant_columns")),
-        ),
-        Err(problem) => problems.push(format!("{place} {problem}")),
+        );
+        problems.extend(clashes(place, &named, filled));
     }
-    for (index, (name, setting)) in names.iter().enumerate() {
-        if let Some((_, first)) = names[..index]
-            .iter()
-            .find(|(seen, _)| seen.eq_ignore_ascii_case(name))
-        {
-            problems.push(format!(
-                "{place} column {name} is in both {first} and {setting}; give it one source"
-            ));
+    problems
+}
+
+/// A problem for each of `names` from `from` on that an earlier one also fills, ignoring case.
+fn clashes(place: &str, names: &[(String, &str)], from: usize) -> Vec<String> {
+    (from..names.len())
+        .filter_map(|index| clash(place, &names[..=index]))
+        .collect()
+}
+
+/// The problem when an earlier one of `names` also fills the last one's column, ignoring case.
+fn clash(place: &str, names: &[(String, &str)]) -> Option<String> {
+    let ((name, setting), earlier) = names.split_last()?;
+    let (_, first) = earlier
+        .iter()
+        .find(|(seen, _)| seen.eq_ignore_ascii_case(name))?;
+    Some(format!(
+        "{place} column {name} is in both {first} and {setting}; give it one source"
+    ))
+}
+
+/// Problems with the `constant_columns` of a source and of each of its tables: a value that does not parse, a name SQLLoad keeps for its own columns, and any on a `postgres_cdc` source, whose changes are applied by key as they are captured.
+fn constant_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let maps: Vec<&ConstantColumns> = sheet_settings(source)
+        .filter_map(|settings| settings.constant_columns.as_ref())
+        .collect();
+    if source.kind == SourceKind::PostgresCdc && !maps.is_empty() {
+        problems.push(format!(
+            "{place} constant_columns is not supported for kind = \"postgres_cdc\""
+        ));
+    }
+    for constants in maps {
+        if let Err(problem) = constant_columns(&constants.0, &[]) {
+            problems.push(format!("{place} {problem}"));
         }
+        problems.extend(
+            constants
+                .0
+                .keys()
+                .filter(|name| name.to_ascii_lowercase().starts_with(RESERVED_COLUMN_PREFIX))
+                .map(|name| {
+                    format!("{place} constant column {name}: names starting with {RESERVED_COLUMN_PREFIX} are SQLLoad's own")
+                }),
+        );
     }
     problems
 }

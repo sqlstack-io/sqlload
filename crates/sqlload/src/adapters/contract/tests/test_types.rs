@@ -156,3 +156,11 @@ pub(crate) struct BoundParameterTestCase {
     pub(crate) column_type: ColumnType,
     pub(crate) expected_parameter: Option<BoundParameter>,
 }
+
+pub(crate) struct MaxCursorTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    /// The table's constant columns: name, type and value as text.
+    pub(crate) scope: Vec<(String, ColumnType, String)>,
+    pub(crate) expected_query: &'static str,
+}

@@ -26,6 +26,14 @@ pub(crate) fn inferred(name: &str, column_type: ColumnType) -> DesiredColumn {
     }
 }
 
+pub(crate) fn constant(name: &str, column_type: ColumnType) -> DesiredColumn {
+    DesiredColumn {
+        name: name.to_owned(),
+        column_type,
+        origin: ColumnOrigin::Constant,
+    }
+}
+
 pub(crate) fn live(name: &str, column_type: ColumnType) -> LiveColumn {
     LiveColumn {
         name: name.to_owned(),

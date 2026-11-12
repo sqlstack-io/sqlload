@@ -40,7 +40,10 @@ pub(crate) fn missing_column(column: &DesiredColumn, rules: SchemaRules) -> Colu
             .render_loader_logical_type(&column.column_type)
             .sql,
     };
-    let declared = matches!(column.origin, ColumnOrigin::Pinned | ColumnOrigin::Metadata);
+    let declared = matches!(
+        column.origin,
+        ColumnOrigin::Pinned | ColumnOrigin::Metadata | ColumnOrigin::Constant
+    );
     match rules.on_schema_change {
         _ if declared => ColumnDecision {
             change: Some(add()),
@@ -173,6 +176,10 @@ fn rebuild(
 fn mismatch(column: &DesiredColumn, live: &LiveColumn) -> String {
     let fix = match column.origin {
         ColumnOrigin::Pinned => "change the pinned type, or migrate the column by hand".to_owned(),
+        ColumnOrigin::Constant => format!(
+            "give the constant the table's type, for example {} = {{ value = \"...\", type = \"{}\" }}",
+            column.name, live.column_type
+        ),
         _ => format!(
             "pin a type the table can hold, for example columns = {{ {} = \"{}\" }}",
             column.name, live.column_type
@@ -227,7 +234,7 @@ fn existing_as_is(column: &DesiredColumn, live: &LiveColumn, rules: SchemaRules)
     }
 }
 
-/// The decision for a column a table SQLLoad did not create lacks: never added; the `_sqlload_*` columns are left out quietly, a source column with a warning, unless the contract or `on_schema_change = "fail"` needs it.
+/// The decision for a column a table SQLLoad did not create lacks: never added; the `_sqlload_*` columns are left out quietly, a source column with a warning, unless the contract or `on_schema_change = "fail"` needs it; a constant column always fails, since rows without it could not be told apart.
 fn missing_as_is(column: &DesiredColumn, rules: SchemaRules) -> ColumnDecision {
     let place = format!(
         "{} is not in the table, which SQLLoad did not create and does not alter",
@@ -235,6 +242,12 @@ fn missing_as_is(column: &DesiredColumn, rules: SchemaRules) -> ColumnDecision {
     );
     match (column.origin, rules.contract, rules.on_schema_change) {
         (ColumnOrigin::Metadata, _, _) => ColumnDecision::default(),
+        (ColumnOrigin::Constant, _, _) => ColumnDecision {
+            problem: Some(format!(
+                "{place}; add it to the table, or remove it from constant_columns"
+            )),
+            ..ColumnDecision::default()
+        },
         (ColumnOrigin::Pinned, Contract::Enforced, _) | (_, _, OnSchemaChange::Fail) => {
             ColumnDecision {
                 problem: Some(format!("{place}; add it to the table, or exclude it")),

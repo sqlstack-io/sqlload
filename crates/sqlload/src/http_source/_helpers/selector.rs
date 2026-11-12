@@ -31,11 +31,45 @@ pub(crate) fn selector(text: Option<&str>) -> Result<Selector, String> {
 fn segments(text: &str) -> Option<Vec<String>> {
     match text {
         "" => Some(Vec::new()),
-        _ => text
-            .strip_prefix('.')?
-            .split('.')
-            .map(|name| is_name(name).then(|| name.to_owned()))
-            .collect(),
+        _ => Some(
+            text.strip_prefix('.')?
+                .split('.')
+                .map(indexed)
+                .collect::<Option<Vec<Vec<String>>>>()?
+                .concat(),
+        ),
+    }
+}
+
+/// A dotted path's part such as `sheets` or `sheets[0]` as its segments, an index kept as `[0]`; `None` when it is neither.
+fn indexed(part: &str) -> Option<Vec<String>> {
+    let (name, indexes) = part
+        .split_once('[')
+        .map_or((part, ""), |(name, rest)| (name, rest));
+    let mut found = vec![is_name(name).then(|| name.to_owned())?];
+    if !indexes.is_empty() {
+        for index in format!("[{indexes}").split_inclusive(']') {
+            let digits = index.strip_prefix('[')?.strip_suffix(']')?;
+            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            found.push(index.to_owned());
+        }
+    }
+    Some(found)
+}
+
+/// The value under `node` at `segment`: an object's field, or a list's item for `[n]`.
+pub(crate) fn step<'a>(node: &'a Value, segment: &str) -> Option<&'a Value> {
+    match segment
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        Some(index) => match index.parse::<usize>() {
+            Ok(index) => node.as_array()?.get(index),
+            Err(_) => None,
+        },
+        None => node.get(segment),
     }
 }
 
@@ -48,7 +82,7 @@ pub(crate) fn selected_node<'a>(document: &'a Value, selector: &Selector) -> Opt
     selector
         .rows
         .iter()
-        .try_fold(document, |node, name| node.get(name))
+        .try_fold(document, |node, name| step(node, name))
 }
 
 /// The rows `selector` points at in `document`: an array's items, one object, or none.
@@ -65,7 +99,7 @@ pub(crate) fn pointer_value(document: &Value, pointer: &Selector) -> Option<Valu
     let node = pointer
         .rows
         .iter()
-        .try_fold(document, |node, name| node.get(name))?;
+        .try_fold(document, |node, name| step(node, name))?;
     match node {
         Value::String(text) if !text.is_empty() => Some(node.clone()),
         Value::Number(_) => Some(node.clone()),

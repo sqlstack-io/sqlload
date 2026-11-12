@@ -1,3 +1,5 @@
+#[path = "tests/test_constant_batches.rs"]
+mod constant_batches;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_python_columns.rs"]

@@ -97,7 +97,9 @@ from a terminal again; Google's account chooser then lets you pick the account.
 Per-table settings go under `[sources.<name>.tables.<table>]`, where `<table>` is the name in
 `ranges` (or the tab's table name), as for other sources: `columns`, `unique_key`, `header` and so on.
 With more than one table, a `table_name` template must contain `{table}`. Files settings such as
-`format` or `constant_columns` are refused.
+`format` are refused. From 0.37.0 (not released yet), [`constant_columns`](/docs/configuration/#table-settings)
+adds columns with the same value in every row, such as `{ tenant_id = "acme" }`; a sheet column of the
+same name, ignoring case, fails `plan`.
 
 ## Columns and types
 

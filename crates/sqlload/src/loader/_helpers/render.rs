@@ -13,7 +13,8 @@ use crate::files_source::models::SourceFormat;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
-    CUT_ELEMENTS_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, RESULT_SCHEMA_VERSION,
+    CONSTANT_NOTE, CUT_ELEMENTS_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN,
+    RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
@@ -155,11 +156,12 @@ pub(crate) fn object_item(table: &TablePlan) -> PlanItem {
     match &table.schema.action {
         TableAction::Create | TableAction::Recreate
             if table.spec.python.is_none()
-                || table
-                    .schema
-                    .write_columns
-                    .iter()
-                    .any(|column| column.origin != ColumnOrigin::Metadata) =>
+                || table.schema.write_columns.iter().any(|column| {
+                    !matches!(
+                        column.origin,
+                        ColumnOrigin::Metadata | ColumnOrigin::Constant
+                    )
+                }) =>
         {
             details.extend(column_details(table));
         }
@@ -240,7 +242,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
                     .iter()
                     .any(|(partition, _)| partition == name),
             ) {
-                (true, _) => "  (constant)",
+                (true, _) => CONSTANT_NOTE,
                 (false, true) => "  (from the path)",
                 (false, false) => "",
             }
@@ -255,6 +257,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
                 .flatten()
                 .collect();
             let note = match (from_path(&column.name), losses.is_empty()) {
+                _ if column.origin == ColumnOrigin::Constant => CONSTANT_NOTE.to_owned(),
                 (path, _) if !path.is_empty() => path.to_owned(),
                 (_, false) => format!("  ({})", losses.join("; ")),
                 (_, true) => String::new(),
@@ -825,7 +828,12 @@ fn python_create(table: &TablePlan) -> String {
         .schema
         .write_columns
         .iter()
-        .filter(|column| column.origin != ColumnOrigin::Metadata)
+        .filter(|column| {
+            !matches!(
+                column.origin,
+                ColumnOrigin::Metadata | ColumnOrigin::Constant
+            )
+        })
         .count();
     match declared {
         0 => "create table on first load (columns inferred from the data)".to_owned(),

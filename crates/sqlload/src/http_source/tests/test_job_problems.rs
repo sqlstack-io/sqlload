@@ -50,6 +50,25 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
             ],
         },
         JobProblemsTestCase {
+            description: "a third level may use the keys of both levels above it",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i/{item_id}/n","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].item_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
+            expected_problems: &[],
+        },
+        JobProblemsTestCase {
+            description: "a third level's placeholder that no level above gives",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i/{item_id}/n/{customer_id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].item_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
+            expected_problems: &[
+                "fan-out path /o/{order_id}/i/{item_id}/n/{customer_id} needs {customer_id}, but over gives only order_id, item_id",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a level that picks a key name a level above already gives",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/n","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].order_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
+            expected_problems: &[
+                "fan_out over picks order_id, which a level above already gives; name it apart with key=",
+            ],
+        },
+        JobProblemsTestCase {
             description: "a pointer that is not a path, a zero limit and a bad header",
             job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0,"headers":{"X Bad":"1"}},"path":"/o","paginator":{"kind":"next_link","pointer":"next"}}"#,
             expected_problems: &[
@@ -88,6 +107,22 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
             job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id","fields":[{"name":"id","path":"$.id"}]}}"#,
             expected_problems: &[
                 "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a one-level fan-out's own select problem comes before its listed key's, as before multi-level fan-out",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/{region}/orders/{id}","paginator":{"kind":"single"},"select":"$.items[*].sku","concurrency":2,"over":{"kind":"values","values":[{"region":"uk"}]}}"#,
+            expected_problems: &[
+                "select \"$.items[*].sku\" names a key field (sku); that form is for fan_out's over, so select the rows instead",
+                "fan-out path /{region}/orders/{id} needs {id}, which the key {\"region\":\"uk\"} lacks",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a one-level over's fields problem comes before its placeholder problem, as before multi-level fan-out",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/shops/{shop}/orders","paginator":{"kind":"single"},"select":"$.items[*].id","keep_record":"raw"}}"#,
+            expected_problems: &[
+                "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows",
+                "fan_out over path /shops/{shop}/orders has the placeholder {shop}; over must be a plain paginate",
             ],
         },
     ];
