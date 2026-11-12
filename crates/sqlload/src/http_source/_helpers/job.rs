@@ -184,7 +184,7 @@ fn body_problems(request: &Request) -> Vec<String> {
         );
     }
     problems.extend(paths.iter().filter_map(|path| match selector(Some(path)) {
-        Ok(parsed) if parsed.field.is_none() && !parsed.rows.is_empty() => None,
+        Ok(parsed) if parsed.field.is_none() && named_fields(&parsed.rows) => None,
         Ok(_) | Err(_) => Some(format!(
             "body path {path:?} is not a path such as \"$.page.cursor\""
         )),
@@ -201,6 +201,11 @@ fn body_problems(request: &Request) -> Vec<String> {
         );
     }
     problems
+}
+
+/// Whether `segments` are one or more field names, with no list index such as `[0]`.
+fn named_fields(segments: &[String]) -> bool {
+    !segments.is_empty() && !segments.iter().any(|segment| segment.starts_with('['))
 }
 
 /// Why a header cannot be sent, if it cannot.

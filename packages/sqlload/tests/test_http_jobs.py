@@ -40,7 +40,7 @@ GRID = {
 				{
 					"rowData": [
 						{"values": [{"effectiveValue": {"stringValue": "Name"}}, {"effectiveValue": {"stringValue": "Qty"}}, {"effectiveValue": {"stringValue": "Done"}}]},
-						{"values": [{"effectiveValue": {"stringValue": "Bolt"}}, {"effectiveValue": {"numberValue": 3}}, {"effectiveValue": {"boolValue": True}}]},
+						{"values": [{"effectiveValue": {"stringValue": "Bolt"}}, {"effectiveValue": {"numberValue": 3}}, {"effectiveValue": {"boolValue": True}}, {"userEnteredFormat": {}}]},
 						{"values": [{"effectiveValue": {"stringValue": "Nut"}}, {}, {"effectiveValue": {"boolValue": False}}]},
 						{"values": [{"effectiveValue": {"stringValue": "Washer"}}]},
 					]
@@ -232,6 +232,8 @@ class Api(BaseHTTPRequestHandler):
 		rows = [dict(row, cells=list(row["cells"])) for row in SHEET_ROWS[(page - 1) * 2 : page * 2]]
 		if query.get("unknown") and rows and page == 2:
 			rows[0]["cells"].append({"columnId": 7999, "value": "stray"})
+		if query.get("twice") and rows and page == 1:
+			rows[0]["cells"].append({"columnId": 7002, "value": 4})
 		self.reply(200, {"columns": columns, "rows": rows} if page == 1 else {"rows": rows})
 
 	def page_number(self, query: dict[str, str]) -> None:
@@ -882,8 +884,9 @@ def test_given_a_get_job_when_loading_then_its_requests_are_unchanged_by_body_pa
 			"api.paginate('/search-cursor', method='POST', json_body={'page': 1}, paginator=sl.cursor('$.meta.next', '$.page.cursor', location='body'))",
 			"json_body has no object to set $.page.cursor in",
 		),
+		("api.paginate('/search', method='POST', paginator=sl.cursor('$.next', '$.page[0]', location='body'))", 'body path "$.page[0]" is not a path such as "$.page.cursor"'),
 	],
-	ids=["body-on-get", "body-paging-on-get", "bad-body-path", "body-path-through-a-number"],
+	ids=["body-on-get", "body-paging-on-get", "bad-body-path", "body-path-through-a-number", "body-path-with-an-index"],
 )
 def test_given_a_bad_body_setting_when_loading_then_no_request_is_sent(tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_text: str) -> None:
 	project = make_project(tmp_path, api, f"@shop.table(description='Orders.')\ndef orders(ctx):\n    return {job}\n")
@@ -1096,8 +1099,20 @@ def test_given_a_column_renamed_between_runs_when_loading_again_then_on_schema_c
 			"fan_out's over picks keys with its select; cells are for the fan-out's own rows",
 			0,
 		),
+		(
+			SHEET.format(extra="").replace("paginator=sl.page_number('page')", "paginator=sl.page_number('page'), params={'twice': 1}"),
+			1,
+			"page=1: cells: row 1: it has two cells for the column Qty",
+			1,
+		),
+		(
+			"api.paginate('/sheet', paginator=sl.page_number('page'), select='$.rows', cells=sl.cells('$.cell'))",
+			1,
+			'cells: no row has a cell field, so cells pointer "$.cell" finds no cells; check it',
+			1,
+		),
 	],
-	ids=["unknown-column-id", "names-from-and-header-row", "pointer-into-a-list", "cells-on-an-over"],
+	ids=["unknown-column-id", "names-from-and-header-row", "pointer-into-a-list", "cells-on-an-over", "two-cells-for-one-column", "pointer-naming-no-field"],
 )
 def test_given_cells_that_cannot_pivot_when_loading_then_it_fails_naming_why(
 	tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_code: int, expected_text: str, expected_requests: int

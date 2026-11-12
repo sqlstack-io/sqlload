@@ -67,6 +67,12 @@ pub(crate) fn pivoted_rows(
         return Ok(("[]".to_owned(), names));
     };
     let field = cell_field(cells).unwrap_or_default();
+    if !listed.iter().any(|row| row.get(&field).is_some()) {
+        return Err(format!(
+            "no row has a {field} field, so cells pointer {:?} finds no cells; check it",
+            cells.pointer
+        ));
+    }
     let (names, skip) = match (cells.header_row, names) {
         (true, Some(names)) => (names, 0),
         (true, None) => (header_names(first, (&field, cells))?, 1),
@@ -151,7 +157,7 @@ fn named(found: Vec<(String, String)>, source: &str) -> Result<CellNames, String
     let mut names = CellNames::default();
     let mut lowered: HashMap<String, String> = HashMap::new();
     for (id, name) in found {
-        if let Some(earlier) = lowered.insert(name.to_lowercase(), name.clone()) {
+        if let Some(earlier) = lowered.insert(name.to_ascii_lowercase(), name.clone()) {
             return Err(format!(
                 "{source} names two columns {earlier} and {name}, which load as one column"
             ));
@@ -177,13 +183,22 @@ fn pivoted_row(
     let Value::Object(object) = row else {
         return Err("is not an object, so it has no cells".to_owned());
     };
-    let mut values: Vec<Value> = vec![Value::Null; names.names.len()];
+    let mut values: Vec<Option<Value>> = vec![None; names.names.len()];
     for (position, cell) in row_cells(row, field)?.iter().enumerate() {
         let id = cell_id(cell, cells, position)?;
+        let value = cell_value(cell, cells)?;
         let Some(at) = names.positions.get(&id) else {
-            return Err(unknown_cell(&id, cells));
+            match value.is_null() {
+                true => continue,
+                false => return Err(unknown_cell(&id, cells)),
+            }
         };
-        values[*at] = cell_value(cell, cells)?;
+        if values[*at].replace(value).is_some() {
+            return Err(format!(
+                "it has two cells for the column {}",
+                names.names[*at]
+            ));
+        }
     }
     let own: Vec<(&String, &Value)> = object.iter().filter(|(name, _)| *name != field).collect();
     let mut members: Vec<String> = own
@@ -191,6 +206,7 @@ fn pivoted_row(
         .map(|(name, value)| member(name, value))
         .collect();
     for (name, value) in names.names.iter().zip(values) {
+        let value = value.unwrap_or(Value::Null);
         if let Some((clash, _)) = own.iter().find(|(own, _)| own.eq_ignore_ascii_case(name)) {
             return Err(format!(
                 "its own field {clash} has the name of the cells' column {name}, so the two would load as one column"
