@@ -1142,6 +1142,10 @@ pub(crate) struct ReadPart {
     /// The Postgres filter; `None` reads the plan's.
     pub(crate) filter: Option<String>,
     /// The values bound to `filter`'s `?` placeholders, in order.
+    #[cfg_attr(
+        not(feature = "odbc"),
+        expect(dead_code, reason = "only ODBC sources bind parameters")
+    )]
     pub(crate) parameters: Vec<BoundParameter>,
     /// `ORDER BY` this quoted column.
     pub(crate) order_by: Option<String>,
