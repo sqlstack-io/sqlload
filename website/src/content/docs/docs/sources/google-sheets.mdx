@@ -39,8 +39,9 @@ is not supported yet.
 
 ## Sign in as a Google user
 
-From 0.35.0 (not released yet). Status: user OAuth tested against a simulated Google endpoint, not
-yet against live Google. The service-account route above is tested against live Google.
+From 0.35.0 (not released yet).
+Status: user OAuth tested against a simulated Google endpoint, not yet against live Google.
+The service-account route above is tested against live Google.
 
 When spreadsheets can't be shared with a service account, SQLLoad can read them as a Google user
 who consents once in the browser. It asks only for the `spreadsheets.readonly` scope.
@@ -74,9 +75,15 @@ changes, or after 7 days for a client whose consent screen is still in testing. 
 own `refresh_token` then fails the table and names the cause; get a new one by signing in from a
 terminal with `refresh_token` unset. A refused cached token leads to a new consent when a terminal
 is there. These failures exit 1, not 75, as running again unchanged won't fix them. A token endpoint
-that is down or throttling is retried like any other Sheets request.
+that is down or throttling is retried like any other Sheets request, and exits 75 if it stays down.
 
 Share the spreadsheet with the signed-in account, or sign in as an account that can open it.
+
+The cache file holds one entry per OAuth client and connection name, keyed `"<client_id> <connection>"`,
+shared by every project on the machine that uses them. Its `refresh_token` field is the token to copy
+for unattended runs. To sign in as another account, delete that entry (or revoke SQLLoad's access at
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions)) and run `sqlload plan`
+from a terminal again.
 
 ## Source
 

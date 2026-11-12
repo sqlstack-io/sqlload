@@ -18,9 +18,9 @@ use crate::auth::tests::test_types::{
     FakeGoogle, FakeOauth, LifecycleOutcome, TokenLifecycleTestCase, UserTokenOutcome,
     UserTokenTestCase,
 };
-use crate::http::errors::ApiError;
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
+use crate::loader::errors::LoaderError;
 
 type Shared = Arc<Mutex<FakeOauth>>;
 
@@ -306,7 +306,9 @@ pub(crate) async fn user_token_outcome(
     )
     .await
     .map_err(|_| "no token within 5 s".to_owned())?;
-    let retryable = first.as_ref().err().is_some_and(ApiError::is_retryable);
+    let retryable = first.as_ref().err().is_some_and(|error| {
+        error.is_retryable() && LoaderError::from(error.clone()).is_retryable()
+    });
     let outcome = first.map_or_else(|error| error.to_string(), |token| token.expose().to_owned());
     let grants = fake
         .lock()
@@ -393,7 +395,7 @@ async fn google_token(State(state): State<SharedGoogle>, body: String) -> Respon
     let exchanged = form.contains_key("code");
     let verified =
         field("code") == "fake-code" && challenge(&field("code_verifier")) == fake.challenge;
-    let answers: [(bool, StatusCode, Value); 4] = [
+    let answers: [(bool, StatusCode, Value); 5] = [
         (
             field("client_secret") != "secret",
             StatusCode::UNAUTHORIZED,
@@ -403,6 +405,11 @@ async fn google_token(State(state): State<SharedGoogle>, body: String) -> Respon
             refresh == "unavailable",
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error": "backend_error", "error_description": "try later"}),
+        ),
+        (
+            refresh == "broken",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!(format!("<html>{}</html>", "x".repeat(400))),
         ),
         (
             fake.revoked.contains(&refresh) || (exchanged && !verified),

@@ -96,7 +96,7 @@ pub(crate) struct UserTokenTestCase {
     pub(crate) cached: Option<(&'static str, i64, &'static str)>,
     /// The access token the server just refused, which the client holds as unexpired.
     pub(crate) refused: Option<&'static str>,
-    /// Refresh tokens Google refuses as revoked; `unavailable` makes its token endpoint fail with 503.
+    /// Refresh tokens Google refuses as revoked; `unavailable` makes its token endpoint fail with 503, and `broken` with a 500 and an HTML page.
     pub(crate) revoked: &'static [&'static str],
     /// The client secret sent; the fake takes only `secret`.
     pub(crate) client_secret: &'static str,

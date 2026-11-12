@@ -46,3 +46,5 @@ pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const INVALID_GRANT: &str = "invalid_grant";
 /// How long Google's access tokens last when the answer doesn't say, in seconds.
 pub const DEFAULT_GOOGLE_TOKEN_SECS: u64 = 3600;
+/// The most of a Google token endpoint's error text an error shows.
+pub const GOOGLE_ERROR_CHARS: usize = 300;

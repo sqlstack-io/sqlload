@@ -3,7 +3,9 @@
 use crate::auth::_helpers::oauth::{Pkce, now_secs, renew_after};
 use crate::auth::_helpers::sign_in::{Consent, SignInIo, browser_code, say};
 use crate::auth::_helpers::token_cache::{read_entry, write_entry};
-use crate::auth::constants::{DEFAULT_GOOGLE_TOKEN_SECS, GOOGLE_PROVIDER, INVALID_GRANT};
+use crate::auth::constants::{
+    DEFAULT_GOOGLE_TOKEN_SECS, GOOGLE_ERROR_CHARS, GOOGLE_PROVIDER, INVALID_GRANT,
+};
 use crate::auth::errors::TokenError;
 use crate::auth::models::{GoogleUser, OauthTokens, Secret};
 use crate::http::constants::TOO_MANY_REQUESTS;
@@ -146,7 +148,9 @@ async fn consent(
             TokenError::Refused(reason) => {
                 ApiError::Auth(format!("Google refused the sign-in code: {reason}"))
             }
-            TokenError::Failed(error) => error,
+            TokenError::Failed(error) => ApiError::Auth(format!(
+                "exchanging the sign-in code failed ({error}); sign in again"
+            )),
         })?;
     if tokens.refresh_token.is_none() {
         return Err(ApiError::Auth(
@@ -203,18 +207,20 @@ async fn token_grant(
         Err(_) => serde_json::Value::Null,
     };
     let error = body["error"].as_str().unwrap_or(status.as_str()).to_owned();
-    let description = body["error_description"]
+    let description: String = body["error_description"]
         .as_str()
         .unwrap_or(&text)
-        .to_owned();
+        .chars()
+        .take(GOOGLE_ERROR_CHARS)
+        .collect();
     match status.as_u16() {
         _ if status.is_success() => tokens_from(&body).map_err(TokenError::Failed),
         _ if error == INVALID_GRANT => Err(TokenError::Refused(format!("{error}: {description}"))),
         code if code == TOO_MANY_REQUESTS || status.is_server_error() => {
             Err(TokenError::Failed(ApiError::Status {
                 status: code,
-                code: error,
-                message: format!("Google's token endpoint: {description}"),
+                code: String::new(),
+                message: format!("Google's token endpoint: {error}: {description}"),
             }))
         }
         _ => Err(TokenError::Failed(ApiError::Auth(format!(
