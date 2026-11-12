@@ -370,6 +370,44 @@ fn given_files_in_plain_folders_when_path_columns_capture_a_date_then_delete_ins
             check_query: PATH_CHECK,
             expected_result: "1:1.0:eu:2026-11-03:main:1:2026-11-08,2:1.0:eu:2026-11-03:main:1:2026-11-08",
         },
+        FilesScenarioTestCase {
+            description: "a table's own constant_columns replace its source's, read by DuckDB itself",
+            store: local_store,
+            settings: concat!(
+                "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\n",
+                "path_columns = \"{region}/{day:date}_*.parquet\"\nconstant_columns = { shop = \"source\" }\n",
+                "[sources.scores.tables.scores]\nconstant_columns = { shop = \"main\", day_count = 1, as_of = 2026-11-08 }\n",
+            ),
+            runs: PATH_RUNS,
+            check_query: PATH_CHECK,
+            expected_result: PATH_RESULT,
+        },
+        FilesScenarioTestCase {
+            description: "a table's own constant_columns replace its source's, read by SQLLoad's reader from S3",
+            store: seaweedfs_store,
+            settings: concat!(
+                "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\ntest_loader_route = true\n",
+                "path_columns = \"{region}/{day:date}_*.parquet\"\nconstant_columns = { shop = \"source\" }\n",
+                "[sources.scores.tables.scores]\nconstant_columns = { shop = \"main\", day_count = 1, as_of = 2026-11-08 }\n",
+            ),
+            runs: PATH_RUNS,
+            check_query: PATH_CHECK,
+            expected_result: PATH_RESULT,
+        },
+        FilesScenarioTestCase {
+            description: "a table's constant replaces a file column of its name, as a files source always has",
+            store: local_store,
+            settings: concat!(
+                "write_strategy = \"append\"\npartition_columns = { day = \"date\" }\n",
+                "[sources.scores.tables.scores]\nconstant_columns = { extra = \"c\" }\n",
+            ),
+            runs: &[FilesRun {
+                files: &[NOV_4, NOV_5],
+                expected_error: "",
+            }],
+            check_query: "SELECT string_agg(id || ':' || extra, ',' ORDER BY id) FROM raw.scores",
+            expected_result: "3:c,5:c",
+        },
     ];
     run_async(async {
         let server = start_seaweedfs().await?;

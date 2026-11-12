@@ -9,7 +9,7 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
 use crate::helpers::{described_project, duckdb_project, load_all, load_selected, run_async};
-use crate::test_types::{LoadRunTestCase, PinnedRunTestCase};
+use crate::test_types::{ConstantLoadTestCase, LoadRunTestCase, PinnedRunTestCase};
 
 const SETUP: &str = "
 CREATE TABLE public.accounts (id int8 PRIMARY KEY, name text, email text, balance numeric(12,2), updated_at timestamptz NOT NULL);
@@ -402,6 +402,109 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
             Some("5/5"),
             "a rerun of both tenants keeps one row per tenant and id"
         );
+        Ok(())
+    })
+}
+
+const CONSTANTS_SETUP: &str = "
+CREATE TABLE public.items (id int8 PRIMARY KEY, label text);
+CREATE TABLE public.clashing (id int8 PRIMARY KEY, \"Tenant_ID\" text);
+CREATE TABLE public.other_items (id int8 PRIMARY KEY, label text);
+INSERT INTO public.items VALUES (1, 'one'), (2, 'two');
+INSERT INTO public.clashing VALUES (1, 'x');
+INSERT INTO public.other_items VALUES (1, 'other');
+";
+
+const NO_SUCH_TABLE: &str = "0";
+
+#[test]
+fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_never_replace_or_remove_other_rows()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(CONSTANTS_SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let test_cases = [
+            ConstantLoadTestCase {
+                description: "a typed constant loads as its type, in every row",
+                settings: "include = [\"public.item*\"]\nconstant_columns = { shard = { value = \"7\", type = \"int\" }, tenant_id = \"a\" }\n",
+                expected_error: "",
+                check_query: "SELECT (SELECT string_agg(column_name || ' ' || column_type, ',') FROM (DESCRIBE raw.app__items)) || '|' || (SELECT string_agg(id || ':' || shard || ':' || tenant_id, ',' ORDER BY id) FROM raw.app__items)",
+                expected_result: "id BIGINT,label VARCHAR,shard BIGINT,tenant_id VARCHAR,_sqlload_load_id VARCHAR,_sqlload_loaded_at TIMESTAMP WITH TIME ZONE|1:7:a,2:7:a",
+            },
+            ConstantLoadTestCase {
+                description: "a table's own constant_columns replace its source's",
+                settings: "include = [\"public.item*\"]\nconstant_columns = { tenant_id = \"source\" }\n[sources.app.tables.\"public.items\"]\nconstant_columns = { region = \"eu\" }\n",
+                expected_error: "",
+                check_query: "SELECT string_agg(column_name, ',') FROM (DESCRIBE raw.app__items)",
+                expected_result: "id,label,region,_sqlload_load_id,_sqlload_loaded_at",
+            },
+            ConstantLoadTestCase {
+                description: "a source column named like a constant, in another case, fails the plan, naming it",
+                settings: "include = [\"public.clash*\"]\nconstant_columns = { tenant_id = \"a\" }\n",
+                expected_error: "constant column tenant_id: the source already has a column Tenant_ID, and a constant never replaces it",
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'app__clashing'",
+                expected_result: NO_SUCH_TABLE,
+            },
+            ConstantLoadTestCase {
+                description: "excluding the source's column of the constant's name loads the constant instead",
+                settings: "include = [\"public.clash*\"]\nconstant_columns = { tenant_id = \"a\" }\n[sources.app.tables.\"public.clashing\"]\nexclude_columns = [\"Tenant_ID\"]\n",
+                expected_error: "",
+                check_query: "SELECT string_agg(id || ':' || tenant_id, ',') FROM raw.app__clashing",
+                expected_result: "1:a",
+            },
+            ConstantLoadTestCase {
+                description: "a constant cannot be a database table's cursor",
+                settings: "include = [\"public.item*\"]\nconstant_columns = { tenant_id = \"a\" }\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\ncursor_column = \"tenant_id\"\n",
+                expected_error: "constant column tenant_id cannot be the cursor_column",
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'app__items'",
+                expected_result: NO_SUCH_TABLE,
+            },
+            ConstantLoadTestCase {
+                description: "tables with constant columns sharing a destination cannot replace it, which would remove the other's rows",
+                settings: "include = [\"public.item*\"]\ntable_name = \"{table}\"\nconstant_columns = { tenant_id = \"a\" }\n[sources.other]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.other_item*\"]\nconstant_columns = { tenant_id = \"b\" }\n[sources.other.tables.\"public.other_items\"]\nname = \"items\"\n",
+                expected_error: "items is also loaded by other.public.other_items, and constant_columns tell their rows apart; app.public.items uses write_strategy = \"replace\"",
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'items'",
+                expected_result: NO_SUCH_TABLE,
+            },
+            ConstantLoadTestCase {
+                description: "tables with constant columns sharing a destination cannot merge on a key without a constant",
+                settings: "include = [\"public.item*\"]\ntable_name = \"{table}\"\nconstant_columns = { tenant_id = \"a\" }\nwrite_strategy = \"merge\"\n[sources.other]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.other_item*\"]\nconstant_columns = { tenant_id = \"b\" }\nwrite_strategy = \"merge\"\nunique_key = [\"tenant_id\", \"id\"]\n[sources.other.tables.\"public.other_items\"]\nname = \"items\"\n",
+                expected_error: "its unique_key (id) has no constant column, so its merge could overwrite their rows",
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'items'",
+                expected_result: NO_SUCH_TABLE,
+            },
+        ];
+        for test_case in test_cases {
+            let text = duckdb_project(postgres.port, test_case.settings);
+            let project = described_project(&text).await?;
+            let destinations = connect_targets(&project)
+                .await
+                .map_err(|error| error.to_string())?;
+            let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
+                return Err("no DuckDB destination".to_owned());
+            };
+            let outcome = load_selected(&project, &destinations, &[]).await;
+            let error = outcome.err().unwrap_or_default();
+            assert!(
+                error.contains(test_case.expected_error)
+                    && error.is_empty() == test_case.expected_error.is_empty(),
+                "{}: {error}",
+                test_case.description
+            );
+            let result = single_text(duckdb, test_case.check_query.to_owned())
+                .await
+                .map_err(|error| error.to_string())?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
         Ok(())
     })
 }

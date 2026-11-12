@@ -159,6 +159,16 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1+run2 2:b,3:c",
         },
         FilesTargetScenarioTestCase {
+            description: "a constant column is written into every file",
+            store: local_store,
+            setup: ORDERS,
+            target_settings: "",
+            settings: "write_strategy = \"append\"\ncursor_column = \"placed_at\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\nconstant_columns = { tenant_id = \"t1\" }\n",
+            runs: &[OK],
+            check_column: "tenant_id",
+            expected_files: "day=2026-11-03 run1 1:t1; day=2026-11-04 run1 2:t1",
+        },
+        FilesTargetScenarioTestCase {
             description: "append into S3 behaves the same",
             store: seaweedfs_store,
             setup: ORDERS,
