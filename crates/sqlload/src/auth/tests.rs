@@ -1,3 +1,5 @@
+#[path = "tests/test_google_oauth.rs"]
+mod google_oauth;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_oauth.rs"]

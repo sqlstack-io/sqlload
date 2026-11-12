@@ -299,6 +299,6 @@ fn open_browser(url: &str) -> bool {
 }
 
 /// Tell the person signing in what to do, on stderr so stdout stays the command's output.
-fn say(text: &str) {
+pub(crate) fn say(text: &str) {
     let _ = writeln!(std::io::stderr(), "{text}");
 }

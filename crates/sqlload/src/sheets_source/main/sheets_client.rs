@@ -4,7 +4,7 @@ use crate::bigquery_api::main::parse_key::parse_key;
 use crate::http::errors::ApiError;
 use crate::sheets_source::_helpers::keys::key_text;
 use crate::sheets_source::constants::{BASE_URL, SERVICE_ACCOUNT_TYPE};
-use crate::sheets_source::models::{KeySource, SheetsClient};
+use crate::sheets_source::models::{KeySource, SheetsClient, SheetsCredential};
 
 /// A client reading as the service account of the key `source` gives, against `base_url` (the public API when `None`); nothing is sent until the first read.
 pub fn sheets_client(
@@ -32,7 +32,7 @@ pub fn sheets_client(
             .unwrap_or(BASE_URL)
             .trim_end_matches('/')
             .to_owned(),
-        key: parse_key(&text)?,
+        credential: SheetsCredential::ServiceAccount(parse_key(&text)?),
         token: std::sync::Arc::default(),
     })
 }

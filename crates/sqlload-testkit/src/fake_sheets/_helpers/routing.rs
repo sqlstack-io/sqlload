@@ -18,15 +18,30 @@ fn google_error(code: u16, status: &str, message: &str) -> Value {
     json!({"error": {"code": code, "message": message, "status": status}})
 }
 
-/// Route one request; every read needs a bearer token the fake handed out and has not refused.
+/// Route one request: a token request gets a token unless its refresh token is revoked; every read needs a bearer token the fake handed out and has not refused.
 pub(crate) async fn handle(
     State(state): State<SharedSheets>,
     parts: Parts,
-    _body: Bytes,
+    body: Bytes,
 ) -> Response {
     let path = parts.uri.path().to_owned();
     if parts.method == axum::http::Method::POST && path == TOKEN_PATH {
+        let form = query_pairs(&String::from_utf8_lossy(&body));
+        let field = |name: &str| {
+            form.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_default()
+        };
         let mut locked = state.lock();
+        locked.grants.push(field("grant_type"));
+        if locked
+            .revoked_refresh_tokens
+            .contains(&field("refresh_token"))
+        {
+            let body = json!({"error": "invalid_grant", "error_description": "Token has been expired or revoked."});
+            return (StatusCode::BAD_REQUEST, body.to_string()).into_response();
+        }
         locked.tokens += 1;
         let token = format!("{}{}", &TOKEN_PREFIX["Bearer ".len()..], locked.tokens);
         return (

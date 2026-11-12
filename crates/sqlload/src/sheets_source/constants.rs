@@ -51,3 +51,6 @@ pub const NOT_FOUND: u16 = 404;
 
 /// The HTTP status of a request whose token the server refused.
 pub const UNAUTHORIZED: u16 = 401;
+
+/// Who a client signed in as a Google user reads as, as messages name it.
+pub const GOOGLE_USER: &str = "the Google account that signed in";

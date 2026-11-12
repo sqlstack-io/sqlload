@@ -908,3 +908,16 @@ pub(crate) struct SftpSnowflakePlanTestCase {
     pub(crate) expected_success: bool,
     pub(crate) expected_output: &'static str,
 }
+
+pub(crate) struct SheetsUserTestCase {
+    pub(crate) description: &'static str,
+    /// The connection's `refresh_token`.
+    pub(crate) refresh: Option<&'static str>,
+    /// Refresh tokens the fake refuses as revoked.
+    pub(crate) revoked: &'static [&'static str],
+    pub(crate) expected_code: i32,
+    /// Text the output holds.
+    pub(crate) expected_output: &'static str,
+    /// The grant type every token request has (plan and load each ask for a token), or none when no token is asked for.
+    pub(crate) expected_grant: Option<&'static str>,
+}

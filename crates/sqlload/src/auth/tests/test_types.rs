@@ -86,3 +86,51 @@ pub(crate) struct ChallengeTestCase {
     pub(crate) verifier: &'static str,
     pub(crate) expected_challenge: &'static str,
 }
+
+/// An access token a Google user's client needs, with what the connection, the cache, the fake Google and the terminal hold.
+pub(crate) struct UserTokenTestCase {
+    pub(crate) description: &'static str,
+    /// The connection's own refresh token.
+    pub(crate) configured: Option<&'static str>,
+    /// The cached access token, its seconds until renewal, and its refresh token.
+    pub(crate) cached: Option<(&'static str, i64, &'static str)>,
+    /// The access token the server just refused, which the client holds as unexpired.
+    pub(crate) refused: Option<&'static str>,
+    /// Refresh tokens Google refuses as revoked; `unavailable` makes its token endpoint fail with 503.
+    pub(crate) revoked: &'static [&'static str],
+    /// The client secret sent; the fake takes only `secret`.
+    pub(crate) client_secret: &'static str,
+    /// Whether a terminal is there to consent from, with a browser that follows the consent.
+    pub(crate) terminal: bool,
+    /// The token, or text the error contains.
+    pub(crate) expected_outcome: &'static str,
+    /// The grant type of every token request, in order.
+    pub(crate) expected_grants: &'static [&'static str],
+    /// The refresh token cached afterwards.
+    pub(crate) expected_cached_refresh: Option<&'static str>,
+    /// Whether the error is one a rerun may fix.
+    pub(crate) expected_retryable: bool,
+    /// What asking again gives (the token, or text the error contains), and the token requests made by then.
+    pub(crate) expected_repeated: (&'static str, usize),
+}
+
+/// What the fake Google OAuth server was asked, and how it answers.
+#[derive(Debug, Default)]
+pub(crate) struct FakeGoogle {
+    pub(crate) grants: Vec<String>,
+    /// The last consent's PKCE challenge, which a code exchange's verifier must match.
+    pub(crate) challenge: String,
+    pub(crate) revoked: Vec<String>,
+    pub(crate) issued: u32,
+}
+
+/// What one token request came to.
+pub(crate) struct UserTokenOutcome {
+    /// The token, or the error.
+    pub(crate) outcome: String,
+    pub(crate) retryable: bool,
+    pub(crate) grants: Vec<String>,
+    pub(crate) cached_refresh: Option<String>,
+    /// What asking again gave, and how many token requests had been made by then.
+    pub(crate) repeated: (String, usize),
+}

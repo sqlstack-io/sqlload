@@ -23,6 +23,10 @@ pub struct FakeSheetsState {
     pub refused_tokens: Vec<String>,
     /// Each read: the range asked for, or `*` for every tab.
     pub reads: Vec<String>,
+    /// Refresh tokens the token endpoint refuses as revoked, as Google does with `invalid_grant`.
+    pub revoked_refresh_tokens: Vec<String>,
+    /// The grant type of each token request.
+    pub grants: Vec<String>,
 }
 
 /// Shared fake state.
@@ -39,10 +43,12 @@ impl SharedSheets {
     }
 }
 
-/// A running fake: the spreadsheets root a connection's `base_url` takes, a service-account key exchanging tokens with it, and its state.
+/// A running fake: the spreadsheets root a connection's `base_url` takes, its token endpoint, a service-account key exchanging tokens with it, and its state.
 #[derive(Debug, Clone)]
 pub struct FakeSheets {
     pub base_url: String,
+    /// The token endpoint, as a Google user connection's `token_url` names it.
+    pub token_url: String,
     pub key_json: String,
     pub state: SharedSheets,
 }
