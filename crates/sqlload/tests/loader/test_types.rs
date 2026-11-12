@@ -64,6 +64,21 @@ pub(crate) struct PinnedRunTestCase {
     pub(crate) expected_rows: &'static str,
 }
 
+/// One tenant's load into a table two tenants share.
+pub(crate) struct TenantStepTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run in Postgres before this load.
+    pub(crate) source_change: &'static str,
+    /// The source loaded, one tenant's.
+    pub(crate) select: &'static str,
+    /// The other tenant, whose rows, load id and load time must not change.
+    pub(crate) untouched_tenant: &'static str,
+    /// The cursor line the plan shows for the loaded tenant.
+    pub(crate) expected_cursor: &'static str,
+    /// Every row after the load, as `tenant_id:id:label`.
+    pub(crate) expected_values: &'static str,
+}
+
 /// One project with constant columns planned and loaded once on a fresh Postgres.
 pub(crate) struct ConstantLoadTestCase {
     pub(crate) description: &'static str,

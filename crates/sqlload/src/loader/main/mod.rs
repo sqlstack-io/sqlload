@@ -7,7 +7,6 @@ pub(in crate::loader) mod _load_table;
 pub(in crate::loader) mod _logged_plan;
 pub(in crate::loader) mod _mixed_cursors;
 pub(in crate::loader) mod _plan_files;
-pub(in crate::loader) mod _shared_destinations;
 pub mod apply_project;
 pub mod connect_targets;
 pub mod debug_project;

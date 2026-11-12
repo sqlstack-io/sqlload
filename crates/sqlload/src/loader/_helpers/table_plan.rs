@@ -167,7 +167,12 @@ pub(crate) fn added_constants<'a>(
 ) -> impl Iterator<Item = &'a (String, ColumnType, String)> {
     spec.constants
         .iter()
-        .filter(|(name, _, _)| !read.iter().any(|column| column.name == *name))
+        .filter(|(name, _, _)| !is_read(read, name))
+}
+
+/// Whether the source reads a column `name`.
+fn is_read(read: &[ReadColumn], name: &str) -> bool {
+    read.iter().any(|column| column.name == name)
 }
 
 /// A schema plan that stops the table for `reasons`.

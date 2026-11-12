@@ -1391,6 +1391,19 @@ pub(crate) async fn source_ends(
     Ok(specs)
 }
 
+/// Each of `specs`' destination name and `schema.table`, which selectors may name.
+pub(crate) fn destination_names(specs: &[TableSpec]) -> Vec<(String, String)> {
+    specs
+        .iter()
+        .map(|spec| {
+            (
+                spec.destination.table.clone(),
+                spec.source_table.qualified_name(),
+            )
+        })
+        .collect()
+}
+
 /// A warning for each selector matching no source or table, with the nearest name: `load` would otherwise say only `0 selected`.
 pub(crate) fn unmatched_selectors(
     project: &ProjectConfig,

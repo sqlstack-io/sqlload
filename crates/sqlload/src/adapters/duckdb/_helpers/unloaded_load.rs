@@ -2,7 +2,7 @@
 
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::adapters::contract::models::{DirectLoaded, UnloadedBatch};
-use crate::adapters::duckdb::_helpers::pull_sql::unloaded_insert;
+use crate::adapters::duckdb::_helpers::pull_sql::{UnloadedColumns, unloaded_insert};
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
 use crate::adapters::duckdb::main::_pull_files::pull_files;
 use crate::adapters::duckdb::models::DuckDbWriter;
@@ -34,7 +34,11 @@ impl DuckDbWriter {
             .collect();
         let insert = unloaded_insert(
             target.staging.unwrap_or(target.table),
-            (carried, batch.read, target.constants),
+            UnloadedColumns {
+                columns: carried,
+                read: batch.read,
+                constants: target.constants,
+            },
             &urls,
             (target.load_id, batch.loaded_at),
         );
