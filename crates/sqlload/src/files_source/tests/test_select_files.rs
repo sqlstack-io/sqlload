@@ -16,6 +16,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "without a cursor every file not loaded yet is read",
             loaded: &[("/data/day=2026-11-03/a.parquet", "1-0")],
+            removed: false,
             cursor_type: None,
             bounds: (None, None),
             expected_keys: Ok(&["day=2026-11-04/a.parquet", "day=2026-11-05/a.parquet"]),
@@ -23,6 +24,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "a file loaded before versions were recorded is skipped",
             loaded: &[("/data/day=2026-11-03/a.parquet", "")],
+            removed: false,
             cursor_type: None,
             bounds: (None, None),
             expected_keys: Ok(&["day=2026-11-04/a.parquet", "day=2026-11-05/a.parquet"]),
@@ -30,13 +32,49 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "a loaded file whose version changed is an error",
             loaded: &[("/data/day=2026-11-04/a.parquet", "9-9")],
+            removed: false,
             cursor_type: None,
             bounds: (None, None),
             expected_keys: Err("was rewritten in place"),
         },
         SelectFilesTestCase {
+            description: "a name loaded at several versions is skipped when one is the version listed",
+            loaded: &[
+                ("/data/day=2026-11-04/a.parquet", "1-0"),
+                ("/data/day=2026-11-04/a.parquet", "9-9"),
+            ],
+            removed: false,
+            cursor_type: None,
+            bounds: (None, None),
+            expected_keys: Ok(&["day=2026-11-03/a.parquet", "day=2026-11-05/a.parquet"]),
+        },
+        SelectFilesTestCase {
+            description: "when loaded files leave the folder, a loaded name at another version is a new file",
+            loaded: &[("/data/day=2026-11-04/a.parquet", "9-9")],
+            removed: true,
+            cursor_type: None,
+            bounds: (None, None),
+            expected_keys: Ok(&[
+                "day=2026-11-03/a.parquet",
+                "day=2026-11-04/a.parquet",
+                "day=2026-11-05/a.parquet",
+            ]),
+        },
+        SelectFilesTestCase {
+            description: "when loaded files leave the folder, one still at a loaded version is skipped",
+            loaded: &[
+                ("/data/day=2026-11-04/a.parquet", "9-9"),
+                ("/data/day=2026-11-04/a.parquet", "1-0"),
+            ],
+            removed: true,
+            cursor_type: None,
+            bounds: (None, None),
+            expected_keys: Ok(&["day=2026-11-03/a.parquet", "day=2026-11-05/a.parquet"]),
+        },
+        SelectFilesTestCase {
             description: "a date cursor reads from <= value < to",
             loaded: &[],
+            removed: false,
             cursor_type: Some(ColumnType::Date),
             bounds: (Some("2026-11-04"), Some("2026-11-05")),
             expected_keys: Ok(&["day=2026-11-04/a.parquet"]),
@@ -44,6 +82,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "a text cursor compares as text",
             loaded: &[],
+            removed: false,
             cursor_type: Some(ColumnType::Text),
             bounds: (Some("2026-11-05"), None),
             expected_keys: Ok(&["day=2026-11-05/a.parquet"]),
@@ -51,6 +90,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "an int cursor needs integer values",
             loaded: &[],
+            removed: false,
             cursor_type: Some(ColumnType::Int),
             bounds: (Some("3"), None),
             expected_keys: Err("is not an integer"),
@@ -58,6 +98,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "a timestamp partition cannot be a cursor",
             loaded: &[],
+            removed: false,
             cursor_type: Some(ColumnType::TimestampTz),
             bounds: (Some("2026-11-04 00:00:00+00"), None),
             expected_keys: Err("must be an int, date or text"),
@@ -90,6 +131,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
             files: &files,
             location: "/data/",
             loaded: &loaded,
+            removed: test_case.removed,
             cursor: test_case
                 .cursor_type
                 .as_ref()

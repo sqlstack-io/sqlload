@@ -159,6 +159,8 @@ pub struct FileSelection<'a> {
     pub location: &'a str,
     /// Source files already in the destination, with their versions (empty when unknown).
     pub loaded: &'a [LoadedFile],
+    /// Whether loaded files leave the folder once they load (`after_load`), so a loaded name at another version is a new file, not one rewritten in place.
+    pub removed: bool,
     /// The partition column the cursor is on, and its type.
     pub cursor: Option<(&'a str, &'a ColumnType)>,
     pub from: Option<&'a str>,
@@ -201,6 +203,16 @@ impl std::fmt::Display for SourceFormat {
             Self::Xml => "xml",
         })
     }
+}
+
+/// What a files source does with each file once its rows commit: keep it (the default), delete it, or move it to another folder of the connection, keeping its key below `path`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum AfterLoad {
+    #[default]
+    Keep,
+    Delete,
+    MoveTo(String),
 }
 
 /// How the files of a text format are compressed; Parquet compresses inside the file.

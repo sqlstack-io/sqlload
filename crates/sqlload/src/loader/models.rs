@@ -14,7 +14,7 @@ use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{
-    FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile, TextChecks,
+    AfterLoad, FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile, TextChecks,
 };
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
@@ -99,6 +99,8 @@ pub struct TableSpec {
     pub allow_empty: bool,
     /// Whether the table's position is kept in the run log (`state = "logged"`).
     pub logged: bool,
+    /// What a files source does with each file once its rows commit.
+    pub after_load: AfterLoad,
     /// Approved for loading as soon as it appears: named exactly in `include`, or declared (files and Python tables); a `[sources.*.tables]` entry alone never approves.
     pub approved: bool,
     pub new_tables: NewTables,
