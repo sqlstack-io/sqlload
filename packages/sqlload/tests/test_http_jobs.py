@@ -118,7 +118,10 @@ class Api(BaseHTTPRequestHandler):
 		if client != ["app", CLIENT_SECRET] or form.get("grant_type") == "refresh_token" and form.get("refresh_token") != server.refresh_token:  # type: ignore[attr-defined]
 			return self.reply(401, {"error": "invalid_client", "error_description": f"unknown client {client} or refresh token"})
 		if form.get("grant_type") == "password" and (form.get("username"), form.get("password")) != ("loader", PASSWORD):
-			return self.reply(400, {"error": "invalid_grant", "error_description": f"wrong password {form.get('password')} for {form.get('username')}"})
+			return self.reply(400, {"message": f"wrong password {form.get('password')} for {form.get('username')}"})
+		if form.get("grant_type") == "refresh_token" and oauth.get("refresh_503_once"):
+			oauth["refresh_503_once"] = False
+			return self.reply(503, {"error": "temporarily_unavailable"}, {"Retry-After": "0"})
 		access = f"access-{len(server.token_requests)}"  # type: ignore[attr-defined]
 		server.tokens[access] = {"issued": time.monotonic(), "uses": 0}  # type: ignore[attr-defined]
 		body: dict[str, Any] = {"access_token": access, "token_type": "Bearer"}
@@ -657,14 +660,26 @@ def test_given_a_password_grant_without_a_refresh_token_or_with_a_refused_one_wh
 	assert all(request["client"] == ["app", CLIENT_SECRET] for request in api.token_requests)  # type: ignore[attr-defined]
 
 
+def test_given_a_token_endpoint_down_once_when_refreshing_after_a_password_grant_then_the_refresh_is_retried_without_the_password(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	api.oauth = {"uses": 3, "rotate": True, "refresh_503_once": True}  # type: ignore[attr-defined]
+	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL)", "paginate('/offset', paginator=sl.offset(limit=1))")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT order_id, status FROM "RAW".shop__t ORDER BY order_id') == ALL_ORDERS
+	expected = [("password", None), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-4")]
+	assert [(request["grant_type"], request.get("refresh_token")) for request in api.token_requests] == expected  # type: ignore[attr-defined]
+
+
 def test_given_a_wrong_password_when_loading_with_json_then_it_fails_for_good_and_hides_the_password(tmp_path: Path, api: ThreadingHTTPServer) -> None:
 	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL)", "paginate('/offset', paginator=sl.offset(limit=10))")
-	(project / "sqlload.toml").write_text((project / "sqlload.toml").read_text().replace("${ENV:SHOP_PASSWORD}", "wr0ng+pass"))
+	(project / "sqlload.toml").write_text((project / "sqlload.toml").read_text().replace("${ENV:SHOP_PASSWORD}", "wr0ng+p\u00e4ss/word"))
 	done = sqlload(project, "load", "--json")
 	assert done.returncode == 1, done.stdout + done.stderr
 	result = json.loads(done.stdout)
 	assert (result["ok"], result["retryable"], result["tables"][0]["retryable"]) == (False, False, False)
-	assert "HTTP 400: invalid_grant: wrong password *** for loader" in done.stdout, done.stdout
+	assert 'HTTP 400: {"message":"wrong password *** for loader"}' in result["tables"][0]["error"]
 	assert "wr0ng" not in done.stdout + done.stderr
 	assert len(api.token_requests) == 1 and api.log == []  # type: ignore[attr-defined]
 

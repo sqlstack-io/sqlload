@@ -298,7 +298,7 @@ example.
   auth, the method RFC 6749 requires servers to support. As the RFC asks, both are form-encoded
   first, so a secret with characters such as `+` or `/` reaches the server encoded. Use `"post"`
   for a server that rejects that, or that wants them as form fields.
-- The client secret and refresh token go only to `token_url`, which must be `https` (`http` only on
+- The client secret, refresh token and password go only to `token_url`, which must be `https` (`http` only on
   `localhost`). Access tokens go only to the connection's own origin, like every other credential.
 - Token errors name the token URL, the status and the server's `error` and `error_description`.
   The client secret, refresh token and every access token are shown as `***`.
