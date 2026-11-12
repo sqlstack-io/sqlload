@@ -7,7 +7,7 @@ From sqlload 0.27.0, an `odbc` source loads tables, views and query
 results from any database that has an ODBC driver. SQLLoad reads the rows as Arrow through the
 driver and loads them into the source's target.
 
-From 0.38.0 (not released yet), the `sqlload` and `sqlload-cli` wheels include ODBC on every
+From 0.39.0 (not released yet), the `sqlload` and `sqlload-cli` wheels include ODBC on every
 platform. Before that, and in a build from source (`cargo install`, or pip building an sdist where
 no wheel fits), ODBC is built only with the `odbc` feature (`cargo install sqlload --features odbc`);
 without it, `plan` refuses an `odbc` source.
@@ -76,7 +76,7 @@ SQLLoad runs on; SQLLoad reaches it through a driver manager:
 
 - **Windows:** the driver manager built into Windows; register drivers and DSNs as usual (ODBC Data
   Sources).
-- **Linux and macOS wheels** (from 0.38.0, not released yet): the unixODBC 2.3.14 driver manager,
+- **Linux and macOS wheels** (from 0.39.0, not released yet): the unixODBC 2.3.14 driver manager,
   bundled as a separate shared library, so no system unixODBC is needed. It reads drivers and
   system DSNs from `odbcinst.ini` and `odbc.ini` in `/etc` on Linux, where distribution driver
   packages register, and in Homebrew's `etc` on macOS (`/opt/homebrew/etc` on Apple silicon,
@@ -103,7 +103,7 @@ as names is refused when the source is read; switch it to ANSI quoting. For MySQ
 | OpenEdge (Progress) | Tested for timestamp handling (parsing `{ts}` values and binding timestamp bounds), not against a live server. |
 | Others | Not yet. A driver needs to describe prepared statements and list tables; run `sqlload plan` to see the types it reports. |
 
-From 0.38.0 (not released yet), a cursor filter compares the cursor column with bound parameters,
+From 0.39.0 (not released yet), a cursor filter compares the cursor column with bound parameters,
 such as `"updated_at" > ?`, each passed as the cursor's own type: a timestamp without a time zone as
 an ODBC `TIMESTAMP`, with every fractional digit; a date as a `DATE`; text as text. No database's
 literal rules can change a bound, and a millisecond maximum such as `23:59:59.997` resumes exactly.
@@ -119,7 +119,7 @@ For a timestamp or date cursor, `--start-cursor`, `--end-cursor` and `cursor_sta
 escape values, such as
 `{ts '2026-01-31 23:59:59.997'}` or `{d '2026-01-31'}`.
 
-From 0.38.0 (not released yet), a timestamp column is read in at least microseconds whatever precision
+From 0.39.0 (not released yet), a timestamp column is read in at least microseconds whatever precision
 the driver describes: MySQL Connector/ODBC describes every `DATETIME(n)` with none, and its fractional
 seconds were dropped before.
 

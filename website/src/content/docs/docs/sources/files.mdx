@@ -38,7 +38,7 @@ cursor_column = "dt"
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
 | `path_columns` | From 0.26.0. A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
 | `unmatched_paths` | From 0.26.0. What a file whose path doesn't match `path_columns` does: `fail` (default) fails `plan` and names it, `skip` leaves it out. |
-| `constant_columns` | From 0.26.0. Columns with the same value in every row, such as `{ region = "eu", as_of = 2026-11-08 }`. From 0.37.0 (not released yet), a [table setting](/docs/configuration/#table-settings), so the source's table entry can set its own. See [Columns from paths](#columns-from-paths). |
+| `constant_columns` | From 0.26.0. Columns with the same value in every row, such as `{ region = "eu", as_of = 2026-11-08 }`. From 0.37.0, a [table setting](/docs/configuration/#table-settings), so the source's table entry can set its own. See [Columns from paths](#columns-from-paths). |
 | `copy_to_internal_stage` | Snowflake only: upload files no external stage covers to the user stage. See [Load methods](/docs/targets/snowflake/#files-into-snowflake). |
 
 ## CSV encodings
@@ -144,7 +144,7 @@ or an archive naming two members alike, fails.
 | `append` | Only files not loaded yet, by `_sqlload_source_file`. A file rewritten in place since it loaded fails the table, with the fix. |
 | `delete_insert` with a partition `cursor_column` (from `partition_columns` or `path_columns`) | The newest loaded partition and everything after it, replacing those partitions whole. |
 | `replace` | Every file, swapped in as a new table. |
-| `merge` with a `unique_key` (from 0.38.0, not released yet) | Only files not merged yet, one at a time, oldest modified first. |
+| `merge` with a `unique_key` (from 0.38.0) | Only files not merged yet, one at a time, oldest modified first. |
 
 ```console
 $ sqlload load
@@ -162,7 +162,7 @@ across commits.
 
 ### Merging files
 
-From 0.38.0 (not released yet), `merge` upserts each new file on its `unique_key`. A load merges
+From 0.38.0, `merge` upserts each new file on its `unique_key`. A load merges
 its files in order of their modified time, then path, one commit each, so a key that several of them
 carry ends with the value from the file modified last. A file that turns up after others merged, even
 with an older modified time, merges after them. Each commit also records that file and its version in
@@ -251,7 +251,7 @@ fails `plan`.
 integer as `int`, a float as `float` and `true` or `false` as `bool`. An unquoted TOML date
 (`2026-11-08`) loads as `date`, and a date and time as `timestamp_tz` with an offset or
 `timestamp_ntz` without. For any other type, write `{ value = "12.50", type = "decimal(10,2)" }`.
-From 0.37.0 (not released yet), `constant_columns` is a [table setting](/docs/configuration/#table-settings)
+From 0.37.0, `constant_columns` is a [table setting](/docs/configuration/#table-settings)
 that every source takes: set on `[sources.NAME.tables.NAME]`, its map replaces the source's.
 
 Captured and typed values load the same in every destination: a boolean as `true` or `false`, an

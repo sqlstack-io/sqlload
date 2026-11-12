@@ -10,7 +10,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Postgres | Tables, by `include` patterns | Binary `COPY` into Arrow, over TLS when the connection's `sslmode` asks |
 | Postgres changes (`postgres_cdc`) | Inserts, updates and deletes of tables, by `include` patterns | A snapshot, then a logical replication slot (`pgoutput`), in whole transactions. See [Postgres changes](/docs/sources/postgres-cdc/). |
 | Snowflake (from 0.26.0) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad, or (from 0.27.0) by DuckDB itself from an S3 stage. See [Snowflake](/docs/sources/snowflake/). |
-| Databases with an ODBC driver (from 0.27.0) | Tables and views, by `include` patterns, and query results | The driver, as Arrow; in the published wheels from 0.38.0 (not released yet), before that in builds with the `odbc` feature. See [ODBC](/docs/sources/odbc/). |
+| Databases with an ODBC driver (from 0.27.0) | Tables and views, by `include` patterns, and query results | The driver, as Arrow; in the published wheels from 0.39.0 (not released yet), before that in builds with the `odbc` feature. See [ODBC](/docs/sources/odbc/). |
 | BigQuery (from 0.30.0) | Tables and views, by `include` patterns, and query results | The Storage Read API, as Arrow in parallel streams; views and queries through a query job. See [BigQuery](/docs/sources/bigquery/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON; gzip or zstd for text formats | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
