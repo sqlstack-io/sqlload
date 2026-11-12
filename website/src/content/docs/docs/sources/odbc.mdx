@@ -7,9 +7,9 @@ From sqlload 0.27.0, an `odbc` source loads tables, views and query
 results from any database that has an ODBC driver. SQLLoad reads the rows as Arrow through the
 driver and loads them into the source's target.
 
-ODBC support is built only with the `odbc` feature. The released packages don't include it yet;
-build SQLLoad with `cargo install sqlload --features odbc`. Without it, `plan` refuses an `odbc`
-source.
+From 0.37.0 (not released yet), the `sqlload` and `sqlload-cli` wheels include ODBC on every
+platform. Before that, and in a `cargo install` without it, ODBC is built only with the `odbc`
+feature (`cargo install sqlload --features odbc`); without it, `plan` refuses an `odbc` source.
 
 ```toml
 [connections.erp]
@@ -70,10 +70,19 @@ Loads (2)                                           sqlload load
 | `dsn` | A data source name from `odbc.ini`, instead of `connection_string`. It and `user` can't contain `;`, `{` or `}`. |
 | `user`, `password` | With `dsn`, when the DSN doesn't hold them. |
 
-Set `connection_string` or `dsn`, not both. SQLLoad uses unixODBC on Linux and macOS, and the
-driver manager built into Windows. The driver and the driver manager must be installed on the
-machine SQLLoad runs on; on Debian and Ubuntu, `unixodbc-dev` (which `cargo install` links
-against) plus the driver's package, such as `odbc-postgresql`.
+Set `connection_string` or `dsn`, not both. Install the database's ODBC driver on the machine
+SQLLoad runs on; SQLLoad reaches it through a driver manager:
+
+- **Windows:** the driver manager built into Windows; register drivers and DSNs as usual (ODBC Data
+  Sources).
+- **Linux and macOS wheels** (from 0.37.0, not released yet): the unixODBC 2.3.14 driver manager,
+  bundled as a separate shared library, so no system unixODBC is needed. It reads drivers and
+  system DSNs from `odbcinst.ini` and `odbc.ini` in `/etc` on Linux, where distribution driver
+  packages register, and in Homebrew's `etc` on macOS (`/opt/homebrew/etc` on Apple silicon,
+  `/usr/local/etc` on Intel), or in the folder `ODBCSYSINI` names; user DSNs from `~/.odbc.ini`.
+  unixODBC is LGPL-2.1; its notice and licence are in each wheel's `.dist-info/licenses`.
+- **`cargo install --features odbc`:** the system's unixODBC, which it links against: `unixodbc-dev`
+  on Debian and Ubuntu, `unixodbc` with Homebrew.
 
 ## Drivers
 
@@ -89,7 +98,7 @@ as names is refused when the source is read; switch it to ANSI quoting. For MySQ
 | OpenEdge (Progress) | Tested for timestamp handling (parsing `{ts}` values and binding timestamp bounds), not against a live server. |
 | Others | Not yet. A driver needs to describe prepared statements and list tables; run `sqlload plan` to see the types it reports. |
 
-From 0.35.0 (not released yet), a cursor filter compares the cursor column with bound parameters,
+From 0.37.0 (not released yet), a cursor filter compares the cursor column with bound parameters,
 such as `"updated_at" > ?`, each passed as the cursor's own type: a timestamp without a time zone as
 an ODBC `TIMESTAMP`, with every fractional digit; a date as a `DATE`; text as text. No database's
 literal rules can change a bound, and a millisecond maximum such as `23:59:59.997` resumes exactly.
@@ -105,7 +114,7 @@ For a timestamp or date cursor, `--start-cursor`, `--end-cursor` and `cursor_sta
 escape values, such as
 `{ts '2026-01-31 23:59:59.997'}` or `{d '2026-01-31'}`.
 
-From 0.35.0 (not released yet), a timestamp column is read in at least microseconds whatever precision
+From 0.37.0 (not released yet), a timestamp column is read in at least microseconds whatever precision
 the driver describes: MySQL Connector/ODBC describes every `DATETIME(n)` with none, and its fractional
 seconds were dropped before.
 

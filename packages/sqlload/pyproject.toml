@@ -9,7 +9,7 @@ description = "SQL data loading tooling."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "licenses/*"]
 classifiers = [
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
@@ -38,8 +38,10 @@ Repository = "https://github.com/sqlstack-io/sqlload"
 manifest-path = "../../crates/sqlload-python/Cargo.toml"
 module-name = "sqlload._native"
 python-source = "python"
-# Kafka TLS with OpenSSL built in, as in sqlload-cli; SASL PLAIN and SCRAM need nothing else.
-features = ["ssl-vendored"]
+# Kafka TLS with OpenSSL built in, as in sqlload-cli; SASL PLAIN and SCRAM need nothing else. ODBC
+# sources through the system's driver manager: unixODBC, which the Linux and macOS wheels bundle
+# (licenses/), or Windows's odbc32.dll.
+features = ["ssl-vendored", "odbc"]
 
 [tool.uv]
 cache-keys = [

@@ -9,6 +9,7 @@ description = "Native executable for sqlload."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+license-files = ["licenses/*"]
 classifiers = [
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
@@ -24,8 +25,10 @@ Repository = "https://github.com/sqlstack-io/sqlload"
 [tool.maturin]
 bindings = "bin"
 manifest-path = "../../crates/sqlload/Cargo.toml"
-# Kafka TLS with OpenSSL built in; SASL PLAIN and SCRAM need nothing else. GSSAPI is left out.
-features = ["ssl-vendored"]
+# Kafka TLS with OpenSSL built in; SASL PLAIN and SCRAM need nothing else. GSSAPI is left out. ODBC
+# sources through the system's driver manager: unixODBC, which the Linux and macOS wheels bundle
+# (licenses/), or Windows's odbc32.dll.
+features = ["ssl-vendored", "odbc"]
 
 [tool.uv]
 cache-keys = [
