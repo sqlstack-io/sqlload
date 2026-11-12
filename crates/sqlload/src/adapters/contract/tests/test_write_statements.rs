@@ -1,4 +1,4 @@
-use crate::adapters::contract::models::{WriteMode, WriteStatementsRequest};
+use crate::adapters::contract::models::{MergeDedupe, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::tests::helpers::{accounts, columns};
 use crate::adapters::contract::tests::test_types::WriteStatementsTestCase;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
@@ -33,6 +33,66 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             },
             expected_statements: &[
                 "MERGE INTO \"RAW\".\"APP__ACCOUNTS\" AS __target USING (SELECT \"ID\" AS \"ID\", PARSE_JSON(\"PROFILE\") AS \"PROFILE\", \"UPDATED_AT\" AS \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\" AS \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" AS \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\") AS __source ON __target.\"ID\" = __source.\"ID\" WHEN MATCHED THEN UPDATE SET \"PROFILE\" = __source.\"PROFILE\", \"UPDATED_AT\" = __source.\"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\" = __source.\"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" = __source.\"_SQLLOAD_LOADED_AT\" WHEN NOT MATCHED THEN INSERT (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") VALUES (__source.\"ID\", __source.\"PROFILE\", __source.\"UPDATED_AT\", __source.\"_SQLLOAD_LOAD_ID\", __source.\"_SQLLOAD_LOADED_AT\")",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "merge with dedupe keeps one staged row per non-NULL key, ranked on the converted values: the highest dedup_sort value, NULLs last, then the later row",
+            warehouse: Warehouse::Snowflake,
+            mode: WriteMode::Merge {
+                unique_key: vec!["id".to_owned()],
+                dedupe: Some(MergeDedupe {
+                    ordinal: "_sqlload_row".to_owned(),
+                    sort: Some(("updated_at".to_owned(), true)),
+                }),
+            },
+            expected_statements: &[
+                "MERGE INTO \"RAW\".\"APP__ACCOUNTS\" AS __target USING (SELECT \"ID\" AS \"ID\", \"PROFILE\" AS \"PROFILE\", \"UPDATED_AT\" AS \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\" AS \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" AS \"_SQLLOAD_LOADED_AT\" FROM (SELECT \"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" FROM (SELECT \"ID\" AS \"ID\", PARSE_JSON(\"PROFILE\") AS \"PROFILE\", \"UPDATED_AT\" AS \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\" AS \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" AS \"_SQLLOAD_LOADED_AT\", ROW_NUMBER() OVER (PARTITION BY \"ID\" ORDER BY \"UPDATED_AT\" DESC NULLS LAST, \"_SQLLOAD_ROW\" DESC) AS __sqlload_rank FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\") AS __sqlload_ranked WHERE __sqlload_rank = 1 OR \"ID\" IS NULL) AS __sqlload_kept) AS __source ON __target.\"ID\" = __source.\"ID\" WHEN MATCHED THEN UPDATE SET \"PROFILE\" = __source.\"PROFILE\", \"UPDATED_AT\" = __source.\"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\" = __source.\"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" = __source.\"_SQLLOAD_LOADED_AT\" WHEN NOT MATCHED THEN INSERT (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") VALUES (__source.\"ID\", __source.\"PROFILE\", __source.\"UPDATED_AT\", __source.\"_SQLLOAD_LOAD_ID\", __source.\"_SQLLOAD_LOADED_AT\")",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "merge with dedupe and no dedup_sort on BigQuery keeps the last staged row per key",
+            warehouse: Warehouse::BigQuery,
+            mode: WriteMode::Merge {
+                unique_key: vec!["id".to_owned()],
+                dedupe: Some(MergeDedupe {
+                    ordinal: "_sqlload_row".to_owned(),
+                    sort: None,
+                }),
+            },
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, `profile` AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM (SELECT `id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM (SELECT `id` AS `id`, PARSE_JSON(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at`, ROW_NUMBER() OVER (PARTITION BY `id` ORDER BY `_sqlload_row` DESC) AS __sqlload_rank FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __sqlload_ranked WHERE __sqlload_rank = 1 OR `id` IS NULL) AS __sqlload_kept) AS __source ON __target.`id` = __source.`id` WHEN MATCHED THEN UPDATE SET `profile` = __source.`profile`, `updated_at` = __source.`updated_at`, `_sqlload_load_id` = __source.`_sqlload_load_id`, `_sqlload_loaded_at` = __source.`_sqlload_loaded_at` WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`)",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "merge with dedupe on Databricks keeps the lowest dedup_sort value per key",
+            warehouse: Warehouse::Databricks,
+            mode: WriteMode::Merge {
+                unique_key: vec!["id".to_owned()],
+                dedupe: Some(MergeDedupe {
+                    ordinal: "_sqlload_source_row".to_owned(),
+                    sort: Some(("updated_at".to_owned(), false)),
+                }),
+            },
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, `profile` AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM (SELECT `id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at`, ROW_NUMBER() OVER (PARTITION BY `id` ORDER BY `updated_at` ASC NULLS LAST, `_sqlload_source_row` DESC) AS __sqlload_rank FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __sqlload_ranked WHERE __sqlload_rank = 1 OR `id` IS NULL) AS __sqlload_kept) AS __source ON __target.`id` = __source.`id` WHEN MATCHED THEN UPDATE SET `profile` = __source.`profile`, `updated_at` = __source.`updated_at`, `_sqlload_load_id` = __source.`_sqlload_load_id`, `_sqlload_loaded_at` = __source.`_sqlload_loaded_at` WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`)",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "merge with dedupe on ClickHouse fills the delta with one row per key, so the delta replaces each key once",
+            warehouse: Warehouse::ClickHouse,
+            mode: WriteMode::Merge {
+                unique_key: vec!["id".to_owned()],
+                dedupe: Some(MergeDedupe {
+                    ordinal: "_sqlload_row".to_owned(),
+                    sort: None,
+                }),
+            },
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
+                "CREATE TABLE `raw`.`app__accounts__sqlload_staging_load1_swap` AS `raw`.`app__accounts`",
+                "-- sqlload publish {\"SortedInsert\":{\"database\":\"raw\",\"table\":\"app__accounts__sqlload_staging_load1_swap\",\"columns\":[\"id\",\"profile\",\"updated_at\",\"_sqlload_load_id\",\"_sqlload_loaded_at\"],\"insert\":\"INSERT INTO `raw`.`app__accounts__sqlload_staging_load1_swap` (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT `id` AS `id`, `profile` AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM (SELECT `id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at` FROM (SELECT `id` AS `id`, CAST(`profile` AS Nullable(String)) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at`, ROW_NUMBER() OVER (PARTITION BY `id` ORDER BY `_sqlload_row` DESC) AS __sqlload_rank FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __sqlload_ranked WHERE __sqlload_rank = 1 OR `id` IS NULL) AS __sqlload_kept\"}}",
+                "-- sqlload publish {\"Partitions\":{\"target\":\"`raw`.`app__accounts`\",\"delta\":\"`raw`.`app__accounts__sqlload_staging_load1_swap`\",\"copy\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy`\",\"aside\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy_aside`\",\"displaced\":\"(`id`) IN (SELECT `id` FROM `raw`.`app__accounts__sqlload_staging_load1_swap`)\"}}",
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
             ],
         },
         WriteStatementsTestCase {
