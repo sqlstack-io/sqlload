@@ -108,3 +108,28 @@ pub const CONCURRENT_UPLOADS: usize = 4;
 
 /// The warehouse's name in messages.
 pub const SNOWFLAKE: &str = "Snowflake";
+
+/// The `ENCODING` a direct `COPY` reads CSV with, for each charset SQLLoad's reader decodes the same way, by its Encoding Standard name; other charsets are refused for the direct route.
+pub const SNOWFLAKE_ENCODINGS: [(&str, &str); 15] = [
+    ("windows-1250", "WINDOWS1250"),
+    ("windows-1251", "WINDOWS1251"),
+    ("windows-1252", "WINDOWS1252"),
+    ("windows-1253", "WINDOWS1253"),
+    ("windows-1254", "WINDOWS1254"),
+    ("windows-1255", "WINDOWS1255"),
+    ("windows-1256", "WINDOWS1256"),
+    ("ISO-8859-2", "ISO88592"),
+    ("ISO-8859-5", "ISO88595"),
+    ("ISO-8859-6", "ISO88596"),
+    ("ISO-8859-7", "ISO88597"),
+    ("ISO-8859-15", "ISO885915"),
+    ("KOI8-R", "KOI8R"),
+    ("UTF-16LE", "UTF16LE"),
+    ("UTF-16BE", "UTF16BE"),
+];
+
+/// Snowflake's name for UTF-8, the `ENCODING` a direct `COPY` of CSV leaves unsaid.
+pub const UTF8_ENCODING: &str = "UTF8";
+
+/// Snowflake's name for ISO-8859-1, which `latin-1` reads byte for byte.
+pub const LATIN1_ENCODING: &str = "ISO88591";

@@ -1,6 +1,7 @@
 use csv_core::ReadRecordResult;
 
 use crate::files_source::_helpers::text::bytes_reader::too_long;
+use crate::files_source::constants::ENCODING_HINT;
 
 /// Where a [`QuoteTracker`] is within a record, as csv-core reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,8 +157,9 @@ impl FirstRecord {
         let mut start = 0;
         let mut fields: Vec<String> = Vec::new();
         for end in &self.ends[..self.ended] {
-            let field = std::str::from_utf8(&self.output[start..*end])
-                .map_err(|_| "line 1: the first record is not UTF-8".to_owned())?;
+            let field = std::str::from_utf8(&self.output[start..*end]).map_err(|_| {
+                format!("line 1: the first record is not valid UTF-8; {ENCODING_HINT}")
+            })?;
             fields.push(field.to_owned());
             start = *end;
         }

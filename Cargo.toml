@@ -35,6 +35,7 @@ bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false }
 duckdb = { version = "1.20000", features = ["bundled", "appender-arrow", "parquet"] }
+encoding_rs = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 csv-core = "0.1"
 flate2 = "1"
