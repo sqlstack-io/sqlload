@@ -470,6 +470,23 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 expected_result: "1:b|2",
             },
             FilesMergeTestCase {
+                description: "a file repeating a key no row has yet fails before it merges, naming the key",
+                settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[MergeFile {
+                        key: "a.csv",
+                        contents: "id,v\n5,a\n5,b\n6,c\n",
+                        modified_secs: 1_000,
+                    }],
+                    loads: true,
+                    expected_error: "drop/a.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (5)",
+                    expected_plan: "",
+                }],
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",
+                expected_result: "0",
+            },
+            FilesMergeTestCase {
                 description: "a failure in the second file keeps the first committed, names the file, and a rerun merges from it without merging the first again; a run with nothing new merges nothing",
                 settings: MERGE_SETTINGS,
                 steps: &[
@@ -492,7 +509,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                                 modified_secs: 3_000,
                             },
                         ],
-                        expected_error: "drop/b.csv: ",
+                        expected_error: "drop/b.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)",
                         loads: true,
                         expected_plan: "",
                     },

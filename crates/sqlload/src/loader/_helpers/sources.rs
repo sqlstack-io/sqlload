@@ -993,7 +993,7 @@ async fn merge_ledger(
     }
     if let Some(cursor) = &spec.cursor {
         return Ok(Err(format!(
-            "cursor_column {} does not apply to a files source's merge, which picks the files it has not merged from the run log, whatever their partition; remove it",
+            "cursor_column {} does not apply to a files source's merge, which picks the files it has not merged from the run log, whatever their partition; remove it and set write_strategy = \"merge\", or keep it and use delete_insert",
             cursor.column
         )));
     }

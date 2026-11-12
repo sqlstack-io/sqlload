@@ -181,13 +181,14 @@ write_strategy = "merge"
 unique_key = ["sku"]
 ```
 
-- A merged file rewritten in place, even back to an earlier version, is merged again, as the newest
-  file.
+- A merged file whose version changed, even back to one merged before, is merged again, as the
+  newest file.
 - Stores that keep modified times to the second, as SFTP does, and the members of one ZIP archive,
   which share the archive's time, fall back to path order for files from the same second.
-- A key repeated within one file follows the target's merge: Postgres fails the file, as does
-  DuckDB for a key already in the table, while DuckDB inserts a new key once per row.
-- Merging files loads into DuckDB and Postgres targets so far. `--reload`, `state = "logged"` and a
+- A file that holds one `unique_key` value in more than one row fails, naming the key's columns
+  and examples, before anything of it merges. Rows with an empty key are not compared.
+- Merging files loads into DuckDB and Postgres targets so far, and MotherDuck through its DuckDB
+  connection, which isn't tested live. `--reload`, `state = "logged"` and a
   `cursor_column` are refused: the run log, not a cursor, picks the files. To merge every file again, drop the table: a table created anew starts a new record.
 
 ## Columns

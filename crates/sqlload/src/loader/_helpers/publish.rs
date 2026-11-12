@@ -88,6 +88,7 @@ use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
 use crate::project::models::WriteStrategy;
+use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
 use crate::publish_checks::models::CheckedCommit;
 use crate::run_log::main::insert_run::insert_run;
@@ -646,6 +647,7 @@ impl Publisher {
         let mode = commit_mode(&self.table.mode, self.waiting_range.take());
         let warehouse = spec.warehouse;
         let runs = runs_table(&spec.destination);
+        let merging_file = self.merged_file.is_some();
         let merged = self.merged_file.take().map(|file| {
             merged_record(
                 spec,
@@ -675,6 +677,18 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
+        if merging_file && let WriteMode::Merge { unique_key } = &mode {
+            let commit = CheckedCommit {
+                destination: &self.destination,
+                warehouse,
+                staging: &staging,
+                table: &spec.destination,
+                exists: self.table.exists,
+                columns: &self.table.schema.write_columns,
+                committed: self.committed_rows,
+            };
+            refuse_repeated_keys(&commit, unique_key).await?;
+        }
         if let Some(checks) = &spec.checks {
             let commit = CheckedCommit {
                 destination: &self.destination,
