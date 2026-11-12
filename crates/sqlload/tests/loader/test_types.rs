@@ -51,6 +51,19 @@ pub(crate) struct LoadRunTestCase {
     pub(crate) expected_result: &'static str,
 }
 
+/// One `plan` + `apply` + `load` whose plan text, table shape and rows are pinned exactly.
+pub(crate) struct PinnedRunTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run in Postgres before this load.
+    pub(crate) source_change: &'static str,
+    /// The rendered plan, line by line.
+    pub(crate) expected_plan: &'static str,
+    /// `DESCRIBE` of the loaded table: each column's name, type and nullability.
+    pub(crate) expected_describe: &'static str,
+    /// Every row, as DuckDB prints it, without the load's own id and time.
+    pub(crate) expected_rows: &'static str,
+}
+
 /// One `plan` + `apply` + `load` within a scenario.
 pub(crate) struct ScenarioRun {
     /// SQL run in Postgres first.

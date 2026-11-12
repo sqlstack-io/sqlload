@@ -9,7 +9,7 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
 use crate::helpers::{described_project, duckdb_project, load_all, run_async};
-use crate::test_types::LoadRunTestCase;
+use crate::test_types::{LoadRunTestCase, PinnedRunTestCase};
 
 const SETUP: &str = "
 CREATE TABLE public.accounts (id int8 PRIMARY KEY, name text, email text, balance numeric(12,2), updated_at timestamptz NOT NULL);
@@ -128,6 +128,137 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
                 "{}",
                 test_case.description
             );
+        }
+        Ok(())
+    })
+}
+
+const PINNED_SETUP: &str = "
+CREATE TABLE public.orders (id int8 PRIMARY KEY, label text, amount numeric(10,2), placed date, updated_at timestamptz NOT NULL);
+INSERT INTO public.orders VALUES
+  (1, 'first', 1.50, '2026-11-01', '2026-11-01 10:00:00+00'),
+  (2, 'second', 2.25, '2026-11-02', '2026-11-02 10:00:00+00');
+";
+
+const PINNED_TABLES: &str = r#"include = ["public.orders"]
+[sources.app.tables."public.orders"]
+write_strategy = "merge"
+cursor_column = "updated_at"
+"#;
+
+const PINNED_DESCRIBE_QUERY: &str = "SELECT string_agg(column_name || ' ' || column_type || ' ' || \"null\", '|') FROM (DESCRIBE raw.app__orders)";
+
+const PINNED_ROWS_QUERY: &str = "SELECT string_agg(CAST(o AS VARCHAR), '|' ORDER BY o.id) FROM (SELECT * EXCLUDE (_sqlload_load_id, _sqlload_loaded_at) FROM raw.app__orders) AS o";
+
+const PINNED_METADATA_QUERY: &str = "SELECT CAST(count(*) FILTER (WHERE _sqlload_load_id IS NULL OR _sqlload_loaded_at IS NULL) AS VARCHAR) FROM raw.app__orders";
+
+const PINNED_FIRST_PLAN: &str = "Plan ready  1 selected, 1 object to create, 1 to load
+
+Objects (1)                                         sqlload apply
+└── raw.app__orders                                 create table
+    ├── id         int             -> BIGINT
+    ├── label      text            -> VARCHAR
+    ├── amount     decimal(10,2)   -> DECIMAL(10,2)
+    ├── placed     date            -> DATE
+    ├── updated_at timestamp_tz    -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
+    └── + _sqlload_load_id, _loaded_at
+
+Loads (1)                                           sqlload load
+└── app__orders                                     merge (unique_key: id)
+    ├── source  postgres  app  public.orders
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   one commit for the whole read (committing part of an unordered cursor read could skip rows)
+    └── cursor  updated_at first run, everything
+
+✓ Plan complete  1 selected, 1 object to create, 1 to load";
+
+const PINNED_DESCRIBE: &str = "id BIGINT YES|label VARCHAR YES|amount DECIMAL(10,2) YES|placed DATE YES|updated_at TIMESTAMP WITH TIME ZONE YES|_sqlload_load_id VARCHAR YES|_sqlload_loaded_at TIMESTAMP WITH TIME ZONE YES";
+
+const PINNED_SECOND_PLAN: &str = "Plan ready  1 selected, 1 to load
+
+Loads (1)                                           sqlload load
+└── app__orders                                     merge (unique_key: id)
+    ├── source  postgres  app  public.orders
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   one commit for the whole read (committing part of an unordered cursor read could skip rows)
+    └── cursor  updated_at from 2026-11-02 10:00:00.000000+00 (destination maximum)
+
+✓ Plan complete  1 selected, 1 to load";
+
+const NO_MISSING_METADATA: &str = "0";
+
+#[test]
+fn given_a_table_without_constant_columns_when_planning_and_loading_twice_then_its_plan_columns_and_rows_stay_byte_identical()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(PINNED_SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let text = duckdb_project(postgres.port, PINNED_TABLES);
+        let project = described_project(&text).await?;
+        let destinations = connect_targets(&project)
+            .await
+            .map_err(|error| error.to_string())?;
+        let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
+            return Err("no DuckDB destination".to_owned());
+        };
+        let test_cases = [
+            PinnedRunTestCase {
+                description: "the first load creates the table from the source's columns",
+                source_change: "",
+                expected_plan: PINNED_FIRST_PLAN,
+                expected_describe: PINNED_DESCRIBE,
+                expected_rows: "{'id': 1, 'label': first, 'amount': 1.50, 'placed': 2026-11-01, 'updated_at': '2026-11-01 10:00:00+00'}|{'id': 2, 'label': second, 'amount': 2.25, 'placed': 2026-11-02, 'updated_at': '2026-11-02 10:00:00+00'}",
+            },
+            PinnedRunTestCase {
+                description: "an incremental merge reads from the destination maximum",
+                source_change: "UPDATE public.orders SET label = 'changed', updated_at = '2026-11-03 10:00:00+00' WHERE id = 1;",
+                expected_plan: PINNED_SECOND_PLAN,
+                expected_describe: PINNED_DESCRIBE,
+                expected_rows: "{'id': 1, 'label': changed, 'amount': 1.50, 'placed': 2026-11-01, 'updated_at': '2026-11-03 10:00:00+00'}|{'id': 2, 'label': second, 'amount': 2.25, 'placed': 2026-11-02, 'updated_at': '2026-11-02 10:00:00+00'}",
+            },
+        ];
+        for test_case in test_cases {
+            client
+                .batch_execute(test_case.source_change)
+                .await
+                .map_err(|error| error.to_string())?;
+            let plan = plan_project(&project, &destinations, &PlanOptions::default())
+                .await
+                .map_err(|error| format!("{}: {error}", test_case.description))?;
+            let (lines, ok) = render_plan(&plan);
+            assert!(ok, "{}:\n{}", test_case.description, lines.join("\n"));
+            assert_eq!(
+                lines.join("\n"),
+                test_case.expected_plan,
+                "{}",
+                test_case.description
+            );
+            apply_project(&plan, &destinations)
+                .await
+                .map_err(|error| error.to_string())?;
+            load_all(&project, &plan, &destinations)
+                .await
+                .map_err(|error| format!("{}: {error}", test_case.description))?;
+            let checks = [
+                (PINNED_DESCRIBE_QUERY, test_case.expected_describe),
+                (PINNED_ROWS_QUERY, test_case.expected_rows),
+                (PINNED_METADATA_QUERY, NO_MISSING_METADATA),
+            ];
+            for (query, expected) in checks {
+                let result = single_text(duckdb, query.to_owned())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(
+                    result.as_deref(),
+                    Some(expected),
+                    "{}: {query}",
+                    test_case.description
+                );
+            }
         }
         Ok(())
     })
