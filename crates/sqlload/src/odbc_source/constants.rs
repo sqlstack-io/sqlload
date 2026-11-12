@@ -28,3 +28,9 @@ pub const TOO_LARGE_VALUE: &str = "too large to be written into the allocated bu
 
 /// The fractional digits a timestamp cursor bound is described with: seven, so SQL Server compares it as `datetime2(7)`, exactly, rather than as a `datetime`.
 pub const TIMESTAMP_PARAMETER_PRECISION: i16 = 7;
+
+/// The name Microsoft's SQL Server drivers report for the database.
+pub const SQL_SERVER_DBMS: &str = "Microsoft SQL Server";
+
+/// The fractional digits SQL Server's driver describes a legacy `datetime` parameter with.
+pub const LEGACY_DATETIME_DIGITS: std::ops::RangeInclusive<i16> = 1..=3;

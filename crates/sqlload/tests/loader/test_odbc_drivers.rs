@@ -11,6 +11,8 @@ const FIRST: &str = "1,2 to 2026-01-31 23:59:59.997 | 1,2 to 2026-01-31";
 
 const SECOND: &str = "1,2,3,4 to 2026-02-01 00:00:00.000 | 1,2,3,4 to 2026-02-01";
 
+const LEGACY_FIRST: &str = "1,2 to 2026-01-31 23:59:59.123 | 1,2 to 2026-01-31";
+
 #[test]
 fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_resume_then_the_next_load_reads_exactly_the_rows_after_each_boundary()
 -> Result<(), String> {
@@ -31,6 +33,23 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
                 "INSERT INTO erp.days VALUES (3, '2026-01-31'), (4, '2026-02-01')",
             ],
             expected_tables: (FIRST, SECOND),
+        },
+        OdbcDriverTestCase {
+            description: "SQL Server's legacy datetime, whose 1/300 s ticks the driver reads rounded to milliseconds (.123 is .12333): a datetime2 bound would read the .123 row again, so it is bound as text in the column's own type",
+            database: OdbcDatabase::SqlServer,
+            tables: ("erp.events", "erp.days"),
+            setup: &[
+                "CREATE SCHEMA erp",
+                "CREATE TABLE erp.events (id int PRIMARY KEY, name nvarchar(40), happened_at datetime NOT NULL)",
+                "CREATE TABLE erp.days (id int PRIMARY KEY, opened date NOT NULL)",
+                "INSERT INTO erp.events VALUES (1, 'a', '2026-01-31 10:00:00'), (2, 'b', '2026-01-31 23:59:59.123')",
+                "INSERT INTO erp.days VALUES (1, '2026-01-30'), (2, '2026-01-31')",
+            ],
+            change: &[
+                "INSERT INTO erp.events VALUES (0, 'early', '2026-01-31 23:59:59.120'), (3, 'next', '2026-01-31 23:59:59.127'), (4, 'later', '2026-02-01 00:00:00')",
+                "INSERT INTO erp.days VALUES (3, '2026-01-31'), (4, '2026-02-01')",
+            ],
+            expected_tables: (LEGACY_FIRST, SECOND),
         },
         OdbcDriverTestCase {
             description: "MySQL through Connector/ODBC, a driver without schemas, in an ANSI_QUOTES session: {ts} and {d} bounds on DATETIME(3) and DATE",
