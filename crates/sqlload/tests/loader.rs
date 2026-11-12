@@ -89,3 +89,5 @@ mod test_snowflake_routes;
 mod test_text_files_to_duckdb;
 #[path = "loader/test_types.rs"]
 mod test_types;
+#[path = "loader/test_unnest.rs"]
+mod test_unnest;

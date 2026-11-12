@@ -12,15 +12,17 @@ use crate::files_source::models::AfterLoad;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::resolve::ResolvedTarget;
 use crate::loader::_helpers::sources::sheet_rule;
-use crate::loader::constants::{ODBC_SOURCE, SNOWFLAKE_SOURCE};
+use crate::loader::constants::{DEFAULT_MAX_DEPTH, ODBC_SOURCE, SNOWFLAKE_SOURCE, UNNEST_ALL};
 use crate::loader::models::{
-    CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
+    CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, Unnest, WarehouseRoute,
+    WarehouseSource,
 };
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
-    CdcDeletes, CdcMode, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection, SourceConfig,
-    SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, WriteStrategy,
+    CdcDeletes, CdcMode, Contract, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection,
+    SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, UnnestSetting,
+    WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
@@ -248,6 +250,11 @@ pub(crate) fn build_spec(
         );
     }
     problems.extend(flatten_problems(context, overrides));
+    let contract = layered(&settings.contract, &defaults.contract)
+        .map(|(value, _)| value)
+        .unwrap_or_default();
+    let (nesting, found) = nesting(context, overrides, (strategy, contract));
+    problems.extend(found);
     problems.extend(after_load_problems(context, strategy));
     let layout = table_layout(settings, defaults);
     problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
@@ -273,7 +280,7 @@ pub(crate) fn build_spec(
         strategy,
         strategy_origin,
         unique_key,
-        naming: Naming::default(),
+        naming: nesting.naming,
         on_duplicate_keys: on_duplicate_keys
             .map(|(value, _)| value)
             .unwrap_or_default(),
@@ -294,9 +301,7 @@ pub(crate) fn build_spec(
             columns: overrides.mask.clone(),
             key: context.source.mask_key.clone(),
         },
-        contract: layered(&settings.contract, &defaults.contract)
-            .map(|(value, _)| value)
-            .unwrap_or_default(),
+        contract,
         on_schema_change: layered(&settings.on_schema_change, &defaults.on_schema_change)
             .map(|(value, _)| value)
             .unwrap_or_default(),
@@ -306,6 +311,9 @@ pub(crate) fn build_spec(
             .map(|(value, _)| value)
             .unwrap_or_default(),
         flatten: overrides.flatten.clone(),
+        row_id: nesting.row_id,
+        unnest: nesting.unnest,
+        max_depth: nesting.max_depth,
         allow_empty: layered(&settings.allow_empty, &defaults.allow_empty)
             .is_some_and(|(value, _)| value),
         logged: layered(&settings.state, &defaults.state)
@@ -820,4 +828,152 @@ fn after_load_problems(context: &SourceContext<'_>, strategy: WriteStrategy) -> 
         problems.push("after_load is for database targets so far, not a files target".to_owned());
     }
     problems
+}
+
+/// What a table's nesting settings come to.
+struct Nesting {
+    naming: Naming,
+    row_id: bool,
+    unnest: Unnest,
+    max_depth: u32,
+}
+
+/// The table's naming (its own, its source's, then its target's), whether its rows get an id (always under dlt's naming), its `unnest` and `max_depth`, and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
+fn nesting(
+    context: &SourceContext<'_>,
+    overrides: &TableOverride,
+    (strategy, contract): (WriteStrategy, Contract),
+) -> (Nesting, Vec<String>) {
+    let settings = &overrides.settings;
+    let defaults = &context.source.defaults;
+    let naming = layered(&settings.naming, &defaults.naming)
+        .map(|(value, _)| value)
+        .or(context.target.naming)
+        .unwrap_or_default();
+    let row_id = layered(&settings.row_id, &defaults.row_id).map(|(value, _)| value);
+    let max_depth = overrides.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
+    let mut problems: Vec<String> = Vec::new();
+    if naming == Naming::Dlt && row_id == Some(false) {
+        problems.push("row_id = false: naming = \"dlt\" gives every row its _dlt_id; drop row_id or use naming = \"sqlload\"".to_owned());
+    }
+    let unnest = match &overrides.unnest {
+        None => Unnest::None,
+        Some(UnnestSetting::Word(word)) if word == UNNEST_ALL => Unnest::All,
+        Some(UnnestSetting::Word(word)) => {
+            problems.push(format!(
+                "unnest = {word:?}: list the dotted paths of the list fields to unnest, or write \"{UNNEST_ALL}\""
+            ));
+            Unnest::None
+        }
+        Some(UnnestSetting::Paths(paths)) => {
+            problems.extend(path_problems(paths, max_depth));
+            problems.extend(column_setting_problems(context, overrides, paths));
+            Unnest::Paths(paths.clone())
+        }
+    };
+    match unnest {
+        Unnest::None if overrides.max_depth.is_some() => {
+            problems.push(
+                "max_depth limits the child tables unnest makes, and this table sets no unnest"
+                    .to_owned(),
+            );
+        }
+        Unnest::None => {}
+        Unnest::All | Unnest::Paths(_) => {
+            problems.extend(refused_writes(context, (strategy, contract)));
+        }
+    }
+    (
+        Nesting {
+            naming,
+            row_id: row_id.unwrap_or(naming == Naming::Dlt),
+            unnest,
+            max_depth,
+        },
+        problems,
+    )
+}
+
+/// The `unnest` paths with an empty part, a parent path not also listed, or more parts than `max_depth`.
+fn path_problems(paths: &[String], max_depth: u32) -> Vec<String> {
+    paths
+        .iter()
+        .filter_map(|path| path_problem(path, paths, max_depth))
+        .collect()
+}
+
+/// What is wrong with the `unnest` path `path` among `paths`: an empty part, a parent path not also listed, or more parts than `max_depth`.
+fn path_problem(path: &str, paths: &[String], max_depth: u32) -> Option<String> {
+    let parts: Vec<&str> = path.split('.').collect();
+    let parent = path.rsplit_once('.').map(|(parent, _)| parent);
+    let listed = parent.is_none_or(|parent| paths.iter().any(|listed| listed == parent));
+    match (parts.iter().any(|part| part.trim().is_empty()), listed) {
+        (true, _) => Some(format!(
+            "unnest {path:?}: a path names a field at each level, joined by \".\""
+        )),
+        (false, false) => Some(format!(
+            "unnest {path:?}: its parent list {:?} must be unnested too; add it",
+            parent.unwrap_or_default()
+        )),
+        (false, true) if parts.len() > max_depth as usize => Some(format!(
+            "unnest {path:?}: it is {} levels deep, past max_depth = {max_depth}; raise max_depth or drop it",
+            parts.len()
+        )),
+        (false, true) => None,
+    }
+}
+
+/// The top-level `unnest` fields a `mask`, `columns` or `exclude_columns` entry also names: unnesting takes the field out of the table, so that setting would silently stop applying.
+fn column_setting_problems(
+    context: &SourceContext<'_>,
+    overrides: &TableOverride,
+    paths: &[String],
+) -> Vec<String> {
+    let exclude: Vec<&String> = context
+        .source
+        .exclude_columns
+        .iter()
+        .chain(&overrides.exclude_columns)
+        .collect();
+    paths
+        .iter()
+        .filter(|path| !path.contains('.'))
+        .filter_map(|field| {
+            let excluded = matching_pattern(field, &exclude);
+            let setting = match (excluded, overrides.mask.contains_key(field), overrides.columns.contains_key(field)) {
+                (Some(pattern), _, _) => format!("exclude_columns {pattern}"),
+                (None, true, _) => "mask".to_owned(),
+                (None, false, true) => "columns".to_owned(),
+                (None, false, false) => return None,
+            };
+            Some(format!(
+                "unnest {field:?}: {setting} also names {field}, which unnesting moves to child tables; drop one of them"
+            ))
+        })
+        .collect()
+}
+
+/// The first of `patterns` matching `field`.
+fn matching_pattern<'a>(field: &str, patterns: &[&'a String]) -> Option<&'a String> {
+    patterns
+        .iter()
+        .find(|pattern| Glob::new(pattern).is_ok_and(|glob| glob.compile_matcher().is_match(field)))
+        .copied()
+}
+
+/// Why this table's writes cannot carry child tables yet: a files target, `delete_insert`, captured changes or an enforced contract.
+fn refused_writes(
+    context: &SourceContext<'_>,
+    (strategy, contract): (WriteStrategy, Contract),
+) -> Vec<String> {
+    [
+        context.target.path.is_some().then_some("a files target"),
+        (strategy == WriteStrategy::DeleteInsert).then_some("write_strategy = \"delete_insert\""),
+        (context.source.kind == SourceKind::PostgresCdc).then_some("kind = \"postgres_cdc\""),
+        (contract == Contract::Enforced).then_some("contract = \"enforced\""),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|what| format!("unnest does not yet write child tables with {what}; drop unnest, and its lists stay JSON columns"))
+    .collect()
 }

@@ -1,6 +1,7 @@
 use crate::adapters::dispatch::main::dialect::connection_warehouse::connection_warehouse;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
+use crate::load_naming::models::Naming;
 use crate::loader::_helpers::specs::ColumnSelection;
 use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, pinned_types,
@@ -117,6 +118,8 @@ pub(crate) struct ResolvedTarget {
     pub(crate) schema: String,
     /// The table folder template, for a files target.
     pub(crate) path: Option<String>,
+    /// How its tables name the columns a load adds, unless a source or table says.
+    pub(crate) naming: Option<Naming>,
 }
 
 /// The target `source` loads into: its own, the project default, or the only target.
@@ -155,6 +158,7 @@ pub(crate) fn source_target(
             database: None,
             schema: String::new(),
             path: Some(target.path_template().to_owned()),
+            naming: target.naming,
         });
     }
     let schema = source
@@ -176,5 +180,6 @@ pub(crate) fn source_target(
         },
         schema,
         path: None,
+        naming: target.naming,
     })
 }
