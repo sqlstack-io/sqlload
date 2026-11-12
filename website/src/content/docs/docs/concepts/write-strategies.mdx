@@ -113,7 +113,7 @@ A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` r
 
 ## Several tenants in one table
 
-From 0.37.0 (not released yet), [`constant_columns`](/docs/configuration/#table-settings) gives
+From 0.37.0, [`constant_columns`](/docs/configuration/#table-settings) gives
 every row of a table the same values, so one table can hold several sources' copies of the same
 data, such as one API pulled for each customer. Put the constant in the `unique_key`:
 
