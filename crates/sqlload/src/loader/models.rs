@@ -695,6 +695,28 @@ pub struct Publisher {
     pub fed_files: Vec<StoredFile>,
     /// The files whose rows are committed, as they were read, which `after_load` deletes or moves.
     pub settled_files: Vec<StoredFile>,
+    /// The child tables `unnest` fills from the table's rows; `None` without `unnest`.
+    pub children: Option<ChildTables>,
+}
+
+/// The child tables of one table's load, each planned from its rows as they arrive.
+#[derive(Debug)]
+pub struct ChildTables {
+    pub options: PlanOptions,
+    pub feeds: Vec<ChildFeed>,
+    /// `created ...` and `altered ...` lines.
+    pub changes: Vec<String>,
+}
+
+/// One child table's load: its plan from the rows so far, and its publisher once it has rows.
+#[derive(Debug)]
+pub struct ChildFeed {
+    /// The dotted path of the list field it holds the items of.
+    pub path: String,
+    pub table: TablePlan,
+    /// The schema merged from every batch so far, all-NULL columns as `Null`.
+    pub merged: arrow_schema::Schema,
+    pub publisher: Option<Publisher>,
 }
 
 /// A files target table's load: its folder, what the load replaces, and the files of the commit being written.
