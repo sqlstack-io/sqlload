@@ -4,7 +4,7 @@ use std::time::Duration;
 use arrow_array::RecordBatch;
 use arrow_pyarrow::ToPyArrow;
 use arrow_schema::SchemaRef;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyConnectionError, PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods};
 use pyo3::{Bound, PyAny, PyRef, PyResult, Python, pyclass, pymethods};
@@ -144,6 +144,12 @@ impl BatchStream {
                 Polled::Failed(CrossError::Python(error)) => return Err(error),
                 Polled::Failed(CrossError::Data(reason)) => {
                     return Err(PyValueError::new_err(reason));
+                }
+                Polled::Failed(CrossError::Http(error)) if error.retryable => {
+                    return Err(PyConnectionError::new_err(error.message));
+                }
+                Polled::Failed(CrossError::Http(error)) => {
+                    return Err(PyValueError::new_err(error.message));
                 }
                 Polled::Pending | Polled::State(_) => py.check_signals()?,
                 Polled::Finished => return Ok(None),

@@ -103,6 +103,7 @@ fn given_a_plan_view_when_printing_it_then_it_follows_the_sqb_plan_layout() {
     for test_case in test_cases {
         let view = PlanView {
             ok: test_case.ok,
+            retryable: false,
             summary: test_case.summary.to_owned(),
             selected: test_case.selected,
             objects: plan_items(test_case.objects),

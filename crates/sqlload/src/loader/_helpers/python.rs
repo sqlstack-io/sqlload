@@ -668,7 +668,7 @@ impl PythonFeed {
             stream = returned;
             match next {
                 None => return Ok(()),
-                Some(Err(reason)) => return Err(LoaderError::Invalid(reason)),
+                Some(Err(failure)) => return Err(LoaderError::Read(failure)),
                 Some(Ok(Streamed::State(state))) => {
                     let state = (state != NO_STATE).then_some(state);
                     let sized = self.table.commits == CommitRule::Size;

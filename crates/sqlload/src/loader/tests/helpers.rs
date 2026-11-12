@@ -6,11 +6,14 @@ use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
+use crate::file_store::errors::StoreError;
+use crate::http::errors::ApiError;
 use crate::loader::_helpers::python::bound_array;
 use crate::loader::_helpers::python::{
     YieldedData, declared_problems, inferred_table, python_tables, source_spelling,
 };
 use crate::loader::_helpers::resolve::resolve_tables;
+use crate::loader::errors::LoaderError;
 use crate::loader::models::{PlanDetail, PlanItem, TableSpec};
 use crate::loader::tests::test_types::{
     BoundArrayTestCase, DeclaredProblemsTestCase, InferredTableTestCase, ItemSpec,
@@ -193,4 +196,30 @@ pub(crate) fn plan_items(specs: &[ItemSpec]) -> Vec<PlanItem> {
                 .collect(),
         })
         .collect()
+}
+
+/// A warehouse call that failed with `status` and service `code`.
+pub(crate) fn status(status: u16, code: &str) -> LoaderError {
+    LoaderError::Snowflake(ApiError::Status {
+        status,
+        code: code.to_owned(),
+        message: "m".to_owned(),
+    })
+}
+
+/// An object store failure.
+pub(crate) fn store(source: object_store::Error) -> LoaderError {
+    LoaderError::Store(StoreError::Object {
+        action: "get",
+        key: "k".to_owned(),
+        source,
+    })
+}
+
+/// An object store failure caused by a socket error of `kind`.
+pub(crate) fn io_store(kind: std::io::ErrorKind) -> LoaderError {
+    store(object_store::Error::Generic {
+        store: "S3",
+        source: Box::new(std::io::Error::new(kind, "socket")),
+    })
 }

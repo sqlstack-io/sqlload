@@ -30,7 +30,7 @@ pub(crate) async fn session(
     match (closed, destination.reconnects) {
         (None, _) | (Some(true), true) => *held = Some(connect_session(destination).await?),
         (Some(true), false) => {
-            return Err(LoaderError::Invalid(
+            return Err(LoaderError::Transient(
                 "the table's Postgres session closed, and its staging table with it; nothing it had not committed was written".to_owned(),
             ));
         }

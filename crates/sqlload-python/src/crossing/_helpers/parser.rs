@@ -272,7 +272,7 @@ impl Output {
                 open && failed.is_none()
             },
         )
-        .map_err(CrossError::Data)?;
+        .map_err(CrossError::Http)?;
         match failed {
             Some(reason) => Err(CrossError::Data(reason)),
             None => Ok(open),

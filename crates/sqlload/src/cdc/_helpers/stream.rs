@@ -1268,6 +1268,7 @@ pub(crate) fn source_outcomes(
                     ..TableLoaded::default()
                 })
                 .map_err(Clone::clone),
+            retryable: false,
             elapsed,
         });
     }
@@ -1434,6 +1435,7 @@ pub(crate) fn failed_outcomes(
             table: "load --follow".to_owned(),
             origin: None,
             loaded: Err(error),
+            retryable: false,
             elapsed,
         }],
         false => outcomes,
