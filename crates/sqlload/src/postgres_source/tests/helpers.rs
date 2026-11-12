@@ -96,3 +96,49 @@ pub(crate) fn source_column(pg_type: PgType) -> SourceColumn {
         source_spelling: None,
     }
 }
+
+/// A startup message of protocol `version` with `params`, framed as libpq and pgwire-replication frame it.
+pub(crate) fn startup_message(version: [u8; 4], params: &[(&str, &str)]) -> Vec<u8> {
+    let mut body = version.to_vec();
+    for (name, value) in params {
+        body.extend_from_slice(name.as_bytes());
+        body.push(0);
+        body.extend_from_slice(value.as_bytes());
+        body.push(0);
+    }
+    body.push(0);
+    let length = u32::try_from(body.len() + 4).unwrap_or(u32::MAX);
+    let mut message = length.to_be_bytes().to_vec();
+    message.extend_from_slice(&body);
+    message
+}
+
+/// The parameters of a well-formed protocol 3.0 startup message, in order; an error naming what is wrong otherwise.
+pub(crate) fn startup_params(message: &[u8]) -> Result<Vec<(String, String)>, String> {
+    let declared = message
+        .get(..4)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_be_bytes)
+        .ok_or("no length")?;
+    if usize::try_from(declared).ok() != Some(message.len()) {
+        return Err(format!("length {declared} for {} bytes", message.len()));
+    }
+    if message.get(4..8) != Some(&[0, 3, 0, 0][..]) {
+        return Err("not protocol 3.0".to_owned());
+    }
+    let text = String::from_utf8(message[8..].to_vec()).map_err(|error| error.to_string())?;
+    let mut parts: Vec<&str> = text.split('\0').collect();
+    // The pairs' terminators and the final NUL leave two empty parts at the end.
+    if parts.len() < 2 || parts.pop() != Some("") || parts.pop() != Some("") {
+        return Err("not NUL-terminated".to_owned());
+    }
+    Ok(parts
+        .chunks(2)
+        .map(|pair| {
+            (
+                pair[0].to_owned(),
+                pair.get(1).copied().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect())
+}

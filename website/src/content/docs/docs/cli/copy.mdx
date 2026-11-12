@@ -31,6 +31,8 @@ Each end is a connection named in `sqlload.toml`, or a URI:
 | `s3://bucket/prefix/?region=eu-west-2` | Files in S3 | Parquet files in S3 |
 | `file:///folder`, or a folder | Files in a folder | Parquet files in a folder |
 
+On Windows a folder can be a drive path (`C:\data\orders`) or a network share (`\\server\share\orders`), and the URL forms are `file:///C:/data/orders` and `file://server/share/orders`.
+
 Snowflake needs `auth` and a `load_method`, which a URI can't carry, so a Snowflake end is always a
 named connection.
 

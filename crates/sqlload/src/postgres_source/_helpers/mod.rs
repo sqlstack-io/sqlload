@@ -2,6 +2,8 @@ pub(crate) mod builders;
 pub(crate) mod catalog;
 pub(crate) mod copy_decoder;
 pub(crate) mod copy_stream;
+#[cfg(any(windows, test))]
+pub(crate) mod loopback_relay;
 pub(crate) mod rustls_connect;
 pub(crate) mod server_reason;
 pub(crate) mod split_read;

@@ -146,6 +146,60 @@ jobs:
           df -h
           docker system df
 
+  # The unit tests on Windows, then the executable end to end: drive paths, a UNC share, the
+  # psqlODBC driver against the runner's own Postgres, and a postgres_cdc load streaming through
+  # the loopback relay Windows uses instead of a socket file.
+  windows:
+    name: Windows
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-2025
+    # A cold cache compiles DuckDB from source with MSVC (about 40 minutes); warm runs take a few.
+    timeout-minutes: 90
+    env:
+      E2E_DIR: C:\sqlload-e2e
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows
+      - name: Remove incomplete DuckDB sources
+        shell: bash
+        run: |
+          for dir in target/duckdb-sources/*/; do
+            [ -d "$dir" ] && [ ! -e "$dir.complete" ] && echo "removing incomplete $dir" && rm -rf "$dir"
+          done; true
+      - name: Unit tests
+        run: cargo test -p sqlload --lib --features odbc --quiet
+      - name: Build the executable
+        run: cargo build -p sqlload --features odbc --bin sqlload --quiet
+      - name: Start Postgres with logical replication
+        shell: pwsh
+        run: |
+          Add-Content -Path "$env:PGDATA\postgresql.conf" -Value "wal_level = logical"
+          Set-Service -Name postgresql-x64-17 -StartupType Manual
+          Start-Service -Name postgresql-x64-17
+      - name: Install psqlODBC
+        shell: pwsh
+        run: |
+          $msi = "$env:RUNNER_TEMP\psqlodbc_x64.msi"
+          Invoke-WebRequest -Uri https://ftp.postgresql.org/pub/odbc/releases/REL-18_00_0006/psqlodbc_x64.msi -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList "/i", $msi, "/qn", "/norestart" -Wait
+          Get-OdbcDriver -Name "PostgreSQL*" -Platform 64-bit | Format-Table Name, Platform
+      - name: Share a folder as \\localhost\sqlload-e2e
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:E2E_DIR\share" | Out-Null
+          New-SmbShare -Name sqlload-e2e -Path "$env:E2E_DIR\share" -FullAccess Everyone | Out-Null
+      - name: End-to-end checks
+        shell: pwsh
+        run: |
+          python -m pip install --quiet duckdb
+          python .github/scripts/windows_e2e.py target\debug\sqlload.exe $env:E2E_DIR \\localhost\sqlload-e2e --odbc-driver "PostgreSQL Unicode(x64)" --cdc
+
   # Postgres to DuckDB, 1M narrow rows, sqlload alone with a release build: a wall-time figure
   # in the job summary, not a gate (shared runners are too noisy to gate on time), so Verify
   # does not wait on it.
@@ -256,7 +310,7 @@ jobs:
   verify:
     name: Verify
     if: always()
-    needs: [changes, checks, containers, perf]
+    needs: [changes, checks, containers, perf, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Confirm every required job passed or was skipped for a docs-only change
@@ -265,12 +319,13 @@ jobs:
           CHECKS_RESULT: ${{ needs.checks.result }}
           CONTAINERS_RESULT: ${{ needs.containers.result }}
           PERF_RESULT: ${{ needs.perf.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
         run: |
           if [[ "${CHANGES_RESULT}" != "success" ]]; then
             echo "Scope classification: ${CHANGES_RESULT}" >&2
             exit 1
           fi
-          for result in "${CHECKS_RESULT}" "${CONTAINERS_RESULT}" "${PERF_RESULT}"; do
+          for result in "${CHECKS_RESULT}" "${CONTAINERS_RESULT}" "${PERF_RESULT}" "${WINDOWS_RESULT}"; do
             case "${result}" in
               success|skipped) ;;
               *)

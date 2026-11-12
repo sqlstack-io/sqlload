@@ -1,6 +1,7 @@
 //! Work out which store and folder a path means.
 
 use crate::store_paths::_helpers::folder::folder;
+use crate::store_paths::_helpers::local_root::{local_root, windows_separators};
 use crate::store_paths::_helpers::locations::{describe, same_store, url_location};
 use crate::store_paths::errors::PathError;
 use crate::store_paths::models::{Location, StoreKind};
@@ -40,8 +41,22 @@ pub fn resolve_location(
             })
         }
         (Some((name, StoreKind::Filesystem { root })), Some(location)) => {
-            let root_prefix = folder(&[root])?;
-            match location.prefix.strip_prefix(&root_prefix) {
+            let windows = cfg!(windows);
+            let separated = windows_separators(root, windows);
+            // A relative root is matched on its folders alone, whatever the path's root.
+            let (same_root, root_folders) = match (local_root(&separated, windows), &location.store)
+            {
+                (Some((root, folders)), StoreKind::Filesystem { root: found }) => {
+                    (root.eq_ignore_ascii_case(found), folders)
+                }
+                _ => (true, separated.as_ref()),
+            };
+            let root_prefix = folder(&[root_folders])?;
+            match location
+                .prefix
+                .strip_prefix(&root_prefix)
+                .filter(|_| same_root)
+            {
                 Some(relative) => Ok(Location {
                     store: StoreKind::Filesystem { root: root.clone() },
                     prefix: relative.to_owned(),
@@ -49,7 +64,7 @@ pub fn resolve_location(
                 None => Err(PathError::ConnectionMismatch {
                     url: path.to_owned(),
                     connection: name.to_owned(),
-                    found: format!("filesystem /{}", location.prefix),
+                    found: format!("filesystem {location}"),
                     expected: format!("filesystem {root}"),
                 }),
             }
@@ -57,6 +72,10 @@ pub fn resolve_location(
         (Some((_, store)), Some(location)) => Ok(Location {
             store: store.clone(),
             prefix: location.prefix,
+        }),
+        (Some((_, store @ StoreKind::Filesystem { .. })), None) => Ok(Location {
+            store: store.clone(),
+            prefix: folder(&[&windows_separators(path, cfg!(windows))])?,
         }),
         (Some((_, store)), None) => Ok(Location {
             store: store.clone(),

@@ -37,3 +37,10 @@ pub(crate) struct ReadColumnTestCase {
     /// The select expression, or the error text.
     pub(crate) expected_result: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct AdmittedStartupTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) message: Vec<u8>,
+    /// The parameters forwarded to the server, in order; `None` when the connection is refused.
+    pub(crate) expected_forwarded: Option<Vec<(String, String)>>,
+}

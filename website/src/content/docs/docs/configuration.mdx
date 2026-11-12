@@ -143,7 +143,7 @@ delete, set `AWS_DISABLE_BULK_DELETE=true`: SQLLoad then deletes each file with 
 
 | Key | Meaning |
 |-----|---------|
-| `root` | A folder on the machine SQLLoad runs on. |
+| `root` | A folder on the machine SQLLoad runs on. On Windows also a drive path (`'C:\data\lake'`) or a network share (`'\\server\share\lake'`); write it as a TOML literal string, in single quotes, so the backslashes stay. |
 
 ### `sftp`
 
