@@ -1,14 +1,19 @@
 //! Read a table or query through ODBC as Arrow batches.
 
 use arrow_array::RecordBatch;
-use arrow_odbc::odbc_api::IntoParameter;
+use arrow_odbc::odbc_api::parameter::{InputParameter, WithDataType};
+use arrow_odbc::odbc_api::sys::{Date, Timestamp};
+use arrow_odbc::odbc_api::{DataType, IntoParameter};
+use chrono::{Datelike, Timelike};
 use tokio::sync::mpsc::Sender;
 
+use crate::adapters::contract::models::BoundParameter;
 use crate::odbc_source::_helpers::batches::{batch_reader, fetch_error};
 use crate::odbc_source::_helpers::connect::connect;
 use crate::odbc_source::_helpers::convert::{converted, output_schema};
 use crate::odbc_source::_helpers::query::select_query;
 use crate::odbc_source::constants::BATCHES_AHEAD;
+use crate::odbc_source::constants::TIMESTAMP_PARAMETER_PRECISION;
 use crate::odbc_source::errors::OdbcSourceError;
 use crate::odbc_source::models::{OdbcReadRequest, OdbcReader};
 
@@ -40,19 +45,17 @@ pub async fn read_rows(
     Ok(rows)
 }
 
-/// Fetch `query`'s rows, with `parameters` bound to its placeholders as text, into `sender` until they end, the receiver goes away, or a fetch fails (sent on as the error). Decimal columns are fetched as text, which `converted` parses without rounding, since drivers round values to the scale they describe (an unbounded `numeric` as `NUMERIC(28,6)`).
+/// Fetch `query`'s rows, with `parameters` bound to its placeholders each as its type, into `sender` until they end, the receiver goes away, or a fetch fails (sent on as the error). Decimal columns are fetched as text, which `converted` parses without rounding, since drivers round values to the scale they describe (an unbounded `numeric` as `NUMERIC(28,6)`).
 fn fetch(
     reader: &OdbcReader,
-    (query, parameters): (&str, &[String]),
+    (query, parameters): (&str, &[BoundParameter]),
     batch_rows: usize,
     sender: &Sender<Result<RecordBatch, OdbcSourceError>>,
 ) -> Result<(), OdbcSourceError> {
     let connection = connect(reader)?;
     let dbms: String = connection.database_management_system_name()?;
-    let parameters: Vec<_> = parameters
-        .iter()
-        .map(|value| value.as_str().into_parameter())
-        .collect();
+    let parameters: Vec<Box<dyn InputParameter + '_>> =
+        parameters.iter().map(odbc_parameter).collect();
     let Some(cursor) = connection.execute(query, parameters.as_slice(), None)? else {
         return Err(OdbcSourceError::Invalid(
             "the read returned no result set".to_owned(),
@@ -67,4 +70,34 @@ fn fetch(
         }
     }
     Ok(())
+}
+
+/// `parameter` as the driver receives it: text as `VARCHAR`; a timestamp as `TIMESTAMP` with seven fractional digits, which SQL Server reads as `datetime2(7)` (it reads three as `datetime`, rounding milliseconds to thirds of a hundredth); a date as `DATE`.
+fn odbc_parameter(parameter: &BoundParameter) -> Box<dyn InputParameter + '_> {
+    let small = |value: u32| u16::try_from(value).unwrap_or(u16::MAX);
+    match parameter {
+        BoundParameter::Text(text) => Box::new(text.as_str().into_parameter()),
+        BoundParameter::Timestamp(time) => Box::new(WithDataType::new(
+            Timestamp {
+                year: i16::try_from(time.year()).unwrap_or(i16::MAX),
+                month: small(time.month()),
+                day: small(time.day()),
+                hour: small(time.hour()),
+                minute: small(time.minute()),
+                second: small(time.second()),
+                fraction: time.nanosecond(),
+            },
+            DataType::Timestamp {
+                precision: TIMESTAMP_PARAMETER_PRECISION,
+            },
+        )),
+        BoundParameter::Date(date) => Box::new(WithDataType::new(
+            Date {
+                year: i16::try_from(date.year()).unwrap_or(i16::MAX),
+                month: small(date.month()),
+                day: small(date.day()),
+            },
+            DataType::Date,
+        )),
+    }
 }

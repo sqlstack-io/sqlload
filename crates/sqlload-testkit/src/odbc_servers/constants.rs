@@ -6,7 +6,8 @@ pub const MYSQL_READY: &str = "port: 3306  MySQL Community Server";
 pub const SQL_SERVER_IMAGE: &str = "mcr.microsoft.com/mssql/server";
 pub const SQL_SERVER_TAG: &str = "2022-latest";
 pub const SQL_SERVER_PORT: u16 = 1433;
-pub const SQL_SERVER_READY: &str = "SQL Server is now ready for client connections";
+/// The line SQL Server logs once its databases are recovered and `sa` can sign in, after it says it is ready for connections.
+pub const SQL_SERVER_READY: &str = "Recovery is complete";
 /// The SQL Server administrator's password, which must meet its complexity rules.
 pub const SQL_SERVER_PASSWORD: &str = "Sqlload-Test-1";
 pub const USER: &str = "sqlload";

@@ -114,8 +114,12 @@ jobs:
           docker pull clickhouse/clickhouse-server:25.8
           docker pull clickhouse/clickhouse-server:26.10
           docker pull clickhouse/clickhouse-server:25.3
-      - name: Install unixODBC and the PostgreSQL ODBC driver
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq unixodbc-dev odbc-postgresql
+          docker pull mysql:8.4
+          docker pull mcr.microsoft.com/mssql/server:2022-latest
+      # unixODBC with psqlODBC, Microsoft's ODBC Driver 18 for SQL Server and MySQL Connector/ODBC,
+      # which the ODBC source's driver tests read through.
+      - name: Install unixODBC and the ODBC drivers
+        run: .github/scripts/install_odbc_drivers.sh --with-dev
       # Compiles first, so the test step's timeout measures the tests alone.
       - name: Build container tests
         run: cargo test -p sqlload --features container-tests,odbc --test exporter --test loader --no-run --quiet

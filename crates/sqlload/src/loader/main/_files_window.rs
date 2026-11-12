@@ -137,7 +137,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
     Ok(Window {
         filter: source_filter(
             &expression,
-            (Some(cursor_type), None, false),
+            (Some(cursor_type), None),
             (from.as_deref().map(|from| (operator, from)), to.as_deref()),
             None,
         ),

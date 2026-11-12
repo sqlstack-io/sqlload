@@ -44,6 +44,9 @@ mod test_loader_edge_cases;
 #[path = "loader/test_mixed_cursors.rs"]
 mod test_mixed_cursors;
 #[cfg(feature = "odbc")]
+#[path = "loader/test_odbc_drivers.rs"]
+mod test_odbc_drivers;
+#[cfg(feature = "odbc")]
 #[path = "loader/test_odbc_to_duckdb.rs"]
 mod test_odbc_to_duckdb;
 #[path = "loader/test_postgres_cdc.rs"]

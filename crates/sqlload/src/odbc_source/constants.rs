@@ -25,3 +25,6 @@ pub const BATCHES_AHEAD: usize = 2;
 
 /// What the driver manager's error says when a value is longer than its buffer.
 pub const TOO_LARGE_VALUE: &str = "too large to be written into the allocated buffer";
+
+/// The fractional digits a timestamp cursor bound is described with: seven, so SQL Server compares it as `datetime2(7)`, exactly, rather than as a `datetime`.
+pub const TIMESTAMP_PARAMETER_PRECISION: i16 = 7;

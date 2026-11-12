@@ -73,3 +73,60 @@ write_strategy = "append"
         database = database.display(),
     )
 }
+
+/// Run each of `statements` through ODBC, one at a time.
+pub(crate) fn odbc_execute(connection_string: &str, statements: &[&str]) -> Result<(), String> {
+    let connection = arrow_odbc::odbc_api::environment()
+        .map_err(|error| error.to_string())?
+        .connect_with_connection_string(
+            connection_string,
+            arrow_odbc::odbc_api::ConnectionOptions::default(),
+        )
+        .map_err(|error| format!("cannot connect: {error}"))?;
+    statements.iter().try_for_each(|statement| {
+        connection
+            .execute(statement, (), None)
+            .map(|_| ())
+            .map_err(|error| format!("{statement}: {error}"))
+    })
+}
+
+/// A project reading an events table appended by its millisecond `happened_at` cursor and a days table replaced from its last `opened` day, through `connection_string`, into DuckDB.
+pub(crate) fn driver_project(
+    connection_string: &str,
+    (events, days): (&str, &str),
+    database: &std::path::Path,
+) -> String {
+    format!(
+        r#"
+[connections.erp]
+kind = "odbc"
+connection_string = "{connection_string}"
+
+[connections.local]
+kind = "duckdb"
+database = '{database}'
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.erp]
+kind = "odbc"
+connection = "erp"
+description = "Events and days of a generic ERP."
+include = ["{events}", "{days}"]
+
+[sources.erp.tables."{events}"]
+description = "Events, read after the newest happened_at."
+cursor_column = "happened_at"
+write_strategy = "append"
+
+[sources.erp.tables."{days}"]
+description = "Days, the last one read again."
+cursor_column = "opened"
+write_strategy = "delete_insert"
+"#,
+        database = database.display(),
+    )
+}

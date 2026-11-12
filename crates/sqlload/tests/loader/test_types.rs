@@ -908,3 +908,18 @@ pub(crate) struct SftpSnowflakePlanTestCase {
     pub(crate) expected_success: bool,
     pub(crate) expected_output: &'static str,
 }
+
+/// One database's run of the ODBC cursor scenario.
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcDriverTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) database: sqlload_testkit::odbc_servers::models::OdbcDatabase,
+    /// The events and days tables as the source's `include` names them.
+    pub(crate) tables: (&'static str, &'static str),
+    /// Statements creating both tables and their first rows.
+    pub(crate) setup: &'static [&'static str],
+    /// Statements adding rows around each cursor's maximum before the second load.
+    pub(crate) change: &'static [&'static str],
+    /// Each table's ids and newest cursor value after the first load, then after the second.
+    pub(crate) expected_tables: (&'static str, &'static str),
+}

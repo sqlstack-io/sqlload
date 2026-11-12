@@ -102,7 +102,7 @@ fn given_cursor_bounds_when_rendering_the_source_filter_then_literals_follow_the
             lower: Some((">", r"zz\' OR 1=1 --")),
             upper: Some(r"o'brien\"),
             expected_filter: Some("`id` > ? AND `id` < ?"),
-            expected_parameters: &[r"zz\' OR 1=1 --", r"o'brien\"],
+            expected_parameters: &[r#"Text("zz\\' OR 1=1 --")"#, r#"Text("o'brien\\")"#],
         },
         SourceFilterTestCase {
             description: "an ODBC numeric bound stays a bare number, not a parameter",
@@ -115,16 +115,17 @@ fn given_cursor_bounds_when_rendering_the_source_filter_then_literals_follow_the
             expected_parameters: &[],
         },
         SourceFilterTestCase {
-            description: "an ODBC timestamp cursor resumes after its millisecond maximum as {ts} literals, which OpenEdge needs and every driver reads",
+            description: "an ODBC timestamp cursor resumes after its millisecond maximum through timestamp parameters, which every driver compares as timestamps (OpenEdge compares no string with one)",
             cursor_type: ColumnType::TimestampNtz,
             dialect: None,
             odbc: true,
             lower: Some((">", "2026-01-31 23:59:59.997000")),
             upper: Some("2026-02-01 00:00:00.000000"),
-            expected_filter: Some(
-                "`id` > {ts '2026-01-31 23:59:59.997'} AND `id` < {ts '2026-02-01 00:00:00'}",
-            ),
-            expected_parameters: &[],
+            expected_filter: Some("`id` > ? AND `id` < ?"),
+            expected_parameters: &[
+                "Timestamp(2026-01-31T23:59:59.997)",
+                "Timestamp(2026-02-01T00:00:00)",
+            ],
         },
         SourceFilterTestCase {
             description: "an ODBC timestamp bound keeps microseconds rather than rounding them away",
@@ -133,18 +134,18 @@ fn given_cursor_bounds_when_rendering_the_source_filter_then_literals_follow_the
             odbc: true,
             lower: Some((">=", "2026-01-31 23:59:59.123456")),
             upper: None,
-            expected_filter: Some("`id` >= {ts '2026-01-31 23:59:59.123456'}"),
-            expected_parameters: &[],
+            expected_filter: Some("`id` >= ?"),
+            expected_parameters: &["Timestamp(2026-01-31T23:59:59.123456)"],
         },
         SourceFilterTestCase {
-            description: "an ODBC date cursor's bound is a {d} literal",
+            description: "an ODBC date cursor's bound is a date parameter",
             cursor_type: ColumnType::Date,
             dialect: None,
             odbc: true,
             lower: Some((">=", "2026-02-01")),
             upper: None,
-            expected_filter: Some("`id` >= {d '2026-02-01'}"),
-            expected_parameters: &[],
+            expected_filter: Some("`id` >= ?"),
+            expected_parameters: &["Date(2026-02-01)"],
         },
         SourceFilterTestCase {
             description: "a timestamp bound from any other source stays a string literal",
@@ -157,7 +158,7 @@ fn given_cursor_bounds_when_rendering_the_source_filter_then_literals_follow_the
             expected_parameters: &[],
         },
         SourceFilterTestCase {
-            description: "an ODBC zoned timestamp bound stays a string literal, since {ts} has no offset",
+            description: "an ODBC zoned timestamp bound stays a string literal, since an ODBC timestamp has no offset",
             cursor_type: ColumnType::TimestampTz,
             dialect: None,
             odbc: true,
@@ -167,7 +168,7 @@ fn given_cursor_bounds_when_rendering_the_source_filter_then_literals_follow_the
             expected_parameters: &[],
         },
         SourceFilterTestCase {
-            description: "an ODBC timestamp bound that is not a timestamp stays one quoted string, never an escape",
+            description: "an ODBC timestamp bound that is not a timestamp stays one quoted string, never a timestamp parameter",
             cursor_type: ColumnType::TimestampNtz,
             dialect: None,
             odbc: true,
@@ -201,16 +202,18 @@ fn given_cursor_bounds_when_rendering_the_source_filter_then_literals_follow_the
         let mut parameters = Vec::new();
         let filter = source_filter(
             "`id`",
-            (
-                Some(&test_case.cursor_type),
-                test_case.dialect,
-                test_case.odbc,
-            ),
+            (Some(&test_case.cursor_type), test_case.dialect),
             (test_case.lower, test_case.upper),
             test_case.odbc.then_some(&mut parameters),
         );
         assert_eq!(
-            (filter.as_deref(), parameters),
+            (
+                filter.as_deref(),
+                parameters
+                    .iter()
+                    .map(|parameter| format!("{parameter:?}"))
+                    .collect::<Vec<String>>()
+            ),
             (
                 test_case.expected_filter,
                 test_case

@@ -119,6 +119,17 @@ pub enum CursorValue {
     Plain,
 }
 
+/// A cursor bound passed to a `?` placeholder rather than written into the filter, typed as its cursor column compares it, so the database's literal rules can't change it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundParameter {
+    /// A text cursor's bound.
+    Text(String),
+    /// A wall-clock timestamp cursor's bound.
+    Timestamp(chrono::NaiveDateTime),
+    /// A date cursor's bound.
+    Date(chrono::NaiveDate),
+}
+
 /// A query for a cursor's maximum and how to read its result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorRead {

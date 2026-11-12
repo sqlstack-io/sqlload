@@ -1,3 +1,5 @@
+#[path = "tests/test_bound_parameter.rs"]
+mod bound_parameter;
 #[path = "tests/test_build_table.rs"]
 mod build_table;
 #[path = "tests/test_check_query.rs"]
@@ -18,8 +20,6 @@ mod helpers;
 mod insert_rows;
 #[path = "tests/test_live_type.rs"]
 mod live_type;
-#[path = "tests/test_odbc_literal.rs"]
-mod odbc_literal;
 #[path = "tests/test_sql_literal.rs"]
 mod sql_literal;
 #[path = "tests/test_staging_changes.rs"]

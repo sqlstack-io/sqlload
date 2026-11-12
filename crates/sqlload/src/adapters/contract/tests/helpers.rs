@@ -123,3 +123,21 @@ pub(crate) fn writes(statement: &str, (target, name): (&str, &str)) -> bool {
                 || statement.starts_with(&format!("{verb} IF EXISTS {target}"))
         })
 }
+
+/// `text` (`YYYY-MM-DD HH:MM:SS[.f]`) as a bound timestamp.
+pub(crate) fn timestamp_parameter(
+    text: &str,
+) -> Result<crate::adapters::contract::models::BoundParameter, String> {
+    chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.f")
+        .map(crate::adapters::contract::models::BoundParameter::Timestamp)
+        .map_err(|error| error.to_string())
+}
+
+/// `text` (`YYYY-MM-DD`) as a bound date.
+pub(crate) fn date_parameter(
+    text: &str,
+) -> Result<crate::adapters::contract::models::BoundParameter, String> {
+    chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
+        .map(crate::adapters::contract::models::BoundParameter::Date)
+        .map_err(|error| error.to_string())
+}

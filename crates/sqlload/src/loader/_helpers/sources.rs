@@ -1,3 +1,4 @@
+use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use arrow_array::RecordBatch;
 use std::collections::BTreeMap;
@@ -1140,6 +1141,8 @@ pub(crate) async fn plan_files(
 pub(crate) struct ReadPart {
     /// The Postgres filter; `None` reads the plan's.
     pub(crate) filter: Option<String>,
+    /// The values bound to `filter`'s `?` placeholders, in order.
+    pub(crate) parameters: Vec<BoundParameter>,
     /// `ORDER BY` this quoted column.
     pub(crate) order_by: Option<String>,
     /// The files to read; `None` reads every planned file.
@@ -1218,7 +1221,7 @@ async fn read_each(
         #[cfg(feature = "odbc")]
         (SourceReader::Odbc(reader), _) => {
             let (filter, parameters) = match part.filter {
-                Some(filter) => (Some(filter), &[][..]),
+                Some(filter) => (Some(filter), &part.parameters[..]),
                 None => (table.source_filter.clone(), &table.source_parameters[..]),
             };
             let request = crate::odbc_source::models::OdbcReadRequest {

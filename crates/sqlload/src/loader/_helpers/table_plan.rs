@@ -1,7 +1,8 @@
+use crate::adapters::contract::main::bound_parameter::bound_parameter;
 use crate::adapters::contract::main::cursor_bound::cursor_bound;
 use crate::adapters::contract::main::cursor_from_now::cursor_from_now;
 use crate::adapters::contract::main::cursor_text::cursor_text;
-use crate::adapters::contract::main::odbc_literal::odbc_literal;
+use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::CursorQuery;
 use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
@@ -934,8 +935,8 @@ pub(crate) struct WindowRequest<'a> {
 /// The source filter, the write mode and a note for `plan`.
 pub(crate) struct Window {
     pub(crate) filter: Option<String>,
-    /// The values bound to `filter`'s `?` placeholders, in order: an ODBC source's text cursor bounds.
-    pub(crate) parameters: Vec<String>,
+    /// The values bound to `filter`'s `?` placeholders, in order: an ODBC source's cursor bounds.
+    pub(crate) parameters: Vec<BoundParameter>,
     /// The cursor range read: `from <= cursor < to`, each open when `None`.
     pub(crate) bounds: (Option<String>, Option<String>),
     pub(crate) mode: WriteMode,
@@ -998,29 +999,26 @@ pub(crate) fn source_cursor(
     ))
 }
 
-/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; a date or wall-clock timestamp cursor's bounds as ODBC `{d '...'}`/`{ts '...'}` literals when `odbc` (an ODBC source, whose driver writes them in its database's syntax, where a string may not compare with a timestamp); a text cursor's bounds as `?` placeholders when `parameters` collects their values, in order, to bind; any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
+/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; a text, date or wall-clock timestamp cursor's bounds as `?` placeholders when `parameters` collects them, in order, to bind as their type (an ODBC source's: no literal reads alike everywhere, since some databases read a backslash in a string as an escape, OpenEdge compares no string with a timestamp, and SQL Server's `{ts}` escape is a `datetime` that rounds milliseconds); any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
 pub(crate) fn source_filter(
     column: &str,
-    (cursor_type, dialect, odbc): (Option<&ColumnType>, Option<Warehouse>, bool),
+    (cursor_type, dialect): (Option<&ColumnType>, Option<Warehouse>),
     (lower, upper): (Option<(&str, &str)>, Option<&str>),
-    mut parameters: Option<&mut Vec<String>>,
+    mut parameters: Option<&mut Vec<BoundParameter>>,
 ) -> Option<String> {
     let adapter = sql_adapter(dialect.unwrap_or(Warehouse::Postgres));
-    let text = matches!(cursor_type, Some(ColumnType::Text | ColumnType::Varchar(_)));
     let mut literal = |value: &str| match (
         cursor_type.filter(|cursor_type| numeric_cursor(cursor_type) && is_number(value)),
-        cursor_type
-            .filter(|_| odbc)
-            .and_then(|cursor_type| odbc_literal(value, cursor_type)),
-        parameters.as_mut().filter(|_| text),
+        parameters
+            .as_mut()
+            .zip(cursor_type.and_then(|cursor_type| bound_parameter(value, cursor_type))),
     ) {
-        (Some(cursor_type), _, _) => adapter.render_cursor_number(value, cursor_type),
-        (None, Some(escaped), _) => escaped,
-        (None, None, Some(parameters)) => {
-            parameters.push(value.to_owned());
+        (Some(cursor_type), _) => adapter.render_cursor_number(value, cursor_type),
+        (None, Some((parameters, parameter))) => {
+            parameters.push(parameter);
             "?".to_owned()
         }
-        (None, None, None) => adapter.render_loader_value_literal(value),
+        (None, None) => adapter.render_loader_value_literal(value),
     };
     let mut bounds: Vec<String> = Vec::new();
     if let Some((operator, value)) = lower {
@@ -1240,17 +1238,17 @@ pub(crate) async fn cursor_window(
         (None, None) => (None, note),
     };
     let source = request.spec.warehouse_source.as_ref();
-    let odbc = source.is_some_and(|source| source_binds_text(source.system));
-    let mut parameters: Vec<String> = Vec::new();
+    let mut parameters: Vec<BoundParameter> = Vec::new();
     let filter = source_filter(
         request.cursor_expression.unwrap_or_default(),
         (
             request.cursor_type,
             source.and_then(|source| source_dialect(source.system)),
-            odbc,
         ),
         (from.as_deref().map(|from| (operator, from)), to.as_deref()),
-        odbc.then_some(&mut parameters),
+        source
+            .is_some_and(|source| source_binds_text(source.system))
+            .then_some(&mut parameters),
     );
     Ok(Ok(Window {
         filter,
