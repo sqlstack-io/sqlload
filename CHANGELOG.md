@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.0](https://github.com/sqlstack-io/sqlload/compare/v0.37.0...v0.38.0) (2026-11-12)
+
+
+### Features
+
+* **files:** merge files sources file by file, oldest modified first ([#201](https://github.com/sqlstack-io/sqlload/issues/201)) ([bcc7cca](https://github.com/sqlstack-io/sqlload/commit/bcc7cca80a60fa21c7dcdc9556f44e7432a04d70))
+
 ## [0.37.0](https://github.com/sqlstack-io/sqlload/compare/v0.36.0...v0.37.0) (2026-11-12)
 
 
