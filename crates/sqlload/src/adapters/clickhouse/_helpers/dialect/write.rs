@@ -72,8 +72,8 @@ pub(crate) fn write_statements(
         })
         .collect();
     let staged = adapter.render_qualified_name(staging);
-    let (from, values) = ranked_source(adapter, request, (&staged, &values))
-        .unwrap_or((staged, values));
+    let (from, values) =
+        ranked_source(adapter, request, (&staged, &values)).unwrap_or((staged, values));
     let values: Vec<String> = values
         .iter()
         .zip(&names)

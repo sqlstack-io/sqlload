@@ -15,9 +15,9 @@ pub(crate) fn merge_statement<A: SqlAdapter + ?Sized>(
 ) -> String {
     let target = adapter.render_qualified_name(request.table);
     let ranked = ranked_source(adapter, request, (source, values));
-    let (source, values) = ranked
-        .as_ref()
-        .map_or((source, values), |(source, names)| (source.as_str(), names.as_slice()));
+    let (source, values) = ranked.as_ref().map_or((source, values), |(source, names)| {
+        (source.as_str(), names.as_slice())
+    });
     let names: Vec<String> = request
         .columns
         .iter()

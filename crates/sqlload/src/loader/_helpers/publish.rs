@@ -752,7 +752,11 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
-        if merging_file && let WriteMode::Merge { unique_key, .. } = &mode {
+        if let WriteMode::Merge {
+            unique_key,
+            dedupe: None,
+        } = &mode
+        {
             let commit = CheckedCommit {
                 destination: &self.destination,
                 warehouse,
@@ -762,7 +766,7 @@ impl Publisher {
                 columns: &self.table.schema.write_columns,
                 committed: self.committed_rows,
             };
-            refuse_repeated_keys(&commit, unique_key).await?;
+            refuse_repeated_keys(&commit, unique_key, merging_file).await?;
         }
         if let Some(checks) = &spec.checks {
             let commit = CheckedCommit {

@@ -194,7 +194,10 @@ pub(crate) fn build_spec(
     let (dedup_sort, found) = dedupe_settings(
         strategy,
         &unique_key,
-        (on_duplicate_keys.map(|(value, _)| value), dedup_sort.as_ref()),
+        (
+            on_duplicate_keys.map(|(value, _)| value),
+            dedup_sort.as_ref(),
+        ),
         overrides,
     );
     problems.extend(found);
@@ -712,7 +715,10 @@ pub(crate) fn default_strategy(cursor: Option<&CursorSpec>, has_key: bool) -> Wr
 fn dedupe_settings(
     strategy: WriteStrategy,
     unique_key: &[String],
-    (on_duplicate_keys, dedup_sort): (Option<OnDuplicateKeys>, Option<&BTreeMap<String, SortDirection>>),
+    (on_duplicate_keys, dedup_sort): (
+        Option<OnDuplicateKeys>,
+        Option<&BTreeMap<String, SortDirection>>,
+    ),
     overrides: &TableOverride,
 ) -> (Option<(String, SortDirection)>, Vec<String>) {
     let mut problems: Vec<String> = Vec::new();
@@ -735,15 +741,23 @@ fn dedupe_settings(
     let (column, direction) = match (entries.next(), entries.next()) {
         (Some((column, direction)), None) => (column.clone(), *direction),
         _ => {
-            problems.push("dedup_sort names one column and its direction, such as { updated_at = \"desc\" }".to_owned());
+            problems.push(
+                "dedup_sort names one column and its direction, such as { updated_at = \"desc\" }"
+                    .to_owned(),
+            );
             return (None, problems);
         }
     };
-    if unique_key.iter().any(|key| key.eq_ignore_ascii_case(&column)) {
+    if unique_key
+        .iter()
+        .any(|key| key.eq_ignore_ascii_case(&column))
+    {
         problems.push(format!("dedup_sort column {column} is in the unique_key, so it is the same in every row it would rank; name another column"));
     }
     if overrides.mask.contains_key(&column) {
-        problems.push(format!("dedup_sort column {column} is masked, so its values cannot rank rows"));
+        problems.push(format!(
+            "dedup_sort column {column} is masked, so its values cannot rank rows"
+        ));
     }
     if on_duplicate_keys == Some(OnDuplicateKeys::Fail) {
         problems.push("dedup_sort picks which repeated row a merge keeps, but on_duplicate_keys = \"fail\" keeps none; set one of them".to_owned());

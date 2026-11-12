@@ -1,7 +1,7 @@
 //! Postgres's SQL: the contract's shared rendering, with Postgres's types, a temporary staging table, `replace` in place and `merge` by `ON CONFLICT`.
 
-use crate::adapters::contract::main::_ranked_source::ranked_source;
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT, STAGING_SUFFIX};
+use crate::adapters::contract::main::_ranked_source::ranked_source;
 use crate::adapters::contract::models::{
     ChangeApply, CursorValue, TableName, WriteStatementsRequest,
 };
@@ -181,9 +181,9 @@ impl SqlAdapter for PostgresSql {
         values: &[String],
     ) -> String {
         let ranked = ranked_source(self, request, (source, values));
-        let (source, values) = ranked
-            .as_ref()
-            .map_or((source, values), |(source, names)| (source.as_str(), names.as_slice()));
+        let (source, values) = ranked.as_ref().map_or((source, values), |(source, names)| {
+            (source.as_str(), names.as_slice())
+        });
         let names: Vec<String> = request
             .columns
             .iter()

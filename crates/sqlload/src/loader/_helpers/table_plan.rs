@@ -4,9 +4,9 @@ use crate::adapters::contract::main::cursor_from_now::cursor_from_now;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::CursorQuery;
+use crate::adapters::contract::models::MergeDedupe;
 use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::contract::models::MergeDedupe;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::source_binds_text::source_binds_text;
@@ -66,8 +66,8 @@ use crate::project::models::BatchStep;
 use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
-use crate::project::models::{OnDuplicateKeys, SortDirection};
 use crate::project::models::{FilesFormat, OutputEncoding};
+use crate::project::models::{OnDuplicateKeys, SortDirection};
 use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -231,7 +231,39 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
+    plan.schema.warnings.extend(split_ranking(&plan));
     with_run_log(plan, destination, options).await
+}
+
+/// What `dedup_sort` cannot rank when a merge may commit more than once: each commit ranks only its own rows, so a later commit overwrites a key an earlier one wrote whatever its sort value.
+fn split_ranking(plan: &TablePlan) -> Option<String> {
+    let WriteMode::Merge {
+        dedupe: Some(MergeDedupe {
+            sort: Some((column, _)),
+            ..
+        }),
+        ..
+    } = &plan.mode
+    else {
+        return None;
+    };
+    let (commits, remedy) = match &plan.commits {
+        CommitRule::Windows(windows) if windows.count > 1 => (
+            format!("once per window ({} windows)", windows.count),
+            "; set batch_size = \"none\" to load it in one commit",
+        ),
+        CommitRule::FileGroups(groups) if groups.len() > 1 => {
+            (format!("once per file ({} files)", groups.len()), "")
+        }
+        CommitRule::Ordered { .. } | CommitRule::Size => (
+            "about every 1 GB".to_owned(),
+            "; set batch_size = \"none\" to load it in one commit",
+        ),
+        _ => return None,
+    };
+    Some(format!(
+        "dedup_sort ranks repeated keys within one commit, and this table commits {commits}: a later commit still overwrites a key an earlier one wrote, whatever its {column} value{remedy}"
+    ))
 }
 
 /// Why the table's `batch_size` setting has no effect, if it has none: a files source commits by whole partitions, `replace` and `--reload` swap the whole table in once, and windows need a cursor.
@@ -1025,9 +1057,10 @@ fn write_mode(
                     true => SOURCE_ROW_COLUMN.to_owned(),
                     false => MERGE_ROW_COLUMN.to_owned(),
                 },
-                sort: spec.dedup_sort.as_ref().map(|(column, direction)| {
-                    (column.clone(), *direction == SortDirection::Desc)
-                }),
+                sort: spec
+                    .dedup_sort
+                    .as_ref()
+                    .map(|(column, direction)| (column.clone(), *direction == SortDirection::Desc)),
             }),
         },
         (false, WriteStrategy::DeleteInsert) => WriteMode::DeleteInsert {
