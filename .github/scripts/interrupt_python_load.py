@@ -8,6 +8,10 @@ load must end within a few seconds as Ctrl-C ends the native executable (the sig
 or STATUS_CONTROL_C_EXIT on Windows), print no Python traceback, and commit nothing; the next load
 must then write every row once. The command runs on a thread of its own, not Python's main thread,
 so this checks Ctrl-C still reaches it.
+
+On Windows, a plain Python process gets the same Ctrl-C first. How it ends without clearing an inherited
+"ignore Ctrl-C" flag is printed, and it must end once it clears the flag, so a failure of the load is
+the load's, not this check's.
 """
 
 import os
@@ -53,8 +57,18 @@ def slow(ctx):
 
 '''
 
+#: On Windows, a child inherits its parent's "ignore Ctrl-C" flag, which a CI runner's processes may
+#: carry; a process in an interactive console has it clear, so each interrupted child clears it first.
+ACCEPT_CTRL_C = "import ctypes; ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False); " if os.name == "nt" else ""
+
 #: `sqlload load`, run as the wheel's console script runs it.
 LOAD = [sys.executable, "-c", "from sqlload._cli import main; main()", "load"]
+
+#: The same load, as a process in an interactive console runs it.
+INTERRUPTED_LOAD = [sys.executable, "-c", ACCEPT_CTRL_C + "from sqlload._cli import main; main()", "load"]
+
+#: A Python process doing nothing, with Ctrl-C's default action as `sqlload._cli` sets it.
+SLEEPER = "import signal, time; signal.signal(signal.SIGINT, signal.SIG_DFL); time.sleep(120)"
 
 #: How Windows ends a process on Ctrl-C when nothing handles it.
 STATUS_CONTROL_C_EXIT = 0xC000013A
@@ -72,9 +86,23 @@ if not kernel32.GenerateConsoleCtrlEvent(0, 0):
 """
 
 
-def start_load(project):
+def start(command, cwd=None):
     flags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
-    return subprocess.Popen(LOAD, cwd=project, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", creationflags=flags)
+    return subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", creationflags=flags)
+
+
+def interrupt_sleeper(code):
+    """Ctrl-C a Python process running `code`, once it has started; whether it ended as Ctrl-C ends it, and how."""
+    process = start([sys.executable, "-c", code])
+    time.sleep(3)
+    ctrl_c(process)
+    try:
+        process.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+        return False, "still running 10 s after Ctrl-C"
+    return interrupted_exit(process.returncode), f"exit {process.returncode}"
 
 
 def ctrl_c(process):
@@ -109,7 +137,12 @@ def main():
         (project / "lake").mkdir()
         (project / "sqlload.toml").write_text(PROJECT, encoding="utf-8")
         (project / "sources" / "shop.py").write_text(textwrap.dedent(MODULE), encoding="utf-8")
-        process = start_load(project)
+        if os.name == "nt":
+            ended, how = interrupt_sleeper(SLEEPER)
+            print(f"note: a Python process with Ctrl-C's default action, as the runner starts it: {how}", flush=True)
+            ended, how = interrupt_sleeper(ACCEPT_CTRL_C + SLEEPER)
+            check(ended, f"Ctrl-C reaches a Python process that accepts it, so this check can deliver it ({how})")
+        process = start(INTERRUPTED_LOAD, project)
         deadline = time.monotonic() + 120
         while not (project / "blocked").exists():
             if process.poll() is not None or time.monotonic() > deadline:
