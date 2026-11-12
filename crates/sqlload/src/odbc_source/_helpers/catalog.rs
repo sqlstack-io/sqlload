@@ -74,7 +74,7 @@ pub(crate) fn source_table(
     }
 }
 
-/// The tables and views whose `schema.table` (or `table`, for a driver without schemas) matches `include` and not `exclude`, with their columns and keys. A driver without schemas (whose schema names are at most 0 long, as MySQL Connector/ODBC's are by default) is asked with no schema pattern, since it refuses any.
+/// The tables and views whose `schema.table` (or `table`, for a driver without schemas) matches `include` and not `exclude`, with their columns and keys. A driver that refuses a schema pattern and reports no schema name length (MySQL Connector/ODBC, by default) is asked again with none; one reporting 0 for "no maximum" still lists every schema.
 pub(crate) fn catalog_tables(
     connection: &Connection<'_>,
     (include, exclude): (&[String], &[String]),
@@ -82,11 +82,13 @@ pub(crate) fn catalog_tables(
     let include = table_matcher(include)?;
     let exclude = table_matcher(exclude)?;
     let mut names: Vec<(String, String)> = Vec::new();
-    let schemas = match connection.max_schema_name_len()? {
-        0 => "",
-        _ => ANY_NAME,
+    let listed = match connection.tables("", ANY_NAME, ANY_NAME, TABLE_TYPES) {
+        Err(_) if connection.max_schema_name_len()? == 0 => {
+            connection.tables("", "", ANY_NAME, TABLE_TYPES)?
+        }
+        listed => listed?,
     };
-    for row in connection.tables("", schemas, ANY_NAME, TABLE_TYPES)? {
+    for row in listed {
         let row = row?;
         let (schema, table) = (catalog_text(&row.schema)?, catalog_text(&row.table)?);
         let qualified = match schema.is_empty() {

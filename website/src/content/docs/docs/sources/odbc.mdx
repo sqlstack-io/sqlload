@@ -94,15 +94,19 @@ such as `"updated_at" > ?`, each passed as the cursor's own type: a timestamp wi
 an ODBC `TIMESTAMP`, with every fractional digit; a date as a `DATE`; text as text. No database's
 literal rules can change a bound, and a millisecond maximum such as `23:59:59.997` resumes exactly.
 SQL Server's legacy `datetime` is the one exception: it stores 1/300 s ticks, which its driver reads
-rounded to milliseconds, so its bounds go as text in the column's own precision, which SQL Server
-converts to the column's type. A numeric cursor compares with a bare number, such as `"id" > 41`.
+rounded to milliseconds, so its bounds go as ISO 8601 text (`2026-01-31T23:59:59.997`) in the
+column's own precision, which SQL Server converts to the column's type alike under every login
+language. A cursor column pinned to a type (`columns = { ... }`) compares with a quoted literal, as
+the pinned type may not be the column's own, such as a `varchar` read as a timestamp. A numeric
+cursor compares with a bare number, such as `"id" > 41`.
 Any other cursor, a timestamp with a time zone for one, still compares with a quoted literal,
 which the database converts to the column's type; check that yours does before relying on it.
-`--start-cursor`, `--end-cursor` and `cursor_start` also take ODBC escape values, such as
+For a timestamp or date cursor, `--start-cursor`, `--end-cursor` and `cursor_start` also take ODBC
+escape values, such as
 `{ts '2026-01-31 23:59:59.997'}` or `{d '2026-01-31'}`.
 
-From 0.35.0 (not released yet), a timestamp column is read in microseconds whatever precision the
-driver describes: MySQL Connector/ODBC describes every `DATETIME(n)` with none, and its fractional
+From 0.35.0 (not released yet), a timestamp column is read in at least microseconds whatever precision
+the driver describes: MySQL Connector/ODBC describes every `DATETIME(n)` with none, and its fractional
 seconds were dropped before.
 
 ## Choosing tables

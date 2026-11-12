@@ -60,6 +60,12 @@ fn given_a_cursor_flag_when_normalising_then_every_system_reads_the_same_bound()
             expected_text: Err("is not an RFC 3339 timestamp or a date"),
         },
         CursorTextTestCase {
+            description: "a text cursor keeps a value that looks like an ODBC literal as it is",
+            text: "{d 'abc'}",
+            column_type: ColumnType::Text,
+            expected_text: Ok("{d 'abc'}"),
+        },
+        CursorTextTestCase {
             description: "a date cursor needs a date",
             text: "2026-11-04T10:00:00Z",
             column_type: ColumnType::Date,

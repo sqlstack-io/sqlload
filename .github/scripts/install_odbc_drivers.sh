@@ -2,13 +2,14 @@
 # Installs unixODBC and the ODBC drivers the container tests read through, on Debian or Ubuntu x86_64,
 # and registers each driver under the name the tests connect with:
 #   PostgreSQL Unicode            psqlODBC, from the distribution
-#   ODBC Driver 18 for SQL Server Microsoft's msodbcsql18 (installing it accepts Microsoft's licence)
+#   ODBC Driver 18 for SQL Server Microsoft's msodbcsql18, the same release as on Windows (installing it accepts Microsoft's licence)
 #   MySQL ODBC Unicode Driver     MySQL Connector/ODBC, MySQL's package for this distribution release
 # Usage: install_odbc_drivers.sh [--with-dev]   (--with-dev adds the unixODBC headers to build against)
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 MYSQL_ODBC_VERSION=26.10.0
+MSODBCSQL_VERSION=18.7.1.1-1
 MYSQL_ODBC_NAME="MySQL ODBC Unicode Driver"
 
 sudo_() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
@@ -27,7 +28,7 @@ if ! dpkg -s msodbcsql18 > /dev/null 2>&1; then
 	sudo_ dpkg -i /tmp/packages-microsoft-prod.deb > /dev/null
 	rm -f /tmp/packages-microsoft-prod.deb
 	sudo_ apt-get update -qq
-	sudo_ env ACCEPT_EULA=Y apt-get install -y -qq msodbcsql18
+	sudo_ env ACCEPT_EULA=Y apt-get install -y -qq "msodbcsql18=${MSODBCSQL_VERSION}"
 fi
 
 # MySQL Connector/ODBC: MySQL's package built for this distribution release, which links the system
@@ -51,7 +52,8 @@ if ! dpkg -s mysql-connector-odbc > /dev/null 2>&1; then
 	sudo_ apt-get install -y -qq "$work/$package"
 	rm -rf "$work"
 fi
-driver="$(ls /usr/lib/x86_64-linux-gnu/odbc/libmyodbc*w.so)"
+driver="/usr/lib/x86_64-linux-gnu/odbc/libmyodbc${MYSQL_ODBC_VERSION%%.*}w.so"
+test -f "$driver"
 printf '[%s]\nDescription=MySQL Connector/ODBC %s\nDriver=%s\nUsageCount=1\n' "$MYSQL_ODBC_NAME" "$MYSQL_ODBC_VERSION" "$driver" > /tmp/mysql-odbc.ini
 sudo_ odbcinst -i -d -r -f /tmp/mysql-odbc.ini > /dev/null
 rm -f /tmp/mysql-odbc.ini

@@ -8,10 +8,10 @@ use chrono::{Datelike, NaiveDateTime, Timelike};
 
 use crate::adapters::contract::models::BoundParameter;
 use crate::odbc_source::constants::{
-    LEGACY_DATETIME_DIGITS, SQL_SERVER_DBMS, TIMESTAMP_PARAMETER_PRECISION,
+    LEGACY_DATETIME_DIGITS, SQL_SERVER_DBMS, TIMESTAMP_PARAMETER_PRECISION, TIMESTAMP_TEXT_DIGITS,
 };
 
-/// `parameters` as `prepared` binds them, in order: text as `VARCHAR`; a date as `DATE`; a timestamp as `TIMESTAMP` with seven fractional digits, which SQL Server compares as `datetime2(7)` (three would make it a `datetime`, rounding milliseconds), except against a SQL Server column the driver describes with one to three fractional digits, a legacy `datetime`: that compares a `datetime2` parameter with the column's exact 1/300 s ticks, which the driver rounded to milliseconds when the bound was read, so the bound goes as text, which SQL Server converts to the column's own type.
+/// `parameters` as `prepared` binds them, in order: text as `VARCHAR`; a date as `DATE`; a timestamp as `TIMESTAMP` with seven fractional digits, which SQL Server compares as `datetime2(7)` (three would make it a `datetime`, rounding milliseconds), except against a SQL Server column the driver describes with one to three fractional digits, a legacy `datetime`: that compares a `datetime2` parameter with the column's exact 1/300 s ticks, which the driver rounded to milliseconds when the bound was read, so the bound goes as text, which SQL Server converts to the column's own type; when the driver can't describe the parameter, as text with seven digits, exact for `datetime2` and refused by a `datetime`.
 pub(crate) fn bound_parameters<S: AsStatementRef>(
     prepared: &mut Prepared<S>,
     dbms: &str,
@@ -33,7 +33,9 @@ pub(crate) fn bound_parameters<S: AsStatementRef>(
                         }
                         _ => odbc_parameter(parameter),
                     },
-                    Err(_) => odbc_parameter(parameter),
+                    Err(_) => {
+                        Box::new(timestamp_text(time, TIMESTAMP_TEXT_DIGITS).into_parameter())
+                    }
                 }
             }
             _ => odbc_parameter(parameter),
@@ -41,18 +43,18 @@ pub(crate) fn bound_parameters<S: AsStatementRef>(
         .collect()
 }
 
-/// `time` as `YYYY-MM-DD HH:MM:SS` with `digits` fractional digits, or with six when it has more than `digits` (which the database then refuses rather than misreads).
+/// `time` as ISO 8601 `YYYY-MM-DDTHH:MM:SS`, which SQL Server reads alike under every `SET LANGUAGE` and `SET DATEFORMAT` (with a space it reads the month and day by the session's language), with `digits` fractional digits, or with six when it has more than `digits` (which the database then refuses rather than misreads).
 pub(crate) fn timestamp_text(time: &NaiveDateTime, digits: u16) -> String {
     let nanoseconds = time.nanosecond();
     let unit = 10u32.pow(9u32.saturating_sub(u32::from(digits)));
     match (digits, nanoseconds % unit) {
-        (0, 0) => time.format("%Y-%m-%d %H:%M:%S").to_string(),
+        (0, 0) => time.format("%Y-%m-%dT%H:%M:%S").to_string(),
         (_, 0) => format!(
             "{}.{}",
-            time.format("%Y-%m-%d %H:%M:%S"),
+            time.format("%Y-%m-%dT%H:%M:%S"),
             &format!("{nanoseconds:09}")[..usize::from(digits)]
         ),
-        _ => time.format("%Y-%m-%d %H:%M:%S%.6f").to_string(),
+        _ => time.format("%Y-%m-%dT%H:%M:%S%.6f").to_string(),
     }
 }
 

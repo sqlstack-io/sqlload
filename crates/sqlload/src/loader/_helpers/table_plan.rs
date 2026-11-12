@@ -1045,6 +1045,20 @@ pub(crate) fn source_filter(
     (!bounds.is_empty()).then(|| bounds.join(" AND "))
 }
 
+/// Whether `spec`'s cursor bounds bind as parameters of the cursor's type: on a source that binds them (ODBC), unless the cursor column is pinned to a type, which may not be the source column's own (a `varchar` read as a timestamp), so its bounds stay literals the database converts.
+pub(crate) fn binds_cursor(spec: &TableSpec) -> bool {
+    let pinned = spec.cursor.as_ref().is_some_and(|cursor| {
+        spec.pinned
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(&cursor.column))
+    });
+    !pinned
+        && spec
+            .warehouse_source
+            .as_ref()
+            .is_some_and(|source| source_binds_text(source.system))
+}
+
 /// Whether a cursor of `column_type` compares as a number.
 fn numeric_cursor(column_type: &ColumnType) -> bool {
     matches!(
@@ -1261,9 +1275,7 @@ pub(crate) async fn cursor_window(
             source.and_then(|source| source_dialect(source.system)),
         ),
         (from.as_deref().map(|from| (operator, from)), to.as_deref()),
-        source
-            .is_some_and(|source| source_binds_text(source.system))
-            .then_some(&mut parameters),
+        binds_cursor(spec).then_some(&mut parameters),
     );
     Ok(Ok(Window {
         filter,

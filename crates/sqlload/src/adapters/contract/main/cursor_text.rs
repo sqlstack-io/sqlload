@@ -5,9 +5,14 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use crate::adapters::contract::constants::{CURSOR_TIMESTAMP_FORMAT, NAIVE_TIMESTAMP_FORMATS};
 use crate::column_types::models::ColumnType;
 
-/// `text` as the cursor literal every system reads alike: zoned instants in UTC with `+00`, wall-clock times without an offset; an ODBC `{ts '...'}` or `{d '...'}` literal, as a query against an ODBC source writes it, reads as the value inside.
+/// `text` as the cursor literal every system reads alike: zoned instants in UTC with `+00`, wall-clock times without an offset; for a timestamp or date cursor, an ODBC `{ts '...'}` or `{d '...'}` literal, as a query against an ODBC source writes it, reads as the value inside (any other cursor keeps it as given).
 pub fn cursor_text(text: &str, column_type: &ColumnType) -> Result<String, String> {
-    let text = odbc_value(text).unwrap_or(text);
+    let text = match column_type {
+        ColumnType::TimestampTz | ColumnType::TimestampNtz | ColumnType::Date => {
+            odbc_value(text).unwrap_or(text)
+        }
+        _ => text,
+    };
     let zoned = DateTime::parse_from_rfc3339(text);
     let naive = NAIVE_TIMESTAMP_FORMATS
         .iter()

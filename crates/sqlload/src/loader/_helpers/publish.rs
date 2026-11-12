@@ -10,7 +10,6 @@ use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded, UnloadedBatch};
 use crate::adapters::contract::types::TableWriter;
-use crate::adapters::dispatch::main::dialect::source_binds_text::source_binds_text;
 use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
@@ -69,7 +68,7 @@ use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
-use crate::loader::_helpers::table_plan::source_filter;
+use crate::loader::_helpers::table_plan::{binds_cursor, source_filter};
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
@@ -1126,9 +1125,7 @@ fn window_filter(
             window.from.as_deref().map(|from| (operator, from)),
             window.to.as_deref(),
         ),
-        source
-            .is_some_and(|source| source_binds_text(source.system))
-            .then_some(&mut parameters),
+        binds_cursor(&table.spec).then_some(&mut parameters),
     );
     (filter, parameters)
 }

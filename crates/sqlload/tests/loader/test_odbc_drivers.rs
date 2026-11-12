@@ -11,14 +11,15 @@ const FIRST: &str = "1,2 to 2026-01-31 23:59:59.997 | 1,2 to 2026-01-31";
 
 const SECOND: &str = "1,2,3,4 to 2026-02-01 00:00:00.000 | 1,2,3,4 to 2026-02-01";
 
-const LEGACY_FIRST: &str = "1,2 to 2026-01-31 23:59:59.123 | 1,2 to 2026-01-31";
+const LEGACY_FIRST: &str = "1,2 to 2026-01-05 23:59:59.123 | 1,2 to 2026-01-31";
 
 #[test]
 fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_resume_then_the_next_load_reads_exactly_the_rows_after_each_boundary()
 -> Result<(), String> {
     let test_cases = [
         OdbcDriverTestCase {
-            description: "SQL Server through Microsoft's ODBC Driver 18: {ts} and {d} bounds on datetime2(3) and date",
+            description: "SQL Server through Microsoft's ODBC Driver 18: millisecond and date cursors on datetime2(3) and date",
+            connection_options: "",
             database: OdbcDatabase::SqlServer,
             tables: ("erp.events", "erp.days"),
             setup: &[
@@ -35,24 +36,26 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
             expected_tables: (FIRST, SECOND),
         },
         OdbcDriverTestCase {
-            description: "SQL Server's legacy datetime, whose 1/300 s ticks the driver reads rounded to milliseconds (.123 is .12333): a datetime2 bound would read the .123 row again, so it is bound as text in the column's own type",
+            description: "SQL Server's legacy datetime, whose 1/300 s ticks the driver reads rounded to milliseconds (.123 is .12333): a datetime2 bound would read the .123 row again, so it is bound as text in the column's own type, in ISO 8601 form, which a british session (day before month) reads alike: 2026-01-05 with a space would be 1 May",
+            connection_options: "Language=British;",
             database: OdbcDatabase::SqlServer,
             tables: ("erp.events", "erp.days"),
             setup: &[
                 "CREATE SCHEMA erp",
                 "CREATE TABLE erp.events (id int PRIMARY KEY, name nvarchar(40), happened_at datetime NOT NULL)",
                 "CREATE TABLE erp.days (id int PRIMARY KEY, opened date NOT NULL)",
-                "INSERT INTO erp.events VALUES (1, 'a', '2026-01-31 10:00:00'), (2, 'b', '2026-01-31 23:59:59.123')",
+                "INSERT INTO erp.events VALUES (1, 'a', '2026-01-05 10:00:00'), (2, 'b', '2026-01-05 23:59:59.123')",
                 "INSERT INTO erp.days VALUES (1, '2026-01-30'), (2, '2026-01-31')",
             ],
             change: &[
-                "INSERT INTO erp.events VALUES (0, 'early', '2026-01-31 23:59:59.120'), (3, 'next', '2026-01-31 23:59:59.127'), (4, 'later', '2026-02-01 00:00:00')",
+                "INSERT INTO erp.events VALUES (0, 'early', '2026-01-05 23:59:59.120'), (3, 'next', '2026-01-05 23:59:59.127'), (4, 'later', '2026-02-01 00:00:00')",
                 "INSERT INTO erp.days VALUES (3, '2026-01-31'), (4, '2026-02-01')",
             ],
             expected_tables: (LEGACY_FIRST, SECOND),
         },
         OdbcDriverTestCase {
-            description: "MySQL through Connector/ODBC, a driver without schemas, in an ANSI_QUOTES session: {ts} and {d} bounds on DATETIME(3) and DATE",
+            description: "MySQL through Connector/ODBC, a driver without schemas, in an ANSI_QUOTES session: millisecond and date cursors on DATETIME(3) and DATE",
+            connection_options: "",
             database: OdbcDatabase::MySql,
             tables: ("events", "days"),
             setup: &[
@@ -68,7 +71,8 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
             expected_tables: (FIRST, SECOND),
         },
         OdbcDriverTestCase {
-            description: "Postgres through psqlODBC: {ts} and {d} bounds on timestamp(3) and date",
+            description: "Postgres through psqlODBC: millisecond and date cursors on timestamp(3) and date",
+            connection_options: "",
             database: OdbcDatabase::Postgres,
             tables: ("erp.events", "erp.days"),
             setup: &[
@@ -94,7 +98,14 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
             let config = folder.path().join("sqlload.toml");
             std::fs::write(
                 &config,
-                driver_project(&server.connection_string, test_case.tables, &database),
+                driver_project(
+                    &format!(
+                        "{}{}",
+                        server.connection_string, test_case.connection_options
+                    ),
+                    test_case.tables,
+                    &database,
+                ),
             )
             .map_err(|error| error.to_string())?;
             let (succeeded, output) = run_sqlload(&config, &["load", "--yes"], ("", ""))?;

@@ -914,6 +914,8 @@ pub(crate) struct SftpSnowflakePlanTestCase {
 pub(crate) struct OdbcDriverTestCase {
     pub(crate) description: &'static str,
     pub(crate) database: sqlload_testkit::odbc_servers::models::OdbcDatabase,
+    /// Appended to the connection string SQLLoad reads through.
+    pub(crate) connection_options: &'static str,
     /// The events and days tables as the source's `include` names them.
     pub(crate) tables: (&'static str, &'static str),
     /// Statements creating both tables and their first rows.
