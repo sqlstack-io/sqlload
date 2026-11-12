@@ -55,6 +55,7 @@ use crate::row_batches::main::flattened_columns::flattened_columns;
 use crate::row_batches::main::json_lists::json_lists;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
+use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::TableAction;
 use crate::similar_names::main::close_name::close_name;
@@ -796,25 +797,12 @@ impl PythonFeed {
             .then_some(self.table.live.as_deref());
         let replanned = replan(load, &self.table, (&data, known), destination).await?;
         let old = staged_columns(&self.table);
-        let statements = schema_statements(&replanned);
-        if let Some(statements) = statements {
-            execute_ddl(destination, statements).await?;
-            self.changes.extend(change_lines(&replanned));
-        }
-        if let Some(publisher) = &mut self.publisher {
-            publisher.settle_rows().await?;
-            publisher.reopen_rows();
-            if let Some(staging) = &publisher.staging {
-                let changes = sql_adapter(replanned.spec.warehouse).render_staging_changes(
-                    staging,
-                    (&old, &staged_columns(&replanned)),
-                    publisher.started_with(),
-                );
-                execute_ddl(&publisher.destination, changes).await?;
-            }
-            publisher.table = replanned.clone();
-            publisher.widen_files().await?;
-        }
+        let changes = bring_in_line(
+            (load.destination, self.publisher.as_mut()),
+            (&old, &replanned),
+        )
+        .await?;
+        self.changes.extend(changes);
         self.table = TablePlan {
             live: replanned.live.clone().or(self.table.live.clone()),
             ..replanned
@@ -1008,4 +996,35 @@ fn table_read(
             .map(|(name, _)| name.clone())
             .collect(),
     }
+}
+
+/// Bring a table planned from its data in line with `replanned`, through `publisher`'s connection once it is open (`destination` before): its schema changes run, and an open publisher's rows so far are settled and its staging table altered from the `old` staged columns, before it takes the new plan. Returns the `created ...` and `altered ...` lines.
+pub(crate) async fn bring_in_line(
+    (destination, publisher): (&Destination, Option<&mut Publisher>),
+    (old, replanned): (&[DesiredColumn], &TablePlan),
+) -> Result<Vec<String>, LoaderError> {
+    let mut changes: Vec<String> = Vec::new();
+    let destination = match &publisher {
+        Some(publisher) => &publisher.destination,
+        None => destination,
+    };
+    if let Some(statements) = schema_statements(replanned) {
+        execute_ddl(destination, statements).await?;
+        changes.extend(change_lines(replanned));
+    }
+    if let Some(publisher) = publisher {
+        publisher.settle_rows().await?;
+        publisher.reopen_rows();
+        if let Some(staging) = &publisher.staging {
+            let altered = sql_adapter(replanned.spec.warehouse).render_staging_changes(
+                staging,
+                (old, &staged_columns(replanned)),
+                publisher.started_with(),
+            );
+            execute_ddl(&publisher.destination, altered).await?;
+        }
+        publisher.table = replanned.clone();
+        publisher.widen_files().await?;
+    }
+    Ok(changes)
 }

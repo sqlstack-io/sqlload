@@ -83,6 +83,7 @@ use crate::loader::constants::INCLUSIVE_BOUND;
 use crate::loader::constants::SNAPSHOT_BEGIN;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_repair::files_to_replace;
+use crate::loader::models::ChildTables;
 use crate::loader::models::CommitRange;
 use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
@@ -420,7 +421,13 @@ impl Publisher {
             }
         };
         let committed_state = run.as_ref().and_then(|run| run.record.state.clone());
+        let children = (table.spec.unnest != Unnest::None).then(|| ChildTables {
+            options: options.clone(),
+            feeds: Vec::new(),
+            changes: Vec::new(),
+        });
         Ok(Self {
+            children,
             writer,
             at_end,
             builds,
@@ -1554,13 +1561,13 @@ impl Publisher {
             encoding: &sink.output.encoding,
         });
         let closed = close_writer(&mut writer, false).await.map(|_| ());
-        let schema = opened.map(|opened| opened.schema);
-        if let Ok(schema) = &schema {
-            writer.schema = schema.clone();
-        }
+        let opened = opened.map(|opened| {
+            writer.schema = opened.schema;
+            writer.metadata = opened.metadata;
+        });
         sink.writer = Some(writer);
         closed?;
-        schema.map(|_| ()).map_err(LoaderError::Invalid)
+        opened.map_err(LoaderError::Invalid)
     }
 
     /// Whether the last commit still has replaced files to delete that no partition written took with it.
