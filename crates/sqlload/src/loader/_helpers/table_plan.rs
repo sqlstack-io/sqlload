@@ -24,7 +24,7 @@ use crate::adapters::files::models::{OutputCheck, PartitionBy, TablePath};
 use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
-use crate::batch_plan::models::WindowSplit;
+use crate::batch_plan::models::{FileGroup, WindowSplit};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
@@ -849,6 +849,16 @@ pub(crate) fn publishes_once(table: &TablePlan) -> bool {
         && sql_adapter(table.spec.warehouse).publishes_ranges_once()
 }
 
+/// One commit per file, in the order planned: a files source's merge applies each file on its own, so a key repeated across files ends with the newest file's value.
+fn one_file_each(count: usize) -> Vec<FileGroup> {
+    (0..count)
+        .map(|index| FileGroup {
+            files: vec![index],
+            values: Vec::new(),
+        })
+        .collect()
+}
+
 /// Whether `route` has the destination load a warehouse source's unloaded files itself.
 pub(crate) fn pulls_unloaded(route: Option<&Route>) -> bool {
     route.is_some_and(|route| {
@@ -1291,6 +1301,9 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
             WriteMode::DeleteInsert { cursor_column, .. } => Some(cursor_column.as_str()),
             _ => None,
         };
+        if matches!(request.mode, WriteMode::Merge { .. }) {
+            return Ok(CommitRule::FileGroups(one_file_each(files.files.len())));
+        }
         return Ok(CommitRule::FileGroups(file_groups(&files.files, by_value)));
     }
     if spec.batch == Some(BatchStep::Whole) {

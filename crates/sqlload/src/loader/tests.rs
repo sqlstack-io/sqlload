@@ -1,5 +1,7 @@
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_merged_files.rs"]
+mod merged_files;
 #[path = "tests/test_python_columns.rs"]
 mod python_columns;
 #[path = "tests/test_render_tally.rs"]

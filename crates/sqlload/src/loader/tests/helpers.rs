@@ -247,3 +247,25 @@ pub(crate) fn unbuildable_request() -> LoaderError {
         |_| LoaderError::Invalid("the request was built".to_owned()),
     )
 }
+
+/// `file` (name, version) as the ledger reads it back from the record a merge commits with it.
+pub(crate) fn merged_file_round_trip(
+    spec: &TableSpec,
+    (name, version): (&str, &str),
+) -> Result<(String, String), String> {
+    let record = crate::loader::_helpers::run_log::merged_record(
+        spec,
+        ("load-1", 1),
+        (format!("{name}|{version}"), 2),
+    );
+    let text = serde_json::to_string(&record).map_err(|error| error.to_string())?;
+    let decoded = crate::run_log::main::decode_runs::decode_runs(&[text]);
+    let file = decoded
+        .records
+        .into_iter()
+        .flat_map(|record| record.files)
+        .next()
+        .ok_or_else(|| format!("no file read back: {:?}", decoded.unreadable))?;
+    let loaded = crate::loader::_helpers::sources::loaded_file(file, true);
+    Ok((loaded.name, loaded.version))
+}

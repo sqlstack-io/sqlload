@@ -3,6 +3,13 @@ use crate::files_source::models::{
     Codec, Compression, FilesEncoding, SourceFormat, UnmatchedPaths,
 };
 
+/// Listed files, as (key, modified ms), and the order a merge applies them in.
+pub(crate) struct MergeOrderTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) files: &'static [(&'static str, i64)],
+    pub(crate) expected_keys: &'static [&'static str],
+}
+
 pub(crate) struct SelectFilesTestCase {
     pub(crate) description: &'static str,
     /// Loaded files and their versions.

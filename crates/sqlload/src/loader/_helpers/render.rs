@@ -573,6 +573,15 @@ fn batch_line(table: &TablePlan) -> String {
             };
             format!("{windows} of {step}, {commits}{end}")
         }
+        (CommitRule::FileGroups(groups), _) if matches!(table.mode, WriteMode::Merge { .. }) => {
+            format!(
+                "{}, one commit each, oldest modified first (ties by path), each recorded in the run log",
+                match groups.len() {
+                    1 => "1 file".to_owned(),
+                    count => format!("{count} files"),
+                }
+            )
+        }
         (CommitRule::FileGroups(groups), _) => {
             let parquet = spec
                 .files

@@ -628,6 +628,8 @@ pub struct Publisher {
     pub batch_bytes: usize,
     /// A files target's folder and the commit being written.
     pub files: Option<FilesSink>,
+    /// A files source's merge: the file (`name|version`) the next commit merges, recorded in the run log with it.
+    pub merged_file: Option<String>,
 }
 
 /// A files target table's load: its folder, what the load replaces, and the files of the commit being written.

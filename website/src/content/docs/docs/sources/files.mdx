@@ -144,8 +144,7 @@ or an archive naming two members alike, fails.
 | `append` | Only files not loaded yet, by `_sqlload_source_file`. A file rewritten in place since it loaded fails the table, with the fix. |
 | `delete_insert` with a partition `cursor_column` (from `partition_columns` or `path_columns`) | The newest loaded partition and everything after it, replacing those partitions whole. |
 | `replace` | Every file, swapped in as a new table. |
-
-`merge` isn't supported for files sources: a file would be read again once its rows are updated.
+| `merge` with a `unique_key` (from 0.37.0, not released yet) | Only files not merged yet, one at a time, oldest modified first. |
 
 ```console
 $ sqlload load
@@ -160,6 +159,34 @@ loaded   raw.events_log  1 rows  0.0s
 
 Large loads commit at 1,000 files or about 1 GB. Under `delete_insert` a partition is never split
 across commits.
+
+### Merging files
+
+From 0.37.0 (not released yet), `merge` upserts each new file on its `unique_key`, so a key that
+several files carry ends with the value from the file modified last. Files merge in order of their
+modified time, then path, one commit each. Each commit also records that file and its version in
+`_sqlload_runs`, in the same transaction, and later loads skip the files recorded there. If a file
+fails, the files before it stay merged, and the error names the file that failed. The next load
+continues from that file.
+
+```toml
+[sources.prices]
+kind = "files"
+connection = "lake"
+path = "prices/"
+format = "csv"
+description = "Price lists, each file updating the prices it names."
+write_strategy = "merge"
+unique_key = ["sku"]
+```
+
+- A merged file rewritten in place is merged again, as the newest file.
+- Stores that keep modified times to the second, as SFTP does, and the members of one ZIP archive,
+  which share the archive's time, fall back to path order for files from the same second.
+- A key repeated within one file follows the target's merge: Postgres fails the file, as does
+  DuckDB for a key already in the table, while DuckDB inserts a new key once per row.
+- Merging files loads into DuckDB and Postgres targets so far. `--reload` and `state = "logged"`
+  are refused. To merge every file again, drop the table: a table created anew starts a new record.
 
 ## Columns
 

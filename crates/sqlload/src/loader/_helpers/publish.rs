@@ -49,7 +49,7 @@ use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
 use crate::file_store::models::OpenFolder as StoreFolder;
 use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
 };
 use crate::files_source::main::batch_columns::batch_columns;
 use crate::files_source::main::batch_footers::batch_footers;
@@ -62,6 +62,8 @@ use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
+use crate::loader::_helpers::run_log::merged_record;
+use crate::loader::_helpers::run_log::open_merge_log;
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
@@ -85,6 +87,7 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
+use crate::project::models::WriteStrategy;
 use crate::publish_checks::main::run_checks::run_checks;
 use crate::publish_checks::models::CheckedCommit;
 use crate::run_log::main::insert_run::insert_run;
@@ -216,6 +219,9 @@ impl Publisher {
         if run.is_some() && runs_sql {
             ensure_runs_table(&table, &destination).await?;
         }
+        if merges_files(&table) {
+            open_merge_log(&table, &destination).await?;
+        }
         let load_id = uuid::Uuid::new_v4().to_string();
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
@@ -338,6 +344,7 @@ impl Publisher {
             committed_state,
             batch_bytes: options.batch_bytes.unwrap_or(BATCH_BYTES),
             files,
+            merged_file: None,
         })
     }
 
@@ -639,12 +646,22 @@ impl Publisher {
         let mode = commit_mode(&self.table.mode, self.waiting_range.take());
         let warehouse = spec.warehouse;
         let runs = runs_table(&spec.destination);
-        let run_insert = match &self.run {
-            Some(_) => {
+        let merged = self.merged_file.take().map(|file| {
+            merged_record(
+                spec,
+                (&self.load_id, self.commits + 1),
+                (file, self.waiting_rows),
+            )
+        });
+        let run_insert = match (&self.run, merged) {
+            (Some(_), _) => {
                 let record = self.record(self.waiting_rows)?;
                 Some(insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid)?)
             }
-            None => None,
+            (None, Some(record)) => {
+                Some(insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid)?)
+            }
+            (None, None) => None,
         };
         let spec = &self.table.spec;
         let statements = sql_adapter(warehouse).render_commit(
@@ -960,53 +977,62 @@ async fn feed(
             }
             CommitRule::FileGroups(groups) => {
                 let planned = table.files.as_ref().map(|files| files.files.as_slice());
+                let merging = merges_files(table);
                 for group in groups {
                     let files: Vec<DataFile> = group
                         .files
                         .iter()
                         .filter_map(|index| planned.and_then(|files| files.get(*index)).cloned())
                         .collect();
-                    let footers = match reader {
-                        SourceReader::Files(folder) => {
-                            publisher.widen_for(run, folder, &files).await?
+                    let merged = merging.then(|| merged_file_text(table, &files));
+                    publisher.merged_file = merged.clone();
+                    let fed_group = async {
+                        let footers = match reader {
+                            SourceReader::Files(folder) => {
+                                publisher.widen_for(run, folder, &files).await?
+                            }
+                            _ => BatchFooters::default(),
+                        };
+                        let range = match group.values.is_empty() {
+                            true => CommitRange::Planned,
+                            false => CommitRange::Values(group.values.clone()),
+                        };
+                        let folder = match reader {
+                            SourceReader::Files(folder) => Some(folder),
+                            _ => None,
+                        };
+                        match publisher
+                            .load_direct((&files, &footers, folder), &range)
+                            .await?
+                        {
+                            Some(DirectLoaded::Committed(rows)) => {
+                                publisher.note_direct(&DirectLoaded::Committed(rows));
+                                return Ok(());
+                            }
+                            Some(staged) => {
+                                publisher.note_direct(&staged);
+                                publisher.cut(range).await?;
+                                return Ok(());
+                            }
+                            None => {}
                         }
-                        _ => BatchFooters::default(),
+                        publisher.note_read(&files);
+                        let part = ReadPart {
+                            files: Some(files),
+                            footers,
+                            ..ReadPart::default()
+                        };
+                        let current = publisher.table.clone();
+                        read_source(reader, &current, part, async |batch| {
+                            stage(&mut publisher, batch).await
+                        })
+                        .await?;
+                        publisher.cut(range).await
                     };
-                    let range = match group.values.is_empty() {
-                        true => CommitRange::Planned,
-                        false => CommitRange::Values(group.values.clone()),
-                    };
-                    let folder = match reader {
-                        SourceReader::Files(folder) => Some(folder),
-                        _ => None,
-                    };
-                    match publisher
-                        .load_direct((&files, &footers, folder), &range)
-                        .await?
-                    {
-                        Some(DirectLoaded::Committed(rows)) => {
-                            publisher.note_direct(&DirectLoaded::Committed(rows));
-                            continue;
-                        }
-                        Some(staged) => {
-                            publisher.note_direct(&staged);
-                            publisher.cut(range).await?;
-                            continue;
-                        }
-                        None => {}
-                    }
-                    publisher.note_read(&files);
-                    let part = ReadPart {
-                        files: Some(files),
-                        footers,
-                        ..ReadPart::default()
-                    };
-                    let current = publisher.table.clone();
-                    read_source(reader, &current, part, async |batch| {
-                        stage(&mut publisher, batch).await
-                    })
-                    .await?;
-                    publisher.cut(range).await?;
+                    fed_group.await.map_err(|error| match &merged {
+                        Some(name) => in_file(name, error),
+                        None => error,
+                    })?;
                 }
             }
             CommitRule::Ordered {
@@ -1087,6 +1113,46 @@ async fn feed(
     }
     .await;
     (publisher, fed)
+}
+
+/// Whether `table` merges a files source's files, one commit and run record per file.
+fn merges_files(table: &TablePlan) -> bool {
+    table.files.is_some()
+        && table.spec.files.is_some()
+        && table.spec.strategy == WriteStrategy::Merge
+}
+
+/// The file a files merge group reads (it holds one), as its run record names it: `name|version`.
+fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> String {
+    let location = table
+        .spec
+        .files
+        .as_ref()
+        .map(|files| files.location.to_string())
+        .unwrap_or_default();
+    files
+        .iter()
+        .map(|data| {
+            format!(
+                "{location}{}{VERSION_SEPARATOR}{}",
+                data.file.relative_key,
+                data.file.version()
+            )
+        })
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
+/// `error` naming the merged file (`name|version`) it happened in, as retryable as it was.
+fn in_file(merged: &str, error: LoaderError) -> LoaderError {
+    let name = merged
+        .rsplit_once(VERSION_SEPARATOR)
+        .map_or(merged, |(name, _)| name);
+    let text = format!("{name}: {error}");
+    match error.is_retryable() {
+        true => LoaderError::Transient(text),
+        false => LoaderError::Invalid(text),
+    }
 }
 
 async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), LoaderError> {

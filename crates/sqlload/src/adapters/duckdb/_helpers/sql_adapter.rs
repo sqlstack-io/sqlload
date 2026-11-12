@@ -6,6 +6,10 @@ use crate::adapters::duckdb::models::DuckDbSql;
 use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
 
 impl SqlAdapter for DuckDbSql {
+    fn merges_files(&self) -> bool {
+        true
+    }
+
     fn warehouse(&self) -> Warehouse {
         Warehouse::DuckDb
     }

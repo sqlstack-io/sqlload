@@ -2,11 +2,17 @@ use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
 use crate::helpers::{
-    local_store, run_async, run_files_scenario, run_large_partition, run_source_row_upgrade,
-    seaweedfs_store,
+    local_store, run_async, run_files_scenario, run_large_partition, run_merge_case,
+    run_source_row_upgrade, seaweedfs_store,
 };
 use crate::test_types::SourceRowUpgradeTestCase;
+use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep};
 use crate::test_types::{FilesRun, FilesScenarioTestCase, LargePartitionTestCase, ParquetFile};
+
+/// Every row as `id:v`, then how many merged files the run log records.
+pub(crate) const MERGE_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
+
+pub(crate) const MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\n";
 
 const NOV_3: ParquetFile = ParquetFile {
     key: "day=2026-11-03/part-0.parquet",
@@ -154,15 +160,21 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
             expected_result: "3",
         },
         FilesScenarioTestCase {
-            description: "merge is blocked for files sources",
+            description: "merge reads parquet files directly, and a file rewritten in place merges again over its keys",
             store: local_store,
             settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\npartition_columns = { day = \"date\" }\n",
-            runs: &[FilesRun {
-                files: &[NOV_3],
-                expected_error: "merge is not supported for files sources",
-            }],
-            check_query: NO_TABLE,
-            expected_result: "0",
+            runs: &[
+                FilesRun {
+                    files: &[NOV_3, NOV_4],
+                    expected_error: "",
+                },
+                FilesRun {
+                    files: &[NOV_4_REWRITTEN],
+                    expected_error: "",
+                },
+            ],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) || ':' || CAST(sum(score) AS VARCHAR) || ':' || string_agg(COALESCE(extra, '-'), ',' ORDER BY id) FROM raw.scores",
+            expected_result: "4:6.0:-,-,y,y",
         },
         FilesScenarioTestCase {
             description: "a source with no files is an error, never an empty load",
@@ -379,6 +391,197 @@ fn given_files_in_plain_folders_when_path_columns_capture_a_date_then_delete_ins
             let result = run_files_scenario(&server.endpoint, directory.path(), &test_case).await;
             assert_eq!(
                 result?.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_and_each_file_merges_once()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [
+            FilesMergeTestCase {
+                description: "a key repeated across files ends with the newest modified file's value, whatever the names",
+                settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    files: &[
+                        MergeFile {
+                            key: "c.csv",
+                            contents: "id,v\n1,c\n2,c\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n3,a\n",
+                            modified_secs: 2_000,
+                        },
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n1,b\n",
+                            modified_secs: 3_000,
+                        },
+                    ],
+                    expected_error: "",
+                    expected_plan: "3 files, one commit each, oldest modified first (ties by path)",
+                }],
+                check_query: MERGE_CHECK,
+                expected_result: "1:b,2:c,3:a|3",
+            },
+            FilesMergeTestCase {
+                description: "files modified at the same time merge in path order",
+                settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    files: &[
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n1,b\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n",
+                            modified_secs: 1_000,
+                        },
+                    ],
+                    expected_error: "",
+                    expected_plan: "",
+                }],
+                check_query: MERGE_CHECK,
+                expected_result: "1:b|2",
+            },
+            FilesMergeTestCase {
+                description: "a failure in the second file keeps the first committed, names the file, and a rerun merges from it without merging the first again; a run with nothing new merges nothing",
+                settings: MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        files: &[
+                            MergeFile {
+                                key: "a.csv",
+                                contents: "id,v\n1,a\n2,a\n",
+                                modified_secs: 1_000,
+                            },
+                            MergeFile {
+                                key: "b.csv",
+                                contents: "id,v\n1,b\n1,bb\n",
+                                modified_secs: 2_000,
+                            },
+                            MergeFile {
+                                key: "c.csv",
+                                contents: "id,v\n2,c\n",
+                                modified_secs: 3_000,
+                            },
+                        ],
+                        expected_error: "drop/b.csv: ",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        files: &[MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n1,b\n",
+                            modified_secs: 2_000,
+                        }],
+                        expected_error: "",
+                        expected_plan: "2 files, one commit each",
+                    },
+                    MergeStep {
+                        files: &[],
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                ],
+                check_query: MERGE_CHECK,
+                expected_result: "1:b,2:c|3",
+            },
+            FilesMergeTestCase {
+                description: "a merged file rewritten in place merges again, as the newest",
+                settings: MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        files: &[
+                            MergeFile {
+                                key: "a.csv",
+                                contents: "id,v\n1,a\n",
+                                modified_secs: 1_000,
+                            },
+                            MergeFile {
+                                key: "b.csv",
+                                contents: "id,v\n1,b\n",
+                                modified_secs: 2_000,
+                            },
+                        ],
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        files: &[MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a2\n",
+                            modified_secs: 3_000,
+                        }],
+                        expected_error: "",
+                        expected_plan: "1 file, one commit each",
+                    },
+                ],
+                check_query: MERGE_CHECK,
+                expected_result: "1:a2|3",
+            },
+        ];
+        for test_case in &test_cases {
+            let result = run_merge_case(
+                ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+                test_case,
+            )
+            .await?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_files_appended_when_their_modified_times_are_shuffled_then_the_load_is_as_before_and_writes_no_run_log()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [FilesMergeTestCase {
+            description: "append ignores modified times and keeps no run log",
+            settings: "write_strategy = \"append\"\n",
+            steps: &[MergeStep {
+                files: &[
+                    MergeFile {
+                        key: "a.csv",
+                        contents: "id,v\n1,a\n",
+                        modified_secs: 3_000,
+                    },
+                    MergeFile {
+                        key: "b.csv",
+                        contents: "id,v\n1,b\n",
+                        modified_secs: 1_000,
+                    },
+                ],
+                expected_error: "",
+                expected_plan: "1 batch of whole partitions, up to 1,000 files or about 1 GB per commit",
+            }],
+            check_query: "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY v) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = '_sqlload_runs')",
+            expected_result: "1:a,1:b|0",
+        }];
+        for test_case in &test_cases {
+            let result = run_merge_case(
+                ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+                test_case,
+            )
+            .await?;
+            assert_eq!(
+                result.as_deref(),
                 Some(test_case.expected_result),
                 "{}",
                 test_case.description
