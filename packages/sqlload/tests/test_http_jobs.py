@@ -83,9 +83,18 @@ class Api(BaseHTTPRequestHandler):
 		"""Orders after `$.filter.after`, paged by `$.page.offset`/`$.page.limit` or by `$.page.cursor` (four at a time)."""
 		body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
 		url = urlparse(self.path)
-		self.server.bodies.append((url.path, self.headers.get("Content-Type"), body))  # type: ignore[attr-defined]
+		self.server.bodies.append((url.path, ", ".join(self.headers.get_all("Content-Type") or []), body))  # type: ignore[attr-defined]
 		if self.headers.get("Authorization") != f"Bearer {TOKEN}":
 			return self.reply(401, {"message": "bad token"})
+		moved = {
+			"/v1/search-302": (302, "/v1/wrapped"),
+			"/v1/search-307": (307, "/v1/search-cursor"),
+			"/v1/search-away": (200, None),
+		}.get(url.path)
+		if moved == (200, None):
+			return self.reply(200, {"items": ORDERS[:1], "next": f"{self.server.other}/steal"})  # type: ignore[attr-defined]
+		if moved is not None:
+			return self.reply(moved[0], {}, {"Location": moved[1]})
 		after = body.get("filter", {}).get("after") or 0
 		rows = [row for row in ORDERS if row["order_id"] > after]
 		page = body.get("page", {})
@@ -93,7 +102,8 @@ class Api(BaseHTTPRequestHandler):
 			start, limit = page["offset"], page["limit"]
 			return self.reply(200, {"items": rows[start : start + limit]})
 		start = int(page.get("cursor") or 0)
-		self.reply(200, {"items": rows[start : start + 4], "meta": {"next": str(start + 4) if start + 4 < len(rows) else None}})
+		token: Any = start + 4 if url.path == "/v1/search-number" else str(start + 4)
+		self.reply(200, {"items": rows[start : start + 4], "meta": {"next": token if start + 4 < len(rows) else None}})
 
 	def token(self) -> None:
 		"""The OAuth2 token endpoint: `self.server.oauth` sets the lifetime, uses before revocation and rotation of tokens it issues."""
@@ -207,6 +217,8 @@ class Elsewhere(BaseHTTPRequestHandler):
 		self.send_header("Content-Length", str(len(data)))
 		self.end_headers()
 		self.wfile.write(data)
+
+	do_POST = do_GET
 
 
 def serve(handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
@@ -648,8 +660,12 @@ SEARCH_FILTER = {"filter": {"status": "any"}}
 			"api.paginate('/search-cursor', method='post', json_body=FILTER, paginator=sl.cursor('$.meta.next', '$.page.cursor', location='body'), select='$.items')",
 			[SEARCH_FILTER, {**SEARCH_FILTER, "page": {"cursor": "4"}}],
 		),
+		(
+			"api.paginate('/search-number', method='POST', json_body=FILTER, paginator=sl.cursor('$.meta.next', '$.page.cursor', location='body'), select='$.items')",
+			[SEARCH_FILTER, {**SEARCH_FILTER, "page": {"cursor": 4}}],
+		),
 	],
-	ids=["offset-in-body", "cursor-token-in-body"],
+	ids=["offset-in-body", "cursor-token-in-body", "numeric-cursor-token-in-body"],
 )
 def test_given_a_post_job_paging_in_its_body_when_loading_then_each_page_sends_the_template_with_its_values(
 	tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_bodies: list[dict[str, Any]]
@@ -662,6 +678,46 @@ def test_given_a_post_job_paging_in_its_body_when_loading_then_each_page_sends_t
 	assert [body for _, _, body in api.bodies] == expected_bodies  # type: ignore[attr-defined]
 	assert {content_type for _, content_type, _ in api.bodies} == {"application/json"}  # type: ignore[attr-defined]
 	assert api.log == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+	("path", "paginator", "expected_code", "expected_text", "expected_paths"),
+	[
+		("/search-307", "sl.single()", 0, "", ["/v1/search-307", "/v1/search-cursor"]),
+		("/search-302", "sl.single()", 1, "or is a 301, 302 or 303 after a POST", ["/v1/search-302"]),
+		("/search-away", "sl.next_link('$.next')", 1, "json_body never leaves the connection's origin", ["/v1/search-away"]),
+	],
+	ids=["307-resends-the-body", "302-is-not-followed-as-a-get", "next-link-to-another-host"],
+)
+def test_given_a_post_answered_with_a_redirect_or_link_when_loading_then_its_body_is_resent_or_the_load_fails(
+	tmp_path: Path,
+	api: ThreadingHTTPServer,
+	elsewhere: ThreadingHTTPServer,
+	path: str,
+	paginator: str,
+	expected_code: int,
+	expected_text: str,
+	expected_paths: list[str],
+) -> None:
+	tables = f"@shop.table(description='Orders.')\ndef orders(ctx):\n    return api.paginate('{path}', method='POST', json_body={SEARCH_FILTER!r}, paginator={paginator}, select='$.items')\n"
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load")
+	assert done.returncode == expected_code, done.stdout + done.stderr
+	assert expected_text in done.stdout + done.stderr
+	assert [(path, body) for path, _, body in api.bodies] == [(path, SEARCH_FILTER) for path in expected_paths]  # type: ignore[attr-defined]
+	assert api.log == [] and elsewhere.seen == []  # type: ignore[attr-defined]
+
+
+def test_given_a_connection_content_type_when_posting_then_it_is_the_only_one_sent(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	tables = (
+		"typed = sl.http(shop, auth=sl.bearer(), headers={'Content-Type': 'application/json; charset=utf-8'})\n\n"
+		"@shop.table(description='Orders.')\ndef orders(ctx):\n"
+		"    return typed.paginate('/search-cursor', method='POST', paginator=sl.single(), select='$.items')\n"
+	)
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert [content_type for _, content_type, _ in api.bodies] == ["application/json; charset=utf-8"]  # type: ignore[attr-defined]
 
 
 def test_given_an_incremental_cursor_in_the_body_when_loading_twice_then_the_second_run_sends_the_stored_cursor(
@@ -696,8 +752,12 @@ def test_given_a_get_job_when_loading_then_its_requests_are_unchanged_by_body_pa
 		("api.paginate('/search', json_body={'a': 1}, paginator=sl.single())", 'json_body is sent only with method="POST"'),
 		("api.paginate('/search', paginator=sl.cursor('$.next', '$.page.cursor', location='body'))", 'a paginator with location="body" needs method="POST"'),
 		("api.paginate('/search', method='POST', paginator=sl.cursor('$.next', 'page[cursor]', location='body'))", 'body path "page[cursor]" is not a path such as "$.page.cursor"'),
+		(
+			"api.paginate('/search-cursor', method='POST', json_body={'page': 1}, paginator=sl.cursor('$.meta.next', '$.page.cursor', location='body'))",
+			"json_body has no object to set $.page.cursor in",
+		),
 	],
-	ids=["body-on-get", "body-paging-on-get", "bad-body-path"],
+	ids=["body-on-get", "body-paging-on-get", "bad-body-path", "body-path-through-a-number"],
 )
 def test_given_a_bad_body_setting_when_loading_then_no_request_is_sent(tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_text: str) -> None:
 	project = make_project(tmp_path, api, f"@shop.table(description='Orders.')\ndef orders(ctx):\n    return {job}\n")

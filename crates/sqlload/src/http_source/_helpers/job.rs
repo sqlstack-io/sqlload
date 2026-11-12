@@ -10,7 +10,7 @@ use tokio::task::JoinSet;
 
 use crate::http_source::_helpers::endpoint::{endpoint, interval, shared_limiter};
 use crate::http_source::_helpers::oauth::token_url;
-use crate::http_source::_helpers::pages::paginate;
+use crate::http_source::_helpers::pages::{paginate, set_at};
 use crate::http_source::_helpers::selector::{selected_rows, selector};
 use crate::http_source::_helpers::urls::{filled_path, placeholders};
 use crate::python_sources::errors::ReadError;
@@ -20,7 +20,9 @@ use crate::row_batches::models::{Projection, ProjectionRules};
 use std::time::Duration;
 
 use crate::http::main::install_tls_provider::install_tls_provider;
-use crate::http_source::constants::{JOB_THREADS, MAX_REDIRECTS, PAGES_AHEAD};
+use crate::http_source::constants::{
+    BODY_DROPPING_REDIRECTS, JOB_THREADS, MAX_REDIRECTS, PAGES_AHEAD,
+};
 use crate::http_source::models::{
     Auth, Calls, FanOut, FieldSpec, HttpJob, HttpPage, KeyFeed, Location, Method, Over, Paginator,
     Request, Selector, StatusAction,
@@ -174,16 +176,23 @@ fn body_problems(request: &Request) -> Vec<String> {
             "a paginator with location=\"body\" sets fields in json_body, so json_body must be an object".to_owned(),
         );
     }
-    problems.extend(
-        paths
-            .into_iter()
-            .filter_map(|path| match selector(Some(path)) {
-                Ok(parsed) if parsed.field.is_none() && !parsed.rows.is_empty() => None,
-                Ok(_) | Err(_) => Some(format!(
-                    "body path {path:?} is not a path such as \"$.page.cursor\""
-                )),
-            }),
-    );
+    problems.extend(paths.iter().filter_map(|path| match selector(Some(path)) {
+        Ok(parsed) if parsed.field.is_none() && !parsed.rows.is_empty() => None,
+        Ok(_) | Err(_) => Some(format!(
+            "body path {path:?} is not a path such as \"$.page.cursor\""
+        )),
+    }));
+    if problems.is_empty() {
+        let mut body = request
+            .json_body
+            .clone()
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        problems.extend(
+            paths
+                .iter()
+                .filter_map(|path| set_at(&mut body, path, Value::Null).err()),
+        );
+    }
     problems
 }
 
@@ -300,7 +309,14 @@ async fn run_job(
     connections: Map<String, Value>,
     pages: Sender<HttpPage>,
 ) -> Result<(), ReadError> {
-    let http = job_client()?;
+    let posts = match &job {
+        HttpJob::Paginate(request) => request.method == Method::Post,
+        HttpJob::FanOut(fan_out) => {
+            fan_out.request.method == Method::Post
+                || matches!(&fan_out.over, Over::Paginate(over) if over.method == Method::Post)
+        }
+    };
+    let http = job_client(posts)?;
     match job {
         HttpJob::Paginate(request) => {
             let calls = request_calls(&request, &connections, &http)?;
@@ -310,11 +326,16 @@ async fn run_job(
     }
 }
 
-/// A pooled client that follows redirects only within the first request's origin, so connection headers and credentials never reach another host.
-fn job_client() -> Result<reqwest::Client, String> {
+/// A pooled client that follows redirects only within the first request's origin, so connection headers and credentials never reach another host; when the job `posts`, it also stops at 301, 302 and 303, which would resend the request as a `GET` without its body.
+fn job_client(posts: bool) -> Result<reqwest::Client, String> {
     install_tls_provider();
     reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::custom(same_origin_redirect))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            match posts && BODY_DROPPING_REDIRECTS.contains(&attempt.status().as_u16()) {
+                true => attempt.stop(),
+                false => same_origin_redirect(attempt),
+            }
+        }))
         .pool_idle_timeout(Duration::from_secs(90))
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(300))

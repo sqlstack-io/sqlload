@@ -183,7 +183,7 @@ fn page_call(
 }
 
 /// `body` with `value` at `path` (such as `$.page.cursor`), adding objects on the way.
-fn set_at(body: &mut Value, path: &str, value: Value) -> Result<(), String> {
+pub(crate) fn set_at(body: &mut Value, path: &str, value: Value) -> Result<(), String> {
     let names = selector(Some(path))?.rows;
     let Some((last, parents)) = names.split_last() else {
         return Err(format!("body path {path:?} names no field"));

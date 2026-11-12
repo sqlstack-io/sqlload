@@ -69,8 +69,13 @@ async fn once(
     let url = &call.url;
     let shown = redacted(&format!("{} {url}", call.method.as_str()), &secrets);
     let own = same_origin(&endpoint.base_url, url);
+    if !own && call.body.is_some() {
+        return Err(format!(
+            "{shown}: the next page is on another origin, and the job's json_body never leaves the connection's origin"
+        ));
+    }
     let mut request = match &call.body {
-        Some(body) => calls.http.post(url.clone()).json(body),
+        Some(_) => calls.http.post(url.clone()),
         None => calls.http.get(url.clone()),
     };
     for (name, value) in endpoint.headers.iter().filter(|_| own) {
@@ -82,6 +87,9 @@ async fn once(
         (Credential::OAuth2(_), true) => request.bearer_auth(access.unwrap_or_default()),
         _ => request,
     };
+    if let Some(body) = &call.body {
+        request = request.json(body);
+    }
     let response = match request.send().await {
         Ok(response) => response,
         Err(error) if error.is_builder() => {
@@ -141,7 +149,7 @@ async fn once(
         _ if skipped => Attempt::Done(None),
         300..=399 => {
             return Err(format!(
-                "{shown}: HTTP {status}: the redirect was not followed: it leads to another origin, has no Location, or goes past {MAX_REDIRECTS} hops; credentials never leave the connection's origin, so use the final URL as base_url"
+                "{shown}: HTTP {status}: the redirect was not followed: it leads to another origin, has no Location, goes past {MAX_REDIRECTS} hops, or is a 301, 302 or 303 after a POST, which would drop its body; credentials never leave the connection's origin, so use the final URL as base_url"
             ));
         }
         TOO_MANY_REQUESTS | FIRST_SERVER_ERROR.. => Attempt::Retry {
