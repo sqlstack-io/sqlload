@@ -24,6 +24,11 @@ pub struct Request {
     /// Query parameters; a null value is left out.
     #[serde(default)]
     pub params: Map<String, Value>,
+    #[serde(default)]
+    pub method: Method,
+    /// The JSON body every `POST` starts from; each page's copy gets the paginator's values when they go in the body.
+    #[serde(default)]
+    pub json_body: Option<Value>,
     pub paginator: Paginator,
     /// Where the rows are in each response, such as `$.items`; `$` (or none) is the whole response.
     #[serde(default)]
@@ -37,6 +42,41 @@ pub struct Request {
     /// A column holding each row's whole object as JSON.
     #[serde(default)]
     pub keep_record: Option<String>,
+}
+
+/// The HTTP method of a job's requests.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Method {
+    #[default]
+    Get,
+    Post,
+}
+
+impl Method {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Post => "POST",
+        }
+    }
+}
+
+/// Where a paginator's values go: the query string, or a path in the JSON body.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Location {
+    #[default]
+    Query,
+    Body,
+}
+
+/// One request of a page: its method, URL and JSON body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageCall {
+    pub method: Method,
+    pub url: reqwest::Url,
+    pub body: Option<Value>,
 }
 
 /// One projected column of a job's rows.
@@ -182,16 +222,28 @@ pub enum Paginator {
     NextLink { pointer: String },
     /// The `Link` header's `rel="next"`.
     LinkHeader,
-    /// `param` counts rows from 0 by `limit`; ends at a page with fewer rows.
+    /// `param` counts rows from 0 by `limit`; ends at a page with fewer rows. In the body, `param` and `limit_param` are paths such as `$.page.offset`.
     Offset {
         param: String,
         limit_param: String,
         limit: u64,
+        #[serde(default)]
+        location: Location,
     },
     /// `param` counts pages from `start`; ends at an empty page.
-    PageNumber { param: String, start: u64 },
-    /// The token at `pointer` in the body goes back as `param`; ends when it is missing, null or empty.
-    Cursor { pointer: String, param: String },
+    PageNumber {
+        param: String,
+        start: u64,
+        #[serde(default)]
+        location: Location,
+    },
+    /// The token at `pointer` in the response goes back as `param`; ends when it is missing, null or empty.
+    Cursor {
+        pointer: String,
+        param: String,
+        #[serde(default)]
+        location: Location,
+    },
 }
 
 /// What a listed status does.

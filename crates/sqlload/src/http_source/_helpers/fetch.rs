@@ -1,8 +1,7 @@
-//! One GET with the shared rate limit, retries with backoff, `Retry-After`, and `on_status`.
+//! One request with the shared rate limit, retries with backoff, `Retry-After`, and `on_status`.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use reqwest::Url;
 use reqwest::header::{LINK, RETRY_AFTER};
 
 use crate::http::constants::{FIRST_SERVER_ERROR, TOO_MANY_REQUESTS, UNAUTHORIZED};
@@ -12,11 +11,11 @@ use crate::http_source::constants::{
     ERROR_EXCERPT_CHARS, FIRST_RETRY_DELAY, MAX_REDIRECTS, MAX_RETRY_AFTER, MAX_RETRY_DELAY,
     SKIPPED_REFUSAL_RENEWAL_AGE,
 };
-use crate::http_source::models::{Attempt, Calls, Credential, Fetched, StatusAction};
+use crate::http_source::models::{Attempt, Calls, Credential, Fetched, PageCall, StatusAction};
 use crate::python_sources::errors::ReadError;
 
-/// The body at `url`, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times, and are still worth retrying later once those run out.
-pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, ReadError> {
+/// The response to `call`, its JSON body resent on every retry, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times, and are still worth retrying later once those run out.
+pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetched>, ReadError> {
     let policy = RetryPolicy {
         first_delay: FIRST_RETRY_DELAY,
         max_delay: MAX_RETRY_DELAY,
@@ -37,7 +36,7 @@ pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, R
             ),
             _ => None,
         };
-        match once(calls, url, access.as_deref(), !renewed).await? {
+        match once(calls, call, access.as_deref(), !renewed).await? {
             Attempt::Done(fetched) => return Ok(fetched),
             Attempt::Refused => {
                 refused = access;
@@ -58,18 +57,22 @@ pub(crate) async fn fetch(calls: &Calls, url: &Url) -> Result<Option<Fetched>, R
     }
 }
 
-/// One try at `url`, with the OAuth2 `access` token when the connection uses one; a 401 from the connection's origin comes back as `Refused` while `may_renew`, unless `on_status` skips 401 and the token is younger than `SKIPPED_REFUSAL_RENEWAL_AGE`.
+/// One try at `call`, with the OAuth2 `access` token when the connection uses one; a 401 from the connection's origin comes back as `Refused` while `may_renew`, unless `on_status` skips 401 and the token is younger than `SKIPPED_REFUSAL_RENEWAL_AGE`.
 async fn once(
     calls: &Calls,
-    url: &Url,
+    call: &PageCall,
     access: Option<&str>,
     may_renew: bool,
 ) -> Result<Attempt, String> {
     let endpoint = &calls.endpoint;
     let secrets = endpoint.current_secrets();
-    let shown = redacted(&format!("GET {url}"), &secrets);
+    let url = &call.url;
+    let shown = redacted(&format!("{} {url}", call.method.as_str()), &secrets);
     let own = same_origin(&endpoint.base_url, url);
-    let mut request = calls.http.get(url.clone());
+    let mut request = match &call.body {
+        Some(body) => calls.http.post(url.clone()).json(body),
+        None => calls.http.get(url.clone()),
+    };
     for (name, value) in endpoint.headers.iter().filter(|_| own) {
         request = request.header(name, value);
     }
