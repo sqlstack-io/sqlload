@@ -453,6 +453,7 @@ fn given_a_relay_when_its_session_is_taken_then_its_socket_folder_is_gone() -> R
             let folder = relay_tls(&address)
                 .await
                 .map_err(|error| error.to_string())?
+                .map(|relay| relay.host)
                 .unwrap_or_default();
             let socket = Path::new(&folder).join(format!(".s.PGSQL.{port}"));
             let mode = std::os::unix::fs::PermissionsExt::mode(

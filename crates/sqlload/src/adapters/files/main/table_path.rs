@@ -3,12 +3,13 @@
 use crate::adapters::files::_helpers::layout::template::partition_folder;
 use crate::adapters::files::constants::{CURSOR_PLACEHOLDER, CURSOR_PLACEHOLDER_START};
 use crate::adapters::files::models::{TablePath, TablePathRequest};
+use crate::store_paths::main::local_separators::local_separators;
 use crate::store_paths::main::render_template::render_template;
 use crate::store_paths::main::resolve_location::resolve_location;
 
-/// The table's folder and partition folder: placeholders filled, the cursor allowed only in the last folder.
+/// The table's folder and partition folder: placeholders filled, the cursor allowed only in the last folder. A leading `/` (or `//` before a Windows share) is kept as the root; a Windows drive (`C:`) is the first folder.
 pub fn table_path(request: &TablePathRequest<'_>) -> Result<TablePath, String> {
-    let template = request.template;
+    let template = &*local_separators(request.template);
     if template.contains("://") {
         return Err(format!(
             "path {template:?} must be relative to connection {:?}, not a URL",
@@ -42,10 +43,7 @@ pub fn table_path(request: &TablePathRequest<'_>) -> Result<TablePath, String> {
             ));
         }
     };
-    let root = match template.starts_with('/') {
-        true => "/",
-        false => "",
-    };
+    let root = &template[..template.len() - template.trim_start_matches('/').len()];
     let rendered = render_template(&format!("{root}{}", folder_segments.join("/")), &values)
         .map_err(|error| error.to_string())?;
     let folder = resolve_location(Some((request.connection, request.store)), &rendered)

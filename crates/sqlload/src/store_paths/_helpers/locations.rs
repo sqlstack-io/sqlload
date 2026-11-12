@@ -1,8 +1,13 @@
+use std::borrow::Cow;
+
 use crate::store_paths::_helpers::folder::folder;
+use crate::store_paths::_helpers::local_root::{
+    local_root, windows_file_url_path, windows_separators,
+};
 use crate::store_paths::errors::PathError;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// The location in a URL or absolute path, `None` for a relative path.
+/// The location in a URL or absolute path (on Windows also `C:\folder`, `\\server\share\folder` and `file://server/share/folder`), `None` for a relative path.
 pub(crate) fn url_location(path: &str) -> Result<Option<Location>, PathError> {
     if let Some(rest) = path.strip_prefix("s3://") {
         let (bucket, key) = rest.split_once('/').unwrap_or((rest, ""));
@@ -22,9 +27,14 @@ pub(crate) fn url_location(path: &str) -> Result<Option<Location>, PathError> {
             prefix: folder(&[key])?,
         }));
     }
-    let absolute = path.strip_prefix("file://").unwrap_or(path);
-    if absolute.starts_with('/') {
-        let prefix = folder(&[absolute])?;
+    let windows = cfg!(windows);
+    let local = match path.strip_prefix("file://") {
+        Some(rest) => windows_file_url_path(rest, windows),
+        None => Cow::Borrowed(path),
+    };
+    let local = windows_separators(&local, windows);
+    if let Some((root, rest)) = local_root(&local, windows) {
+        let prefix = folder(&[rest])?;
         if prefix.is_empty() {
             return Err(PathError::Empty {
                 path: path.to_owned(),
@@ -32,9 +42,7 @@ pub(crate) fn url_location(path: &str) -> Result<Option<Location>, PathError> {
             });
         }
         return Ok(Some(Location {
-            store: StoreKind::Filesystem {
-                root: "/".to_owned(),
-            },
+            store: StoreKind::Filesystem { root },
             prefix,
         }));
     }

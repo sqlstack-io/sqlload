@@ -29,8 +29,8 @@ access to spreadsheets and nothing else.
 | `service_account_json` | The service-account key file's JSON text, normally `${ENV:...}`. |
 | `service_account_json_base64` | The same, base64-encoded, for secret stores that dislike newlines and quotes. |
 | `service_account_file` | A path to the key file. |
-| `client_id`, `client_secret` | From 0.36.0 (not released yet). An OAuth client, to read as a Google user instead. See [Sign in as a Google user](#sign-in-as-a-google-user). |
-| `refresh_token` | From 0.36.0 (not released yet). The Google user's refresh token, for unattended runs. |
+| `client_id`, `client_secret` | From 0.36.0. An OAuth client, to read as a Google user instead. See [Sign in as a Google user](#sign-in-as-a-google-user). |
+| `refresh_token` | From 0.36.0. The Google user's refresh token, for unattended runs. |
 
 Set at most one of the three key settings and `client_id`; `plan` refuses more. With none, SQLLoad
 reads the key file `GOOGLE_APPLICATION_CREDENTIALS` names. `sqlload debug` shows which service
@@ -39,7 +39,7 @@ is not supported yet.
 
 ## Sign in as a Google user
 
-From 0.36.0 (not released yet).
+From 0.36.0.
 Status: user OAuth tested against a simulated Google endpoint, not yet against live Google.
 The service-account route above is tested against live Google.
 

@@ -12,6 +12,7 @@ use crate::command::_helpers::limits::runtime;
 use crate::command::_helpers::loader_commands::{exit_code, json_error, run_loader};
 use crate::command::_helpers::logging::init_logging;
 use crate::command::_helpers::output::{config_text, print_lines};
+use crate::command::constants::COMMAND_STACK_BYTES;
 use crate::command::errors::CommandError;
 use crate::command::models::{Cli, Command, LoaderRequest};
 use crate::project::main::is_project::is_project;
@@ -50,26 +51,38 @@ where
         Ok(runtime) => runtime,
         Err(message) => return failed(json, name, &message.into()),
     };
-    let outcome = runtime.block_on(async {
-        if copies || is_project(&text) {
-            let request = LoaderRequest {
-                text: &text,
-                config: &cli.config,
-                command: cli.command,
-                host,
-                no_color: cli.no_color,
-                variables: Default::default(),
-            };
-            return match copies {
-                true => run_copy(request).await,
-                false => run_loader(request).await,
-            };
-        }
-        run_exporter_command(&cli.config, cli.command)
-            .await
-            .map(|lines| (lines, 0))
-            .map_err(CommandError::from)
+    let outcome = on_command_stack(|| {
+        runtime.block_on(async {
+            if copies || is_project(&text) {
+                let request = LoaderRequest {
+                    text: &text,
+                    config: &cli.config,
+                    command: cli.command,
+                    host,
+                    no_color: cli.no_color,
+                    variables: Default::default(),
+                };
+                return match copies {
+                    true => run_copy(request).await,
+                    false => run_loader(request).await,
+                };
+            }
+            run_exporter_command(&cli.config, cli.command)
+                .await
+                .map(|lines| (lines, 0))
+                .map_err(CommandError::from)
+        })
     });
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return failed(
+                json,
+                name,
+                &format!("cannot start the command's thread: {error}").into(),
+            );
+        }
+    };
     match outcome {
         Ok((lines, code)) => {
             print_lines(lines, cli.no_color);
@@ -91,4 +104,18 @@ fn failed(json: bool, code: &str, error: &CommandError) -> u8 {
         }
     }
     exit_code(false, error.retryable)
+}
+
+/// `body`'s result, run on a thread of its own with `COMMAND_STACK_BYTES` of stack rather than on the caller's: a Windows main thread, the executable's or python.exe's, has 1 MB, which a debug build's copy into a files target outgrows. A panic in `body` carries on in the caller.
+fn on_command_stack<T: Send>(body: impl FnOnce() -> T + Send) -> std::io::Result<T> {
+    std::thread::scope(|scope| {
+        let thread = std::thread::Builder::new()
+            .name("sqlload-command".to_owned())
+            .stack_size(COMMAND_STACK_BYTES)
+            .spawn_scoped(scope, body)?;
+        Ok(match thread.join() {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        })
+    })
 }

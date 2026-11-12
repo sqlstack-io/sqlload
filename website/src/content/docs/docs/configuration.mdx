@@ -143,7 +143,7 @@ delete, set `AWS_DISABLE_BULK_DELETE=true`: SQLLoad then deletes each file with 
 
 | Key | Meaning |
 |-----|---------|
-| `root` | A folder on the machine SQLLoad runs on. |
+| `root` | A folder on the machine SQLLoad runs on. On Windows also a drive path (`'C:\data\lake'`) or a network share (`'\\server\share\lake'`); write it as a TOML literal string, in single quotes, so the backslashes stay. |
 
 ### `sftp`
 
@@ -178,7 +178,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 |-----|---------|
 | `base_url` | The API's base URL. |
 | `token` | For `sl.bearer()` and `sl.api_key(...)`. |
-| `username`, `password` | For `sl.basic()`, and from 0.36.0 (not released yet) for `sl.oauth2_password(...)`. |
+| `username`, `password` | For `sl.basic()`, and from 0.36.0 for `sl.oauth2_password(...)`. |
 | `client_id`, `client_secret` | From 0.27.0. For `sl.oauth2_client_credentials(...)`, and for `sl.oauth2_refresh_token(...)` or `sl.oauth2_password(...)` when the API wants the client too. |
 | `refresh_token` | From 0.27.0. For `sl.oauth2_refresh_token(...)`. |
 | `headers` | Headers sent with every request. |

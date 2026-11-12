@@ -192,14 +192,16 @@ class Http:
 		keep_record: str | None = None,
 		method: str = "GET",
 		json_body: Mapping[str, Any] | None = None,
+		key: str | None = None,
 	) -> Job:
 		"""Every page of `path`; `select` (such as `"$.items"`) is where the rows are, `on_status={404: "skip"}` treats a status as no rows.
 
 		`fields` loads only those values of each row, renamed (`{"account_code": "$.code"}`); `keep_record` adds each
 		row's whole object as a JSON column. `method="POST"` sends `json_body` as JSON with every page, each page's copy
-		holding the paginator's values when its `location` is `"body"`."""
+		holding the paginator's values when its `location` is `"body"`. As a fan-out's `over`, `key` names the
+		placeholder the selected values fill when it is not the field's own name (`select="$.items[*].id", key="order_id"`)."""
 		request = self._request(path, paginator, params, select, on_status, (method, json_body))
-		return Job({"kind": "paginate", **request, **_projection(fields, keep_record)})
+		return Job({"kind": "paginate", **request, **_projection(fields, keep_record), **_key(key)})
 
 	def fan_out(
 		self,
@@ -215,22 +217,21 @@ class Http:
 		keep_record: str | None = None,
 		method: str = "GET",
 		json_body: Mapping[str, Any] | None = None,
+		key: str | None = None,
 	) -> Job:
 		"""Every page of `path` once per key of `over`, up to `concurrency` at a time: `over` is a paginate whose
 		`select` picks the keys (`"$.items[*].id"` fills `{id}`), or values (`["uk", "fr"]` fill the one placeholder;
-		dicts fill them by name)."""
-		if isinstance(over, Job) and over._definition["kind"] != "paginate":
-			raise TypeError("fan_out over= takes a paginate job or values, not another fan_out")
+		dicts fill them by name).
+
+		`over` can also be another fan_out whose `select` picks keys, as deep as they nest: each key keeps the
+		fields of the keys above it, so a third level's path can use `{order_id}` and `{item_id}`. `key` names the
+		placeholder this fan-out's selected values fill when it is itself an `over`."""
 		if isinstance(over, (str, bytes)):
-			raise TypeError("fan_out over= takes a paginate job or a list of values, not one string")
-		over_spec = (
-			{"kind": "paginate", **{k: v for k, v in over._definition.items() if k != "kind"}}
-			if isinstance(over, Job)
-			else {"kind": "values", "values": list(over)}
-		)
+			raise TypeError("fan_out over= takes a paginate or fan_out job or a list of values, not one string")
+		over_spec = dict(over._definition) if isinstance(over, Job) else {"kind": "values", "values": list(over)}
 		request = self._request(path, paginator or single(), params, select, on_status, (method, json_body))
 		projected = _projection(fields, keep_record)
-		return Job({"kind": "fan_out", **request, **projected, "over": over_spec, "concurrency": concurrency})
+		return Job({"kind": "fan_out", **request, **projected, **_key(key), "over": over_spec, "concurrency": concurrency})
 
 	def _request(
 		self,
@@ -254,6 +255,11 @@ class Http:
 			"select": select,
 			"on_status": {str(status): action for status, action in (on_status or {}).items()},
 		}
+
+
+def _key(key: str | None) -> dict[str, Any]:
+	"""`key` as a job field, left out when unset so jobs without it are unchanged."""
+	return {} if key is None else {"key": key}
 
 
 def _projection(fields: Fields | None, keep_record: str | None) -> dict[str, Any]:
