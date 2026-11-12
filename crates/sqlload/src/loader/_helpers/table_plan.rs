@@ -1,6 +1,8 @@
+use crate::adapters::contract::main::bound_parameter::bound_parameter;
 use crate::adapters::contract::main::cursor_bound::cursor_bound;
 use crate::adapters::contract::main::cursor_from_now::cursor_from_now;
 use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::CursorQuery;
 use crate::adapters::contract::models::NowShift;
 use crate::adapters::contract::models::WriteMode;
@@ -980,8 +982,8 @@ pub(crate) struct WindowRequest<'a> {
 /// The source filter, the write mode and a note for `plan`.
 pub(crate) struct Window {
     pub(crate) filter: Option<String>,
-    /// The values bound to `filter`'s `?` placeholders, in order: an ODBC source's text cursor bounds.
-    pub(crate) parameters: Vec<String>,
+    /// The values bound to `filter`'s `?` placeholders, in order: an ODBC source's cursor bounds.
+    pub(crate) parameters: Vec<BoundParameter>,
     /// The cursor range read: `from <= cursor < to`, each open when `None`.
     pub(crate) bounds: (Option<String>, Option<String>),
     pub(crate) mode: WriteMode,
@@ -1044,22 +1046,23 @@ pub(crate) fn source_cursor(
     ))
 }
 
-/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; a text cursor's bounds as `?` placeholders when `parameters` collects their values, in order, to bind; any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
+/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; a text, date or wall-clock timestamp cursor's bounds as `?` placeholders when `parameters` collects them, in order, to bind as their type (an ODBC source's: no literal reads alike everywhere, since some databases read a backslash in a string as an escape, OpenEdge compares no string with a timestamp, and SQL Server's `{ts}` escape is a `datetime` that rounds milliseconds); any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
 pub(crate) fn source_filter(
     column: &str,
     (cursor_type, dialect): (Option<&ColumnType>, Option<Warehouse>),
     (lower, upper): (Option<(&str, &str)>, Option<&str>),
-    mut parameters: Option<&mut Vec<String>>,
+    mut parameters: Option<&mut Vec<BoundParameter>>,
 ) -> Option<String> {
     let adapter = sql_adapter(dialect.unwrap_or(Warehouse::Postgres));
-    let text = matches!(cursor_type, Some(ColumnType::Text | ColumnType::Varchar(_)));
     let mut literal = |value: &str| match (
         cursor_type.filter(|cursor_type| numeric_cursor(cursor_type) && is_number(value)),
-        parameters.as_mut().filter(|_| text),
+        parameters
+            .as_mut()
+            .zip(cursor_type.and_then(|cursor_type| bound_parameter(value, cursor_type))),
     ) {
         (Some(cursor_type), _) => adapter.render_cursor_number(value, cursor_type),
-        (None, Some(parameters)) => {
-            parameters.push(value.to_owned());
+        (None, Some((parameters, parameter))) => {
+            parameters.push(parameter);
             "?".to_owned()
         }
         (None, None) => adapter.render_loader_value_literal(value),
@@ -1072,6 +1075,21 @@ pub(crate) fn source_filter(
         bounds.push(format!("{column} < {}", literal(value)));
     }
     (!bounds.is_empty()).then(|| bounds.join(" AND "))
+}
+
+/// Whether `spec`'s cursor bounds bind as parameters of the cursor's type: on a source that binds them (ODBC), unless the cursor column is pinned to a type other than text, which may not be the source column's own (a `varchar` read as a timestamp), so its bounds stay literals the database converts; text binds as text whatever the column, as a literal would convert, without a database reading its backslashes.
+pub(crate) fn binds_cursor(spec: &TableSpec) -> bool {
+    let pinned_other = spec.cursor.as_ref().is_some_and(|cursor| {
+        spec.pinned.iter().any(|(name, column_type)| {
+            name.eq_ignore_ascii_case(&cursor.column)
+                && !matches!(column_type, ColumnType::Text | ColumnType::Varchar(_))
+        })
+    });
+    !pinned_other
+        && spec
+            .warehouse_source
+            .as_ref()
+            .is_some_and(|source| source_binds_text(source.system))
 }
 
 /// Whether a cursor of `column_type` compares as a number.
@@ -1286,7 +1304,7 @@ pub(crate) async fn cursor_window(
         (None, None) => (None, note),
     };
     let source = request.spec.warehouse_source.as_ref();
-    let mut parameters: Vec<String> = Vec::new();
+    let mut parameters: Vec<BoundParameter> = Vec::new();
     let filter = source_filter(
         request.cursor_expression.unwrap_or_default(),
         (
@@ -1294,9 +1312,7 @@ pub(crate) async fn cursor_window(
             source.and_then(|source| source_dialect(source.system)),
         ),
         (from.as_deref().map(|from| (operator, from)), to.as_deref()),
-        source
-            .is_some_and(|source| source_binds_text(source.system))
-            .then_some(&mut parameters),
+        binds_cursor(spec).then_some(&mut parameters),
     );
     Ok(Ok(Window {
         filter,

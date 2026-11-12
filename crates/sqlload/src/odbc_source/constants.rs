@@ -10,6 +10,10 @@ pub const ANY_NAME: &str = "%";
 /// The identifier quote SQLLoad writes, ANSI SQL's.
 pub const IDENTIFIER_QUOTE: char = '"';
 
+/// A query returning one row only when the database reads `"name"` as a name rather than a string.
+pub const ANSI_QUOTES_PROBE: &str =
+    "SELECT 1 FROM (SELECT 1 AS sqlload_probe) sqlload_query WHERE \"sqlload_probe\" = 1";
+
 /// The driver's answer when it does not quote identifiers.
 pub const NO_QUOTE: char = ' ';
 
@@ -21,3 +25,15 @@ pub const BATCHES_AHEAD: usize = 2;
 
 /// What the driver manager's error says when a value is longer than its buffer.
 pub const TOO_LARGE_VALUE: &str = "too large to be written into the allocated buffer";
+
+/// The fractional digits a timestamp cursor bound is described with: seven, so SQL Server compares it as `datetime2(7)`, exactly, rather than as a `datetime`.
+pub const TIMESTAMP_PARAMETER_PRECISION: i16 = 7;
+
+/// The name Microsoft's SQL Server drivers report for the database.
+pub const SQL_SERVER_DBMS: &str = "Microsoft SQL Server";
+
+/// The fractional digits SQL Server's driver describes a legacy `datetime` parameter with.
+pub const LEGACY_DATETIME_DIGITS: std::ops::RangeInclusive<i16> = 1..=3;
+
+/// The fractional digits of a SQL Server timestamp bound sent as text when the driver can't describe its parameter: `datetime2`'s seven, which a legacy `datetime` refuses rather than rounds.
+pub const TIMESTAMP_TEXT_DIGITS: u16 = 7;

@@ -9,7 +9,7 @@ description = "SQL data loading tooling."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "licenses/*"]
 classifiers = [
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
@@ -39,7 +39,12 @@ manifest-path = "../../crates/sqlload-python/Cargo.toml"
 module-name = "sqlload._native"
 python-source = "python"
 # Kafka TLS with OpenSSL built in, as in sqlload-cli; SASL PLAIN and SCRAM need nothing else.
+# The published wheels also build `odbc` (publish.yml's --features odbc), bundling unixODBC on Linux
+# and macOS (licenses/); a build from this sdist leaves it out, so it needs no driver manager.
 features = ["ssl-vendored"]
+# unixODBC's source, which the release sdist carries as the corresponding source of the library the
+# Linux and macOS wheels bundle; publish.yml fetches it (unixodbc_source.sh) and checks it is there.
+include = [{ path = "unixODBC-*.tar.gz", format = "sdist" }]
 
 [tool.uv]
 cache-keys = [

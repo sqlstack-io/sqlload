@@ -24,6 +24,13 @@ fn given_a_cursor_maximum_when_making_the_lower_bound_then_lookback_and_zone_are
             expected_bound: Ok("2026-11-04 09:02:03.000000"),
         },
         CursorBoundTestCase {
+            description: "a wall-clock millisecond maximum, as an ODBC source's cursor resumes from, keeps its milliseconds",
+            raw: "1769903999997000",
+            value: CursorValue::EpochMicros { zoned: false },
+            lookback: None,
+            expected_bound: Ok("2026-01-31 23:59:59.997000"),
+        },
+        CursorBoundTestCase {
             description: "a date moves back by whole days, rounding the lookback up",
             raw: "2026-11-04",
             value: CursorValue::Date,

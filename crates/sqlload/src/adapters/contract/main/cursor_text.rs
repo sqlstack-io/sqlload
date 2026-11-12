@@ -5,8 +5,14 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use crate::adapters::contract::constants::{CURSOR_TIMESTAMP_FORMAT, NAIVE_TIMESTAMP_FORMATS};
 use crate::column_types::models::ColumnType;
 
-/// `text` as the cursor literal every system reads alike: zoned instants in UTC with `+00`, wall-clock times without an offset.
+/// `text` as the cursor literal every system reads alike: zoned instants in UTC with `+00`, wall-clock times without an offset; for a timestamp or date cursor, an ODBC `{ts '...'}` or `{d '...'}` literal, as a query against an ODBC source writes it, reads as the value inside (any other cursor keeps it as given).
 pub fn cursor_text(text: &str, column_type: &ColumnType) -> Result<String, String> {
+    let text = match column_type {
+        ColumnType::TimestampTz | ColumnType::TimestampNtz | ColumnType::Date => {
+            odbc_value(text).unwrap_or(text)
+        }
+        _ => text,
+    };
     let zoned = DateTime::parse_from_rfc3339(text);
     let naive = NAIVE_TIMESTAMP_FORMATS
         .iter()
@@ -66,4 +72,14 @@ pub fn cursor_text(text: &str, column_type: &ColumnType) -> Result<String, Strin
         },
         _ => Ok(text.to_owned()),
     }
+}
+
+/// The quoted value of an ODBC `{ts '...'}` or `{d '...'}` escape literal, in any letter case and spacing.
+fn odbc_value(text: &str) -> Option<&str> {
+    let inner = text.trim().strip_prefix('{')?.strip_suffix('}')?.trim();
+    let (keyword, quoted) = inner.split_at(inner.find('\'')?);
+    let keyword = keyword.trim();
+    (keyword.eq_ignore_ascii_case("ts") || keyword.eq_ignore_ascii_case("d"))
+        .then(|| quoted.strip_prefix('\'')?.strip_suffix('\''))
+        .flatten()
 }

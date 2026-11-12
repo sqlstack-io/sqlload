@@ -30,6 +30,42 @@ fn given_a_cursor_flag_when_normalising_then_every_system_reads_the_same_bound()
             expected_text: Err("has a UTC offset"),
         },
         CursorTextTestCase {
+            description: "a wall-clock cursor reads an ODBC {ts} literal with milliseconds",
+            text: "{ts '2026-01-31 23:59:59.997'}",
+            column_type: ColumnType::TimestampNtz,
+            expected_text: Ok("2026-01-31 23:59:59.997000"),
+        },
+        CursorTextTestCase {
+            description: "an ODBC literal reads in any letter case and spacing",
+            text: " { TS'2026-01-31 23:59:59' } ",
+            column_type: ColumnType::TimestampNtz,
+            expected_text: Ok("2026-01-31 23:59:59.000000"),
+        },
+        CursorTextTestCase {
+            description: "a date cursor reads an ODBC {d} literal",
+            text: "{d '2026-02-01'}",
+            column_type: ColumnType::Date,
+            expected_text: Ok("2026-02-01"),
+        },
+        CursorTextTestCase {
+            description: "a zoned cursor reads an ODBC {ts} literal as UTC",
+            text: "{ts '2026-01-31 23:59:59.5'}",
+            column_type: ColumnType::TimestampTz,
+            expected_text: Ok("2026-01-31 23:59:59.500000+00"),
+        },
+        CursorTextTestCase {
+            description: "an ODBC literal missing its closing quote is refused",
+            text: "{ts '2026-01-31 23:59:59}",
+            column_type: ColumnType::TimestampNtz,
+            expected_text: Err("is not an RFC 3339 timestamp or a date"),
+        },
+        CursorTextTestCase {
+            description: "a text cursor keeps a value that looks like an ODBC literal as it is",
+            text: "{d 'abc'}",
+            column_type: ColumnType::Text,
+            expected_text: Ok("{d 'abc'}"),
+        },
+        CursorTextTestCase {
             description: "a date cursor needs a date",
             text: "2026-11-04T10:00:00Z",
             column_type: ColumnType::Date,

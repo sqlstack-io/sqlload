@@ -23,3 +23,10 @@ pub(crate) struct OdbcReaderTestCase {
     pub(crate) password: Option<&'static str>,
     pub(crate) expected_connection_string: &'static str,
 }
+
+pub(crate) struct TimestampTextTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) time: &'static str,
+    pub(crate) digits: u16,
+    pub(crate) expected_text: &'static str,
+}
