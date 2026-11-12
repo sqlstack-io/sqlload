@@ -5,7 +5,7 @@ use crate::command::tests::test_types::{
 
 const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 const NO_LOAD_METHOD: &str = "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
-const REFUSING_TARGET: &str = "[connections.pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = 1\nuser = \"loader\"\npassword = \"p\"\ndatabase = \"app\"\nsslmode = \"disable\"\n[targets.dev]\nconnection = \"pg\"\nloader_schema = \"raw\"\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"orders/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n";
+const REFUSING_TARGET: &str = "[connections.pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = 1\nuser = \"loader\"\npassword = \"p\"\ndatabase = \"app\"\nsslmode = \"disable\"\n[targets.dev]\nconnection = \"pg\"\nloader_schema = \"raw\"\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"orders/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\n[connections.lake]\nkind = \"filesystem\"\nroot = '{root}'\n";
 const UNREACHABLE_SOURCE: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[connections.app]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = 1\nuser = \"u\"\npassword = \"p\"\ndatabase = \"app\"\nsslmode = \"disable\"\n[sources.app]\nkind = \"postgres\"\nconnection = \"app\"\ndestination = \"dev\"\ninclude = [\"public.*\"]\n";
 
 #[test]
@@ -116,7 +116,7 @@ fn given_a_files_source_into_a_files_target_when_planning_then_an_overlapping_fo
     ];
     for test_case in test_cases {
         let project = format!(
-            "[connections.lake]\nkind = \"filesystem\"\nroot = \"{}\"\n[targets.lake]\nconnection = \"lake\"\npath = \"{}\"\nsingle_file = {}\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"data/orders/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\npartition_columns = {{ day = \"date\" }}\n",
+            "[connections.lake]\nkind = \"filesystem\"\nroot = '{}'\n[targets.lake]\nconnection = \"lake\"\npath = \"{}\"\nsingle_file = {}\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"data/orders/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\npartition_columns = {{ day = \"date\" }}\n",
             root.path().display(),
             test_case.target_path,
             test_case.single_file
@@ -170,7 +170,7 @@ fn given_a_failure_a_rerun_may_pass_when_loading_then_it_exits_75_and_says_so_el
         },
         ExitCodeTestCase {
             description: "--json: an unreachable source beside a plan error that is not retryable exits 1",
-            project: "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[connections.app]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = 1\nuser = \"u\"\npassword = \"p\"\ndatabase = \"app\"\nsslmode = \"disable\"\n[sources.app]\nkind = \"postgres\"\nconnection = \"app\"\ndestination = \"dev\"\ninclude = [\"public.*\"]\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"missing/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\ndestination = \"dev\"\n[connections.lake]\nkind = \"filesystem\"\nroot = \"{root}\"\n",
+            project: "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[connections.app]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = 1\nuser = \"u\"\npassword = \"p\"\ndatabase = \"app\"\nsslmode = \"disable\"\n[sources.app]\nkind = \"postgres\"\nconnection = \"app\"\ndestination = \"dev\"\ninclude = [\"public.*\"]\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"missing/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\ndestination = \"dev\"\n[connections.lake]\nkind = \"filesystem\"\nroot = '{root}'\n",
             argv: &["load", "--json"],
             expected_output: "\"retryable\": false",
             expected_exit: "exit 1",
