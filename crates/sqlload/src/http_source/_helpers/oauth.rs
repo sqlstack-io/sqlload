@@ -59,7 +59,7 @@ pub(crate) fn shared_token_source(
 }
 
 fn token_source(token_url: Url, spec: &OAuth2Spec, grant: Grant) -> TokenSource {
-    let (grant_type, client, refresh_token) = match grant {
+    let (grant_type, client, refresh_token, password) = match grant {
         Grant::ClientCredentials {
             client_id,
             client_secret,
@@ -67,18 +67,25 @@ fn token_source(token_url: Url, spec: &OAuth2Spec, grant: Grant) -> TokenSource 
             "client_credentials",
             (Some(client_id), Some(client_secret)),
             None,
+            None,
         ),
         Grant::RefreshToken {
             refresh_token,
             client,
-        } => ("refresh_token", client, Some(refresh_token)),
+        } => ("refresh_token", client, Some(refresh_token), None),
+        Grant::Password {
+            username,
+            password,
+            client,
+        } => ("password", client, None, Some((username, password))),
     };
-    let mut form = vec![("grant_type".to_owned(), grant_type.to_owned())];
-    form.extend(spec.scope.clone().map(|scope| ("scope".to_owned(), scope)));
+    let scope = spec.scope.clone().map(|scope| ("scope".to_owned(), scope));
     let mut secrets: Vec<String> = refresh_token
         .iter()
-        .flat_map(|token| secret_forms(token))
+        .chain(password.iter().map(|(_, password)| password))
+        .flat_map(|secret| secret_forms(secret))
         .collect();
+    let mut client_fields: Vec<(String, String)> = Vec::new();
     let basic = match (client, spec.client_auth) {
         ((Some(id), Some(secret)), ClientAuth::Basic) => {
             let pair = (encoded(&id), encoded(&secret));
@@ -89,16 +96,32 @@ fn token_source(token_url: Url, spec: &OAuth2Spec, grant: Grant) -> TokenSource 
             Some(pair)
         }
         ((id, secret), _) => {
-            form.extend(id.map(|id| ("client_id".to_owned(), id)));
+            client_fields.extend(id.map(|id| ("client_id".to_owned(), id)));
             secrets.extend(secret.iter().flat_map(|secret| secret_forms(secret)));
-            form.extend(secret.map(|secret| ("client_secret".to_owned(), secret)));
+            client_fields.extend(secret.map(|secret| ("client_secret".to_owned(), secret)));
             None
         }
     };
     secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+    let refresh_form = password.is_some().then(|| {
+        let mut form = vec![("grant_type".to_owned(), "refresh_token".to_owned())];
+        form.extend(scope.clone());
+        form.extend(client_fields.clone());
+        form
+    });
+    let mut form = vec![("grant_type".to_owned(), grant_type.to_owned())];
+    form.extend(scope);
+    form.extend(password.into_iter().flat_map(|(username, password)| {
+        [
+            ("username".to_owned(), username),
+            ("password".to_owned(), password),
+        ]
+    }));
+    form.extend(client_fields);
     TokenSource {
         token_url,
         form,
+        refresh_form,
         basic,
         state: tokio::sync::Mutex::new(TokenState {
             refresh_token,
@@ -109,7 +132,7 @@ fn token_source(token_url: Url, spec: &OAuth2Spec, grant: Grant) -> TokenSource 
 }
 
 impl TokenSource {
-    /// Every secret of the token flow so far: the client secret, refresh tokens and each access token issued.
+    /// Every secret of the token flow so far: the client secret, password, refresh tokens and each access token issued.
     pub(crate) fn secrets(&self) -> Vec<String> {
         self.secrets
             .lock()
@@ -139,7 +162,10 @@ impl TokenSource {
             Some(access) if fresh && Some(access.as_str()) != refused => return Ok(access.clone()),
             Some(_) | None => {}
         }
-        let issued = self.request(http, retries, &state).await?;
+        let (issued, kept) = self
+            .request(http, retries, state.refresh_token.clone())
+            .await?;
+        state.refresh_token = kept;
         let renew_at = issued
             .renew_after
             .and_then(|delay| Instant::now().checked_add(delay));
@@ -152,18 +178,44 @@ impl TokenSource {
         state.access = Some(issued.access.clone());
         state.issued_at = Some(Instant::now());
         state.renew_at = renew_at;
-        if state.refresh_token.is_some() {
+        if state.refresh_token.is_some() || self.refresh_form.is_some() {
             state.refresh_token = issued.refresh_token.or(state.refresh_token.take());
         }
         Ok(issued.access)
     }
 
-    /// One token request, retried like a page on transport errors, 429 and 5xx.
+    /// A new token, and the refresh token to keep: from the refresh token a password grant was handed, falling back to the grant itself (and dropping that refresh token) when the server refuses it, else from `form` and any `refresh_token`.
     async fn request(
         &self,
         http: &reqwest::Client,
         retries: u32,
-        state: &TokenState,
+        refresh_token: Option<String>,
+    ) -> Result<(Issued, Option<String>), ReadError> {
+        let (Some(refresh_form), Some(token)) = (&self.refresh_form, refresh_token.clone()) else {
+            let mut form = self.form.clone();
+            form.extend(
+                refresh_token
+                    .clone()
+                    .map(|token| ("refresh_token".to_owned(), token)),
+            );
+            return Ok((self.post(http, retries, &form).await?, refresh_token));
+        };
+        let mut form = refresh_form.clone();
+        form.push(("refresh_token".to_owned(), token));
+        match self.post(http, retries, &form).await {
+            Err(error) if !error.retryable => {
+                Ok((self.post(http, retries, &self.form).await?, None))
+            }
+            other => Ok((other?, refresh_token)),
+        }
+    }
+
+    /// One token request posting `form`, retried like a page on transport errors, 429 and 5xx.
+    async fn post(
+        &self,
+        http: &reqwest::Client,
+        retries: u32,
+        form: &[(String, String)],
     ) -> Result<Issued, ReadError> {
         let policy = RetryPolicy {
             first_delay: FIRST_RETRY_DELAY,
@@ -171,16 +223,9 @@ impl TokenSource {
             max_attempts: retries + 1,
         };
         let shown = format!("POST {} (OAuth2 token)", self.token_url);
-        let mut form = self.form.clone();
-        form.extend(
-            state
-                .refresh_token
-                .clone()
-                .map(|token| ("refresh_token".to_owned(), token)),
-        );
         let mut attempt = 1;
         loop {
-            let mut request = http.post(self.token_url.clone()).form(&form);
+            let mut request = http.post(self.token_url.clone()).form(form);
             if let Some((id, secret)) = &self.basic {
                 request = request.basic_auth(id, Some(secret));
             }
@@ -224,8 +269,7 @@ impl TokenSource {
         let secrets = self.secrets();
         let failed = |status: u16| {
             let reason = match serde_json::from_slice::<Value>(&body) {
-                Ok(document) => oauth_error(&document)
-                    .unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned()),
+                Ok(document) => oauth_error(&document).unwrap_or_else(|| document.to_string()),
                 Err(_) => String::from_utf8_lossy(&body).into_owned(),
             };
             let reason = redacted(&reason, &secrets)
@@ -304,12 +348,18 @@ pub(crate) fn renewal_delay(expires_in: Option<&Value>) -> Result<Option<Duratio
         }))
 }
 
-/// `secret` as sent and as it appears in a URL or a form body, for redaction.
-fn secret_forms(secret: &str) -> [String; 3] {
+/// `secret` as sent, as it appears in a URL or a form body, and inside a JSON string, for redaction; a JSON error body is re-serialised before it is shown, so any escaping the server chose (`\/`, `\u00e9`) becomes this one.
+fn secret_forms(secret: &str) -> [String; 4] {
     let percent = encoded(secret);
     let form = percent
         .replace("%20", "+")
         .replace("%2A", "*")
         .replace('~', "%7E");
-    [secret.to_owned(), percent, form]
+    let quoted = serde_json::to_string(secret).unwrap_or_default();
+    let json = quoted
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .unwrap_or(secret)
+        .to_owned();
+    [secret.to_owned(), percent, form, json]
 }

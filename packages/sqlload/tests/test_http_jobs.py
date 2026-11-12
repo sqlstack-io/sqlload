@@ -22,6 +22,7 @@ ITEMS = {n: [{"order_id": n, "line": line} for line in range(n % 3)] for n in ra
 TOKEN = "s3cret-token"
 CLIENT_SECRET = "cl1ent+secret/x~y"
 REFRESH_TOKEN = "r3fresh-first"
+PASSWORD = "pa55+word/x"
 
 
 class Api(BaseHTTPRequestHandler):
@@ -116,6 +117,11 @@ class Api(BaseHTTPRequestHandler):
 		oauth = server.oauth  # type: ignore[attr-defined]
 		if client != ["app", CLIENT_SECRET] or form.get("grant_type") == "refresh_token" and form.get("refresh_token") != server.refresh_token:  # type: ignore[attr-defined]
 			return self.reply(401, {"error": "invalid_client", "error_description": f"unknown client {client} or refresh token"})
+		if form.get("grant_type") == "password" and (form.get("username"), form.get("password")) != ("loader", PASSWORD):
+			return self.reply(400, {"message": f"wrong password {form.get('password')} for {form.get('username')}"})
+		if form.get("grant_type") == "refresh_token" and oauth.get("refresh_503_once"):
+			oauth["refresh_503_once"] = False
+			return self.reply(503, {"error": "temporarily_unavailable"}, {"Retry-After": "0"})
 		access = f"access-{len(server.token_requests)}"  # type: ignore[attr-defined]
 		server.tokens[access] = {"issued": time.monotonic(), "uses": 0}  # type: ignore[attr-defined]
 		body: dict[str, Any] = {"access_token": access, "token_type": "Bearer"}
@@ -123,6 +129,8 @@ class Api(BaseHTTPRequestHandler):
 			body["expires_in"] = oauth["lifetime"]
 		if oauth.get("rotate"):
 			server.refresh_token = body["refresh_token"] = f"r3fresh-{len(server.token_requests) + 1}"  # type: ignore[attr-defined]
+		if oauth.get("stale_refresh"):
+			body["refresh_token"] = "stale"
 		self.reply(200, body)
 
 	def access_allowed(self, bearer: str) -> bool:
@@ -270,6 +278,8 @@ def make_project(tmp_path: Path, server: ThreadingHTTPServer, tables: str) -> Pa
 			client_id = "app"
 			client_secret = "${{ENV:SHOP_CLIENT_SECRET}}"
 			refresh_token = "{REFRESH_TOKEN}"
+			username = "loader"
+			password = "${{ENV:SHOP_PASSWORD}}"
 
 			[targets.dev]
 			connection = "wh"
@@ -284,7 +294,7 @@ def make_project(tmp_path: Path, server: ThreadingHTTPServer, tables: str) -> Pa
 def sqlload(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
 	home = project / "home"
 	home.mkdir(exist_ok=True)
-	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "SHOP_TOKEN": TOKEN, "SHOP_CLIENT_SECRET": CLIENT_SECRET}
+	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "SHOP_TOKEN": TOKEN, "SHOP_CLIENT_SECRET": CLIENT_SECRET, "SHOP_PASSWORD": PASSWORD}
 	return subprocess.run(
 		[sys.executable, "-c", "from sqlload._cli import main; main()", *args], cwd=project, env=env, capture_output=True, text=True, timeout=120
 	)
@@ -554,15 +564,22 @@ def oauth_project(tmp_path: Path, server: ThreadingHTTPServer, auth: str, job: s
 	return make_project(tmp_path, server, tables)
 
 
-def test_given_short_lived_tokens_when_pages_outlast_one_then_it_is_renewed_before_it_expires(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+@pytest.mark.parametrize(
+	("auth", "expected_grant"),
+	[("sl.oauth2_client_credentials(TOKEN_URL, scope='orders:read')", "client_credentials"), ("sl.oauth2_password(TOKEN_URL, scope='orders:read')", "password")],
+	ids=["client-credentials", "password"],
+)
+def test_given_short_lived_tokens_when_pages_outlast_one_then_it_is_renewed_before_it_expires(
+	tmp_path: Path, api: ThreadingHTTPServer, auth: str, expected_grant: str
+) -> None:
 	api.oauth = {"lifetime": 2}  # type: ignore[attr-defined]
-	project = oauth_project(tmp_path, api, "sl.oauth2_client_credentials(TOKEN_URL, scope='orders:read')", "paginate('/slow', paginator=sl.page_number('p'), select='$.items')")
+	project = oauth_project(tmp_path, api, auth, "paginate('/slow', paginator=sl.page_number('p'), select='$.items')")
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT order_id, status FROM "RAW".shop__t ORDER BY order_id') == ALL_ORDERS
 	assert api.refused == 0  # type: ignore[attr-defined]
 	assert len(api.token_requests) >= 2  # type: ignore[attr-defined]
-	assert {(request["grant_type"], request.get("scope")) for request in api.token_requests} == {("client_credentials", "orders:read")}  # type: ignore[attr-defined]
+	assert {(request["grant_type"], request.get("scope")) for request in api.token_requests} == {(expected_grant, "orders:read")}  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
@@ -570,8 +587,9 @@ def test_given_short_lived_tokens_when_pages_outlast_one_then_it_is_renewed_befo
 	[
 		("sl.oauth2_client_credentials(TOKEN_URL)", [("client_credentials", None)] * 3),
 		("sl.oauth2_refresh_token(TOKEN_URL, client_auth='post')", [("refresh_token", REFRESH_TOKEN), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-3")]),
+		("sl.oauth2_password(TOKEN_URL)", [("password", None), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-3")]),
 	],
-	ids=["client-credentials", "refresh-token-rotated-client-in-form"],
+	ids=["client-credentials", "refresh-token-rotated-client-in-form", "password-then-its-refresh-token"],
 )
 def test_given_a_token_revoked_mid_pagination_when_the_api_answers_401_then_a_new_one_is_fetched_and_the_page_retried(
 	tmp_path: Path, api: ThreadingHTTPServer, auth: str, expected_grant: list[tuple[str, str | None]]
@@ -583,6 +601,7 @@ def test_given_a_token_revoked_mid_pagination_when_the_api_answers_401_then_a_ne
 	assert query(project, 'SELECT order_id, status FROM "RAW".shop__t ORDER BY order_id') == ALL_ORDERS
 	assert api.refused == 2  # type: ignore[attr-defined]
 	assert [(request["grant_type"], request.get("refresh_token")) for request in api.token_requests] == expected_grant  # type: ignore[attr-defined]
+	assert all(("username" in request, "password" in request) == ((request["grant_type"] == "password",) * 2) for request in api.token_requests)  # type: ignore[attr-defined]
 	assert all(request["client"] == ["app", CLIENT_SECRET] for request in api.token_requests)  # type: ignore[attr-defined]
 	assert {auth for path, _, auth in api.log if path == "/v1/offset"} == {"Bearer access-1", "Bearer access-2", "Bearer access-3"}  # type: ignore[attr-defined]
 
@@ -625,6 +644,54 @@ def test_given_an_oauth2_failure_when_loading_then_the_error_says_why_and_hides_
 	assert expected_text in output, output
 	assert not any(secret in output for secret in (CLIENT_SECRET, "wrong-secret", "access-1"))
 	assert all(path in ("/v1/whoami", "/v1/leak", "/v1/notjson") for path, _, _ in api.log)  # type: ignore[attr-defined]
+
+
+def test_given_a_password_grant_without_a_refresh_token_or_with_a_refused_one_when_the_api_answers_401_then_it_asks_with_the_password_again(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	api.oauth = {"uses": 3, "stale_refresh": True}  # type: ignore[attr-defined]
+	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL, client_auth='post')", "paginate('/offset', paginator=sl.offset(limit=1))")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT order_id, status FROM "RAW".shop__t ORDER BY order_id') == ALL_ORDERS
+	expected = [("password", "loader", PASSWORD, None), ("refresh_token", None, None, "stale")] * 2 + [("password", "loader", PASSWORD, None)]
+	sent = [(request["grant_type"], request.get("username"), request.get("password"), request.get("refresh_token")) for request in api.token_requests]  # type: ignore[attr-defined]
+	assert sent == expected
+	assert all(request["client"] == ["app", CLIENT_SECRET] for request in api.token_requests)  # type: ignore[attr-defined]
+
+
+def test_given_a_token_endpoint_down_once_when_refreshing_after_a_password_grant_then_the_refresh_is_retried_without_the_password(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	api.oauth = {"uses": 3, "rotate": True, "refresh_503_once": True}  # type: ignore[attr-defined]
+	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL)", "paginate('/offset', paginator=sl.offset(limit=1))")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT order_id, status FROM "RAW".shop__t ORDER BY order_id') == ALL_ORDERS
+	expected = [("password", None), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-4")]
+	assert [(request["grant_type"], request.get("refresh_token")) for request in api.token_requests] == expected  # type: ignore[attr-defined]
+
+
+def test_given_a_token_endpoint_down_when_refreshing_without_retries_then_the_run_is_retryable_and_the_password_is_not_resent(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	api.oauth = {"uses": 3, "rotate": True, "refresh_503_once": True}  # type: ignore[attr-defined]
+	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL), retries=0", "paginate('/offset', paginator=sl.offset(limit=1))")
+	done = sqlload(project, "load")
+	assert done.returncode == 75, done.stdout + done.stderr
+	assert [(request["grant_type"], request.get("refresh_token")) for request in api.token_requests] == [("password", None), ("refresh_token", "r3fresh-2")]  # type: ignore[attr-defined]
+
+
+def test_given_a_wrong_password_when_loading_with_json_then_it_fails_for_good_and_hides_the_password(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL)", "paginate('/offset', paginator=sl.offset(limit=10))")
+	(project / "sqlload.toml").write_text((project / "sqlload.toml").read_text().replace("${ENV:SHOP_PASSWORD}", "wr0ng+p\u00e4ss\\\\word"))
+	done = sqlload(project, "load", "--json")
+	assert done.returncode == 1, done.stdout + done.stderr
+	result = json.loads(done.stdout)
+	assert (result["ok"], result["retryable"], result["tables"][0]["retryable"]) == (False, False, False)
+	assert 'HTTP 400: {"message":"wrong password *** for loader"}' in result["tables"][0]["error"]
+	assert "wr0ng" not in done.stdout + done.stderr
+	assert len(api.token_requests) == 1 and api.log == []  # type: ignore[attr-defined]
 
 
 def test_given_401_listed_as_skip_when_the_api_answers_it_then_the_request_is_skipped_without_a_new_token(tmp_path: Path, api: ThreadingHTTPServer) -> None:

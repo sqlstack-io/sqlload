@@ -89,6 +89,19 @@ pub(crate) fn endpoint(
                 grant,
             )?)
         }
+        Auth::Oauth2Password(spec) => {
+            let grant = Grant::Password {
+                username: needed("username")?,
+                password: needed("password")?,
+                client: (present("client_id"), present("client_secret")),
+            };
+            Credential::OAuth2(shared_token_source(
+                name,
+                &format!("{:?}", client.auth),
+                spec,
+                grant,
+            )?)
+        }
     };
     let mut headers = settings
         .get("headers")

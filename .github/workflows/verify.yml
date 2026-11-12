@@ -11,9 +11,12 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its older run. Every push to main (and every manual run) gets
+# a group of its own commit, so the next merge neither cancels it nor replaces it while it waits:
+# GitHub keeps only one pending run per group, so cancel-in-progress: false alone would not do.
 concurrency:
-  group: verify-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: verify-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
