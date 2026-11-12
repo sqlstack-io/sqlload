@@ -330,42 +330,57 @@ fn table_constants(
     };
     let warehouse = context.target.warehouse;
     let constants = constant_columns(&written.0, &[warehouse]).map_err(|problem| vec![problem])?;
-    let loaded = table.columns.iter().filter(|column| {
-        !excluded
-            .iter()
-            .any(|(excluded, _)| *excluded == column.name)
-    });
     let clashes: Vec<String> = match context.source.kind {
         SourceKind::Files => Vec::new(),
-        _ => loaded
-            .filter_map(|column| {
-                constants
-                    .iter()
-                    .find(|(name, _, _)| name.eq_ignore_ascii_case(&column.name))
-                    .map(|(name, _, _)| {
-                        format!(
-                            "constant column {name}: the source already has a column {}, and a constant never replaces it; rename the constant, or exclude the source's column",
-                            column.name
-                        )
-                    })
-            })
+        _ => table
+            .columns
+            .iter()
+            .filter(|column| !is_excluded(excluded, &column.name))
+            .filter_map(|column| clash(&constants, &column.name))
             .collect(),
     };
-    let types = constants.iter().filter_map(|(name, column_type, _)| {
-        match (column_type, arrow_field(name, column_type)) {
-            (ColumnType::Array(_), _) => Some(format!("constant column {name}: an array cannot be a constant")),
-            (_, None) => Some(format!(
-                "constant column {name}: {column_type} has no Arrow type, so a constant cannot be one; pin a portable type"
-            )),
-            _ => sql_adapter(warehouse)
-                .type_problem(column_type)
-                .map(|problem| format!("constant column {name}: {problem}")),
-        }
-    });
+    let types = constants
+        .iter()
+        .filter_map(|constant| constant_type_problem(constant, warehouse));
     let problems: Vec<String> = clashes.into_iter().chain(types).collect();
     match problems.is_empty() {
         true => Ok(constants),
         false => Err(problems),
+    }
+}
+
+/// Whether `excluded` drops column `name`.
+fn is_excluded(excluded: &[(String, String)], name: &str) -> bool {
+    excluded.iter().any(|(excluded, _)| excluded == name)
+}
+
+/// The problem with source column `column` when one of `constants` has its name, ignoring case.
+fn clash(constants: &[(String, ColumnType, String)], column: &str) -> Option<String> {
+    constants
+        .iter()
+        .find(|(name, _, _)| name.eq_ignore_ascii_case(column))
+        .map(|(name, _, _)| {
+            format!(
+                "constant column {name}: the source already has a column {column}, and a constant never replaces it; rename the constant, or exclude the source's column"
+            )
+        })
+}
+
+/// Why a constant of this type cannot load into `warehouse`: an array, a type with no Arrow type, or one the warehouse cannot load.
+fn constant_type_problem(
+    (name, column_type, _): &(String, ColumnType, String),
+    warehouse: Warehouse,
+) -> Option<String> {
+    match (column_type, arrow_field(name, column_type)) {
+        (ColumnType::Array(_), _) => Some(format!(
+            "constant column {name}: an array cannot be a constant"
+        )),
+        (_, None) => Some(format!(
+            "constant column {name}: {column_type} has no Arrow type, so a constant cannot be one; pin a portable type"
+        )),
+        _ => sql_adapter(warehouse)
+            .type_problem(column_type)
+            .map(|problem| format!("constant column {name}: {problem}")),
     }
 }
 

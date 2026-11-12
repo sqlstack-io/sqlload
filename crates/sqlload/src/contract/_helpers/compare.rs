@@ -9,6 +9,7 @@ use crate::contract::constants::{
     TYPE_MISMATCH,
 };
 use crate::contract::models::ContractFinding;
+use crate::loader::models::TableSpec;
 use crate::project::models::Contract;
 use crate::schema_plan::models::LiveColumn;
 
@@ -109,4 +110,15 @@ fn live_finding(
         }),
         (None, Contract::None) => None,
     }
+}
+
+/// The columns `spec` declares, by name: its pinned types and its constant columns' types (a pin of a constant's name wins).
+pub(crate) fn declared_columns(spec: &TableSpec) -> BTreeMap<String, ColumnType> {
+    let mut declared: BTreeMap<String, ColumnType> = spec
+        .constants
+        .iter()
+        .map(|(name, column_type, _)| (name.clone(), column_type.clone()))
+        .collect();
+    declared.extend(spec.pinned.clone());
+    declared
 }

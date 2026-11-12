@@ -455,21 +455,20 @@ fn path_value_problems(place: &str, source: &SourceConfig) -> Vec<String> {
 
 /// A problem for each of `names` from `from` on that an earlier one also fills, ignoring case.
 fn clashes(place: &str, names: &[(String, &str)], from: usize) -> Vec<String> {
-    names
-        .iter()
-        .enumerate()
-        .skip(from)
-        .filter_map(|(index, (name, setting))| {
-            names[..index]
-                .iter()
-                .find(|(seen, _)| seen.eq_ignore_ascii_case(name))
-                .map(|(_, first)| {
-                    format!(
-                        "{place} column {name} is in both {first} and {setting}; give it one source"
-                    )
-                })
-        })
+    (from..names.len())
+        .filter_map(|index| clash(place, &names[..=index]))
         .collect()
+}
+
+/// The problem when an earlier one of `names` also fills the last one's column, ignoring case.
+fn clash(place: &str, names: &[(String, &str)]) -> Option<String> {
+    let ((name, setting), earlier) = names.split_last()?;
+    let (_, first) = earlier
+        .iter()
+        .find(|(seen, _)| seen.eq_ignore_ascii_case(name))?;
+    Some(format!(
+        "{place} column {name} is in both {first} and {setting}; give it one source"
+    ))
 }
 
 /// Problems with the `constant_columns` of a source and of each of its tables: a value that does not parse, a name SQLLoad keeps for its own columns, and any on a `postgres_cdc` source, whose changes are applied by key as they are captured.

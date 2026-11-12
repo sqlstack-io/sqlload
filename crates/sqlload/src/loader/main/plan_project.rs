@@ -6,15 +6,14 @@ use crate::adapters::dispatch::main::dialect::files_destination::files_destinati
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::folder_conflict::folder_conflict;
 use crate::adapters::files::models::FolderClaim;
-use crate::loader::_helpers::destination::table_folder;
+use crate::loader::_helpers::destination::{block_shared_destinations, table_folder};
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::sources::{
-    admit_tables, scoped_tables, selected, source_ends, unmatched_selectors,
+    admit_tables, destination_names, scoped_tables, selected, source_ends, unmatched_selectors,
 };
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
-use crate::loader::main::_shared_destinations::block_shared_destinations;
 use crate::loader::models::{FilesSource, PlanOptions, ProjectPlan, TablePlan, TableSpec};
 use crate::project::models::ProjectConfig;
 
@@ -26,7 +25,6 @@ pub async fn plan_project(
 ) -> Result<ProjectPlan, LoaderError> {
     let mut plan = ProjectPlan::default();
     let mut claims: Vec<FolderClaim> = Vec::new();
-    let mut names: Vec<(String, String)> = Vec::new();
     let mut configured: Vec<TableSpec> = Vec::new();
     for (source_name, source) in &project.sources {
         let (resolved, files) =
@@ -48,12 +46,6 @@ pub async fn plan_project(
         plan.skipped.extend(resolved.skipped);
         claims.extend(folder_claims(&resolved.specs, files.as_ref(), destinations));
         configured.extend(resolved.specs.iter().cloned());
-        names.extend(resolved.specs.iter().map(|spec| {
-            (
-                spec.destination.table.clone(),
-                spec.source_table.qualified_name(),
-            )
-        }));
         let specs = source_ends(project, (source_name, source), resolved.specs, options).await?;
         let mut planned: Vec<TablePlan> = Vec::new();
         let mut unselected: Vec<TableSpec> = Vec::new();
@@ -78,10 +70,11 @@ pub async fn plan_project(
         )
         .await?;
     }
-    plan.warnings
-        .extend(unmatched_selectors(project, options, &names));
-    let plan = block_shared_destinations(plan, &configured);
-    Ok(block_conflicts(plan, &claims, options))
+    Ok(block_conflicts(
+        plan,
+        (&claims, &configured),
+        (project, options),
+    ))
 }
 
 /// The folders files tables write to, whether or not they are selected, with the folder their files source (`files`) reads; warehouse tables and paths that do not resolve claim none.
@@ -114,12 +107,18 @@ fn folder_claims(
     claims
 }
 
-/// The plan with every selected files table blocked whose folder clashes with any other configured table's, and every cursor table blocked when a cursor range meets cursors of different kinds.
+/// The plan with a warning for each selector matching none of the `configured` tables, every selected files table blocked whose folder clashes with any other configured table's, every selected table blocked whose destination table it shares with configured tables it could remove or overwrite rows of (see [`block_shared_destinations`]), and every cursor table blocked when a cursor range meets cursors of different kinds.
 fn block_conflicts(
     mut plan: ProjectPlan,
-    claims: &[FolderClaim],
-    options: &PlanOptions,
+    (claims, configured): (&[FolderClaim], &[TableSpec]),
+    (project, options): (&ProjectConfig, &PlanOptions),
 ) -> ProjectPlan {
+    plan.warnings.extend(unmatched_selectors(
+        project,
+        options,
+        &destination_names(configured),
+    ));
+    let mut plan = block_shared_destinations(plan, configured);
     for table in plan
         .tables
         .iter_mut()

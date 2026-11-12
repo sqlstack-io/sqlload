@@ -4,6 +4,22 @@ use crate::project::tests::helpers::{
 };
 use crate::project::tests::test_types::{ParseProjectErrorTestCase, ParseProjectTestCase};
 
+const CONSTANT_SOURCES: &str = r#"
+[sources.app]
+kind = "postgres"
+connection = "pg"
+include = ["public.*"]
+constant_columns = { tenant_id = "${ENV:TENANT}", region = "eu" }
+
+[sources.app.tables."public.orders"]
+description = "d"
+constant_columns = { tenant_id = { value = "7", type = "int" }, as_of = 2026-11-08 }
+
+[sources.app.tables."public.events"]
+description = "d"
+unique_key = ["tenant_id", "id"]
+"#;
+
 #[test]
 fn given_a_full_project_when_parsing_then_sources_and_table_settings_are_read() -> Result<(), String>
 {
@@ -587,22 +603,6 @@ fn given_a_snowflake_source_when_parsing_then_its_query_tables_and_window_are_re
     }
     Ok(())
 }
-
-const CONSTANT_SOURCES: &str = r#"
-[sources.app]
-kind = "postgres"
-connection = "pg"
-include = ["public.*"]
-constant_columns = { tenant_id = "${ENV:TENANT}", region = "eu" }
-
-[sources.app.tables."public.orders"]
-description = "d"
-constant_columns = { tenant_id = { value = "7", type = "int" }, as_of = 2026-11-08 }
-
-[sources.app.tables."public.events"]
-description = "d"
-unique_key = ["tenant_id", "id"]
-"#;
 
 #[test]
 fn given_constant_columns_on_a_source_and_its_tables_when_parsing_then_a_tables_map_replaces_the_sources()

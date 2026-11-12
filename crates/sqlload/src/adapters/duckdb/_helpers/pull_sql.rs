@@ -94,14 +94,22 @@ fn constant_list(files: &[PulledFile], name: &str) -> String {
         .join(", ")
 }
 
+/// What an unloaded batch's insert fills: the columns it writes, those the files hold as they are read, and the table's `constant_columns` (name, type and value as text).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UnloadedColumns<'a> {
+    pub columns: &'a [DesiredColumn],
+    pub read: &'a [ReadColumn],
+    pub constants: &'a [(String, ColumnType, String)],
+}
+
 /// `INSERT INTO into` every one of `columns` from a warehouse's unloaded Parquet files at `urls`: a column of `read` from the files, turned back from whole microseconds where it is read as a time or timestamp, then cast to its type, exactly whatever the session's time zone; a column of `constants` from its value; the load id and load time are the batch's; any other column is NULL.
 pub(crate) fn unloaded_insert(
     into: &TableName,
-    (columns, read, constants): (
-        &[DesiredColumn],
-        &[ReadColumn],
-        &[(String, ColumnType, String)],
-    ),
+    UnloadedColumns {
+        columns,
+        read,
+        constants,
+    }: UnloadedColumns<'_>,
     urls: &[String],
     (load_id, loaded_at): (&str, &str),
 ) -> String {
