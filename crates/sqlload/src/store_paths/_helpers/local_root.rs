@@ -56,6 +56,24 @@ pub(crate) fn windows_file_url_path(rest: &str, windows: bool) -> Cow<'_, str> {
     }
 }
 
+/// `root` with a share on `localhost` named by `127.0.0.1`, the same server, when `windows` (object_store keeps its root as a URL, and url reads `file://localhost/share` as a drive path); unchanged otherwise.
+pub(crate) fn share_by_address(root: &str, windows: bool) -> Cow<'_, str> {
+    if !windows {
+        return Cow::Borrowed(root);
+    }
+    let separated = windows_separators(root, windows);
+    let on_localhost = separated.strip_prefix("//").and_then(|share| {
+        share
+            .get(.."localhost/".len())
+            .filter(|host| host.eq_ignore_ascii_case("localhost/"))
+            .map(|host| &share[host.len()..])
+    });
+    match on_localhost {
+        Some(rest) => Cow::Owned(format!(r"\\127.0.0.1\{}", rest.replace('/', r"\"))),
+        None => Cow::Borrowed(root),
+    }
+}
+
 /// Whether `path` starts with a drive letter and its colon.
 fn is_drive(path: &str) -> bool {
     matches!(path.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic())

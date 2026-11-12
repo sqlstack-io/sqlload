@@ -58,3 +58,10 @@ pub(crate) struct StripFoldersTestCase {
     pub(crate) expected_windows: Option<&'static str>,
     pub(crate) expected_unix: Option<&'static str>,
 }
+
+/// A filesystem root, as object_store's local store opens it on Windows and on Unix.
+pub(crate) struct ShareByAddressTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) root: &'static str,
+    pub(crate) expected_windows: &'static str,
+}

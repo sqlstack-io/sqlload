@@ -69,6 +69,13 @@ def files_checks(exe, work, share):
         sys.exit(f"no Parquet files under {lake}")
     print(f"ok: UNC share holds {written}", flush=True)
 
+    # The same share named by this machine's name, as a share on another server is named.
+    named = "\\\\" + os.environ["COMPUTERNAME"] + "\\" + share.lstrip("\\").split("\\", 1)[1] + "\\lake\\by_name"
+    sqlload(exe, "copy", str(source), named, "--format", "csv")
+    if not list((work / "share" / "lake" / "by_name").rglob("*.parquet")):
+        sys.exit(f"no Parquet files under {named}")
+    print(f"ok: {named} holds Parquet files", flush=True)
+
     # Read back through a file:// URL naming the share, and through a \\?\UNC\ path.
     server_share = share.lstrip("\\").replace("\\", "/")
     sqlload(exe, "copy", f"file://{server_share}/lake/orders", f"duckdb://{database}#raw.from_share", "--format", "parquet")

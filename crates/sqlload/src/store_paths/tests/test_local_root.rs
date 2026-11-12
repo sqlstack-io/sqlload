@@ -1,7 +1,9 @@
-use crate::store_paths::_helpers::local_root::{strip_folders, windows_file_url_path};
+use crate::store_paths::_helpers::local_root::{
+    share_by_address, strip_folders, windows_file_url_path,
+};
 use crate::store_paths::tests::helpers::root_of;
 use crate::store_paths::tests::test_types::{
-    FileUrlPathTestCase, LocalRootTestCase, StripFoldersTestCase,
+    FileUrlPathTestCase, LocalRootTestCase, ShareByAddressTestCase, StripFoldersTestCase,
 };
 
 #[test]
@@ -176,6 +178,62 @@ fn given_a_folder_prefix_when_stripping_a_connections_folders_then_windows_ignor
         assert_eq!(
             strip_folders(test_case.prefix, test_case.folders, false),
             test_case.expected_unix,
+            "{} on Unix",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_filesystem_roots_when_opening_their_store_then_only_a_windows_share_on_localhost_is_named_by_address()
+ {
+    let test_cases = [
+        ShareByAddressTestCase {
+            description: "a share on localhost",
+            root: r"\\localhost\sqlload-e2e\lake\orders",
+            expected_windows: r"\\127.0.0.1\sqlload-e2e\lake\orders",
+        },
+        ShareByAddressTestCase {
+            description: "localhost in another case",
+            root: r"\\LocalHost\exports",
+            expected_windows: r"\\127.0.0.1\exports",
+        },
+        ShareByAddressTestCase {
+            description: "a share on localhost as a file:// URL gives it",
+            root: "//localhost/exports/x",
+            expected_windows: r"\\127.0.0.1\exports\x",
+        },
+        ShareByAddressTestCase {
+            description: "an extended-length share on localhost",
+            root: r"\\?\UNC\localhost\exports\x",
+            expected_windows: r"\\127.0.0.1\exports\x",
+        },
+        ShareByAddressTestCase {
+            description: "a server whose name starts with localhost",
+            root: r"\\localhostname\exports\x",
+            expected_windows: r"\\localhostname\exports\x",
+        },
+        ShareByAddressTestCase {
+            description: "a share on another server",
+            root: r"\\nas01\exports\x",
+            expected_windows: r"\\nas01\exports\x",
+        },
+        ShareByAddressTestCase {
+            description: "a drive folder named localhost",
+            root: r"C:\localhost\x",
+            expected_windows: r"C:\localhost\x",
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            share_by_address(test_case.root, true),
+            test_case.expected_windows,
+            "{} on Windows",
+            test_case.description
+        );
+        assert_eq!(
+            share_by_address(test_case.root, false),
+            test_case.root,
             "{} on Unix",
             test_case.description
         );
