@@ -30,7 +30,7 @@ pub async fn selected_specs(
         chosen
             .problems
             .extend(resolved.drained.filter(|drained| drained.in_scope).map(|drained| format!(
-                "{}: after_load emptied its folder, so there are no files to read its columns from until new ones come",
+                "[sources.{}]: after_load emptied its folder, so there are no files to read its columns from until new ones come",
                 drained.skipped.source_name
             )));
         for mut spec in resolved.specs {

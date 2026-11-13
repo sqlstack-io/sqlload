@@ -1615,6 +1615,17 @@ fn drained_files(
         table: table_name((source_name, source), name, &listed),
     };
     let in_scope = selected(options, (source_name, &table.table, source_name));
+    if target.path.is_some() {
+        return ResolvedTables {
+            problems: in_scope
+                .then(|| {
+                    format!("[sources.{source_name}]: after_load is for database targets so far, not a files target")
+                })
+                .into_iter()
+                .collect(),
+            ..ResolvedTables::default()
+        };
+    }
     let path = source.path.as_deref().unwrap_or_default();
     ResolvedTables {
         drained: Some(DrainedFiles {
@@ -1824,6 +1835,9 @@ pub(crate) async fn found_sources<'a>(
         if shared {
             found.unresolved.push(source.name.clone());
         }
+        found
+            .drained
+            .push((drained.table.table.clone(), source.name.clone()));
         if !drained.in_scope {
             continue;
         }
@@ -1846,12 +1860,7 @@ pub(crate) async fn found_sources<'a>(
         };
         match problem {
             Some(problem) => source.resolved.problems.push(problem),
-            None => {
-                found
-                    .drained
-                    .push((drained.table.table.clone(), source.name.clone()));
-                source.resolved.skipped.push(drained.skipped);
-            }
+            None => source.resolved.skipped.push(drained.skipped),
         }
     }
     Ok(found)
