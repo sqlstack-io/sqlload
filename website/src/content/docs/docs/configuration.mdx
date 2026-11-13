@@ -196,7 +196,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `csv` | files, csv | From 0.27.0. `{ delimiter, header, quote, null_value }`; default `,`, `true`, `"` and an empty string. |
 | `single_file` | files | From 0.27.0. One file per table or partition, named after the table folder. Default `false`. |
 | `max_footer_reads` | files | The most Parquet footers `plan` reads for one table's schema. Default 100. |
-| `naming` | warehouses | From 0.40.0 (not released yet). `sqlload` (default) or `dlt`: how its tables name the columns a load adds and the child tables `unnest` makes; `dlt` also names the tables and columns themselves in dlt's snake_case. A source or table may override it. See [Naming](/docs/concepts/nested-data/#naming). |
+| `naming` | warehouses | From 0.40.0. `sqlload` (default) or `dlt`: how its tables name the columns a load adds and the child tables `unnest` makes; `dlt` also names the tables and columns themselves in dlt's snake_case. A source or table may override it. See [Naming](/docs/concepts/nested-data/#naming). |
 
 ## Sources
 
@@ -275,10 +275,10 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `type_change_rebuild` | `require_confirmation` | `allow`, `require_confirmation` or `deny`. |
 | `checks` | none | `{ unique, not_null, min_rows, max_row_drop, warn }`, run on the staged rows before they're published. See [Checks before publish](/docs/concepts/checks/). |
 | `constant_columns` | none | The same value in every row, such as `{ tenant_id = "acme" }`, typed by its TOML value or `{ value, type }`. From 0.26.0 on files sources; from 0.37.0 on every source but `postgres_cdc`, and per table, where a table's map replaces its source's. A files source replaces a file column of the same name, and `plan` notes it; every other source fails at `plan` when it already has a column of the name, ignoring case, before anything is written. See [Several tenants in one table](/docs/concepts/write-strategies/#several-tenants-in-one-table). |
-| `unnest` | none | From 0.40.0 (not released yet). In a table entry only: the dotted paths of the list fields whose items become rows of child tables, such as `["items", "items.parts"]`, or `"all"`. See [Nested data](/docs/concepts/nested-data/). |
-| `max_depth` | `1000` | From 0.40.0 (not released yet). In a table entry with `unnest`: how many levels of child tables it makes at most. |
-| `naming` | the target's | From 0.40.0 (not released yet). `sqlload` or `dlt`. See [Naming](/docs/concepts/nested-data/#naming). |
-| `row_id` | `false` | From 0.40.0 (not released yet). Give every row a unique id, in `_sqlload_row_id`. Always on with `unnest` and under `naming = "dlt"`, where it is `_dlt_id`. |
+| `unnest` | none | From 0.40.0. In a table entry only: the dotted paths of the list fields whose items become rows of child tables, such as `["items", "items.parts"]`, or `"all"`. See [Nested data](/docs/concepts/nested-data/). |
+| `max_depth` | `1000` | From 0.40.0. In a table entry with `unnest`: how many levels of child tables it makes at most. |
+| `naming` | the target's | From 0.40.0. `sqlload` or `dlt`. See [Naming](/docs/concepts/nested-data/#naming). |
+| `row_id` | `false` | From 0.40.0. Give every row a unique id, in `_sqlload_row_id`. Always on with `unnest` and under `naming = "dlt"`, where it is `_dlt_id`. |
 
 ClickHouse targets also take these, for the tables SQLLoad creates. Other targets refuse them, and
 Python tables don't take them. See [Table layout](/docs/targets/clickhouse/#table-layout).
