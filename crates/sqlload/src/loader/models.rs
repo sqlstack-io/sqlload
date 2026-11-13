@@ -492,6 +492,8 @@ pub struct PlanOptions {
     pub batch_bytes: Option<usize>,
     /// `--resnapshot`: drop and recreate each selected `postgres_cdc` source's slot and copy every table again.
     pub resnapshot: bool,
+    /// `--fail-fast`: once a table fails, start no other; tables already loading finish.
+    pub fail_fast: bool,
 }
 
 /// What one Python table's load needs.
@@ -533,6 +535,8 @@ pub struct TableOutcome {
     /// Whether a failed load may succeed when run again unchanged; `false` once loaded.
     pub retryable: bool,
     pub elapsed: std::time::Duration,
+    /// Never started, because `--fail-fast` stopped the load after another table failed; `loaded` holds why.
+    pub skipped: bool,
 }
 
 impl TableOutcome {
@@ -935,6 +939,8 @@ pub struct RunSummary {
     pub recreated: usize,
     pub loaded: usize,
     pub failed: usize,
+    /// Tables `--fail-fast` never started.
+    pub skipped: usize,
     pub rows: u64,
 }
 

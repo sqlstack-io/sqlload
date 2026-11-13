@@ -19,6 +19,7 @@ on:
       - .github/scripts/assert_sdist_sources.sh
       - .github/scripts/assert_wheel_notices.sh
       - .github/scripts/smoke_odbc_wheel.py
+      - .github/scripts/smoke_mysql_odbc_wheel.sh
       - packages/*/licenses/**
       - packages/*/pyproject.toml
       - Cargo.toml
@@ -305,6 +306,11 @@ jobs:
               "${bin}/python" .github/scripts/smoke_odbc_wheel.py "${bin}/sqlload" "${cli}/sqlload"
               ;;
           esac
+      # A live load from MySQL 8.4 through MySQL Connector/ODBC from MySQL's Debian 13 package, through
+      # each wheel's bundled unixODBC; the package is built for amd64 alone.
+      - name: Load through MySQL Connector/ODBC's Debian 13 package
+        if: matrix.platform.name == 'linux-x86_64'
+        run: bash .github/scripts/smoke_mysql_odbc_wheel.sh dist
 
   sdist:
     name: Build sdists

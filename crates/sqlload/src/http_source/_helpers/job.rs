@@ -15,7 +15,9 @@ use crate::http_source::_helpers::endpoint::{endpoint, interval, shared_limiter}
 use crate::http_source::_helpers::oauth::token_url;
 use crate::http_source::_helpers::pages::{paginate, set_at};
 use crate::http_source::_helpers::selector::{selected_rows, selector};
-use crate::http_source::_helpers::urls::{filled_path, placeholders, redacted};
+use crate::http_source::_helpers::urls::{
+    body_placeholders, filled_body, filled_path, placeholders, redacted,
+};
 use crate::python_sources::errors::ReadError;
 use crate::row_batches::main::projection::projection;
 use crate::row_batches::main::projection_problem::projection_problem;
@@ -225,13 +227,75 @@ fn fan_out_problems(fan_out: &FanOut) -> Vec<String> {
     let mut problems = request_problems(&fan_out.request);
     problems.extend(field_problem(&fan_out.request));
     problems.extend(level_problems(fan_out));
+    problems.extend(batch_problems(fan_out));
+    problems
+}
+
+/// The placeholders a fan-out level's keys fill: its path's, then its `json_body`'s.
+pub(crate) fn fan_out_placeholders(request: &Request) -> Vec<String> {
+    let mut names = placeholders(&request.path);
+    for name in request
+        .json_body
+        .as_ref()
+        .map(body_placeholders)
+        .unwrap_or_default()
+    {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// Where placeholder `name` of `request` is, for its problems: the path, or `json_body`.
+fn placeholder_place(request: &Request, name: &str) -> String {
+    match placeholders(&request.path)
+        .iter()
+        .any(|found| found == name)
+    {
+        true => format!("path {}", request.path),
+        false => "json_body".to_owned(),
+    }
+}
+
+/// Why `fan_out`'s `batch` cannot work, if it is set and cannot: zero, a path placeholder (one request carries many keys), or no `json_body` value that is just a placeholder for the keys' list.
+fn batch_problems(fan_out: &FanOut) -> Vec<String> {
+    let Some(batch) = fan_out.batch else {
+        return Vec::new();
+    };
+    let request = &fan_out.request;
+    let mut problems: Vec<String> = Vec::new();
+    problems.extend((batch == 0).then(|| "fan_out batch must be at least 1".to_owned()));
+    problems.extend(placeholders(&request.path).first().map(|name| {
+        format!(
+            "a batched fan-out sends many keys in one request, so its path {} cannot have the placeholder {{{name}}}; put the keys in json_body",
+            request.path
+        )
+    }));
+    let Some(body) = &request.json_body else {
+        problems.push(
+            "fan_out batch= sends each batch's keys as a list in json_body, so it needs json_body with a placeholder, such as {\"ids\": \"{id}\"}".to_owned(),
+        );
+        return problems;
+    };
+    let names = body_placeholders(body);
+    if names.is_empty() {
+        problems.push(
+            "fan_out batch= sends each batch's keys as a list in json_body, but json_body has no placeholder, such as {\"ids\": \"{id}\"}".to_owned(),
+        );
+    }
+    let sample: Map<String, Value> = names
+        .into_iter()
+        .map(|name| (name, Value::Bool(true)))
+        .collect();
+    problems.extend(filled_body(body, &[&sample], true).err());
     problems
 }
 
 /// The problems of a fan-out level apart from its own request's, and of every level above it, whether it loads rows or feeds keys to the level below.
 fn level_problems(fan_out: &FanOut) -> Vec<String> {
     let path = &fan_out.request.path;
-    let wanted = placeholders(path);
+    let wanted = fan_out_placeholders(&fan_out.request);
     let mut problems: Vec<String> = Vec::new();
     problems.extend(
         (fan_out.concurrency == 0).then(|| "fan_out concurrency must be at least 1".to_owned()),
@@ -239,7 +303,7 @@ fn level_problems(fan_out: &FanOut) -> Vec<String> {
     let (picker, kind) = match &fan_out.over {
         Over::Values { .. } if wanted.is_empty() => {
             problems.push(format!(
-                "fan-out path {path} has no placeholder, so every key would request the same URL; add one such as {{id}}"
+                "fan-out path {path} has no placeholder, so every key would send the same request; add one such as {{id}} to the path or json_body"
             ));
             return problems;
         }
@@ -247,7 +311,7 @@ fn level_problems(fan_out: &FanOut) -> Vec<String> {
             problems.extend(
                 values
                     .iter()
-                    .find_map(|value| key_problem(path, &wanted, value)),
+                    .find_map(|value| key_problem(&fan_out.request, &wanted, value)),
             );
             return problems;
         }
@@ -262,6 +326,9 @@ fn level_problems(fan_out: &FanOut) -> Vec<String> {
         Over::FanOut(inner) => {
             problems.extend(request_problems(&inner.request));
             problems.extend(level_problems(inner));
+            problems.extend(inner.batch.map(|_| {
+                "batch= is for the fan-out that loads rows; a fan_out used as over sends one request per key".to_owned()
+            }));
             problems.extend(picker_problem(&inner.request));
             (&inner.request, "a fan_out")
         }
@@ -274,7 +341,7 @@ fn level_problems(fan_out: &FanOut) -> Vec<String> {
         return problems;
     };
     let above = match &fan_out.over {
-        Over::FanOut(inner) => provided_keys(&inner.over, &placeholders(&inner.request.path)),
+        Over::FanOut(inner) => provided_keys(&inner.over, &fan_out_placeholders(&inner.request)),
         Over::Values { .. } | Over::Paginate(_) => Vec::new(),
     };
     problems.extend(above.contains(&name).then(|| {
@@ -289,7 +356,8 @@ fn level_problems(fan_out: &FanOut) -> Vec<String> {
             .filter(|name| !given.contains(name))
             .map(|name| {
                 format!(
-                    "fan-out path {path} needs {{{name}}}, but over gives only {}",
+                    "fan-out {} needs {{{name}}}, but over gives only {}",
+                    placeholder_place(&fan_out.request, name),
                     given.join(", ")
                 )
             }),
@@ -336,15 +404,16 @@ fn provided_keys(over: &Over, wanted: &[String]) -> Vec<String> {
             }
         }
         Over::Paginate(over) => key_name(over).into_iter().collect(),
-        Over::FanOut(inner) => provided_keys(&inner.over, &placeholders(&inner.request.path))
+        Over::FanOut(inner) => provided_keys(&inner.over, &fan_out_placeholders(&inner.request))
             .into_iter()
             .chain(key_name(&inner.request))
             .collect(),
     }
 }
 
-/// Why the listed key `value` cannot fill the placeholders `wanted` of `path`, if it cannot.
-fn key_problem(path: &str, wanted: &[String], value: &Value) -> Option<String> {
+/// Why the listed key `value` cannot fill the placeholders `wanted` of `request`, if it cannot.
+fn key_problem(request: &Request, wanted: &[String], value: &Value) -> Option<String> {
+    let path = &request.path;
     let missing = |key: &Map<String, Value>| {
         wanted
             .iter()
@@ -353,7 +422,10 @@ fn key_problem(path: &str, wanted: &[String], value: &Value) -> Option<String> {
     };
     match value {
         Value::Object(key) => missing(key).map(|name| {
-            format!("fan-out path {path} needs {{{name}}}, which the key {value} lacks")
+            format!(
+                "fan-out {} needs {{{name}}}, which the key {value} lacks",
+                placeholder_place(request, &name)
+            )
         }),
         _ if wanted.len() == 1 => None,
         _ => Some(format!(
@@ -504,23 +576,27 @@ fn run_fan_out<'a>(
                 KeyFeed::FanOut(Box::new((*inner, connections.clone(), http.clone())))
             }
         };
-        let wanted = placeholders(&fan_out.request.path);
+        let wanted = fan_out_placeholders(&fan_out.request);
         tasks.spawn(feed_keys(feed, wanted, key_sender, nested));
         let request = Arc::new(fan_out.request);
+        let batch = fan_out.batch;
         for _ in 0..fan_out.concurrency {
             let (calls, request, keys, sink) =
                 (calls.clone(), request.clone(), keys.clone(), sink.clone());
             tasks.spawn(async move {
                 loop {
-                    let key = keys.lock().await.recv().await;
-                    let Some(key) = key else { return Ok(()) };
-                    fan_out_key(&calls, &request, &key, &sink)
+                    let taken = next_keys(&keys, batch).await;
+                    let Some(first) = taken.first() else {
+                        return Ok(());
+                    };
+                    let trail = first.trail.clone();
+                    fan_out_key(&calls, &request, (&taken, batch.is_some()), &sink)
                         .await
                         .map_err(|error| ReadError {
                             message: match nested {
                                 true => format!(
                                     "{}{}",
-                                    redacted(&key.trail, &calls.endpoint.current_secrets()),
+                                    redacted(&trail, &calls.endpoint.current_secrets()),
                                     error.message
                                 ),
                                 false => error.message,
@@ -540,14 +616,43 @@ fn run_fan_out<'a>(
 /// A fan-out level's run, boxed so a level can run the level above it.
 type LevelRun<'a> = Pin<Box<dyn Future<Output = Result<(), ReadError>> + Send + 'a>>;
 
-/// Every page of `request` for `key`: out as rows, or picked into keys for the level below, each keeping `key`'s fields.
+/// The next key as they arrive, or with `batch` up to that many (fewer once the keys run out); none when no key is left.
+async fn next_keys(keys: &Mutex<Receiver<FanKey>>, batch: Option<usize>) -> Vec<FanKey> {
+    let wanted = batch.unwrap_or(1).max(1);
+    let mut receiver = keys.lock().await;
+    let mut taken: Vec<FanKey> = Vec::new();
+    while taken.len() < wanted {
+        match receiver.recv().await {
+            Some(key) => taken.push(key),
+            None => break,
+        }
+    }
+    taken
+}
+
+/// Every page of `request` for `keys` (one, or a batch filling `json_body` with their lists when `batched`): out as rows, or picked into keys for the level below, each keeping the key's fields.
 async fn fan_out_key(
     calls: &Calls,
     request: &Request,
-    key: &FanKey,
+    (keys, batched): (&[FanKey], bool),
     sink: &Sink,
 ) -> Result<(), ReadError> {
+    let Some(key) = keys.first() else {
+        return Ok(());
+    };
     let path = filled_path(&request.path, &key.fields)?;
+    let filled: Request;
+    let request = match &request.json_body {
+        Some(body) => {
+            let fields: Vec<&Map<String, Value>> = keys.iter().map(|key| &key.fields).collect();
+            filled = Request {
+                json_body: Some(filled_body(body, &fields, batched)?),
+                ..request.clone()
+            };
+            &filled
+        }
+        None => request,
+    };
     match sink {
         Sink::Pages(pages) => paginate(calls, request, &path, pages).await,
         Sink::Keys(keys) => {

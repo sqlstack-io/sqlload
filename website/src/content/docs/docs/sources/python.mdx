@@ -222,7 +222,7 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
 | `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). From 0.37.0, `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0, `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, batch=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0, `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. From 0.43.0, keys also fill `{placeholders}` in `json_body`, and `batch` sends several keys per request; see [Keys in a POST body](#keys-in-a-post-body). |
 
 | Paginator | Next page |
 |-----------|-----------|
@@ -285,6 +285,38 @@ def notes(ctx):
 - An error names the keys that led to it, such as `/orders order_id=5 → /orders/5/items item_id=51 →
   GET .../notes?page=2: HTTP 500`.
 - `plan` checks every level before any request: each placeholder must come from a level above.
+
+### Keys in a POST body
+
+From 0.43.0. APIs that look items up by POST take the keys in the body rather than the path. A
+`fan_out`'s keys fill `{placeholders}` in the string values of `json_body` as they fill the path's:
+a value that is just a placeholder, such as `"{order_id}"`, takes the key as the API returned it, so a
+number stays a number; a placeholder inside other text, such as `"order {order_id}"`, is filled as text.
+
+```python
+@shop.table(description="Items of each order.", write_strategy="append", cursor_column="order_id")
+def items(ctx):
+    orders = api.paginate("/orders", paginator=sl.page_number("p"),
+                          params={"after": ctx.cursor_value}, select="$.items[*].order_id")
+    return api.fan_out("/items/lookup", over=orders, method="POST",
+                       json_body={"order": {"id": "{order_id}"}}, select="$.items")
+```
+
+With `batch=N`, each request carries up to N keys: a value that is just a placeholder holds the list
+of the batch's keys, so `json_body={"ids": "{order_id}"}` with `batch=1000` sends
+`{"ids": [1, 2, …]}` with up to 1,000 keys, the last batch fewer. Each batch is one request, retried as
+a whole, and `concurrency` counts batches.
+
+```python
+    return api.fan_out("/items/lookup", over=orders, method="POST",
+                       json_body={"ids": "{order_id}"}, batch=1000, select="$.items")
+```
+
+- `plan` checks every placeholder in the path and the body before any request: each must come from
+  a level above, and a fan-out needs at least one, or every key would send the same request.
+- A batch's keys go only in the body, as whole values: `plan` refuses a batched fan-out with a
+  placeholder in its path or inside other text, or without `json_body`.
+- A batched fan-out can't be the `over` of another fan-out.
 
 ### Rows of cells
 

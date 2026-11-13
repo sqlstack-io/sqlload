@@ -133,6 +133,9 @@ pub struct FanOut {
     pub request: Request,
     pub over: Over,
     pub concurrency: usize,
+    /// Keys sent per request, each placeholder of `json_body` filled with the list of the batch's values; `None` sends one key per request.
+    #[serde(default)]
+    pub batch: Option<usize>,
 }
 
 /// The keys a fan-out requests.
