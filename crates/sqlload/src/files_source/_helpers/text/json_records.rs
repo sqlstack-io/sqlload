@@ -61,11 +61,10 @@ impl<'de> Visitor<'de> for ObjectVisitor {
 /// One field of a JSON record: its key, its value (an empty placeholder for an object or array) and the nested value's compact text.
 type JsonField = (String, Value, Option<String>);
 
-/// `record` with each field holding an object replaced where it stands, and recursively, by one field per key named `<field>__<key>`, as dlt flattens objects (an empty object, or a NULL inside an object, leaves none); each name flattening makes, and each field it replaces, joins `made`. A made name the record already has is an error naming it.
+/// `record` with each field holding an object replaced where it stands, and recursively, by one field per key named `<field>__<key>`, as dlt flattens objects (an empty object, or a NULL inside an object, leaves none); with each name flattening made, and each field it replaced. A made name the record already has is an error naming it.
 pub(crate) fn flattened_record(
     record: JsonRecord,
-    made: &mut BTreeSet<String>,
-) -> Result<JsonRecord, String> {
+) -> Result<(JsonRecord, BTreeSet<String>), String> {
     let mut fields: Vec<JsonField> = Vec::with_capacity(record.fields.len());
     let mut flattened: BTreeSet<String> = BTreeSet::new();
     for field in record.fields {
@@ -81,11 +80,13 @@ pub(crate) fn flattened_record(
             record.line
         ));
     }
-    made.extend(flattened);
-    Ok(JsonRecord {
-        line: record.line,
-        fields,
-    })
+    Ok((
+        JsonRecord {
+            line: record.line,
+            fields,
+        },
+        flattened,
+    ))
 }
 
 /// Push `field`, named below `prefix` when an object holds it, onto `fields`, or its keys in its place when it holds an object (a NULL below a prefix leaves nothing); the object's name and names below a prefix join `flattened`.

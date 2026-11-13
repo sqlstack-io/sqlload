@@ -10,7 +10,7 @@ use crate::helpers::{
     CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, run_async,
     run_sqlload, spawn_sqlload, step, stop_sqlload,
 };
-use crate::postgres_helpers::run_cdc_scenario;
+use crate::postgres_helpers::{DLT_CRM, DLT_CRM_CHECK, DLT_CRM_SOURCE, run_cdc_scenario};
 use crate::test_types::{
     CdcPlanTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
     QuietSlotTestCase,
@@ -47,47 +47,6 @@ const LIVE_CHANGELOG_QUERY: &str = "SELECT (SELECT array_join(transform(array_so
 
 const CHANGELOG_QUERY: &str = "SELECT (SELECT string_agg(_sqlload_seq || ':' || _sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM raw.log__orders) || ' | ' || (SELECT string_agg(_sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM raw.log__items) || ' | ' || (SELECT string_agg(_sqlload_unchanged, ';') FROM raw.log__orders WHERE _sqlload_op = 'update')";
 pub(crate) const CHANGELOG_RESULT: &str = "0:snapshot:1,0:snapshot:2,0:snapshot:3,1:insert:4,2:update:1,1:delete:2 | snapshot:1,snapshot:2,insert:3,update:1 | ,big,";
-
-/// A source capturing `crm."Contacts"` under dlt's names, so its columns `ContactID`, `Full Name` and `IsActive` load as `contact_id`, `full_name` and `is_active`.
-const DLT_CRM_SOURCE: &str = r#"
-[sources.crm]
-kind = "postgres_cdc"
-connection = "pg"
-include = ["crm.*"]
-naming = "dlt"
-"#;
-
-const CRM: &[&str] = &["load", "crm"];
-
-/// The table, its snapshot, then a transaction inserting, updating and deleting a contact, and a re-run of nothing.
-const DLT_CRM: [CdcStep; 3] = [
-    step(
-        r#"
-CREATE SCHEMA crm;
-CREATE TABLE crm."Contacts" ("ContactID" int8 PRIMARY KEY, "Full Name" text, "IsActive" boolean);
-INSERT INTO crm."Contacts" VALUES (1, 'Ann', true), (2, 'Bo', true);
-"#,
-        CRM,
-        "",
-        (true, "loaded"),
-    ),
-    step(
-        r#"
-BEGIN;
-INSERT INTO crm."Contacts" VALUES (3, 'Cy', false);
-UPDATE crm."Contacts" SET "Full Name" = 'Ann B' WHERE "ContactID" = 1;
-DELETE FROM crm."Contacts" WHERE "ContactID" = 2;
-COMMIT;
-"#,
-        CRM,
-        "",
-        (true, "Completed"),
-    ),
-    step("", CRM, "", (true, "0 rows")),
-];
-
-/// Each contact under its loaded names, with its last change and whether it is deleted.
-const DLT_CRM_CHECK: &str = "SELECT string_agg(contact_id || ':' || full_name || ':' || is_active || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY contact_id) FROM raw.crm__contacts";
 
 const APP: &[&str] = &["load", "app"];
 pub(crate) const LOG: &[&str] = &["load", "log"];

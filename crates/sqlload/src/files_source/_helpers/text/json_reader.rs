@@ -69,13 +69,16 @@ impl JsonReader {
         }
         let take = limit.min(self.ready.len());
         let records: Vec<JsonRecord> = self.ready.drain(..take).collect();
-        match self.flatten_objects {
-            false => Ok(records),
-            true => records
-                .into_iter()
-                .map(|record| flattened_record(record, &mut self.flattened))
-                .collect(),
+        if !self.flatten_objects {
+            return Ok(records);
         }
+        let mut flat: Vec<JsonRecord> = Vec::with_capacity(records.len());
+        for record in records {
+            let (record, made) = flattened_record(record)?;
+            self.flattened.extend(made);
+            flat.push(record);
+        }
+        Ok(flat)
     }
 }
 

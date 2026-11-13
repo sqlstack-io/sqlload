@@ -43,12 +43,13 @@ use crate::http::models::ConnectionCounter;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::destination::table_folder;
-use crate::loader::_helpers::files_columns::{flattened_object_problems, referenced_columns};
 use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::resolve::{NameRule, resolve_tables, source_target};
 use crate::loader::_helpers::run_log::merged_files;
 use crate::loader::_helpers::specs::is_child_column;
-use crate::loader::_helpers::specs::{missing_description, table_name, table_naming};
+use crate::loader::_helpers::specs::{
+    flattened_object_problems, missing_description, referenced_columns, table_name, table_naming,
+};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
     KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, RELOAD_FIX,

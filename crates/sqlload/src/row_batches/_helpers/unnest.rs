@@ -209,11 +209,10 @@ impl Split<'_> {
                 let object = serde_json::from_str::<OrderedObject>(item)
                     .map_err(|error| format!("{}: {error}", place.path))?
                     .0;
-                let mut entries: Vec<(String, Box<RawValue>)> = Vec::new();
-                match self.flatten_objects {
-                    true => flatten_entries(object, ("", place.path), &mut entries)?,
-                    false => entries = object,
-                }
+                let entries = match self.flatten_objects {
+                    true => flatten_entries(object, ("", place.path))?,
+                    false => object,
+                };
                 self.loaded_keys(entries, place.path)?
             }
             Some(b'[') => vec![(NESTED_LIST_KEY.to_owned(), raw(item, place.path)?)],
@@ -309,12 +308,12 @@ impl Split<'_> {
     }
 }
 
-/// Push `entries`, named below `prefix` when an object holds them, onto `flat`, with each object's keys in its place as `<key>__<inner>`, recursively, as dlt flattens an item's objects (an empty object, or a NULL inside an object, leaves nothing); an error names the item's `path`.
+/// `entries`, named below `prefix` when an object holds them, with each object's keys in its place as `<key>__<inner>`, recursively, as dlt flattens an item's objects (an empty object, or a NULL inside an object, leaves nothing); an error names the item's `path`.
 fn flatten_entries(
     entries: Vec<(String, Box<RawValue>)>,
     (prefix, path): (&str, &str),
-    flat: &mut Vec<(String, Box<RawValue>)>,
-) -> Result<(), String> {
+) -> Result<Vec<(String, Box<RawValue>)>, String> {
+    let mut flat: Vec<(String, Box<RawValue>)> = Vec::with_capacity(entries.len());
     for (key, value) in entries {
         let name = match prefix.is_empty() {
             true => key,
@@ -324,13 +323,13 @@ fn flatten_entries(
             Some(b'{') => {
                 let object = serde_json::from_str::<OrderedObject>(value.get())
                     .map_err(|error| format!("{path}.{name}: {error}"))?;
-                flatten_entries(object.0, (&name, path), flat)?;
+                flat.extend(flatten_entries(object.0, (&name, path))?);
             }
             Some(b'n') if !prefix.is_empty() => {}
             _ => flat.push((name, value)),
         }
     }
-    Ok(())
+    Ok(flat)
 }
 
 /// `text` as a raw JSON value, an error naming `path` when it is not one.

@@ -130,26 +130,28 @@ fn given_json_objects_with_nested_objects_when_flattening_as_dlt_then_keys_becom
         FlattenJsonTestCase {
             description: "objects flatten in place at every level; an empty object or a NULL inside one leaves nothing; a list stays",
             text: r#"{"id":1,"c":{"n":"a","addr":{"city":"x"},"gone":null,"e":{}},"tags":[1],"z":2}"#,
-            expected: Ok(
+            expected_flattened: Ok(
                 r#"id=1|c__n="a"|c__addr__city="x"|tags=[1]|z=2 made c,c__addr,c__addr__city,c__e,c__n"#,
             ),
         },
         FlattenJsonTestCase {
             description: "a NULL at the top level stays a field",
             text: r#"{"c":null}"#,
-            expected: Ok("c=null made "),
+            expected_flattened: Ok("c=null made "),
         },
         FlattenJsonTestCase {
             description: "a flattened name the record already has is an error naming it",
             text: r#"{"c__n":1,"c":{"n":2}}"#,
-            expected: Err("line 1: naming = \"dlt\" flattens an object into the column c__n"),
+            expected_flattened: Err(
+                "line 1: naming = \"dlt\" flattens an object into the column c__n",
+            ),
         },
     ];
     for test_case in test_cases {
         let flattened = flatten_json(&test_case);
         assert_eq!(
             flattened.as_deref().ok(),
-            test_case.expected.ok(),
+            test_case.expected_flattened.ok(),
             "{}",
             test_case.description
         );
@@ -157,7 +159,7 @@ fn given_json_objects_with_nested_objects_when_flattening_as_dlt_then_keys_becom
             flattened
                 .err()
                 .unwrap_or_default()
-                .contains(test_case.expected.err().unwrap_or_default()),
+                .contains(test_case.expected_flattened.err().unwrap_or_default()),
             "{}",
             test_case.description
         );
