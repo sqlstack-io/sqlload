@@ -112,7 +112,7 @@ fn merged_names(source_name: &str, source: &SourceConfig, specs: &[TableSpec]) -
     let mut problems: Vec<String> = Vec::new();
     for (index, spec) in specs.iter().enumerate() {
         let clash = specs[..index].iter().find(|earlier| {
-            spec.naming == Naming::Dlt
+            (spec.naming == Naming::Dlt || earlier.naming == Naming::Dlt)
                 && earlier.destination.table == spec.destination.table
                 && written(earlier) != written(spec)
         });

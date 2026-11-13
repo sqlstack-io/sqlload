@@ -125,7 +125,9 @@ pub(crate) struct ConstantsAddedTestCase {
 pub(crate) struct ChildPathsTestCase {
     pub(crate) description: &'static str,
     pub(crate) warehouse: Warehouse,
-    /// Live child tables of `s__t`, as the warehouse lists them.
+    /// The parent table's name as the load writes it.
+    pub(crate) parent: &'static str,
+    /// Live child tables of `parent`, as the warehouse lists them.
     pub(crate) tables: &'static [&'static str],
     /// Each table's dotted path, as `(path, table)`.
     pub(crate) expected_paths: &'static [(&'static str, &'static str)],

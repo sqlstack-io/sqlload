@@ -19,7 +19,7 @@ pub(crate) fn findings(
     declared: &BTreeMap<String, ColumnType>,
     contract: Contract,
     live: Option<&[LiveColumn]>,
-    (warehouse, relation): (Warehouse, &str),
+    (warehouse, naming, relation): (Warehouse, Naming, &str),
 ) -> Vec<ContractFinding> {
     let Some(live) = live else {
         return vec![ContractFinding {
@@ -38,7 +38,7 @@ pub(crate) fn findings(
     };
     let mut found: Vec<ContractFinding> = live
         .iter()
-        .filter(|column| !is_own(&column.name))
+        .filter(|column| !is_own(naming, &column.name))
         .filter_map(|column| live_finding(column, declared_type(&column.name), contract, warehouse))
         .collect();
     found.extend(
@@ -57,9 +57,9 @@ pub(crate) fn findings(
     found
 }
 
-/// Whether a load added the column itself: any `_sqlload_*` column, or one of dlt's metadata columns, which `naming = "dlt"` writes.
-pub(crate) fn is_own(name: &str) -> bool {
-    is_load_column(Naming::Dlt, &name.to_ascii_lowercase())
+/// Whether a load under `naming` added the column itself: any `_sqlload_*` column, or one of dlt's metadata columns under `naming = "dlt"`.
+pub(crate) fn is_own(naming: Naming, name: &str) -> bool {
+    is_load_column(naming, &name.to_ascii_lowercase())
 }
 
 /// Whether `live` has a column named `name`, ignoring case.

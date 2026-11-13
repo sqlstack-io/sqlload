@@ -41,7 +41,7 @@ pub(crate) fn source_drift(
         Err(problems) => return unavailable(problems.join("; ")),
     };
     let undeclared = |name: &str| {
-        !is_own(name)
+        !is_own(spec.naming, name)
             && !spec
                 .pinned
                 .keys()

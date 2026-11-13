@@ -327,6 +327,7 @@ pub(crate) fn constants_added(
 pub(crate) fn live_paths(test_case: &ChildPathsTestCase) -> Result<Vec<(String, String)>, String> {
     let mut spec = python_spec("{}")?;
     spec.warehouse = test_case.warehouse;
+    test_case.parent.clone_into(&mut spec.destination.table);
     let tables = test_case
         .tables
         .iter()

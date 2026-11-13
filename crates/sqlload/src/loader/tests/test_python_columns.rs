@@ -255,6 +255,7 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         ChildPathsTestCase {
             description: "Snowflake lists plain names upper-cased; their paths are the fields as the rows name them",
             warehouse: Warehouse::Snowflake,
+            parent: "s__t",
             tables: &["S__T__ITEMS", "S__T__ITEMS__PARTS"],
             expected_paths: &[
                 ("items", "S__T__ITEMS"),
@@ -264,7 +265,15 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         ChildPathsTestCase {
             description: "DuckDB lists them as written",
             warehouse: Warehouse::DuckDb,
+            parent: "s__t",
             tables: &["s__t__items"],
+            expected_paths: &[("items", "s__t__items")],
+        },
+        ChildPathsTestCase {
+            description: "Postgres lists an upper-case parent's children folded to lower case",
+            warehouse: Warehouse::Postgres,
+            parent: "S__T",
+            tables: &["s__t__items", "other__items"],
             expected_paths: &[("items", "s__t__items")],
         },
     ];
