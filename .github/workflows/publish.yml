@@ -124,6 +124,9 @@ jobs:
             target: x86_64
             homebrew: /usr/local
             cross: x86_64-apple-darwin
+            # librdkafka's own configure (rdkafka-sys) builds for the runner's architecture unless
+            # its compiler and linker flags name the target's.
+            arch_flags: -arch x86_64
           - name: windows-x86_64
             runner: windows-latest
             target: x86_64
@@ -179,6 +182,9 @@ jobs:
       # release build reuses the previous release's work and recompiles little beyond sqlload.
       - name: Build ${{ matrix.package.name }} wheel
         uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS: ${{ matrix.platform.arch_flags }}
+          LDFLAGS: ${{ matrix.platform.arch_flags }}
         with:
           command: build
           # The wheels build ODBC (sdists don't, so building one needs no driver manager); repair copies
