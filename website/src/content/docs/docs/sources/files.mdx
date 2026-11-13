@@ -233,7 +233,7 @@ after_load = { move_to = "loaded" }
 - It needs `write_strategy = "append"` or `"merge"`, which never read a loaded file again. A file
   that reappears under a loaded name is a new file when its version differs; an identical copy,
   such as the same bytes on S3, is skipped as loaded and stays. `--reload` is refused.
-- From 0.39.1 (not released yet), a run that finds the folder empty skips the table and exits 0,
+- From 0.39.1, a run that finds the folder empty skips the table and exits 0,
   since `after_load` handled every file loaded before: `plan` lists it under skipped, as does
   `load --json` in `plan.skipped`. That needs an existing folder holding no file at all (hidden
   ones aside) and a table that has loaded before. A folder on a local disk that is missing or can't
