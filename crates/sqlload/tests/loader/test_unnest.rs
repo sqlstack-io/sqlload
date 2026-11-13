@@ -19,7 +19,8 @@ use crate::helpers::{
     described_project, duckdb_execute, duckdb_text, load_ndjson_runs, run_async, run_sqlload,
 };
 use crate::test_types::{
-    ClearRowsTestCase, RekeyedTestCase, RowIdTestCase, UnnestFailTestCase, UnnestPlanTestCase,
+    ClearRowsTestCase, NamedLikeTestCase, RekeyedTestCase, RowIdTestCase, UnnestFailTestCase,
+    UnnestPlanTestCase,
 };
 
 const COLUMNS: &str = "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders'";
@@ -142,6 +143,43 @@ const CLICKHOUSE_APPEND_CHECK: &str = "SELECT (SELECT arrayStringConcat(arraySor
 
 /// The staging table holding the merged roots in the clear test.
 const CLEAR_STAGING: &str = "orders__sqlload_staging_20261113";
+
+/// Tables seeded beside `orders` and named like its child tables: `orders__notes`, a plain table, and `orders__x__items`, the child table of another root `orders__x`; each with one row. `{parent_id}` is the naming's parent-id column.
+const NAMED_LIKE_CHILDREN: &[&str] = &[
+    "CREATE SCHEMA raw",
+    "CREATE TABLE raw.orders__notes (id BIGINT, note TEXT)",
+    "INSERT INTO raw.orders__notes VALUES (1, 'n')",
+    "CREATE TABLE raw.orders__x (id BIGINT, row_id TEXT)",
+    "INSERT INTO raw.orders__x VALUES (1, 'r')",
+    "CREATE TABLE raw.orders__x__items (sku TEXT, {parent_id} TEXT)",
+    "INSERT INTO raw.orders__x__items VALUES ('s', 'r')",
+];
+
+/// [`NAMED_LIKE_CHILDREN`] in ClickHouse's SQL.
+const CLICKHOUSE_NAMED_LIKE_CHILDREN: &[&str] = &[
+    "CREATE DATABASE raw",
+    "CREATE TABLE raw.orders__notes (id Int64, note String) ENGINE = MergeTree ORDER BY tuple()",
+    "INSERT INTO raw.orders__notes VALUES (1, 'n')",
+    "CREATE TABLE raw.orders__x (id Int64, row_id String) ENGINE = MergeTree ORDER BY tuple()",
+    "INSERT INTO raw.orders__x VALUES (1, 'r')",
+    "CREATE TABLE raw.orders__x__items (sku String, {parent_id} String) ENGINE = MergeTree ORDER BY tuple()",
+    "INSERT INTO raw.orders__x__items VALUES ('s', 'r')",
+];
+
+/// A replace under `unnest = "all"` whose second run has no tags, so the real child table `orders__tags` is emptied.
+const NAMED_LIKE_RUNS: &[(&str, &str)] = &[
+    (
+        "a.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"a\"}], \"tags\": [\"x\"]}\n",
+    ),
+    ("a.ndjson", "{\"id\": 3, \"items\": [{\"sku\": \"c\"}]}\n"),
+];
+
+/// The rows of the seeded tables, then of the real child tables: `notes/x items/tags/items`.
+const NAMED_LIKE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders__notes) || '/' || (SELECT count(*) FROM raw.orders__x__items) || '/' || (SELECT count(*) FROM raw.orders__tags) || '/' || (SELECT count(*) FROM raw.orders__items)";
+
+/// [`NAMED_LIKE_CHECK`] in ClickHouse's SQL.
+const CLICKHOUSE_NAMED_LIKE_CHECK: &str = "SELECT toString((SELECT count() FROM raw.orders__notes)) || '/' || toString((SELECT count() FROM raw.orders__x__items)) || '/' || toString((SELECT count() FROM raw.orders__tags)) || '/' || toString((SELECT count() FROM raw.orders__items))";
 
 #[test]
 fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_problem()
@@ -956,4 +994,98 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
         );
     }
     Ok(())
+}
+
+#[test]
+fn given_tables_named_like_child_tables_when_unnest_all_replaces_then_only_its_own_child_tables_are_emptied()
+-> Result<(), String> {
+    let test_cases = [
+        NamedLikeTestCase {
+            description: "a plain table and another root's child table named like child tables keep their rows, and a real child table no row fills is emptied (naming = \"sqlload\")",
+            settings: "[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            parent_id: "_sqlload_parent_id",
+            expected_result: "1/1/0/1",
+        },
+        NamedLikeTestCase {
+            description: "a plain table and another root's child table named like child tables keep their rows, and a real child table no row fills is emptied (naming = \"dlt\", which names the parent-id column _dlt_parent_id)",
+            settings: "naming = \"dlt\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            parent_id: "_dlt_parent_id",
+            expected_result: "1/1/0/1",
+        },
+    ];
+    let seed = |statements: &[&str], parent_id: &str| -> Vec<String> {
+        statements
+            .iter()
+            .map(|statement| statement.replace("{parent_id}", parent_id))
+            .collect()
+    };
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        let postgres_connection = format!(
+            "kind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"sqlload\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"",
+            postgres.port
+        );
+        let clickhouse = start_clickhouse().await?;
+        let clickhouse_connection = format!(
+            "kind = \"clickhouse\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"{CLICKHOUSE_USER}\"\npassword = \"{CLICKHOUSE_PASSWORD}\"",
+            clickhouse.port
+        );
+        for test_case in &test_cases {
+            let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let database = root.path().join("out.duckdb");
+            duckdb_execute(
+                &database,
+                &seed(NAMED_LIKE_CHILDREN, test_case.parent_id).join(";\n"),
+            )?;
+            load_ndjson_runs(
+                &root.path().join("duckdb"),
+                &format!("kind = \"duckdb\"\ndatabase = \"{}\"", database.display()),
+                (test_case.settings, NAMED_LIKE_RUNS),
+            )?;
+            client
+                .batch_execute("DROP SCHEMA IF EXISTS raw CASCADE")
+                .await
+                .map_err(|error| error.to_string())?;
+            for statement in seed(NAMED_LIKE_CHILDREN, test_case.parent_id) {
+                client
+                    .batch_execute(&statement)
+                    .await
+                    .map_err(|error| format!("{statement}: {error}"))?;
+            }
+            load_ndjson_runs(
+                &root.path().join("postgres"),
+                &postgres_connection,
+                (test_case.settings, NAMED_LIKE_RUNS),
+            )?;
+            run_client(&clickhouse, "DROP DATABASE IF EXISTS raw", &[]).await?;
+            for statement in seed(CLICKHOUSE_NAMED_LIKE_CHILDREN, test_case.parent_id) {
+                run_client(&clickhouse, &statement, &[]).await?;
+            }
+            load_ndjson_runs(
+                &root.path().join("clickhouse"),
+                &clickhouse_connection,
+                (test_case.settings, NAMED_LIKE_RUNS),
+            )?;
+            let postgres_found: String = client
+                .query_one(NAMED_LIKE_CHECK, &[])
+                .await
+                .map_err(|error| format!("{NAMED_LIKE_CHECK}: {error}"))?
+                .get(0);
+            assert_eq!(
+                [
+                    duckdb_text(&database, NAMED_LIKE_CHECK)?,
+                    postgres_found,
+                    run_client(&clickhouse, CLICKHOUSE_NAMED_LIKE_CHECK, &[])
+                        .await?
+                        .trim()
+                        .to_owned(),
+                ],
+                [test_case.expected_result; 3],
+                "{} (DuckDB, Postgres, ClickHouse)",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
 }

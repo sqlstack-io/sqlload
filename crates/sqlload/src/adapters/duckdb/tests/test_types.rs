@@ -99,6 +99,8 @@ pub(crate) struct AttachedDatabaseTestCase {
     pub(crate) setup: &'static str,
     pub(crate) expected_columns: &'static [&'static str],
     pub(crate) expected_dropped: usize,
+    /// `orders`'s child-table listing (staging tables included), each name after its `1` (has a parent-id column) or `0` mark, sorted.
+    pub(crate) expected_children: &'static [&'static str],
 }
 
 pub(crate) struct IndexReplayTestCase {

@@ -2,6 +2,7 @@ use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
+use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::duckdb::_helpers::motherduck_connection::{
     chosen_token, connection_string, path_text, refused,
@@ -378,15 +379,18 @@ fn given_a_motherduck_destination_when_routing_then_it_takes_only_arrow_batches(
 fn given_other_attached_databases_when_reading_the_schema_and_staging_then_only_the_current_database_counts()
 -> Result<(), String> {
     let test_cases = [AttachedDatabaseTestCase {
-        description: "another database holding the table, a stale staging table, and a database named like the schema",
+        description: "another database holding the table, a stale staging table, a child table named like a plain table here, and a database named like the schema",
         setup: "ATTACH ':memory:' AS other;
                 CREATE SCHEMA other.raw;
                 CREATE TABLE other.raw.orders (id INTEGER, extra INTEGER);
                 CREATE TABLE other.raw.orders__sqlload_staging_20200101000000 (id INTEGER);
                 CREATE TABLE raw.orders__sqlload_staging_20200101000000 (id INTEGER);
+                CREATE TABLE other.raw.orders__notes (sku TEXT, _sqlload_parent_id TEXT);
+                CREATE TABLE raw.orders__notes (note TEXT);
                 ATTACH ':memory:' AS raw;",
         expected_columns: &["id"],
         expected_dropped: 1,
+        expected_children: &["0orders__notes", "0orders__sqlload_staging_20200101000000"],
     }];
     let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
     for test_case in test_cases {
@@ -414,6 +418,13 @@ fn given_other_attached_databases_when_reading_the_schema_and_staging_then_only_
             .map_err(|error| error.to_string())?
             .unwrap_or_default();
         let names: Vec<&str> = columns.iter().map(|column| column.name.as_str()).collect();
+        let mut children = runtime
+            .block_on(text_values(
+                &Destination::DuckDb(destination.clone()),
+                DuckDbSql.list_child_tables_sql(&table),
+            ))
+            .map_err(|error| format!("{}: {error}", test_case.description))?;
+        children.sort();
         let dropped = runtime
             .block_on(drop_stale_staging(
                 &Destination::DuckDb(destination.clone()),
@@ -428,6 +439,11 @@ fn given_other_attached_databases_when_reading_the_schema_and_staging_then_only_
         );
         assert_eq!(
             dropped, test_case.expected_dropped,
+            "{}",
+            test_case.description
+        );
+        assert_eq!(
+            children, test_case.expected_children,
             "{}",
             test_case.description
         );

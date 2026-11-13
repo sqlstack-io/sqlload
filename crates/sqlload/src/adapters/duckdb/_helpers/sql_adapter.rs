@@ -1,5 +1,6 @@
 //! DuckDB's SQL: the contract's shared rendering, with DuckDB's types.
 
+use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::duckdb::_helpers::type_names::{logical_type, portable_type};
 use crate::adapters::duckdb::models::DuckDbSql;
@@ -36,6 +37,11 @@ impl SqlAdapter for DuckDbSql {
 
     fn widens_in_place(&self, _live: &ColumnType, _target: &ColumnType) -> bool {
         true
+    }
+
+    /// Only the current database's columns: MotherDuck attaches the account's other databases too, whose tables of the same schema and name would count as the target's.
+    fn render_schema_columns(&self, _table: &TableName) -> String {
+        "(SELECT table_schema, table_name, column_name FROM information_schema.columns WHERE table_catalog = current_database())".to_owned()
     }
 
     /// Only the current database's staging tables: MotherDuck attaches the account's other databases too.
