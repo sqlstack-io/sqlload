@@ -1032,6 +1032,8 @@ pub(crate) struct AfterLoadStep {
     pub(crate) files: &'static [(&'static str, &'static str)],
     /// Folders removed next, by path below the root, such as `drop`.
     pub(crate) removed: &'static [&'static str],
+    /// Arguments after `load --json`, such as `--exclude`.
+    pub(crate) args: &'static [&'static str],
     pub(crate) expected_exit: i32,
     /// The table's `status`, `rows` and `after_load` in the report, with the plan's `errors` and `skipped` reasons (the root as `<root>`), as compact JSON.
     pub(crate) expected_report: &'static str,

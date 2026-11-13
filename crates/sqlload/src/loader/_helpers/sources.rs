@@ -1687,8 +1687,12 @@ fn drained_files(
         };
     }
     let path = source.path.as_deref().unwrap_or_default();
+    let spec = resolve_tables(project, source_name, std::slice::from_ref(&listed))
+        .specs
+        .pop();
     ResolvedTables {
         drained: Some(DrainedFiles {
+            spec,
             in_scope,
             target: target.name,
             skipped: SkippedTable {
@@ -1918,6 +1922,7 @@ pub(crate) async fn found_sources<'a>(
         found
             .drained
             .push((drained.table.table.clone(), source.name.clone()));
+        found.configured.extend(drained.spec);
         if !drained.in_scope {
             continue;
         }
