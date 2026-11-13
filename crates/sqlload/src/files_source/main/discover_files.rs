@@ -1,7 +1,5 @@
 //! List a files source and work out its schema from Parquet footers or sampled JSON and CSV records.
 
-use std::collections::BTreeSet;
-
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::models::OpenFolder;
@@ -59,10 +57,8 @@ pub async fn discover_files(
     let text_format = encoding.format != SourceFormat::Parquet;
     let mut columns: Vec<SampledColumn> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
-    let mut objects: BTreeSet<String> = BTreeSet::new();
-    let sampled = newest_columns(folder, &files, encoding).await?;
-    for ((data, _), (found, flattened)) in files.iter().rev().zip(sampled) {
-        objects.extend(flattened);
+    let (sampled, objects) = newest_columns(folder, &files, encoding).await?;
+    for ((data, _), found) in files.iter().rev().zip(sampled) {
         let (found, loader) = drop_loader_columns(found);
         for name in loader {
             if !dropped.contains(&name) {
@@ -88,7 +84,7 @@ pub async fn discover_files(
         skipped: listed.skipped,
         unmatched: listed.unmatched,
         dropped,
-        objects: objects.into_iter().collect(),
+        objects,
     })
 }
 

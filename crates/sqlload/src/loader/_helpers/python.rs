@@ -195,34 +195,60 @@ fn is_child_of_any(table: &str, parents: &[&str]) -> bool {
 
 /// The dotted path each of `spec`'s child tables among `tables` holds, by its name as the load writes it (`orders__items__parts` holds `items.parts`; Snowflake's `ORDERS__ITEMS` holds `items`; Postgres lists the children of `ORDERS` folded, as `orders__items`): the path of a `child_pinned` column whose table it is, or else the name's parts. Only the pins know a path whose field holds `__` (a list in an object `naming = "dlt"` flattened: `orders__items__dims__tags` holds `items.dims__tags`) or a name dlt shortened.
 pub(crate) fn child_paths(spec: &TableSpec, tables: Vec<String>) -> Vec<(String, String)> {
-    let prefix = format!("{}{CHILD_TABLE_SEPARATOR}", spec.destination.table);
-    let adapter = sql_adapter(spec.warehouse);
-    let stored = adapter.stored_table_name(&prefix);
-    let pinned: BTreeSet<&str> = spec
-        .child_pinned
-        .keys()
-        .flat_map(|key| key.match_indices('.').map(|(at, _)| &key[..at]))
-        .collect();
+    let pinned = pinned_tables(spec, &tables);
     tables
         .into_iter()
         .filter_map(|table| {
-            let named = pinned.iter().find(|path| {
-                adapter
-                    .stored_table_name(&unnested_table(spec, path))
-                    .eq_ignore_ascii_case(&table)
-            });
-            if let Some(path) = named {
-                return Some(((*path).to_owned(), table));
-            }
-            if !table.starts_with(&stored) {
-                return None;
-            }
-            let path = source_spelling(&table, spec)
-                .get(prefix.len()..)?
-                .replace(CHILD_TABLE_SEPARATOR, ".");
+            let path = pinned
+                .get(&table)
+                .cloned()
+                .or_else(|| named_child_path(spec, &table))?;
             Some((path, table))
         })
         .collect()
+}
+
+/// Each child table path `spec`'s `child_pinned` keys name: every dotted prefix of a key (`items.dims__tags.value` names `items` and `items.dims__tags`).
+fn pinned_child_paths(spec: &TableSpec) -> BTreeSet<&str> {
+    let mut paths: BTreeSet<&str> = BTreeSet::new();
+    for key in spec.child_pinned.keys() {
+        for (at, _) in key.match_indices('.') {
+            paths.insert(&key[..at]);
+        }
+    }
+    paths
+}
+
+/// Each of `tables` (as the warehouse lists them) that a `child_pinned` path's child table is, with that path: the table spelt exactly as the path's is, or else one spelt so in another case (Postgres lists an upper-case parent's children folded), so `items` and `Items` keep their own paths.
+fn pinned_tables(spec: &TableSpec, tables: &[String]) -> BTreeMap<String, String> {
+    let adapter = sql_adapter(spec.warehouse);
+    let mut found: BTreeMap<String, String> = BTreeMap::new();
+    for path in pinned_child_paths(spec) {
+        let name = adapter.stored_table_name(&unnested_table(spec, path));
+        let mut table = tables.iter().find(|table| **table == name);
+        if table.is_none() {
+            table = tables
+                .iter()
+                .find(|table| table.eq_ignore_ascii_case(&name));
+        }
+        if let Some(table) = table {
+            found.insert(table.clone(), path.to_owned());
+        }
+    }
+    found
+}
+
+/// The path `table`'s name gives, its parts below `spec`'s table joined by dots; `None` when it is not named as a child of that table.
+fn named_child_path(spec: &TableSpec, table: &str) -> Option<String> {
+    let prefix = format!("{}{CHILD_TABLE_SEPARATOR}", spec.destination.table);
+    if !table.starts_with(&sql_adapter(spec.warehouse).stored_table_name(&prefix)) {
+        return None;
+    }
+    Some(
+        source_spelling(table, spec)
+            .get(prefix.len()..)?
+            .replace(CHILD_TABLE_SEPARATOR, "."),
+    )
 }
 
 /// `spec` with each top-level field whose child table is among `children` chosen as a list field under `unnest = "all"`: an earlier load chose it, so this one keeps it one whatever its sampled values show (a value that is not a list then fails the load).
