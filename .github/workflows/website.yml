@@ -6,6 +6,8 @@ on:
   pull_request:
     paths:
       - website/**
+      # Pages import these example projects as they are.
+      - packages/sqlload/tests/docs_examples/**
       - .github/workflows/website.yml
   workflow_dispatch:
 

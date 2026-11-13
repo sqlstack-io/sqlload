@@ -1,6 +1,7 @@
 """The examples of the "Coming from dlt" guide, each a project under docs_examples/from_dlt that the page shows as it is.
 
-Each test copies one example, loads it twice and checks the tables against what dlt 1.32.0 loads from the same data.
+Each test copies one example and loads it twice. The filesystem example's tables and row ids are checked against values
+recorded from dlt 1.32.0 (an upsert merge on OrderID of the same two files); the dlt side isn't rerun here.
 """
 
 import json
@@ -13,7 +14,7 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import duckdb
 import pytest
@@ -30,11 +31,15 @@ CHILD_LOAD_ID = "_dlt_load_id"
 #: Row ids dlt 1.32.0 gives the filesystem example's rows under its upsert merge on OrderID, after both files.
 DLT_ORDER_IDS = [(1, "shipped", "E7zK8EiO51eQ2A"), (2, "open", "+AfrtWtvbsW93w"), (3, "open", "uh9DeJo8VgLavQ")]
 DLT_LINES = [
-	("gear", 1, "+AfrtWtvbsW93w", 0, "DuJY8AIkJ6Zhig"),
-	("bolt", 3, "E7zK8EiO51eQ2A", 0, "2XJ+MfjrBXUANw"),
-	("washer", 12, "uh9DeJo8VgLavQ", 0, "PGoWoo56ddUyCQ"),
+	("gear", 1, "+AfrtWtvbsW93w", "+AfrtWtvbsW93w", 0, "DuJY8AIkJ6Zhig"),
+	("bolt", 3, "E7zK8EiO51eQ2A", "E7zK8EiO51eQ2A", 0, "2XJ+MfjrBXUANw"),
+	("washer", 12, "uh9DeJo8VgLavQ", "uh9DeJo8VgLavQ", 0, "PGoWoo56ddUyCQ"),
 ]
-DLT_TAGS = [("gift", "E7zK8EiO51eQ2A"), ("web", "E7zK8EiO51eQ2A"), ("phone", "uh9DeJo8VgLavQ")]
+DLT_TAGS = [
+	("web", "E7zK8EiO51eQ2A", "E7zK8EiO51eQ2A", 0, "YcUJKjjxfXopOg"),
+	("gift", "E7zK8EiO51eQ2A", "E7zK8EiO51eQ2A", 1, "l0M7l3gszuWIsA"),
+	("phone", "uh9DeJo8VgLavQ", "uh9DeJo8VgLavQ", 0, "IDeWc4RGahzgvw"),
+]
 
 FIRST_ORDERS = [
 	{"id": 1, "status": "open", "updatedAt": "2026-11-01T09:00:00Z", "lines": [{"sku": "bolt", "qty": 3}, {"sku": "nut", "qty": 6}]},
@@ -72,7 +77,7 @@ class Shop(BaseHTTPRequestHandler):
 		page = rows[start : start + PAGE_SIZE]
 		host, port = self.server.server_address[:2]
 		more = start + PAGE_SIZE < len(rows)
-		params = "&".join(f"{key}={value}" for key, value in {**query, "start": start + PAGE_SIZE}.items())
+		params = urlencode({**query, "start": start + PAGE_SIZE})
 		self.reply(200, {"items": page, "next": f"http://{host}:{port}/v1/orders?{params}" if more else None})
 
 	def reply(self, status: int, body: object) -> None:
@@ -92,6 +97,7 @@ def shop() -> Iterator[ThreadingHTTPServer]:
 	threading.Thread(target=server.serve_forever, daemon=True).start()
 	yield server
 	server.shutdown()
+	server.server_close()
 
 
 def example(tmp_path: Path, name: str) -> Path:
@@ -141,8 +147,8 @@ def test_given_the_filesystem_example_when_a_second_file_merges_then_its_tables_
 	assert listing(project) == (project / "tables.txt").read_text()
 	assert as_dlt_lists_them(listing(project)) == (project / "tables-dlt.txt").read_text()
 	assert query(project, "SELECT order_id, status, _dlt_id FROM shop.orders ORDER BY order_id") == DLT_ORDER_IDS
-	assert query(project, "SELECT sku, qty, _dlt_root_id, _dlt_list_idx, _dlt_id FROM shop.orders__lines ORDER BY _dlt_root_id, _dlt_list_idx") == DLT_LINES
-	assert query(project, "SELECT value, _dlt_root_id FROM shop.orders__tags ORDER BY _dlt_root_id, value") == DLT_TAGS
+	assert query(project, "SELECT sku, qty, _dlt_root_id, _dlt_parent_id, _dlt_list_idx, _dlt_id FROM shop.orders__lines ORDER BY _dlt_root_id, _dlt_list_idx") == DLT_LINES
+	assert query(project, "SELECT value, _dlt_root_id, _dlt_parent_id, _dlt_list_idx, _dlt_id FROM shop.orders__tags ORDER BY _dlt_root_id, _dlt_list_idx") == DLT_TAGS
 	assert sorted(path.name for path in (project / "landing" / "loaded").iterdir()) == ["2026-11-01.ndjson", "2026-11-02.ndjson"]
 
 
@@ -152,6 +158,7 @@ def test_given_the_rest_api_example_when_an_order_changes_then_only_it_is_reques
 	url = f"http://{host}:{port}/v1"
 	first = load(project, url)
 	ids = dict(query(project, "SELECT id, _dlt_id FROM shop.orders"))
+	first_requests = list(shop.requests)  # type: ignore[attr-defined]
 	shop.orders[1] = SHIPPED  # type: ignore[attr-defined]
 	shop.requests.clear()  # type: ignore[attr-defined]
 	second = load(project, url)
@@ -161,6 +168,7 @@ def test_given_the_rest_api_example_when_an_order_changes_then_only_it_is_reques
 	assert listed == (project / "tables.txt").read_text()
 	assert [(table["table"], table["rows"]) for table in first["tables"]] == [("shop.orders", 3), ("shop.payments", 3)]
 	assert [(table["table"], table["rows"]) for table in second["tables"]] == [("shop.orders", 1), ("shop.payments", 3)]
+	assert ("/v1/orders", {"updated_after": "2026-01-01T00:00:00+00:00", "start": "2"}) in first_requests
 	assert ("/v1/orders", {"updated_after": "2026-11-01T11:00:00+00:00"}) in shop.requests  # type: ignore[attr-defined]
 	assert query(project, "SELECT id, status, CAST(updated_at AS VARCHAR) FROM shop.orders ORDER BY id") == [
 		(1, "open", "2026-11-01 09:00:00+00"),
