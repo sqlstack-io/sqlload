@@ -73,7 +73,7 @@ def run_case(case: Case, binary: str, work: Path) -> list[dict[str, Any]]:
 		if done.returncode != 0:
 			shown.append({"error": (done.stdout + done.stderr).strip()})
 			break
-		shown.append(dataset(str(folder / "out.duckdb"), SCHEMA, TABLE, case.key, case.disposition == "merge"))
+		shown.append(dataset(str(folder / "out.duckdb"), SCHEMA, TABLE, case.stored_key, case.disposition == "merge"))
 	return shown
 
 
