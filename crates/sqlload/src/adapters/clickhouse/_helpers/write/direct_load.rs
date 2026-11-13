@@ -115,7 +115,7 @@ impl ClickHouseWriter {
                 &into,
                 (columns, &sql_type),
                 (&file, credentials.as_ref()),
-                (target.load_id, batch.loaded_at),
+                (target.naming, target.load_id, batch.loaded_at),
             );
             rows += written_rows(&self.destination, &insert, &parameters)
                 .await

@@ -17,6 +17,14 @@ impl SqlAdapter for BigQuerySql {
         Warehouse::BigQuery
     }
 
+    fn max_identifier_length(&self) -> Option<usize> {
+        Some(300)
+    }
+
+    fn writes_child_tables(&self) -> bool {
+        true
+    }
+
     /// Not yet: a later release applies changes to BigQuery once a live round has run them.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false
@@ -171,6 +179,19 @@ impl SqlAdapter for BigQuerySql {
         format!(
             "LOWER(table_name) LIKE {}",
             self.render_loader_value_literal(&format!("%{}%", suffix.to_ascii_lowercase()))
+        )
+    }
+
+    /// The dataset's own `INFORMATION_SCHEMA`, qualified by its project.
+    fn render_schema_tables(&self, table: &TableName) -> String {
+        let project = table
+            .database
+            .as_deref()
+            .map(|name| format!("{}.", self.render_identifier(name)))
+            .unwrap_or_default();
+        format!(
+            "{project}{}.INFORMATION_SCHEMA.TABLES",
+            self.render_identifier(&table.schema)
         )
     }
 

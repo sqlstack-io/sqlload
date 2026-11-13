@@ -9,6 +9,7 @@ use crate::column_types::main::arrow_field::arrow_field;
 use crate::file_store::errors::StoreError;
 use crate::http::errors::ApiError;
 use crate::loader::_helpers::python::bound_array;
+use crate::loader::_helpers::python::child_paths;
 use crate::loader::_helpers::python::{
     YieldedData, declared_problems, inferred_table, python_tables, source_spelling,
 };
@@ -16,8 +17,8 @@ use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{PlanDetail, PlanItem, TableSpec};
 use crate::loader::tests::test_types::{
-    BoundArrayTestCase, DeclaredProblemsTestCase, InferredTableTestCase, ItemSpec,
-    SourceSpellingTestCase,
+    BoundArrayTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, InferredTableTestCase,
+    ItemSpec, SourceSpellingTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
@@ -73,21 +74,26 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
         null_columns: &null_columns,
         rows: 1,
     };
-    inferred_table(&planned, &declared, &data, live)
-        .columns
-        .iter()
-        .map(|column| {
-            format!(
-                "{}:{}",
-                column.name,
-                column
-                    .column_type
-                    .as_ref()
-                    .map_or_else(Clone::clone, ToString::to_string)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",")
+    inferred_table(
+        (&planned, crate::load_naming::models::Naming::Sqlload),
+        &declared,
+        &data,
+        live,
+    )
+    .columns
+    .iter()
+    .map(|column| {
+        format!(
+            "{}:{}",
+            column.name,
+            column
+                .column_type
+                .as_ref()
+                .map_or_else(Clone::clone, ToString::to_string)
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(",")
 }
 
 /// A crossing's schema: an int, a float, text, a UTC timestamp, a JSON column, an all-NULL column and a metadata column.
@@ -315,4 +321,17 @@ pub(crate) fn constants_added(
         })
         .collect();
     Ok((added == batch, columns?.join(" ")))
+}
+
+/// The paths `child_paths` gives the case's live child tables of Python table `s__t`.
+pub(crate) fn live_paths(test_case: &ChildPathsTestCase) -> Result<Vec<(String, String)>, String> {
+    let mut spec = python_spec("{}")?;
+    spec.warehouse = test_case.warehouse;
+    test_case.parent.clone_into(&mut spec.destination.table);
+    let tables = test_case
+        .tables
+        .iter()
+        .map(|table| (*table).to_owned())
+        .collect();
+    Ok(child_paths(&spec, tables))
 }

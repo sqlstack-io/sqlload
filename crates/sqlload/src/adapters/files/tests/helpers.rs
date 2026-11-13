@@ -230,7 +230,10 @@ pub(crate) fn day_columns() -> Vec<DesiredColumn> {
             origin: ColumnOrigin::Source,
         },
     ];
-    columns.extend(metadata_columns());
+    columns.extend(metadata_columns(
+        crate::load_naming::models::Naming::Sqlload,
+        false,
+    ));
     columns
 }
 

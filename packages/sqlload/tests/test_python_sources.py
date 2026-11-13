@@ -165,6 +165,41 @@ def test_given_a_python_table_when_loaded_twice_into_duckdb_then_its_strategy_ap
 	assert query(project, 'SELECT count(DISTINCT _sqlload_load_id) FROM "RAW"."shop__rows"')[0][0] >= 1
 
 
+def test_given_dlt_naming_when_a_python_table_merges_twice_then_fields_load_snake_cased_and_merge_by_the_yielded_key(tmp_path: Path) -> None:
+	project = make_project(
+		tmp_path,
+		DUCKDB_PROJECT,
+		"shop.table(description='Test table.', naming='dlt', write_strategy='merge', unique_key='OrderID', unnest=['LineItems'])(rows)\n",
+	)
+	give(project, "rows", [{"OrderID": 1, "Unit Price": "a", "LineItems": [{"UnitPrice": 5}]}, {"OrderID": 2, "Unit Price": "b", "LineItems": []}])
+	load(project)
+	give(project, "rows", [{"OrderID": 1, "Unit Price": "c", "LineItems": [{"UnitPrice": 7}]}])
+	load(project)
+	columns = query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
+	assert [name for (name,) in columns] == ["order_id", "unit_price", "_dlt_load_id", "_sqlload_loaded_at", "_dlt_id"]
+	assert query(project, 'SELECT order_id, unit_price FROM "RAW"."shop__rows" ORDER BY order_id') == [(1, "c"), (2, "b")]
+	assert query(project, 'SELECT o.order_id, i.unit_price FROM "RAW"."shop__rows" o JOIN "RAW"."shop__rows__line_items" i ON i._dlt_parent_id = o._dlt_id') == [(1, 7)]
+
+
+def test_given_dlt_naming_and_a_source_spelled_cursor_when_loading_again_then_ctx_gets_the_loaded_cursor_and_its_maximum(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', naming='dlt', write_strategy='append', cursor_column='UpdatedAt')(rows)\n")
+	give(project, "rows", [{"ID": 1, "UpdatedAt": 10}, {"ID": 2, "UpdatedAt": 20}])
+	load(project)
+	give(project, "rows", [{"ID": 3, "UpdatedAt": 30}])
+	load(project)
+	assert seen(project, "rows")["cursor_column"] == "updated_at"
+	assert seen(project, "rows")["cursor_value"] == "20"
+	assert query(project, 'SELECT id, updated_at FROM "RAW"."shop__rows" ORDER BY id') == [(1, 10), (2, 20), (3, 30)]
+
+
+def test_given_dlt_naming_when_two_yielded_fields_load_as_one_name_then_the_table_fails_naming_both(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', naming='dlt')(rows)\n")
+	give(project, "rows", [{"OrderID": 1, "Order ID": 2}])
+	done = sqlload(project, "load")
+	assert done.returncode != 0
+	assert 'fields "OrderID" and "Order ID" both load as order_id under naming = "dlt"' in done.stdout + done.stderr
+
+
 def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_fit_the_live_types(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
 	give(project, "rows", [{"id": 1, "code": "x1", "meta": {"k": 1}}])
@@ -1185,6 +1220,14 @@ def test_given_arrow_list_batches_when_loading_a_pinned_array_then_every_batch_k
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	load(project)
 	assert query(project, 'SELECT id, xs::VARCHAR FROM "RAW".shop__t ORDER BY id') == expected
+
+
+def test_given_dlt_naming_when_a_source_spelled_arrow_list_is_pinned_as_an_array_then_it_crosses_as_a_list(tmp_path: Path) -> None:
+	data = "[__import__('pyarrow').table({'ID': [1], 'Scores': [[float('nan'), 1]]})]"
+	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', naming='dlt', columns={{'Scores': 'array(float)'}})(lambda ctx: {data})\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	load(project)
+	assert query(project, 'SELECT id, scores::VARCHAR FROM "RAW".shop__t') == [(1, "[nan, 1.0]")]
 
 
 def test_given_a_native_type_pinned_for_a_files_target_when_planning_then_plan_refuses_the_column(tmp_path: Path) -> None:

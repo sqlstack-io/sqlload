@@ -1096,3 +1096,41 @@ pub(crate) struct DedupeTargetTestCase {
     /// What `check_query` returns after each repeated-key rule, in their order: last row, highest, lowest, fail.
     pub(crate) expected_rows: [&'static str; 4],
 }
+
+/// An NDJSON files source under `drop/` with `settings`, planned by the executable into a DuckDB target, or a filesystem files target when `files_target`.
+pub(crate) struct UnnestPlanTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) files_target: bool,
+    /// The one file under `drop/`.
+    pub(crate) file: &'static str,
+    pub(crate) expected_ok: bool,
+    /// Text the plan's output holds; empty when it plans.
+    pub(crate) expected_problem: &'static str,
+}
+
+/// An NDJSON files source under `drop/` with `settings`, loaded into DuckDB once per run, then once more with `failing`'s file, which fails.
+pub(crate) struct UnnestFailTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// Each run's new file before the failing one, as `name`, `contents`.
+    pub(crate) runs: &'static [(&'static str, &'static str)],
+    pub(crate) failing: (&'static str, &'static str),
+    /// Text the failed load's output holds.
+    pub(crate) expected_error: &'static str,
+    /// A query of the database after the failed load and what it returns: what the failure left.
+    pub(crate) expected_after: (&'static str, &'static str),
+}
+
+/// An NDJSON files source under `drop/` with `settings`, loaded by the executable into DuckDB once per run, each run adding its file.
+pub(crate) struct RowIdTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// Each run's new file, as `name`, `contents`.
+    pub(crate) runs: &'static [(&'static str, &'static str)],
+    /// The table's columns in order, joined by `,`.
+    pub(crate) expected_columns: &'static str,
+    /// A query over `raw.orders` (and its child tables) returning one text.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}

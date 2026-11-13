@@ -1,0 +1,64 @@
+# Known differences between dlt's and SQLLoad's output of the parity cases. compare.py fails on any
+# difference no entry allows, and on any entry that matches nothing, so this list stays exact.
+# Each entry: kind, reason, and values or globs narrowing it (case, run, table, column, place; "*" when left out).
+
+[[allowed]]
+kind = "extra_column"
+table = "orders"
+column = "_sqlload_source_*"
+reason = "A files source records the file, its version and the row's line on each root row (_sqlload_source_file, _source_version, _source_row), which files merges and reruns rely on; dlt has no such columns."
+
+[[allowed]]
+kind = "column_type"
+case = "xml_*"
+table = "orders"
+column = "id"
+reason = "SQLLoad infers XML text's types (1 is BIGINT); xmltodict hands dlt every XML value as text (VARCHAR)."
+
+[[allowed]]
+kind = "extra_table"
+case = "xml_single_then_many"
+run = "1"
+table = "orders__tag"
+reason = "An element an unnest path names is always a list to SQLLoad, so a row with one <tag> gets a child row; xmltodict gives dlt a single <tag> as a plain value, which stays a column of the parent."
+
+[[allowed]]
+kind = "missing_column"
+case = "xml_single_then_many"
+table = "orders"
+column = "tag"
+reason = "As above: dlt keeps a single <tag> as a parent column; SQLLoad's is always a child row."
+
+[[allowed]]
+kind = "row"
+case = "xml_single_then_many"
+run = "2"
+table = "orders__tag"
+place = "id=1/tag[0]"
+reason = "As above: id 1's single <tag> is a child row in SQLLoad, a parent column in dlt."
+
+[[allowed]]
+kind = "load_failed"
+case = "list_then_object"
+run = "2"
+reason = "Once unnest = \"all\" has taken tags as a list field (its child table exists), a later object there fails the load naming the column, so it is never stored as JSON or dropped; dlt flattens the object into a tags__k column of the parent instead."
+
+[[allowed]]
+kind = "extra_column"
+case = "null_lists"
+table = "orders"
+column = "items"
+reason = "A column whose sampled values are all NULL is a text column of the table in SQLLoad, and unnest = \"all\" takes it only once a list arrives; dlt makes no column for values that are only NULL."
+
+[[allowed]]
+kind = "extra_column"
+case = "null_then_list"
+table = "orders"
+column = "tags"
+reason = "As above: tags is NULL in run 1, so SQLLoad makes it a text column, which stays (empty) once run 2's lists move to orders__tags; dlt never makes the column."
+
+[[allowed]]
+kind = "load_failed"
+case = "naming_collision"
+run = "1"
+reason = "Two columns whose names normalise to one (OrderID and Order ID, both order_id) stop SQLLoad's plan, naming both, so no value is lost silently; dlt keeps the last value of a row given as a dictionary. Excluding one of the two with exclude_columns resolves it."

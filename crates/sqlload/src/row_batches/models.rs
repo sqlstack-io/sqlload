@@ -1,5 +1,11 @@
 use std::collections::HashMap;
 
+use crate::row_batches::types::ListChoices;
+
+use arrow_array::RecordBatch;
+
+use crate::load_naming::models::Naming;
+
 /// One value of a yielded row, before its column's type is known.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cell {
@@ -170,6 +176,8 @@ pub struct ProjectionRules<'a> {
     /// Columns expanded into `<column>__<key>` after projection.
     pub flatten: &'a [String],
     pub masked: &'a [String],
+    /// How the table's columns load, and the destination's name limit: under dlt's naming a field loads the cursor when its loaded name is the cursor's.
+    pub naming: (Naming, Option<usize>),
 }
 
 /// One column a projection loads: the value at `path` (keys from the row object down), or NULL when it is missing.
@@ -239,4 +247,64 @@ impl JsonWriter {
     pub fn take(&mut self) -> String {
         std::mem::take(&mut self.text)
     }
+}
+
+/// Which list fields of a table's rows become child tables.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Unnest {
+    /// None: lists stay JSON columns.
+    #[default]
+    None,
+    /// Every list field, at every level down to `max_depth`: a field whose values are lists, and never one with another value (an object or a scalar stays a column).
+    All,
+    /// The list fields at these dotted paths.
+    Paths(Vec<String>),
+}
+
+impl Unnest {
+    /// Whether the loaded table's own column `name` is a list field its child tables take, so the table itself has no such column: a listed one, or under `"all"` one `choices` (the plan's) chose.
+    pub fn takes(&self, name: &str, choices: &ListChoices) -> bool {
+        match self {
+            Self::Paths(paths) => paths.iter().any(|path| path == name),
+            Self::All => choices.get(name) == Some(&true),
+            Self::None => false,
+        }
+    }
+}
+
+/// How [`unnest_batch`](crate::row_batches::main::unnest_batch::unnest_batch) splits a batch's list fields into child tables.
+#[derive(Debug, Clone, Copy)]
+pub struct UnnestRequest<'a> {
+    /// The table the batch loads, whose name its child tables' names start with.
+    pub table: &'a str,
+    pub unnest: &'a Unnest,
+    /// How many levels of child tables to make at most.
+    pub max_depth: u32,
+    pub naming: Naming,
+    /// The longest name dlt's naming gives on the destination.
+    pub name_limit: Option<usize>,
+    /// Each row's id, which its child rows name as their parent's.
+    pub ids: &'a [String],
+    /// Each row's root row's id, which child rows carry under a merge; `None` otherwise.
+    pub roots: Option<&'a [String]>,
+}
+
+/// A batch split by `unnest`: the parent's rows without their unnested list fields, and every child table's rows, parents before their children.
+#[derive(Debug)]
+pub struct Unnested {
+    pub parent: RecordBatch,
+    pub children: Vec<ChildBatch>,
+}
+
+/// The rows of one child table.
+#[derive(Debug)]
+pub struct ChildBatch {
+    /// The dotted path of the list field the rows come from, such as `items.parts`.
+    pub path: String,
+    /// The child table's name, such as `orders__items__parts`.
+    pub table: String,
+    /// The items' data columns, then the parent's id, the position in the list, the row's own id and, under a merge, the root row's id.
+    pub batch: RecordBatch,
+    /// Each row's root: its row in the batch split.
+    pub root_rows: Vec<usize>,
 }

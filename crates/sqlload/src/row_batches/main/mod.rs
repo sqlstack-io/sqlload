@@ -1,12 +1,15 @@
+pub mod choose_lists;
 pub mod columns_batch;
 pub mod conform_batch;
 pub mod flatten_batch;
 pub mod flattened_columns;
 pub mod json_lists;
 pub mod json_rows;
+pub mod loaded_batch;
 pub mod merge_schema;
 pub mod normalise_batch;
 pub mod projection;
 pub mod projection_problem;
 pub mod settled_schema;
 pub mod text_rows;
+pub mod unnest_batch;

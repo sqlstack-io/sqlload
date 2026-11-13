@@ -40,11 +40,13 @@ use crate::files_source::models::{
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
+use crate::load_naming::main::loaded_name::loaded_name;
+use crate::load_naming::models::Naming;
 use crate::loader::_helpers::destination::table_folder;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
-use crate::loader::_helpers::resolve::{resolve_tables, source_target};
+use crate::loader::_helpers::resolve::{NameRule, resolve_tables, source_target};
 use crate::loader::_helpers::run_log::merged_files;
-use crate::loader::_helpers::specs::{missing_description, table_name};
+use crate::loader::_helpers::specs::{missing_description, table_name, table_naming};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
     KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, RELOAD_FIX,
@@ -70,6 +72,7 @@ use crate::project::models::{
     BatchStep, ConnectionConfig, NewTables, OnDuplicateKeys, ProjectConfig, SourceConfig,
     SourceKind, TableOverride, TableSettings, WriteStrategy,
 };
+use crate::row_batches::main::loaded_batch::loaded_batch;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::sheets_source::constants::{EMPTY_SHEET_COLUMN_KIND, SCOPE, SHEET_COLUMN_KIND};
 use crate::sheets_source::main::duplicate_key::duplicate_key;
@@ -233,12 +236,20 @@ pub(crate) async fn source_tables(
             )
         }
         SourceKind::Files => {
-            let warehouse = match source_target(project, source) {
-                Ok(target) => target.warehouse,
+            let target = match source_target(project, source) {
+                Ok(target) => target,
                 Err(problem) => return Ok(Err(problem.into())),
             };
+            let unset = TableSettings::default();
+            let settings = source
+                .tables
+                .get(source_name)
+                .map_or(&unset, |overrides| &overrides.settings);
+            let naming = table_naming((settings, &source.defaults), target.naming);
             Ok(
-                match discover_files_table(project, source_name, source, warehouse).await {
+                match discover_files_table(project, source_name, source, (target.warehouse, naming))
+                    .await
+                {
                     Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
                     Err(LoaderError::Files(FilesError::NoFiles { .. }))
                         if source.after_load != AfterLoad::Keep =>
@@ -658,7 +669,12 @@ async fn sheet_rows(
     let columns: Vec<(String, ColumnType)> = table
         .read_columns
         .iter()
-        .map(|column| (column.name.clone(), column.output.clone()))
+        .map(|column| {
+            (
+                table.spec.source_table.spelling(&column.name).to_owned(),
+                column.output.clone(),
+            )
+        })
         .collect();
     sheet_batch(&grid, read.rule, &columns).map_err(LoaderError::Invalid)
 }
@@ -722,7 +738,7 @@ pub(crate) async fn discover_files_table(
     project: &ProjectConfig,
     source_name: &str,
     source: &SourceConfig,
-    warehouse: Warehouse,
+    (warehouse, naming): (Warehouse, Naming),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
@@ -732,7 +748,7 @@ pub(crate) async fn discover_files_table(
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
     }
-    files_source_parts(source_name, source, warehouse, (location, table))
+    files_source_parts(source_name, source, (warehouse, naming), (location, table))
 }
 
 /// What files source `source_name` fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then its table's `constant_columns`; a `native(...)` type, which SQLLoad's reader cannot build, is refused.
@@ -800,7 +816,7 @@ fn path_values(
 pub(crate) fn files_source_parts(
     source_name: &str,
     source: &SourceConfig,
-    warehouse: Warehouse,
+    (warehouse, naming): (Warehouse, Naming),
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let encoding = source.files_encoding();
@@ -811,7 +827,8 @@ pub(crate) fn files_source_parts(
         .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
         .collect();
     let overrides = source.tables.get(source_name);
-    let pinned_only = pinned_unsampled(overrides, &table, &added, encoding.format)?;
+    let rule = (naming, sql_adapter(warehouse).max_identifier_length());
+    let pinned_only = pinned_unsampled(overrides, (&table, &added, rule), encoding.format)?;
     let dropped = (!table.dropped.is_empty()).then(|| {
         format!(
             "dropped {} from the files (replaced by this load's)",
@@ -897,11 +914,10 @@ pub(crate) fn files_source_parts(
     ))
 }
 
-/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column.
+/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. Under `rule`'s dlt naming a pin naming a sampled column by its loaded name is one sampling saw.
 fn pinned_unsampled(
     overrides: Option<&TableOverride>,
-    table: &FilesTable,
-    added: &[&str],
+    (table, added, rule): (&FilesTable, &[&str], NameRule),
     format: SourceFormat,
 ) -> Result<Vec<String>, LoaderError> {
     let Some(overrides) = overrides.filter(|_| format != SourceFormat::Parquet) else {
@@ -912,9 +928,15 @@ fn pinned_unsampled(
         .iter()
         .map(|column| column.name.as_str())
         .collect();
+    let loaded = |name: &str| loaded_name(rule.0, name, rule.1);
+    let seen: Vec<String> = sampled
+        .iter()
+        .chain(added)
+        .map(|name| loaded(name))
+        .collect();
     let mut unsampled: Vec<String> = Vec::new();
     for name in overrides.columns.keys() {
-        if added.contains(&name.as_str()) || sampled.contains(&name.as_str()) {
+        if seen.contains(&loaded(name)) {
             continue;
         }
         let known = sampled.iter().chain(added).copied();
@@ -926,6 +948,35 @@ fn pinned_unsampled(
         unsampled.push(name.clone());
     }
     Ok(unsampled)
+}
+
+/// What a files read reads, as the files spell it (the batches it reads are renamed to the loaded names after): each of `read_columns` in its read type, and those whose types were inferred from sampled values, not pinned and not filled from the path (`partition_types`) or the file.
+pub(crate) fn files_read_as(
+    spec: &TableSpec,
+    read_columns: &[ReadColumn],
+    partition_types: &[(String, ColumnType)],
+) -> (Vec<DesiredColumn>, Vec<String>) {
+    let spelled = |name: &str| spec.source_table.spelling(name).to_owned();
+    let columns: Vec<DesiredColumn> = read_columns
+        .iter()
+        .map(|column| DesiredColumn {
+            name: spelled(&column.name),
+            column_type: column.output.clone(),
+            origin: ColumnOrigin::Source,
+        })
+        .collect();
+    let filled: Vec<&str> = partition_types
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
+        .collect();
+    let inferred: Vec<String> = read_columns
+        .iter()
+        .filter(|column| !spec.pinned.contains_key(&column.name))
+        .map(|column| spelled(&column.name))
+        .filter(|name| !filled.contains(&name.as_str()))
+        .collect();
+    (columns, inferred)
 }
 
 /// The read columns of a files source: the file's types, or the pinned ones (converted while reading).
@@ -1088,8 +1139,10 @@ pub(crate) fn nanosecond_columns(
                     StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
                 )
             })
-            .filter(|column| !spec.pinned.contains_key(&column.name))
-            .filter(|column| fewer_digits(live, &column.name).is_none())
+            .filter(|column| {
+                let loaded = spec.source_table.loaded_as(&column.name);
+                !spec.pinned.contains_key(loaded) && fewer_digits(live, loaded).is_none()
+            })
             .map(|column| column.name.clone())
             .collect(),
         false => Vec::new(),
@@ -1109,9 +1162,11 @@ pub(crate) fn truncated_nanoseconds(spec: &TableSpec, live: Option<&[LiveColumn]
             matches!(
                 column.stored_read,
                 StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
-            ) && !spec.pinned.contains_key(&column.name)
+            ) && !spec
+                .pinned
+                .contains_key(spec.source_table.loaded_as(&column.name))
         })
-        .filter_map(|column| truncated_warning(live, &column.name))
+        .filter_map(|column| truncated_warning(live, spec.source_table.loaded_as(&column.name)))
         .collect()
 }
 
@@ -1151,7 +1206,7 @@ pub(crate) async fn plan_files(
             .files
             .partition_types
             .iter()
-            .find(|(name, _)| *name == cursor.column)
+            .find(|(name, _)| name == spec.source_table.spelling(&cursor.column))
         {
             Some((name, column_type)) => Some((name.as_str(), column_type)),
             None => {
@@ -1243,29 +1298,10 @@ pub(crate) async fn plan_files(
         from: request.bounds.0,
         to: request.bounds.1,
     };
-    let columns: Vec<DesiredColumn> = request
-        .read_columns
-        .iter()
-        .map(|column| DesiredColumn {
-            name: column.name.clone(),
-            column_type: column.output.clone(),
-            origin: ColumnOrigin::Source,
-        })
-        .collect();
-    let constants: Vec<&str> = request
-        .files
-        .partition_types
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
-        .collect();
+    let (columns, inferred) =
+        files_read_as(spec, request.read_columns, &request.files.partition_types);
     let checks = TextChecks {
-        inferred: request
-            .read_columns
-            .iter()
-            .map(|column| column.name.clone())
-            .filter(|name| !spec.pinned.contains_key(name) && !constants.contains(&name.as_str()))
-            .collect(),
+        inferred,
         ..request.files.checks.clone()
     };
     let nanos = nanosecond_columns(spec, &request.files.table.columns, request.live);
@@ -1312,13 +1348,13 @@ pub(crate) async fn read_source(
     mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), LoaderError>,
 ) -> Result<u64, LoaderError> {
     let mut failed: Option<LoaderError> = None;
-    let read = read_each(reader, table, part, async |batch| {
+    let read = Box::pin(read_each(reader, table, part, async |batch| {
         on_batch(batch).await.map_err(|error| {
             let text = error.to_string();
             failed = Some(error);
             text
         })
-    })
+    }))
     .await;
     match (read, failed) {
         (Err(read), Some(failed)) if failed.is_retryable() => {
@@ -1362,7 +1398,11 @@ async fn read_each(
                 },
                 None => files.clone(),
             };
-            Ok(read_files(folder, &read, &part.footers, on_batch).await?)
+            let mut on_batch = on_batch;
+            let loaded = async |batch: RecordBatch| {
+                on_batch(loaded_batch(&batch, &table.spec.source_table)?).await
+            };
+            Ok(read_files(folder, &read, &part.footers, loaded).await?)
         }
         (SourceReader::Snowflake(snowflake), _) => {
             let filter = part.filter.or_else(|| table.source_filter.clone());
@@ -1404,7 +1444,11 @@ async fn read_each(
             Ok(read_bigquery_rows(reader, &request, on_batch).await?)
         }
         (SourceReader::Sheets(client, spreadsheet_id), _) => {
-            let batch = sheet_rows(client, spreadsheet_id, table).await?;
+            let batch = loaded_batch(
+                &sheet_rows(client, spreadsheet_id, table).await?,
+                &table.spec.source_table,
+            )
+            .map_err(LoaderError::Invalid)?;
             let rows = batch.num_rows() as u64;
             let mut on_batch = on_batch;
             on_batch(batch).await.map_err(LoaderError::Invalid)?;
@@ -1472,7 +1516,12 @@ pub(crate) async fn source_ends(
                         Ok(ColumnType::Int | ColumnType::SmallInt)
                     )
                 })
-                .map(|column| column.name.clone())
+                .map(|column| {
+                    column
+                        .source_spelling
+                        .clone()
+                        .unwrap_or_else(|| column.name.clone())
+                })
         });
         let wanted = matches!(spec.batch, Some(BatchStep::Integer(_)))
             && selected(
@@ -1605,14 +1654,24 @@ fn drained_files(
         estimated_bytes: 0,
         comment: None,
     };
-    let name = source
-        .tables
-        .get(source_name)
-        .and_then(|table| table.name.as_deref());
+    let overrides = source.tables.get(source_name);
+    let name = overrides.and_then(|table| table.name.as_deref());
+    let unset = TableSettings::default();
+    let naming = table_naming(
+        (
+            overrides.map_or(&unset, |overrides| &overrides.settings),
+            &source.defaults,
+        ),
+        target.naming,
+    );
+    let rule = (
+        naming,
+        sql_adapter(target.warehouse).max_identifier_length(),
+    );
     let table = TableName {
         database: target.database,
         schema: target.schema,
-        table: table_name((source_name, source), name, &listed),
+        table: table_name((source_name, source), name, (&listed, rule)),
     };
     let in_scope = selected(options, (source_name, &table.table, source_name));
     if target.path.is_some() {
@@ -1666,26 +1725,46 @@ pub(crate) fn source_in_scope(
                     .any(|selector| !project.sources.contains_key(selector)));
     };
     let found: Vec<String> = discovered.iter().map(SourceTable::qualified_name).collect();
+    let (target_naming, limit) = source_target(project, source).map_or((None, None), |target| {
+        (
+            target.naming,
+            sql_adapter(target.warehouse).max_identifier_length(),
+        )
+    });
+    let unset = TableSettings::default();
+    let rule = |overrides: Option<&TableOverride>| {
+        (
+            table_naming(
+                (
+                    overrides.map_or(&unset, |overrides| &overrides.settings),
+                    &source.defaults,
+                ),
+                target_naming,
+            ),
+            limit,
+        )
+    };
     let named = source
         .tables
         .iter()
         .filter(|(qualified, _)| !found.contains(qualified))
         .map(|(qualified, overrides)| {
             let destination = match overrides.name.as_deref() {
-                Some(name) if !name.contains('{') => name,
-                _ => "",
+                Some(name) if !name.contains('{') => {
+                    let (naming, limit) = rule(Some(overrides));
+                    loaded_name(naming, name, limit)
+                }
+                _ => String::new(),
             };
-            (destination.to_owned(), qualified.clone())
+            (destination, qualified.clone())
         });
     let tables: Vec<(String, String)> = discovered
         .iter()
         .map(|table| {
-            let name = source
-                .tables
-                .get(&table.qualified_name())
-                .and_then(|overrides| overrides.name.as_deref());
+            let overrides = source.tables.get(&table.qualified_name());
+            let name = overrides.and_then(|overrides| overrides.name.as_deref());
             (
-                table_name((source_name, source), name, table),
+                table_name((source_name, source), name, (table, rule(overrides))),
                 table.qualified_name(),
             )
         })

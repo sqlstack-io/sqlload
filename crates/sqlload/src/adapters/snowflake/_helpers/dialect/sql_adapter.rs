@@ -30,6 +30,24 @@ impl SqlAdapter for SnowflakeSql {
         Warehouse::Snowflake
     }
 
+    fn max_identifier_length(&self) -> Option<usize> {
+        Some(255)
+    }
+
+    fn writes_child_tables(&self) -> bool {
+        true
+    }
+
+    /// The table's database's `INFORMATION_SCHEMA`, which need not be the session's.
+    fn render_schema_tables(&self, table: &TableName) -> String {
+        let catalog = table
+            .database
+            .as_deref()
+            .map(|name| format!("{}.", self.render_identifier(name)))
+            .unwrap_or_default();
+        format!("{catalog}information_schema.tables")
+    }
+
     fn builds_like_target(&self) -> bool {
         true
     }

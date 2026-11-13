@@ -4,12 +4,13 @@ use arrow_array::{ArrayRef, RecordBatch, StringArray, TimestampMicrosecondArray}
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::SchemaRef;
 
-use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN};
+use crate::load_naming::models::MetadataRole;
+use crate::row_ids::main::random_row_ids::random_row_ids;
 
-/// `batch` as the table's columns: each cast to the file type, and the load id and time filled in.
+/// `batch` as the table's columns: each cast to the file type, and the load id and time filled in where `metadata`, aligned with `schema`'s fields, says the load adds them.
 pub(crate) fn shape_batch(
     batch: &RecordBatch,
-    schema: &SchemaRef,
+    (schema, metadata): (&SchemaRef, &[Option<MetadataRole>]),
     load_id: &str,
     loaded_at_micros: i64,
 ) -> Result<RecordBatch, String> {
@@ -21,18 +22,29 @@ pub(crate) fn shape_batch(
     let columns: Vec<ArrayRef> = schema
         .fields()
         .iter()
-        .map(|field| -> Result<ArrayRef, String> {
-            match (field.name().as_str(), batch.column_by_name(field.name())) {
-                (LOAD_ID_COLUMN, _) => Ok(Arc::new(StringArray::from(vec![load_id; rows]))),
-                (LOADED_AT_COLUMN, _) => Ok(Arc::new(
+        .zip(metadata)
+        .map(|(field, role)| -> Result<ArrayRef, String> {
+            match (role, batch.column_by_name(field.name())) {
+                (Some(MetadataRole::LoadId), _) => {
+                    Ok(Arc::new(StringArray::from(vec![load_id; rows])))
+                }
+                (Some(MetadataRole::LoadedAt), _) => Ok(Arc::new(
                     TimestampMicrosecondArray::from(vec![loaded_at_micros; rows])
                         .with_timezone("UTC"),
                 )),
-                (name, Some(column)) => cast_with_options(column, field.data_type(), &strict)
-                    .map_err(|error| {
-                        format!("{name}: cannot convert to {}: {error}", field.data_type())
-                    }),
-                (name, None) => Err(format!("the source batch has no column {name}")),
+                (Some(MetadataRole::RowId), _) => {
+                    Ok(Arc::new(StringArray::from(random_row_ids(rows)?)))
+                }
+                (_, Some(column)) => {
+                    cast_with_options(column, field.data_type(), &strict).map_err(|error| {
+                        format!(
+                            "{}: cannot convert to {}: {error}",
+                            field.name(),
+                            field.data_type()
+                        )
+                    })
+                }
+                (_, None) => Err(format!("the source batch has no column {}", field.name())),
             }
         })
         .collect::<Result<_, String>>()?;

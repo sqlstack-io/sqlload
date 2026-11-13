@@ -16,6 +16,10 @@ impl SqlAdapter for DatabricksSql {
         Warehouse::Databricks
     }
 
+    fn max_identifier_length(&self) -> Option<usize> {
+        Some(255)
+    }
+
     fn keeps_nanoseconds(&self) -> bool {
         false
     }

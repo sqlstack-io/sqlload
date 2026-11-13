@@ -24,7 +24,7 @@ pub(crate) fn adoption(spec: &TableSpec, live: &[LiveColumn], overwrite: bool) -
     let mut paste: Vec<(String, String)> = Vec::new();
     for column in live
         .iter()
-        .filter(|column| !is_own(&column.name) && !masked(&column.name))
+        .filter(|column| !is_own(spec.naming, &column.name) && !masked(&column.name))
     {
         let physical = column.column_type.to_string();
         let found = declared

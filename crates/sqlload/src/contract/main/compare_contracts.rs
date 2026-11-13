@@ -91,7 +91,7 @@ async fn resource(
                     &declared_columns(spec),
                     spec.contract,
                     live.as_deref(),
-                    (spec.warehouse, &relation),
+                    (spec.warehouse, spec.naming, &relation),
                 ),
                 match source {
                     true => source_drift((spec, source_columns), live.as_deref(), &relation),
@@ -164,11 +164,11 @@ async fn files_resource(
             &declared_columns(spec),
             spec.contract,
             read.live.as_deref(),
-            (spec.warehouse, &relation),
+            (spec.warehouse, spec.naming, &relation),
         ));
     }
     if let Some(live) = read.live.as_deref().filter(|_| readable) {
-        found.extend(file_drift(live, &read.files));
+        found.extend(file_drift(spec.naming, live, &read.files));
     }
     if source && readable {
         found.extend(source_drift(

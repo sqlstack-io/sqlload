@@ -293,6 +293,28 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "0",
         },
         ScenarioTestCase {
+            description: "two tables dlt's naming loads into one table stop the plan, naming both",
+            setup: "CREATE TABLE public.\"order-items\" (id int8); CREATE TABLE public.order_items (id int8);",
+            settings: "naming = \"dlt\"\n",
+            runs: &[ScenarioRun {
+                expected_error: "public.order-items and public.order_items: both load as table app__order_items under naming = \"dlt\"",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "a dlt-named table that loads into the table another one loads into under SQLLoad's naming stops the plan",
+            setup: "CREATE TABLE public.\"order-items\" (id int8); CREATE TABLE public.order_items (id int8);",
+            settings: "[sources.app.tables.\"public.order-items\"]\nnaming = \"dlt\"\n",
+            runs: &[ScenarioRun {
+                expected_error: "public.order-items and public.order_items: both load as table app__order_items under naming = \"dlt\"",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
             description: "a masked cursor column is rejected",
             setup: "CREATE TABLE public.users (id int8 PRIMARY KEY, code text);",
             settings: "[sources.app.tables.\"public.users\"]\ncursor_column = \"code\"\nmask = { code = \"hash\" }\n",

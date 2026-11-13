@@ -43,6 +43,23 @@ impl SourceTable {
             false => format!("{}.{}", self.schema, self.name),
         }
     }
+
+    /// How the source spells column `name`: its source spelling when the load renames it, else `name`.
+    pub fn spelling<'a>(&'a self, name: &'a str) -> &'a str {
+        self.columns
+            .iter()
+            .find(|column| column.name == name)
+            .and_then(|column| column.source_spelling.as_deref())
+            .unwrap_or(name)
+    }
+
+    /// The name the source's column `spelling` loads as: the column the source spells so, else `spelling` itself.
+    pub fn loaded_as<'a>(&'a self, spelling: &'a str) -> &'a str {
+        self.columns
+            .iter()
+            .find(|column| column.source_spelling.as_deref() == Some(spelling))
+            .map_or(spelling, |column| column.name.as_str())
+    }
 }
 
 /// The Postgres types SQLLoad reads natively; everything else is read as text.

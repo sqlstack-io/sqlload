@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::contract::_helpers::compare::findings;
 use crate::contract::tests::test_types::FindingsTestCase;
+use crate::load_naming::models::Naming;
 use crate::project::models::Contract;
 use crate::schema_plan::models::LiveColumn;
 
@@ -10,7 +11,7 @@ use crate::schema_plan::models::LiveColumn;
 fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_finding() {
     let test_cases = [
         FindingsTestCase {
-            description: "matching names in another case and equal types agree, and SQLLoad's own columns never count",
+            description: "matching names in another case and equal types agree, and the columns a load adds (SQLLoad's or dlt's) never count",
             declared: vec![
                 ("ID", ColumnType::Int),
                 (
@@ -23,6 +24,7 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
             ],
             contract: Contract::Enforced,
             warehouse: Warehouse::DuckDb,
+            naming: Naming::Dlt,
             live: Some(vec![
                 ("id", ColumnType::Int),
                 (
@@ -33,6 +35,8 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
                     },
                 ),
                 ("_sqlload_load_id", ColumnType::Text),
+                ("_dlt_load_id", ColumnType::Text),
+                ("_dlt_id", ColumnType::Text),
             ]),
             expected_messages: &[],
         },
@@ -50,6 +54,7 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
             ],
             contract: Contract::None,
             warehouse: Warehouse::DuckDb,
+            naming: Naming::Sqlload,
             live: Some(vec![
                 (
                     "amount",
@@ -70,6 +75,7 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
             declared: vec![("id", ColumnType::Int)],
             contract: Contract::Enforced,
             warehouse: Warehouse::DuckDb,
+            naming: Naming::Sqlload,
             live: Some(vec![("id", ColumnType::Int), ("extra", ColumnType::Bool)]),
             expected_messages: &[
                 "missing_declaration: physical column 'extra' (bool) is not declared",
@@ -80,6 +86,7 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
             declared: vec![("id", ColumnType::Int)],
             contract: Contract::None,
             warehouse: Warehouse::DuckDb,
+            naming: Naming::Sqlload,
             live: None,
             expected_messages: &["relation_missing: physical relation RAW.orders does not exist"],
         },
@@ -91,6 +98,7 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
             ],
             contract: Contract::None,
             warehouse: Warehouse::DuckDb,
+            naming: Naming::Sqlload,
             live: Some(vec![
                 ("note", ColumnType::Text),
                 ("big", ColumnType::Native("HUGEINT".to_owned())),
@@ -113,6 +121,7 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
             ],
             contract: Contract::None,
             warehouse: Warehouse::Snowflake,
+            naming: Naming::Sqlload,
             live: Some(vec![
                 ("a", ColumnType::Int),
                 ("b", ColumnType::Varchar(36)),
@@ -132,6 +141,7 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
             declared: vec![("a", ColumnType::Varchar(50)), ("b", ColumnType::Text)],
             contract: Contract::None,
             warehouse: Warehouse::Snowflake,
+            naming: Naming::Sqlload,
             live: Some(vec![
                 ("a", ColumnType::Varchar(100)),
                 ("b", ColumnType::Varchar(50)),
@@ -146,9 +156,25 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
             declared: vec![("a", ColumnType::SmallInt)],
             contract: Contract::None,
             warehouse: Warehouse::DuckDb,
+            naming: Naming::Sqlload,
             live: Some(vec![("a", ColumnType::Int)]),
             expected_messages: &[
                 "type_mismatch: column 'a' is declared smallint but physical type is int",
+            ],
+        },
+        FindingsTestCase {
+            description: "under SQLLoad's naming a column named like dlt's metadata is the source's own data",
+            declared: vec![("id", ColumnType::Int)],
+            contract: Contract::Enforced,
+            warehouse: Warehouse::DuckDb,
+            naming: Naming::Sqlload,
+            live: Some(vec![
+                ("id", ColumnType::Int),
+                ("_dlt_id", ColumnType::Text),
+                ("_sqlload_load_id", ColumnType::Text),
+            ]),
+            expected_messages: &[
+                "missing_declaration: physical column '_dlt_id' (text) is not declared",
             ],
         },
     ];
@@ -172,7 +198,7 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
             &declared,
             test_case.contract,
             live.as_deref(),
-            (test_case.warehouse, "RAW.orders"),
+            (test_case.warehouse, test_case.naming, "RAW.orders"),
         )
         .iter()
         .map(|finding| format!("{}: {}", finding.kind, finding.message))

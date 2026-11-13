@@ -68,5 +68,22 @@ pub(crate) struct ProjectionProblemTestCase {
     pub(crate) cursor_column: Option<&'static str>,
     pub(crate) flatten: &'static [&'static str],
     pub(crate) masked: &'static [&'static str],
+    pub(crate) naming: crate::load_naming::models::Naming,
     pub(crate) expected_problem: Option<&'static str>,
+}
+
+pub(crate) struct UnnestBatchTestCase {
+    pub(crate) description: &'static str,
+    /// NDJSON rows, read as one batch.
+    pub(crate) rows: &'static str,
+    pub(crate) unnest: fn() -> crate::row_batches::models::Unnest,
+    pub(crate) max_depth: u32,
+    /// Each row's id.
+    pub(crate) ids: &'static [&'static str],
+    /// Each row's root id, under a merge.
+    pub(crate) roots: Option<&'static [&'static str]>,
+    /// Under `unnest = "all"`, the fields already chosen as list fields (`true`) or not, as `path`, `chosen`.
+    pub(crate) chosen: &'static [(&'static str, bool)],
+    /// The parent rendered as `schema / rows`, then each child as `table = schema / rows`, then the choices made (`chosen: path=true,...`) under `"all"`, or the error text.
+    pub(crate) expected_batches: Result<&'static [&'static str], &'static str>,
 }

@@ -213,3 +213,77 @@ pub(crate) fn shown_json_lists(
         .collect::<Vec<_>>()
         .join("|"))
 }
+
+/// `test_case`'s rows split by [`unnest_batch`](crate::row_batches::main::unnest_batch::unnest_batch) into `orders` and its child tables under SQLLoad's naming: the parent rendered, then each child as `table = rendered`.
+pub(crate) fn unnested(
+    test_case: &crate::row_batches::tests::test_types::UnnestBatchTestCase,
+) -> Result<Vec<String>, String> {
+    let read = JsonRead {
+        layout: JsonLayout::Lines,
+        path: None,
+        batch_rows: usize::MAX,
+        projection: None,
+    };
+    let mut batches: Vec<RecordBatch> = Vec::new();
+    json_rows(test_case.rows.as_bytes(), &read, |columns| {
+        batches.push(columns_batch(columns)?);
+        Ok(())
+    })?;
+    let batch = batches.first().ok_or("no rows")?;
+    let ids: Vec<String> = test_case.ids.iter().map(|id| (*id).to_owned()).collect();
+    let roots: Option<Vec<String>> = test_case
+        .roots
+        .map(|roots| roots.iter().map(|id| (*id).to_owned()).collect());
+    let unnest = (test_case.unnest)();
+    let request = crate::row_batches::models::UnnestRequest {
+        table: "orders",
+        unnest: &unnest,
+        max_depth: test_case.max_depth,
+        naming: crate::load_naming::models::Naming::Sqlload,
+        name_limit: None,
+        ids: &ids,
+        roots: roots.as_deref(),
+    };
+    let mut choices: crate::row_batches::types::ListChoices = test_case
+        .chosen
+        .iter()
+        .map(|(path, chosen)| ((*path).to_owned(), *chosen))
+        .collect();
+    let split =
+        crate::row_batches::main::unnest_batch::unnest_batch(batch, &request, &mut choices)?;
+    let mut shown = vec![render(&split.parent)];
+    shown.extend(
+        split
+            .children
+            .iter()
+            .map(|child| format!("{} = {}", child.table, render(&child.batch))),
+    );
+    let chosen: Vec<String> = choices
+        .iter()
+        .map(|(path, chosen)| format!("{path}={chosen}"))
+        .collect();
+    shown.extend(
+        (unnest == crate::row_batches::models::Unnest::All)
+            .then(|| format!("chosen: {}", chosen.join(","))),
+    );
+    Ok(shown)
+}
+
+/// `unnest` naming `items`, `items.parts` and `tags`.
+pub(crate) fn items_parts_tags() -> crate::row_batches::models::Unnest {
+    crate::row_batches::models::Unnest::Paths(vec![
+        "items".to_owned(),
+        "items.parts".to_owned(),
+        "tags".to_owned(),
+    ])
+}
+
+/// `unnest = "all"`.
+pub(crate) fn every_list() -> crate::row_batches::models::Unnest {
+    crate::row_batches::models::Unnest::All
+}
+
+/// `unnest` naming `tags` alone.
+pub(crate) fn tags_only() -> crate::row_batches::models::Unnest {
+    crate::row_batches::models::Unnest::Paths(vec!["tags".to_owned()])
+}

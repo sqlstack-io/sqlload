@@ -36,6 +36,10 @@ use crate::column_types::models::Warehouse;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::{Compression, SourceFormat};
+use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::python::list_choices;
+use crate::loader::_helpers::python::live_child_tables;
+use crate::loader::_helpers::python::with_live_children;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
@@ -77,6 +81,7 @@ use crate::routing::models::Route;
 use crate::routing::models::RouteOverrides;
 use crate::routing::models::Step;
 use crate::routing::models::Store;
+use crate::row_batches::models::Unnest;
 use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN, MERGE_ROW_COLUMN};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::main::plan_schema::plan_schema;
@@ -115,7 +120,7 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             files
                 .partition_types
                 .iter()
-                .any(|(column, _)| column == name)
+                .any(|(column, _)| column == spec.source_table.spelling(name))
         })
     };
     let mut desired: Vec<DesiredColumn> = read
@@ -134,6 +139,8 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             },
         })
         .collect();
+    let choices = list_choices(spec);
+    desired.retain(|column| !spec.unnest.takes(&column.name, &choices));
     desired.extend(
         added_constants(spec, read).map(|(name, column_type, _)| DesiredColumn {
             name: name.clone(),
@@ -148,11 +155,11 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     desired.retain(|column| !(merged && column.name == CDC_UNCHANGED_COLUMN));
     for column in desired
         .iter_mut()
-        .filter(|column| column.name.starts_with(CDC_PREFIX))
+        .filter(|column| is_load_column(spec.naming, &column.name))
     {
         column.origin = ColumnOrigin::Metadata;
     }
-    desired.extend(metadata_columns());
+    desired.extend(metadata_columns(spec.naming, spec.row_id));
     desired
 }
 
@@ -223,6 +230,11 @@ pub(crate) async fn plan_table(
             vec![ENFORCED_UNDECLARED_PROBLEM.to_owned()],
         ));
     }
+    let children = match spec.unnest {
+        Unnest::All => live_child_tables(destination, spec).await?,
+        _ => Vec::new(),
+    };
+    let spec = &with_live_children(spec, &children);
     let plan = plan_table_once(spec, destination, options).await?;
     let augmented = with_live_columns(spec, plan.live.as_deref())
         .or_else(|| with_live_types(spec, plan.live.as_deref()));
@@ -389,6 +401,7 @@ pub(crate) async fn replan_columns(
                 auto_widen: spec.auto_widen,
                 type_change_rebuild: spec.type_change_rebuild,
                 rebuild_allowed: options.rebuild_allowed,
+                naming: spec.naming,
             };
             let compared = live.as_deref().filter(|_| !options.reload);
             let mut schema = plan_schema(&desired, compared, rules);
@@ -648,6 +661,7 @@ async fn plan_table_once(
         auto_widen: spec.auto_widen,
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
+        naming: spec.naming,
     };
     let compared = live.as_deref().filter(|_| !options.reload);
     let mut schema = plan_schema(&desired, compared, rules);
@@ -909,6 +923,11 @@ fn reader_offer(
         .filter(|(_, method)| **method == MaskMethod::Hmac)
         .map(|(name, _)| name.as_str())
         .collect();
+    let nesting = match (spec.unnest == Unnest::None, spec.row_id) {
+        (false, _) => Some("the table unnests lists into child tables, which SQLLoad writes"),
+        (true, true) => Some("the table gives each row an id, which SQLLoad makes"),
+        (true, false) => None,
+    };
     let needs_loader = match (hmac.is_empty(), spec.test_loader_route, &spec.checks) {
         (false, _, _) => Some(format!(
             "{} masked with hmac, whose key must never appear in SQL",
@@ -918,6 +937,7 @@ fn reader_offer(
         (true, false, Some(_)) => {
             Some("the table has checks, which run on the rows SQLLoad stages".to_owned())
         }
+        (true, false, None) if nesting.is_some() => nesting.map(str::to_owned),
         (true, false, None) => spec.files.as_ref().and_then(|files| {
             match (
                 &files.location.store,

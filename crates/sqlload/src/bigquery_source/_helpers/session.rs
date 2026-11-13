@@ -21,7 +21,7 @@ pub(crate) async fn read_session(
     let fields: Vec<String> = request
         .columns
         .iter()
-        .map(|column| column.name.clone())
+        .map(|column| request.table.spelling(&column.name).to_owned())
         .collect();
     let direct = request.sql.is_none() && request.table.estimated_bytes >= 0;
     let (table, restriction, snapshot_ms) = match direct {

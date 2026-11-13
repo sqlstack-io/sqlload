@@ -110,7 +110,7 @@ pub(crate) fn read_column(
     column: &SourceColumn,
     output: &ColumnType,
 ) -> Result<ReadColumn, String> {
-    let quoted = quote_identifier(&column.name);
+    let quoted = quote_identifier(column.source_spelling.as_deref().unwrap_or(&column.name));
     let Some((expression, wire)) = read_as(column.pg_type, output, &quoted) else {
         return Err(format!(
             "{} has type {}, which cannot be read as {output}",

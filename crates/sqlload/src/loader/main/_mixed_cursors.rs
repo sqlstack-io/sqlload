@@ -16,7 +16,9 @@ fn cursor_kind(table: &TablePlan) -> Option<String> {
         files
             .partition_types
             .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(&cursor.column))
+            .find(|(name, _)| {
+                name.eq_ignore_ascii_case(table.spec.source_table.spelling(&cursor.column))
+            })
             .map(|(_, column_type)| column_type.clone())
     });
     Some(match read.or(partition) {

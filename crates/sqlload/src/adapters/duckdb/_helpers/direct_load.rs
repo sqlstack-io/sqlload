@@ -52,7 +52,7 @@ impl DuckDbWriter {
             target.staging.unwrap_or(target.table),
             (carried, &in_files),
             &files,
-            (target.load_id, batch.loaded_at),
+            (target.naming, target.load_id, batch.loaded_at),
         );
         let transaction = target.direct || target.builds;
         if transaction && !self.open_transaction {

@@ -1,9 +1,16 @@
 use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
+use crate::adapters::contract::constants::{STAGING_SUFFIX, SWAP_SUFFIX};
 use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
+use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
+use crate::adapters::dispatch::main::session::table_names::table_names;
+use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;
@@ -11,6 +18,11 @@ use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
+use crate::load_naming::constants::CHILD_TABLE_SEPARATOR;
+use crate::load_naming::main::child_table_name::child_table_name;
+use crate::load_naming::main::loaded_name::loaded_name;
+use crate::load_naming::main::metadata_name::metadata_name;
+use crate::load_naming::models::{MetadataRole, Naming};
 use crate::loader::_helpers::publish::staged_columns;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
@@ -18,6 +30,7 @@ use crate::loader::_helpers::run_log::run_entry;
 use crate::loader::_helpers::table_plan::append_problem;
 use crate::loader::_helpers::table_plan::replan_columns;
 use crate::loader::_helpers::table_plan::schema_statements;
+use crate::loader::constants::DROPPED_CHUNK;
 use crate::loader::constants::EMPTY_REPLACE_PROBLEM;
 use crate::loader::constants::NO_DATA_NOTE;
 use crate::loader::constants::NO_STATE;
@@ -25,8 +38,11 @@ use crate::loader::constants::PYTHON_COLUMN_TYPE;
 use crate::loader::constants::UNKNOWN_CURSOR_TYPE;
 use crate::loader::constants::UTC_OFFSET_SUFFIX;
 use crate::loader::errors::LoaderError;
+use crate::loader::models::ChildFeed;
+use crate::loader::models::ChildTables;
 use crate::loader::models::CommitRange;
 use crate::loader::models::CommitRule;
+use crate::loader::models::PlanOptions;
 use crate::loader::models::Publisher;
 use crate::loader::models::PythonFeed;
 use crate::loader::models::PythonLoad;
@@ -35,11 +51,13 @@ use crate::loader::models::ReadWindow;
 use crate::loader::models::TableLoaded;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
+use crate::masking::models::MaskRules;
 use crate::postgres_source::models::PgType;
 use crate::postgres_source::models::SourceColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::constants::FILES_CONNECTION_KINDS;
 use crate::project::models::CheckName;
+use crate::project::models::OnSchemaChange;
 use crate::project::models::ProjectConfig;
 use crate::project::models::SourceConfig;
 use crate::publish_checks::main::check_column_problems::check_column_problems;
@@ -48,14 +66,19 @@ use crate::python_sources::models::TableRead;
 use crate::python_sources::types::BatchStream;
 use crate::python_sources::types::PythonHost;
 use crate::python_sources::types::Streamed;
+use crate::row_batches::main::choose_lists::choose_lists;
 use crate::row_batches::main::conform_batch::conform_batch;
 use crate::row_batches::main::flattened_columns::flattened_columns;
 use crate::row_batches::main::json_lists::json_lists;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
-use crate::schema_plan::constants::LOAD_ID_COLUMN;
-use crate::schema_plan::constants::LOADED_AT_COLUMN;
+use crate::row_batches::models::ChildBatch;
+use crate::row_batches::models::Unnest;
+use crate::row_batches::types::ListChoices;
+use crate::schema_plan::constants::ROOT_ROW_COLUMN;
+use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
+use crate::schema_plan::models::SchemaPlan;
 use crate::schema_plan::models::TableAction;
 use crate::similar_names::main::close_name::close_name;
 use arrow_array::Array;
@@ -82,6 +105,7 @@ use arrow_schema::TimeUnit;
 use arrow_select::filter::filter_record_batch;
 use chrono::NaiveDate;
 use chrono::NaiveDateTime;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -118,7 +142,102 @@ pub(crate) fn python_table(module: &str, table: &SourceTable) -> PythonTable {
             .iter()
             .map(|column| column.name.clone())
             .collect(),
+        lists: ListChoices::new(),
     }
+}
+
+/// The child tables `spec`'s table has in the destination (tables named `<table>__...`, staging and swap tables left out); none without `unnest`.
+pub(crate) async fn live_child_tables(
+    destination: &Destination,
+    spec: &TableSpec,
+) -> Result<Vec<String>, LoaderError> {
+    if spec.unnest == Unnest::None || spec.destination_path.is_some() {
+        return Ok(Vec::new());
+    }
+    let adapter = sql_adapter(spec.warehouse);
+    let found = table_names(
+        destination,
+        adapter.list_child_tables_sql(&spec.destination),
+    )
+    .await?;
+    Ok(found
+        .into_iter()
+        .filter(|name| !name.contains(STAGING_SUFFIX) && !name.ends_with(SWAP_SUFFIX))
+        .collect())
+}
+
+/// The dotted path each of `spec`'s child tables among `tables` holds, by its name as the load writes it (`orders__items__parts` holds `items.parts`; Snowflake's `ORDERS__ITEMS` holds `items`; Postgres lists the children of `ORDERS` folded, as `orders__items`).
+pub(crate) fn child_paths(spec: &TableSpec, tables: Vec<String>) -> Vec<(String, String)> {
+    let prefix = format!("{}{CHILD_TABLE_SEPARATOR}", spec.destination.table);
+    let stored = sql_adapter(spec.warehouse).stored_name(&prefix);
+    tables
+        .into_iter()
+        .filter(|table| table.starts_with(&stored))
+        .filter_map(|table| {
+            let path = source_spelling(&table, spec)
+                .get(prefix.len()..)?
+                .replace(CHILD_TABLE_SEPARATOR, ".");
+            Some((path, table))
+        })
+        .collect()
+}
+
+/// `spec` with each top-level field whose child table is among `children` chosen as a list field under `unnest = "all"`: an earlier load chose it, so this one keeps it one whatever its sampled values show (a value that is not a list then fails the load).
+pub(crate) fn with_live_children(spec: &TableSpec, children: &[String]) -> TableSpec {
+    let mut chosen = spec.clone();
+    if spec.unnest != Unnest::All || children.is_empty() {
+        return chosen;
+    }
+    let adapter = sql_adapter(spec.warehouse);
+    let live = |field: &str| {
+        let table = child_table_name(
+            (spec.naming, adapter.max_identifier_length()),
+            &spec.destination.table,
+            field,
+        );
+        children.contains(&adapter.stored_name(&table))
+    };
+    if let Some(files) = &mut chosen.files {
+        for column in &mut files.table.columns {
+            if live(&column.name) {
+                column.lists = Some(true);
+            }
+        }
+    }
+    if let Some(python) = &mut chosen.python {
+        let prefix = adapter.stored_name(&format!(
+            "{}{CHILD_TABLE_SEPARATOR}",
+            spec.destination.table
+        ));
+        for name in children {
+            let field = name
+                .strip_prefix(&prefix)
+                .filter(|field| !field.contains(CHILD_TABLE_SEPARATOR));
+            if let Some(field) = field {
+                python.lists.insert(field.to_owned(), true);
+            }
+        }
+    }
+    chosen
+}
+
+/// Under `unnest = "all"`, the top-level columns the plan chose as list fields or not: from the sampled files, or from a Python table's rows so far.
+pub(crate) fn list_choices(spec: &TableSpec) -> ListChoices {
+    if spec.unnest != Unnest::All {
+        return ListChoices::new();
+    }
+    let sampled = spec
+        .files
+        .iter()
+        .flat_map(|files| &files.table.columns)
+        .filter_map(|column| {
+            Some((
+                spec.source_table.loaded_as(&column.name).to_owned(),
+                column.lists?,
+            ))
+        });
+    let yielded = spec.python.iter().flat_map(|python| python.lists.clone());
+    sampled.chain(yielded).collect()
 }
 
 /// A Python table's spec with the live table's data columns added (as the source has them, so `plan` shows no change for them), or `None` when there are none to add; its `constant_columns` are never the source's.
@@ -134,7 +253,7 @@ pub(crate) fn with_live_columns(
             .any(|(constant, _, _)| constant.eq_ignore_ascii_case(name))
     };
     for column in live? {
-        if !is_metadata(&column.name)
+        if !is_metadata(spec.naming, &column.name)
             && !constant(&column.name)
             && !has_column(&spec.source_table, &column.name)
         {
@@ -148,6 +267,36 @@ pub(crate) fn with_live_columns(
     let mut augmented = spec.clone();
     augmented.source_table.columns.extend(added);
     Some(augmented)
+}
+
+/// A yielded batch with its fields named as they load under `spec`'s naming: as yielded under SQLLoad's, normalised under dlt's; two fields loading as one name fail, naming both.
+fn dlt_named(batch: RecordBatch, spec: &TableSpec) -> Result<RecordBatch, LoaderError> {
+    if spec.naming == Naming::Sqlload {
+        return Ok(batch);
+    }
+    let limit = sql_adapter(spec.warehouse).max_identifier_length();
+    let schema = batch.schema();
+    let mut fields: Vec<arrow_schema::FieldRef> = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let name = loaded_name(spec.naming, field.name(), limit);
+        if let Some(other) = fields.iter().find(|taken| *taken.name() == name) {
+            let yielded = schema
+                .fields()
+                .iter()
+                .find(|yielded| loaded_name(spec.naming, yielded.name(), limit) == *other.name())
+                .map_or(name.clone(), |yielded| yielded.name().clone());
+            return Err(LoaderError::Invalid(format!(
+                "fields {yielded:?} and {:?} both load as {name} under naming = \"dlt\"; rename one in the table function",
+                field.name()
+            )));
+        }
+        fields.push(Arc::new(field.as_ref().clone().with_name(name)));
+    }
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+        batch.columns().to_vec(),
+    )
+    .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
 /// The name a table function most likely yields for live column `stored`: its lower-case form when the warehouse stores that as `stored` (upper case on Snowflake), else `stored` itself.
@@ -168,14 +317,14 @@ pub(crate) struct YieldedData<'a> {
 
 /// A Python table as its yielded data shows it: every column of the data typed by inference (the live table's type when the inferred one fits it, or when the column only held NULL), plus declared columns no row had.
 pub(crate) fn inferred_table(
-    planned: &SourceTable,
+    (planned, naming): (&SourceTable, Naming),
     declared: &[String],
     data: &YieldedData<'_>,
     live: Option<&[LiveColumn]>,
 ) -> SourceTable {
     let mut columns: Vec<SourceColumn> = Vec::new();
     for field in data.schema.fields() {
-        if !is_metadata(field.name()) {
+        if !is_metadata(naming, field.name()) {
             let live_type = live_type(live, field.name());
             let column_type = match (data.null_columns.contains(field.name()), live_type) {
                 (true, Some(live_type)) => live_type,
@@ -206,7 +355,7 @@ pub(crate) fn declared_problems(spec: &TableSpec, data: &YieldedData<'_>) -> Vec
         .fields()
         .iter()
         .map(|field| field.name().as_str())
-        .filter(|name| !is_metadata(name))
+        .filter(|name| !is_metadata(spec.naming, name))
         .collect();
     let keys = spec
         .pinned
@@ -388,8 +537,15 @@ fn python_column(name: &str, column_type: ColumnType) -> SourceColumn {
     }
 }
 
-fn is_metadata(name: &str) -> bool {
-    name.eq_ignore_ascii_case(LOAD_ID_COLUMN) || name.eq_ignore_ascii_case(LOADED_AT_COLUMN)
+/// Whether `name` is a column the load adds under `naming`.
+fn is_metadata(naming: Naming, name: &str) -> bool {
+    [
+        MetadataRole::LoadId,
+        MetadataRole::LoadedAt,
+        MetadataRole::RowId,
+    ]
+    .into_iter()
+    .any(|role| name.eq_ignore_ascii_case(metadata_name(naming, role)))
 }
 
 /// Call the table function on a blocking thread; the host holds the GIL only to start it.
@@ -650,7 +806,10 @@ impl PythonFeed {
             self.plan_data(load, true).await?;
         }
         let state = self.state.clone();
-        let rows = self.publisher(load).await?.finish(state).await?;
+        let publisher = self.publisher(load).await?;
+        let rows = publisher.finish(state).await?;
+        let children = publisher.child_changes();
+        self.changes.extend(children);
         Ok(TableLoaded {
             rows,
             changes: std::mem::take(&mut self.changes),
@@ -722,9 +881,16 @@ impl PythonFeed {
         window: Option<&CursorWindow>,
     ) -> Result<(), LoaderError> {
         self.check_flattened(&batch)?;
+        let batch = dlt_named(batch, &self.table.spec)?;
         let merged = merge_schema(&self.merged, &batch.schema());
         self.rows += batch.num_rows() as u64;
-        if merged != self.merged || self.publisher.is_none() {
+        let chosen = match (&self.table.spec.unnest, &mut self.table.spec.python) {
+            (Unnest::All, Some(python)) => {
+                choose_lists(&batch, &mut python.lists).map_err(LoaderError::Invalid)?
+            }
+            _ => false,
+        };
+        if merged != self.merged || self.publisher.is_none() || chosen {
             self.merged = merged;
             self.plan_data(load, false).await?;
         }
@@ -789,25 +955,12 @@ impl PythonFeed {
             .then_some(self.table.live.as_deref());
         let replanned = replan(load, &self.table, (&data, known), destination).await?;
         let old = staged_columns(&self.table);
-        let statements = schema_statements(&replanned);
-        if let Some(statements) = statements {
-            execute_ddl(destination, statements).await?;
-            self.changes.extend(change_lines(&replanned));
-        }
-        if let Some(publisher) = &mut self.publisher {
-            publisher.settle_rows().await?;
-            publisher.reopen_rows();
-            if let Some(staging) = &publisher.staging {
-                let changes = sql_adapter(replanned.spec.warehouse).render_staging_changes(
-                    staging,
-                    (&old, &staged_columns(&replanned)),
-                    publisher.started_with(),
-                );
-                execute_ddl(&publisher.destination, changes).await?;
-            }
-            publisher.table = replanned.clone();
-            publisher.widen_files().await?;
-        }
+        let changes = bring_in_line(
+            (load.destination, self.publisher.as_mut()),
+            (&old, &replanned),
+        )
+        .await?;
+        self.changes.extend(changes);
         self.table = TablePlan {
             live: replanned.live.clone().or(self.table.live.clone()),
             ..replanned
@@ -886,7 +1039,7 @@ async fn replan(
         .map(|python| python.declared.clone())
         .unwrap_or_default();
     let table = inferred_table(
-        &load.table.spec.source_table,
+        (&load.table.spec.source_table, load.table.spec.naming),
         &declared,
         data,
         planned.live.as_deref(),
@@ -1000,5 +1153,496 @@ fn table_read(
             .filter(|(_, column_type)| matches!(column_type, ColumnType::Array(_)))
             .map(|(name, _)| name.clone())
             .collect(),
+        naming: (
+            spec.naming,
+            sql_adapter(spec.warehouse).max_identifier_length(),
+        ),
+    }
+}
+
+/// Bring a table planned from its data in line with `replanned`, through `publisher`'s connection once it is open (`destination` before): its schema changes run, and an open publisher's rows so far are settled and its staging table altered from the `old` staged columns, before it takes the new plan. Returns the `created ...` and `altered ...` lines.
+pub(crate) async fn bring_in_line(
+    (destination, publisher): (&Destination, Option<&mut Publisher>),
+    (old, replanned): (&[DesiredColumn], &TablePlan),
+) -> Result<Vec<String>, LoaderError> {
+    let mut changes: Vec<String> = Vec::new();
+    let destination = match &publisher {
+        Some(publisher) => &publisher.destination,
+        None => destination,
+    };
+    if let Some(statements) = schema_statements(replanned) {
+        execute_ddl(destination, statements).await?;
+        changes.extend(change_lines(replanned));
+    }
+    if let Some(publisher) = publisher {
+        publisher.settle_rows().await?;
+        publisher.reopen_rows();
+        if let Some(staging) = &publisher.staging {
+            let altered = sql_adapter(replanned.spec.warehouse).render_staging_changes(
+                staging,
+                (old, &staged_columns(replanned)),
+                publisher.started_with(),
+            );
+            execute_ddl(&publisher.destination, altered).await?;
+        }
+        publisher.table = replanned.clone();
+        publisher.widen_files().await?;
+    }
+    Ok(changes)
+}
+
+/// A child table's plan before its first rows: the parent's settings, with columns inferred from its rows as a Python table's are, each row given an id, and no key, cursor, checks or column rules of the parent's; a `replace` replaces it with the parent, every other load appends to it.
+fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
+    let spec = &parent.spec;
+    let child = TableSpec {
+        source_table: SourceTable {
+            name: table.to_owned(),
+            columns: Vec::new(),
+            primary_key: Vec::new(),
+            indexed_columns: Vec::new(),
+            comment: None,
+            ..spec.source_table.clone()
+        },
+        destination: TableName {
+            table: table.to_owned(),
+            ..spec.destination.clone()
+        },
+        description: format!(
+            "The items of the {path} lists of {}.",
+            spec.destination.table
+        ),
+        unique_key: Vec::new(),
+        dedup_sort: None,
+        cursor: None,
+        batch: None,
+        constants: Vec::new(),
+        shared_destination: false,
+        source_end: None,
+        pinned: BTreeMap::new(),
+        excluded_columns: Vec::new(),
+        masked: MaskRules::default(),
+        logged: false,
+        files: None,
+        destination_path: None,
+        flatten: Vec::new(),
+        row_id: true,
+        root_rows: matches!(parent.mode, WriteMode::Merge { .. }),
+        unnest: Unnest::None,
+        python: Some(PythonTable {
+            module: String::new(),
+            declared: Vec::new(),
+            lists: ListChoices::new(),
+        }),
+        sheet: None,
+        cdc: None,
+        checks: None,
+        warehouse_source: None,
+        ..spec.clone()
+    };
+    TablePlan {
+        spec: child,
+        read_columns: Vec::new(),
+        live: None,
+        schema: SchemaPlan {
+            action: TableAction::Create,
+            write_columns: Vec::new(),
+            warnings: Vec::new(),
+            blocked: None,
+        },
+        mode: match parent.mode {
+            WriteMode::Replace => WriteMode::Replace,
+            WriteMode::Recreate => WriteMode::Recreate,
+            _ => WriteMode::Append,
+        },
+        source_filter: None,
+        source_parameters: Vec::new(),
+        cursor_note: None,
+        window: None,
+        route: parent.route.clone(),
+        files: None,
+        output: None,
+        exists: false,
+        logged: None,
+        commits: CommitRule::Size,
+        stage: parent.stage.clone(),
+        planned_stage: None,
+    }
+}
+
+/// The ids a child batch's rows were given, from its row id column.
+fn given_ids(batch: &RecordBatch, naming: Naming) -> Result<Vec<String>, LoaderError> {
+    let name = metadata_name(naming, MetadataRole::RowId);
+    let ids = batch
+        .column_by_name(name)
+        .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+        .ok_or_else(|| {
+            LoaderError::Invalid(format!("a child table's rows have no {name} column"))
+        })?;
+    Ok(ids
+        .iter()
+        .map(|id| id.unwrap_or_default().to_owned())
+        .collect())
+}
+
+/// The child table the items of `spec`'s list field at dotted `path` land in, such as `orders__items__parts` for `items.parts`.
+pub(crate) fn unnested_table(spec: &TableSpec, path: &str) -> String {
+    let mut table = spec.destination.table.clone();
+    for field in path.split('.') {
+        table = child_table_name(
+            (
+                spec.naming,
+                sql_adapter(spec.warehouse).max_identifier_length(),
+            ),
+            &table,
+            field,
+        );
+    }
+    table
+}
+
+/// The staged ordinal of each child row's root, from the root's row in the parent's batch.
+fn root_ordinals_of(root_rows: &[usize], ordinals: &[i64]) -> Vec<i64> {
+    root_rows
+        .iter()
+        .map(|row| ordinals.get(*row).copied().unwrap_or_default())
+        .collect()
+}
+
+impl ChildTables {
+    /// Stage the child rows of one of the parent's batches: a child table is planned (and created or altered) when its rows bring new columns, then they wait in its staging table for the parent's next commit.
+    pub(crate) async fn stage(
+        &mut self,
+        (parent, (load_id, loaded_at)): (&TablePlan, (&str, &str)),
+        (batches, ordinals): (Vec<ChildBatch>, Option<&[i64]>),
+    ) -> Result<(), LoaderError> {
+        for child in batches {
+            let roots = ordinals.map(|ordinals| root_ordinals_of(&child.root_rows, ordinals));
+            let below =
+                |path: &String| child.path == *path || child.path.starts_with(&format!("{path}."));
+            if self.ignored.iter().any(below) {
+                continue;
+            }
+            let index = match self.feeds.iter().position(|feed| feed.path == child.path) {
+                Some(index) => index,
+                None => {
+                    if !self.admits((parent, &child)).await? {
+                        self.ignored.push(child.path.clone());
+                        continue;
+                    }
+                    self.feeds.push(ChildFeed {
+                        table: child_plan(parent, (&child.path, &child.table)),
+                        path: child.path.clone(),
+                        merged: Schema::empty(),
+                        publisher: None,
+                    });
+                    self.feeds.len() - 1
+                }
+            };
+            let feed = &mut self.feeds[index];
+            let merged = merge_schema(&feed.merged, &child.batch.schema());
+            if merged != feed.merged || feed.publisher.is_none() {
+                feed.merged = merged;
+                let changes = feed.plan((&self.destination, &self.options), false).await?;
+                self.changes.extend(changes);
+            }
+            let ids = given_ids(&child.batch, parent.spec.naming)?;
+            let schema: SchemaRef = Arc::new(settled_schema(&feed.merged));
+            let (typed, _) = typed_batch(&child.batch, &feed.table, &schema, None)?;
+            let publisher = match &mut feed.publisher {
+                Some(publisher) => publisher,
+                None => {
+                    let mut opened = Publisher::open(
+                        feed.table.clone(),
+                        (&self.destination, &self.options),
+                        None,
+                    )
+                    .await?;
+                    opened.load_id = load_id.to_owned();
+                    opened.loaded_at = loaded_at.to_owned();
+                    feed.publisher.insert(opened)
+                }
+            };
+            publisher.stage_rows(typed, (Some(ids), roots)).await?;
+        }
+        Ok(())
+    }
+
+    /// Whether `child`'s table may be filled: always on the table's first load; after it, a child table that is not there yet is a schema change, which `on_schema_change` decides like a new column: added, left out with its rows and everything below (`"ignore"`, `false`), or refused.
+    async fn admits(
+        &self,
+        (parent, child): (&TablePlan, &ChildBatch),
+    ) -> Result<bool, LoaderError> {
+        let spec = &parent.spec;
+        if !parent.exists || spec.on_schema_change == OnSchemaChange::AppendNewColumns {
+            return Ok(true);
+        }
+        let table = TableName {
+            table: child.table.clone(),
+            ..spec.destination.clone()
+        };
+        if live_columns(&self.destination, &table).await?.is_some() {
+            return Ok(true);
+        }
+        match spec.on_schema_change {
+            OnSchemaChange::Fail => Err(LoaderError::Invalid(format!(
+                "new list field {} would make the child table {} and on_schema_change = \"fail\"",
+                child.path, child.table
+            ))),
+            _ => {
+                tracing::warn!(table = %child.table, field = %child.path, "new list field is not loaded (on_schema_change = \"ignore\")");
+                Ok(false)
+            }
+        }
+    }
+
+    /// Commit every child table's rows so far, before the parent's commit names them (under a merge, once the rows of the roots it merges are cleared, see [`Self::clear_merged`]).
+    pub(crate) async fn cut(
+        &mut self,
+        (parent, destination, staging): (&TablePlan, &Destination, Option<&TableName>),
+    ) -> Result<(), LoaderError> {
+        self.clear_merged((parent, destination, staging)).await?;
+        for publisher in self
+            .feeds
+            .iter_mut()
+            .filter_map(|feed| feed.publisher.as_mut())
+        {
+            publisher.cut(CommitRange::Planned).await?;
+        }
+        Ok(())
+    }
+
+    /// Finish every child table before the parent: columns that only held NULL become text, and what waits commits; under a `replace` (or `--reload`) an existing child table no rows reached (a listed one, or under `"all"` any named as the table's) is emptied too, so it never keeps an earlier load's items.
+    pub(crate) async fn finish(
+        &mut self,
+        (parent, (load_id, loaded_at)): (&TablePlan, (&str, &str)),
+        (destination, staging): (&Destination, Option<&TableName>),
+    ) -> Result<(), LoaderError> {
+        self.clear_merged((parent, destination, staging)).await?;
+        let replaced = matches!(parent.mode, WriteMode::Replace | WriteMode::Recreate);
+        let spec = &parent.spec;
+        let adapter = sql_adapter(spec.warehouse);
+        let candidates: Vec<(String, String)> = match &spec.unnest {
+            Unnest::Paths(paths) if replaced => paths
+                .iter()
+                .map(|path| (path.clone(), unnested_table(spec, path)))
+                .collect(),
+            Unnest::All if replaced => {
+                child_paths(spec, live_child_tables(&self.destination, spec).await?)
+            }
+            _ => Vec::new(),
+        };
+        for (path, table) in &candidates {
+            let fed = self.feeds.iter().any(|feed| {
+                adapter.stored_name(&feed.table.spec.destination.table)
+                    == adapter.stored_name(table)
+            });
+            if fed {
+                continue;
+            }
+            let mut feed = ChildFeed {
+                table: child_plan(parent, (path, table)),
+                path: path.clone(),
+                merged: Schema::empty(),
+                publisher: None,
+            };
+            if live_columns(&self.destination, &feed.table.spec.destination)
+                .await?
+                .is_none()
+            {
+                continue;
+            }
+            feed.plan((&self.destination, &self.options), true).await?;
+            let mut opened =
+                Publisher::open(feed.table.clone(), (&self.destination, &self.options), None)
+                    .await?;
+            opened.load_id = load_id.to_owned();
+            opened.loaded_at = loaded_at.to_owned();
+            feed.publisher = Some(opened);
+            self.feeds.push(feed);
+        }
+        for feed in &mut self.feeds {
+            let unsettled = feed
+                .merged
+                .fields()
+                .iter()
+                .any(|field| *field.data_type() == DataType::Null);
+            if unsettled {
+                let changes = feed.plan((&self.destination, &self.options), true).await?;
+                self.changes.extend(changes);
+            }
+            if let Some(publisher) = &mut feed.publisher {
+                publisher.finish(None).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Under a merge, before the commit of the parent's rows staged in `staging` (on the parent's `destination`): the staged child rows of the parent rows the merge drops (a repeated key's others) leave each child table's staging table, and every child table's rows whose root is being merged are deleted, so a root's items are replaced by its new ones, an empty or missing list leaving none. Each runs on its own, before the child and parent commits: a failure between them leaves a root without its items until a rerun merges it again.
+    async fn clear_merged(
+        &mut self,
+        (parent, destination, staging): (&TablePlan, &Destination, Option<&TableName>),
+    ) -> Result<(), LoaderError> {
+        let (WriteMode::Merge { .. }, Some(staging)) = (&parent.mode, staging) else {
+            return Ok(());
+        };
+        let spec = &parent.spec;
+        let adapter = sql_adapter(spec.warehouse);
+        for publisher in self
+            .feeds
+            .iter_mut()
+            .filter_map(|feed| feed.publisher.as_mut())
+        {
+            publisher.flush_batch().await?;
+        }
+        let request = WriteStatementsRequest {
+            table: &spec.destination,
+            columns: &parent.schema.write_columns,
+            mode: &parent.mode,
+            hashed: &[],
+            built: None,
+        };
+        let dropped: Vec<i64> = match adapter.render_dropped_ordinals(&request, staging) {
+            Some(query) => text_values(destination, query)
+                .await?
+                .iter()
+                .map(|text| {
+                    text.parse::<i64>().map_err(|error| {
+                        LoaderError::Invalid(format!("a dropped row's ordinal {text}: {error}"))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+            None => Vec::new(),
+        };
+        let root_row = adapter.render_identifier(ROOT_ROW_COLUMN);
+        for publisher in self
+            .feeds
+            .iter_mut()
+            .filter_map(|feed| feed.publisher.as_mut())
+        {
+            let Some(child_staging) = publisher.staging.clone() else {
+                continue;
+            };
+            let deletes: Vec<String> = dropped
+                .chunks(DROPPED_CHUNK)
+                .map(|chunk| {
+                    let listed: Vec<String> = chunk.iter().map(i64::to_string).collect();
+                    format!(
+                        "DELETE FROM {} WHERE {root_row} IN ({})",
+                        adapter.render_qualified_name(&child_staging),
+                        listed.join(", ")
+                    )
+                })
+                .collect();
+            execute(&publisher.destination, deletes).await?;
+        }
+        let root_name = metadata_name(spec.naming, MetadataRole::RootId);
+        let row_id = adapter.render_identifier(metadata_name(spec.naming, MetadataRole::RowId));
+        let mut tables: Vec<String> = self.merged.clone();
+        for feed in self.feeds.iter().filter(|feed| feed.publisher.is_some()) {
+            let table = &feed.table.spec.destination.table;
+            if !tables
+                .iter()
+                .any(|known| adapter.stored_name(known) == adapter.stored_name(table))
+            {
+                tables.push(table.clone());
+            }
+        }
+        let mut deletes: Vec<String> = Vec::new();
+        for table in tables {
+            let name = TableName {
+                table,
+                ..spec.destination.clone()
+            };
+            let rooted = live_columns(destination, &name)
+                .await?
+                .is_some_and(|columns| {
+                    columns
+                        .iter()
+                        .any(|column| column.name.eq_ignore_ascii_case(root_name))
+                });
+            if rooted {
+                deletes.push(format!(
+                    "DELETE FROM {} WHERE {} IN (SELECT {row_id} FROM {})",
+                    adapter.render_qualified_name(&name),
+                    adapter.render_identifier(root_name),
+                    adapter.render_qualified_name(staging)
+                ));
+            }
+        }
+        execute(destination, deletes).await
+    }
+
+    /// Close every child table's publisher; best effort.
+    pub(crate) async fn close(&mut self) {
+        for publisher in self
+            .feeds
+            .iter_mut()
+            .filter_map(|feed| feed.publisher.as_mut())
+        {
+            publisher.close().await;
+        }
+    }
+}
+
+impl ChildFeed {
+    /// Plan the child table for its rows so far and bring it in line, as [`PythonFeed::plan_data`] does a Python table; returns the `created ...` and `altered ...` lines.
+    async fn plan(
+        &mut self,
+        (destination, options): (&Destination, &PlanOptions),
+        settle: bool,
+    ) -> Result<Vec<String>, LoaderError> {
+        let nulls: BTreeSet<String> = self
+            .merged
+            .fields()
+            .iter()
+            .filter(|field| *field.data_type() == DataType::Null)
+            .map(|field| field.name().clone())
+            .collect();
+        let live = self.table.live.as_deref();
+        let fields: Vec<_> = self
+            .merged
+            .fields()
+            .iter()
+            .filter(|field| {
+                settle || !nulls.contains(field.name()) || live_type(live, field.name()).is_some()
+            })
+            .cloned()
+            .collect();
+        let schema = settled_schema(&Schema::new(fields));
+        let data = YieldedData {
+            schema: &schema,
+            null_columns: &nulls,
+            rows: 0,
+        };
+        let spec = TableSpec {
+            source_table: inferred_table(
+                (&self.table.spec.source_table, self.table.spec.naming),
+                &[],
+                &data,
+                live,
+            ),
+            ..self.table.spec.clone()
+        };
+        let reader = match &self.publisher {
+            Some(publisher) => &publisher.destination,
+            None => destination,
+        };
+        let columns = replan_columns(&spec, (reader, live), None, options).await?;
+        let replanned = TablePlan {
+            exists: columns.live.is_some(),
+            spec: columns.spec,
+            read_columns: columns.read_columns,
+            live: columns.live,
+            schema: columns.schema,
+            ..self.table.clone()
+        };
+        let old = staged_columns(&self.table);
+        let changes =
+            bring_in_line((destination, self.publisher.as_mut()), (&old, &replanned)).await?;
+        self.table = TablePlan {
+            live: replanned.live.clone().or(self.table.live.clone()),
+            ..replanned
+        };
+        Ok(changes)
     }
 }

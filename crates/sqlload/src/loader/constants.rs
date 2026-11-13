@@ -123,3 +123,12 @@ pub const TRANSIENT_SERVER_CODES: [&str; 9] = [
     "internalError",
     "rateLimitExceeded",
 ];
+
+/// How many levels of child tables `unnest` makes when `max_depth` is not set: dlt's own default nesting limit (1.32.0).
+pub const DEFAULT_MAX_DEPTH: u32 = 1000;
+
+/// The `unnest` word that unnests every list field.
+pub const UNNEST_ALL: &str = "all";
+
+/// How many dropped rows' ordinals one `DELETE` from a child table's staging table lists.
+pub const DROPPED_CHUNK: usize = 1000;

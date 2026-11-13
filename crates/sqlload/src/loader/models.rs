@@ -1,5 +1,7 @@
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::ChangeApply;
+use crate::load_naming::models::Naming;
+use crate::row_batches::models::Unnest;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -120,6 +122,14 @@ pub struct TableSpec {
     pub destination_path: Option<String>,
     /// The top-level objects expanded one level into `<object>__<key>` columns (Python tables only).
     pub flatten: Vec<String>,
+    /// Every row gets a unique id column.
+    pub row_id: bool,
+    /// A child table of a merge: always staged, never written straight to the table, its staged rows carrying their root row's ordinal (`_sqlload_root_row`, staging only), so the rows of roots the merge drops leave before the commit.
+    pub root_rows: bool,
+    /// The list fields whose items become rows of child tables.
+    pub unnest: Unnest,
+    /// How many levels of child tables `unnest` makes at most; deeper lists stay JSON.
+    pub max_depth: u32,
     /// The table function behind a Python table; `None` for declarative sources.
     pub python: Option<PythonTable>,
     /// What a Google Sheets table reads; `None` for other sources.
@@ -134,6 +144,8 @@ pub struct TableSpec {
     pub warehouse_source: Option<WarehouseSource>,
     /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).
     pub layout: TableLayout,
+    /// How the load names the columns it adds, and under dlt's naming its tables and columns.
+    pub naming: Naming,
 }
 
 /// A warehouse source's table: the query behind it, if any, and the route its warehouse reads it by.
@@ -194,6 +206,8 @@ pub struct PythonTable {
     pub module: String,
     /// Columns declared with `columns` or `mask`; the rest are inferred at load.
     pub declared: Vec<String>,
+    /// Under `unnest = "all"`, the columns chosen from the yielded values as list fields or not so far.
+    pub lists: crate::row_batches::types::ListChoices,
 }
 
 /// The cursor range a load reads: `from <= cursor < to` (`from < cursor` when not inclusive), each open when `None`.
@@ -685,6 +699,36 @@ pub struct Publisher {
     pub fed_files: Vec<StoredFile>,
     /// The files whose rows are committed, as they were read, which `after_load` deletes or moves.
     pub settled_files: Vec<StoredFile>,
+    /// The child tables `unnest` fills from the table's rows; `None` without `unnest`.
+    pub children: Option<ChildTables>,
+}
+
+/// The child tables of one table's load, each planned from its rows as they arrive.
+#[derive(Debug)]
+pub struct ChildTables {
+    /// Under `unnest = "all"`, the fields at every level chosen as list fields or not so far: the plan's, then as the rows decide.
+    pub choices: crate::row_batches::types::ListChoices,
+    /// A connection of their own that plans, creates and alters them before each has its publisher.
+    pub destination: Destination,
+    pub options: PlanOptions,
+    pub feeds: Vec<ChildFeed>,
+    /// The paths of new child tables `on_schema_change = "ignore"` leaves out, with everything below them.
+    pub ignored: Vec<String>,
+    /// `created ...` and `altered ...` lines.
+    pub changes: Vec<String>,
+    /// Under a merge, the child tables there before the load, each commit clearing the rows of its roots from them before their new rows land.
+    pub merged: Vec<String>,
+}
+
+/// One child table's load: its plan from the rows so far, and its publisher once it has rows.
+#[derive(Debug)]
+pub struct ChildFeed {
+    /// The dotted path of the list field it holds the items of.
+    pub path: String,
+    pub table: TablePlan,
+    /// The schema merged from every batch so far, all-NULL columns as `Null`.
+    pub merged: arrow_schema::Schema,
+    pub publisher: Option<Publisher>,
 }
 
 /// A files target table's load: its folder, what the load replaces, and the files of the commit being written.

@@ -10,6 +10,7 @@ use crate::files_source::models::{
     AfterLoad, Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
     XlsxOptions, XmlOptions,
 };
+use crate::load_naming::models::Naming;
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
@@ -328,6 +329,9 @@ pub struct TargetConfig {
     /// The most Parquet footers `plan` reads for one table's schema (files targets).
     #[serde(default)]
     pub max_footer_reads: Option<usize>,
+    /// How its tables name the columns a load adds and the child tables `unnest` makes; a source or table may override it.
+    #[serde(default)]
+    pub naming: Option<Naming>,
 }
 
 impl TargetConfig {
@@ -544,14 +548,24 @@ impl SourceConfig {
         )
     }
 
-    /// How a files source's files are encoded, with defaults for what is not set.
+    /// How a files source's files are encoded, with defaults for what is not set; the elements a table's `unnest` paths end in are XML `lists`, so one that appears once still lands in its child table.
     pub fn files_encoding(&self) -> FilesEncoding {
+        let mut xml = self.xml.clone().unwrap_or_default();
+        for path in self.tables.values().flat_map(|table| match &table.unnest {
+            Some(UnnestSetting::Paths(paths)) => paths.as_slice(),
+            Some(UnnestSetting::Word(_)) | None => &[],
+        }) {
+            let element = path.rsplit('.').next().unwrap_or_default().to_owned();
+            if !xml.lists.contains(&element) {
+                xml.lists.push(element);
+            }
+        }
         FilesEncoding {
             format: self.format,
             compression: self.compression.unwrap_or_default(),
             csv: self.csv.clone().unwrap_or_default(),
             xlsx: self.xlsx.clone().unwrap_or_default(),
-            xml: self.xml.clone().unwrap_or_default(),
+            xml,
             members: self.members.clone(),
             record: (self.shape == RecordShape::Record).then(|| {
                 self.record_column
@@ -740,6 +754,12 @@ pub struct TableSettings {
     /// Which of the rows sharing a `unique_key` a merge keeps: the one with the highest (`desc`) or lowest (`asc`) value of the one column named.
     #[serde(default)]
     pub dedup_sort: Option<BTreeMap<String, SortDirection>>,
+    /// How the columns the load adds, and the child tables `unnest` makes, are named: SQLLoad's own names (default) or dlt's; overrides the target's.
+    #[serde(default)]
+    pub naming: Option<Naming>,
+    /// Give every row a unique id column (`_sqlload_row_id`); always on under `naming = "dlt"`, as `_dlt_id`.
+    #[serde(default)]
+    pub row_id: Option<bool>,
 }
 
 /// What a merge does with rows of one commit that share a `unique_key`.
@@ -858,6 +878,20 @@ pub struct TableOverride {
     /// Top-level objects of a Python table expanded one level into `<object>__<key>` columns; everything else nested stays JSON.
     #[serde(default)]
     pub flatten: Vec<String>,
+    /// List fields whose items become rows of child tables: dotted paths (`"items"`, `"items.parts"`), or `"all"`.
+    #[serde(default)]
+    pub unnest: Option<UnnestSetting>,
+    /// How many levels of child tables `unnest` makes at most; deeper lists stay JSON (default 1000, as dlt's).
+    #[serde(default)]
+    pub max_depth: Option<u32>,
+}
+
+/// A table's `unnest` as written: a word (`"all"`) or a list of dotted paths.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum UnnestSetting {
+    Word(String),
+    Paths(Vec<String>),
 }
 
 /// How a masked column's values are replaced.

@@ -60,7 +60,11 @@ fn given_a_parquet_file_in_s3_when_clickhouse_pulls_it_then_each_column_takes_th
             "`raw`.`s`",
             (&test_case.columns, &sql_type),
             (&file, signed),
-            ("load1", "2026-11-08T07:00:00Z"),
+            (
+                crate::load_naming::models::Naming::Sqlload,
+                "load1",
+                "2026-11-08T07:00:00Z",
+            ),
         );
         let expected_parameters: Vec<(String, String)> = test_case
             .expected_parameters

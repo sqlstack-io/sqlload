@@ -31,12 +31,20 @@ impl SqlAdapter for PostgresSql {
         Warehouse::Postgres
     }
 
+    fn max_identifier_length(&self) -> Option<usize> {
+        Some(63)
+    }
+
     /// Not yet: Postgres targets take `postgres` and other sources, and a later release applies captured changes.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false
     }
 
     fn keeps_tables(&self) -> bool {
+        true
+    }
+
+    fn writes_child_tables(&self) -> bool {
         true
     }
 

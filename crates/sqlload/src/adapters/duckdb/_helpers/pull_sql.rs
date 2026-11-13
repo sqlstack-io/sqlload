@@ -6,8 +6,10 @@ use crate::adapters::duckdb::constants::{UNLOADED_BATCH_ROWS, UNLOADED_FILE_ROWS
 use crate::adapters::duckdb::models::DuckDbSql;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
+use crate::load_naming::main::metadata_role::metadata_role;
+use crate::load_naming::models::{MetadataRole, Naming};
 use crate::postgres_source::models::ReadColumn;
-use crate::schema_plan::constants::{LOAD_ID_COLUMN, LOADED_AT_COLUMN, MERGE_ROW_COLUMN};
+use crate::schema_plan::constants::MERGE_ROW_COLUMN;
 use crate::schema_plan::models::DesiredColumn;
 
 /// One file DuckDB reads: where it reads it, and the values SQLLoad gives every row of it (its name and version as the files source records them, and its partition values), by column (`None` for a partition folder the file lacks).
@@ -22,7 +24,7 @@ pub(crate) fn pull_insert(
     into: &TableName,
     (columns, in_files): (&[DesiredColumn], &[String]),
     files: &[PulledFile],
-    (load_id, loaded_at): (&str, &str),
+    (naming, load_id, loaded_at): (Naming, &str, &str),
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
@@ -36,27 +38,30 @@ pub(crate) fn pull_insert(
     };
     let values: Vec<String> = columns
         .iter()
-        .map(|column| match column.name.as_str() {
-            LOAD_ID_COLUMN => cast(literal(load_id), column),
-            LOADED_AT_COLUMN => cast(literal(loaded_at), column),
-            SOURCE_ROW_COLUMN => cast("f.file_row_number + 1".to_owned(), column),
-            name if files
-                .first()
-                .is_some_and(|file| constant(file, name).is_some()) =>
-            {
-                cast(
-                    format!(
-                        "[{}][CAST(f.file_index AS BIGINT) + 1]",
-                        constant_list(files, name)
-                    ),
-                    column,
-                )
-            }
-            name if in_files.contains(&name.to_owned()) => {
-                cast(format!("f.{}", identifier(name)), column)
-            }
-            _ => "NULL".to_owned(),
-        })
+        .map(
+            |column| match (metadata_role(naming, &column.name), column.name.as_str()) {
+                (Some(MetadataRole::LoadId), _) => cast(literal(load_id), column),
+                (Some(MetadataRole::LoadedAt), _) => cast(literal(loaded_at), column),
+                (None, SOURCE_ROW_COLUMN) => cast("f.file_row_number + 1".to_owned(), column),
+                (_, name)
+                    if files
+                        .first()
+                        .is_some_and(|file| constant(file, name).is_some()) =>
+                {
+                    cast(
+                        format!(
+                            "[{}][CAST(f.file_index AS BIGINT) + 1]",
+                            constant_list(files, name)
+                        ),
+                        column,
+                    )
+                }
+                (_, name) if in_files.contains(&name.to_owned()) => {
+                    cast(format!("f.{}", identifier(name)), column)
+                }
+                _ => "NULL".to_owned(),
+            },
+        )
         .collect();
     let urls: Vec<String> = files.iter().map(|file| literal(&file.url)).collect();
     let targets: Vec<String> = columns
@@ -100,6 +105,8 @@ pub(crate) struct UnloadedColumns<'a> {
     pub columns: &'a [DesiredColumn],
     pub read: &'a [ReadColumn],
     pub constants: &'a [(String, ColumnType, String)],
+    /// How the table names the columns a load adds.
+    pub naming: Naming,
     /// The batch, from 1: a merge's `_sqlload_row` numbers its rows after earlier batches', by file and row in file.
     pub batch: u64,
 }
@@ -111,6 +118,7 @@ pub(crate) fn unloaded_insert(
         columns,
         read,
         constants,
+        naming,
         batch,
     }: UnloadedColumns<'_>,
     urls: &[String],
@@ -120,8 +128,13 @@ pub(crate) fn unloaded_insert(
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
     let values: Vec<String> = columns
         .iter()
-        .map(
-            |column| match column_value(column, (read, constants), (load_id, loaded_at), batch) {
+        .map(|column| {
+            match column_value(
+                column,
+                (read, constants),
+                (naming, load_id, loaded_at),
+                batch,
+            ) {
                 Some(value) => format!(
                     "CAST({value} AS {})",
                     DuckDbSql
@@ -129,8 +142,8 @@ pub(crate) fn unloaded_insert(
                         .sql
                 ),
                 None => "NULL".to_owned(),
-            },
-        )
+            }
+        })
         .collect();
     let targets: Vec<String> = columns
         .iter()
@@ -154,21 +167,21 @@ pub(crate) fn unloaded_insert(
 fn column_value(
     column: &DesiredColumn,
     (read, constants): (&[ReadColumn], &[(String, ColumnType, String)]),
-    (load_id, loaded_at): (&str, &str),
+    (naming, load_id, loaded_at): (Naming, &str, &str),
     batch: u64,
 ) -> Option<String> {
     let constant = constants
         .iter()
         .find(|(name, _, _)| *name == column.name)
         .map(|(_, _, value)| DuckDbSql.render_loader_value_literal(value));
-    match column.name.as_str() {
-        LOAD_ID_COLUMN => Some(DuckDbSql.render_loader_value_literal(load_id)),
-        LOADED_AT_COLUMN => Some(DuckDbSql.render_loader_value_literal(loaded_at)),
-        MERGE_ROW_COLUMN => Some(format!(
+    match (metadata_role(naming, &column.name), column.name.as_str()) {
+        (Some(MetadataRole::LoadId), _) => Some(DuckDbSql.render_loader_value_literal(load_id)),
+        (Some(MetadataRole::LoadedAt), _) => Some(DuckDbSql.render_loader_value_literal(loaded_at)),
+        (None, MERGE_ROW_COLUMN) => Some(format!(
             "{batch} * {UNLOADED_BATCH_ROWS} + CAST(f.file_index AS BIGINT) * {UNLOADED_FILE_ROWS} + f.file_row_number"
         )),
         _ if constant.is_some() => constant,
-        name => read
+        (_, name) => read
             .iter()
             .find(|read| read.name == name)
             .map(|read| unloaded_value(&read.output, &DuckDbSql.render_identifier(name))),

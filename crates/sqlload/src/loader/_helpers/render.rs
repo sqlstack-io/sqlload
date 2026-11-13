@@ -10,6 +10,9 @@ use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
+use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::python::list_choices;
+use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
@@ -25,6 +28,7 @@ use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
 use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
+use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnChange, ColumnOrigin, DesiredColumn, TableAction};
 use crate::store_paths::models::StoreKind;
@@ -220,7 +224,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .schema
         .write_columns
         .iter()
-        .partition(|column| column.name.starts_with("_sqlload_"));
+        .partition(|column| is_load_column(table.spec.naming, &column.name));
     let name_width = data
         .iter()
         .map(|column| column.name.len())
@@ -234,6 +238,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .unwrap_or(0)
         + 3;
     let from_path = |name: &str| {
+        let name = table.spec.source_table.spelling(name);
         table.spec.files.as_ref().map_or("", |files| {
             match (
                 files.constants.iter().any(|constant| constant == name),
@@ -398,6 +403,38 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             .as_ref()
             .map(|python| detail("schema", python_columns_line(table, python))),
     );
+    let unnested: Option<Vec<String>> = match &spec.unnest {
+        Unnest::Paths(paths) => Some(paths.clone()),
+        Unnest::All => Some(
+            list_choices(spec)
+                .into_iter()
+                .filter_map(|(field, chosen)| chosen.then_some(field))
+                .collect(),
+        ),
+        Unnest::None => None,
+    };
+    if let Some(paths) = unnested {
+        let tables: Vec<String> = paths
+            .iter()
+            .map(|path| unnested_table(spec, path))
+            .collect();
+        let text = match (&spec.unnest, tables.is_empty()) {
+            (Unnest::All, true) => format!(
+                "every list field, {} levels down at most, into child tables as lists appear; columns inferred at load",
+                spec.max_depth
+            ),
+            (Unnest::All, false) => format!(
+                "every list field, {} levels down at most: {} and more as lists appear; columns inferred at load",
+                spec.max_depth,
+                tables.join(", ")
+            ),
+            _ => format!(
+                "{}  child tables, columns inferred at load",
+                tables.join(", ")
+            ),
+        };
+        details.push(detail("unnest", text));
+    }
     details.extend(
         spec.files
             .as_ref()

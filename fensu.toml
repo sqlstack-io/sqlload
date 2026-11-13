@@ -4,7 +4,11 @@ roots = ["crates"]
 tests = []
 tooling = ["crates/sqlload-testkit"]
 rule_packs = ["rust"]
-rule_paths = ["fensu_rules/adapter_ownership.py", "fensu_rules/loader_reads.py"]
+rule_paths = [
+    "fensu_rules/adapter_ownership.py",
+    "fensu_rules/loader_reads.py",
+    "fensu_rules/metadata_names.py",
+]
 select = ["FPRS", "XSL"]
 
 [[targets.rust.rule_exceptions]]

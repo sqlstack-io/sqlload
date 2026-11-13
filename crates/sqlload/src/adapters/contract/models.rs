@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{BatchFooters, DataFile, FilesRead};
+use crate::load_naming::models::Naming;
 use crate::loader::models::TableSpec;
 use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::models::{DesiredColumn, LiveColumn};
@@ -160,6 +161,8 @@ pub struct WriteTarget<'a> {
     pub columns: &'a [DesiredColumn],
     /// The table's own columns in their final types, which a build table has.
     pub write_columns: &'a [DesiredColumn],
+    /// How the table names the columns a load adds.
+    pub naming: Naming,
     pub load_id: &'a str,
     /// The batch being filled, from 1.
     pub batch: u64,

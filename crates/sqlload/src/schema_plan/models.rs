@@ -1,4 +1,5 @@
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::load_naming::models::Naming;
 use crate::project::models::{Contract, OnSchemaChange, Policy};
 
 /// Where a desired column's type comes from.
@@ -44,6 +45,8 @@ pub struct SchemaRules {
     pub type_change_rebuild: Policy,
     /// `--allow-type-change-rebuild` was given.
     pub rebuild_allowed: bool,
+    /// How the load names its columns: a table holding this naming's load id column is SQLLoad's.
+    pub naming: Naming,
 }
 
 /// One change to an existing table.

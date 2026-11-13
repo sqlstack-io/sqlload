@@ -34,6 +34,9 @@ pub struct TableRead {
     pub masked: Vec<String>,
     /// Columns pinned as `array(...)`: their Arrow lists cross as lists, so each element converts exactly.
     pub arrays: Vec<String>,
+    /// How the table's columns load and the destination's name limit, which the crossing matches yielded fields to `cursor` and `arrays` by; not sent to the table function.
+    #[serde(skip)]
+    pub naming: (crate::load_naming::models::Naming, Option<usize>),
 }
 
 /// The cursor window a table function may use to read only new data.

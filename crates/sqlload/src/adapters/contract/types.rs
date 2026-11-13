@@ -12,8 +12,8 @@ use crate::adapters::contract::_helpers::promote::{
     drop_and_rename, merge_statement, swap_statements,
 };
 use crate::adapters::contract::_helpers::queries::{
-    check_query, cursor_query, insert_rows, loaded_files_query, staging_tables_query, staging_time,
-    stale_staging,
+    check_query, child_tables_query, cursor_query, insert_rows, loaded_files_query,
+    staging_tables_query, staging_time, stale_staging,
 };
 use crate::adapters::contract::_helpers::recreate::recreate_statements;
 use crate::adapters::contract::_helpers::schema::{
@@ -22,6 +22,7 @@ use crate::adapters::contract::_helpers::schema::{
 };
 use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::_helpers::write::write_statements;
+use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
 use crate::adapters::contract::models::{
     ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, TableName,
     WriteStatementsRequest, WriteTarget,
@@ -44,6 +45,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// Whether a `postgres_cdc` source applying its changes by `apply` may load into the destination: every SQL warehouse its changes have been applied to live; a files target only as a changelog, having no tables to merge into.
     fn captures_changes(&self, apply: ChangeApply) -> bool {
         self.runs_sql() || apply == ChangeApply::Changelog
+    }
+
+    /// Whether the warehouse's writer has been taught to write the child tables `unnest` makes, beside their parent.
+    fn writes_child_tables(&self) -> bool {
+        false
+    }
+
+    /// The longest table or column name, in characters, that dlt's naming gives on the warehouse (the shorter of dlt's table and column limits), past which it shortens a name with a tag; `None` where it gives no limit.
+    fn max_identifier_length(&self) -> Option<usize> {
+        None
     }
 
     /// Whether SQLLoad never drops or recreates the warehouse's tables and never alters one it did not create: `replace` empties and refills the table in one transaction instead of swapping a new one in, `--reload` is refused, and an existing table without `_sqlload_load_id` is loaded as it is.
@@ -294,6 +305,15 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         drop_and_rename(self, target, build, indexes)
     }
 
+    /// Under a merge that dedupes, a query of the ordinal (as text) of each row of `staging` the merge of `request` drops, so the rows hanging off them (child tables' rows) are dropped too; `None` without `dedupe`.
+    fn render_dropped_ordinals(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+    ) -> Option<String> {
+        dropped_ordinals(self, request, staging)
+    }
+
     /// One `MERGE`: key matches update every other column, the rest are inserted.
     fn render_merge(
         &self,
@@ -419,6 +439,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
             "table_name ILIKE {}",
             self.render_loader_value_literal(&format!("%{suffix}%"))
         )
+    }
+
+    /// The relation listing the tables of `table`'s schema, with `table_schema` and `table_name` columns.
+    fn render_schema_tables(&self, _table: &TableName) -> String {
+        "information_schema.tables".to_owned()
+    }
+
+    /// The query listing the tables named as `parent`'s child tables are, in its schema.
+    fn list_child_tables_sql(&self, parent: &TableName) -> String {
+        child_tables_query(self, (parent, &self.render_schema_tables(parent)))
     }
 
     /// The query listing staging tables a crashed load may have left in `table`'s schema; `database` is the connection's, for warehouses that need one.
