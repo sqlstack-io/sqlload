@@ -1,0 +1,151 @@
+name: Published wheel smoke test
+
+# After a release publishes, install it from PyPI on every platform the wheels are built for and
+# check it runs: the CLI, the import, a small load and the ODBC driver manager. Not a required check;
+# it uses no release secrets.
+on:
+  workflow_run:
+    workflows: [Publish]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to test, for example 0.40.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Wait for PyPI
+    # Publish also runs on pull requests, building and publishing nothing.
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The commit Publish ran on holds the version it released in the Release Please manifest.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Resolve the version
+        id: version
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          version="${REQUESTED:-$(jq -r '.["."]' .release-please-manifest.json)}"
+          if [[ ! "$version" =~ ^0\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Refusing version '$version'. Expected 0.MINOR.PATCH."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Wait until PyPI serves both packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for package in sqlload sqlload-cli; do
+            for attempt in $(seq 1 60); do
+              if curl -fsS -o /dev/null "https://pypi.org/pypi/${package}/${VERSION}/json"; then
+                echo "PyPI serves ${package} ${VERSION}"
+                continue 2
+              fi
+              sleep 20
+            done
+            echo "PyPI still does not serve ${package} ${VERSION} after 20 minutes"
+            exit 1
+          done
+
+  smoke:
+    name: Smoke (${{ matrix.platform.name }})
+    needs: version
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: linux-x86_64
+            runner: ubuntu-latest
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - name: macos-arm64
+            runner: macos-15
+          - name: macos-x86_64
+            runner: macos-15-intel
+          - name: windows-x86_64
+            runner: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install sqlload and sqlload-cli from PyPI
+        shell: bash
+        run: |
+          python -m venv smoke
+          python -m venv smoke-cli
+          bin=smoke/bin; cli=smoke-cli/bin
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then bin=smoke/Scripts; cli=smoke-cli/Scripts; fi
+          # PyPI's index pages can lag the JSON API for a few minutes.
+          for attempt in $(seq 1 10); do
+            "${bin}/python" -m pip install --quiet --no-cache-dir "sqlload==${VERSION}" &&
+              "${cli}/python" -m pip install --quiet --no-cache-dir "sqlload-cli==${VERSION}" && break
+            if [[ "$attempt" == 10 ]]; then exit 1; fi
+            sleep 30
+          done
+          echo "BIN=${bin}" >> "$GITHUB_ENV"
+          echo "CLI=${cli}" >> "$GITHUB_ENV"
+      - name: Run the CLI, the import and a small load
+        shell: bash
+        run: |
+          "${BIN}/sqlload" --help > /dev/null
+          "${BIN}/python" -c "import sqlload, sqlload._native"
+          "${BIN}/python" -I .github/scripts/smoke_published_wheel.py "${VERSION}" "${BIN}/sqlload" "${CLI}/sqlload"
+      - name: Check the ODBC driver manager
+        shell: bash
+        run: |
+          # As in Publish: on Linux in a container with no unixODBC (the runner image has one), on
+          # macOS once Homebrew's is removed, on Windows odbc32.dll.
+          case "${RUNNER_OS}" in
+            Linux)
+              docker run --rm -e VERSION -v "$PWD:/w" -w /w python:3.12-slim bash -c '
+                python -m venv /v && /v/bin/pip install --quiet --no-cache-dir "sqlload==${VERSION}" &&
+                python -m venv /c && /c/bin/pip install --quiet --no-cache-dir "sqlload-cli==${VERSION}" &&
+                /v/bin/python .github/scripts/smoke_odbc_wheel.py /v/bin/sqlload /c/bin/sqlload --default-ini /etc/odbcinst.ini --driver-folder "/usr/lib/$(uname -m)-linux-gnu/odbc"'
+              ;;
+            macOS)
+              if brew list --versions unixodbc > /dev/null 2>&1; then brew uninstall --ignore-dependencies unixodbc; fi
+              "${BIN}/python" .github/scripts/smoke_odbc_wheel.py "${BIN}/sqlload" "${CLI}/sqlload" --default-ini "$(brew --prefix)/etc/odbcinst.ini"
+              ;;
+            Windows)
+              "${BIN}/python" .github/scripts/smoke_odbc_wheel.py "${BIN}/sqlload" "${CLI}/sqlload"
+              ;;
+          esac
+
+  report:
+    name: Report a failure
+    needs: [version, smoke]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          title="Published wheel smoke test fails"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "It failed for ${VERSION:-an unresolved version}: $RUN_URL"
+          else
+            gh issue create --title "$title" --body "Installing ${VERSION:-the release} from PyPI failed a smoke check on at least one platform: $RUN_URL. The run's log names the platform and the check."
+          fi
