@@ -1149,3 +1149,13 @@ pub(crate) struct ClearRowsTestCase {
     /// The staged roots left once root `r1`'s staged row is deleted, sorted and joined by `,`.
     pub(crate) expected_staged: &'static str,
 }
+
+/// `orders` loaded twice with `settings` (a replace under `unnest = "all"`) into DuckDB, Postgres and ClickHouse, each seeded first with tables named like its child tables.
+pub(crate) struct NamedLikeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// The naming's parent-id column, which the seeded child table of another root holds.
+    pub(crate) parent_id: &'static str,
+    /// Rows left in `orders__notes/orders__x__items/orders__tags/orders__items`.
+    pub(crate) expected_result: &'static str,
+}

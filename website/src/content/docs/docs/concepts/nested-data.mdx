@@ -78,7 +78,12 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
 - Once a field is a child table, a later value that is neither a list nor NULL fails the load,
   naming the field. Its rows are never stored as JSON or dropped. To keep such a field as JSON, list
   the paths to unnest without it.
-- A field with a child table from an earlier load stays one.
+- A field with a child table from an earlier load stays one. A table counts as one only when it is
+  named `<table>__<field>` and has the parent-id column (`_sqlload_parent_id`, or `_dlt_parent_id`
+  under `naming = "dlt"`), and is not another table's child table (`orders__notes__items` when a
+  table `orders__notes` holds no parent-id column). From 0.41.1 (not released yet), other tables
+  named so, such as a plain `orders__notes` beside `orders`, are left as they are. Before that, a
+  `replace` emptied them and a `merge` could delete rows from them.
 - A list field first seen after a table's first load is a new child table, which
   `on_schema_change` decides: `append_new_columns` creates it, `ignore` leaves its items out with a
   warning, and `fail` stops the load.

@@ -78,15 +78,17 @@ pub(crate) fn loaded_files_query<A: SqlAdapter + ?Sized>(
     )
 }
 
-/// The query listing the tables in `parent`'s schema named as its child tables are, `<parent>__<field>` (the staging tables among them too), read from `tables`, the warehouse's `information_schema.tables` that lists that schema.
+/// The query listing the tables in `parent`'s schema named as its child tables are, `<parent>__<field>` (the staging tables among them too), read from `columns`, the warehouse's `information_schema.columns` that lists that schema: each name follows `1` when the table has the `parent_id` column, as a child table does, and `0` when not.
 pub(crate) fn child_tables_query<A: SqlAdapter + ?Sized>(
     adapter: &A,
-    (parent, tables): (&TableName, &str),
+    (parent, columns): (&TableName, &str),
+    parent_id: &str,
 ) -> String {
     let schema = adapter.render_loader_value_literal(&adapter.stored_name(&parent.schema));
     let prefix = adapter.stored_name(&format!("{}{CHILD_TABLE_SEPARATOR}", parent.table));
+    let parent_id = adapter.render_loader_value_literal(&adapter.stored_name(parent_id));
     format!(
-        "SELECT table_name FROM {tables} WHERE table_schema = {schema} AND left(table_name, {}) = {}",
+        "SELECT max(CASE WHEN column_name = {parent_id} THEN '1' ELSE '0' END) || table_name FROM {columns} WHERE table_schema = {schema} AND left(table_name, {}) = {} GROUP BY table_name",
         prefix.chars().count(),
         adapter.render_loader_value_literal(&prefix)
     )
