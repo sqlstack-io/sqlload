@@ -1,3 +1,4 @@
+use sqlload::load_naming::models::Naming;
 use sqlload::row_batches::models::ProjectionRules;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender};
@@ -49,6 +50,8 @@ pub struct ReadContext {
     pub masked: Vec<String>,
     /// Columns whose Arrow lists of scalars cross as lists (the table pins them as arrays); other lists cross as json text.
     pub arrays: Vec<String>,
+    /// How the table's columns load and the destination's name limit: `cursor_column` and `arrays` are loaded names, which yielded fields match as they load.
+    pub naming: (Naming, Option<usize>),
 }
 
 impl ReadContext {
@@ -58,6 +61,7 @@ impl ReadContext {
             cursor_column: self.cursor_column.as_deref(),
             flatten: &self.flatten,
             masked: &self.masked,
+            naming: self.naming,
         }
     }
 }

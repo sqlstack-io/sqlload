@@ -176,6 +176,8 @@ pub struct ProjectionRules<'a> {
     /// Columns expanded into `<column>__<key>` after projection.
     pub flatten: &'a [String],
     pub masked: &'a [String],
+    /// How the table's columns load, and the destination's name limit: under dlt's naming a field loads the cursor when its loaded name is the cursor's.
+    pub naming: (Naming, Option<usize>),
 }
 
 /// One column a projection loads: the value at `path` (keys from the row object down), or NULL when it is missing.

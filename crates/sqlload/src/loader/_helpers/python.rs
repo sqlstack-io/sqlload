@@ -1154,6 +1154,10 @@ fn table_read(
             .filter(|(_, column_type)| matches!(column_type, ColumnType::Array(_)))
             .map(|(name, _)| name.clone())
             .collect(),
+        naming: (
+            spec.naming,
+            sql_adapter(spec.warehouse).max_identifier_length(),
+        ),
     }
 }
 
