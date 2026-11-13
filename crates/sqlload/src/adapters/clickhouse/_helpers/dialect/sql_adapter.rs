@@ -45,10 +45,6 @@ impl SqlAdapter for ClickHouseSql {
         Some(255)
     }
 
-    fn writes_child_tables(&self) -> bool {
-        true
-    }
-
     /// Published by partitions, as a merge is: ClickHouse deletes rows in place only by mutations, which no swap protects.
     fn render_clear_rows(
         &self,

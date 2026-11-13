@@ -48,11 +48,6 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         self.runs_sql() || apply == ChangeApply::Changelog
     }
 
-    /// Whether the warehouse's writer has been taught to write the child tables `unnest` makes, beside their parent.
-    fn writes_child_tables(&self) -> bool {
-        false
-    }
-
     /// The statements deleting published table `table`'s rows matching `condition` (a merge clearing the items of the roots it replaces from a child table): one `DELETE`. `scratch` names the tables a warehouse that publishes by swaps builds beside it.
     fn render_clear_rows(
         &self,

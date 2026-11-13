@@ -3,6 +3,7 @@ use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::main::staging_id::staging_id;
 use crate::adapters::contract::models::BoundParameter;
+use crate::adapters::contract::models::ChangeApply;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::TableShape;
 use crate::adapters::contract::models::WriteMode;
@@ -118,7 +119,9 @@ use crate::run_log::main::runs_location::runs_location;
 use crate::run_log::main::runs_table::runs_table;
 use crate::run_log::models::RunOutcome;
 use crate::run_log::models::RunRecord;
-use crate::schema_plan::constants::{MERGE_ROW_COLUMN, ROOT_ROW_COLUMN};
+use crate::schema_plan::constants::{
+    CDC_LSN_COLUMN, CDC_SEQ_COLUMN, MERGE_ROW_COLUMN, ROOT_ROW_COLUMN,
+};
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
@@ -179,15 +182,20 @@ fn write_target<'a>(
     }
 }
 
-/// Under a merge or `delete_insert`, the child tables of `table` already in the destination that its commits clear the rows of their replaced roots from: every one under `"all"`, the listed paths' otherwise.
+/// Whether a commit by `mode` replaces some of the table's rows, whose child rows it clears first: a merge, `delete_insert`, and captured changes (a changelog's only on a replay, whose rows keep their ids).
+pub(crate) fn replaces_roots(mode: &WriteMode) -> bool {
+    matches!(
+        mode,
+        WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. } | WriteMode::Changes(_)
+    )
+}
+
+/// Under a write that replaces rows (see [`replaces_roots`]), the child tables of `table` already in the destination that its commits clear the rows of their replaced roots from: every one under `"all"`, the listed paths' otherwise.
 async fn merged_children(
     table: &TablePlan,
     destination: &Destination,
 ) -> Result<Vec<String>, LoaderError> {
-    if !matches!(
-        table.mode,
-        WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. }
-    ) {
+    if !replaces_roots(&table.mode) {
         return Ok(Vec::new());
     }
     let spec = &table.spec;
@@ -277,17 +285,33 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
     columns
 }
 
-/// Each row's id when the table gives its rows one: under a merge, the hash of its `unique_key` (so a row keeps its id, and its child rows theirs, on every load), otherwise a fresh random id.
+/// The columns a row's id is the hash of, so a row keeps its id (and its child rows theirs) on every load: a merge's `unique_key`; a `postgres_cdc` table's key, in its snapshot as in its changes, and in a changelog the change's `_sqlload_lsn` and `_sqlload_seq` before it, so a replayed change gets its ids again; `None` for random ids.
+fn id_key(table: &TablePlan) -> Option<Vec<String>> {
+    match (&table.mode, &table.spec.cdc) {
+        (WriteMode::Merge { unique_key, .. }, _) => Some(unique_key.clone()),
+        (_, Some(cdc)) if cdc.apply == ChangeApply::Changelog => Some(
+            [CDC_LSN_COLUMN, CDC_SEQ_COLUMN]
+                .map(str::to_owned)
+                .into_iter()
+                .chain(table.spec.unique_key.iter().cloned())
+                .collect(),
+        ),
+        (_, Some(_)) => Some(table.spec.unique_key.clone()),
+        _ => None,
+    }
+}
+
+/// Each row's id when the table gives its rows one: the hash of its key (see [`id_key`]), otherwise a fresh random id.
 fn row_ids(table: &TablePlan, batch: &RecordBatch) -> Result<Option<Vec<String>>, String> {
     if !table.spec.row_id {
         return Ok(None);
     }
-    let WriteMode::Merge { unique_key, .. } = &table.mode else {
+    let Some(unique_key) = id_key(table) else {
         return random_row_ids(batch.num_rows()).map(Some);
     };
     let schema = batch.schema();
     let mut key: Vec<(String, usize)> = Vec::with_capacity(unique_key.len());
-    for name in unique_key {
+    for name in &unique_key {
         let index = schema.index_of(name).map_err(|_| {
             format!("the staged rows have no unique_key column {name} to give their row ids from")
         })?;
@@ -657,10 +681,8 @@ impl Publisher {
                 for (name, chosen) in list_choices(spec) {
                     children.choices.entry(name).or_insert(chosen);
                 }
-                let rooted = matches!(
-                    self.table.mode,
-                    WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. }
-                );
+                let rooted = id_key(&self.table).is_some()
+                    || matches!(self.table.mode, WriteMode::DeleteInsert { .. });
                 let given = ids.as_deref().unwrap_or_default();
                 let unnested = unnest_batch(
                     &masked,

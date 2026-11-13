@@ -909,7 +909,6 @@ fn nesting(
         Unnest::None => {}
         Unnest::All | Unnest::Paths(_) => {
             problems.extend(refused_writes(context, overrides, strategy));
-            problems.extend(unbuilt_writes(context));
             if row_id == Some(false) {
                 problems.push("row_id = false: unnest gives every row an id, which its child rows name as their parent's; drop row_id".to_owned());
             }
@@ -1004,18 +1003,7 @@ fn matching_pattern<'a>(field: &str, patterns: &[&'a String]) -> Option<&'a Stri
         .copied()
 }
 
-/// What this build cannot yet do with `unnest` while its writers are taught to: a warehouse whose writer does not write child tables (Databricks).
-fn unbuilt_writes(context: &SourceContext<'_>) -> Vec<String> {
-    let warehouse = context.target.warehouse;
-    [(context.target.path.is_none() && !sql_adapter(warehouse).writes_child_tables())
-        .then(|| format!("a {warehouse} target"))]
-    .into_iter()
-    .flatten()
-    .map(|what| format!("unnest does not yet write child tables with {what}; drop unnest, and its lists stay JSON columns"))
-    .collect()
-}
-
-/// Why this table's writes cannot carry child tables yet: captured changes; on a files target, `"all"` (whose earlier child tables a load cannot find), a merge or `delete_insert` (which would rewrite a child table's files), and a path that would not give each child table a folder of its own (without `{table}`, or partitioned by the cursor, which child rows do not carry).
+/// Why this table's writes cannot carry child tables yet: captured changes on a files target; on a files target, `"all"` (whose earlier child tables a load cannot find), a merge or `delete_insert` (which would rewrite a child table's files), and a path that would not give each child table a folder of its own (without `{table}`, or partitioned by the cursor, which child rows do not carry).
 fn refused_writes(
     context: &SourceContext<'_>,
     overrides: &TableOverride,
@@ -1031,10 +1019,11 @@ fn refused_writes(
     let files = |refused: bool, what: String| (template.is_some() && refused).then_some(what);
     let all = matches!(&overrides.unnest, Some(UnnestSetting::Word(word)) if word == UNNEST_ALL);
     let rewrites = matches!(strategy, WriteStrategy::Merge | WriteStrategy::DeleteInsert);
+    let files_target = template.is_some();
     let template = template.map(String::as_str).unwrap_or_default();
     [
-        (context.source.kind == SourceKind::PostgresCdc)
-            .then(|| "kind = \"postgres_cdc\"".to_owned()),
+        (context.source.kind == SourceKind::PostgresCdc && files_target)
+            .then(|| "kind = \"postgres_cdc\" on a files target".to_owned()),
         files(all, "unnest = \"all\" on a files target (list the paths)".to_owned()),
         files(
             rewrites,

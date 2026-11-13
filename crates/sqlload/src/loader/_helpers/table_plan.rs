@@ -475,16 +475,23 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
     }
 }
 
-/// A captured table's read columns: the data columns it writes (its snapshot stages them, its stream is matched to them by name and its snapshot record lists them), and every change column.
-pub(crate) fn captured_read(read: Vec<ReadColumn>, schema: &SchemaPlan) -> Vec<ReadColumn> {
+/// A captured table's read columns: the data columns it writes (its snapshot stages them, its stream is matched to them by name and its snapshot record lists them), the list fields its child tables take, and every change column.
+pub(crate) fn captured_read(
+    spec: &TableSpec,
+    read: Vec<ReadColumn>,
+    schema: &SchemaPlan,
+) -> Vec<ReadColumn> {
     let written: Vec<&str> = schema
         .write_columns
         .iter()
         .map(|column| column.name.as_str())
         .collect();
+    let choices = list_choices(spec);
     read.into_iter()
         .filter(|column| {
-            column.name.starts_with(CDC_PREFIX) || written.contains(&column.name.as_str())
+            column.name.starts_with(CDC_PREFIX)
+                || written.contains(&column.name.as_str())
+                || spec.unnest.takes(&column.name, &choices)
         })
         .collect()
 }
@@ -669,7 +676,7 @@ async fn plan_table_once(
         schema.action = TableAction::Recreate;
     }
     let read_columns = match spec.cdc {
-        Some(_) => captured_read(read_columns, &schema),
+        Some(_) => captured_read(spec, read_columns, &schema),
         None => read_columns,
     };
     let cursor_type = spec.cursor.as_ref().and_then(|cursor| {
@@ -1596,7 +1603,7 @@ pub(crate) fn captured_columns(
 ) -> (SchemaPlan, Vec<ReadColumn>) {
     schema.warnings.extend(resnapshot_warning(spec, options));
     let read = match spec.cdc {
-        Some(_) => captured_read(read, &schema),
+        Some(_) => captured_read(spec, read, &schema),
         None => read,
     };
     (schema, read)

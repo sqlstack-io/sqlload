@@ -21,10 +21,6 @@ impl SqlAdapter for BigQuerySql {
         Some(300)
     }
 
-    fn writes_child_tables(&self) -> bool {
-        true
-    }
-
     /// Not yet: a later release applies changes to BigQuery once a live round has run them.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false

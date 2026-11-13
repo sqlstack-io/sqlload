@@ -11,10 +11,6 @@ impl SqlAdapter for DuckDbSql {
         true
     }
 
-    fn writes_child_tables(&self) -> bool {
-        true
-    }
-
     fn warehouse(&self) -> Warehouse {
         Warehouse::DuckDb
     }

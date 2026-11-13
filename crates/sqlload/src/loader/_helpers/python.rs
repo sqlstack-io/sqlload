@@ -4,6 +4,7 @@ use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::WriteStatementsRequest;
+use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
@@ -14,6 +15,7 @@ use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;
+use crate::cdc::constants::DELETE_OP;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
@@ -23,6 +25,7 @@ use crate::load_naming::main::child_table_name::child_table_name;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
+use crate::loader::_helpers::publish::replaces_roots;
 use crate::loader::_helpers::publish::staged_columns;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
@@ -79,6 +82,7 @@ use crate::row_batches::models::ChildBatch;
 use crate::row_batches::models::Unnest;
 use crate::row_batches::types::ListChoices;
 use crate::schema_plan::constants::ROOT_ROW_COLUMN;
+use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_OP_COLUMN, CDC_UNCHANGED_COLUMN};
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::SchemaPlan;
@@ -1548,10 +1552,7 @@ impl ChildTables {
             (&TableName, &WriteMode),
         ),
     ) -> Result<(), LoaderError> {
-        if !matches!(
-            mode,
-            WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. }
-        ) {
+        if !replaces_roots(mode) {
             return Ok(());
         }
         let spec = &parent.spec;
@@ -1657,12 +1658,26 @@ impl ChildTables {
                 roots = format!("{roots} OR {root} IN ({rekeyed})");
             }
         }
+        let load_id = self
+            .feeds
+            .iter()
+            .find_map(|feed| feed.publisher.as_ref())
+            .map(|publisher| publisher.load_id.clone());
         let deletes: Vec<String> = rooted
             .iter()
             .flat_map(|(index, name)| {
                 let scratch = TableName {
                     table: format!("{}_{index}", staging.table),
                     ..staging.clone()
+                };
+                let roots = match mode {
+                    WriteMode::Changes(change) => changed_roots(
+                        (spec, &name.table),
+                        (staging, change),
+                        (root_name, row_id_name),
+                        load_id.as_deref(),
+                    ),
+                    _ => roots.clone(),
                 };
                 adapter.render_clear_rows(name, &roots, &scratch)
             })
@@ -1679,6 +1694,69 @@ impl ChildTables {
         {
             publisher.close().await;
         }
+    }
+}
+
+/// Under captured changes, the condition choosing the rows of `table`, a child table of `spec`'s, whose roots the changes in `staging` replace: every changed root (in a changelog, rows a replay wrote before), but under `merge` a root keeps its items when its list field came unchanged (a TOASTed value the change left out) and, under soft deletes, when it is deleted, as its row stays; under hard deletes a truncate also takes the roots it removes. A child table under captured changes appends its rows straight in, so this load's own rows (`load_id`) are never among them.
+fn changed_roots(
+    (spec, table): (&TableSpec, &str),
+    (staging, change): (&TableName, &ChangeWrite),
+    (root_name, row_id_name): (&str, &str),
+    load_id: Option<&str>,
+) -> String {
+    let adapter = sql_adapter(spec.warehouse);
+    let id = |name: &str| adapter.render_identifier(name);
+    let text = |value: &str| adapter.render_loader_value_literal(value);
+    let stored = adapter.stored_name(table);
+    let path = match &spec.unnest {
+        Unnest::Paths(paths) => paths
+            .iter()
+            .find(|path| adapter.stored_name(&unnested_table(spec, path)) == stored)
+            .cloned(),
+        _ => child_paths(spec, vec![table.to_owned()])
+            .into_iter()
+            .next()
+            .map(|(path, _)| path),
+    };
+    let mut kept: Vec<String> = Vec::new();
+    let field = path.as_deref().and_then(|path| path.split('.').next());
+    if let Some(field) = field.filter(|_| change.apply != ChangeApply::Changelog) {
+        kept.push(format!(
+            "POSITION({} IN COALESCE({}, {})) = 0",
+            text(&format!(",{field},")),
+            id(CDC_UNCHANGED_COLUMN),
+            text("")
+        ));
+    }
+    if change.apply == ChangeApply::SoftDeletes {
+        kept.push(format!("{} <> {}", id(CDC_OP_COLUMN), text(DELETE_OP)));
+    }
+    let filter = match kept.is_empty() {
+        true => String::new(),
+        false => format!(" WHERE {}", kept.join(" AND ")),
+    };
+    let root = id(root_name);
+    let row_id = id(row_id_name);
+    let changed = format!(
+        "{root} IN (SELECT {row_id} FROM {}{filter})",
+        adapter.render_qualified_name(staging)
+    );
+    let replaced = match (&change.truncated, change.apply) {
+        (Some(truncation), ChangeApply::HardDeletes) => format!(
+            "{changed} OR {root} IN (SELECT {row_id} FROM {} WHERE {} < {})",
+            adapter.render_qualified_name(&spec.destination),
+            id(CDC_LSN_COLUMN),
+            truncation.lsn
+        ),
+        _ => changed,
+    };
+    match load_id {
+        Some(load_id) => format!(
+            "({replaced}) AND {} <> {}",
+            id(metadata_name(spec.naming, MetadataRole::LoadId)),
+            text(load_id)
+        ),
+        None => replaced,
     }
 }
 

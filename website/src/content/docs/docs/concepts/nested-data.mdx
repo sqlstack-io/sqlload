@@ -56,8 +56,9 @@ Set in a table entry:
   the two leaves those rows without items until a rerun loads the window again.
 
 Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets, and from
-0.41.0 (not released yet) ClickHouse targets. Databricks targets and `postgres_cdc` sources are
-refused for now: `plan` names the setting, and without `unnest` the lists load as JSON columns.
+0.41.0 (not released yet) ClickHouse targets, and from 0.42.0 Databricks targets. Databricks child
+tables are staged and copied in as their parent is; so far they are tested against a stand-in for
+the Databricks API, not a live warehouse.
 `state = "logged"` and `contract = "enforced"` tables write child tables from 0.42.0. A logged
 table's child rows commit with the commit that records its state, so a rerun after a failure reads
 them again from the state last recorded.
@@ -68,6 +69,15 @@ The target's `path` names the folder by `{table}` and is not partitioned by the 
 `merge` and `delete_insert` are refused on files targets. Each commit stores the child tables'
 files before its parent's, so a failure between the two leaves files whose parent rows are not
 there, which a join by `_sqlload_parent_id` leaves out.
+
+`postgres_cdc` sources write child tables from 0.42.0, except into files targets, from a `json` or
+`jsonb` column whose values are lists. Each row's id is the hash of its key (in a
+changelog, of the change's `_sqlload_lsn`, `_sqlload_seq` and key), in the snapshot as in the
+changes. Each captured insert or update replaces its row's items, and a delete removes them under
+`deletes = "hard"`; under soft deletes a deleted row keeps its items, as it keeps its row. An
+update that left a TOASTed list out, unchanged, keeps the row's items. A changelog's change rows
+each get their own items. A batch replayed after a stop before the slot confirmed it writes the
+same items again rather than more.
 
 ClickHouse has no transactions, so its child tables are published the way their parent is: by
 swapping in whole tables or whole partitions. Under `merge`, the merged rows' old items leave each
