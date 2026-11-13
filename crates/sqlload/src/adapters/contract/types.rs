@@ -21,7 +21,7 @@ use crate::adapters::contract::_helpers::schema::{
     staging_table,
 };
 use crate::adapters::contract::_helpers::type_fit::type_fit;
-use crate::adapters::contract::_helpers::write::write_statements;
+use crate::adapters::contract::_helpers::write::{replaced_rows, write_statements};
 use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
 use crate::adapters::contract::main::_rekeyed_row_ids::rekeyed_row_ids;
 use crate::adapters::contract::models::{
@@ -334,6 +334,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging: &TableName,
     ) -> Option<String> {
         dropped_ordinals(self, request, staging)
+    }
+
+    /// Under `delete_insert`, the condition choosing the rows its commit replaces, which their child tables' rows go with; `None` when it replaces every row.
+    fn render_replaced_rows(&self, request: &WriteStatementsRequest<'_>) -> Option<String> {
+        replaced_rows(self, request)
     }
 
     /// Under a merge, a query of the `row_id` of each row of the table that a row of `staging` shares its key with but whose `row_id` differs (an id not derived from the key, as dlt's `delete-insert` merge gives), so the rows hanging off it can be replaced too; `None` without a merge.

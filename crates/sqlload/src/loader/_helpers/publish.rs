@@ -179,12 +179,15 @@ fn write_target<'a>(
     }
 }
 
-/// Under a merge, the child tables of `table` already in the destination that its commits clear the rows of their roots from: every one under `"all"`, the listed paths' otherwise.
+/// Under a merge or `delete_insert`, the child tables of `table` already in the destination that its commits clear the rows of their replaced roots from: every one under `"all"`, the listed paths' otherwise.
 async fn merged_children(
     table: &TablePlan,
     destination: &Destination,
 ) -> Result<Vec<String>, LoaderError> {
-    if !matches!(table.mode, WriteMode::Merge { .. }) {
+    if !matches!(
+        table.mode,
+        WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. }
+    ) {
         return Ok(Vec::new());
     }
     let spec = &table.spec;
@@ -638,7 +641,10 @@ impl Publisher {
                 for (name, chosen) in list_choices(spec) {
                     children.choices.entry(name).or_insert(chosen);
                 }
-                let merging = matches!(self.table.mode, WriteMode::Merge { .. });
+                let rooted = matches!(
+                    self.table.mode,
+                    WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. }
+                );
                 let given = ids.as_deref().unwrap_or_default();
                 let unnested = unnest_batch(
                     &masked,
@@ -649,7 +655,7 @@ impl Publisher {
                         naming: spec.naming,
                         name_limit: sql_adapter(spec.warehouse).max_identifier_length(),
                         ids: given,
-                        roots: merging.then_some(given),
+                        roots: rooted.then_some(given),
                     },
                     &mut children.choices,
                 )
@@ -756,7 +762,7 @@ impl Publisher {
         if let Some(children) = self.children.as_mut().filter(|_| self.direct || !pending) {
             Box::pin(children.finish(
                 (&self.table, (&self.load_id, &self.loaded_at)),
-                (&self.destination, self.staging.as_ref()),
+                (&self.destination, None),
             ))
             .await?;
         }
@@ -1047,12 +1053,13 @@ impl Publisher {
                 true => {
                     Box::pin(children.finish(
                         (&self.table, (&self.load_id, &self.loaded_at)),
-                        (&self.destination, Some(&staging)),
+                        (&self.destination, Some((&staging, &mode))),
                     ))
                     .await?
                 }
                 false => {
-                    Box::pin(children.cut((&self.table, &self.destination, Some(&staging)))).await?
+                    Box::pin(children.cut((&self.table, &self.destination, (&staging, &mode))))
+                        .await?
                 }
             }
         }

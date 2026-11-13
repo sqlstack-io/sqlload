@@ -3,7 +3,7 @@
 use crate::adapters::clickhouse::_helpers::dialect::layout::{layout_clauses, layout_problems};
 use crate::adapters::clickhouse::_helpers::dialect::type_names::{logical_type, portable_type};
 use crate::adapters::clickhouse::_helpers::dialect::write::{
-    clear_statements, swap_statements, write_statements,
+    clear_statements, range_condition, swap_statements, write_statements,
 };
 use crate::adapters::clickhouse::constants::EMPTY_SORTING_KEY;
 use crate::adapters::clickhouse::models::ClickHouseSql;
@@ -249,6 +249,11 @@ impl SqlAdapter for ClickHouseSql {
         staging: &TableName,
     ) -> Vec<String> {
         write_statements(self, request, staging)
+    }
+
+    /// ClickHouse's typed bounds, as its partition publish displaces the rows.
+    fn render_replaced_rows(&self, request: &WriteStatementsRequest<'_>) -> Option<String> {
+        Some(range_condition(self, request))
     }
 
     /// Every statement commits on its own: ClickHouse has no transactions.

@@ -1412,12 +1412,12 @@ impl ChildTables {
         }
     }
 
-    /// Commit every child table's rows so far, before the parent's commit names them (under a merge, once the rows of the roots it merges are cleared, see [`Self::clear_merged`]).
+    /// Commit every child table's rows so far, before the parent's commit (of `staging`'s rows, by `mode`) names them: under a merge or `delete_insert`, once the rows of the roots it replaces are cleared (see [`Self::clear_replaced`]).
     pub(crate) async fn cut(
         &mut self,
-        (parent, destination, staging): (&TablePlan, &Destination, Option<&TableName>),
+        (parent, destination, commit): (&TablePlan, &Destination, (&TableName, &WriteMode)),
     ) -> Result<(), LoaderError> {
-        self.clear_merged((parent, destination, staging)).await?;
+        self.clear_replaced((parent, destination, commit)).await?;
         for publisher in self
             .feeds
             .iter_mut()
@@ -1428,13 +1428,15 @@ impl ChildTables {
         Ok(())
     }
 
-    /// Finish every child table before the parent: columns that only held NULL become text, and what waits commits; under a `replace` (or `--reload`) an existing child table no rows reached (a listed one, or under `"all"` any named as the table's) is emptied too, so it never keeps an earlier load's items.
+    /// Finish every child table before the parent (`commit`, its last commit's staging table and mode, when one follows): columns that only held NULL become text, and what waits commits; under a `replace` (or `--reload`) an existing child table no rows reached (a listed one, or under `"all"` any named as the table's) is emptied too, so it never keeps an earlier load's items.
     pub(crate) async fn finish(
         &mut self,
         (parent, (load_id, loaded_at)): (&TablePlan, (&str, &str)),
-        (destination, staging): (&Destination, Option<&TableName>),
+        (destination, commit): (&Destination, Option<(&TableName, &WriteMode)>),
     ) -> Result<(), LoaderError> {
-        self.clear_merged((parent, destination, staging)).await?;
+        if let Some(commit) = commit {
+            self.clear_replaced((parent, destination, commit)).await?;
+        }
         let replaced = matches!(parent.mode, WriteMode::Replace | WriteMode::Recreate);
         let spec = &parent.spec;
         let adapter = sql_adapter(spec.warehouse);
@@ -1494,14 +1496,21 @@ impl ChildTables {
         Ok(())
     }
 
-    /// Under a merge, before the commit of the parent's rows staged in `staging` (on the parent's `destination`): the staged child rows of the parent rows the merge drops (a repeated key's others) leave each child table's staging table, and every child table's rows whose root is being merged are deleted, so a root's items are replaced by its new ones, an empty or missing list leaving none. Each runs on its own, before the child and parent commits: a failure between them leaves a root without its items until a rerun merges it again.
-    async fn clear_merged(
+    /// Before the commit of the parent's rows staged in `staging` (on the parent's `destination`) by `mode`, every child table's rows whose root that commit replaces are deleted, so a root's items are replaced by its new ones, an empty or missing list leaving none: under a merge the roots it merges (and the staged child rows of the parent rows it drops, a repeated key's others, leave each child table's staging table), under `delete_insert` the rows in its window or partitions. Each runs on its own, before the child and parent commits: a failure between them leaves a root without its items until a rerun replaces it again.
+    async fn clear_replaced(
         &mut self,
-        (parent, destination, staging): (&TablePlan, &Destination, Option<&TableName>),
+        (parent, destination, (staging, mode)): (
+            &TablePlan,
+            &Destination,
+            (&TableName, &WriteMode),
+        ),
     ) -> Result<(), LoaderError> {
-        let (WriteMode::Merge { .. }, Some(staging)) = (&parent.mode, staging) else {
+        if !matches!(
+            mode,
+            WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. }
+        ) {
             return Ok(());
-        };
+        }
         let spec = &parent.spec;
         let adapter = sql_adapter(spec.warehouse);
         for publisher in self
@@ -1514,7 +1523,7 @@ impl ChildTables {
         let request = WriteStatementsRequest {
             table: &spec.destination,
             columns: &parent.schema.write_columns,
-            mode: &parent.mode,
+            mode,
             hashed: &[],
             built: None,
         };
@@ -1585,10 +1594,20 @@ impl ChildTables {
         if rooted.is_empty() {
             return Ok(());
         }
-        let mut roots = format!(
-            "{root} IN (SELECT {row_id} FROM {})",
-            adapter.render_qualified_name(staging)
-        );
+        let mut roots = match mode {
+            WriteMode::DeleteInsert { .. } => format!(
+                "{root} IN (SELECT {row_id} FROM {}{})",
+                adapter.render_qualified_name(&spec.destination),
+                adapter
+                    .render_replaced_rows(&request)
+                    .map(|condition| format!(" WHERE {condition}"))
+                    .unwrap_or_default()
+            ),
+            _ => format!(
+                "{root} IN (SELECT {row_id} FROM {})",
+                adapter.render_qualified_name(staging)
+            ),
+        };
         if let Some(rekeyed) = adapter.render_rekeyed_row_ids(&request, staging, row_id_name) {
             let found = text_values(destination, format!("{rekeyed} LIMIT 1")).await?;
             if !found.is_empty() {

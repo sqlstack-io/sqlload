@@ -47,9 +47,13 @@ Set in a table entry:
   row whose id didn't come from its key, as one dlt loaded with its `delete-insert` merge, also
   loses the items its child rows tie to its old id in `_sqlload_root_id` (`_dlt_root_id`). Child
   rows an `append` loaded hold no root id, so they stay when the table later switches to `merge`.
+- `delete_insert` (added in 0.42.0): each row's items carry its id in `_sqlload_root_id`. Before a
+  commit deletes its window or partitions from the parent, the items of the rows it deletes leave
+  every child table, then the commit's new items are inserted. As under `merge`, a failure between
+  the two leaves those rows without items until a rerun loads the window again.
 
 Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets, and from
-0.41.0 (not released yet) ClickHouse targets. Databricks targets, files targets, `delete_insert`,
+0.41.0 (not released yet) ClickHouse targets. Databricks targets, files targets,
 `state = "logged"`, `contract = "enforced"` and `postgres_cdc` sources are refused for now: `plan`
 names the setting, and without `unnest` the lists load as JSON columns.
 

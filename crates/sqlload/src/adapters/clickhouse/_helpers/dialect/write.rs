@@ -177,7 +177,10 @@ pub(crate) fn typed_literal(text: &str, column_type: &ColumnType) -> String {
 }
 
 /// The rows a `delete_insert` replaces: those whose cursor is one of its values, or within its range (`1`, every row, when it has no bounds). The bounds are [typed literals](typed_literal), so a bound ClickHouse cannot read fails rather than matching nothing.
-fn range_condition(adapter: &ClickHouseSql, request: &WriteStatementsRequest<'_>) -> String {
+pub(crate) fn range_condition(
+    adapter: &ClickHouseSql,
+    request: &WriteStatementsRequest<'_>,
+) -> String {
     let WriteMode::DeleteInsert {
         cursor_column,
         from,

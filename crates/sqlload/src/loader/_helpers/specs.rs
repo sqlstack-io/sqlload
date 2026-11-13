@@ -888,7 +888,7 @@ fn nesting(
         }
         Unnest::None => {}
         Unnest::All | Unnest::Paths(_) => {
-            problems.extend(refused_writes(context, (strategy, contract)));
+            problems.extend(refused_writes(context, contract));
             problems.extend(unbuilt_writes(context, logged));
             if row_id == Some(false) {
                 problems.push("row_id = false: unnest gives every row an id, which its child rows name as their parent's; drop row_id".to_owned());
@@ -998,14 +998,10 @@ fn unbuilt_writes(context: &SourceContext<'_>, logged: bool) -> Vec<String> {
     .collect()
 }
 
-/// Why this table's writes cannot carry child tables yet: a files target, `delete_insert`, captured changes or an enforced contract.
-fn refused_writes(
-    context: &SourceContext<'_>,
-    (strategy, contract): (WriteStrategy, Contract),
-) -> Vec<String> {
+/// Why this table's writes cannot carry child tables yet: a files target, captured changes or an enforced contract.
+fn refused_writes(context: &SourceContext<'_>, contract: Contract) -> Vec<String> {
     [
         context.target.path.is_some().then_some("a files target"),
-        (strategy == WriteStrategy::DeleteInsert).then_some("write_strategy = \"delete_insert\""),
         (context.source.kind == SourceKind::PostgresCdc).then_some("kind = \"postgres_cdc\""),
         (contract == Contract::Enforced).then_some("contract = \"enforced\""),
     ]

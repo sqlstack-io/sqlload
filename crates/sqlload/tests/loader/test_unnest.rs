@@ -144,6 +144,34 @@ const CLICKHOUSE_APPEND_CHECK: &str = "SELECT (SELECT arrayStringConcat(arraySor
 /// The staging table holding the merged roots in the clear test.
 const CLEAR_STAGING: &str = "orders__sqlload_staging_20261113";
 
+/// The parent's columns under [`DELETE_INSERT_SETTINGS`].
+const DELETE_INSERT_COLUMNS: &str = "id,day,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at,_sqlload_row_id";
+
+/// A `delete_insert` on a date partition with `unnest`.
+const DELETE_INSERT_SETTINGS: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n";
+
+/// Two days' files, then the second day's rewritten with other items.
+const DELETE_INSERT_RUNS: &[(&str, &str)] = &[
+    (
+        "day=2026-11-03/a.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1]}]}\n",
+    ),
+    (
+        "day=2026-11-04/b.ndjson",
+        "{\"id\": 2, \"items\": [{\"sku\": \"b\", \"parts\": [2, 3]}]}\n",
+    ),
+    (
+        "day=2026-11-04/b.ndjson",
+        "{\"id\": 2, \"items\": [{\"sku\": \"c\", \"parts\": [4]}]}\n",
+    ),
+];
+
+/// Rows in orders/items/parts, then each part linked up to its order.
+const DELETE_INSERT_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',' ORDER BY p.value) FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
+
+/// [`DELETE_INSERT_CHECK`] in ClickHouse's SQL.
+const CLICKHOUSE_DELETE_INSERT_CHECK: &str = "SELECT toString((SELECT count() FROM raw.orders)) || '/' || toString((SELECT count() FROM raw.orders__items)) || '/' || toString((SELECT count() FROM raw.orders__items__parts)) || '/' || (SELECT arrayStringConcat(arraySort(groupArray(toString(o.id) || ':' || i.sku || ':' || toString(p.value))), ',') FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
+
 /// Tables seeded beside `orders` and named like its child tables: `orders__notes`, a plain table, and `orders__x__items`, the child table of another root `orders__x`; each with one row. `{parent_id}` is the naming's parent-id column.
 const NAMED_LIKE_CHILDREN: &[&str] = &[
     "CREATE SCHEMA raw",
@@ -256,14 +284,6 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             file: ORDERS,
             expected_ok: false,
             expected_problem: "max_depth limits the child tables unnest makes, and this table sets no unnest",
-        },
-        UnnestPlanTestCase {
-            description: "delete_insert",
-            settings: "write_strategy = \"delete_insert\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
-            files_target: false,
-            file: ORDERS,
-            expected_ok: false,
-            expected_problem: "unnest does not yet write child tables with write_strategy = \"delete_insert\"",
         },
         UnnestPlanTestCase {
             description: "an enforced contract",
@@ -462,6 +482,14 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             expected_result: "2/1/1/1:d:5",
         },
         RowIdTestCase {
+            description: "unnest on a delete_insert: a rewritten partition's orders lose their old items and parts at every level, and another partition's keep theirs",
+            settings: DELETE_INSERT_SETTINGS,
+            runs: DELETE_INSERT_RUNS,
+            expected_columns: DELETE_INSERT_COLUMNS,
+            check_query: DELETE_INSERT_CHECK,
+            expected_result: "2/2/2/1:a:1,2:c:4",
+        },
+        RowIdTestCase {
             description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then",
             settings: ALL_SETTINGS,
             runs: ALL_RUNS,
@@ -642,6 +670,14 @@ fn given_unnest_when_loading_into_postgres_then_lists_become_child_tables_linked
             expected_result: "2/1/1/1:d:5",
         },
         RowIdTestCase {
+            description: "unnest on a delete_insert: a rewritten partition's orders lose their old items and parts at every level, and another partition's keep theirs (Postgres)",
+            settings: DELETE_INSERT_SETTINGS,
+            runs: DELETE_INSERT_RUNS,
+            expected_columns: DELETE_INSERT_COLUMNS,
+            check_query: DELETE_INSERT_CHECK,
+            expected_result: "2/2/2/1:a:1,2:c:4",
+        },
+        RowIdTestCase {
             description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then (Postgres)",
             settings: ALL_SETTINGS,
             runs: ALL_RUNS,
@@ -706,6 +742,14 @@ fn given_unnest_when_loading_into_clickhouse_then_lists_become_child_tables_link
             expected_columns: UNNESTED_COLUMNS,
             check_query: CLICKHOUSE_APPEND_CHECK,
             expected_result: "2:new/1:a:1@0,1:a:2@1,2:b:3@0",
+        },
+        RowIdTestCase {
+            description: "unnest on a delete_insert: a rewritten partition's orders lose their old items and parts at every level, and another partition's keep theirs (ClickHouse)",
+            settings: DELETE_INSERT_SETTINGS,
+            runs: DELETE_INSERT_RUNS,
+            expected_columns: DELETE_INSERT_COLUMNS,
+            check_query: CLICKHOUSE_DELETE_INSERT_CHECK,
+            expected_result: "2/2/2/1:a:1,2:c:4",
         },
         RowIdTestCase {
             description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then (ClickHouse)",
