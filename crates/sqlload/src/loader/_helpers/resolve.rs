@@ -173,21 +173,6 @@ fn resolve_table(
             .contains_key(&loaded_name(naming, column, rule.1))
     });
     let loaded = loaded_table(table, &excluded, rule)?;
-    if let Some((from, to)) = (source.kind == SourceKind::PostgresCdc)
-        .then(|| {
-            table
-                .columns
-                .iter()
-                .zip(&loaded.columns)
-                .find(|(from, to)| from.name != to.name)
-        })
-        .flatten()
-    {
-        return Err(vec![format!(
-            "naming = \"dlt\" loads column {:?} as {}, and a postgres_cdc stream matches its changes to the source's names; use naming = \"sqlload\" for this source",
-            from.name, to.name
-        )]);
-    }
     let pinned = pinned_types(&overrides, context.target.warehouse)?;
     build_spec(
         &context,

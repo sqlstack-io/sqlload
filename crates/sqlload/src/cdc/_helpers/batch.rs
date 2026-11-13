@@ -233,6 +233,15 @@ fn applied_changes(
     Ok((fold_changes(kept, &positions)?, truncated))
 }
 
+/// `relation` with each column the load renames (under `naming = "dlt"`) under the name it loads as, so the plan's read columns and key find it; a column the plan lacks keeps the source's name.
+pub(crate) fn loaded_relation(relation: &Relation, planned: &SourceTable) -> Relation {
+    let mut loaded = relation.clone();
+    for column in &mut loaded.columns {
+        column.name = planned.loaded_as(&column.name).to_owned();
+    }
+    loaded
+}
+
 /// The columns of `relation` on the stream that `planned`, the table as its load was planned, lacks: added (or renamed) since, so the load has nowhere to write them.
 pub(crate) fn unplanned_columns(relation: &Relation, planned: &SourceTable) -> Vec<String> {
     let known: std::collections::BTreeSet<&str> = planned
