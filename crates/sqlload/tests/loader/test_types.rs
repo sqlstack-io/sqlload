@@ -1107,6 +1107,17 @@ pub(crate) struct UnnestPlanTestCase {
     pub(crate) expected_problem: &'static str,
 }
 
+/// An NDJSON files source under `drop/` with `settings`, loaded into DuckDB once per run, then once more with `failing`'s file, which fails.
+pub(crate) struct UnnestFailTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// Each run's new file before the failing one, as `name`, `contents`.
+    pub(crate) runs: &'static [(&'static str, &'static str)],
+    pub(crate) failing: (&'static str, &'static str),
+    /// Text the failed load's output holds.
+    pub(crate) expected_error: &'static str,
+}
+
 /// An NDJSON files source under `drop/` with `settings`, loaded by the executable into DuckDB once per run, each run adding its file.
 pub(crate) struct RowIdTestCase {
     pub(crate) description: &'static str,

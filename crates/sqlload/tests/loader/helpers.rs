@@ -1961,12 +1961,12 @@ pub(crate) async fn run_merge_case(
         .map_err(|error| error.to_string())
 }
 
-/// Write a project loading the NDJSON files of `root/drop/` into `[connections.wh]` (given as `connection`'s settings, schema `raw`) with `settings` added, then load once per run, each after writing its new file; fails with the output of a load that fails.
+/// Write a project loading the NDJSON files of `root/drop/` into `[connections.wh]` (given as `connection`'s settings, schema `raw`) with `settings` added, then load once per run, each after writing its new file; returns the project's file, and fails with the output of a load that fails.
 pub(crate) fn load_ndjson_runs(
     root: &std::path::Path,
     connection: &str,
     (settings, runs): (&str, &[(&str, &str)]),
-) -> Result<(), String> {
+) -> Result<std::path::PathBuf, String> {
     std::fs::create_dir_all(root.join("drop")).map_err(|error| error.to_string())?;
     let config = root.join("sqlload.toml");
     let text = format!(
@@ -1980,5 +1980,5 @@ pub(crate) fn load_ndjson_runs(
         let (ok, output) = run_sqlload(&config, &["load"], ("", ""))?;
         ok.then_some(()).ok_or(output)?;
     }
-    Ok(())
+    Ok(config)
 }

@@ -5,7 +5,7 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
 use crate::helpers::{duckdb_text, load_ndjson_runs, run_async, run_sqlload};
-use crate::test_types::{RowIdTestCase, UnnestPlanTestCase};
+use crate::test_types::{RowIdTestCase, UnnestFailTestCase, UnnestPlanTestCase};
 
 const COLUMNS: &str = "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders'";
 
@@ -14,6 +14,25 @@ const ORDERS: &str =
 
 /// The parent's columns once `unnest` takes its list fields.
 const UNNESTED_COLUMNS: &str = "id,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at,_sqlload_row_id";
+
+/// The parent's columns under `unnest = "all"` when its rows also hold an object, which stays a column.
+const ALL_COLUMNS: &str = "id,meta,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at,_sqlload_row_id";
+
+/// An append with `unnest = "all"`.
+const ALL_SETTINGS: &str =
+    "write_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n";
+
+/// Two runs under `unnest = "all"`: an object, a list of objects with a list in each, then a list field first seen in the second.
+const ALL_RUNS: &[(&str, &str)] = &[
+    (
+        "a.ndjson",
+        "{\"id\": 1, \"meta\": {\"k\": 1}, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n",
+    ),
+    (
+        "b.ndjson",
+        "{\"id\": 2, \"meta\": {\"k\": 2}, \"items\": [{\"sku\": \"b\", \"parts\": []}], \"tags\": [\"t\"]}\n",
+    ),
+];
 
 /// The settings of the replace with `unnest`.
 const REPLACE_SETTINGS: &str =
@@ -62,6 +81,13 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             files_target: false,
             expected_ok: true,
             expected_problem: "├── unnest  orders__items, orders__items__parts, orders__tags  child tables, columns inferred at load",
+        },
+        UnnestPlanTestCase {
+            description: "unnest = \"all\" names the child tables of the list fields the sampled rows hold",
+            settings: "[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            files_target: false,
+            expected_ok: true,
+            expected_problem: "├── unnest  every list field, 1000 levels down at most: orders__items, orders__tags and more as lists appear; columns inferred at load",
         },
         UnnestPlanTestCase {
             description: "a word other than all",
@@ -242,6 +268,22 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             check_query: APPEND_CHECK,
             expected_result: "2:new/1:a:1@0,1:a:2@1,2:b:3@0",
         },
+        RowIdTestCase {
+            description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then",
+            settings: ALL_SETTINGS,
+            runs: ALL_RUNS,
+            expected_columns: ALL_COLUMNS,
+            check_query: APPEND_CHECK,
+            expected_result: "2:t/1:a:1@0,1:a:2@1",
+        },
+        RowIdTestCase {
+            description: "unnest = \"all\" with on_schema_change = \"ignore\": the list field first seen in run 2 makes no table, and its items are left out",
+            settings: "write_strategy = \"append\"\non_schema_change = \"ignore\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            runs: ALL_RUNS,
+            expected_columns: ALL_COLUMNS,
+            check_query: "SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'raw' AND table_name = 'orders__tags') || '/' || (SELECT count(*) FROM raw.orders__items__parts)",
+            expected_result: "0/2",
+        },
     ];
     for test_case in &test_cases {
         let root = tempfile::tempdir().map_err(|error| error.to_string())?;
@@ -285,6 +327,14 @@ fn given_unnest_when_loading_into_postgres_then_lists_become_child_tables_linked
             check_query: APPEND_CHECK,
             expected_result: "2:new/1:a:1@0,1:a:2@1,2:b:3@0",
         },
+        RowIdTestCase {
+            description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then (Postgres)",
+            settings: ALL_SETTINGS,
+            runs: ALL_RUNS,
+            expected_columns: ALL_COLUMNS,
+            check_query: APPEND_CHECK,
+            expected_result: "2:t/1:a:1@0,1:a:2@1",
+        },
     ];
     run_async(async {
         let postgres = start_postgres().await?;
@@ -321,4 +371,51 @@ fn given_unnest_when_loading_into_postgres_then_lists_become_child_tables_linked
         }
         Ok(())
     })
+}
+
+#[test]
+fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_naming_the_field()
+-> Result<(), String> {
+    let test_cases = [
+        UnnestFailTestCase {
+            description: "an object where unnest = \"all\" took a list field fails, naming the file and the field",
+            settings: ALL_SETTINGS,
+            runs: &[("a.ndjson", "{\"id\": 1, \"tags\": [\"x\"]}\n")],
+            failing: ("b.ndjson", "{\"id\": 2, \"tags\": {\"k\": \"y\"}}\n"),
+            expected_error: "b.ndjson: tags: unnest = \"all\" took tags as a list field from its values so far, and a row holds a value that is not a list there",
+        },
+        UnnestFailTestCase {
+            description: "a list field first seen in a later load under on_schema_change = \"fail\" is refused, naming its table",
+            settings: "write_strategy = \"append\"\non_schema_change = \"fail\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            runs: &[("a.ndjson", "{\"id\": 1, \"items\": [{\"sku\": \"a\"}]}\n")],
+            failing: (
+                "b.ndjson",
+                "{\"id\": 2, \"items\": [{\"sku\": \"b\"}], \"tags\": [\"t\"]}\n",
+            ),
+            expected_error: "new list field tags would make the child table orders__tags and on_schema_change = \"fail\"",
+        },
+    ];
+    for test_case in &test_cases {
+        let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let connection = format!(
+            "kind = \"duckdb\"\ndatabase = \"{}\"",
+            root.path().join("out.duckdb").display()
+        );
+        let config = load_ndjson_runs(
+            root.path(),
+            &connection,
+            (test_case.settings, test_case.runs),
+        )?;
+        let (name, contents) = test_case.failing;
+        std::fs::write(root.path().join("drop").join(name), contents)
+            .map_err(|error| error.to_string())?;
+        let (ok, output) = run_sqlload(&config, &["load"], ("", ""))?;
+        assert_eq!(
+            (ok, output.contains(test_case.expected_error)),
+            (false, true),
+            "{}: {output}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

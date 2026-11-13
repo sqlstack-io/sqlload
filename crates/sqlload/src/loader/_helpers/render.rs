@@ -11,6 +11,7 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
@@ -401,18 +402,37 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             .as_ref()
             .map(|python| detail("schema", python_columns_line(table, python))),
     );
-    if let Unnest::Paths(paths) = &spec.unnest {
+    let unnested: Option<Vec<String>> = match &spec.unnest {
+        Unnest::Paths(paths) => Some(paths.clone()),
+        Unnest::All => Some(
+            list_choices(spec)
+                .into_iter()
+                .filter_map(|(field, chosen)| chosen.then_some(field))
+                .collect(),
+        ),
+        Unnest::None => None,
+    };
+    if let Some(paths) = unnested {
         let tables: Vec<String> = paths
             .iter()
             .map(|path| unnested_table(spec, path))
             .collect();
-        details.push(detail(
-            "unnest",
-            format!(
+        let text = match (&spec.unnest, tables.is_empty()) {
+            (Unnest::All, true) => format!(
+                "every list field, {} levels down at most, into child tables as lists appear; columns inferred at load",
+                spec.max_depth
+            ),
+            (Unnest::All, false) => format!(
+                "every list field, {} levels down at most: {} and more as lists appear; columns inferred at load",
+                spec.max_depth,
+                tables.join(", ")
+            ),
+            _ => format!(
                 "{}  child tables, columns inferred at load",
                 tables.join(", ")
             ),
-        ));
+        };
+        details.push(detail("unnest", text));
     }
     details.extend(
         spec.files
