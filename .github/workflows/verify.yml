@@ -101,7 +101,7 @@ jobs:
     runs-on: ubuntu-24.04
     # A cold cache compiles DuckDB from source (about 25 minutes); warm runs take a few.
     timeout-minutes: 60
-    # packages: read lets the job sign in to GHCR, whose anonymous pull limit the bastion image hit.
+    # packages: read lets the job sign in to GHCR when it has to pull the bastion image.
     permissions:
       contents: read
       packages: read
@@ -114,38 +114,86 @@ jobs:
         with:
           shared-key: containers
       - run: make clean-partial-duckdb-sources
-      - name: Sign in to GHCR
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-      # The SSH bastion's image, read from where the testkit pins it, pulled once and signed in so the tests find it here;
-      # GHCR's rate limit (toomanyrequests) gets one retry a minute later, any other failure none.
-      - name: Pull the SSH bastion image
+      # GHCR rate-limits pulls by runner address even when signed in, so the SSH bastion's image is kept in the
+      # Actions cache, keyed by its digest. The tests name it by digest, which Docker's classic image store drops
+      # on `docker load`; the containerd image store keeps it, so the job switches Docker to that store first.
+      - name: Use the containerd image store
+        run: |
+          config=/etc/docker/daemon.json
+          current=$(sudo cat "$config" 2>/dev/null || echo '{}')
+          updated=$(jq '.features["containerd-snapshotter"] = true' <<<"$current")
+          sudo tee "$config" >/dev/null <<<"$updated"
+          sudo systemctl restart docker
+          timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done'
+          if ! docker info -f '{{.DriverStatus}}' | grep -q io.containerd.snapshotter.v1; then
+            echo "::error::Docker is not using the containerd image store: $(docker info -f '{{.DriverStatus}}')"
+            exit 1
+          fi
+      # The image as the testkit pins it, and its cache key.
+      - name: Read the SSH bastion image
+        id: bastion
         run: |
           pins=$(tr -d '\n' < crates/sqlload-testkit/src/ssh/constants.rs)
           name=$(grep -o 'const IMAGE: &str = *"[^"]*"' <<<"$pins" | cut -d'"' -f2 || true)
           tag=$(grep -o 'const TAG: &str = *"[^"]*"' <<<"$pins" | cut -d'"' -f2 || true)
-          image="$name:$tag"
-          if [ -z "$name" ] || [ -z "$tag" ]; then
-            echo "::error::cannot read the SSH bastion image's IMAGE and TAG from crates/sqlload-testkit/src/ssh/constants.rs"
+          if [ -z "$name" ] || [ -z "$tag" ] || [ "${tag#*@}" = "$tag" ]; then
+            echo "::error::cannot read the SSH bastion image's IMAGE and TAG (with its digest) from crates/sqlload-testkit/src/ssh/constants.rs"
             exit 1
           fi
+          {
+            echo "image=$name:$tag"
+            echo "tagged=$name:${tag%%@*}"
+            echo "key=ssh-bastion-${tag#*@}"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: bastion-cache
+        with:
+          path: ${{ runner.temp }}/ssh-bastion.tar
+          key: ${{ steps.bastion.outputs.key }}
+      # Loaded from the cache when it resolves by digest there; otherwise pulled once, signed in, so the tests find
+      # it here, GHCR's rate limit (toomanyrequests) getting one retry a minute later and any other failure none,
+      # then saved for the cache.
+      - name: Load or pull the SSH bastion image
+        id: bastion-image
+        env:
+          IMAGE: ${{ steps.bastion.outputs.image }}
+          TAGGED: ${{ steps.bastion.outputs.tagged }}
+          ARCHIVE: ${{ runner.temp }}/ssh-bastion.tar
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          if [ -f "$ARCHIVE" ]; then
+            docker load -i "$ARCHIVE"
+            if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+              echo "loaded $IMAGE from the cache"
+              exit 0
+            fi
+            echo "::warning::the cached SSH bastion image does not resolve as $IMAGE; pulling it"
+          fi
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
           for attempt in 1 2; do
-            if out=$(timeout -k 10 240 docker pull "$image" 2>&1); then
+            if out=$(timeout -k 10 240 docker pull "$IMAGE" 2>&1); then
               echo "$out"
+              docker tag "$IMAGE" "$TAGGED"
+              docker save -o "$ARCHIVE" "$TAGGED"
+              echo "pulled=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "$out"
             if [ "$attempt" = 1 ] && grep -qiE "toomanyrequests|429 Too Many Requests" <<<"$out"; then
-              echo "GHCR rate-limited the pull of $image; retrying once in 60 s"
+              echo "GHCR rate-limited the pull of $IMAGE; retrying once in 60 s"
               sleep 60
               continue
             fi
             break
           done
-          echo "::error::cannot pull the SSH bastion image $image: $(tail -n 1 <<<"$out")"
+          echo "::error::cannot pull the SSH bastion image $IMAGE: $(tail -n 1 <<<"$out")"
           exit 1
+      - uses: actions/cache/save@v4
+        if: steps.bastion-image.outputs.pulled == 'true' && steps.bastion-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/ssh-bastion.tar
+          key: ${{ steps.bastion.outputs.key }}
       - run: |
           docker pull redpandadata/redpanda:v25.1.4
           docker pull postgres:17-alpine
