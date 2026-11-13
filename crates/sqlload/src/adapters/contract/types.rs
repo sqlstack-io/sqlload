@@ -52,6 +52,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         false
     }
 
+    /// The longest table or column name, in characters, that dlt's naming gives on the warehouse (the shorter of dlt's table and column limits), past which it shortens a name with a tag; `None` where it gives no limit.
+    fn max_identifier_length(&self) -> Option<usize> {
+        None
+    }
+
     /// Whether SQLLoad never drops or recreates the warehouse's tables and never alters one it did not create: `replace` empties and refills the table in one transaction instead of swapping a new one in, `--reload` is refused, and an existing table without `_sqlload_load_id` is loaded as it is.
     fn keeps_tables(&self) -> bool {
         false

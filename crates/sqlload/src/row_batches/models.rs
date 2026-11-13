@@ -279,6 +279,8 @@ pub struct UnnestRequest<'a> {
     /// How many levels of child tables to make at most.
     pub max_depth: u32,
     pub naming: Naming,
+    /// The longest name dlt's naming gives on the destination.
+    pub name_limit: Option<usize>,
     /// Each row's id, which its child rows name as their parent's.
     pub ids: &'a [String],
     /// Each row's root row's id, which child rows carry under a merge; `None` otherwise.

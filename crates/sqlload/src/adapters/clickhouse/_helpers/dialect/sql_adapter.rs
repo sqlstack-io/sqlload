@@ -39,6 +39,10 @@ impl SqlAdapter for ClickHouseSql {
         Warehouse::ClickHouse
     }
 
+    fn max_identifier_length(&self) -> Option<usize> {
+        Some(255)
+    }
+
     /// Not yet: changes would need merging into partitions batch by batch.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false

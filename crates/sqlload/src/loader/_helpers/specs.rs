@@ -9,8 +9,9 @@ use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::models::AfterLoad;
+use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
-use crate::loader::_helpers::resolve::ResolvedTarget;
+use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::constants::{DEFAULT_MAX_DEPTH, ODBC_SOURCE, SNOWFLAKE_SOURCE, UNNEST_ALL};
 use crate::loader::models::{
@@ -264,7 +265,13 @@ pub(crate) fn build_spec(
     let name = table_name(
         (context.name, context.source),
         overrides.name.as_deref(),
-        table,
+        (
+            table,
+            (
+                nesting.naming,
+                sql_adapter(context.target.warehouse).max_identifier_length(),
+            ),
+        ),
     );
     Ok(TableSpec {
         source_name: context.name.to_owned(),
@@ -664,20 +671,21 @@ fn excluded_by(name: &str, exclude: &[(&String, GlobMatcher)]) -> Option<(String
     Some((name.to_owned(), format!("exclude_columns {pattern}")))
 }
 
-/// The destination table name of `table` from source `source_name`: `name` (its `name` setting) when it has no placeholder, else that template (or the source's) filled in.
+/// The destination table name of `table` from source `source_name`: `name` (its `name` setting) when it has no placeholder, else that template (or the source's) filled in; as it loads under `rule`.
 pub(crate) fn table_name(
     (source_name, source): (&str, &SourceConfig),
     name: Option<&str>,
-    table: &SourceTable,
+    (table, rule): (&SourceTable, NameRule),
 ) -> String {
-    match name {
+    let name = match name {
         Some(name) if !name.contains('{') => name.to_owned(),
         _ => destination_name(
             name.unwrap_or(source.table_name_template()),
             source_name,
             table,
         ),
-    }
+    };
+    loaded_name(rule.0, &name, rule.1)
 }
 
 /// A destination table name from `template` with `{source}`, `{schema}` and `{table}` filled in.
@@ -847,10 +855,7 @@ fn nesting(
 ) -> (Nesting, Vec<String>) {
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
-    let naming = layered(&settings.naming, &defaults.naming)
-        .map(|(value, _)| value)
-        .or(context.target.naming)
-        .unwrap_or_default();
+    let naming = table_naming((settings, defaults), context.target.naming);
     let row_id = layered(&settings.row_id, &defaults.row_id).map(|(value, _)| value);
     let max_depth = overrides.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
     let logged = layered(&settings.state, &defaults.state)
@@ -899,6 +904,17 @@ fn nesting(
         },
         problems,
     )
+}
+
+/// How a table names what it loads: its own `naming`, else its source's, else its target's (`target`), else SQLLoad's.
+pub(crate) fn table_naming(
+    (settings, defaults): (&TableSettings, &TableSettings),
+    target: Option<Naming>,
+) -> Naming {
+    layered(&settings.naming, &defaults.naming)
+        .map(|(value, _)| value)
+        .or(target)
+        .unwrap_or_default()
 }
 
 /// The `unnest` paths with an empty part, a parent path not also listed, or more parts than `max_depth`.

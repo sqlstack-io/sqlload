@@ -42,6 +42,8 @@ pub(crate) struct Split<'a> {
     pub(crate) unnest: &'a Unnest,
     pub(crate) max_depth: u32,
     pub(crate) naming: Naming,
+    /// The longest name dlt's naming gives on the destination.
+    pub(crate) name_limit: Option<usize>,
     /// Under `"all"`, the fields chosen as list fields or not so far, chosen further as values decide.
     pub(crate) choices: &'a mut ListChoices,
     pub(crate) levels: Vec<Level>,
@@ -106,7 +108,7 @@ impl Split<'_> {
         let Some(texts) = self.choose_column((field, column))? else {
             return Ok(false);
         };
-        let table = child_table_name(self.naming, request.table, field.name());
+        let table = child_table_name((self.naming, self.name_limit), request.table, field.name());
         for (row, text) in texts.iter().enumerate() {
             let (Some(text), Some(parent)) = (text, request.ids.get(row)) else {
                 continue;
@@ -235,7 +237,7 @@ impl Split<'_> {
         level.root_rows.push(place.root_row);
         for (key, value) in &lists {
             let path = format!("{}.{key}", place.path);
-            let table = child_table_name(self.naming, place.table, key);
+            let table = child_table_name((self.naming, self.name_limit), place.table, key);
             let below = ListPlace {
                 path: &path,
                 table: &table,

@@ -144,7 +144,7 @@ pub struct TableSpec {
     pub warehouse_source: Option<WarehouseSource>,
     /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).
     pub layout: TableLayout,
-    /// How the load names the columns it adds.
+    /// How the load names the columns it adds, and under dlt's naming its tables and columns.
     pub naming: Naming,
 }
 

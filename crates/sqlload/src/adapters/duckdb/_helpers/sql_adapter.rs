@@ -18,6 +18,10 @@ impl SqlAdapter for DuckDbSql {
         Warehouse::DuckDb
     }
 
+    fn max_identifier_length(&self) -> Option<usize> {
+        Some(65536)
+    }
+
     fn keeps_nanoseconds(&self) -> bool {
         false
     }

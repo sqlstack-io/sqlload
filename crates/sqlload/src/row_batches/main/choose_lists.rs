@@ -13,6 +13,7 @@ pub fn choose_lists(batch: &RecordBatch, choices: &mut ListChoices) -> Result<bo
         unnest: &Unnest::All,
         max_depth: 1,
         naming: Naming::Sqlload,
+        name_limit: None,
         choices,
         levels: Vec::new(),
     };

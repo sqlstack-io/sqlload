@@ -24,7 +24,7 @@ pub fn read_columns(
         };
         columns.push(ReadColumn {
             name: column.name.clone(),
-            expression: quote_identifier(&column.name),
+            expression: quote_identifier(column.source_spelling.as_deref().unwrap_or(&column.name)),
             wire: WireType::Text,
             output,
         });

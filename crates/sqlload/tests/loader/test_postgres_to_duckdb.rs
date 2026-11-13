@@ -165,6 +165,62 @@ constant_columns = { run_tag = "second" }
 
 const ADDED_CONSTANT_ROWS_QUERY: &str = "SELECT string_agg(id || ':' || label || ':' || coalesce(run_tag, ''), ',' ORDER BY id) FROM raw.app__items";
 
+/// A table whose quoted names dlt's naming renames, read in integer windows of one key each.
+const DLT_SETUP: &str = r#"
+CREATE TABLE public."Orders-V2" ("OrderID" int8 PRIMARY KEY, "Seq" int8 NOT NULL, "Unit Price" numeric(10,2), "UpdatedAt" timestamptz NOT NULL);
+INSERT INTO public."Orders-V2" VALUES (1, 1, 1.50, '2026-11-01 10:00:00+00'), (2, 2, 2.25, '2026-11-02 10:00:00+00');
+"#;
+
+/// The key named as the source spells it, the cursor as it loads.
+const DLT_TABLES: &str = r#"include = ["public.Orders-V2"]
+[sources.app.tables."public.Orders-V2"]
+naming = "dlt"
+write_strategy = "merge"
+unique_key = ["OrderID"]
+cursor_column = "seq"
+cursor_start = "0"
+batch_size = 1
+"#;
+
+const DLT_DESCRIBE_QUERY: &str =
+    "SELECT string_agg(column_name || ' ' || column_type, '|') FROM (DESCRIBE raw.app__orders_v2)";
+
+const DLT_ROWS_QUERY: &str = "SELECT string_agg(order_id || ':' || seq || ':' || unit_price || ':' || CAST(updated_at AS VARCHAR), '|' ORDER BY order_id) FROM raw.app__orders_v2";
+
+const DLT_FIRST_PLAN: &str = "Plan ready  1 selected, 1 object to create, 1 to load
+
+Objects (1)                                         sqlload apply
+└── raw.app__orders_v2                              create table
+    ├── order_id   int             -> BIGINT
+    ├── seq        int             -> BIGINT
+    ├── unit_price decimal(10,2)   -> DECIMAL(10,2)
+    ├── updated_at timestamp_tz    -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
+    └── + _dlt_load_id, _loaded_at, _dlt_id
+
+Loads (1)                                           sqlload load
+└── app__orders_v2                                  merge (unique_key: order_id)
+    ├── source  postgres  app  public.Orders-V2
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   3 windows of 1, one commit each, up to the source's maximum 2 (read at plan)
+    ├── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
+    └── cursor  seq first run, from cursor_start 0
+
+✓ Plan complete  1 selected, 1 object to create, 1 to load";
+
+const DLT_SECOND_PLAN: &str = "Plan ready  1 selected, 1 to load
+
+Loads (1)                                           sqlload load
+└── app__orders_v2                                  merge (unique_key: order_id)
+    ├── source  postgres  app  public.Orders-V2
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── batch   2 windows of 1, one commit each, up to the source's maximum 3 (read at plan)
+    ├── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
+    └── cursor  seq from 2 (destination maximum)
+
+✓ Plan complete  1 selected, 1 to load";
+
+const DLT_DESCRIBE: &str = "order_id BIGINT|seq BIGINT|unit_price DECIMAL(10,2)|updated_at TIMESTAMP WITH TIME ZONE|_dlt_load_id VARCHAR|_sqlload_loaded_at TIMESTAMP WITH TIME ZONE|_dlt_id VARCHAR";
+
 #[test]
 fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_keeps_the_table_right()
 -> Result<(), String> {
@@ -598,6 +654,82 @@ fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_neve
                 "{}",
                 test_case.description
             );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_quoted_source_names_under_dlt_naming_when_loading_twice_then_the_table_and_columns_load_snake_cased_and_merge_by_the_renamed_key()
+-> Result<(), String> {
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(DLT_SETUP)
+            .await
+            .map_err(|error| error.to_string())?;
+        let text = duckdb_project(postgres.port, DLT_TABLES);
+        let project = described_project(&text).await?;
+        let destinations = connect_targets(&project)
+            .await
+            .map_err(|error| error.to_string())?;
+        let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
+            return Err("no DuckDB destination".to_owned());
+        };
+        let test_cases = [
+            PinnedRunTestCase {
+                description: "the first load names the table and columns as dlt does, reading each window by the source's names",
+                source_change: "",
+                expected_plan: DLT_FIRST_PLAN,
+                expected_describe: DLT_DESCRIBE,
+                expected_rows: "1:1:1.50:2026-11-01 10:00:00+00|2:2:2.25:2026-11-02 10:00:00+00",
+            },
+            PinnedRunTestCase {
+                description: "an incremental merge reads after the destination maximum and replaces the row by its renamed key",
+                source_change: r#"UPDATE public."Orders-V2" SET "Seq" = 3, "Unit Price" = 9.99 WHERE "OrderID" = 1;"#,
+                expected_plan: DLT_SECOND_PLAN,
+                expected_describe: DLT_DESCRIBE,
+                expected_rows: "1:3:9.99:2026-11-01 10:00:00+00|2:2:2.25:2026-11-02 10:00:00+00",
+            },
+        ];
+        for test_case in test_cases {
+            client
+                .batch_execute(test_case.source_change)
+                .await
+                .map_err(|error| error.to_string())?;
+            let plan = plan_project(&project, &destinations, &PlanOptions::default())
+                .await
+                .map_err(|error| format!("{}: {error}", test_case.description))?;
+            let (lines, ok) = render_plan(&plan);
+            assert!(ok, "{}:\n{}", test_case.description, lines.join("\n"));
+            assert_eq!(
+                lines.join("\n"),
+                test_case.expected_plan,
+                "{}",
+                test_case.description
+            );
+            apply_project(&plan, &destinations)
+                .await
+                .map_err(|error| error.to_string())?;
+            load_all(&project, &plan, &destinations)
+                .await
+                .map_err(|error| format!("{}: {error}", test_case.description))?;
+            let checks = [
+                (DLT_DESCRIBE_QUERY, test_case.expected_describe),
+                (DLT_ROWS_QUERY, test_case.expected_rows),
+            ];
+            for (query, expected) in checks {
+                let result = single_text(duckdb, query.to_owned())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(
+                    result.as_deref(),
+                    Some(expected),
+                    "{}: {query}",
+                    test_case.description
+                );
+            }
         }
         Ok(())
     })
