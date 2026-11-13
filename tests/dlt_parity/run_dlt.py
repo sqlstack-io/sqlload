@@ -50,7 +50,7 @@ def run_case(case: Case, work: Path) -> list[dict[str, Any]]:
 			max_table_nesting=case.max_depth,
 		)
 		pipeline.run(resource)
-		shown.append(dataset(database, SCHEMA, TABLE, case.key, case.disposition == "merge"))
+		shown.append(dataset(database, SCHEMA, TABLE, case.stored_key, case.disposition == "merge"))
 	return shown
 
 

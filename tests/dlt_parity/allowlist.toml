@@ -56,3 +56,9 @@ case = "null_then_list"
 table = "orders"
 column = "tags"
 reason = "As above: tags is NULL in run 1, so SQLLoad makes it a text column, which stays (empty) once run 2's lists move to orders__tags; dlt never makes the column."
+
+[[allowed]]
+kind = "load_failed"
+case = "naming_collision"
+run = "1"
+reason = "Two columns whose names normalise to one (OrderID and Order ID, both order_id) stop SQLLoad's plan, naming both, so no value is lost silently; dlt keeps the last value of a row given as a dictionary. Excluding one of the two with exclude_columns resolves it."
