@@ -1155,7 +1155,7 @@ impl Publisher {
         let (source_table, files_source) = files_source_parts(
             &spec.source_name,
             source,
-            spec.warehouse,
+            (spec.warehouse, spec.naming),
             (source_files.location.clone(), found),
         )?;
         let resolved = resolve_tables(run.project, &spec.source_name, &[source_table]);
