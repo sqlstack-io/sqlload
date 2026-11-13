@@ -87,7 +87,9 @@ Under `naming = "dlt"` the tables and columns themselves are also named as dlt's
 Postgres) is shortened with a tag, as dlt shortens it. Settings may name a column either way
 (`unique_key = ["OrderID"]` or `["order_id"]`), and `plan` shows the loaded name.
 `exclude_columns`, `allow_columns` and `skip_tables_with_columns` match the source's own names,
-and `flatten` the names a Python table yields. The target schema keeps the name it is given.
+and `flatten` the names a Python table yields. A Python table's `ctx.cursor_column` is the cursor's
+loaded name (`updated_at` for a field yielded as `UpdatedAt`). The target schema keeps the name it
+is given.
 
 The columns a load adds:
 

@@ -1,5 +1,7 @@
 //! Whether a table's projected rows still load what the table needs.
 
+use crate::load_naming::main::loaded_name::loaded_name;
+use crate::load_naming::models::Naming;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
 use crate::row_batches::models::{Projection, ProjectionRules};
 
@@ -17,15 +19,21 @@ pub fn projection_problem(projection: &Projection, rules: ProjectionRules<'_>) -
         .iter()
         .map(|field| &field.name)
         .chain(&projection.keep_record)
-        .any(|name| loads_as(name, column, rules.flatten));
+        .any(|name| loads_as(name, (column, rules.naming), rules.flatten));
     (!loads).then(|| {
         format!("the table's cursor_column {column} is not among the fields; add it to fields")
     })
 }
 
-/// Whether the projected column `name` loads `column`: itself, or a `<name>__<key>` column when `flatten` lists it (exactly, as flattening matches it).
-fn loads_as(name: &str, column: &str, flatten: &[String]) -> bool {
-    match flatten.iter().any(|listed| listed == name) {
+/// Whether the projected column `name` loads `column`, a loaded name under `naming`: itself, or a `<name>__<key>` column when `flatten` lists it (exactly, as flattening matches it); `name` as it loads under `naming`.
+fn loads_as(
+    name: &str,
+    (column, (naming, limit)): (&str, (Naming, Option<usize>)),
+    flatten: &[String],
+) -> bool {
+    let flattened = flatten.iter().any(|listed| listed == name);
+    let name = loaded_name(naming, name, limit);
+    match flattened {
         true => column
             .get(..name.len() + FLATTEN_SEPARATOR.len())
             .is_some_and(|prefix| {

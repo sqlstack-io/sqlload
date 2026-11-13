@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use sqlload::http_source::main::run_http_job::run_http_job;
+use sqlload::load_naming::main::loaded_name::loaded_name;
 use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::flatten_batch::flatten_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
@@ -240,7 +241,19 @@ impl Output {
     /// A yielded Arrow batch with its listed struct columns flattened, then in the loader's types.
     fn arrow(&self, batch: &RecordBatch) -> Result<RecordBatch, CrossError> {
         let flattened = flatten_batch(batch, &self.context.flatten).map_err(CrossError::Data)?;
-        normalise_batch(&flattened, &self.context.arrays).map_err(CrossError::Data)
+        let (naming, limit) = self.context.naming;
+        let arrays: Vec<String> = flattened
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .filter(|name| {
+                self.context
+                    .arrays
+                    .contains(&loaded_name(naming, name, limit))
+            })
+            .collect();
+        normalise_batch(&flattened, &arrays).map_err(CrossError::Data)
     }
 
     /// Run an `sl.http` job, parsing each page into batches as it arrives; `Ok(false)` once the consumer has gone, which cancels the requests in flight.

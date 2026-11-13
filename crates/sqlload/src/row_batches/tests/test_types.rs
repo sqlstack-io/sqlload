@@ -68,6 +68,7 @@ pub(crate) struct ProjectionProblemTestCase {
     pub(crate) cursor_column: Option<&'static str>,
     pub(crate) flatten: &'static [&'static str],
     pub(crate) masked: &'static [&'static str],
+    pub(crate) naming: crate::load_naming::models::Naming,
     pub(crate) expected_problem: Option<&'static str>,
 }
 

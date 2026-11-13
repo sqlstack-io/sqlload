@@ -1,3 +1,4 @@
+use crate::load_naming::models::Naming;
 use crate::row_batches::main::projection::projection;
 use crate::row_batches::main::projection_problem::projection_problem;
 use crate::row_batches::models::JsonLayout;
@@ -202,7 +203,40 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             cursor_column: Some("ID"),
             flatten: &[],
             masked: &[],
+            naming: Naming::Sqlload,
             expected_problem: None,
+        },
+        ProjectionProblemTestCase {
+            description: "under dlt naming a field loads the cursor when its loaded name is the cursor's",
+            fields: &["id", "UpdatedAt"],
+            keep_record: None,
+            cursor_column: Some("updated_at"),
+            flatten: &[],
+            masked: &[],
+            naming: Naming::Dlt,
+            expected_problem: None,
+        },
+        ProjectionProblemTestCase {
+            description: "under dlt naming a flattened object's keys load the cursor by their loaded names",
+            fields: &["Meta"],
+            keep_record: None,
+            cursor_column: Some("meta__updated_at"),
+            flatten: &["Meta"],
+            masked: &[],
+            naming: Naming::Dlt,
+            expected_problem: None,
+        },
+        ProjectionProblemTestCase {
+            description: "under SQLLoad's naming a field spelled otherwise is no cursor",
+            fields: &["id", "UpdatedAt"],
+            keep_record: None,
+            cursor_column: Some("updated_at"),
+            flatten: &[],
+            masked: &[],
+            naming: Naming::Sqlload,
+            expected_problem: Some(
+                "the table's cursor_column updated_at is not among the fields; add it to fields",
+            ),
         },
         ProjectionProblemTestCase {
             description: "a cursor that is no field fails",
@@ -211,6 +245,7 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             cursor_column: Some("updated_at"),
             flatten: &[],
             masked: &[],
+            naming: Naming::Sqlload,
             expected_problem: Some(
                 "the table's cursor_column updated_at is not among the fields; add it to fields",
             ),
@@ -222,6 +257,7 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             cursor_column: Some("Customer__Updated_At"),
             flatten: &["customer"],
             masked: &[],
+            naming: Naming::Sqlload,
             expected_problem: None,
         },
         ProjectionProblemTestCase {
@@ -231,6 +267,7 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             cursor_column: Some("customer"),
             flatten: &["customer"],
             masked: &[],
+            naming: Naming::Sqlload,
             expected_problem: Some(
                 "the table's cursor_column customer is not among the fields; add it to fields",
             ),
@@ -242,6 +279,7 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             cursor_column: Some("customer__updated_at"),
             flatten: &["Customer"],
             masked: &[],
+            naming: Naming::Sqlload,
             expected_problem: Some(
                 "the table's cursor_column customer__updated_at is not among the fields; add it to fields",
             ),
@@ -253,6 +291,7 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             cursor_column: Some("raw"),
             flatten: &[],
             masked: &[],
+            naming: Naming::Sqlload,
             expected_problem: None,
         },
         ProjectionProblemTestCase {
@@ -262,6 +301,7 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             cursor_column: None,
             flatten: &[],
             masked: &["email"],
+            naming: Naming::Sqlload,
             expected_problem: Some(
                 "keep_record would hold the masked columns (email) unmasked; drop keep_record or the mask",
             ),
@@ -287,6 +327,7 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             cursor_column: test_case.cursor_column,
             flatten: &flatten,
             masked: &masked,
+            naming: (test_case.naming, None),
         };
         let problem = projection(Some(&fields), test_case.keep_record)
             .ok()
