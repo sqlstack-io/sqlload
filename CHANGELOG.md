@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.42.0](https://github.com/sqlstack-io/sqlload/compare/v0.41.1...v0.42.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **files:** under naming = "dlt", a JSON or NDJSON files source's object columns, which held JSON, stop receiving values, and its objects load into new parent__key columns instead. A child table whose list field holds __ is now named with each part (orders__a__b for a__B, not orders__a_b), so it loads into a new table.
+
+### Features
+
+* **files:** dlt naming safety: flatten objects, postgres_cdc under dlt names, drained after_load protection ([#229](https://github.com/sqlstack-io/sqlload/issues/229)) ([3ed131a](https://github.com/sqlstack-io/sqlload/commit/3ed131a3656b4cd852adb7e3242c4b4bde6078ea))
+* **unnest:** child tables in more setups ([#227](https://github.com/sqlstack-io/sqlload/issues/227)) ([37dfdb4](https://github.com/sqlstack-io/sqlload/commit/37dfdb4e10cda701ae56bf0c2229da032fe41787))
+
 ## [0.41.1](https://github.com/sqlstack-io/sqlload/compare/v0.41.0...v0.41.1) (2026-11-13)
 
 
