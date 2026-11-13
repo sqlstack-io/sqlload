@@ -1084,6 +1084,28 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
         UnnestFailTestCase {
+            description: "a nested list an earlier load took, whose child table exists, fails on a later value that is not a list",
+            settings: ALL_SETTINGS,
+            runs: &[("a.ndjson", "{\"id\": 1, \"items\": [{\"parts\": [1]}]}\n")],
+            failing: ("b.ndjson", "{\"id\": 2, \"items\": [{\"parts\": \"x\"}]}\n"),
+            expected_error: "items.parts: unnest = \"all\" took items.parts as a list field from its values so far",
+            expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
+        },
+        UnnestFailTestCase {
+            description: "under dlt naming a list inside an object inside items keeps its existing child table's choice",
+            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            runs: &[(
+                "a.ndjson",
+                "{\"id\": 1, \"items\": [{\"dims\": {\"tags\": [\"t\"]}}]}\n",
+            )],
+            failing: (
+                "b.ndjson",
+                "{\"id\": 2, \"items\": [{\"dims\": {\"tags\": \"x\"}}]}\n",
+            ),
+            expected_error: "items.dims__tags: unnest = \"all\" took items.dims__tags as a list field from its values so far",
+            expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
+        },
+        UnnestFailTestCase {
             description: "a list field first seen in a later load under on_schema_change = \"fail\" is refused, naming its table",
             settings: "write_strategy = \"append\"\non_schema_change = \"fail\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
             runs: &[("a.ndjson", "{\"id\": 1, \"items\": [{\"sku\": \"a\"}]}\n")],

@@ -21,6 +21,8 @@ pub fn unnest_batch(
         naming: request.naming,
         name_limit: request.name_limit,
         flatten_objects: request.flatten_objects,
+        live: request.live,
+        looked_up: std::collections::BTreeSet::new(),
         choices,
         levels: Vec::new(),
     };

@@ -15,6 +15,8 @@ pub fn choose_lists(batch: &RecordBatch, choices: &mut ListChoices) -> Result<bo
         naming: Naming::Sqlload,
         name_limit: None,
         flatten_objects: false,
+        live: &[],
+        looked_up: std::collections::BTreeSet::new(),
         choices,
         levels: Vec::new(),
     };

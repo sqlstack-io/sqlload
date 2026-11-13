@@ -66,7 +66,6 @@ use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
-use crate::loader::_helpers::python::child_paths;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
 use crate::loader::_helpers::python::unnested_table;
@@ -100,7 +99,6 @@ use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
 use crate::loader::models::TableLoaded;
 use crate::loader::models::TablePlan;
-use crate::loader::models::TableSpec;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
@@ -111,7 +109,6 @@ use crate::publish_checks::models::CheckedCommit;
 use crate::row_batches::main::unnest_batch::unnest_batch;
 use crate::row_batches::models::Unnest;
 use crate::row_batches::models::UnnestRequest;
-use crate::row_batches::types::ListChoices;
 use crate::row_ids::main::key_row_ids::key_row_ids;
 use crate::row_ids::main::random_row_ids::random_row_ids;
 use crate::run_log::main::insert_run::insert_run;
@@ -219,23 +216,6 @@ async fn merged_children(
                 .is_none_or(|listed| listed.contains(&adapter.stored_table_name(live)))
         })
         .collect())
-}
-
-/// The list fields a load under `unnest = "all"` starts with chosen: the plan's, and every path at every level an existing child table holds, as an earlier load chose it.
-async fn live_choices(
-    spec: &TableSpec,
-    destination: &Destination,
-) -> Result<ListChoices, LoaderError> {
-    let mut choices = list_choices(spec);
-    if spec.unnest == Unnest::All {
-        let tables = live_child_tables(destination, spec).await?;
-        choices.extend(
-            child_paths(spec, tables)
-                .into_iter()
-                .map(|(path, _)| (path, true)),
-        );
-    }
-    Ok(choices)
 }
 
 /// The columns the staged batches carry: the read columns as the source gives them, the constant columns the load adds, then the `_sqlload_*` metadata.
@@ -617,7 +597,11 @@ impl Publisher {
             Unnest::None => None,
             _ => Some(ChildTables {
                 merged: merged_children(&table, &destination).await?,
-                choices: live_choices(&table.spec, &destination).await?,
+                choices: list_choices(&table.spec),
+                live: match table.spec.unnest {
+                    Unnest::All => live_child_tables(&destination, &table.spec).await?,
+                    _ => Vec::new(),
+                },
                 destination: table_destination(&destination)?,
                 options: options.clone(),
                 feeds: Vec::new(),
@@ -702,6 +686,7 @@ impl Publisher {
                             .files
                             .as_ref()
                             .is_some_and(|files| files.encoding.flatten_objects),
+                        live: &children.live,
                         ids: given,
                         roots: rooted.then_some(given),
                     },
