@@ -1,0 +1,232 @@
+---
+title: "Coming from dlt"
+description: "Move dlt pipelines to SQLLoad: how sources, resources, write dispositions, incremental loading, rest_api and filesystem map, tables that keep dlt's names and row ids, a _dlt_loads view, and running loads from an orchestrator."
+---
+
+import { Code } from '@astrojs/starlight/components';
+import restToml from '../../../../../../packages/sqlload/tests/docs_examples/from_dlt/rest_api/sqlload.toml?raw';
+import restPy from '../../../../../../packages/sqlload/tests/docs_examples/from_dlt/rest_api/sources/shop.py?raw';
+import restTables from '../../../../../../packages/sqlload/tests/docs_examples/from_dlt/rest_api/tables.txt?raw';
+import loadsSql from '../../../../../../packages/sqlload/tests/docs_examples/from_dlt/rest_api/dlt_loads.sql?raw';
+import filesToml from '../../../../../../packages/sqlload/tests/docs_examples/from_dlt/filesystem/sqlload.toml?raw';
+import filesTables from '../../../../../../packages/sqlload/tests/docs_examples/from_dlt/filesystem/tables.txt?raw';
+import dltTables from '../../../../../../packages/sqlload/tests/docs_examples/from_dlt/filesystem/tables-dlt.txt?raw';
+
+This guide moves dlt pipelines to SQLLoad: what each dlt idea becomes, a REST API and a folder of
+files carried across, tables that keep the names and row ids dlt gave them, and running loads from
+an orchestrator. It needs SQLLoad 0.40.0 or later. Every SQLLoad example on this page is a project
+that SQLLoad's test suite loads twice, and the files example's tables and row ids are checked against
+what dlt 1.32.0 loads from the same files. For how the two differ in design, see
+[SQLLoad, dlt and ingestr](/docs/compared/).
+
+## What each dlt idea becomes
+
+| dlt | SQLLoad |
+| --- | --- |
+| `dlt.pipeline(destination=..., dataset_name="shop")` | A [target](/docs/configuration/#targets) in `sqlload.toml`, with `loader_schema = "shop"`. There is no pipeline working directory. |
+| `@dlt.source` | `sl.source(...)` in Python, or a `[sources.<name>]` entry for a database or files. |
+| `@dlt.resource` | `@source.table` in Python, or a table of a source. |
+| A resource's table name | `{source}__{table}` by default. `table_name = "{table}"` on the source names it as dlt does. |
+| `write_disposition="append"` or `"replace"` | `write_strategy = "append"` or `"replace"`. |
+| `write_disposition="merge"` with `primary_key` | `write_strategy = "merge"` with `unique_key`. See [merge](/docs/concepts/write-strategies/#merge). |
+| `merge_key`, dlt's `delete-insert` of the partitions a load holds | `write_strategy = "delete_insert"` with `cursor_column`: it deletes the cursor range it read, then inserts. See [delete_insert](/docs/concepts/write-strategies/#delete_insert). |
+| `dlt.sources.incremental("updated_at", initial_value=...)` | `cursor_column = "updated_at"` and `cursor_start`, with `ctx.cursor_value` in a Python table. `lag` is `lookback`. See [Cursors](/docs/concepts/cursors/). |
+| Pipeline state (`_dlt_pipeline_state`) | The destination's own maximum of `cursor_column`, read each run. `state = "logged"` keeps a position for the tables that need one. |
+| The stored schema (`_dlt_version`) | The live table, read each run. See [Contracts](/docs/concepts/contracts/). |
+| `max_table_nesting` and child tables | `unnest` and `max_depth`. See [Nested data](/docs/concepts/nested-data/). |
+| `rest_api` | `sl.http`, below. |
+| `filesystem` with a reader | A [files source](/docs/sources/files/), below. |
+| `secrets.toml` and `config.toml` | `${ENV:NAME}` in `sqlload.toml`. |
+| `pipeline.run()` from a task | `sqlload load --json`, below. |
+
+## REST APIs: rest_api to sl.http
+
+A `rest_api` source like this one, with a bearer token, a JSON next link, an incremental parameter
+and a child resource per order (see dlt's
+[rest_api docs](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/dlt-ecosystem/verified-sources/rest_api/basic.md)):
+
+```python
+# dlt, for comparison
+source = rest_api_source({
+    "client": {"base_url": "https://api.example.com/v1", "auth": {"type": "bearer", "token": token}},
+    "resource_defaults": {"write_disposition": "merge", "primary_key": "id"},
+    "resources": [
+        {
+            "name": "orders",
+            "endpoint": {
+                "path": "orders",
+                "data_selector": "items",
+                "paginator": {"type": "json_link", "next_url_path": "next"},
+                "params": {"updated_after": {"type": "incremental", "cursor_path": "updatedAt",
+                                             "initial_value": "2026-01-01T00:00:00Z"}},
+            },
+        },
+        {
+            "name": "payments",
+            "endpoint": {
+                "path": "orders/{resources.orders.id}/payments",
+                "data_selector": "items",
+                "response_actions": [{"status_code": 404, "action": "ignore"}],
+            },
+        },
+    ],
+})
+```
+
+becomes a connection and a Python module. Every request runs in Rust; no row passes through Python.
+
+<Code code={restToml} lang="toml" title="sqlload.toml" />
+
+<Code code={restPy} lang="python" title="sources/shop.py" />
+
+```console
+$ export SHOP_API_URL=https://api.example.com/v1 SHOP_TOKEN=...
+$ sqlload load
+```
+
+It loads these tables into `shop`, each line a table and its columns:
+
+<Code code={restTables} lang="text" title="Tables" wrap />
+
+On the next run, `orders` asks only for orders updated after the newest `updated_at` it holds, and
+merges them on `id`. A merged order keeps its `_dlt_id`, and its lines are replaced by the ones it
+holds now. `payments` reads every order's payments again and merges them on their own `id`.
+
+How `rest_api` settings map:
+
+- `client.base_url` and the credentials go in the `http` connection; `auth` is an argument of
+  `sl.http`. `bearer` is `sl.bearer()`, `api_key` is `sl.api_key(header=...)` or
+  `sl.api_key(query=...)`, `http_basic` is `sl.basic()`, and `oauth2_client_credentials` is
+  `sl.oauth2_client_credentials(token_url)`. The OAuth2 password grant, which dlt's `rest_api` has
+  no auth type for ([config_setup.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/sources/rest_api/config_setup.py#L89-L94)), is
+  `sl.oauth2_password(token_url)`; see [OAuth2](/docs/sources/python/#oauth2).
+- Paginators: `json_link` is `sl.next_link("$.next")`, `header_link` is `sl.link_header()`,
+  `offset` is `sl.offset(limit=...)`, `page_number` is `sl.page_number()`, `cursor` is
+  `sl.cursor(pointer, param)`, and `single_page` is `sl.single()`. dlt's `auto` guesses one
+  ([config_setup.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/sources/rest_api/config_setup.py#L75-L87)); SQLLoad never does.
+- `data_selector` is `select`, as a path from `$`.
+- An `incremental` parameter is `params={"updated_after": ctx.cursor_value}` with the table's
+  `cursor_column`. The value comes from the destination, so nothing needs to be kept between runs.
+- A resource that resolves another (`{resources.orders.id}`) is `api.fan_out(path, over=...)`, whose
+  `over` is a `paginate` selecting the keys. Fan-outs nest as many levels deep as needed; see
+  [Multi-level fan-out](/docs/sources/python/#multi-level-fan-out).
+- `method: POST` with a `json` body is `method="POST", json_body={...}`, and paginators that page in
+  the body take `location="body"`; see [POST with a JSON body](/docs/sources/python/#post-with-a-json-body).
+- `response_actions` that ignore a status are `on_status={404: "skip"}`. 429, 5xx and dropped
+  connections are retried, honouring `Retry-After`; `retries=` on `sl.http` sets how many times.
+- An API that returns each row as a list of cells, such as a spreadsheet's, is `cells=sl.cells(...)`;
+  see [Rows of cells](/docs/sources/python/#rows-of-cells).
+
+## Files: filesystem to a files source
+
+dlt's `filesystem` source with `read_jsonl` and a resource merged on `OrderID` with
+`write_disposition={"disposition": "merge", "strategy": "upsert"}` becomes one `[sources]` entry. Its
+table is named after the source:
+
+<Code code={filesToml} lang="toml" title="sqlload.toml" />
+
+- `merge` merges each new file once, oldest modified first, and records it in `_sqlload_runs`, so
+  no file is read twice and none needs `incremental` on its modification date. See
+  [Merging files](/docs/sources/files/#merging-files).
+- `after_load = { move_to = "loaded" }` moves each file once its rows are committed; `"delete"`
+  deletes it. See [Deleting or moving loaded files](/docs/sources/files/#deleting-or-moving-loaded-files).
+- `format` is `parquet`, `csv`, `json`, `ndjson`, `xlsx` or `xml`, and the files can be on S3 or an
+  SFTP server.
+  See [Load files](/docs/guides/files/).
+
+## Tables that look like dlt's
+
+Three settings make SQLLoad's tables look like the ones dlt made, so the models and queries over
+them keep working:
+
+- `naming = "dlt"` on the target names tables, columns and child tables as dlt's default
+  `snake_case` naming does (`OrderID` is `order_id`), and the columns a load adds as dlt names them
+  (`_dlt_load_id`, `_dlt_id`, `_dlt_parent_id`, `_dlt_list_idx`, `_dlt_root_id`).
+- `unnest = "all"` makes a child table of every list field, as dlt does.
+- `max_depth` is dlt's `max_table_nesting`.
+
+For the files example above, after its second file, dlt 1.32.0 (with the `upsert` merge) and SQLLoad
+load these tables:
+
+<Code code={dltTables} lang="text" title="dlt" wrap />
+
+<Code code={filesTables} lang="text" title="SQLLoad" wrap />
+
+The rows and every `_dlt_id`, `_dlt_parent_id`, `_dlt_root_id` and `_dlt_list_idx` are the same.
+SQLLoad adds `_sqlload_loaded_at`, and on a files source the file, version and line each row came
+from. Its child tables also carry `_dlt_load_id`, which dlt writes on root rows only
+([relational.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/relational.py#L294-L296)).
+
+A table dlt loaded can carry on under SQLLoad with the same settings: the first load adds SQLLoad's
+columns to it and merges into the rows dlt wrote. One case needs a fresh start. dlt's default
+`delete-insert` merge gives root rows random ids, where SQLLoad's `merge` (like dlt's `upsert`)
+derives them from the key ([helpers.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/helpers.py#L107-L120)). SQLLoad's merge then can't find the child rows of an order dlt merged,
+and they would stay beside its new ones. Before merging into child tables dlt merged with
+`delete-insert`, load the table from the start once: `sqlload load --reload --yes <table>` for a
+Python table, or for a files source drop its tables and merge every file again, moving files
+`after_load` moved back under `path` first. Postgres targets refuse `--reload`
+([Reloading a table](/docs/concepts/write-strategies/#reloading-a-table)), so there drop the table
+and its child tables and load it again.
+
+How `_dlt_id` is made, and the other ways names can differ, are under
+[Naming](/docs/concepts/nested-data/#naming).
+
+## A _dlt_loads view
+
+SQLLoad doesn't write `_dlt_loads`, `_dlt_pipeline_state` or `_dlt_version`. Positions come from
+the destination's tables and the schema from the live tables, so neither is needed. For models that
+read `_dlt_loads`, such as a dbt source filtering on `status = 0`, a view over the source's root
+tables gives the same columns. Where dlt loaded the dataset before, its `_dlt_loads` table is
+still there: rename it first, and `UNION ALL` it into the view to keep its loads. Rows dlt wrote
+have no `_sqlload_loaded_at`, so their loads show a NULL `inserted_at` in the view.
+
+<Code code={loadsSql} lang="sql" title="dlt_loads.sql" />
+
+Add a `SELECT` for each root table of the source. Child tables need none, since every load that
+writes child rows also writes their parents. The same statement works on DuckDB, MotherDuck,
+Postgres, Snowflake, BigQuery and ClickHouse. On BigQuery, `shop` is the dataset; on Snowflake, the
+unquoted names match the upper-case names SQLLoad stores.
+
+The view differs from dlt's table in what it can know:
+
+- It lists the loads whose rows are still there. A load whose rows were all replaced, by `replace`
+  or by merging every row again, drops out. In the example above, the first run's `payments` load
+  is gone once the second run merges every payment again.
+- Each table's load in a run has its own `load_id`, a UUID. dlt gives one per run, as a timestamp
+  ([load_package.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/storages/load_package.py#L161-L168)), so order by
+  `inserted_at` rather than by `load_id`.
+- `status` is always 0, since the view sees only committed rows. A load that failed after
+  committing some batches shows with those batches. There is no `schema_version_hash`.
+
+## Running loads from an orchestrator
+
+A task that ran `pipeline.run()` runs `sqlload load --json` instead, and needs no pipeline folder
+kept between runs, so it can run on workers whose disks are thrown away.
+
+- The exit code says what to do: 0 when every table loaded, 75 when every failure may pass on a
+  second try (connections, throttling, 5xx, locks), and 1 otherwise (configuration, credentials,
+  permissions, data that doesn't fit). Retry on 75 and alert on 1. See
+  [Retrying failed runs](/docs/cli/#retrying-failed-runs).
+- Standard output holds one JSON document, with `ok`, `retryable`, and each table's `status`,
+  `rows` and `error`; logs go to standard error. See [Results as JSON](/docs/cli/load/#results-as-json).
+- A rerun after a failure loads no row twice and loses none: committed batches stay, and the next
+  run carries on from the destination.
+
+## Known differences
+
+Under `naming = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
+
+- An object stays a JSON column, where dlt flattens it into `parent__key` columns
+  ([relational.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/relational.py#L154-L186)). A Python table's
+  `flatten` expands objects one level.
+- A value that doesn't fit its column's type fails the load, or widens the column as the table's
+  [contract](/docs/concepts/contracts/) allows. dlt adds a variant column such as `amount__v_text`
+  ([schema.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/general-usage/schema.md#L172-L204)).
+- A field listed in `unnest` is always a child table, even when an XML element appears only once;
+  dlt keeps a single match as a column of the parent.
+- Two columns whose names normalise to one stop the plan, naming both, where dlt keeps one of them.
+- `unnest` is refused on Databricks and files targets, on ClickHouse until 0.41.0 (not released
+  yet), under `delete_insert`, `state = "logged"` and `contract = "enforced"`, and for
+  `postgres_cdc` sources: `plan` names the setting.
+
+The full list, with how row ids are derived, is under [Naming](/docs/concepts/nested-data/#naming).
