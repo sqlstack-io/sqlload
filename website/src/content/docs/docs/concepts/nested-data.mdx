@@ -45,10 +45,16 @@ Set in a table entry:
   only what it holds now. When a commit repeats a key, only the kept row's items load (see
   [Repeated keys](/docs/concepts/write-strategies/#repeated-keys)).
 
-Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets.
-ClickHouse and Databricks targets, files targets, `delete_insert`, `state = "logged"`,
-`contract = "enforced"` and `postgres_cdc` sources are refused for now: `plan` names the setting,
-and without `unnest` the lists load as JSON columns.
+Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets, and from
+0.41.0 (not released yet) ClickHouse targets. Databricks targets, files targets, `delete_insert`,
+`state = "logged"`, `contract = "enforced"` and `postgres_cdc` sources are refused for now: `plan`
+names the setting, and without `unnest` the lists load as JSON columns.
+
+ClickHouse has no transactions, so its child tables are published the way their parent is: by
+swapping in whole tables or whole partitions. Under `merge`, the merged rows' old items leave each
+child table in a partition publish of their own, and the new items are then added. Child tables
+are created with ClickHouse's default engine and no sorting key or partitions, whatever layout
+their parent sets, so each such publish rebuilds the whole child table.
 
 A commit's checks (`checks`, and `on_duplicate_keys = "fail"` under `merge`) run on the parent's
 rows before any child table is written, so a refused commit leaves the child tables as they were.
