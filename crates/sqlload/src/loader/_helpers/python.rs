@@ -5,6 +5,7 @@ use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
@@ -1408,7 +1409,7 @@ impl ChildTables {
         (path, table): (&str, &str),
     ) -> Result<TablePlan, LoaderError> {
         let planned = child_plan(parent, (path, table));
-        let Destination::Files(files) = &self.destination else {
+        let Some(files) = files_destination(&self.destination) else {
             return Ok(planned);
         };
         let read = plan_files_table(&planned.spec, files, &self.options).await?;
@@ -1428,9 +1429,9 @@ impl ChildTables {
 
     /// Whether the child table `table` is there already: on a files target, whether its folder holds files.
     async fn exists(&self, table: &TablePlan) -> Result<bool, LoaderError> {
-        match &self.destination {
-            Destination::Files(_) => Ok(table.exists),
-            destination => Ok(live_columns(destination, &table.spec.destination)
+        match files_destination(&self.destination) {
+            Some(_) => Ok(table.exists),
+            None => Ok(live_columns(&self.destination, &table.spec.destination)
                 .await?
                 .is_some()),
         }

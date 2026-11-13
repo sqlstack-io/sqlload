@@ -7,7 +7,12 @@ use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
 use sqlload::loader::models::{LoadRun, PlanOptions};
 use sqlload::project::models::ProjectConfig;
+use sqlload_testkit::postgres::main::connect::connect;
+use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 use tokio_postgres::Client;
+
+use crate::helpers::{cdc_project, duckdb_text, run_async, run_sqlload};
+use crate::test_types::CdcScenarioTestCase;
 
 /// The project: the test database's `public` tables loaded into its `mart` schema, through a Postgres target on the same connection.
 pub(crate) fn project_text(port: u16) -> String {
@@ -145,4 +150,51 @@ write_strategy = "replace"
 checks = {{ min_rows = 5, warn = ["min_rows"] }}
 "#
     )
+}
+
+/// Run `test_case` in a fresh Postgres server of its version set up by `setup`, each step against the DuckDB file, and return its check query's result.
+pub(crate) fn run_cdc_scenario(
+    test_case: &CdcScenarioTestCase,
+    setup: &str,
+) -> Result<String, String> {
+    let mut observed = String::new();
+    run_async(async {
+        let postgres = start_postgres_version(test_case.tag).await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(setup)
+            .await
+            .map_err(|error| error.to_string())?;
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let database = folder.path().join("out.duckdb");
+        let config = folder.path().join("sqlload.toml");
+        let project = cdc_project(postgres.port, &database)
+            + &test_case
+                .extra_config
+                .replace("{port}", &postgres.port.to_string());
+        std::fs::write(&config, project).map_err(|error| error.to_string())?;
+        for (index, step) in test_case.steps.iter().enumerate() {
+            client
+                .batch_execute(step.source_change)
+                .await
+                .map_err(|error| error.to_string())?;
+            let (success, output) =
+                run_sqlload(&config, step.args, (step.crash_at, test_case.spill_bytes))?;
+            assert_eq!(
+                success, step.expected_success,
+                "{}: step {index} {:?}\n{output}",
+                test_case.description, step.args
+            );
+            assert!(
+                output.contains(step.expected_output),
+                "{}: step {index} {:?} output lacks {:?}\n{output}",
+                test_case.description,
+                step.args,
+                step.expected_output
+            );
+        }
+        observed = duckdb_text(&database, test_case.check_query)?;
+        Ok(())
+    })?;
+    Ok(observed)
 }

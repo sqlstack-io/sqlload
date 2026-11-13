@@ -271,3 +271,13 @@ pub(crate) async fn run_live_databricks(
     .len();
     Ok((outcome.err().unwrap_or_default(), rows, folders))
 }
+
+/// One day's NDJSON orders whose `items` lists, with a list in each item, make child tables.
+pub(crate) fn listed_items() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(vec![(
+        "day=2026-11-01/a.ndjson".to_owned(),
+        bytes::Bytes::from_static(
+            b"{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n{\"id\": 2, \"items\": [{\"sku\": \"b\", \"parts\": [3]}]}\n",
+        ),
+    )])
+}

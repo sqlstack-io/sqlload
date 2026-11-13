@@ -640,16 +640,6 @@ pub(crate) fn two_days() -> Result<Vec<(String, bytes::Bytes)>, String> {
     Ok(files)
 }
 
-/// One day's NDJSON orders whose `items` lists, with a list in each item, make child tables.
-pub(crate) fn listed_items() -> Result<Vec<(String, bytes::Bytes)>, String> {
-    Ok(vec![(
-        "day=2026-11-01/a.ndjson".to_owned(),
-        bytes::Bytes::from_static(
-            b"{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n{\"id\": 2, \"items\": [{\"sku\": \"b\", \"parts\": [3]}]}\n",
-        ),
-    )])
-}
-
 /// Enough files for two batches.
 pub(crate) fn two_batches() -> Result<Vec<(String, bytes::Bytes)>, String> {
     let mut files = day_files("2026-11-01", (1000, 0), None)?;

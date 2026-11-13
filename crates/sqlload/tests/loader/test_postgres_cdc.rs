@@ -10,6 +10,7 @@ use crate::helpers::{
     CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, run_async,
     run_sqlload, spawn_sqlload, step, stop_sqlload,
 };
+use crate::postgres_helpers::run_cdc_scenario;
 use crate::test_types::{
     CdcPlanTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
     QuietSlotTestCase,
@@ -1421,7 +1422,12 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
         },
     ];
     for test_case in &test_cases {
-        run_cdc_scenario(test_case)?;
+        assert_eq!(
+            run_cdc_scenario(test_case, SETUP)?,
+            test_case.expected_result,
+            "{}",
+            test_case.description
+        );
     }
     Ok(())
 }
@@ -1460,56 +1466,14 @@ fn given_unnest_on_a_postgres_cdc_source_when_a_batch_replays_then_each_roots_it
         },
     ];
     for test_case in &test_cases {
-        run_cdc_scenario(test_case)?;
-    }
-    Ok(())
-}
-
-/// Run `test_case` in a fresh Postgres server of its version, each step against the DuckDB file, then check the file.
-fn run_cdc_scenario(test_case: &CdcScenarioTestCase) -> Result<(), String> {
-    run_async(async {
-        let postgres = start_postgres_version(test_case.tag).await?;
-        let client = connect(&postgres).await?;
-        client
-            .batch_execute(SETUP)
-            .await
-            .map_err(|error| error.to_string())?;
-        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
-        let database = folder.path().join("out.duckdb");
-        let config = folder.path().join("sqlload.toml");
-        let project = cdc_project(postgres.port, &database)
-            + &test_case
-                .extra_config
-                .replace("{port}", &postgres.port.to_string());
-        std::fs::write(&config, project).map_err(|error| error.to_string())?;
-        for (index, step) in test_case.steps.iter().enumerate() {
-            client
-                .batch_execute(step.source_change)
-                .await
-                .map_err(|error| error.to_string())?;
-            let (success, output) =
-                run_sqlload(&config, step.args, (step.crash_at, test_case.spill_bytes))?;
-            assert_eq!(
-                success, step.expected_success,
-                "{}: step {index} {:?}\n{output}",
-                test_case.description, step.args
-            );
-            assert!(
-                output.contains(step.expected_output),
-                "{}: step {index} {:?} output lacks {:?}\n{output}",
-                test_case.description,
-                step.args,
-                step.expected_output
-            );
-        }
         assert_eq!(
-            duckdb_text(&database, test_case.check_query)?,
+            run_cdc_scenario(test_case, SETUP)?,
             test_case.expected_result,
             "{}",
             test_case.description
         );
-        Ok(())
-    })
+    }
+    Ok(())
 }
 
 /// A Databricks target takes `postgres_cdc` sources: each table is copied, then its changes merge or append.
