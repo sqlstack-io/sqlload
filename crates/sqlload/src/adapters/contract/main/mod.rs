@@ -1,4 +1,5 @@
 pub(in crate::adapters) mod _batch_direct_problem;
+pub(in crate::adapters) mod _dropped_ordinals;
 pub(in crate::adapters) mod _files_direct_problem;
 pub(in crate::adapters) mod _footer_rows;
 pub(in crate::adapters) mod _ranked_source;

@@ -28,6 +28,7 @@
 			"docs/concepts/cursors",
 			"docs/concepts/contracts",
 			"docs/concepts/checks",
+			"docs/concepts/nested-data",
 			"docs/concepts/types"
 		]
 	},

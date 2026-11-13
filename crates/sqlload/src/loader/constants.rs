@@ -129,3 +129,6 @@ pub const DEFAULT_MAX_DEPTH: u32 = 1000;
 
 /// The `unnest` word that unnests every list field.
 pub const UNNEST_ALL: &str = "all";
+
+/// How many dropped rows' ordinals one `DELETE` from a child table's staging table lists.
+pub const DROPPED_CHUNK: usize = 1000;

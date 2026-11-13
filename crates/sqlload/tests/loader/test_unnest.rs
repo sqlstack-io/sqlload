@@ -71,6 +71,24 @@ const APPEND_RUNS: &[(&str, &str)] = &[
 /// The append's tags and parts joined to their orders by id and load, with each part's position.
 const APPEND_CHECK: &str = "SELECT (SELECT string_agg(o.id || ':' || t.value, ',') FROM raw.orders o JOIN raw.orders__tags t ON t._sqlload_parent_id = o._sqlload_row_id AND t._sqlload_load_id = o._sqlload_load_id) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value || '@' || p._sqlload_list_idx, ',' ORDER BY p.value) FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id AND i._sqlload_load_id = o._sqlload_load_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id AND p._sqlload_load_id = o._sqlload_load_id)";
 
+/// A merge with `unnest`.
+const MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n";
+
+/// Two runs of the merge: the second repeats order 1 in one file, so the row read last wins, and empties order 2's list.
+const MERGE_RUNS: &[(&str, &str)] = &[
+    (
+        "a.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}, {\"sku\": \"b\", \"parts\": [3]}]}\n{\"id\": 2, \"items\": [{\"sku\": \"c\", \"parts\": [4]}]}\n",
+    ),
+    (
+        "b.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"x\", \"parts\": [9]}]}\n{\"id\": 1, \"items\": [{\"sku\": \"d\", \"parts\": [5]}]}\n{\"id\": 2, \"items\": []}\n",
+    ),
+];
+
+/// The merge's orders, items and parts counts, and each order's items and parts joined by id.
+const MERGE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',') FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
+
 #[test]
 fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_problem()
 -> Result<(), String> {
@@ -167,11 +185,11 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             expected_problem: "├── id    int    -> BIGINT\n    ├── items json   -> JSON\n    └── + _sqlload_source_file",
         },
         UnnestPlanTestCase {
-            description: "a merge, until its child rows are replaced by root",
+            description: "a merge plans its child tables, whose rows each commit replaces by root",
             settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"tags\"]\n",
             files_target: false,
-            expected_ok: false,
-            expected_problem: "unnest does not yet write child tables with write_strategy = \"merge\"",
+            expected_ok: true,
+            expected_problem: "├── unnest  orders__tags  child tables, columns inferred at load",
         },
         UnnestPlanTestCase {
             description: "row ids turned off under dlt naming",
@@ -269,6 +287,14 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             expected_result: "2:new/1:a:1@0,1:a:2@1,2:b:3@0",
         },
         RowIdTestCase {
+            description: "unnest on a merge: a merged order's items and parts are replaced by its new ones, a repeated key keeps only the kept row's, and an empty list leaves none",
+            settings: MERGE_SETTINGS,
+            runs: MERGE_RUNS,
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: MERGE_CHECK,
+            expected_result: "2/1/1/1:d:5",
+        },
+        RowIdTestCase {
             description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then",
             settings: ALL_SETTINGS,
             runs: ALL_RUNS,
@@ -326,6 +352,14 @@ fn given_unnest_when_loading_into_postgres_then_lists_become_child_tables_linked
             expected_columns: UNNESTED_COLUMNS,
             check_query: APPEND_CHECK,
             expected_result: "2:new/1:a:1@0,1:a:2@1,2:b:3@0",
+        },
+        RowIdTestCase {
+            description: "unnest on a merge: a merged order's items and parts are replaced by its new ones, a repeated key keeps only the kept row's, and an empty list leaves none",
+            settings: MERGE_SETTINGS,
+            runs: MERGE_RUNS,
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: MERGE_CHECK,
+            expected_result: "2/1/1/1:d:5",
         },
         RowIdTestCase {
             description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then (Postgres)",

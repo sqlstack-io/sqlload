@@ -1,0 +1,75 @@
+---
+title: "Nested data"
+description: "List fields as child tables with unnest: how child rows link to their parents, what each write strategy does with them, and what unnest = \"all\" chooses."
+---
+
+From 0.40.0 (not released yet), `unnest` turns list fields into child tables, the way dlt does. A
+field that isn't unnested stays a JSON column.
+
+```toml
+[sources.orders.tables.orders]
+unnest = ["items", "items.parts", "tags"]
+```
+
+With this, `{"id": 1, "items": [{"sku": "a", "parts": [1, 2]}], "tags": ["x"]}` loads:
+
+- `orders`: `id`, without `items` and `tags`, and an id for each row in `_sqlload_row_id`.
+- `orders__items`: one row per item (`sku`), with `_sqlload_parent_id` (its order's row id),
+  `_sqlload_list_idx` (its place in the list, from 0) and its own `_sqlload_row_id`.
+- `orders__items__parts` and `orders__tags`: a list of scalars gives a `value` column. A list
+  inside a list gives its item a `list` field, a level further down.
+
+Each child row also carries the load's `_sqlload_load_id` and `_sqlload_loaded_at`. A NULL, missing
+or empty list gives no child rows. Child tables take their columns from their rows, as a Python
+table does, and follow `on_schema_change` like any other table.
+
+## Settings
+
+Set in a table entry:
+
+- `unnest`: the dotted paths of the list fields, each with its parent's path also listed (`items`
+  before `items.parts`). Or `"all"`, described below.
+- `max_depth`: how many levels of child tables to make at most, 1000 by default. A list deeper than
+  that stays JSON in its parent.
+- `row_id` (also on a source): every table with `unnest` gives its rows an id, so it can't be
+  `false`.
+
+## Write strategies
+
+- `append`: each run's child rows link to that run's rows.
+- `replace` and `--reload`: child tables are replaced with their parent. A child table no row
+  reaches any more is emptied.
+- `merge`: a row's id comes from its `unique_key`, so a merged row keeps its id and its items carry
+  it in `_sqlload_root_id`. At each commit, the merged rows' items are deleted from every child
+  table, then their new items are inserted. A row whose list shrank, emptied or went missing keeps
+  only what it holds now. When a commit repeats a key, only the kept row's items load (see
+  [Repeated keys](/docs/concepts/write-strategies/#repeated-keys)).
+
+`delete_insert`, `state = "logged"`, `contract = "enforced"`, `postgres_cdc` sources, files targets
+and warehouses other than DuckDB and Postgres are refused for now: `plan` names the setting, and
+without `unnest` the lists load as JSON columns.
+
+Each commit writes the child tables before their parent. If a load fails between the two, child
+tables can hold rows whose parent row was never committed, or under `merge`, a merged row's old
+items can be gone before its new ones land. A rerun loads those rows again and puts them right.
+Join child rows to their parent by `_sqlload_parent_id` rather than reading child tables on their
+own.
+
+On a files source, SQLLoad reads each file itself to split its rows, rather than having the
+warehouse read the files directly. Loads with `unnest` are slower than without it.
+
+## unnest = "all"
+
+`unnest = "all"` unnests every list field, at every level down to `max_depth`:
+
+- A field becomes a child table when the values seen so far are lists, from the sampled files or a
+  Python table's first rows. An object stays a JSON column.
+- NULL, missing and empty values decide nothing. A field that held only those in what was sampled
+  isn't unnested until a list appears in it, and then gets its child table.
+- Once a field is a child table, a later value that is neither a list nor NULL fails the load,
+  naming the field. Its rows are never stored as JSON or dropped. To keep such a field as JSON, list
+  the paths to unnest without it.
+- A field with a child table from an earlier load stays one.
+- A list field first seen after a table's first load is a new child table, which
+  `on_schema_change` decides: `append_new_columns` creates it, `ignore` leaves its items out with a
+  warning, and `fail` stops the load.

@@ -301,4 +301,6 @@ pub struct ChildBatch {
     pub table: String,
     /// The items' data columns, then the parent's id, the position in the list, the row's own id and, under a merge, the root row's id.
     pub batch: RecordBatch,
+    /// Each row's root: its row in the batch split.
+    pub root_rows: Vec<usize>,
 }
