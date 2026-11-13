@@ -96,6 +96,13 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
                 "SELECT table_name FROM `p`.`raw`.INFORMATION_SCHEMA.TABLES WHERE LOWER(table_name) LIKE '%__sqlload_staging_%'",
             ],
         },
+        RenderedTestCase {
+            description: "an unnested table's child tables are listed from its dataset's own INFORMATION_SCHEMA",
+            rendered: vec![adapter.list_child_tables_sql(&orders())],
+            expected_statements: &[
+                "SELECT table_name FROM `p`.`raw`.INFORMATION_SCHEMA.TABLES WHERE table_schema = 'raw' AND left(table_name, 8) = 'orders__'",
+            ],
+        },
     ];
     for test_case in test_cases {
         assert_eq!(

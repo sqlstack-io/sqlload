@@ -436,9 +436,14 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         )
     }
 
+    /// The relation listing the tables of `table`'s schema, with `table_schema` and `table_name` columns.
+    fn render_schema_tables(&self, _table: &TableName) -> String {
+        "information_schema.tables".to_owned()
+    }
+
     /// The query listing the tables named as `parent`'s child tables are, in its schema.
     fn list_child_tables_sql(&self, parent: &TableName) -> String {
-        child_tables_query(self, parent)
+        child_tables_query(self, (parent, &self.render_schema_tables(parent)))
     }
 
     /// The query listing staging tables a crashed load may have left in `table`'s schema; `database` is the connection's, for warehouses that need one.

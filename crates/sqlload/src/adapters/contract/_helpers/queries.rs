@@ -78,15 +78,15 @@ pub(crate) fn loaded_files_query<A: SqlAdapter + ?Sized>(
     )
 }
 
-/// The query listing the tables in `parent`'s schema named as its child tables are, `<parent>__<field>` (the staging tables among them too).
+/// The query listing the tables in `parent`'s schema named as its child tables are, `<parent>__<field>` (the staging tables among them too), read from `tables`, the warehouse's `information_schema.tables` that lists that schema.
 pub(crate) fn child_tables_query<A: SqlAdapter + ?Sized>(
     adapter: &A,
-    parent: &TableName,
+    (parent, tables): (&TableName, &str),
 ) -> String {
     let schema = adapter.render_loader_value_literal(&adapter.stored_name(&parent.schema));
     let prefix = adapter.stored_name(&format!("{}{CHILD_TABLE_SEPARATOR}", parent.table));
     format!(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema = {schema} AND left(table_name, {}) = {}",
+        "SELECT table_name FROM {tables} WHERE table_schema = {schema} AND left(table_name, {}) = {}",
         prefix.chars().count(),
         adapter.render_loader_value_literal(&prefix)
     )
