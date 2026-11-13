@@ -69,6 +69,7 @@ use crate::project::models::{
     BatchStep, ConnectionConfig, NewTables, OnDuplicateKeys, ProjectConfig, SourceConfig,
     SourceKind, TableOverride, TableSettings, WriteStrategy,
 };
+use crate::row_batches::main::loaded_batch::loaded_batch;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::sheets_source::constants::{EMPTY_SHEET_COLUMN_KIND, SCOPE, SHEET_COLUMN_KIND};
 use crate::sheets_source::main::duplicate_key::duplicate_key;
@@ -652,7 +653,12 @@ async fn sheet_rows(
     let columns: Vec<(String, ColumnType)> = table
         .read_columns
         .iter()
-        .map(|column| (column.name.clone(), column.output.clone()))
+        .map(|column| {
+            (
+                table.spec.source_table.spelling(&column.name).to_owned(),
+                column.output.clone(),
+            )
+        })
         .collect();
     sheet_batch(&grid, read.rule, &columns).map_err(LoaderError::Invalid)
 }
@@ -922,6 +928,35 @@ fn pinned_unsampled(
     Ok(unsampled)
 }
 
+/// What a files read reads, as the files spell it (the batches it reads are renamed to the loaded names after): each of `read_columns` in its read type, and those whose types were inferred from sampled values, not pinned and not filled from the path (`partition_types`) or the file.
+pub(crate) fn files_read_as(
+    spec: &TableSpec,
+    read_columns: &[ReadColumn],
+    partition_types: &[(String, ColumnType)],
+) -> (Vec<DesiredColumn>, Vec<String>) {
+    let spelled = |name: &str| spec.source_table.spelling(name).to_owned();
+    let columns: Vec<DesiredColumn> = read_columns
+        .iter()
+        .map(|column| DesiredColumn {
+            name: spelled(&column.name),
+            column_type: column.output.clone(),
+            origin: ColumnOrigin::Source,
+        })
+        .collect();
+    let filled: Vec<&str> = partition_types
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
+        .collect();
+    let inferred: Vec<String> = read_columns
+        .iter()
+        .filter(|column| !spec.pinned.contains_key(&column.name))
+        .map(|column| spelled(&column.name))
+        .filter(|name| !filled.contains(&name.as_str()))
+        .collect();
+    (columns, inferred)
+}
+
 /// The read columns of a files source: the file's types, or the pinned ones (converted while reading).
 pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     let mut problems: Vec<String> = Vec::new();
@@ -1082,8 +1117,10 @@ pub(crate) fn nanosecond_columns(
                     StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
                 )
             })
-            .filter(|column| !spec.pinned.contains_key(&column.name))
-            .filter(|column| fewer_digits(live, &column.name).is_none())
+            .filter(|column| {
+                let loaded = spec.source_table.loaded_as(&column.name);
+                !spec.pinned.contains_key(loaded) && fewer_digits(live, loaded).is_none()
+            })
             .map(|column| column.name.clone())
             .collect(),
         false => Vec::new(),
@@ -1103,9 +1140,11 @@ pub(crate) fn truncated_nanoseconds(spec: &TableSpec, live: Option<&[LiveColumn]
             matches!(
                 column.stored_read,
                 StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
-            ) && !spec.pinned.contains_key(&column.name)
+            ) && !spec
+                .pinned
+                .contains_key(spec.source_table.loaded_as(&column.name))
         })
-        .filter_map(|column| truncated_warning(live, &column.name))
+        .filter_map(|column| truncated_warning(live, spec.source_table.loaded_as(&column.name)))
         .collect()
 }
 
@@ -1237,29 +1276,10 @@ pub(crate) async fn plan_files(
         from: request.bounds.0,
         to: request.bounds.1,
     };
-    let columns: Vec<DesiredColumn> = request
-        .read_columns
-        .iter()
-        .map(|column| DesiredColumn {
-            name: column.name.clone(),
-            column_type: column.output.clone(),
-            origin: ColumnOrigin::Source,
-        })
-        .collect();
-    let constants: Vec<&str> = request
-        .files
-        .partition_types
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
-        .collect();
+    let (columns, inferred) =
+        files_read_as(spec, request.read_columns, &request.files.partition_types);
     let checks = TextChecks {
-        inferred: request
-            .read_columns
-            .iter()
-            .map(|column| column.name.clone())
-            .filter(|name| !spec.pinned.contains_key(name) && !constants.contains(&name.as_str()))
-            .collect(),
+        inferred,
         ..request.files.checks.clone()
     };
     let nanos = nanosecond_columns(spec, &request.files.table.columns, request.live);
@@ -1306,13 +1326,13 @@ pub(crate) async fn read_source(
     mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), LoaderError>,
 ) -> Result<u64, LoaderError> {
     let mut failed: Option<LoaderError> = None;
-    let read = read_each(reader, table, part, async |batch| {
+    let read = Box::pin(read_each(reader, table, part, async |batch| {
         on_batch(batch).await.map_err(|error| {
             let text = error.to_string();
             failed = Some(error);
             text
         })
-    })
+    }))
     .await;
     match (read, failed) {
         (Err(read), Some(failed)) if failed.is_retryable() => {
@@ -1356,7 +1376,11 @@ async fn read_each(
                 },
                 None => files.clone(),
             };
-            Ok(read_files(folder, &read, &part.footers, on_batch).await?)
+            let mut on_batch = on_batch;
+            let loaded = async |batch: RecordBatch| {
+                on_batch(loaded_batch(&batch, &table.spec.source_table)?).await
+            };
+            Ok(read_files(folder, &read, &part.footers, loaded).await?)
         }
         (SourceReader::Snowflake(snowflake), _) => {
             let filter = part.filter.or_else(|| table.source_filter.clone());
@@ -1398,7 +1422,11 @@ async fn read_each(
             Ok(read_bigquery_rows(reader, &request, on_batch).await?)
         }
         (SourceReader::Sheets(client, spreadsheet_id), _) => {
-            let batch = sheet_rows(client, spreadsheet_id, table).await?;
+            let batch = loaded_batch(
+                &sheet_rows(client, spreadsheet_id, table).await?,
+                &table.spec.source_table,
+            )
+            .map_err(LoaderError::Invalid)?;
             let rows = batch.num_rows() as u64;
             let mut on_batch = on_batch;
             on_batch(batch).await.map_err(LoaderError::Invalid)?;

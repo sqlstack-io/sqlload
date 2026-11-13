@@ -1100,6 +1100,8 @@ pub(crate) struct UnnestPlanTestCase {
     pub(crate) description: &'static str,
     pub(crate) settings: &'static str,
     pub(crate) files_target: bool,
+    /// The one file under `drop/`.
+    pub(crate) file: &'static str,
     pub(crate) expected_ok: bool,
     /// Text the plan's output holds; empty when it plans.
     pub(crate) expected_problem: &'static str,

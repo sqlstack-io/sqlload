@@ -8,49 +8,8 @@ use arrow_schema::{DataType, Schema, SchemaRef};
 
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::ColumnType;
-use crate::postgres_source::models::{ReadColumn, SourceColumn, SourceTable};
+use crate::postgres_source::models::ReadColumn;
 use crate::row_batches::main::normalise_batch::normalise_batch;
-
-/// How the table spells its column `name`, which the read asks for and gets back: its source spelling when the load renames it.
-pub(crate) fn source_name<'a>(table: &'a SourceTable, name: &'a str) -> &'a str {
-    table
-        .columns
-        .iter()
-        .find(|column| column.name == name)
-        .and_then(|column| column.source_spelling.as_deref())
-        .unwrap_or(name)
-}
-
-/// The column of `table` the source spells `spelling` and the load renames.
-fn spelled<'a>(table: &'a SourceTable, spelling: &str) -> Option<&'a SourceColumn> {
-    table
-        .columns
-        .iter()
-        .find(|column| column.source_spelling.as_deref() == Some(spelling))
-}
-
-/// `batch` with each field the load renames under its loaded name, so the read columns find it.
-pub(crate) fn loaded_fields(
-    batch: &RecordBatch,
-    table: &SourceTable,
-) -> Result<RecordBatch, String> {
-    let schema = batch.schema();
-    let fields: Vec<arrow_schema::FieldRef> = schema
-        .fields()
-        .iter()
-        .map(|field| match spelled(table, field.name()) {
-            Some(column) => Arc::new(field.as_ref().clone().with_name(&column.name)),
-            None => field.clone(),
-        })
-        .collect();
-    batch
-        .clone()
-        .with_schema(Arc::new(Schema::new_with_metadata(
-            fields,
-            schema.metadata().clone(),
-        )))
-        .map_err(|error| error.to_string())
-}
 
 /// The Arrow schema the read columns are handed on in, with the columns `json` reads from records and lists.
 pub(crate) fn output_schema(columns: &[ReadColumn]) -> Result<(SchemaRef, Vec<bool>), String> {

@@ -5,6 +5,7 @@ pub mod flatten_batch;
 pub mod flattened_columns;
 pub mod json_lists;
 pub mod json_rows;
+pub mod loaded_batch;
 pub mod merge_schema;
 pub mod normalise_batch;
 pub mod projection;

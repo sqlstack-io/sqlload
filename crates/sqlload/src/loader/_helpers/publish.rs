@@ -75,6 +75,7 @@ use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::merged_record;
 use crate::loader::_helpers::sources::ReadPart;
+use crate::loader::_helpers::sources::files_read_as;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
@@ -1180,19 +1181,8 @@ impl Publisher {
             replanned_columns.live,
             replanned_columns.schema,
         );
-        let read_as: Vec<DesiredColumn> = read_columns
-            .iter()
-            .map(|column| DesiredColumn {
-                name: column.name.clone(),
-                column_type: column.output.clone(),
-                origin: ColumnOrigin::Source,
-            })
-            .collect();
-        let inferred: Vec<String> = read_columns
-            .iter()
-            .map(|column| column.name.clone())
-            .filter(|name| !widened.pinned.contains_key(name) && !replaced.contains(&name.as_str()))
-            .collect();
+        let (read_as, inferred) =
+            files_read_as(&widened, &read_columns, &source_files.partition_types);
         let nanos = widened.files.as_ref().map_or_else(Vec::new, |files| {
             nanosecond_columns(&widened, &files.table.columns, live.as_deref())
         });
