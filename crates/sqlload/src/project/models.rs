@@ -572,6 +572,7 @@ impl SourceConfig {
                     .clone()
                     .unwrap_or_else(|| RECORD_COLUMN.to_owned())
             }),
+            flatten_objects: false,
         }
     }
 

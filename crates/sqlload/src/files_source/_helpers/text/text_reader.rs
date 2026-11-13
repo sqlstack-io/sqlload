@@ -151,7 +151,8 @@ async fn typed_records(
             Records::Csv(Box::new(reader))
         }
         format => Records::Json {
-            reader: JsonReader::new(bytes, format == SourceFormat::Ndjson),
+            reader: JsonReader::new(bytes, format == SourceFormat::Ndjson)
+                .flattening(request.encoding.flatten_objects),
             columns: request
                 .columns
                 .iter()

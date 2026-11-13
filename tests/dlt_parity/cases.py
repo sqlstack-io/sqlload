@@ -154,6 +154,24 @@ CASES: tuple[Case, ...] = (
 		runs=(ndjson('{"id": 1, "OrderID": 1, "Order ID": 2}'),),
 	),
 	Case(
+		name="nested_objects",
+		fmt="ndjson",
+		disposition="merge",
+		runs=(
+			ndjson(
+				'{"id": 1, "Customer": {"Name": "a", "Address": {"City": "x", "Zip": 1}}, "meta": {}, "items": [{"sku": "s", "dims": {"w": 2}}]}',
+				'{"id": 2, "Customer": null, "items": []}',
+			),
+			ndjson('{"id": 2, "Customer": {"Name": "b", "Address": null}, "items": [{"sku": "t"}]}'),
+		),
+	),
+	Case(
+		name="list_in_object",
+		fmt="ndjson",
+		disposition="append",
+		runs=(ndjson('{"id": 1, "customer": {"tags": ["a", "b"]}}'),),
+	),
+	Case(
 		name="new_list_field_later",
 		fmt="ndjson",
 		disposition="append",

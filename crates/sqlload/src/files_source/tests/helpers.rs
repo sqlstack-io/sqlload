@@ -22,7 +22,7 @@ use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::_helpers::text::csv_records::{FirstRecord, QuoteTracker};
-use crate::files_source::_helpers::text::json_records::JsonSplitter;
+use crate::files_source::_helpers::text::json_records::{JsonSplitter, flattened_record};
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::main::after_load::after_load;
 use crate::files_source::main::discover_files::discover_files;
@@ -33,7 +33,8 @@ use crate::files_source::models::{
     SourceFormat, TextChecks, XlsxOptions, XmlOptions,
 };
 use crate::files_source::tests::test_types::{
-    AfterLoadTestCase, ReadTextFilesTestCase, SplitJsonTestCase, TrackCsvTestCase,
+    AfterLoadTestCase, FlattenJsonTestCase, ReadTextFilesTestCase, SplitJsonTestCase,
+    TrackCsvTestCase,
 };
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::main::resolve_location::resolve_location;
@@ -377,6 +378,27 @@ pub(crate) fn split_json(test_case: &SplitJsonTestCase) -> Result<Vec<u64>, Stri
     }
     lines.extend(splitter.finish()?.into_iter().map(|record| record.line));
     Ok(lines)
+}
+
+/// The case's object flattened as `naming = \"dlt\"` flattens it, shown as the case's `expected` describes.
+pub(crate) fn flatten_json(test_case: &FlattenJsonTestCase) -> Result<String, String> {
+    let mut splitter = JsonSplitter::new(true, 1024);
+    let mut records = splitter.push(test_case.text.as_bytes())?;
+    records.extend(splitter.finish()?);
+    let mut made: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let record = flattened_record(records.remove(0), &mut made)?;
+    let fields: Vec<String> = record
+        .fields
+        .iter()
+        .map(|(name, value, nested)| {
+            format!(
+                "{name}={}",
+                nested.clone().unwrap_or_else(|| value.to_string())
+            )
+        })
+        .collect();
+    let made: Vec<String> = made.into_iter().collect();
+    Ok(format!("{} made {}", fields.join("|"), made.join(",")))
 }
 
 /// The first record's fields joined by `|`, once the whole file was followed for open quotes.

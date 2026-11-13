@@ -177,11 +177,11 @@ fn given_names_when_normalising_as_dlt_then_they_match_dlts_snake_case_and_stay_
             expected_name: "orders__line_items",
         },
         DltNameTestCase {
-            description: "a list field holding __ is one name, its __ merged",
+            description: "a list field holding __ keeps it, each part normalised, as a dlt 1.32.0 pipeline names it",
             normalise: child_of_orders,
             name: "a__B",
             max_length: Some(63),
-            expected_name: "orders__a_b",
+            expected_name: "orders__a__b",
         },
     ];
     for test_case in test_cases {
