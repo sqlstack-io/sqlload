@@ -48,8 +48,8 @@ Set in a table entry:
   it in `_sqlload_root_id`. At each commit, the merged rows' items are deleted from every child
   table, then their new items are inserted. A row whose list shrank, emptied or went missing keeps
   only what it holds now. When a commit repeats a key, only the kept row's items load (see
-  [Repeated keys](/docs/concepts/write-strategies/#repeated-keys)). From 0.41.1 (not released yet), a merged
-  row whose id didn't come from its key, as one dlt loaded with its `delete-insert` merge, also
+  [Repeated keys](/docs/concepts/write-strategies/#repeated-keys)). From 0.41.1, a merged row
+  whose id didn't come from its key, as one dlt loaded with its `delete-insert` merge, also
   loses the items its child rows tie to its old id in `_sqlload_root_id` (`_dlt_root_id`). Child
   rows an `append` loaded hold no root id, so they stay when the table later switches to `merge`.
 - `delete_insert` (added in 0.42.0): each row's items carry its id in `_sqlload_root_id`. Before a
@@ -58,7 +58,7 @@ Set in a table entry:
   the two leaves those rows without items until a rerun loads the window again.
 
 Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets, and from
-0.41.0 (not released yet) ClickHouse targets, and from 0.42.0 Databricks targets. Databricks child
+0.41.0 ClickHouse targets, and from 0.42.0 Databricks targets. Databricks child
 tables are staged and copied in as their parent is; so far they are tested against a stand-in for
 the Databricks API, not a live warehouse.
 `state = "logged"` and `contract = "enforced"` tables write child tables from 0.42.0. A logged
@@ -115,7 +115,7 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
 - A field with a child table from an earlier load stays one. A table counts as one only when it is
   named `<table>__<field>` and has a parent-id column (`_sqlload_parent_id` or `_dlt_parent_id`,
   whatever the `naming`), and is not another table's child table (`orders__notes__items` when a
-  table `orders__notes` holds no parent-id column). From 0.41.1 (not released yet), other tables
+  table `orders__notes` holds no parent-id column). From 0.41.1, other tables
   named so, such as a plain `orders__notes` beside `orders`, are left as they are. Before that, a
   `replace` emptied them and a `merge` could delete rows from them.
 - A list field first seen after a table's first load is a new child table, which

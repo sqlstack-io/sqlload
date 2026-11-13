@@ -6,6 +6,8 @@
 #   is unset: /etc on Linux, as distribution driver packages register there; Homebrew's etc on macOS.
 #   DRIVER_PATH is a colon-separated list of folders searched for a driver registered by file name
 #   alone, as Debian and Ubuntu packages register theirs (Driver=psqlodbcw.so).
+# Cross-compiles for UNIXODBC_HOST when it is set (a target triple such as x86_64-apple-darwin), with
+# the compiler in CC.
 # The source release and its SHA-256 are pinned in unixodbc_source.sh.
 set -euo pipefail
 
@@ -21,6 +23,7 @@ cd "$work/${tarball%.tar.gz}"
 # The included libltdl is built into the libraries, so they need no system libltdl; no readline, as
 # only the libraries ship.
 ./configure --prefix="$prefix" --libdir="$libdir" --sysconfdir="$sysconfdir" \
+	${UNIXODBC_HOST:+--host="$UNIXODBC_HOST"} \
 	${driver_path:+--with-odbc-driver-path="$driver_path"} \
 	--with-included-ltdl --enable-readline=no --enable-editline=no --enable-static=no > "$work/configure.log" ||
 	{ tail -50 "$work/configure.log"; exit 1; }

@@ -96,8 +96,9 @@ jobs:
               )
           PY
 
+  # Each package's wheel builds in its own job, so the CLI and the extension build side by side.
   wheels:
-    name: Build wheel (${{ matrix.platform.name }})
+    name: Build ${{ matrix.package.name }} (${{ matrix.platform.name }})
     needs: [release-tag, release-metadata]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -110,16 +111,44 @@ jobs:
           - name: linux-aarch64
             runner: ubuntu-24.04-arm
             target: aarch64
+          # homebrew: the Homebrew prefix of the Macs the wheel runs on, whose etc the bundled
+          # unixODBC reads and whose lib it finds drivers in by name.
           - name: macos-arm64
             runner: macos-latest
             target: aarch64
-          # GitHub's last Intel macOS image, available until August 2027.
+            homebrew: /opt/homebrew
+          # Cross-compiled on Apple silicon, several times faster than GitHub's Intel runners;
+          # wheel-smoke installs and runs it on an Intel Mac.
           - name: macos-x86_64
-            runner: macos-15-intel
+            runner: macos-latest
             target: x86_64
-          - name: windows-x86_64
-            runner: windows-latest
-            target: x86_64
+            homebrew: /usr/local
+            cross: x86_64-apple-darwin
+            # librdkafka's own configure (rdkafka-sys) builds for the runner's architecture unless
+            # its compiler and linker flags name the target's.
+            arch_flags: -arch x86_64
+        # builds: the packages the cell builds. sqlload-cli ships one standalone Rust executable
+        # (OpenSSL built in) and links no libpython, so maturin tags it py3-none-<platform>. sqlload
+        # is a PyO3 extension built against the stable ABI, so one cp310-abi3 wheel per platform
+        # serves CPython 3.10 and later, and cross-compiles without a target Python.
+        package:
+          - name: CLI wheel
+            id: cli
+            builds: cli
+          - name: Python extension wheel
+            id: python
+            builds: python
+        # Windows builds both in one job: the second reuses the first's build and takes about two
+        # minutes, where a job of its own builds everything again.
+        include:
+          - platform:
+              name: windows-x86_64
+              runner: windows-latest
+              target: x86_64
+            package:
+              name: CLI and Python extension wheels
+              id: both
+              builds: cli python
     steps:
       - uses: actions/checkout@v5
         with:
@@ -143,18 +172,28 @@ jobs:
         run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
       # unixODBC built from its pinned source, which the Linux and macOS wheels bundle as a separate
       # shared library (licenses/ in each package; Linux builds it in the manylinux container below).
-      # The runner's Homebrew copy goes first, so the wheels link this one and the smoke test runs
-      # with no unixODBC installed. It reads Homebrew's etc, where Homebrew's drivers register.
+      # The runner's Homebrew copy goes first, so the wheels link this one. It reads the target Macs'
+      # Homebrew etc, where Homebrew's drivers register; the Intel one is cross-compiled for x86_64.
       - name: Build unixODBC for macOS
         if: runner.os == 'macOS'
+        env:
+          HOMEBREW: ${{ matrix.platform.homebrew }}
+          UNIXODBC_HOST: ${{ matrix.platform.cross }}
         run: |
           if brew list --versions unixodbc > /dev/null 2>&1; then brew uninstall --ignore-dependencies unixodbc; fi
-          bash .github/scripts/build_unixodbc.sh "$RUNNER_TEMP/unixodbc" "$(brew --prefix)/etc" '' "$(brew --prefix)/lib"
+          if [[ -n "$UNIXODBC_HOST" ]]; then export CC="clang -arch ${UNIXODBC_HOST%%-*}"; fi
+          bash .github/scripts/build_unixodbc.sh "$RUNNER_TEMP/unixodbc" "$HOMEBREW/etc" '' "$HOMEBREW/lib"
           echo "RUSTFLAGS=-L native=$RUNNER_TEMP/unixodbc/lib" >> "$GITHUB_ENV"
-      # sqlload-cli ships one standalone Rust executable (OpenSSL built in) and links no libpython,
-      # so maturin tags it py3-none-<platform>. The tag is asserted before release.
-      - name: Build native CLI wheel
+      # sccache keeps compiled crates and DuckDB's bundled C++ between runs of the same branch, so a
+      # release build reuses the previous release's work and recompiles little beyond sqlload. Not on
+      # Windows, where it made the build about 12 minutes slower. If the Actions cache is down when
+      # sccache starts, the build fails; rerun it (PyPI skips wheels it already has).
+      - name: Build CLI wheel
+        if: contains(matrix.package.builds, 'cli')
         uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS: ${{ matrix.platform.arch_flags }}
+          LDFLAGS: ${{ matrix.platform.arch_flags }}
         with:
           command: build
           # The wheels build ODBC (sdists don't, so building one needs no driver manager); repair copies
@@ -162,36 +201,78 @@ jobs:
           args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
+          sccache: ${{ runner.os != 'Windows' }}
           working-directory: packages/sqlload-cli
           # The vendored OpenSSL build runs Perl's Configure, which needs modules the
           # manylinux image leaves out. unixODBC reads /etc, where distribution drivers register.
           before-script-linux: |
             dnf install -y perl-IPC-Cmd perl-Time-Piece
             bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
-      - name: Assert native CLI wheel is interpreter-agnostic
-        shell: bash
-        run: bash .github/scripts/assert_cli_wheel_tags.sh dist
-      # sqlload is a PyO3 extension built against the stable ABI, so one cp310-abi3 wheel per
-      # platform serves CPython 3.10 and later.
       - name: Build Python extension wheel
+        if: contains(matrix.package.builds, 'python')
         uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS: ${{ matrix.platform.arch_flags }}
+          LDFLAGS: ${{ matrix.platform.arch_flags }}
         with:
           command: build
-          # The wheels build ODBC (sdists don't, so building one needs no driver manager); repair copies
-          # unixODBC into the Linux and macOS wheels; Windows uses odbc32.dll.
           args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
+          sccache: ${{ runner.os != 'Windows' }}
           working-directory: packages/sqlload
           before-script-linux: |
             dnf install -y perl-IPC-Cmd perl-Time-Piece
             bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
-      - name: Assert Python extension wheel targets the stable ABI
+      - name: Assert the CLI wheel's tag
+        if: contains(matrix.package.builds, 'cli')
+        shell: bash
+        run: bash .github/scripts/assert_cli_wheel_tags.sh dist
+      - name: Assert the Python extension wheel's tag
+        if: contains(matrix.package.builds, 'python')
         shell: bash
         run: bash .github/scripts/assert_python_wheel_tags.sh dist
-      - name: Assert every wheel carries unixODBC's notice, and Linux and macOS wheels bundle it
+      - name: Assert the wheel carries unixODBC's notice, and a Linux or macOS wheel bundles it
         shell: bash
         run: bash .github/scripts/assert_wheel_notices.sh dist
+      - uses: actions/upload-artifact@v5
+        with:
+          name: wheel-${{ matrix.platform.name }}-${{ matrix.package.id }}
+          path: dist
+
+  # Each platform's two wheels, installed and run natively: the Intel Mac's on an Intel runner.
+  wheel-smoke:
+    name: Smoke-test wheels (${{ matrix.platform.name }})
+    needs: [release-tag, wheels]
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: linux-x86_64
+            runner: ubuntu-latest
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - name: macos-arm64
+            runner: macos-latest
+          # GitHub's last Intel macOS image, available until August 2027.
+          - name: macos-x86_64
+            runner: macos-15-intel
+          - name: windows-x86_64
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-tag.outputs.tag }}
+          sparse-checkout: .github/scripts
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: wheel-${{ matrix.platform.name }}-*
+          path: dist
+          merge-multiple: true
       - name: Smoke-test the wheels
         shell: bash
         run: |
@@ -208,7 +289,7 @@ jobs:
           "${cli}/python" -m pip install --quiet dist/sqlload_cli-*.whl
           "${cli}/sqlload" --version
           # ODBC through each wheel's driver manager: on Linux in a container with no unixODBC (the
-          # runner image has one), on macOS here (Homebrew's was removed above), on Windows odbc32.dll.
+          # runner image has one), on macOS once Homebrew's is removed, on Windows odbc32.dll.
           case "${RUNNER_OS}" in
             Linux)
               docker run --rm -v "$PWD:/w" -w /w python:3.12-slim bash -c '
@@ -217,17 +298,13 @@ jobs:
                 /v/bin/python .github/scripts/smoke_odbc_wheel.py /v/bin/sqlload /c/bin/sqlload --default-ini /etc/odbcinst.ini --driver-folder "/usr/lib/$(uname -m)-linux-gnu/odbc"'
               ;;
             macOS)
-              rm -rf "$RUNNER_TEMP/unixodbc"
+              if brew list --versions unixodbc > /dev/null 2>&1; then brew uninstall --ignore-dependencies unixodbc; fi
               "${bin}/python" .github/scripts/smoke_odbc_wheel.py "${bin}/sqlload" "${cli}/sqlload" --default-ini "$(brew --prefix)/etc/odbcinst.ini"
               ;;
             Windows)
               "${bin}/python" .github/scripts/smoke_odbc_wheel.py "${bin}/sqlload" "${cli}/sqlload"
               ;;
           esac
-      - uses: actions/upload-artifact@v5
-        with:
-          name: wheel-${{ matrix.platform.name }}
-          path: dist
 
   sdist:
     name: Build sdists
@@ -269,6 +346,7 @@ jobs:
     needs:
       - release-tag
       - wheels
+      - wheel-smoke
       - sdist
     runs-on: ubuntu-latest
     environment: pypi
@@ -312,6 +390,7 @@ jobs:
     needs:
       - release-tag
       - wheels
+      - wheel-smoke
       - sdist
     runs-on: ubuntu-latest
     environment: crates

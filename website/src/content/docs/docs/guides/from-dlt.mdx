@@ -161,7 +161,7 @@ A table dlt loaded can carry on under SQLLoad with the same settings: the first 
 columns to it and merges into the rows dlt wrote. dlt's default `delete-insert` merge gives root
 rows random ids, where SQLLoad's `merge` (like dlt's `upsert`) derives them from the key
 ([helpers.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/helpers.py#L107-L120)).
-From 0.41.1 (not released yet), SQLLoad's merge also finds a merged row's child rows by the id it
+From 0.41.1, SQLLoad's merge also finds a merged row's child rows by the id it
 held before, so the items dlt loaded are replaced like any others, and the row keeps its new,
 key-derived id from then on. Before 0.41.1 those items stay beside the new ones: load such a table
 from the start once instead, with `sqlload load --reload --yes <table>` for a Python table, or for a
@@ -229,6 +229,6 @@ Under `naming = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
 - Two columns whose names normalise to one stop the plan, naming both, where dlt keeps one of them.
 - Before 0.42.0, `unnest` is refused on Databricks and files targets, under `delete_insert`,
   `state = "logged"` and `contract = "enforced"`, and for `postgres_cdc` sources, and `plan` names
-  the setting. ClickHouse targets take it from 0.41.0 (not released yet).
+  the setting. ClickHouse targets take it from 0.41.0.
 
 The full list, with how row ids are derived, is under [Naming](/docs/concepts/nested-data/#naming).
