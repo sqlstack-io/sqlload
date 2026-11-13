@@ -44,6 +44,7 @@ pub(crate) async fn run_after_load_case(
             .arg(&config)
             .arg("load")
             .arg("--json")
+            .args(step.args)
             .output()
             .map_err(|error| error.to_string())?;
         let report: serde_json::Value = serde_json::from_slice(&output.stdout)

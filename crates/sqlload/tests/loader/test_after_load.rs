@@ -16,6 +16,7 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             linked: &[],
             steps: &[AfterLoadStep {
                 removed: &[],
+                args: &[],
                 files: &[("drop/a.csv", "id,v\n1,a\n")],
                 expected_exit: 0,
                 expected_report: r#"{"after_load":null,"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
@@ -29,18 +30,21 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             steps: &[
                 AfterLoadStep {
                     removed: &[],
+                    args: &[],
                     files: &[("drop/a.csv", "id,v\n1,a\n"), ("drop/b.csv", "id,v\n2,b\n")],
                     expected_exit: 0,
                     expected_report: r#"{"after_load":{"action":"delete","failed":[],"files":2,"status":"done"},"problems":[],"rows":2,"skipped":[],"status":"loaded"}"#,
                 },
                 AfterLoadStep {
                     removed: &[],
+                    args: &[],
                     files: &[],
                     expected_exit: 0,
                     expected_report: r#"{"after_load":null,"problems":[],"rows":null,"skipped":["no files to load in drop/: after_load deleted or moved the ones already loaded"],"status":null}"#,
                 },
                 AfterLoadStep {
                     removed: &[],
+                    args: &[],
                     files: &[("drop/a.csv", "id,v\n3,cc\n")],
                     expected_exit: 0,
                     expected_report: r#"{"after_load":{"action":"delete","failed":[],"files":1,"status":"done"},"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
@@ -54,6 +58,7 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             linked: &[],
             steps: &[AfterLoadStep {
                 removed: &[],
+                args: &[],
                 files: &[
                     ("drop/a.csv", "id,v\n1,a\n"),
                     ("drop/2026/b.csv", "id,v\n2,b\n"),
@@ -69,6 +74,7 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             linked: &[],
             steps: &[AfterLoadStep {
                 removed: &[],
+                args: &[],
                 files: &[("done/a.csv", "old"), ("drop/a.csv", "id,v\n1,a\n")],
                 expected_exit: 0,
                 expected_report: r#"{"after_load":{"action":"move","failed":["<root>/drop/a.csv"],"files":0,"status":"failed"},"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
@@ -81,6 +87,7 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             linked: &[("archive", "/dev/shm")],
             steps: &[AfterLoadStep {
                 removed: &[],
+                args: &[],
                 files: &[
                     ("drop/a.csv", "id,v\n1,a\n"),
                     ("drop/ts=00%3A00/b.csv", "id,v\n2,b\n"),
@@ -100,30 +107,35 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             steps: &[
                 AfterLoadStep {
                     removed: &[],
+                    args: &[],
                     files: &[("drop/.keep", "")],
                     expected_exit: 1,
                     expected_report: r#"{"after_load":null,"problems":["no files to load in drop/, and scores was never loaded: after_load skips an emptied folder only once its table exists; check the source's path and connection"],"rows":null,"skipped":[],"status":null}"#,
                 },
                 AfterLoadStep {
                     removed: &[],
+                    args: &[],
                     files: &[("drop/a.csv", "id,v\n1,a\n")],
                     expected_exit: 0,
                     expected_report: r#"{"after_load":{"action":"move","failed":[],"files":1,"status":"done"},"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
                 },
                 AfterLoadStep {
                     removed: &[],
+                    args: &[],
                     files: &[],
                     expected_exit: 0,
                     expected_report: r#"{"after_load":null,"problems":[],"rows":null,"skipped":["no files to load in drop/: after_load deleted or moved the ones already loaded"],"status":null}"#,
                 },
                 AfterLoadStep {
                     removed: &[],
+                    args: &[],
                     files: &[("drop/b.json", "{}")],
                     expected_exit: 1,
                     expected_report: r#"{"after_load":null,"problems":["<root>/drop/: no .csv, .csv.gz, .csv.zst files found; check the source's path and format (an empty source never empties the destination)"],"rows":null,"skipped":[],"status":null}"#,
                 },
                 AfterLoadStep {
                     removed: &["drop"],
+                    args: &[],
                     files: &[],
                     expected_exit: 1,
                     expected_report: r#"{"after_load":null,"problems":["<root>/drop/: no .csv, .csv.gz, .csv.zst files found; check the source's path and format (an empty source never empties the destination); the folder cannot be read: No such file or directory (os error 2)"],"rows":null,"skipped":[],"status":null}"#,
@@ -132,11 +144,25 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             expected_files: &["done/a.csv=id,v\\n1,a\\n"],
         },
         AfterLoadTestCase {
+            description: "an emptied source still protects its rows: a table sharing its destination cannot replace it, even when only that table is selected",
+            settings: "write_strategy = \"append\"\nafter_load = \"delete\"\nconstant_columns = { feed = \"a\" }\n\n[sources.other]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"other/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\nconstant_columns = { feed = \"b\" }\n[sources.other.tables.other]\nname = \"scores\"\n",
+            linked: &[],
+            steps: &[AfterLoadStep {
+                removed: &[],
+                args: &["--select", "other"],
+                files: &[("drop/.keep", ""), ("other/b.csv", "id,v\n2,b\n")],
+                expected_exit: 1,
+                expected_report: r#"{"after_load":null,"problems":["scores is also loaded by scores.scores, and constant_columns tell their rows apart; other.other uses write_strategy = \"replace\", which would remove the other tables' rows: use merge on a unique_key that includes a constant column, or append"],"rows":null,"skipped":[],"status":null}"#,
+            }],
+            expected_files: &["other/b.csv=id,v\\n2,b\\n"],
+        },
+        AfterLoadTestCase {
             description: "a failed load deletes nothing",
             settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\non_duplicate_keys = \"fail\"\nafter_load = \"delete\"\n",
             linked: &[],
             steps: &[AfterLoadStep {
                 removed: &[],
+                args: &[],
                 files: &[("drop/a.csv", "id,v\n1,a\n1,b\n")],
                 expected_exit: 1,
                 expected_report: r#"{"after_load":null,"problems":[],"rows":null,"skipped":[],"status":"failed"}"#,

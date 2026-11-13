@@ -291,6 +291,8 @@ pub struct DrainedFiles {
     pub table: TableName,
     pub skipped: SkippedTable,
     pub problem: String,
+    /// Its settings resolved as a table with no columns, so tables sharing its destination are checked against them as against any configured table; `None` when they do not resolve.
+    pub spec: Option<TableSpec>,
 }
 
 /// The selected tables of one project for `contract`, before any destination is read.
