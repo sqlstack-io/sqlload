@@ -23,6 +23,7 @@ fn given_a_file_column_when_duckdb_would_read_the_files_itself_then_its_reader_n
             column_type: Ok(ColumnType::Int),
             direct_refusal: None,
             stored_read: StoredRead::default(),
+            lists: None,
         };
         assert_eq!(
             reserved_name(&column).is_some(),

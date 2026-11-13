@@ -1,4 +1,5 @@
 use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
+use crate::adapters::contract::constants::{STAGING_SUFFIX, SWAP_SUFFIX};
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
@@ -6,6 +7,7 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
+use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;
@@ -13,6 +15,7 @@ use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
+use crate::load_naming::constants::CHILD_TABLE_SEPARATOR;
 use crate::load_naming::main::child_table_name::child_table_name;
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
@@ -57,6 +60,7 @@ use crate::python_sources::models::TableRead;
 use crate::python_sources::types::BatchStream;
 use crate::python_sources::types::PythonHost;
 use crate::python_sources::types::Streamed;
+use crate::row_batches::main::choose_lists::choose_lists;
 use crate::row_batches::main::conform_batch::conform_batch;
 use crate::row_batches::main::flattened_columns::flattened_columns;
 use crate::row_batches::main::json_lists::json_lists;
@@ -64,6 +68,7 @@ use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::row_batches::models::ChildBatch;
 use crate::row_batches::models::Unnest;
+use crate::row_batches::types::ListChoices;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::SchemaPlan;
@@ -130,7 +135,77 @@ pub(crate) fn python_table(module: &str, table: &SourceTable) -> PythonTable {
             .iter()
             .map(|column| column.name.clone())
             .collect(),
+        lists: ListChoices::new(),
     }
+}
+
+/// The child tables `spec`'s table has in the destination (tables named `<table>__...`, staging and swap tables left out); none without `unnest`.
+pub(crate) async fn live_child_tables(
+    destination: &Destination,
+    spec: &TableSpec,
+) -> Result<Vec<String>, LoaderError> {
+    if spec.unnest == Unnest::None || spec.destination_path.is_some() {
+        return Ok(Vec::new());
+    }
+    let adapter = sql_adapter(spec.warehouse);
+    let found = text_values(
+        destination,
+        adapter.list_child_tables_sql(&spec.destination),
+    )
+    .await?;
+    Ok(found
+        .into_iter()
+        .filter(|name| !name.contains(STAGING_SUFFIX) && !name.ends_with(SWAP_SUFFIX))
+        .collect())
+}
+
+/// `spec` with each top-level field whose child table is among `children` chosen as a list field under `unnest = "all"`: an earlier load chose it, so this one keeps it one whatever its sampled values show (a value that is not a list then fails the load).
+pub(crate) fn with_live_children(spec: &TableSpec, children: &[String]) -> TableSpec {
+    let mut chosen = spec.clone();
+    if spec.unnest != Unnest::All || children.is_empty() {
+        return chosen;
+    }
+    let adapter = sql_adapter(spec.warehouse);
+    let live = |field: &str| {
+        let table = child_table_name(spec.naming, &spec.destination.table, field);
+        children.contains(&adapter.stored_name(&table))
+    };
+    if let Some(files) = &mut chosen.files {
+        for column in &mut files.table.columns {
+            if live(&column.name) {
+                column.lists = Some(true);
+            }
+        }
+    }
+    if let Some(python) = &mut chosen.python {
+        let prefix = adapter.stored_name(&format!(
+            "{}{CHILD_TABLE_SEPARATOR}",
+            spec.destination.table
+        ));
+        for name in children {
+            let field = name
+                .strip_prefix(&prefix)
+                .filter(|field| !field.contains(CHILD_TABLE_SEPARATOR));
+            if let Some(field) = field {
+                python.lists.insert(field.to_owned(), true);
+            }
+        }
+    }
+    chosen
+}
+
+/// Under `unnest = "all"`, the top-level columns the plan chose as list fields or not: from the sampled files, or from a Python table's rows so far.
+pub(crate) fn list_choices(spec: &TableSpec) -> ListChoices {
+    if spec.unnest != Unnest::All {
+        return ListChoices::new();
+    }
+    let sampled = spec
+        .files
+        .iter()
+        .flat_map(|files| &files.table.columns)
+        .filter_map(|column| Some((column.name.clone(), column.lists?)));
+    let yielded = spec.python.iter().flat_map(|python| python.lists.clone());
+    sampled.chain(yielded).collect()
 }
 
 /// A Python table's spec with the live table's data columns added (as the source has them, so `plan` shows no change for them), or `None` when there are none to add; its `constant_columns` are never the source's.
@@ -746,7 +821,13 @@ impl PythonFeed {
         self.check_flattened(&batch)?;
         let merged = merge_schema(&self.merged, &batch.schema());
         self.rows += batch.num_rows() as u64;
-        if merged != self.merged || self.publisher.is_none() {
+        let chosen = match (&self.table.spec.unnest, &mut self.table.spec.python) {
+            (Unnest::All, Some(python)) => {
+                choose_lists(&batch, &mut python.lists).map_err(LoaderError::Invalid)?
+            }
+            _ => false,
+        };
+        if merged != self.merged || self.publisher.is_none() || chosen {
             self.merged = merged;
             self.plan_data(load, false).await?;
         }
@@ -1082,6 +1163,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         python: Some(PythonTable {
             module: String::new(),
             declared: Vec::new(),
+            lists: ListChoices::new(),
         }),
         sheet: None,
         cdc: None,
@@ -1204,23 +1286,47 @@ impl ChildTables {
         Ok(())
     }
 
-    /// Finish every child table before the parent: columns that only held NULL become text, and what waits commits; under a `replace` (or `--reload`) an existing child table no rows reached is emptied too, so it never keeps an earlier load's items.
+    /// Finish every child table before the parent: columns that only held NULL become text, and what waits commits; under a `replace` (or `--reload`) an existing child table no rows reached (a listed one, or under `"all"` any named as the table's) is emptied too, so it never keeps an earlier load's items.
     pub(crate) async fn finish(
         &mut self,
         (parent, (load_id, loaded_at)): (&TablePlan, (&str, &str)),
     ) -> Result<(), LoaderError> {
         let replaced = matches!(parent.mode, WriteMode::Replace | WriteMode::Recreate);
-        let paths = match &parent.spec.unnest {
-            Unnest::Paths(paths) if replaced => paths.as_slice(),
-            _ => &[],
+        let spec = &parent.spec;
+        let adapter = sql_adapter(spec.warehouse);
+        let candidates: Vec<(String, String)> = match &spec.unnest {
+            Unnest::Paths(paths) if replaced => paths
+                .iter()
+                .map(|path| (path.clone(), unnested_table(spec, path)))
+                .collect(),
+            Unnest::All if replaced => {
+                let prefix = adapter.stored_name(&format!(
+                    "{}{CHILD_TABLE_SEPARATOR}",
+                    spec.destination.table
+                ));
+                live_child_tables(&self.destination, spec)
+                    .await?
+                    .into_iter()
+                    .filter_map(|table| {
+                        let path = table
+                            .get(prefix.len()..)?
+                            .replace(CHILD_TABLE_SEPARATOR, ".");
+                        Some((path, table))
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
         };
-        for path in paths {
-            if self.feeds.iter().any(|feed| feed.path == *path) {
+        for (path, table) in &candidates {
+            let fed = self.feeds.iter().any(|feed| {
+                adapter.stored_name(&feed.table.spec.destination.table)
+                    == adapter.stored_name(table)
+            });
+            if fed {
                 continue;
             }
-            let table = unnested_table(&parent.spec, path);
             let mut feed = ChildFeed {
-                table: child_plan(parent, (path, &table)),
+                table: child_plan(parent, (path, table)),
                 path: path.clone(),
                 merged: Schema::empty(),
                 publisher: None,

@@ -19,6 +19,7 @@ use crate::row_batches::_helpers::arrow_json::normalise_column;
 use crate::row_batches::_helpers::json_seed::raw_cell;
 use crate::row_batches::main::columns_batch::columns_batch;
 use crate::row_batches::models::{ChildBatch, RowColumns, Unnest, UnnestRequest};
+use crate::row_batches::types::ListChoices;
 use crate::row_ids::main::child_row_id::child_row_id;
 
 /// The key dlt gives a list that is itself an item of a list, so its items land a level down (`items__list`).
@@ -40,7 +41,16 @@ pub(crate) struct Split<'a> {
     pub(crate) unnest: &'a Unnest,
     pub(crate) max_depth: u32,
     pub(crate) naming: Naming,
+    /// Under `"all"`, the fields chosen as list fields or not so far, chosen further as values decide.
+    pub(crate) choices: &'a mut ListChoices,
     pub(crate) levels: Vec<Level>,
+}
+
+/// What a field's values say about it being a list field: whether some value is a list with items, and whether some value is neither NULL nor a list.
+#[derive(Default)]
+struct Seen {
+    list: bool,
+    other: bool,
 }
 
 /// Where one list's items go: the list field's dotted path and child table, its depth (1 for a field of the loaded table), and the row it belongs to with that row's root.
@@ -90,10 +100,9 @@ impl Split<'_> {
         if !self.unnests(field.name(), 1) {
             return Ok(false);
         }
-        let texts = json_texts(field, column)?;
-        if !matches!(self.unnest, Unnest::Paths(_)) && !holds_list(&texts) {
+        let Some(texts) = self.choose_column((field, column))? else {
             return Ok(false);
-        }
+        };
         let table = child_table_name(self.naming, request.table, field.name());
         for (row, text) in texts.iter().enumerate() {
             let (Some(text), Some(parent)) = (text, request.ids.get(row)) else {
@@ -112,6 +121,41 @@ impl Split<'_> {
             self.add_list(text, &place)?;
         }
         Ok(true)
+    }
+
+    /// The JSON texts of the column `field` when it moves to a child table (see [`Self::chooses`]), choosing it from its values when that is still open.
+    pub(crate) fn choose_column(
+        &mut self,
+        (field, column): (&Field, &ArrayRef),
+    ) -> Result<Option<Vec<Option<String>>>, String> {
+        let texts = json_texts(field, column)?;
+        let seen = texts
+            .iter()
+            .flatten()
+            .fold(Seen::default(), |seen, text| seen.and(text));
+        Ok(self.chooses(field.name(), &seen)?.then_some(texts))
+    }
+
+    /// Whether the field at `path` moves to a child table given what its values in hand show: always for a listed path; under `"all"` when it is chosen as a list field, or this is its first deciding value and that is a list (a NULL or empty list decides nothing). A field chosen as a list field with a value that is not a list fails, naming it, as storing that value or dropping it would both lose it.
+    fn chooses(&mut self, path: &str, seen: &Seen) -> Result<bool, String> {
+        if matches!(self.unnest, Unnest::Paths(_)) {
+            return Ok(true);
+        }
+        match (self.choices.get(path).copied(), seen) {
+            (Some(true), Seen { other: true, .. }) => Err(format!(
+                "{path}: unnest = \"all\" took {path} as a list field from its values so far, and a row holds a value that is not a list there; list the paths to unnest without {path}, so it stays a JSON column, or fix the row"
+            )),
+            (Some(chosen), _) => Ok(chosen),
+            (None, Seen { other: true, .. }) => {
+                self.choices.insert(path.to_owned(), false);
+                Ok(false)
+            }
+            (None, Seen { list: true, .. }) => {
+                self.choices.insert(path.to_owned(), true);
+                Ok(true)
+            }
+            (None, _) => Ok(false),
+        }
     }
 
     /// Whether the list field at `path`, `depth` levels down, becomes a child table: listed in `unnest` (or any list under `"all"`), no deeper than `max_depth`.
@@ -159,11 +203,17 @@ impl Split<'_> {
             Some(b'[') => vec![(NESTED_LIST_KEY.to_owned(), raw(item, place.path)?)],
             _ => vec![(VALUE_COLUMN.to_owned(), raw(item, place.path)?)],
         };
-        let (lists, cells): (Vec<_>, Vec<_>) = entries.into_iter().partition(|(key, value)| {
+        let mut lists: Vec<(String, Box<RawValue>)> = Vec::new();
+        let mut cells: Vec<(String, Box<RawValue>)> = Vec::new();
+        for (key, value) in entries {
             let nested = format!("{}.{key}", place.path);
-            self.unnests(&nested, place.depth + 1)
-                && (matches!(self.unnest, Unnest::Paths(_)) || value.get().starts_with('['))
-        });
+            let taken = self.unnests(&nested, place.depth + 1)
+                && self.chooses(&nested, &Seen::default().and(value.get()))?;
+            match taken {
+                true => lists.push((key, value)),
+                false => cells.push((key, value)),
+            }
+        }
         let level = self.level(place);
         for (key, value) in &cells {
             level.rows.push(
@@ -298,12 +348,22 @@ fn quoted(text: &str, is_json: bool) -> String {
     }
 }
 
-/// Whether column `name`'s JSON `texts` hold a list in any row: a list field under `unnest = "all"`.
-fn holds_list(texts: &[Option<String>]) -> bool {
-    texts
-        .iter()
-        .flatten()
-        .any(|text| text.trim_start().starts_with('['))
+impl Seen {
+    /// What is seen once the JSON value `text` is too.
+    fn and(self, text: &str) -> Self {
+        let text = text.trim_start();
+        match text.as_bytes().first() {
+            None | Some(b'n') => self,
+            Some(b'[') => Self {
+                list: self.list || !text[1..].trim_start().starts_with(']'),
+                ..self
+            },
+            Some(_) => Self {
+                other: true,
+                ..self
+            },
+        }
+    }
 }
 
 /// The parent's rows from the `kept` columns, with `schema`'s metadata.

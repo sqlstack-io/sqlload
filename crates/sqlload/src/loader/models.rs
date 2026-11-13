@@ -204,6 +204,8 @@ pub struct PythonTable {
     pub module: String,
     /// Columns declared with `columns` or `mask`; the rest are inferred at load.
     pub declared: Vec<String>,
+    /// Under `unnest = "all"`, the columns chosen from the yielded values as list fields or not so far.
+    pub lists: crate::row_batches::types::ListChoices,
 }
 
 /// The cursor range a load reads: `from <= cursor < to` (`from < cursor` when not inclusive), each open when `None`.
@@ -702,6 +704,8 @@ pub struct Publisher {
 /// The child tables of one table's load, each planned from its rows as they arrive.
 #[derive(Debug)]
 pub struct ChildTables {
+    /// Under `unnest = "all"`, the fields at every level chosen as list fields or not so far: the plan's, then as the rows decide.
+    pub choices: crate::row_batches::types::ListChoices,
     /// A connection of their own that plans, creates and alters them before each has its publisher.
     pub destination: Destination,
     pub options: PlanOptions,

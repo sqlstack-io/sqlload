@@ -19,6 +19,7 @@ pub fn batch_columns(
             column_type: Some(column.column_type.clone()),
             direct_refusal: column.direct_refusal.clone(),
             stored_read: column.stored_read,
+            lists: column.lists,
         })
         .collect();
     let mut problems: Vec<String> = Vec::new();

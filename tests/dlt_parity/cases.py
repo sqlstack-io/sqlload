@@ -99,6 +99,30 @@ CASES: tuple[Case, ...] = (
 		),
 	),
 	Case(
+		name="null_lists",
+		fmt="ndjson",
+		disposition="append",
+		runs=(ndjson('{"id": 1, "tags": ["x"]}', '{"id": 2, "tags": null}', '{"id": 3, "items": null, "tags": []}'),),
+	),
+	Case(
+		name="list_then_object",
+		fmt="ndjson",
+		disposition="append",
+		runs=(
+			ndjson('{"id": 1, "tags": ["x"]}'),
+			ndjson('{"id": 2, "tags": {"k": "y"}}'),
+		),
+	),
+	Case(
+		name="null_then_list",
+		fmt="ndjson",
+		disposition="append",
+		runs=(
+			ndjson('{"id": 1, "tags": null}'),
+			ndjson('{"id": 2, "tags": ["a", "b"]}'),
+		),
+	),
+	Case(
 		name="new_list_field_later",
 		fmt="ndjson",
 		disposition="append",

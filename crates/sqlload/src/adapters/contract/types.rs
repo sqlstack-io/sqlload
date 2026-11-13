@@ -12,8 +12,8 @@ use crate::adapters::contract::_helpers::promote::{
     drop_and_rename, merge_statement, swap_statements,
 };
 use crate::adapters::contract::_helpers::queries::{
-    check_query, cursor_query, insert_rows, loaded_files_query, staging_tables_query, staging_time,
-    stale_staging,
+    check_query, child_tables_query, cursor_query, insert_rows, loaded_files_query,
+    staging_tables_query, staging_time, stale_staging,
 };
 use crate::adapters::contract::_helpers::recreate::recreate_statements;
 use crate::adapters::contract::_helpers::schema::{
@@ -424,6 +424,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
             "table_name ILIKE {}",
             self.render_loader_value_literal(&format!("%{suffix}%"))
         )
+    }
+
+    /// The query listing the tables named as `parent`'s child tables are, in its schema.
+    fn list_child_tables_sql(&self, parent: &TableName) -> String {
+        child_tables_query(self, parent)
     }
 
     /// The query listing staging tables a crashed load may have left in `table`'s schema; `database` is the connection's, for warehouses that need one.

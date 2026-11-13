@@ -6,7 +6,7 @@ use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::_helpers::cells::cell_reader::{CellReader, cell_type};
-use crate::files_source::_helpers::plan::columns::SampledColumn;
+use crate::files_source::_helpers::plan::columns::{SampledColumn, joined_lists, text_lists};
 use crate::files_source::_helpers::text::bytes_reader::open_bytes;
 use crate::files_source::_helpers::text::csv_reader::CsvReader;
 use crate::files_source::_helpers::text::inference::{csv_value_type, json_value_type};
@@ -46,18 +46,20 @@ pub(crate) fn json_columns(records: &[JsonRecord]) -> Vec<SampledColumn> {
     let mut columns: Vec<SampledColumn> = Vec::new();
     let mut positions: HashMap<&str, usize> = HashMap::new();
     for record in records {
-        for (key, value, _) in &record.fields {
+        for (key, value, nested) in &record.fields {
             let position = *positions.entry(key.as_str()).or_insert_with(|| {
                 columns.push(SampledColumn {
                     name: key.clone(),
                     column_type: None,
                     direct_refusal: None,
                     stored_read: StoredRead::Plain,
+                    lists: None,
                 });
                 columns.len() - 1
             });
             let column = &mut columns[position];
             column.column_type = observe(column.column_type.take(), json_value_type(value));
+            column.lists = joined_lists(column.lists, value_lists(value, nested.as_deref()));
         }
     }
     columns
@@ -80,6 +82,11 @@ pub(crate) fn cell_columns(names: &[String], records: &[CellRecord]) -> Vec<Samp
                 Some(Ok(seen)) => Some(Ok(cell_type(seen, cell.kind.clone()))),
                 seen => observe(seen, Some(cell.kind.clone())),
             };
+            let lists = match cell.kind {
+                ColumnType::Json => text_lists(&cell.text),
+                _ => Some(false),
+            };
+            column.lists = joined_lists(column.lists, lists);
         }
     }
     columns
@@ -92,6 +99,16 @@ fn text_column(name: &str) -> SampledColumn {
         column_type: None,
         direct_refusal: None,
         stored_read: StoredRead::Plain,
+        lists: None,
+    }
+}
+
+/// What one JSON value says about its column being a list field, from its `nested` JSON text when it is a list or object: `None` for NULL or an empty list.
+fn value_lists(value: &serde_json::Value, nested: Option<&str>) -> Option<bool> {
+    match (value, nested) {
+        (_, Some(text)) => text_lists(text),
+        (serde_json::Value::Null, None) => None,
+        _ => Some(false),
     }
 }
 
@@ -114,6 +131,7 @@ pub(crate) fn csv_columns(names: &[String], batch: Option<&RecordBatch>) -> Vec<
             column_type,
             direct_refusal: None,
             stored_read: StoredRead::Plain,
+            lists: Some(false),
         });
     }
     columns
