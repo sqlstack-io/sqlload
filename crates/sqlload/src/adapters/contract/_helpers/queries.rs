@@ -11,6 +11,8 @@ use crate::adapters::contract::models::{
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::constants::CHILD_TABLE_SEPARATOR;
+use crate::load_naming::main::metadata_name::metadata_name;
+use crate::load_naming::models::{MetadataRole, Naming};
 use crate::schema_plan::models::DesiredColumn;
 
 /// A query for `MAX(column)` over the rows of the request's scope, whose text never depends on session time zones or output formats; `None` if a lookback needs a time column.
@@ -78,17 +80,21 @@ pub(crate) fn loaded_files_query<A: SqlAdapter + ?Sized>(
     )
 }
 
-/// The query listing the tables in `parent`'s schema named as its child tables are, `<parent>__<field>` (the staging tables among them too), read from `columns`, the warehouse's `information_schema.columns` that lists that schema: each name follows `1` when the table has the `parent_id` column, as a child table does, and `0` when not.
+/// The query listing the tables in `parent`'s schema named as its child tables are, `<parent>__<field>` (the staging tables among them too), read from `columns`, the warehouse's `information_schema.columns` that lists that schema: each name follows `1` when the table has a parent-id column under either naming, as a child table does, and `0` when not.
 pub(crate) fn child_tables_query<A: SqlAdapter + ?Sized>(
     adapter: &A,
     (parent, columns): (&TableName, &str),
-    parent_id: &str,
 ) -> String {
     let schema = adapter.render_loader_value_literal(&adapter.stored_name(&parent.schema));
     let prefix = adapter.stored_name(&format!("{}{CHILD_TABLE_SEPARATOR}", parent.table));
-    let parent_id = adapter.render_loader_value_literal(&adapter.stored_name(parent_id));
+    let parent_ids = [Naming::Sqlload, Naming::Dlt]
+        .map(|naming| {
+            let name = metadata_name(naming, MetadataRole::ParentId);
+            adapter.render_loader_value_literal(&adapter.stored_name(name))
+        })
+        .join(", ");
     format!(
-        "SELECT max(CASE WHEN column_name = {parent_id} THEN '1' ELSE '0' END) || table_name FROM {columns} WHERE table_schema = {schema} AND left(table_name, {}) = {} GROUP BY table_name",
+        "SELECT max(CASE WHEN column_name IN ({parent_ids}) THEN '1' ELSE '0' END) || table_name FROM {columns} WHERE table_schema = {schema} AND left(table_name, {}) = {} GROUP BY table_name",
         prefix.chars().count(),
         adapter.render_loader_value_literal(&prefix)
     )

@@ -1,5 +1,5 @@
 use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
-use crate::adapters::contract::constants::{STAGING_SUFFIX, SWAP_SUFFIX};
+use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
@@ -147,7 +147,7 @@ pub(crate) fn python_table(module: &str, table: &SourceTable) -> PythonTable {
     }
 }
 
-/// The child tables `spec`'s table has in the destination (tables named `<table>__...` that have the parent-id column, staging and swap tables, in any case, left out); none without `unnest`. A table named so without that column is another table, and so are the child tables of such a table (`orders__notes__items` beside a table `orders__notes`).
+/// The child tables `spec`'s table has in the destination (tables named `<table>__...` that have a parent-id column, staging tables and the swap tables named after them, in any case, left out); none without `unnest`. A table named so without that column is another table, and so are the child tables of such a table (`orders__notes__items` beside a table `orders__notes`).
 pub(crate) async fn live_child_tables(
     destination: &Destination,
     spec: &TableSpec,
@@ -156,10 +156,9 @@ pub(crate) async fn live_child_tables(
         return Ok(Vec::new());
     }
     let adapter = sql_adapter(spec.warehouse);
-    let parent_id = metadata_name(spec.naming, MetadataRole::ParentId);
     let found = table_names(
         destination,
-        adapter.list_child_tables_sql(&spec.destination, parent_id),
+        adapter.list_child_tables_sql(&spec.destination),
     )
     .await?;
     let (children, others): (Vec<&String>, Vec<&String>) =
@@ -168,10 +167,7 @@ pub(crate) async fn live_child_tables(
     Ok(children
         .into_iter()
         .filter_map(|marked| marked.get(1..))
-        .filter(|name| {
-            let name = name.to_ascii_lowercase();
-            !name.contains(STAGING_SUFFIX) && !name.ends_with(SWAP_SUFFIX)
-        })
+        .filter(|name| !name.to_ascii_lowercase().contains(STAGING_SUFFIX))
         .filter(|name| !is_child_of_any(name, &others))
         .map(str::to_owned)
         .collect())
