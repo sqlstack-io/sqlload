@@ -1537,7 +1537,19 @@ impl ChildTables {
             execute(&publisher.destination, deletes).await?;
         }
         let root_name = metadata_name(spec.naming, MetadataRole::RootId);
-        let row_id = adapter.render_identifier(metadata_name(spec.naming, MetadataRole::RowId));
+        let row_id_name = metadata_name(spec.naming, MetadataRole::RowId);
+        let row_id = adapter.render_identifier(row_id_name);
+        let root = adapter.render_identifier(root_name);
+        let mut roots = format!(
+            "{root} IN (SELECT {row_id} FROM {})",
+            adapter.render_qualified_name(staging)
+        );
+        if let Some(rekeyed) = adapter.render_rekeyed_row_ids(&request, staging, row_id_name) {
+            let found = text_values(destination, format!("{rekeyed} LIMIT 1")).await?;
+            if !found.is_empty() {
+                roots = format!("{roots} OR {root} IN ({rekeyed})");
+            }
+        }
         let mut tables: Vec<String> = self.merged.clone();
         for feed in self.feeds.iter().filter(|feed| feed.publisher.is_some()) {
             let table = &feed.table.spec.destination.table;
@@ -1566,15 +1578,7 @@ impl ChildTables {
                     table: format!("{}_{index}", staging.table),
                     ..staging.clone()
                 };
-                deletes.extend(adapter.render_clear_rows(
-                    &name,
-                    &format!(
-                        "{} IN (SELECT {row_id} FROM {})",
-                        adapter.render_identifier(root_name),
-                        adapter.render_qualified_name(staging)
-                    ),
-                    &scratch,
-                ));
+                deletes.extend(adapter.render_clear_rows(&name, &roots, &scratch));
             }
         }
         execute(destination, deletes).await

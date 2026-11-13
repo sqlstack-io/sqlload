@@ -1135,6 +1135,20 @@ pub(crate) struct RowIdTestCase {
     pub(crate) expected_result: &'static str,
 }
 
+/// A merge into child tables whose rows hang off root ids the merge's keys did not give (as dlt's `delete-insert` merge leaves them).
+pub(crate) struct RekeyedTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// The run loaded before the ids are rewritten.
+    pub(crate) loaded: &'static [(&'static str, &'static str)],
+    /// The run merged after.
+    pub(crate) merged: &'static [(&'static str, &'static str)],
+    /// Statements giving the loaded roots ids their keys don't derive, their child rows following.
+    pub(crate) rekey: &'static str,
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// A ClickHouse child table cleared of the items of the roots a merge stages.
 pub(crate) struct ClearRowsTestCase {
     pub(crate) description: &'static str,
