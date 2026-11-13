@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.41.1](https://github.com/sqlstack-io/sqlload/compare/v0.41.0...v0.41.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **unnest:** replace the child rows of merged roots whose ids their keys did not give ([#222](https://github.com/sqlstack-io/sqlload/issues/222)) ([af3f601](https://github.com/sqlstack-io/sqlload/commit/af3f601bd5951ebba8745e35dc9daa1c855c3af5))
+* **unnest:** take only real child tables under unnest = "all" ([#223](https://github.com/sqlstack-io/sqlload/issues/223)) ([aaa6a9b](https://github.com/sqlstack-io/sqlload/commit/aaa6a9bb7985650bbb5d7a11dfb1411a01fee49a))
+
 ## [0.41.0](https://github.com/sqlstack-io/sqlload/compare/v0.40.0...v0.41.0) (2026-11-13)
 
 
