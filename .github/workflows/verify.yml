@@ -121,10 +121,14 @@ jobs:
         run: |
           config=/etc/docker/daemon.json
           current=$(sudo cat "$config" 2>/dev/null || echo '{}')
-          jq '.features["containerd-snapshotter"] = true' <<<"$current" | sudo tee "$config" >/dev/null
+          updated=$(jq '.features["containerd-snapshotter"] = true' <<<"$current")
+          sudo tee "$config" >/dev/null <<<"$updated"
           sudo systemctl restart docker
           timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done'
-          docker info -f '{{.DriverStatus}}'
+          if ! docker info -f '{{.DriverStatus}}' | grep -q io.containerd.snapshotter.v1; then
+            echo "::error::Docker is not using the containerd image store: $(docker info -f '{{.DriverStatus}}')"
+            exit 1
+          fi
       # The image as the testkit pins it, and its cache key.
       - name: Read the SSH bastion image
         id: bastion
@@ -146,8 +150,8 @@ jobs:
         with:
           path: ${{ runner.temp }}/ssh-bastion.tar
           key: ${{ steps.bastion.outputs.key }}
+      # Even on a cache hit, so a cached image that does not resolve is still pulled signed in.
       - name: Sign in to GHCR
-        if: steps.bastion-cache.outputs.cache-hit != 'true'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_USER: ${{ github.actor }}
