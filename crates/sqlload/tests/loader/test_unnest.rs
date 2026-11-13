@@ -586,7 +586,7 @@ fn given_unnest_when_loading_into_clickhouse_then_lists_become_child_tables_link
 }
 
 #[test]
-fn given_merged_roots_when_clearing_a_clickhouse_child_table_then_only_their_items_leave_by_partition_publishes()
+fn given_merged_roots_when_clearing_child_tables_loaded_to_clickhouse_then_only_their_items_leave()
 -> Result<(), String> {
     let test_cases = [
         ClearRowsTestCase {
@@ -595,6 +595,7 @@ fn given_merged_roots_when_clearing_a_clickhouse_child_table_then_only_their_ite
             rows: "('r1', 'a'), ('r1', 'b'), ('r2', 'c'), (NULL, 'n')",
             roots: "('r1'), ('r3')",
             expected_rows: "NULL:n,r2:c",
+            expected_staged: "r3",
         },
         ClearRowsTestCase {
             description: "a table partitioned by sku: every partition holding a merged root's items is rebuilt, and one left empty goes",
@@ -602,6 +603,7 @@ fn given_merged_roots_when_clearing_a_clickhouse_child_table_then_only_their_ite
             rows: "('r1', 'a'), ('r2', 'a'), ('r1', 'b'), ('r3', 'c')",
             roots: "('r1')",
             expected_rows: "r2:a,r3:c",
+            expected_staged: "",
         },
         ClearRowsTestCase {
             description: "a single partition emptied by the clear goes",
@@ -609,6 +611,7 @@ fn given_merged_roots_when_clearing_a_clickhouse_child_table_then_only_their_ite
             rows: "('r1', 'a'), ('r2', 'b')",
             roots: "('r1')",
             expected_rows: "r2:b",
+            expected_staged: "",
         },
         ClearRowsTestCase {
             description: "roots with no items leave the table as it was",
@@ -616,6 +619,7 @@ fn given_merged_roots_when_clearing_a_clickhouse_child_table_then_only_their_ite
             rows: "('r1', 'a'), ('r2', 'b')",
             roots: "('r9')",
             expected_rows: "r1:a,r2:b",
+            expected_staged: "r9",
         },
     ];
     run_async(async {
@@ -673,10 +677,19 @@ fn given_merged_roots_when_clearing_a_clickhouse_child_table_then_only_their_ite
             )
             .await
             .map_err(|error| error.to_string())?;
+            execute(
+                serving,
+                vec![adapter.render_delete_staged(&staging, "_sqlload_row_id IN ('r1')")],
+            )
+            .await
+            .map_err(|error| error.to_string())?;
             let mut found: Vec<String> = Vec::new();
             for query in [
                 "SELECT arrayStringConcat(arraySort(groupArray(ifNull(_sqlload_root_id, 'NULL') || ':' || sku)), ',') FROM raw.orders__items",
                 "SELECT arrayStringConcat(arraySort(groupArray(name)), ',') FROM system.tables WHERE database = 'raw'",
+                &format!(
+                    "SELECT arrayStringConcat(arraySort(groupArray(_sqlload_row_id)), ',') FROM raw.{CLEAR_STAGING}"
+                ),
             ] {
                 found.push(run_client(&clickhouse, query, &[]).await?.trim().to_owned());
             }
@@ -684,7 +697,8 @@ fn given_merged_roots_when_clearing_a_clickhouse_child_table_then_only_their_ite
                 found,
                 [
                     test_case.expected_rows.to_owned(),
-                    format!("orders__items,{CLEAR_STAGING}")
+                    format!("orders__items,{CLEAR_STAGING}"),
+                    test_case.expected_staged.to_owned()
                 ],
                 "{}",
                 test_case.description

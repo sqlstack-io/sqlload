@@ -1146,4 +1146,6 @@ pub(crate) struct ClearRowsTestCase {
     pub(crate) roots: &'static str,
     /// The rows left, as sorted `root:sku`, joined by `,`.
     pub(crate) expected_rows: &'static str,
+    /// The staged roots left once root `r1`'s staged row is deleted, sorted and joined by `,`.
+    pub(crate) expected_staged: &'static str,
 }

@@ -3,10 +3,10 @@
 use crate::adapters::clickhouse::_helpers::dialect::layout::{layout_clauses, layout_problems};
 use crate::adapters::clickhouse::_helpers::dialect::type_names::{logical_type, portable_type};
 use crate::adapters::clickhouse::_helpers::dialect::write::{
-    clear_statements, publish_statement, swap_statements, write_statements,
+    clear_statements, swap_statements, write_statements,
 };
 use crate::adapters::clickhouse::constants::EMPTY_SORTING_KEY;
-use crate::adapters::clickhouse::models::{ClickHouseSql, PublishStep};
+use crate::adapters::clickhouse::models::ClickHouseSql;
 use crate::adapters::contract::models::{
     ChangeApply, CursorValue, TableName, WriteStatementsRequest,
 };
@@ -59,12 +59,12 @@ impl SqlAdapter for ClickHouseSql {
         clear_statements(self, table, condition, scratch)
     }
 
-    /// A lightweight `DELETE`, or `ALTER TABLE ... DELETE` where the server refuses one.
+    /// A mutation, which every supported server runs and `mutations_sync = 2` finishes before the next statement: a staging table is read only by its commit's insert, so it needs no lightweight `DELETE`, which servers before 25.5 cannot pin.
     fn render_delete_staged(&self, staging: &TableName, condition: &str) -> String {
-        publish_statement(&PublishStep::DeleteRows {
-            table: self.render_qualified_name(staging),
-            condition: condition.to_owned(),
-        })
+        format!(
+            "ALTER TABLE {} DELETE WHERE {condition}",
+            self.render_qualified_name(staging)
+        )
     }
 
     /// Not yet: changes would need merging into partitions batch by batch.
