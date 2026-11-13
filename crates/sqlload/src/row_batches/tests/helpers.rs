@@ -242,6 +242,7 @@ pub(crate) fn unnested(
         naming: crate::load_naming::models::Naming::Sqlload,
         name_limit: None,
         flatten_objects: false,
+        live: &[],
         ids: &ids,
         roots: roots.as_deref(),
     };
