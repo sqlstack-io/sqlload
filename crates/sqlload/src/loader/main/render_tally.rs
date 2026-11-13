@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::loader::_helpers::render::{change_line, thousands};
 use crate::loader::models::{TableOutcome, TallyLine};
 
-/// One aligned line per object `applied` created or altered and per table loaded or failed, then a final line counting them; and whether nothing failed.
+/// One aligned line per object `applied` created or altered and per table loaded, failed or skipped, then a final line counting them; and whether nothing failed.
 pub fn render_tally(
     applied: &[String],
     outcomes: &[TableOutcome],
@@ -29,6 +29,7 @@ pub fn render_tally(
                     format!("{} rows{note}  {seconds}", thousands(loaded.rows)),
                 )
             }
+            Err(reason) if outcome.skipped => ("skipped", reason.clone()),
             Err(reason) => ("failed", reason.clone()),
         };
         lines.push(TallyLine {
@@ -59,10 +60,11 @@ pub fn render_tally(
         })
         .collect();
     let count = |verb: &str| lines.iter().filter(|line| line.verb == verb).count();
-    let (loaded, failed) = (count("loaded"), count("failed"));
+    let (loaded, failed, skipped) = (count("loaded"), count("failed"), count("skipped"));
     let mut clauses: Vec<String> = Vec::new();
     clauses.extend((loaded > 0).then(|| format!("{loaded} loaded")));
     clauses.extend((failed > 0).then(|| format!("{failed} failed")));
+    clauses.extend((skipped > 0).then(|| format!("{skipped} skipped")));
     clauses.extend((loaded > 0).then(|| format!("{} rows", thousands(rows))));
     clauses.push(format!("{:.1}s", elapsed.as_secs_f64()));
     if !out.is_empty() {

@@ -92,7 +92,7 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
             description: "listed values over a path without a placeholder",
             job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"values","values":[1,2]}}"#,
             expected_problems: &[
-                "fan-out path /orders has no placeholder, so every key would request the same URL; add one such as {id}",
+                "fan-out path /orders has no placeholder, so every key would send the same request; add one such as {id} to the path or json_body",
             ],
         },
         JobProblemsTestCase {
@@ -123,6 +123,47 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
             expected_problems: &[
                 "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows",
                 "fan_out over path /shops/{shop}/orders has the placeholder {shop}; over must be a plain paginate",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "body placeholders filled from a paginate's keys; a GraphQL query's braces stay text",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"json_body":{"query":"{ order { lines } }","order":{"id":"{id}"}},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
+            expected_problems: &[],
+        },
+        JobProblemsTestCase {
+            description: "a body placeholder no level above gives",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"json_body":{"order":{"id":"{order_id}"}},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
+            expected_problems: &["fan-out json_body needs {order_id}, but over gives only id"],
+        },
+        JobProblemsTestCase {
+            description: "a listed key lacking a body placeholder",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"json_body":{"region":"{region}","id":"{id}"},"over":{"kind":"values","values":[{"id":1}]}}"#,
+            expected_problems: &[
+                "fan-out json_body needs {region}, which the key {\"id\":1} lacks",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a batch of zero, with a path placeholder and a placeholder within other text",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup/{id}","method":"POST","paginator":{"kind":"single"},"concurrency":2,"batch":0,"json_body":{"q":"id in {id}"},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
+            expected_problems: &[
+                "fan_out batch must be at least 1",
+                "a batched fan-out sends many keys in one request, so its path /lookup/{id} cannot have the placeholder {id}; put the keys in json_body",
+                "json_body value \"id in {id}\" holds a placeholder within other text; a batched fan-out fills only a value that is just the placeholder, such as \"{id}\", with the list of its keys",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a batch without a body to put its keys in",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"batch":100,"over":{"kind":"values","values":[1]}}"#,
+            expected_problems: &[
+                "fan-out path /lookup has no placeholder, so every key would send the same request; add one such as {id} to the path or json_body",
+                "fan_out batch= sends each batch's keys as a list in json_body, so it needs json_body with a placeholder, such as {\"ids\": \"{id}\"}",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a batched level used as another fan-out's over",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}/l/{line_id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"batch":10,"select":"$.items[*].line_id","json_body":{"ids":"{id}"},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}}"#,
+            expected_problems: &[
+                "batch= is for the fan-out that loads rows; a fan_out used as over sends one request per key",
             ],
         },
     ];

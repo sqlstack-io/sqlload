@@ -254,6 +254,7 @@ class Http:
 		json_body: Mapping[str, Any] | None = None,
 		key: str | None = None,
 		cells: Cells | None = None,
+		batch: int | None = None,
 	) -> Job:
 		"""Every page of `path` once per key of `over`, up to `concurrency` at a time: `over` is a paginate whose
 		`select` picks the keys (`"$.items[*].id"` fills `{id}`), or values (`["uk", "fr"]` fill the one placeholder;
@@ -261,13 +262,20 @@ class Http:
 
 		`over` can also be another fan_out whose `select` picks keys, as deep as they nest: each key keeps the
 		fields of the keys above it, so a third level's path can use `{order_id}` and `{item_id}`. `key` names the
-		placeholder this fan-out's selected values fill when it is itself an `over`."""
+		placeholder this fan-out's selected values fill when it is itself an `over`.
+
+		With `method="POST"`, `{name}` placeholders in `json_body`'s string values are filled from each key as well:
+		a value that is just `"{id}"` takes the key as it is (a number stays a number), and `plan` checks a level
+		above gives every one. `batch=1000` sends up to 1000 keys per request instead, each such value holding the
+		list of the batch's keys (`{"ids": "{id}"}` sends `{"ids": [1, 2, 3]}`); each batch is one request,
+		retried as a whole."""
 		if isinstance(over, (str, bytes)):
 			raise TypeError("fan_out over= takes a paginate or fan_out job or a list of values, not one string")
 		over_spec = dict(over._definition) if isinstance(over, Job) else {"kind": "values", "values": list(over)}
 		request = self._request(path, paginator or single(), params, select, on_status, (method, json_body))
 		projected = _projection(fields, keep_record)
-		return Job({"kind": "fan_out", **request, **projected, **_key(key), **_cells(cells), "over": over_spec, "concurrency": concurrency})
+		batched = {} if batch is None else {"batch": batch}
+		return Job({"kind": "fan_out", **request, **projected, **_key(key), **_cells(cells), "over": over_spec, "concurrency": concurrency, **batched})
 
 	def _request(
 		self,

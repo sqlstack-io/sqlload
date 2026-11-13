@@ -492,6 +492,8 @@ pub struct PlanOptions {
     pub batch_bytes: Option<usize>,
     /// `--resnapshot`: drop and recreate each selected `postgres_cdc` source's slot and copy every table again.
     pub resnapshot: bool,
+    /// `--fail-fast`: once a table fails, start no other; tables already loading finish.
+    pub fail_fast: bool,
 }
 
 /// What one Python table's load needs.
@@ -533,9 +535,25 @@ pub struct TableOutcome {
     /// Whether a failed load may succeed when run again unchanged; `false` once loaded.
     pub retryable: bool,
     pub elapsed: std::time::Duration,
+    /// Never started, because `--fail-fast` stopped the load after another table failed; `loaded` holds why.
+    pub skipped: bool,
 }
 
 impl TableOutcome {
+    /// `table` as a table `--fail-fast` never started once `failed` (a table's outcome name) failed: skipped and retryable, as a rerun loads it.
+    pub fn skipped(table: &TablePlan, failed: &str) -> Self {
+        Self {
+            table: table.outcome_name(),
+            origin: Some(table.origin()),
+            loaded: Err(format!(
+                "not started: --fail-fast stopped the load after {failed} failed"
+            )),
+            retryable: true,
+            elapsed: std::time::Duration::ZERO,
+            skipped: true,
+        }
+    }
+
     /// Whether this table needs nothing a rerun cannot give it: it loaded, or its failure is retryable.
     pub fn passes_on_rerun(&self) -> bool {
         match &self.loaded {
@@ -935,6 +953,8 @@ pub struct RunSummary {
     pub recreated: usize,
     pub loaded: usize,
     pub failed: usize,
+    /// Tables `--fail-fast` never started.
+    pub skipped: usize,
     pub rows: u64,
 }
 

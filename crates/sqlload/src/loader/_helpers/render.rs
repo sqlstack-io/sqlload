@@ -1090,6 +1090,7 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
         recreated: actions("recreated"),
         loaded: statuses("loaded"),
         failed: statuses("failed"),
+        skipped: statuses("skipped"),
         rows: tables.iter().filter_map(|table| table.rows).sum(),
     };
     let view = plan_view(plan);
@@ -1116,6 +1117,7 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
 fn table_result(outcome: &TableOutcome) -> TableResult {
     let (status, rows, note, error) = match &outcome.loaded {
         Ok(loaded) => ("loaded", Some(loaded.rows), loaded.note.clone(), None),
+        Err(reason) if outcome.skipped => ("skipped", None, None, Some(reason.clone())),
         Err(reason) => ("failed", None, None, Some(reason.clone())),
     };
     TableResult {

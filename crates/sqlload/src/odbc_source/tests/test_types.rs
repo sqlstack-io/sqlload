@@ -30,3 +30,13 @@ pub(crate) struct TimestampTextTestCase {
     pub(crate) digits: u16,
     pub(crate) expected_text: &'static str,
 }
+
+pub(crate) struct ConnectErrorTestCase {
+    pub(crate) description: &'static str,
+    /// The file written in the test's folder, by name, and what it holds.
+    pub(crate) file: (&'static str, Vec<u8>),
+    /// The file name the connection string registers as the driver library, in the same folder.
+    pub(crate) library: &'static str,
+    /// What the error adds under unixODBC's, `{path}` standing for the library's path.
+    pub(crate) expected_reason: &'static str,
+}

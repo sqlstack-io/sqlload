@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tokio::task::{Id, JoinError};
 
+use crate::cdc::main::load_cdc::load_cdc;
 use crate::loader::constants::DEFAULT_THREADS;
 use crate::loader::main::_load_table::load_one;
 use crate::loader::models::{LoadRun, ProjectPlan, SharedRun, TableOutcome, TablePlan};
@@ -43,6 +44,7 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
             loaded: Ok(loaded),
             retryable: false,
             elapsed: started.elapsed(),
+            skipped: false,
         },
         Err(error) => TableOutcome {
             table: table.outcome_name(),
@@ -50,6 +52,7 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
             retryable: error.is_retryable(),
             loaded: Err(error.to_string()),
             elapsed: started.elapsed(),
+            skipped: false,
         },
     }
 }
@@ -77,10 +80,14 @@ pub(crate) struct TableQueue<'a> {
     writing: BTreeSet<String>,
     started: BTreeMap<Id, usize>,
     outcomes: Vec<(usize, TableOutcome)>,
+    /// `--fail-fast`: the first failure stops new tables starting.
+    fail_fast: bool,
+    /// The table whose failure stopped new tables starting, once `fail_fast` saw it fail.
+    stopped: Option<String>,
 }
 
 impl<'a> TableQueue<'a> {
-    pub(crate) fn new(project: &'a ProjectConfig, plan: &'a ProjectPlan) -> Self {
+    pub(crate) fn new(project: &'a ProjectConfig, plan: &'a ProjectPlan, fail_fast: bool) -> Self {
         let tables: Vec<&TablePlan> = plan
             .tables
             .iter()
@@ -94,11 +101,25 @@ impl<'a> TableQueue<'a> {
             writing: BTreeSet::new(),
             started: BTreeMap::new(),
             outcomes: Vec::new(),
+            fail_fast,
+            stopped: None,
         }
+    }
+
+    /// The outcomes of `plan`'s `postgres_cdc` sources, which load after the other tables, each as one unit; once `--fail-fast` stopped the run, none of them starts.
+    pub(crate) async fn cdc_outcomes(
+        &self,
+        run: &LoadRun<'_>,
+        plan: &ProjectPlan,
+    ) -> Vec<TableOutcome> {
+        load_cdc(run, plan, self.stopped.clone()).await
     }
 
     /// The next table that may start, with its place in the queue: the first waiting whose source's shared client (unless `parallel_tables`) is free, and whose destination table no other table is loading.
     pub(crate) fn next(&mut self) -> Option<(usize, &'a TablePlan)> {
+        if self.stopped.is_some() {
+            return None;
+        }
         let tables = &self.tables;
         let busy = &self.busy;
         let writing = &self.writing;
@@ -133,20 +154,28 @@ impl<'a> TableQueue<'a> {
         let table = self.tables[index];
         self.busy.remove(table.spec.source_name.as_str());
         self.writing.remove(&destination_key(table));
-        self.outcomes.push((
-            index,
-            outcome.unwrap_or_else(|reason| TableOutcome {
-                table: table.outcome_name(),
-                origin: Some(table.origin()),
-                loaded: Err(reason),
-                retryable: false,
-                elapsed: std::time::Duration::ZERO,
-            }),
-        ));
+        let outcome = outcome.unwrap_or_else(|reason| TableOutcome {
+            table: table.outcome_name(),
+            origin: Some(table.origin()),
+            loaded: Err(reason),
+            retryable: false,
+            elapsed: std::time::Duration::ZERO,
+            skipped: false,
+        });
+        if self.fail_fast && self.stopped.is_none() && outcome.loaded.is_err() {
+            self.stopped = Some(outcome.table.clone());
+        }
+        self.outcomes.push((index, outcome));
     }
 
-    /// The outcomes in plan order.
+    /// The outcomes in plan order, a table `--fail-fast` never started among them as skipped.
     pub(crate) fn outcomes(mut self) -> Vec<TableOutcome> {
+        if let Some(failed) = &self.stopped {
+            for index in &self.waiting {
+                let skipped = TableOutcome::skipped(self.tables[*index], failed);
+                self.outcomes.push((*index, skipped));
+            }
+        }
         self.outcomes.sort_by_key(|(index, _)| *index);
         self.outcomes
             .into_iter()

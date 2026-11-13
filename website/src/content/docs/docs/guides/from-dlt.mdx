@@ -110,6 +110,11 @@ How `rest_api` settings map:
 - A resource that resolves another (`{resources.orders.id}`) is `api.fan_out(path, over=...)`, whose
   `over` is a `paginate` selecting the keys. Fan-outs nest as many levels deep as needed; see
   [Multi-level fan-out](/docs/sources/python/#multi-level-fan-out).
+- A resource whose parent's keys go in a POST body, rather than the path, is
+  `api.fan_out(path, over=..., method="POST", json_body={"order": {"id": "{id}"}})`. `batch=1000`
+  sends up to 1,000 keys per request as a list (`json_body={"ids": "{id}"}`), each batch retried as
+  one request, where dlt needs Python that fetches the keys and yields one request per batch; see
+  [Keys in a POST body](/docs/sources/python/#keys-in-a-post-body).
 - `method: POST` with a `json` body is `method="POST", json_body={...}`, and paginators that page in
   the body take `location="body"`; see [POST with a JSON body](/docs/sources/python/#post-with-a-json-body).
 - `response_actions` that ignore a status are `on_status={404: "skip"}`. 429, 5xx and dropped

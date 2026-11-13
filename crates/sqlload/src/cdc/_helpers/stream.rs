@@ -1283,6 +1283,7 @@ pub(crate) fn source_outcomes(
                 .map_err(Clone::clone),
             retryable: loaded.is_err() && retryable,
             elapsed,
+            skipped: false,
         });
     }
     outcomes
@@ -1452,6 +1453,7 @@ pub(crate) fn failed_outcomes(
             loaded: Err(error),
             retryable: false,
             elapsed,
+            skipped: false,
         }],
         false => outcomes,
     }
