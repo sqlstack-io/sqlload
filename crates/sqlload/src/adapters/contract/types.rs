@@ -23,6 +23,7 @@ use crate::adapters::contract::_helpers::schema::{
 use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::_helpers::write::write_statements;
 use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
+use crate::adapters::contract::main::_rekeyed_row_ids::rekeyed_row_ids;
 use crate::adapters::contract::models::{
     ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, TableName,
     WriteStatementsRequest, WriteTarget,
@@ -333,6 +334,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging: &TableName,
     ) -> Option<String> {
         dropped_ordinals(self, request, staging)
+    }
+
+    /// Under a merge, a query of the `row_id` of each row of the table that a row of `staging` shares its key with but whose `row_id` differs (an id not derived from the key, as dlt's `delete-insert` merge gives), so the rows hanging off it can be replaced too; `None` without a merge.
+    fn render_rekeyed_row_ids(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+        row_id: &str,
+    ) -> Option<String> {
+        rekeyed_row_ids(self, request, staging, row_id)
     }
 
     /// One `MERGE`: key matches update every other column, the rest are inserted.

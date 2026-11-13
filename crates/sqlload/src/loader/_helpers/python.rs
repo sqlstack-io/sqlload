@@ -1552,7 +1552,9 @@ impl ChildTables {
             execute(&publisher.destination, deletes).await?;
         }
         let root_name = metadata_name(spec.naming, MetadataRole::RootId);
-        let row_id = adapter.render_identifier(metadata_name(spec.naming, MetadataRole::RowId));
+        let row_id_name = metadata_name(spec.naming, MetadataRole::RowId);
+        let row_id = adapter.render_identifier(row_id_name);
+        let root = adapter.render_identifier(root_name);
         let mut tables: Vec<String> = self.merged.clone();
         for feed in self.feeds.iter().filter(|feed| feed.publisher.is_some()) {
             let table = &feed.table.spec.destination.table;
@@ -1563,35 +1565,46 @@ impl ChildTables {
                 tables.push(table.clone());
             }
         }
-        let mut deletes: Vec<String> = Vec::new();
+        let mut rooted: Vec<(usize, TableName)> = Vec::new();
         for (index, table) in tables.into_iter().enumerate() {
             let name = TableName {
                 table,
                 ..spec.destination.clone()
             };
-            let rooted = live_columns(destination, &name)
+            let has_root = live_columns(destination, &name)
                 .await?
                 .is_some_and(|columns| {
                     columns
                         .iter()
                         .any(|column| column.name.eq_ignore_ascii_case(root_name))
                 });
-            if rooted {
+            if has_root {
+                rooted.push((index, name));
+            }
+        }
+        if rooted.is_empty() {
+            return Ok(());
+        }
+        let mut roots = format!(
+            "{root} IN (SELECT {row_id} FROM {})",
+            adapter.render_qualified_name(staging)
+        );
+        if let Some(rekeyed) = adapter.render_rekeyed_row_ids(&request, staging, row_id_name) {
+            let found = text_values(destination, format!("{rekeyed} LIMIT 1")).await?;
+            if !found.is_empty() {
+                roots = format!("{roots} OR {root} IN ({rekeyed})");
+            }
+        }
+        let deletes: Vec<String> = rooted
+            .iter()
+            .flat_map(|(index, name)| {
                 let scratch = TableName {
                     table: format!("{}_{index}", staging.table),
                     ..staging.clone()
                 };
-                deletes.extend(adapter.render_clear_rows(
-                    &name,
-                    &format!(
-                        "{} IN (SELECT {row_id} FROM {})",
-                        adapter.render_identifier(root_name),
-                        adapter.render_qualified_name(staging)
-                    ),
-                    &scratch,
-                ));
-            }
-        }
+                adapter.render_clear_rows(name, &roots, &scratch)
+            })
+            .collect();
         execute(destination, deletes).await
     }
 

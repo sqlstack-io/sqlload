@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.41.0](https://github.com/sqlstack-io/sqlload/compare/v0.40.0...v0.41.0) (2026-11-13)
+
+
+### Features
+
+* **unnest:** write child tables on ClickHouse targets ([#216](https://github.com/sqlstack-io/sqlload/issues/216)) ([292e611](https://github.com/sqlstack-io/sqlload/commit/292e6111d6fb710cb28115c4ae66521ab5b87e9d))
+
+
+### Documentation
+
+* 0.40.0 is released ([#221](https://github.com/sqlstack-io/sqlload/issues/221)) ([5ed4ae8](https://github.com/sqlstack-io/sqlload/commit/5ed4ae88be90dc733deb32e2d9120db5c71bdb18))
+* add a guide for moving dlt pipelines to SQLLoad ([#220](https://github.com/sqlstack-io/sqlload/issues/220)) ([9fe8810](https://github.com/sqlstack-io/sqlload/commit/9fe88100a4c5f123ccf1e8f4380f9d2c81def27e))
+
 ## [0.40.0](https://github.com/sqlstack-io/sqlload/compare/v0.39.1...v0.40.0) (2026-11-13)
 
 
