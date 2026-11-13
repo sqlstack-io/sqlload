@@ -157,7 +157,7 @@ pub(crate) async fn run_clickhouse_stops(
         stop_after(&stopped_name, Some(stops));
         let stopped = bounded_load(
             (project, destinations, &test_case.options),
-            &format!("the load stopped after {stops} statements"),
+            &format!("the load set to stop after {stops} statements"),
         )
         .await;
         stop_after(&stopped_name, None);
