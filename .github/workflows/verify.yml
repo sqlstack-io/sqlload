@@ -115,7 +115,10 @@ jobs:
           shared-key: containers
       - run: make clean-partial-duckdb-sources
       - name: Sign in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       # The SSH bastion's image, read from where the testkit pins it, pulled once and signed in so the tests find it here;
       # GHCR's rate limit (toomanyrequests) gets one retry a minute later, any other failure none.
       - name: Pull the SSH bastion image
