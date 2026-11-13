@@ -101,6 +101,10 @@ jobs:
     runs-on: ubuntu-24.04
     # A cold cache compiles DuckDB from source (about 25 minutes); warm runs take a few.
     timeout-minutes: 60
+    # packages: read lets the job sign in to GHCR, whose anonymous pull limit the bastion image hit.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -110,6 +114,38 @@ jobs:
         with:
           shared-key: containers
       - run: make clean-partial-duckdb-sources
+      - name: Sign in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+      # The SSH bastion's image, read from where the testkit pins it, pulled once and signed in so the tests find it here;
+      # GHCR's rate limit (toomanyrequests) gets one retry a minute later, any other failure none.
+      - name: Pull the SSH bastion image
+        run: |
+          pins=$(tr -d '\n' < crates/sqlload-testkit/src/ssh/constants.rs)
+          name=$(grep -o 'const IMAGE: &str = *"[^"]*"' <<<"$pins" | cut -d'"' -f2 || true)
+          tag=$(grep -o 'const TAG: &str = *"[^"]*"' <<<"$pins" | cut -d'"' -f2 || true)
+          image="$name:$tag"
+          if [ -z "$name" ] || [ -z "$tag" ]; then
+            echo "::error::cannot read the SSH bastion image's IMAGE and TAG from crates/sqlload-testkit/src/ssh/constants.rs"
+            exit 1
+          fi
+          for attempt in 1 2; do
+            if out=$(timeout -k 10 240 docker pull "$image" 2>&1); then
+              echo "$out"
+              exit 0
+            fi
+            echo "$out"
+            if [ "$attempt" = 1 ] && grep -qiE "toomanyrequests|429 Too Many Requests" <<<"$out"; then
+              echo "GHCR rate-limited the pull of $image; retrying once in 60 s"
+              sleep 60
+              continue
+            fi
+            break
+          done
+          echo "::error::cannot pull the SSH bastion image $image: $(tail -n 1 <<<"$out")"
+          exit 1
       - run: |
           docker pull redpandadata/redpanda:v25.1.4
           docker pull postgres:17-alpine
