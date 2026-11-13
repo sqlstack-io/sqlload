@@ -9,6 +9,7 @@ use crate::column_types::main::arrow_field::arrow_field;
 use crate::file_store::errors::StoreError;
 use crate::http::errors::ApiError;
 use crate::loader::_helpers::python::bound_array;
+use crate::loader::_helpers::python::child_paths;
 use crate::loader::_helpers::python::{
     YieldedData, declared_problems, inferred_table, python_tables, source_spelling,
 };
@@ -16,8 +17,8 @@ use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{PlanDetail, PlanItem, TableSpec};
 use crate::loader::tests::test_types::{
-    BoundArrayTestCase, DeclaredProblemsTestCase, InferredTableTestCase, ItemSpec,
-    SourceSpellingTestCase,
+    BoundArrayTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, InferredTableTestCase,
+    ItemSpec, SourceSpellingTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
@@ -320,4 +321,16 @@ pub(crate) fn constants_added(
         })
         .collect();
     Ok((added == batch, columns?.join(" ")))
+}
+
+/// The paths `child_paths` gives the case's live child tables of Python table `s__t`.
+pub(crate) fn live_paths(test_case: &ChildPathsTestCase) -> Result<Vec<(String, String)>, String> {
+    let mut spec = python_spec("{}")?;
+    spec.warehouse = test_case.warehouse;
+    let tables = test_case
+        .tables
+        .iter()
+        .map(|table| (*table).to_owned())
+        .collect();
+    Ok(child_paths(&spec, tables))
 }

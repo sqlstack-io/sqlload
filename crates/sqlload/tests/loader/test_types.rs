@@ -1118,6 +1118,8 @@ pub(crate) struct UnnestFailTestCase {
     pub(crate) failing: (&'static str, &'static str),
     /// Text the failed load's output holds.
     pub(crate) expected_error: &'static str,
+    /// A query of the database after the failed load and what it returns: what the failure left.
+    pub(crate) expected_after: (&'static str, &'static str),
 }
 
 /// An NDJSON files source under `drop/` with `settings`, loaded by the executable into DuckDB once per run, each run adding its file.

@@ -238,6 +238,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .unwrap_or(0)
         + 3;
     let from_path = |name: &str| {
+        let name = table.spec.source_table.spelling(name);
         table.spec.files.as_ref().map_or("", |files| {
             match (
                 files.constants.iter().any(|constant| constant == name),

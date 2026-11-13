@@ -120,7 +120,7 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             files
                 .partition_types
                 .iter()
-                .any(|(column, _)| column == name)
+                .any(|(column, _)| column == spec.source_table.spelling(name))
         })
     };
     let mut desired: Vec<DesiredColumn> = read

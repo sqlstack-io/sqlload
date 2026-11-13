@@ -10,7 +10,7 @@ use crate::schema_plan::models::LiveColumn;
 fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_finding() {
     let test_cases = [
         FindingsTestCase {
-            description: "matching names in another case and equal types agree, and SQLLoad's own columns never count",
+            description: "matching names in another case and equal types agree, and the columns a load adds (SQLLoad's or dlt's) never count",
             declared: vec![
                 ("ID", ColumnType::Int),
                 (
@@ -33,6 +33,8 @@ fn given_declared_and_live_columns_when_compared_then_each_difference_is_one_fin
                     },
                 ),
                 ("_sqlload_load_id", ColumnType::Text),
+                ("_dlt_load_id", ColumnType::Text),
+                ("_dlt_id", ColumnType::Text),
             ]),
             expected_messages: &[],
         },

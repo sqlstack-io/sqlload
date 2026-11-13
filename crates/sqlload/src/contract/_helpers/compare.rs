@@ -8,7 +8,8 @@ use crate::contract::constants::{
     MISSING_DECLARATION, MISSING_PHYSICAL_COLUMN, RELATION_MISSING, TYPE_MISMATCH,
 };
 use crate::contract::models::ContractFinding;
-use crate::load_naming::constants::SQLLOAD_PREFIX;
+use crate::load_naming::main::is_load_column::is_load_column;
+use crate::load_naming::models::Naming;
 use crate::loader::models::TableSpec;
 use crate::project::models::Contract;
 use crate::schema_plan::models::LiveColumn;
@@ -56,9 +57,9 @@ pub(crate) fn findings(
     found
 }
 
-/// Whether SQLLoad added the column itself (`_sqlload_*`).
+/// Whether a load added the column itself: any `_sqlload_*` column, or one of dlt's metadata columns, which `naming = "dlt"` writes.
 pub(crate) fn is_own(name: &str) -> bool {
-    name.to_ascii_lowercase().starts_with(SQLLOAD_PREFIX)
+    is_load_column(Naming::Dlt, &name.to_ascii_lowercase())
 }
 
 /// Whether `live` has a column named `name`, ignoring case.

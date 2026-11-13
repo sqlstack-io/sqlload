@@ -68,6 +68,7 @@ use crate::load_naming::models::{MetadataRole, Naming};
 use crate::loader::_helpers::python::child_paths;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
+use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_merge_log;
@@ -187,14 +188,24 @@ async fn merged_children(
         return Ok(Vec::new());
     }
     let spec = &table.spec;
-    let live = live_child_tables(destination, spec).await?;
-    Ok(child_paths(spec, live)
+    let adapter = sql_adapter(spec.warehouse);
+    let listed: Option<Vec<String>> = match &spec.unnest {
+        Unnest::Paths(paths) => Some(
+            paths
+                .iter()
+                .map(|path| adapter.stored_name(&unnested_table(spec, path)))
+                .collect(),
+        ),
+        _ => None,
+    };
+    Ok(live_child_tables(destination, spec)
+        .await?
         .into_iter()
-        .filter(|(path, _)| match &spec.unnest {
-            Unnest::Paths(paths) => paths.contains(path),
-            _ => true,
+        .filter(|live| {
+            listed
+                .as_ref()
+                .is_none_or(|listed| listed.contains(&adapter.stored_name(live)))
         })
-        .map(|(_, table)| table)
         .collect())
 }
 
@@ -724,9 +735,6 @@ impl Publisher {
         if self.direct || self.at_end || unchanged || unfinished || publishes_once(&self.table) {
             return Ok(());
         }
-        if let Some(children) = &mut self.children {
-            Box::pin(children.cut((&self.table, &self.destination, self.staging.as_ref()))).await?;
-        }
         self.commit(false).await
     }
 
@@ -745,7 +753,7 @@ impl Publisher {
             || empty_range
             || matches!(&self.table.mode, WriteMode::Changes(change) if change.truncated.is_some())
             || self.leftover_deletes();
-        if let Some(children) = &mut self.children {
+        if let Some(children) = self.children.as_mut().filter(|_| self.direct || !pending) {
             Box::pin(children.finish(
                 (&self.table, (&self.load_id, &self.loaded_at)),
                 (&self.destination, self.staging.as_ref()),
@@ -1033,6 +1041,20 @@ impl Publisher {
                 committed: self.committed_rows,
             };
             run_checks(&commit, checks).await?;
+        }
+        if let Some(children) = &mut self.children {
+            match last {
+                true => {
+                    Box::pin(children.finish(
+                        (&self.table, (&self.load_id, &self.loaded_at)),
+                        (&self.destination, Some(&staging)),
+                    ))
+                    .await?
+                }
+                false => {
+                    Box::pin(children.cut((&self.table, &self.destination, Some(&staging)))).await?
+                }
+            }
         }
         let _held = match self.at_end && !sql_adapter(warehouse).keeps_tables() {
             true => ddl_guard(&self.destination).await,

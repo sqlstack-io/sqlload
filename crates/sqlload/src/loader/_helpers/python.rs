@@ -166,17 +166,14 @@ pub(crate) async fn live_child_tables(
         .collect())
 }
 
-/// The dotted path each of `spec`'s child tables among `tables` holds, by its name (`orders__items__parts` holds `items.parts`).
+/// The dotted path each of `spec`'s child tables among `tables` holds, by its name as the load writes it (`orders__items__parts` holds `items.parts`; Snowflake's `ORDERS__ITEMS` holds `items`).
 pub(crate) fn child_paths(spec: &TableSpec, tables: Vec<String>) -> Vec<(String, String)> {
-    let prefix = sql_adapter(spec.warehouse).stored_name(&format!(
-        "{}{CHILD_TABLE_SEPARATOR}",
-        spec.destination.table
-    ));
+    let prefix = format!("{}{CHILD_TABLE_SEPARATOR}", spec.destination.table);
     tables
         .into_iter()
         .filter_map(|table| {
-            let path = table
-                .get(prefix.len()..)?
+            let path = source_spelling(&table, spec)
+                .strip_prefix(&prefix)?
                 .replace(CHILD_TABLE_SEPARATOR, ".");
             Some((path, table))
         })

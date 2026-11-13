@@ -1975,8 +1975,10 @@ pub(crate) fn load_ndjson_runs(
     );
     std::fs::write(&config, text).map_err(|error| error.to_string())?;
     for (name, contents) in runs {
-        std::fs::write(root.join("drop").join(name), contents)
-            .map_err(|error| error.to_string())?;
+        let path = root.join("drop").join(name);
+        let folder = path.parent().ok_or("a run's file has no folder")?;
+        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+        std::fs::write(path, contents).map_err(|error| error.to_string())?;
         let (ok, output) = run_sqlload(&config, &["load"], ("", ""))?;
         ok.then_some(()).ok_or(output)?;
     }

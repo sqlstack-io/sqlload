@@ -2,12 +2,12 @@ use crate::column_types::models::ColumnType;
 use crate::column_types::models::Warehouse;
 use crate::loader::_helpers::python::fitting_type;
 use crate::loader::tests::helpers::{
-    bound_text, crossed_schema, inferred_columns, integer_code, lower_case_rows, problems_for,
-    spelling,
+    bound_text, crossed_schema, inferred_columns, integer_code, live_paths, lower_case_rows,
+    problems_for, spelling,
 };
 use crate::loader::tests::test_types::{
-    BoundArrayTestCase, DeclaredProblemsTestCase, FittingTypeTestCase, InferredTableTestCase,
-    SourceSpellingTestCase,
+    BoundArrayTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, FittingTypeTestCase,
+    InferredTableTestCase, SourceSpellingTestCase,
 };
 
 #[test]
@@ -244,6 +244,37 @@ fn given_a_cursor_bound_when_filtering_python_rows_then_it_takes_the_cursor_colu
             "{}",
             test_case.description
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spelling_gives_the_fields_path()
+-> Result<(), String> {
+    let test_cases = [
+        ChildPathsTestCase {
+            description: "Snowflake lists plain names upper-cased; their paths are the fields as the rows name them",
+            warehouse: Warehouse::Snowflake,
+            tables: &["S__T__ITEMS", "S__T__ITEMS__PARTS"],
+            expected_paths: &[
+                ("items", "S__T__ITEMS"),
+                ("items.parts", "S__T__ITEMS__PARTS"),
+            ],
+        },
+        ChildPathsTestCase {
+            description: "DuckDB lists them as written",
+            warehouse: Warehouse::DuckDb,
+            tables: &["s__t__items"],
+            expected_paths: &[("items", "s__t__items")],
+        },
+    ];
+    for test_case in test_cases {
+        let found = live_paths(&test_case)?;
+        let found: Vec<(&str, &str)> = found
+            .iter()
+            .map(|(path, table)| (path.as_str(), table.as_str()))
+            .collect();
+        assert_eq!(found, test_case.expected_paths, "{}", test_case.description);
     }
     Ok(())
 }

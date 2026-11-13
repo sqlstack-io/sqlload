@@ -50,7 +50,9 @@ ClickHouse and Databricks targets, files targets, `delete_insert`, `state = "log
 `contract = "enforced"` and `postgres_cdc` sources are refused for now: `plan` names the setting,
 and without `unnest` the lists load as JSON columns.
 
-Each commit writes the child tables before their parent. If a load fails between the two, child
+A commit's checks (`checks`, and `on_duplicate_keys = "fail"` under `merge`) run on the parent's
+rows before any child table is written, so a refused commit leaves the child tables as they were.
+Each commit then writes the child tables before their parent. If a load fails between the two, child
 tables can hold rows whose parent row was never committed, or under `merge`, a merged row's old
 items can be gone before its new ones land. A rerun loads those rows again and puts them right.
 Join child rows to their parent by `_sqlload_parent_id` rather than reading child tables on their
@@ -112,8 +114,9 @@ Where SQLLoad and dlt still differ under `naming = "dlt"`:
 
 - Two columns whose names normalise to one (`OrderID` and `Order ID`) stop the plan, naming
   both; dlt keeps the last value of a row it is given as a dictionary. Exclude one of them with
-  `exclude_columns`. A `postgres_cdc` source whose column names would change is refused, since
-  its change stream matches columns by the source's names.
+  `exclude_columns`. Two tables of one source whose names normalise to one (`order-items` and
+  `order_items`) stop the plan too; give one its own `name`. A `postgres_cdc` source whose column
+  names would change is refused, since its change stream matches columns by the source's names.
 
 - An object stays a JSON column; dlt flattens it into `parent__key` columns.
 - A field listed in `unnest` always goes to its child table, even when an XML element appears

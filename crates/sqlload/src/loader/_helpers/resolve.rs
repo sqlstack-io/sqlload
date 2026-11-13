@@ -5,6 +5,7 @@ use crate::load_naming::main::is_load_column::is_load_column;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::specs::ColumnSelection;
+use crate::loader::_helpers::specs::table_name;
 use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, pinned_types, table_naming,
 };
@@ -79,6 +80,9 @@ pub(crate) fn resolve_tables(
             ),
         }
     }
+    resolved
+        .problems
+        .extend(merged_names(source_name, source, &resolved.specs));
     for listed in source.tables.keys() {
         if !discovered
             .iter()
@@ -90,6 +94,38 @@ pub(crate) fn resolve_tables(
         }
     }
     resolved
+}
+
+/// A problem for each pair of `specs` (one source's) that dlt's naming loads into one table although their names differ (`order-items` and `order_items`), where one would overwrite or mix with the other's rows.
+fn merged_names(source_name: &str, source: &SourceConfig, specs: &[TableSpec]) -> Vec<String> {
+    let written = |spec: &TableSpec| {
+        let name = source
+            .tables
+            .get(&spec.source_table.qualified_name())
+            .and_then(|overrides| overrides.name.as_deref());
+        table_name(
+            (source_name, source),
+            name,
+            (&spec.source_table, (Naming::Sqlload, None)),
+        )
+    };
+    let mut problems: Vec<String> = Vec::new();
+    for (index, spec) in specs.iter().enumerate() {
+        let clash = specs[..index].iter().find(|earlier| {
+            spec.naming == Naming::Dlt
+                && earlier.destination.table == spec.destination.table
+                && written(earlier) != written(spec)
+        });
+        if let Some(earlier) = clash {
+            problems.push(format!(
+                "{} and {}: both load as table {} under naming = \"dlt\"; give one a name of its own with name",
+                earlier.source_table.qualified_name(),
+                spec.source_table.qualified_name(),
+                spec.destination.table
+            ));
+        }
+    }
+    problems
 }
 
 /// One table's spec, `Ok(Err(reason))` if the column rules skip it, or its problems.

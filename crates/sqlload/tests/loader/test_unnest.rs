@@ -335,6 +335,17 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             expected_result: "1:c:3,2:b:2/1:7",
         },
         RowIdTestCase {
+            description: "naming = \"dlt\" with a cursor on a partition column the naming renames: the second run reads only the new partition",
+            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\ncursor_column = \"Day\"\npartition_columns = { Day = \"date\" }\n",
+            runs: &[
+                ("Day=2026-11-03/a.ndjson", "{\"ID\": 1}\n"),
+                ("Day=2026-11-04/b.ndjson", "{\"ID\": 2}\n"),
+            ],
+            expected_columns: "id,day,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_dlt_load_id,_sqlload_loaded_at,_dlt_id",
+            check_query: "SELECT string_agg(id || ':' || day, ',' ORDER BY id) FROM raw.orders",
+            expected_result: "1:2026-11-03,2:2026-11-04",
+        },
+        RowIdTestCase {
             description: "unnest on a replace: the lists leave the parent, the second run replaces parent and children alike, and a list no row has any more is emptied",
             settings: REPLACE_SETTINGS,
             runs: REPLACE_RUNS,
@@ -481,6 +492,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             runs: &[("a.ndjson", "{\"id\": 1, \"tags\": [\"x\"]}\n")],
             failing: ("b.ndjson", "{\"id\": 2, \"tags\": {\"k\": \"y\"}}\n"),
             expected_error: "b.ndjson: tags: unnest = \"all\" took tags as a list field from its values so far, and a row holds a value that is not a list there",
+            expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
         UnnestFailTestCase {
             description: "a list field first seen in a later load under on_schema_change = \"fail\" is refused, naming its table",
@@ -491,6 +503,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
                 "{\"id\": 2, \"items\": [{\"sku\": \"b\"}], \"tags\": [\"t\"]}\n",
             ),
             expected_error: "new list field tags would make the child table orders__tags and on_schema_change = \"fail\"",
+            expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
         UnnestFailTestCase {
             description: "under dlt naming a later file's column loading as an existing one's name fails, naming both",
@@ -498,6 +511,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             runs: &[("a.ndjson", "{\"OrderID\": 1}\n")],
             failing: ("b.ndjson", "{\"OrderID\": 2, \"Order ID\": 3}\n"),
             expected_error: "columns \"OrderID\" and \"Order ID\" both load as order_id",
+            expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
         UnnestFailTestCase {
             description: "under dlt naming two keys of one child item loading as one name fail, naming both",
@@ -508,6 +522,38 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
                 "{\"id\": 2, \"items\": [{\"UnitPrice\": 1, \"unit price\": 2}]}\n",
             ),
             expected_error: "items: keys \"UnitPrice\" and \"unit price\" both load as unit_price",
+            expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
+        },
+        UnnestFailTestCase {
+            description: "a merge its parent's checks refuse writes no child rows: the roots keep their items",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"items\"]\nchecks = { not_null = [\"v\"] }\n",
+            runs: &[(
+                "a.ndjson",
+                "{\"id\": 1, \"v\": \"a\", \"items\": [{\"sku\": \"x\"}]}\n",
+            )],
+            failing: (
+                "b.ndjson",
+                "{\"id\": 1, \"v\": null, \"items\": [{\"sku\": \"y\"}, {\"sku\": \"z\"}]}\n",
+            ),
+            expected_error: "not_null",
+            expected_after: (
+                "SELECT string_agg(sku, ',' ORDER BY sku) FROM raw.orders__items",
+                "x",
+            ),
+        },
+        UnnestFailTestCase {
+            description: "a replace its parent's min_rows refuses keeps the child tables it would have replaced",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items\"]\nchecks = { min_rows = 2 }\n",
+            runs: &[(
+                "a.ndjson",
+                "{\"id\": 1, \"items\": [{\"sku\": \"x\"}]}\n{\"id\": 2, \"items\": []}\n",
+            )],
+            failing: ("a.ndjson", "{\"id\": 3, \"items\": [{\"sku\": \"y\"}]}\n"),
+            expected_error: "min_rows",
+            expected_after: (
+                "SELECT string_agg(sku, ',' ORDER BY sku) FROM raw.orders__items",
+                "x",
+            ),
         },
     ];
     for test_case in &test_cases {
@@ -529,6 +575,13 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             (ok, output.contains(test_case.expected_error)),
             (false, true),
             "{}: {output}",
+            test_case.description
+        );
+        let (query, expected) = test_case.expected_after;
+        assert_eq!(
+            duckdb_text(&root.path().join("out.duckdb"), query)?,
+            expected,
+            "{}",
             test_case.description
         );
     }

@@ -1206,7 +1206,7 @@ pub(crate) async fn plan_files(
             .files
             .partition_types
             .iter()
-            .find(|(name, _)| *name == cursor.column)
+            .find(|(name, _)| name == spec.source_table.spelling(&cursor.column))
         {
             Some((name, column_type)) => Some((name.as_str(), column_type)),
             None => {
