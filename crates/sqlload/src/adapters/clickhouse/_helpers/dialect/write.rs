@@ -136,6 +136,33 @@ pub(crate) fn write_statements(
     ]
 }
 
+/// `table`'s rows matching `condition` removed the way a merge publishes: an empty delta created `AS` the table (named after `scratch`) whose partition publish displaces those rows, so a run killed at any point leaves the table whole and a rerun converges.
+pub(crate) fn clear_statements(
+    adapter: &ClickHouseSql,
+    table: &TableName,
+    condition: &str,
+    scratch: &TableName,
+) -> Vec<String> {
+    let delta_table = with_suffix(scratch, SWAP_SUFFIX);
+    let delta = adapter.render_qualified_name(&delta_table);
+    let copy = with_suffix(&delta_table, COPY_SUFFIX);
+    vec![
+        format!("DROP TABLE IF EXISTS {delta}"),
+        format!(
+            "CREATE TABLE {delta} AS {}",
+            adapter.render_qualified_name(table)
+        ),
+        publish_statement(&PublishStep::Partitions {
+            target: adapter.render_qualified_name(table),
+            delta: delta.clone(),
+            copy: adapter.render_qualified_name(&copy),
+            aside: adapter.render_qualified_name(&with_suffix(&copy, ASIDE_SUFFIX)),
+            displaced: Some(condition.to_owned()),
+        }),
+        format!("DROP TABLE IF EXISTS {delta}"),
+    ]
+}
+
 /// `text` as a value of `column_type` without `Nullable`, so text ClickHouse cannot read fails: a timestamp parsed with its offset (in UTC when it has none), anything else cast.
 pub(crate) fn typed_literal(text: &str, column_type: &ColumnType) -> String {
     let literal = ClickHouseSql.render_loader_value_literal(text);

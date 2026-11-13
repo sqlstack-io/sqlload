@@ -2,9 +2,11 @@
 
 use crate::adapters::clickhouse::_helpers::dialect::layout::{layout_clauses, layout_problems};
 use crate::adapters::clickhouse::_helpers::dialect::type_names::{logical_type, portable_type};
-use crate::adapters::clickhouse::_helpers::dialect::write::{swap_statements, write_statements};
+use crate::adapters::clickhouse::_helpers::dialect::write::{
+    clear_statements, publish_statement, swap_statements, write_statements,
+};
 use crate::adapters::clickhouse::constants::EMPTY_SORTING_KEY;
-use crate::adapters::clickhouse::models::ClickHouseSql;
+use crate::adapters::clickhouse::models::{ClickHouseSql, PublishStep};
 use crate::adapters::contract::models::{
     ChangeApply, CursorValue, TableName, WriteStatementsRequest,
 };
@@ -41,6 +43,28 @@ impl SqlAdapter for ClickHouseSql {
 
     fn max_identifier_length(&self) -> Option<usize> {
         Some(255)
+    }
+
+    fn writes_child_tables(&self) -> bool {
+        true
+    }
+
+    /// Published by partitions, as a merge is: ClickHouse deletes rows in place only by mutations, which no swap protects.
+    fn render_clear_rows(
+        &self,
+        table: &TableName,
+        condition: &str,
+        scratch: &TableName,
+    ) -> Vec<String> {
+        clear_statements(self, table, condition, scratch)
+    }
+
+    /// A lightweight `DELETE`, or `ALTER TABLE ... DELETE` where the server refuses one.
+    fn render_delete_staged(&self, staging: &TableName, condition: &str) -> String {
+        publish_statement(&PublishStep::DeleteRows {
+            table: self.render_qualified_name(staging),
+            condition: condition.to_owned(),
+        })
     }
 
     /// Not yet: changes would need merging into partitions batch by batch.

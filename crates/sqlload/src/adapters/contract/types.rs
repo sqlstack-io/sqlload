@@ -52,6 +52,27 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         false
     }
 
+    /// The statements deleting published table `table`'s rows matching `condition` (a merge clearing the items of the roots it replaces from a child table): one `DELETE`. `scratch` names the tables a warehouse that publishes by swaps builds beside it.
+    fn render_clear_rows(
+        &self,
+        table: &TableName,
+        condition: &str,
+        _scratch: &TableName,
+    ) -> Vec<String> {
+        vec![format!(
+            "DELETE FROM {} WHERE {condition}",
+            self.render_qualified_name(table)
+        )]
+    }
+
+    /// The statement deleting staging table `staging`'s rows matching `condition`.
+    fn render_delete_staged(&self, staging: &TableName, condition: &str) -> String {
+        format!(
+            "DELETE FROM {} WHERE {condition}",
+            self.render_qualified_name(staging)
+        )
+    }
+
     /// The longest table or column name, in characters, that dlt's naming gives on the warehouse (the shorter of dlt's table and column limits), past which it shortens a name with a tag; `None` where it gives no limit.
     fn max_identifier_length(&self) -> Option<usize> {
         None
