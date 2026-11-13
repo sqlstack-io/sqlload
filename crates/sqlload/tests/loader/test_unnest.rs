@@ -15,8 +15,12 @@ use sqlload::adapters::dispatch::main::session::execute::execute;
 use sqlload::column_types::models::Warehouse;
 use sqlload::loader::main::connect_targets::connect_targets;
 
-use crate::helpers::{described_project, duckdb_text, load_ndjson_runs, run_async, run_sqlload};
-use crate::test_types::{ClearRowsTestCase, RowIdTestCase, UnnestFailTestCase, UnnestPlanTestCase};
+use crate::helpers::{
+    described_project, duckdb_execute, duckdb_text, load_ndjson_runs, run_async, run_sqlload,
+};
+use crate::test_types::{
+    ClearRowsTestCase, RekeyedTestCase, RowIdTestCase, UnnestFailTestCase, UnnestPlanTestCase,
+};
 
 const COLUMNS: &str = "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders'";
 
@@ -99,6 +103,18 @@ const MERGE_RUNS: &[(&str, &str)] = &[
 
 /// The merge's orders, items and parts counts, and each order's items and parts joined by id.
 const MERGE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',') FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
+
+/// The merge's roots given ids their keys don't derive, as dlt's `delete-insert` merge gives them random ones; their items and parts follow.
+const REKEY_SQL: &str = "UPDATE raw.orders SET _sqlload_row_id = 'old-' || _sqlload_row_id; UPDATE raw.orders__items SET _sqlload_parent_id = 'old-' || _sqlload_parent_id, _sqlload_root_id = 'old-' || _sqlload_root_id; UPDATE raw.orders__items__parts SET _sqlload_root_id = 'old-' || _sqlload_root_id";
+
+/// [`MERGE_SETTINGS`] under dlt's naming.
+const DLT_MERGE_SETTINGS: &str = "naming = \"dlt\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n";
+
+/// [`REKEY_SQL`] under dlt's naming.
+const DLT_REKEY_SQL: &str = "UPDATE raw.orders SET _dlt_id = 'old-' || _dlt_id; UPDATE raw.orders__items SET _dlt_parent_id = 'old-' || _dlt_parent_id, _dlt_root_id = 'old-' || _dlt_root_id; UPDATE raw.orders__items__parts SET _dlt_root_id = 'old-' || _dlt_root_id";
+
+/// [`MERGE_CHECK`] under dlt's naming.
+const DLT_MERGE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',') FROM raw.orders o JOIN raw.orders__items i ON i._dlt_parent_id = o._dlt_id JOIN raw.orders__items__parts p ON p._dlt_parent_id = i._dlt_id)";
 
 /// The parent's columns on ClickHouse, in table order.
 const CLICKHOUSE_COLUMNS: &str = "SELECT arrayStringConcat(groupArray(name), ',') FROM (SELECT name FROM system.columns WHERE database = 'raw' AND table = 'orders' ORDER BY position)";
@@ -429,6 +445,119 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
         );
     }
     Ok(())
+}
+
+#[test]
+fn given_roots_whose_ids_their_keys_did_not_give_when_merging_then_their_old_items_leave_too()
+-> Result<(), String> {
+    let test_cases = [
+        RekeyedTestCase {
+            description: "roots with other ids (as an append or dlt's delete-insert gives them): a merged order's old items and parts are replaced, an emptied list leaves none",
+            settings: MERGE_SETTINGS,
+            loaded: &MERGE_RUNS[..1],
+            merged: &MERGE_RUNS[1..],
+            rekey: REKEY_SQL,
+            check_query: MERGE_CHECK,
+            expected_result: "2/1/1/1:d:5",
+        },
+        RekeyedTestCase {
+            description: "naming = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the old items and parts go",
+            settings: DLT_MERGE_SETTINGS,
+            loaded: &MERGE_RUNS[..1],
+            merged: &MERGE_RUNS[1..],
+            rekey: DLT_REKEY_SQL,
+            check_query: DLT_MERGE_CHECK,
+            expected_result: "2/1/1/1:d:5",
+        },
+    ];
+    for test_case in &test_cases {
+        let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let database = root.path().join("out.duckdb");
+        let connection = format!("kind = \"duckdb\"\ndatabase = \"{}\"", database.display());
+        load_ndjson_runs(
+            root.path(),
+            &connection,
+            (test_case.settings, test_case.loaded),
+        )?;
+        duckdb_execute(&database, test_case.rekey)?;
+        load_ndjson_runs(
+            root.path(),
+            &connection,
+            (test_case.settings, test_case.merged),
+        )?;
+        assert_eq!(
+            duckdb_text(&database, test_case.check_query)?,
+            test_case.expected_result,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_roots_whose_ids_their_keys_did_not_give_when_merging_into_postgres_then_their_old_items_leave_too()
+-> Result<(), String> {
+    let test_cases = [
+        RekeyedTestCase {
+            description: "roots with other ids (as an append or dlt's delete-insert gives them): a merged order's old items and parts are replaced, an emptied list leaves none",
+            settings: MERGE_SETTINGS,
+            loaded: &MERGE_RUNS[..1],
+            merged: &MERGE_RUNS[1..],
+            rekey: REKEY_SQL,
+            check_query: MERGE_CHECK,
+            expected_result: "2/1/1/1:d:5",
+        },
+        RekeyedTestCase {
+            description: "naming = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the old items and parts go",
+            settings: DLT_MERGE_SETTINGS,
+            loaded: &MERGE_RUNS[..1],
+            merged: &MERGE_RUNS[1..],
+            rekey: DLT_REKEY_SQL,
+            check_query: DLT_MERGE_CHECK,
+            expected_result: "2/1/1/1:d:5",
+        },
+    ];
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        let connection = format!(
+            "kind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"sqlload\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"",
+            postgres.port
+        );
+        for test_case in &test_cases {
+            client
+                .batch_execute("DROP SCHEMA IF EXISTS raw CASCADE")
+                .await
+                .map_err(|error| error.to_string())?;
+            let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+            load_ndjson_runs(
+                root.path(),
+                &connection,
+                (test_case.settings, test_case.loaded),
+            )?;
+            client
+                .batch_execute(test_case.rekey)
+                .await
+                .map_err(|error| format!("{}: {error}", test_case.rekey))?;
+            load_ndjson_runs(
+                root.path(),
+                &connection,
+                (test_case.settings, test_case.merged),
+            )?;
+            let row = client
+                .query_one(test_case.check_query, &[])
+                .await
+                .map_err(|error| format!("{}: {error}", test_case.check_query))?;
+            assert_eq!(
+                row.get::<_, String>(0),
+                test_case.expected_result,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
 }
 
 #[test]

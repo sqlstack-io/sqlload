@@ -43,7 +43,9 @@ Set in a table entry:
   it in `_sqlload_root_id`. At each commit, the merged rows' items are deleted from every child
   table, then their new items are inserted. A row whose list shrank, emptied or went missing keeps
   only what it holds now. When a commit repeats a key, only the kept row's items load (see
-  [Repeated keys](/docs/concepts/write-strategies/#repeated-keys)).
+  [Repeated keys](/docs/concepts/write-strategies/#repeated-keys)). From 0.41.1 (not released yet), a merged
+  row whose id didn't come from its key, as one loaded by `append` or by dlt's `delete-insert` merge,
+  also loses the items that hang off its old id.
 
 Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets, and from
 0.41.0 (not released yet) ClickHouse targets. Databricks targets, files targets, `delete_insert`,
