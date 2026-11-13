@@ -70,6 +70,7 @@ use crate::loader::_helpers::python::child_paths;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
 use crate::loader::_helpers::python::unnested_table;
+use crate::loader::_helpers::python::without_deleted_items;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_merge_log;
@@ -285,9 +286,14 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
     columns
 }
 
-/// The columns a row's id is the hash of, so a row keeps its id (and its child rows theirs) on every load: a merge's `unique_key`; a `postgres_cdc` table's key, in its snapshot as in its changes, and in a changelog the change's `_sqlload_lsn` and `_sqlload_seq` before it, so a replayed change gets its ids again; `None` for random ids.
+/// The columns a row's id is the hash of, so a row keeps its id (and its child rows theirs) on every load: a merge's `unique_key`; with `unnest`, a `postgres_cdc` table's key, in its snapshot as in its changes, and in a changelog the change's `_sqlload_lsn` and `_sqlload_seq` before it, so a replayed change gets its ids again; `None` for random ids.
 fn id_key(table: &TablePlan) -> Option<Vec<String>> {
-    match (&table.mode, &table.spec.cdc) {
+    let cdc = table
+        .spec
+        .cdc
+        .as_ref()
+        .filter(|_| table.spec.unnest != Unnest::None);
+    match (&table.mode, cdc) {
         (WriteMode::Merge { unique_key, .. }, _) => Some(unique_key.clone()),
         (_, Some(cdc)) if cdc.apply == ChangeApply::Changelog => Some(
             [CDC_LSN_COLUMN, CDC_SEQ_COLUMN]
@@ -697,6 +703,7 @@ impl Publisher {
                     },
                     &mut children.choices,
                 )
+                .and_then(|unnested| without_deleted_items(&self.table, &masked, unnested))
                 .map_err(LoaderError::Invalid)?;
                 let ordinals = root_ordinals(&self.table, &masked, self.staged_ordinal)
                     .map_err(LoaderError::Invalid)?;

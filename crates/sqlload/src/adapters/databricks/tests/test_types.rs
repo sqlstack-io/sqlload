@@ -14,3 +14,9 @@ pub(crate) struct StaleRemovalsTestCase {
     pub(crate) expected_files: Vec<&'static str>,
     pub(crate) expected_folders: Vec<&'static str>,
 }
+
+pub(crate) struct RenderedTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) rendered: String,
+    pub(crate) expected_statement: &'static str,
+}

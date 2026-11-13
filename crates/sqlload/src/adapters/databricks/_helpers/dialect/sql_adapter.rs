@@ -1,5 +1,6 @@
 //! Databricks SQL, where it differs from the contract's shared rendering.
 
+use crate::adapters::contract::_helpers::queries::child_tables_query;
 use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::models::{CursorValue, TableName, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
@@ -130,6 +131,26 @@ impl SqlAdapter for DatabricksSql {
             CursorValue::Date => format!("date_format(MAX({column}), 'yyyy-MM-dd')"),
             CursorValue::Plain => format!("CAST(MAX({column}) AS STRING)"),
         }
+    }
+
+    /// The table's catalog's, as statements run with no default catalog.
+    fn render_schema_columns(&self, table: &TableName) -> String {
+        let catalog = table
+            .database
+            .as_deref()
+            .map(|name| format!("{}.", self.render_identifier(name)))
+            .unwrap_or_default();
+        format!("{catalog}information_schema.columns")
+    }
+
+    /// Unity Catalog reports schema and table names lower-cased.
+    fn list_child_tables_sql(&self, parent: &TableName) -> String {
+        let stored = TableName {
+            database: parent.database.clone(),
+            schema: parent.schema.to_ascii_lowercase(),
+            table: parent.table.to_ascii_lowercase(),
+        };
+        child_tables_query(self, (&stored, &self.render_schema_columns(parent)))
     }
 
     /// Unity Catalog reports schema names lower-cased.

@@ -81,6 +81,7 @@ use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::row_batches::models::ChildBatch;
 use crate::row_batches::models::Unnest;
+use crate::row_batches::models::Unnested;
 use crate::row_batches::types::ListChoices;
 use crate::schema_plan::constants::ROOT_ROW_COLUMN;
 use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_OP_COLUMN, CDC_UNCHANGED_COLUMN};
@@ -91,11 +92,13 @@ use crate::schema_plan::models::TableAction;
 use crate::similar_names::main::close_name::close_name;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
+use arrow_array::BooleanArray;
 use arrow_array::Date32Array;
 use arrow_array::RecordBatch;
 use arrow_array::Scalar;
 use arrow_array::StringArray;
 use arrow_array::TimestampMicrosecondArray;
+use arrow_array::cast::AsArray;
 use arrow_cast::cast::CastOptions;
 use arrow_cast::cast::cast_with_options;
 use arrow_cast::display::ArrayFormatter;
@@ -1698,6 +1701,44 @@ impl ChildTables {
     }
 }
 
+/// `unnested` without its deletes' child rows when `table` applies captured changes (a changelog keeps them): with `REPLICA IDENTITY FULL` a delete carries its row's old lists, whose items stay loaded under soft deletes and are cleared under hard ones.
+pub(crate) fn without_deleted_items(
+    table: &TablePlan,
+    batch: &RecordBatch,
+    mut unnested: Unnested,
+) -> Result<Unnested, String> {
+    let WriteMode::Changes(change) = &table.mode else {
+        return Ok(unnested);
+    };
+    let Ok(index) = batch.schema().index_of(CDC_OP_COLUMN) else {
+        return Ok(unnested);
+    };
+    if change.apply == ChangeApply::Changelog {
+        return Ok(unnested);
+    }
+    let ops = cast_with_options(
+        batch.column(index),
+        &DataType::Utf8,
+        &CastOptions::default(),
+    )
+    .map_err(|error| error.to_string())?;
+    let ops = ops.as_string::<i32>();
+    let deleted: Vec<bool> = (0..ops.len())
+        .map(|row| ops.is_valid(row) && ops.value(row) == DELETE_OP)
+        .collect();
+    for child in &mut unnested.children {
+        let keep: BooleanArray = child
+            .root_rows
+            .iter()
+            .map(|row| Some(!deleted[*row]))
+            .collect();
+        child.batch =
+            filter_record_batch(&child.batch, &keep).map_err(|error| error.to_string())?;
+        child.root_rows.retain(|row| !deleted[*row]);
+    }
+    Ok(unnested)
+}
+
 /// Under captured changes, the condition choosing the rows of `table`, a child table of `spec`'s, whose roots the changes in `staging` replace: every changed root (in a changelog, rows a replay wrote before), but under `merge` a root keeps its items when its list field came unchanged (a TOASTed value the change left out) and, under soft deletes, when it is deleted, as its row stays; under hard deletes a truncate also takes the roots it removes. A child table under captured changes appends its rows straight in, so this load's own rows (`load_id`) are never among them.
 fn changed_roots(
     (spec, table): (&TableSpec, &str),
@@ -1709,18 +1750,31 @@ fn changed_roots(
     let id = |name: &str| adapter.render_identifier(name);
     let text = |value: &str| adapter.render_loader_value_literal(value);
     let stored = adapter.stored_name(table);
-    let path = match &spec.unnest {
+    let field: Option<String> = match &spec.unnest {
         Unnest::Paths(paths) => paths
             .iter()
             .find(|path| adapter.stored_name(&unnested_table(spec, path)) == stored)
-            .cloned(),
-        _ => child_paths(spec, vec![table.to_owned()])
-            .into_iter()
-            .next()
-            .map(|(path, _)| path),
+            .and_then(|path| path.split('.').next())
+            .map(str::to_owned),
+        // The source column whose child table this is or is below, the longest when names overlap
+        // (`line__items` beside `line`), as a column name may hold the separator.
+        _ => spec
+            .source_table
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .filter(|column| {
+                let child = adapter.stored_name(&child_table_name(
+                    (spec.naming, adapter.max_identifier_length()),
+                    &spec.destination.table,
+                    column,
+                ));
+                stored == child || stored.starts_with(&format!("{child}{CHILD_TABLE_SEPARATOR}"))
+            })
+            .max_by_key(|column| column.len())
+            .map(str::to_owned),
     };
     let mut kept: Vec<String> = Vec::new();
-    let field = path.as_deref().and_then(|path| path.split('.').next());
     if let Some(field) = field.filter(|_| change.apply != ChangeApply::Changelog) {
         kept.push(format!(
             "POSITION({} IN COALESCE({}, {})) = 0",

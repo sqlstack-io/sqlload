@@ -33,7 +33,9 @@ Set in a table entry:
   that stays JSON in its parent.
 - `columns` (added in 0.42.0): a child table's column is named by its dotted path, such as
   `"items.sku" = "text"`, to pin its type. Under `contract = "enforced"`, each child table loads
-  only the columns named so, with its id and link columns, and leaves out the rest.
+  only the columns named so, with its id and link columns, and leaves out the rest. These keys
+  aren't checked against the data, since a field may be missing from the first rows: a misspelled
+  one loads as an empty column, and under `contract = "enforced"` the field it meant is left out.
 - `row_id` (also on a source): every table with `unnest` gives its rows an id, so it can't be
   `false`.
 
@@ -60,8 +62,10 @@ Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targ
 tables are staged and copied in as their parent is; so far they are tested against a stand-in for
 the Databricks API, not a live warehouse.
 `state = "logged"` and `contract = "enforced"` tables write child tables from 0.42.0. A logged
-table's child rows commit with the commit that records its state, so a rerun after a failure reads
-them again from the state last recorded.
+table's child rows commit just before the commit that records its state. When that commit fails, a
+rerun reads from the state last recorded and loads those rows and their items again, while the
+failed commit's child rows stay behind with a parent id no row holds, so a join on the parent id
+never shows them.
 
 Files targets write child tables from 0.42.0, each in a folder of its own beside its parent's
 (`orders__items/` beside `orders/`), under `append` and `replace` with the paths to unnest listed.

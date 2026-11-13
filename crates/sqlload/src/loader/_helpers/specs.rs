@@ -119,7 +119,7 @@ pub(crate) fn is_child_column(key: &str, overrides: &TableOverride) -> bool {
     }
 }
 
-/// Problems with `columns` and `mask` keys that name no source column, so a typo never loads a column unmasked; a key declaring a child table's column is checked against the child's rows instead.
+/// Problems with `columns` and `mask` keys that name no source column, so a typo never loads a column unmasked; a `columns` key declaring a child table's column is not checked, as its field may be missing from the rows read first.
 fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> Vec<String> {
     let names: Vec<&str> = table
         .columns

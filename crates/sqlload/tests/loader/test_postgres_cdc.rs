@@ -793,6 +793,18 @@ description = "Carts, captured."
 unnest = ["items"]
 "#;
 
+/// [`CARTS_SOURCE`] taking every list field.
+const ALL_CARTS_SOURCE: &str = r#"
+[sources.shop]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["shop.*"]
+
+[sources.shop.tables."shop.carts"]
+description = "Carts, captured."
+unnest = "all"
+"#;
+
 /// [`CARTS_SOURCE`] with hard deletes.
 const HARD_CARTS_SOURCE: &str = r#"
 [sources.shop]
@@ -837,6 +849,19 @@ COMMIT;
 /// The snapshot, the changes in a load stopped before the slot confirmed them, their replay, then a re-run of nothing.
 const CARTS_REPLAYED: [CdcStep; 4] = [
     step("", SHOP, "", (true, "loaded")),
+    step(CARTS_CHANGES, SHOP, "batch-before-confirm", (false, "")),
+    step("", SHOP, "", (true, "Completed")),
+    step("", SHOP, "", (true, "0 rows")),
+];
+
+/// [`CARTS_REPLAYED`] on a table with `REPLICA IDENTITY FULL`, whose deletes carry the old row, items included.
+const CARTS_FULL_REPLAYED: [CdcStep; 4] = [
+    step(
+        "ALTER TABLE shop.carts REPLICA IDENTITY FULL",
+        SHOP,
+        "",
+        (true, "loaded"),
+    ),
     step(CARTS_CHANGES, SHOP, "batch-before-confirm", (false, "")),
     step("", SHOP, "", (true, "Completed")),
     step("", SHOP, "", (true, "0 rows")),
@@ -1452,6 +1477,33 @@ fn given_unnest_on_a_postgres_cdc_source_when_a_batch_replays_then_each_roots_it
             spill_bytes: "",
             extra_config: HARD_CARTS_SOURCE,
             steps: &CARTS_REPLAYED,
+            check_query: CARTS_CHECK,
+            expected_result: "1:z,3:300,4:d / 302",
+        },
+        CdcScenarioTestCase {
+            description: "unnest = \"all\" under soft deletes: the TOASTed list a change left out keeps its items, found by the child table's column",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: ALL_CARTS_SOURCE,
+            steps: &CARTS_REPLAYED,
+            check_query: CARTS_CHECK,
+            expected_result: "1:z,2:c,3:300,4:d / 303",
+        },
+        CdcScenarioTestCase {
+            description: "unnest under soft deletes with REPLICA IDENTITY FULL: a delete's old items, which it carries, never load again",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: CARTS_SOURCE,
+            steps: &CARTS_FULL_REPLAYED,
+            check_query: CARTS_CHECK,
+            expected_result: "1:z,2:c,3:300,4:d / 303",
+        },
+        CdcScenarioTestCase {
+            description: "unnest under hard deletes with REPLICA IDENTITY FULL: a delete's old items leave no orphans",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: HARD_CARTS_SOURCE,
+            steps: &CARTS_FULL_REPLAYED,
             check_query: CARTS_CHECK,
             expected_result: "1:z,3:300,4:d / 302",
         },
