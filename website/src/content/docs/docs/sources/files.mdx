@@ -185,7 +185,7 @@ unique_key = ["sku"]
   newest file.
 - Stores that keep modified times to the second, as SFTP does, and the members of one ZIP archive,
   which share the archive's time, fall back to path order for files from the same second.
-- From 0.39.0 (not released yet), a file that holds one `unique_key` value in more than one row
+- From 0.39.0, a file that holds one `unique_key` value in more than one row
   merges the last of those rows, or the one `dedup_sort` picks; see
   [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). With
   `on_duplicate_keys = "fail"`, as in 0.38.0, such a file fails instead, naming the key's columns
@@ -198,7 +198,7 @@ unique_key = ["sku"]
 
 ### Deleting or moving loaded files
 
-From 0.39.0 (not released yet), `after_load` says what happens to each file once its rows are
+From 0.39.0, `after_load` says what happens to each file once its rows are
 committed: `"keep"` (the default), `"delete"`, or `{ move_to = "<folder>" }`.
 
 ```toml

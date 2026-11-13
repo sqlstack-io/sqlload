@@ -68,7 +68,7 @@ destination's maximum (minus any `lookback`); without one, it reads the whole ta
 
 ### Repeated keys
 
-From 0.39.0 (not released yet), when the rows of one commit hold a `unique_key` value more than
+From 0.39.0, when the rows of one commit hold a `unique_key` value more than
 once, `merge` keeps one row for each value. The destination never gets the key twice, and the load
 never fails on the warehouse's own error about it.
 
