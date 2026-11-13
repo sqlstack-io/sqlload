@@ -222,6 +222,22 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             expected_problem: "columns \"OrderID\" and \"Order ID\" both load as order_id under naming = \"dlt\"; exclude one with exclude_columns",
         },
         UnnestPlanTestCase {
+            description: "under dlt naming a pin may name a sampled column by its loaded name",
+            settings: "naming = \"dlt\"\n[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
+            files_target: false,
+            file: "{\"OrderID\": 1}\n",
+            expected_ok: true,
+            expected_problem: "├── order_id text   -> VARCHAR",
+        },
+        UnnestPlanTestCase {
+            description: "under SQLLoad's naming the same pin is a typo of the file's name",
+            settings: "[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
+            files_target: false,
+            file: "{\"OrderID\": 1}\n",
+            expected_ok: false,
+            expected_problem: "did you mean \"OrderID\"?",
+        },
+        UnnestPlanTestCase {
             description: "excluding one of two colliding columns resolves it",
             settings: "naming = \"dlt\"\nexclude_columns = [\"Order ID\"]\n",
             files_target: false,

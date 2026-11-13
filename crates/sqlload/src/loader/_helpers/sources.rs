@@ -41,9 +41,10 @@ use crate::files_source::models::{
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
 use crate::load_naming::main::loaded_name::loaded_name;
+use crate::load_naming::models::Naming;
 use crate::loader::_helpers::destination::table_folder;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
-use crate::loader::_helpers::resolve::{resolve_tables, source_target};
+use crate::loader::_helpers::resolve::{NameRule, resolve_tables, source_target};
 use crate::loader::_helpers::run_log::merged_files;
 use crate::loader::_helpers::specs::{missing_description, table_name, table_naming};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
@@ -235,12 +236,20 @@ pub(crate) async fn source_tables(
             )
         }
         SourceKind::Files => {
-            let warehouse = match source_target(project, source) {
-                Ok(target) => target.warehouse,
+            let target = match source_target(project, source) {
+                Ok(target) => target,
                 Err(problem) => return Ok(Err(problem.into())),
             };
+            let unset = TableSettings::default();
+            let settings = source
+                .tables
+                .get(source_name)
+                .map_or(&unset, |overrides| &overrides.settings);
+            let naming = table_naming((settings, &source.defaults), target.naming);
             Ok(
-                match discover_files_table(project, source_name, source, warehouse).await {
+                match discover_files_table(project, source_name, source, (target.warehouse, naming))
+                    .await
+                {
                     Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
                     Err(LoaderError::Files(FilesError::NoFiles { .. }))
                         if source.after_load != AfterLoad::Keep =>
@@ -729,7 +738,7 @@ pub(crate) async fn discover_files_table(
     project: &ProjectConfig,
     source_name: &str,
     source: &SourceConfig,
-    warehouse: Warehouse,
+    (warehouse, naming): (Warehouse, Naming),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
@@ -739,7 +748,7 @@ pub(crate) async fn discover_files_table(
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
     }
-    files_source_parts(source_name, source, warehouse, (location, table))
+    files_source_parts(source_name, source, (warehouse, naming), (location, table))
 }
 
 /// What files source `source_name` fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then its table's `constant_columns`; a `native(...)` type, which SQLLoad's reader cannot build, is refused.
@@ -807,7 +816,7 @@ fn path_values(
 pub(crate) fn files_source_parts(
     source_name: &str,
     source: &SourceConfig,
-    warehouse: Warehouse,
+    (warehouse, naming): (Warehouse, Naming),
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let encoding = source.files_encoding();
@@ -818,7 +827,8 @@ pub(crate) fn files_source_parts(
         .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
         .collect();
     let overrides = source.tables.get(source_name);
-    let pinned_only = pinned_unsampled(overrides, &table, &added, encoding.format)?;
+    let rule = (naming, sql_adapter(warehouse).max_identifier_length());
+    let pinned_only = pinned_unsampled(overrides, (&table, &added, rule), encoding.format)?;
     let dropped = (!table.dropped.is_empty()).then(|| {
         format!(
             "dropped {} from the files (replaced by this load's)",
@@ -904,11 +914,10 @@ pub(crate) fn files_source_parts(
     ))
 }
 
-/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column.
+/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. Under `rule`'s dlt naming a pin naming a sampled column by its loaded name is one sampling saw.
 fn pinned_unsampled(
     overrides: Option<&TableOverride>,
-    table: &FilesTable,
-    added: &[&str],
+    (table, added, rule): (&FilesTable, &[&str], NameRule),
     format: SourceFormat,
 ) -> Result<Vec<String>, LoaderError> {
     let Some(overrides) = overrides.filter(|_| format != SourceFormat::Parquet) else {
@@ -919,9 +928,15 @@ fn pinned_unsampled(
         .iter()
         .map(|column| column.name.as_str())
         .collect();
+    let loaded = |name: &str| loaded_name(rule.0, name, rule.1);
+    let seen: Vec<String> = sampled
+        .iter()
+        .chain(added)
+        .map(|name| loaded(name))
+        .collect();
     let mut unsampled: Vec<String> = Vec::new();
     for name in overrides.columns.keys() {
-        if added.contains(&name.as_str()) || sampled.contains(&name.as_str()) {
+        if seen.contains(&loaded(name)) {
             continue;
         }
         let known = sampled.iter().chain(added).copied();
