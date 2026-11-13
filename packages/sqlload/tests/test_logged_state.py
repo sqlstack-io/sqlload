@@ -141,6 +141,31 @@ second = pages_of("second")
 """
 
 
+#: `orders` reads data/orders.json, a list of pages of orders with `items` lists, from the page in ctx.state.
+UNNEST_MODULE = """
+import json
+from pathlib import Path
+
+import sqlload as sl
+
+HERE = Path(__file__).resolve().parent.parent
+shop = sl.source("shop")
+
+
+@shop.table(description="Test table.", write_strategy="append", state="logged", unnest=["items"])
+def orders(ctx):
+    data = json.loads((HERE / "data" / "orders.json").read_text())
+    page = ctx.state or 0
+    for rows in data[page:]:
+        yield rows
+        page += 1
+    ctx.state = page
+"""
+
+#: Each order with its items, joined by parent id, so it shows the rows a reader sees.
+ORDER_ITEMS = 'SELECT o.id, i.sku FROM "RAW"."shop__orders" o JOIN "RAW"."shop__orders__items" i ON i._sqlload_parent_id = o._sqlload_row_id ORDER BY o.id, i.sku'
+
+
 def make_project(tmp_path: Path, toml: str) -> Path:
 	for folder in ["sources", "data", "lake"]:
 		(tmp_path / folder).mkdir()
@@ -514,3 +539,19 @@ def test_given_a_record_whose_time_is_not_rfc_3339_when_resetting_then_the_table
 	ok(project, "logged-state", "reset", "--to", "1", "--yes", "api__pages")
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 1
+
+
+def test_given_a_logged_table_with_unnest_when_a_commit_fails_and_reruns_then_each_order_has_its_items_once(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT)
+	(project / "sources" / "shop.py").write_text(UNNEST_MODULE)
+	give(project, "orders", [[{"id": 1, "items": [{"sku": "a"}, {"sku": "b"}]}]])
+	ok(project, "load", "shop__orders")
+	execute(project, 'ALTER TABLE "RAW"."_sqlload_runs" RENAME COLUMN note TO note_moved')
+	give(project, "orders", [[{"id": 1, "items": [{"sku": "a"}, {"sku": "b"}]}], [{"id": 2, "items": [{"sku": "c"}]}]])
+	assert sqlload(project, "load", "shop__orders").returncode == 1
+	execute(project, 'ALTER TABLE "RAW"."_sqlload_runs" RENAME COLUMN note_moved TO note')
+	ok(project, "load", "shop__orders")
+	give(project, "orders", [[{"id": 1, "items": [{"sku": "a"}, {"sku": "b"}]}], [{"id": 2, "items": [{"sku": "c"}]}], [{"id": 3, "items": [{"sku": "d"}]}]])
+	ok(project, "load", "shop__orders")
+	assert query(project, ORDER_ITEMS) == [(1, "a"), (1, "b"), (2, "c"), (3, "d")]
+	assert runs(project, "shop__orders") == [("run", "1", None, "1"), ("run", "2", None, "1"), ("run", "3", None, "1")]

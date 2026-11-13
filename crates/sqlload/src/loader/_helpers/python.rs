@@ -27,6 +27,7 @@ use crate::loader::_helpers::publish::staged_columns;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
 use crate::loader::_helpers::run_log::run_entry;
+use crate::loader::_helpers::specs::is_child_column;
 use crate::loader::_helpers::table_plan::append_problem;
 use crate::loader::_helpers::table_plan::replan_columns;
 use crate::loader::_helpers::table_plan::schema_statements;
@@ -116,7 +117,8 @@ pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
     for (name, table) in &source.tables {
         let mut columns: Vec<SourceColumn> = Vec::new();
         for column in table.columns.keys().chain(table.mask.keys()) {
-            if !columns.iter().any(|known| known.name == *column) {
+            if !columns.iter().any(|known| known.name == *column) && !is_child_column(column, table)
+            {
                 columns.push(python_column(column, ColumnType::Text));
             }
         }
@@ -1234,7 +1236,15 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         constants: Vec::new(),
         shared_destination: false,
         source_end: None,
-        pinned: BTreeMap::new(),
+        pinned: spec
+            .child_pinned
+            .iter()
+            .filter_map(|(key, column_type)| {
+                let column = key.strip_prefix(path)?.strip_prefix('.')?;
+                (!column.contains('.')).then(|| (column.to_owned(), column_type.clone()))
+            })
+            .collect(),
+        child_pinned: BTreeMap::new(),
         excluded_columns: Vec::new(),
         masked: MaskRules::default(),
         logged: false,

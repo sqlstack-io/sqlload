@@ -31,6 +31,9 @@ Set in a table entry:
   before `items.parts`). Or `"all"`, described below.
 - `max_depth`: how many levels of child tables to make at most, 1000 by default. A list deeper than
   that stays JSON in its parent.
+- `columns` (added in 0.42.0): a child table's column is named by its dotted path, such as
+  `"items.sku" = "text"`, to pin its type. Under `contract = "enforced"`, each child table loads
+  only the columns named so, with its id and link columns, and leaves out the rest.
 - `row_id` (also on a source): every table with `unnest` gives its rows an id, so it can't be
   `false`.
 
@@ -53,9 +56,11 @@ Set in a table entry:
   the two leaves those rows without items until a rerun loads the window again.
 
 Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets, and from
-0.41.0 (not released yet) ClickHouse targets. Databricks targets, files targets,
-`state = "logged"`, `contract = "enforced"` and `postgres_cdc` sources are refused for now: `plan`
-names the setting, and without `unnest` the lists load as JSON columns.
+0.41.0 (not released yet) ClickHouse targets. Databricks targets, files targets and
+`postgres_cdc` sources are refused for now: `plan` names the setting, and without `unnest` the
+lists load as JSON columns. `state = "logged"` and `contract = "enforced"` tables write child
+tables from 0.42.0. A logged table's child rows commit with the commit that records its state, so
+a rerun after a failure reads them again from the state last recorded.
 
 ClickHouse has no transactions, so its child tables are published the way their parent is: by
 swapping in whole tables or whole partitions. Under `merge`, the merged rows' old items leave each

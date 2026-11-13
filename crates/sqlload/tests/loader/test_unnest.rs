@@ -286,14 +286,6 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             expected_problem: "max_depth limits the child tables unnest makes, and this table sets no unnest",
         },
         UnnestPlanTestCase {
-            description: "an enforced contract",
-            settings: "contract = \"enforced\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
-            files_target: false,
-            file: ORDERS,
-            expected_ok: false,
-            expected_problem: "unnest does not yet write child tables with contract = \"enforced\"",
-        },
-        UnnestPlanTestCase {
             description: "a files target",
             settings: "[sources.orders.tables.orders]\nunnest = \"all\"\n",
             files_target: true,
@@ -488,6 +480,17 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             expected_columns: DELETE_INSERT_COLUMNS,
             check_query: DELETE_INSERT_CHECK,
             expected_result: "2/2/2/1:a:1,2:c:4",
+        },
+        RowIdTestCase {
+            description: "unnest under an enforced contract: columns declares the child tables' columns by dotted path; each table loads its declared columns and links, and leaves out the rest (an item's qty, the parent's note and tags)",
+            settings: "contract = \"enforced\"\n[sources.orders.tables.orders]\ncolumns = { id = \"int\", \"items.sku\" = \"text\", \"items.parts.value\" = \"int\" }\nunnest = [\"items\", \"items.parts\"]\n",
+            runs: &[(
+                "a.ndjson",
+                "{\"id\": 1, \"note\": \"n\", \"items\": [{\"sku\": \"a\", \"qty\": 5, \"parts\": [1, 2]}], \"tags\": [\"x\"]}\n",
+            )],
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: "SELECT (SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders__items') || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',' ORDER BY p.value) FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)",
+            expected_result: "sku,_sqlload_parent_id,_sqlload_list_idx,_sqlload_load_id,_sqlload_loaded_at,_sqlload_row_id/1:a:1,1:a:2",
         },
         RowIdTestCase {
             description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then",

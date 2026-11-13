@@ -46,6 +46,7 @@ use crate::loader::_helpers::destination::table_folder;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::resolve::{NameRule, resolve_tables, source_target};
 use crate::loader::_helpers::run_log::merged_files;
+use crate::loader::_helpers::specs::is_child_column;
 use crate::loader::_helpers::specs::{missing_description, table_name, table_naming};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
@@ -936,7 +937,7 @@ fn pinned_unsampled(
         .collect();
     let mut unsampled: Vec<String> = Vec::new();
     for name in overrides.columns.keys() {
-        if seen.contains(&loaded(name)) {
+        if seen.contains(&loaded(name)) || is_child_column(name, overrides) {
             continue;
         }
         let known = sampled.iter().chain(added).copied();

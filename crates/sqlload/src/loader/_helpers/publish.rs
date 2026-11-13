@@ -450,6 +450,22 @@ fn with_planned_columns(
     .map_err(|error| error.to_string())
 }
 
+/// `batch` with only the columns the table writes, as a build table holds no others (an enforced contract leaves undeclared columns out of a table that unnests, whose rows are read rather than copied).
+fn written_only(batch: RecordBatch, written: &[DesiredColumn]) -> Result<RecordBatch, LoaderError> {
+    let names: BTreeSet<&str> = written.iter().map(|column| column.name.as_str()).collect();
+    let kept: Vec<usize> = batch
+        .schema()
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| names.contains(field.name().as_str()))
+        .map(|(position, _)| position)
+        .collect();
+    batch
+        .project(&kept)
+        .map_err(|error| LoaderError::Invalid(error.to_string()))
+}
+
 impl Publisher {
     /// A table's load ready for its first batch: its own connection, and (unless the batches go straight into the table) a fresh staging table.
     pub(crate) async fn open(
@@ -696,6 +712,10 @@ impl Publisher {
         let batch = match roots {
             Some(roots) => with_root_rows(batch, roots)?,
             None => batch,
+        };
+        let batch = match self.builds {
+            true => written_only(batch, &self.table.schema.write_columns)?,
+            false => batch,
         };
         self.batch_rows += batch.num_rows() as u64;
         self.arrow_bytes += batch.get_array_memory_size();

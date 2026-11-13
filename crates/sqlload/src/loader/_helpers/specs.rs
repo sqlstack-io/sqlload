@@ -20,9 +20,8 @@ use crate::loader::models::{
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
-    CdcDeletes, CdcMode, Contract, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection,
-    SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, UnnestSetting,
-    WriteStrategy,
+    CdcDeletes, CdcMode, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection, SourceConfig,
+    SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
@@ -108,7 +107,18 @@ pub(crate) fn pinned_types(
     }
 }
 
-/// Problems with `columns` and `mask` keys that name no source column, so a typo never loads a column unmasked.
+/// Whether `columns` key `key` declares a column of one of the table's child tables (`items.sku`): its path before the last dot is a listed `unnest` path, or under `unnest = "all"` it has one.
+pub(crate) fn is_child_column(key: &str, overrides: &TableOverride) -> bool {
+    match &overrides.unnest {
+        Some(UnnestSetting::Paths(paths)) => key
+            .rsplit_once('.')
+            .is_some_and(|(path, _)| paths.iter().any(|listed| listed == path)),
+        Some(UnnestSetting::Word(word)) if word == UNNEST_ALL => key.contains('.'),
+        _ => false,
+    }
+}
+
+/// Problems with `columns` and `mask` keys that name no source column, so a typo never loads a column unmasked; a key declaring a child table's column is checked against the child's rows instead.
 fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> Vec<String> {
     let names: Vec<&str> = table
         .columns
@@ -118,6 +128,7 @@ fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> 
     let keys = overrides
         .columns
         .keys()
+        .filter(|key| !is_child_column(key, overrides))
         .map(|key| ("columns", key))
         .chain(overrides.mask.keys().map(|key| ("mask", key)));
     keys.filter(|(_, key)| !names.contains(&key.as_str()))
@@ -254,7 +265,7 @@ pub(crate) fn build_spec(
     let contract = layered(&settings.contract, &defaults.contract)
         .map(|(value, _)| value)
         .unwrap_or_default();
-    let (nesting, found) = nesting(context, overrides, (strategy, contract));
+    let (nesting, found) = nesting(context, overrides);
     problems.extend(found);
     problems.extend(after_load_problems(context, strategy));
     let layout = table_layout(settings, defaults);
@@ -302,7 +313,17 @@ pub(crate) fn build_spec(
         #[cfg(not(feature = "container-tests"))]
         test_loader_route: false,
         source_end: None,
-        pinned: columns.pinned,
+        pinned: columns
+            .pinned
+            .iter()
+            .filter(|(key, _)| !is_child_column(key, overrides))
+            .map(|(key, column_type)| (key.clone(), column_type.clone()))
+            .collect(),
+        child_pinned: columns
+            .pinned
+            .into_iter()
+            .filter(|(key, _)| is_child_column(key, overrides))
+            .collect(),
         excluded_columns: columns.excluded,
         masked: MaskRules {
             columns: overrides.mask.clone(),
@@ -848,18 +869,12 @@ struct Nesting {
 }
 
 /// The table's naming (its own, its source's, then its target's), whether its rows get an id (always under dlt's naming), its `unnest` and `max_depth`, and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
-fn nesting(
-    context: &SourceContext<'_>,
-    overrides: &TableOverride,
-    (strategy, contract): (WriteStrategy, Contract),
-) -> (Nesting, Vec<String>) {
+fn nesting(context: &SourceContext<'_>, overrides: &TableOverride) -> (Nesting, Vec<String>) {
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
     let naming = table_naming((settings, defaults), context.target.naming);
     let row_id = layered(&settings.row_id, &defaults.row_id).map(|(value, _)| value);
     let max_depth = overrides.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
-    let logged = layered(&settings.state, &defaults.state)
-        .is_some_and(|(value, _)| value == StateMode::Logged);
     let mut problems: Vec<String> = Vec::new();
     if naming == Naming::Dlt && row_id == Some(false) {
         problems.push("row_id = false: naming = \"dlt\" gives every row its _dlt_id; drop row_id or use naming = \"sqlload\"".to_owned());
@@ -888,8 +903,8 @@ fn nesting(
         }
         Unnest::None => {}
         Unnest::All | Unnest::Paths(_) => {
-            problems.extend(refused_writes(context, contract));
-            problems.extend(unbuilt_writes(context, logged));
+            problems.extend(refused_writes(context));
+            problems.extend(unbuilt_writes(context));
             if row_id == Some(false) {
                 problems.push("row_id = false: unnest gives every row an id, which its child rows name as their parent's; drop row_id".to_owned());
             }
@@ -984,26 +999,22 @@ fn matching_pattern<'a>(field: &str, patterns: &[&'a String]) -> Option<&'a Stri
         .copied()
 }
 
-/// What this build cannot yet do with `unnest` while its writers are taught to: a warehouse whose writer does not write child tables (Databricks); and a `state = "logged"` table, whose commit can wait on its state while its child rows would not.
-fn unbuilt_writes(context: &SourceContext<'_>, logged: bool) -> Vec<String> {
+/// What this build cannot yet do with `unnest` while its writers are taught to: a warehouse whose writer does not write child tables (Databricks).
+fn unbuilt_writes(context: &SourceContext<'_>) -> Vec<String> {
     let warehouse = context.target.warehouse;
-    [
-        (context.target.path.is_none() && !sql_adapter(warehouse).writes_child_tables())
-            .then(|| format!("a {warehouse} target")),
-        logged.then(|| "state = \"logged\"".to_owned()),
-    ]
+    [(context.target.path.is_none() && !sql_adapter(warehouse).writes_child_tables())
+        .then(|| format!("a {warehouse} target"))]
     .into_iter()
     .flatten()
     .map(|what| format!("unnest does not yet write child tables with {what}; drop unnest, and its lists stay JSON columns"))
     .collect()
 }
 
-/// Why this table's writes cannot carry child tables yet: a files target, captured changes or an enforced contract.
-fn refused_writes(context: &SourceContext<'_>, contract: Contract) -> Vec<String> {
+/// Why this table's writes cannot carry child tables yet: a files target or captured changes.
+fn refused_writes(context: &SourceContext<'_>) -> Vec<String> {
     [
         context.target.path.is_some().then_some("a files target"),
         (context.source.kind == SourceKind::PostgresCdc).then_some("kind = \"postgres_cdc\""),
-        (contract == Contract::Enforced).then_some("contract = \"enforced\""),
     ]
     .into_iter()
     .flatten()
