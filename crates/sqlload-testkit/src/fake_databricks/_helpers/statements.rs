@@ -269,18 +269,28 @@ fn child_tables(state: &FakeState, statement: &str) -> Value {
     let rows: Vec<Vec<Value>> = state
         .tables
         .iter()
-        .filter_map(|(key, table)| {
-            let name = key.strip_prefix(&format!("{schema}."))?;
-            let child = table.columns.iter().any(|(column, _)| {
-                ["_sqlload_parent_id", "_dlt_parent_id"]
-                    .iter()
-                    .any(|parent_id| column.eq_ignore_ascii_case(parent_id))
-            });
-            name.starts_with(&prefix)
-                .then(|| vec![json!(format!("{}{name}", u8::from(child)))])
-        })
+        .filter_map(|(key, table)| marked_child(key, table, (&schema, &prefix)))
         .collect();
     succeeded(&["marked"], rows)
+}
+
+/// The listing's row for the table at `key` (`schema.table`) when it is in `schema` and its name starts with `prefix`: its name after `1` when it has a parent-id column, `0` when not.
+fn marked_child(
+    key: &str,
+    table: &FakeTable,
+    (schema, prefix): (&str, &str),
+) -> Option<Vec<Value>> {
+    let name = key.strip_prefix(&format!("{schema}."))?;
+    let child = table.columns.iter().any(|(column, _)| is_parent_id(column));
+    name.starts_with(prefix)
+        .then(|| vec![json!(format!("{}{name}", u8::from(child)))])
+}
+
+/// Whether `column` is a child table's parent-id column, under either naming.
+fn is_parent_id(column: &str) -> bool {
+    ["_sqlload_parent_id", "_dlt_parent_id"]
+        .iter()
+        .any(|parent_id| column.eq_ignore_ascii_case(parent_id))
 }
 
 /// The columns of the table `information_schema.columns` is asked about: name, `full_data_type`, precision and scale.
