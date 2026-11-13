@@ -99,6 +99,31 @@ pub(crate) async fn read_text(serving: &Destination, query: &str) -> Result<Stri
 /// How many stop points a stopped-load test tries; more than any of its loads' statements.
 const STOP_POINTS: usize = 30;
 
+/// The longest one load of a stopped-load test may take (each takes about a second), so a hung request fails the test naming its stop point instead of waiting for the CI watchdog: a ClickHouse request may otherwise wait for hours.
+const STOPPED_LOAD_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// `options`' plan, apply and load of `project`, failing as `what` once it runs past [`STOPPED_LOAD_DEADLINE`].
+async fn bounded_load(
+    (project, destinations, options): (
+        &ProjectConfig,
+        &BTreeMap<String, Destination>,
+        &PlanOptions,
+    ),
+    what: &str,
+) -> Result<Result<String, String>, String> {
+    tokio::time::timeout(
+        STOPPED_LOAD_DEADLINE,
+        plan_apply_load_with(project, destinations, options),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "{what} was still running after {} seconds",
+            STOPPED_LOAD_DEADLINE.as_secs()
+        )
+    })
+}
+
 /// Load `test_case.table` into the ClickHouse target `dev` (in `database`) once, then, for each N below `STOP_POINTS`, switch its source to the other state with `set_state` and load it with ClickHouse's statements for it stopped from the Nth on: after each stop the table must hold the old or the new state, and the rerun the new one. Returns the first N whose run was never stopped, once every statement ran.
 pub(crate) async fn run_clickhouse_stops(
     project: &ProjectConfig,
@@ -113,7 +138,11 @@ pub(crate) async fn run_clickhouse_stops(
     let stopped_name = format!("`{database}`.`{}", test_case.table);
     let [first, _] = test_case.states;
     set_state(first.0).await?;
-    plan_apply_load_with(project, destinations, &select_only(test_case.table)).await?;
+    bounded_load(
+        (project, destinations, &select_only(test_case.table)),
+        "the first load",
+    )
+    .await??;
     assert_eq!(
         read_text(serving, test_case.query).await?,
         first.1,
@@ -126,8 +155,13 @@ pub(crate) async fn run_clickhouse_stops(
         let current = test_case.states[stops % 2].1;
         set_state(change).await?;
         stop_after(&stopped_name, Some(stops));
-        let stopped = plan_apply_load_with(project, destinations, &test_case.options).await;
+        let stopped = bounded_load(
+            (project, destinations, &test_case.options),
+            &format!("the load stopped after {stops} statements"),
+        )
+        .await;
         stop_after(&stopped_name, None);
+        let stopped = stopped?;
         let seen = read_text(serving, test_case.query).await?;
         assert!(
             seen == current || seen == expected,
@@ -140,9 +174,12 @@ pub(crate) async fn run_clickhouse_stops(
             test_case.description
         );
         unstopped = unstopped.or(stopped.is_ok().then_some(stops));
-        plan_apply_load_with(project, destinations, &test_case.options)
-            .await
-            .map_err(|error| format!("the rerun after {stops}: {error}"))?;
+        bounded_load(
+            (project, destinations, &test_case.options),
+            &format!("the rerun after {stops}"),
+        )
+        .await?
+        .map_err(|error| format!("the rerun after {stops}: {error}"))?;
         assert_eq!(
             read_text(serving, test_case.query).await?,
             expected,
