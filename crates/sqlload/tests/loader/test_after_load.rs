@@ -157,6 +157,44 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             expected_files: &["other/b.csv=id,v\\n2,b\\n"],
         },
         AfterLoadTestCase {
+            description: "an emptied source whose table pins a column still protects its rows",
+            settings: "write_strategy = \"append\"\nafter_load = \"delete\"\nconstant_columns = { feed = \"a\" }\n[sources.scores.tables.scores]\ncolumns = { v = \"text\" }\n\n[sources.other]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"other/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\nconstant_columns = { feed = \"b\" }\n[sources.other.tables.other]\nname = \"scores\"\n",
+            linked: &[],
+            steps: &[AfterLoadStep {
+                removed: &[],
+                args: &["--select", "other"],
+                files: &[("drop/.keep", ""), ("other/b.csv", "id,v\n2,b\n")],
+                expected_exit: 1,
+                expected_report: r#"{"after_load":null,"problems":["scores is also loaded by scores.scores, and constant_columns tell their rows apart; other.other uses write_strategy = \"replace\", which would remove the other tables' rows: use merge on a unique_key that includes a constant column, or append"],"rows":null,"skipped":[],"status":null}"#,
+            }],
+            expected_files: &["other/b.csv=id,v\\n2,b\\n"],
+        },
+        AfterLoadTestCase {
+            description: "two emptied sources appending to one table are both skipped, neither failing because of the other",
+            settings: "write_strategy = \"append\"\nafter_load = \"delete\"\nconstant_columns = { feed = \"a\" }\n\n[sources.other]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"other/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\nafter_load = \"delete\"\nconstant_columns = { feed = \"b\" }\n[sources.other.tables.other]\nname = \"scores\"\n",
+            linked: &[],
+            steps: &[
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[
+                        ("drop/a.csv", "id,v\n1,a\n"),
+                        ("other/b.csv", "id,v\n2,b\n"),
+                    ],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":{"action":"delete","failed":[],"files":1,"status":"done"},"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
+                },
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":null,"problems":[],"rows":null,"skipped":["no files to load in other/: after_load deleted or moved the ones already loaded","no files to load in drop/: after_load deleted or moved the ones already loaded"],"status":null}"#,
+                },
+            ],
+            expected_files: &[],
+        },
+        AfterLoadTestCase {
             description: "a failed load deletes nothing",
             settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\non_duplicate_keys = \"fail\"\nafter_load = \"delete\"\n",
             linked: &[],

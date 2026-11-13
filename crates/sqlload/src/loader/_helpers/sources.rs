@@ -43,6 +43,7 @@ use crate::http::models::ConnectionCounter;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::destination::table_folder;
+use crate::loader::_helpers::files_columns::{flattened_object_problems, referenced_columns};
 use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::resolve::{NameRule, resolve_tables, source_target};
 use crate::loader::_helpers::run_log::merged_files;
@@ -836,6 +837,13 @@ pub(crate) fn files_source_parts(
     let overrides = source.tables.get(source_name);
     let rule = (naming, sql_adapter(warehouse).max_identifier_length());
     let pinned_only = pinned_unsampled(overrides, (&table, &added, rule), encoding.format)?;
+    if encoding.flatten_objects {
+        let problems = flattened_object_problems((source, overrides), &table.columns, rule)
+            .map_err(LoaderError::Invalid)?;
+        if !problems.is_empty() {
+            return Err(LoaderError::Invalid(problems.join("; ")));
+        }
+    }
     let dropped = (!table.dropped.is_empty()).then(|| {
         format!(
             "dropped {} from the files (replaced by this load's)",
@@ -1651,17 +1659,17 @@ fn drained_files(
             };
         }
     };
+    let overrides = source.tables.get(source_name);
     let listed = SourceTable {
         schema: String::new(),
         name: source_name.to_owned(),
-        columns: Vec::new(),
+        columns: referenced_columns(overrides),
         primary_key: Vec::new(),
         indexed_columns: Vec::new(),
         estimated_rows: -1,
         estimated_bytes: 0,
         comment: None,
     };
-    let overrides = source.tables.get(source_name);
     let name = overrides.and_then(|table| table.name.as_deref());
     let unset = TableSettings::default();
     let naming = table_naming(
@@ -1916,6 +1924,7 @@ pub(crate) async fn found_sources<'a>(
             files,
         });
     }
+    let mut drained_specs: Vec<TableSpec> = Vec::new();
     for (index, drained) in drained_sources {
         let source = &mut found.sources[index];
         let shared = found
@@ -1928,7 +1937,7 @@ pub(crate) async fn found_sources<'a>(
         found
             .drained
             .push((drained.table.table.clone(), source.name.clone()));
-        found.configured.extend(drained.spec);
+        drained_specs.extend(drained.spec);
         if !drained.in_scope {
             continue;
         }
@@ -1954,6 +1963,7 @@ pub(crate) async fn found_sources<'a>(
             None => source.resolved.skipped.push(drained.skipped),
         }
     }
+    found.configured.extend(drained_specs);
     Ok(found)
 }
 

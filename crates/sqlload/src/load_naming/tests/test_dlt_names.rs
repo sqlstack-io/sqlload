@@ -183,6 +183,13 @@ fn given_names_when_normalising_as_dlt_then_they_match_dlts_snake_case_and_stay_
             max_length: Some(63),
             expected_name: "orders__a__b",
         },
+        DltNameTestCase {
+            description: "a blank list field is named _empty, as dlt names a blank key",
+            normalise: child_of_orders,
+            name: " ",
+            max_length: Some(63),
+            expected_name: "orders___empty",
+        },
     ];
     for test_case in test_cases {
         assert_eq!(

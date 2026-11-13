@@ -168,6 +168,16 @@ Where SQLLoad and dlt still differ under `naming = "dlt"`:
   does, at every level and inside unnested items, and a list inside an object becomes a child
   table such as `orders__customer__tags`. An object from a Python table or a database's JSON
   column stays a JSON column; a Python table's `flatten` expands objects one level.
+  - An object's keys are columns like any other: a key first seen after the sampled rows fails
+    the load, naming its column (`customer__vip`); pin it in `columns` to load it. An object that
+    is NULL in a row loads as NULLs in its columns.
+  - `columns`, `mask`, `exclude_columns` and `allow_columns` name the flattened columns
+    (`customer__email`, or `customer__*`); a setting naming only the object fails the plan,
+    listing its columns.
+  - Upgrading from 0.40 or 0.41: a files source's object columns, which held JSON, stop
+    receiving values, and its objects load into new `parent__key` columns instead. A child table
+    whose list field holds `__` is now named with each part (`orders__a__b` for `a__B`, not
+    `orders__a_b`), as a dlt pipeline names it, so it loads into a new table.
 - A field that is only NULL in the sampled rows is a text column, beside the `parent__key`
   columns of its objects; dlt makes no column for it.
 - A field listed in `unnest` always goes to its child table, even when an XML element appears

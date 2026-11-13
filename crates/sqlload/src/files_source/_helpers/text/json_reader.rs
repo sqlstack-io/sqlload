@@ -46,6 +46,11 @@ impl JsonReader {
         self
     }
 
+    /// Whether this reader flattens objects.
+    pub(crate) fn flattens(&self) -> bool {
+        self.flatten_objects
+    }
+
     /// The fields flattening has made, and the object fields it replaced, in the records read so far.
     pub(crate) fn flattened(&self) -> &BTreeSet<String> {
         &self.flattened
@@ -74,11 +79,11 @@ impl JsonReader {
     }
 }
 
-/// `records` as a batch of text columns, one per `columns` entry (a missing key is NULL; a repeated key keeps its last value), and the line each row starts on; a key the source lacks, or a value that does not fit its inferred type, is an error.
+/// `records` as a batch of text columns, one per `columns` entry (a missing key is NULL; a repeated key keeps its last value), and the line each row starts on; a key the source lacks, or a value that does not fit its inferred type, is an error, except a NULL when `flattened` (an object that is NULL in this row and flattened in others, which a missing key already loads as).
 pub(crate) fn records_batch(
     records: &[JsonRecord],
     columns: &[(String, ColumnType)],
-    checks: &ColumnChecks,
+    (checks, flattened): (&ColumnChecks, bool),
 ) -> Result<(RecordBatch, Vec<u64>), String> {
     let index: HashMap<&str, usize> = columns
         .iter()
@@ -90,7 +95,9 @@ pub(crate) fn records_batch(
         for field in &record.fields {
             let (key, value, nested) = field;
             let Some(position) = index.get(key.as_str()) else {
-                checks.check_name("key", key, record.line)?;
+                if !(flattened && value.is_null()) {
+                    checks.check_name("key", key, record.line)?;
+                }
                 continue;
             };
             check_value(checks, field, record.line)?;
