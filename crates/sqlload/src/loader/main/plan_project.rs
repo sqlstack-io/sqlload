@@ -26,7 +26,7 @@ pub async fn plan_project(
 ) -> Result<ProjectPlan, LoaderError> {
     let found = found_sources(project, destinations, options).await?;
     let (mut plan, claims, configured) = (found.plan, found.claims, found.configured);
-    let unresolved = found.unresolved;
+    let (unresolved, drained) = (found.unresolved, found.drained);
     for FoundSource {
         name: source_name,
         source,
@@ -69,7 +69,7 @@ pub async fn plan_project(
     }
     Ok(block_conflicts(
         plan,
-        (&claims, &configured),
+        (&claims, &configured, &drained),
         (project, options),
     ))
 }
@@ -77,14 +77,13 @@ pub async fn plan_project(
 /// The plan with a warning for each selector matching none of the `configured` tables, every selected files table blocked whose folder clashes with any other configured table's, every selected table blocked whose destination table it shares with configured tables it could remove or overwrite rows of (see [`block_shared_destinations`]), and every cursor table blocked when a cursor range meets cursors of different kinds.
 fn block_conflicts(
     mut plan: ProjectPlan,
-    (claims, configured): (&[FolderClaim], &[TableSpec]),
+    (claims, configured, drained): (&[FolderClaim], &[TableSpec], &[(String, String)]),
     (project, options): (&ProjectConfig, &PlanOptions),
 ) -> ProjectPlan {
-    plan.warnings.extend(unmatched_selectors(
-        project,
-        options,
-        &destination_names(configured),
-    ));
+    let mut names = destination_names(configured);
+    names.extend(drained.iter().cloned());
+    plan.warnings
+        .extend(unmatched_selectors(project, options, &names));
     let mut plan = block_shared_destinations(plan, configured);
     for table in plan
         .tables

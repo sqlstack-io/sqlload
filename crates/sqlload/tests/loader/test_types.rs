@@ -1030,8 +1030,10 @@ pub(crate) struct FilesMergeTestCase {
 pub(crate) struct AfterLoadStep {
     /// Files written first, by path below the connection's root, such as `drop/a.csv`.
     pub(crate) files: &'static [(&'static str, &'static str)],
+    /// Folders removed next, by path below the root, such as `drop`.
+    pub(crate) removed: &'static [&'static str],
     pub(crate) expected_exit: i32,
-    /// The table's `status`, `rows` and `after_load` in the report, as compact JSON.
+    /// The table's `status`, `rows` and `after_load` in the report, with the plan's `errors` and `skipped` reasons (the root as `<root>`), as compact JSON.
     pub(crate) expected_report: &'static str,
 }
 

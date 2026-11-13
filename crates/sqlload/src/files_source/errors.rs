@@ -7,7 +7,7 @@ pub enum FilesError {
     Store(#[from] StoreError),
     #[error("{key}: {reason}")]
     File { key: String, reason: String },
-    /// The folder `key` lists no file of the source's format, and none that `path_columns` refuses.
+    /// The folder `key`, which can be read, lists no file at all (hidden ones aside): none of the source's format, of another, or that `path_columns` refuses.
     #[error("{key}: {reason}")]
     NoFiles { key: String, reason: String },
 }

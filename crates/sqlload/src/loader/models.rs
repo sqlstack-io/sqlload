@@ -251,6 +251,8 @@ pub struct FoundSources<'a> {
     pub plan: ProjectPlan,
     /// The sources whose tables could not be listed, selected or not, so the tables they would load are unknown.
     pub unresolved: Vec<String>,
+    /// The destination table and source of each files source skipped as drained (see [`DrainedFiles`]), names a selector may use.
+    pub drained: Vec<(String, String)>,
 }
 
 /// The settings for tables of one project, before any destination is read.
@@ -262,6 +264,19 @@ pub struct ResolvedTables {
     pub problems: Vec<String>,
     /// Warnings about reaching the source, such as reading it in plain text.
     pub warnings: Vec<String>,
+    /// A files source whose folder `after_load` emptied, when the selection takes it.
+    pub drained: Option<DrainedFiles>,
+}
+
+/// A files source with an existing, readable folder that `after_load` emptied: skipped with nothing to load when its destination `table` exists in `target`, a problem when it does not, as a path that never held the table's files looks the same.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrainedFiles {
+    /// Whether the selection takes it; one it does not still counts as unknown to tables sharing its destination.
+    pub in_scope: bool,
+    pub target: String,
+    pub table: TableName,
+    pub skipped: SkippedTable,
+    pub problem: String,
 }
 
 /// The selected tables of one project for `contract`, before any destination is read.

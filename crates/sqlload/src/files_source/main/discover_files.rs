@@ -8,6 +8,7 @@ use crate::files_source::_helpers::plan::columns::{
     ColumnMerge, SampledColumn, case_problems, drop_loader_columns, file_columns, merge_columns,
 };
 use crate::files_source::_helpers::plan::encoding::{file_codec, file_names};
+use crate::files_source::_helpers::plan::folder::unreadable;
 use crate::files_source::_helpers::plan::partitions::data_file;
 use crate::files_source::_helpers::plan::sample::newest_columns;
 use crate::files_source::constants::{
@@ -140,9 +141,18 @@ async fn listed_files(
         file_names(encoding)
     );
     let key = folder.location.to_string();
-    match (listed.files.is_empty(), listed.unmatched) {
-        (false, _) => Ok(listed),
-        (true, 0) => Err(FilesError::NoFiles { key, reason }),
-        (true, _) => Err(FilesError::File { key, reason }),
+    let others = listed.skipped + listed.unmatched;
+    match (
+        listed.files.is_empty(),
+        others,
+        unreadable(&folder.location),
+    ) {
+        (false, _, _) => Ok(listed),
+        (true, 0, None) => Err(FilesError::NoFiles { key, reason }),
+        (true, _, None) => Err(FilesError::File { key, reason }),
+        (true, _, Some(error)) => Err(FilesError::File {
+            key,
+            reason: format!("{reason}; the folder cannot be read: {error}"),
+        }),
     }
 }

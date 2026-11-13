@@ -36,6 +36,9 @@ pub(crate) async fn run_after_load_case(
                 .map_err(|error| error.to_string())?;
             std::fs::write(&file, contents).map_err(|error| error.to_string())?;
         }
+        for folder in step.removed {
+            std::fs::remove_dir_all(root.path().join(folder)).map_err(|error| error.to_string())?;
+        }
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
             .arg("--config")
             .arg(&config)
@@ -71,7 +74,22 @@ pub(crate) async fn run_after_load_case(
             .iter()
             .map(|item| item["details"][0]["text"].clone())
             .collect();
+        let problems: Vec<serde_json::Value> = report["plan"]["errors"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .map(|item| {
+                serde_json::Value::from(
+                    item["details"][0]["text"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .replace(&root.path().display().to_string(), "<root>"),
+                )
+            })
+            .collect();
         let shown = serde_json::json!({
+            "problems": problems,
             "status": table["status"],
             "rows": table["rows"],
             "after_load": after_load,
