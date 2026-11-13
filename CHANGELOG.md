@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.40.0](https://github.com/sqlstack-io/sqlload/compare/v0.39.1...v0.40.0) (2026-11-13)
+
+
+### Features
+
+* **unnest:** child tables from list fields, row ids, and dlt's naming ([#215](https://github.com/sqlstack-io/sqlload/issues/215)) ([a928007](https://github.com/sqlstack-io/sqlload/commit/a9280072f1b2000897ecd8f0a120c109cc2ada5d))
+
+
+### Documentation
+
+* 0.39.1 is released ([#213](https://github.com/sqlstack-io/sqlload/issues/213)) ([6e798c0](https://github.com/sqlstack-io/sqlload/commit/6e798c068034abb004bb3b2f246acfb82f885f9d))
+
 ## [0.39.1](https://github.com/sqlstack-io/sqlload/compare/v0.39.0...v0.39.1) (2026-11-13)
 
 
