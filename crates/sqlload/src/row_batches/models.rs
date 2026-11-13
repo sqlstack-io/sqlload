@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::row_batches::types::ListChoices;
+
 use arrow_array::RecordBatch;
 
 use crate::load_naming::models::Naming;
@@ -251,18 +253,19 @@ pub enum Unnest {
     /// None: lists stay JSON columns.
     #[default]
     None,
-    /// Every list field, at every level down to `max_depth`.
+    /// Every list field, at every level down to `max_depth`: a field whose values are lists, and never one with another value (an object or a scalar stays a column).
     All,
     /// The list fields at these dotted paths.
     Paths(Vec<String>),
 }
 
 impl Unnest {
-    /// Whether the loaded table's own column `name` is a list field its child tables take, so the table itself has no such column.
-    pub fn takes(&self, name: &str) -> bool {
+    /// Whether the loaded table's own column `name` is a list field its child tables take, so the table itself has no such column: a listed one, or under `"all"` one `choices` (the plan's) chose.
+    pub fn takes(&self, name: &str, choices: &ListChoices) -> bool {
         match self {
             Self::Paths(paths) => paths.iter().any(|path| path == name),
-            Self::None | Self::All => false,
+            Self::All => choices.get(name) == Some(&true),
+            Self::None => false,
         }
     }
 }

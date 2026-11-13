@@ -1,3 +1,4 @@
+pub mod choose_lists;
 pub mod columns_batch;
 pub mod conform_batch;
 pub mod flatten_batch;

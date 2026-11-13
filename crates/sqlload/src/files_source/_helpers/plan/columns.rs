@@ -18,6 +18,35 @@ pub(crate) struct SampledColumn {
     /// How the column is held when a direct `COPY` does not load it exactly.
     pub(crate) direct_refusal: Option<String>,
     pub(crate) stored_read: StoredRead,
+    /// Whether the sampled values were lists (`unnest = "all"` unnests the column): `Some(true)` when some held items and every other was NULL or empty, `Some(false)` once any was not a list, `None` while none decided.
+    pub(crate) lists: Option<bool>,
+}
+
+/// What two sightings of a column's values say about it being a list field: any value that is not a list says no, any list with items yes.
+pub(crate) fn joined_lists(seen: Option<bool>, found: Option<bool>) -> Option<bool> {
+    match (seen, found) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (None, None) => None,
+    }
+}
+
+/// What one value of JSON text `text` says about its column being a list field: `None` for NULL or an empty list.
+pub(crate) fn text_lists(text: &str) -> Option<bool> {
+    let text = text.trim_start();
+    match text.as_bytes().first() {
+        None | Some(b'n') => None,
+        Some(b'[') => (!text[1..].trim_start().starts_with(']')).then_some(true),
+        Some(_) => Some(false),
+    }
+}
+
+/// What an Arrow column of `data_type` says about being a list field.
+fn arrow_lists(data_type: &DataType) -> Option<bool> {
+    Some(matches!(
+        data_type,
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(..)
+    ))
 }
 
 /// Whether `name` is one of the loader's own columns, ignoring case.
@@ -48,6 +77,7 @@ pub(crate) fn schema_columns(schema: &SchemaRef) -> Vec<SampledColumn> {
             column_type: Some(portable_type(field)),
             direct_refusal: direct_refusal(field.data_type()),
             stored_read: arrow_read(field.data_type()),
+            lists: arrow_lists(field.data_type()),
         })
         .collect()
 }
@@ -86,6 +116,7 @@ pub(crate) fn parquet_columns(footer: &ArrowReaderMetadata) -> Vec<SampledColumn
                 column_type: Some(portable_type(field)),
                 direct_refusal,
                 stored_read,
+                lists: arrow_lists(field.data_type()),
             }
         })
         .collect()
@@ -262,6 +293,7 @@ pub(crate) fn merge_columns(
         }
         existing.stored_read =
             joined_read(existing.stored_read, column.stored_read).unwrap_or(existing.stored_read);
+        existing.lists = joined_lists(existing.lists, column.lists);
         match (&existing.column_type, column.column_type) {
             (_, None) => {}
             (None, found_type) => existing.column_type = found_type,
@@ -327,6 +359,7 @@ pub(crate) fn merge_schema(
             column_type: Some(column.column_type),
             direct_refusal: column.direct_refusal,
             stored_read: column.stored_read,
+            lists: column.lists,
         })
         .collect();
     let merge = ColumnMerge {
@@ -347,6 +380,7 @@ pub(crate) fn file_columns(columns: Vec<SampledColumn>) -> Vec<FileColumn> {
             column_type: column.column_type.unwrap_or(Ok(ColumnType::Text)),
             direct_refusal: column.direct_refusal,
             stored_read: column.stored_read,
+            lists: column.lists,
         })
         .collect()
 }

@@ -91,6 +91,7 @@ fn record_column(name: &str) -> SampledColumn {
         column_type: Some(Ok(ColumnType::Json)),
         direct_refusal: None,
         stored_read: StoredRead::Plain,
+        lists: Some(false),
     }
 }
 

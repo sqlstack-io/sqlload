@@ -883,7 +883,7 @@ fn nesting(
         Unnest::None => {}
         Unnest::All | Unnest::Paths(_) => {
             problems.extend(refused_writes(context, (strategy, contract)));
-            problems.extend(unbuilt_writes(context, (strategy, &unnest), logged));
+            problems.extend(unbuilt_writes(context, strategy, logged));
             if row_id == Some(false) {
                 problems.push("row_id = false: unnest gives every row an id, which its child rows name as their parent's; drop row_id".to_owned());
             }
@@ -967,15 +967,14 @@ fn matching_pattern<'a>(field: &str, patterns: &[&'a String]) -> Option<&'a Stri
         .copied()
 }
 
-/// What this build cannot yet do with `unnest` while its writers are taught to: `unnest = "all"`, a merge, and warehouses other than DuckDB and Postgres; and a `state = "logged"` table, whose commit can wait on its state while its child rows would not.
+/// What this build cannot yet do with `unnest` while its writers are taught to: a merge, and warehouses other than DuckDB and Postgres; and a `state = "logged"` table, whose commit can wait on its state while its child rows would not.
 fn unbuilt_writes(
     context: &SourceContext<'_>,
-    (strategy, unnest): (WriteStrategy, &Unnest),
+    strategy: WriteStrategy,
     logged: bool,
 ) -> Vec<String> {
     let warehouse = context.target.warehouse;
     [
-        (*unnest == Unnest::All).then(|| "unnest = \"all\" (list the paths instead)".to_owned()),
         (strategy == WriteStrategy::Merge).then(|| "write_strategy = \"merge\"".to_owned()),
         (context.target.path.is_none() && !sql_adapter(warehouse).writes_child_tables())
             .then(|| format!("a {warehouse} target")),

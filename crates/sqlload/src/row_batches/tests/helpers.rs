@@ -243,13 +243,27 @@ pub(crate) fn unnested(
         ids: &ids,
         roots: roots.as_deref(),
     };
-    let split = crate::row_batches::main::unnest_batch::unnest_batch(batch, &request)?;
+    let mut choices: crate::row_batches::types::ListChoices = test_case
+        .chosen
+        .iter()
+        .map(|(path, chosen)| ((*path).to_owned(), *chosen))
+        .collect();
+    let split =
+        crate::row_batches::main::unnest_batch::unnest_batch(batch, &request, &mut choices)?;
     let mut shown = vec![render(&split.parent)];
     shown.extend(
         split
             .children
             .iter()
             .map(|child| format!("{} = {}", child.table, render(&child.batch))),
+    );
+    let chosen: Vec<String> = choices
+        .iter()
+        .map(|(path, chosen)| format!("{path}={chosen}"))
+        .collect();
+    shown.extend(
+        (unnest == crate::row_batches::models::Unnest::All)
+            .then(|| format!("chosen: {}", chosen.join(","))),
     );
     Ok(shown)
 }

@@ -22,6 +22,7 @@ pub fn key_columns(
             column_type: Ok(column_type.unwrap_or(ColumnType::Text)),
             direct_refusal: None,
             stored_read: StoredRead::Plain,
+            lists: None,
         });
     }
     Ok(columns)

@@ -37,6 +37,9 @@ use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::{Compression, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::python::list_choices;
+use crate::loader::_helpers::python::live_child_tables;
+use crate::loader::_helpers::python::with_live_children;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
@@ -136,7 +139,8 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
             },
         })
         .collect();
-    desired.retain(|column| !spec.unnest.takes(&column.name));
+    let choices = list_choices(spec);
+    desired.retain(|column| !spec.unnest.takes(&column.name, &choices));
     desired.extend(
         added_constants(spec, read).map(|(name, column_type, _)| DesiredColumn {
             name: name.clone(),
@@ -226,6 +230,11 @@ pub(crate) async fn plan_table(
             vec![ENFORCED_UNDECLARED_PROBLEM.to_owned()],
         ));
     }
+    let children = match spec.unnest {
+        Unnest::All => live_child_tables(destination, spec).await?,
+        _ => Vec::new(),
+    };
+    let spec = &with_live_children(spec, &children);
     let plan = plan_table_once(spec, destination, options).await?;
     let augmented = with_live_columns(spec, plan.live.as_deref())
         .or_else(|| with_live_types(spec, plan.live.as_deref()));

@@ -78,6 +78,8 @@ pub struct FileColumn {
     pub direct_refusal: Option<String>,
     /// How a stage read returns the column's values, where that takes more than a cast.
     pub stored_read: StoredRead,
+    /// Whether the sampled values were lists, for `unnest = "all"`; `None` while every one was NULL or empty.
+    pub lists: Option<bool>,
 }
 
 /// How a stage read returns a Parquet column's values (with `USE_LOGICAL_TYPE`), where loading them exactly takes more than a cast.

@@ -65,6 +65,7 @@ use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
+use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_merge_log;
@@ -130,6 +131,7 @@ use arrow_array::Int64Array;
 use arrow_array::RecordBatch;
 use arrow_array::StringArray;
 use arrow_array::TimestampMicrosecondArray;
+use arrow_array::new_null_array;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::Field;
@@ -172,6 +174,7 @@ fn write_target<'a>(
 
 /// The columns the staged batches carry: the read columns as the source gives them, the constant columns the load adds, then the `_sqlload_*` metadata.
 pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
+    let choices = list_choices(&table.spec);
     let mut columns: Vec<DesiredColumn> = table
         .read_columns
         .iter()
@@ -180,7 +183,7 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
             column_type: column.output.clone(),
             origin: ColumnOrigin::Source,
         })
-        .filter(|column| !table.spec.unnest.takes(&column.name))
+        .filter(|column| !table.spec.unnest.takes(&column.name, &choices))
         .collect();
     columns.extend(added_constants(&table.spec, &table.read_columns).map(
         |(name, column_type, _)| DesiredColumn {
@@ -308,6 +311,35 @@ fn with_metadata(
     RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).map_err(|error| error.to_string())
 }
 
+/// `parent`, the rows unnesting left, with a NULL column for each column of `masked` it took that the table still has among `staged`: a column the plan kept, chosen as a list field from later rows (`unnest = "all"`), stays in the table empty.
+fn with_planned_columns(
+    (masked, parent): (&RecordBatch, RecordBatch),
+    staged: &[DesiredColumn],
+) -> Result<RecordBatch, String> {
+    let schema = masked.schema();
+    let mut fields: Vec<Arc<Field>> = Vec::new();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    for field in schema.fields() {
+        let kept = parent.column_by_name(field.name()).cloned();
+        let planned = staged.iter().any(|column| column.name == *field.name());
+        let column = match (kept, planned) {
+            (Some(kept), _) => kept,
+            (None, true) => new_null_array(field.data_type(), masked.num_rows()),
+            (None, false) => continue,
+        };
+        fields.push(field.clone());
+        columns.push(column);
+    }
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            parent.schema().metadata().clone(),
+        )),
+        columns,
+    )
+    .map_err(|error| error.to_string())
+}
+
 impl Publisher {
     /// A table's load ready for its first batch: its own connection, and (unless the batches go straight into the table) a fresh staging table.
     pub(crate) async fn open(
@@ -427,6 +459,7 @@ impl Publisher {
         let children = match table.spec.unnest {
             Unnest::None => None,
             _ => Some(ChildTables {
+                choices: list_choices(&table.spec),
                 destination: table_destination(&destination)?,
                 options: options.clone(),
                 feeds: Vec::new(),
@@ -492,6 +525,9 @@ impl Publisher {
         let masked = match &mut self.children {
             Some(children) => {
                 let spec = &self.table.spec;
+                for (name, chosen) in list_choices(spec) {
+                    children.choices.entry(name).or_insert(chosen);
+                }
                 let unnested = unnest_batch(
                     &masked,
                     &UnnestRequest {
@@ -502,6 +538,7 @@ impl Publisher {
                         ids: ids.as_deref().unwrap_or_default(),
                         roots: None,
                     },
+                    &mut children.choices,
                 )
                 .map_err(LoaderError::Invalid)?;
                 children
@@ -510,7 +547,8 @@ impl Publisher {
                         unnested.children,
                     )
                     .await?;
-                unnested.parent
+                with_planned_columns((&masked, unnested.parent), &staged_columns(&self.table))
+                    .map_err(LoaderError::Invalid)?
             }
             None => masked,
         };

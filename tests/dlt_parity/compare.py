@@ -67,9 +67,10 @@ def comparable(row: dict[str, Any], shared: set[str], retyped: set[str]) -> dict
 
 
 def failure(output: str) -> str:
-	"""The reason a failed load gives, else its last line."""
+	"""The reason a failed plan or table load gives, else the output's last line."""
 	lines = [line.strip() for line in output.splitlines() if line.strip()]
-	reasons = [line.split("reason", 1)[1].strip() for line in lines if "reason " in line]
+	reasons = [line.split("reason", 1)[1].strip() for line in lines if line.lstrip("│└├─ ").startswith("reason ")]
+	reasons += [line.split(None, 2)[-1] for line in lines if line.startswith("failed ")]
 	return reasons[0] if reasons else (lines[-1] if lines else "")
 
 
