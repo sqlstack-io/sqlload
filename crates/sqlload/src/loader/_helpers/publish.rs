@@ -645,7 +645,7 @@ impl Publisher {
         let constants: Vec<&(String, ColumnType, String)> =
             added_constants(&self.table.spec, &self.table.read_columns).collect();
         let masked = with_constants(&masked, &constants).map_err(LoaderError::Invalid)?;
-        if self.files.is_some() {
+        if self.files.is_some() && self.children.is_none() {
             self.batch_rows += masked.num_rows() as u64;
             self.arrow_bytes += masked.get_array_memory_size();
             return self.stage_files(masked).await;
@@ -719,6 +719,9 @@ impl Publisher {
         };
         self.batch_rows += batch.num_rows() as u64;
         self.arrow_bytes += batch.get_array_memory_size();
+        if self.files.is_some() {
+            return self.stage_files(batch).await;
+        }
         let columns = staged_columns(&self.table);
         let target = write_target(
             &self.table,
@@ -1001,6 +1004,18 @@ impl Publisher {
     async fn commit(&mut self, last: bool) -> Result<(), LoaderError> {
         if self.files.is_some() {
             self.waiting_range = None;
+            if let Some(children) = &mut self.children {
+                match last {
+                    true => {
+                        Box::pin(children.finish(
+                            (&self.table, (&self.load_id, &self.loaded_at)),
+                            (&self.destination, None),
+                        ))
+                        .await?
+                    }
+                    false => Box::pin(children.cut((&self.table, &self.destination, None))).await?,
+                }
+            }
             return self.commit_files(last).await;
         }
         let Some(staging) = self.staging.clone() else {
@@ -1078,8 +1093,12 @@ impl Publisher {
                     .await?
                 }
                 false => {
-                    Box::pin(children.cut((&self.table, &self.destination, (&staging, &mode))))
-                        .await?
+                    Box::pin(children.cut((
+                        &self.table,
+                        &self.destination,
+                        Some((&staging, &mode)),
+                    )))
+                    .await?
                 }
             }
         }

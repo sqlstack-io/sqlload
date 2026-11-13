@@ -39,6 +39,7 @@ use crate::loader::constants::PYTHON_COLUMN_TYPE;
 use crate::loader::constants::UNKNOWN_CURSOR_TYPE;
 use crate::loader::constants::UTC_OFFSET_SUFFIX;
 use crate::loader::errors::LoaderError;
+use crate::loader::main::_plan_files::plan_files_table;
 use crate::loader::models::ChildFeed;
 use crate::loader::models::ChildTables;
 use crate::loader::models::CommitRange;
@@ -1249,7 +1250,6 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         masked: MaskRules::default(),
         logged: false,
         files: None,
-        destination_path: None,
         flatten: Vec::new(),
         row_id: true,
         root_rows: matches!(parent.mode, WriteMode::Merge { .. }),
@@ -1352,12 +1352,15 @@ impl ChildTables {
             let index = match self.feeds.iter().position(|feed| feed.path == child.path) {
                 Some(index) => index,
                 None => {
-                    if !self.admits((parent, &child)).await? {
+                    let table = self
+                        .child_table(parent, (&child.path, &child.table))
+                        .await?;
+                    if !self.admits((parent, &child, &table)).await? {
                         self.ignored.push(child.path.clone());
                         continue;
                     }
                     self.feeds.push(ChildFeed {
-                        table: child_plan(parent, (&child.path, &child.table)),
+                        table,
                         path: child.path.clone(),
                         merged: Schema::empty(),
                         publisher: None,
@@ -1394,20 +1397,51 @@ impl ChildTables {
         Ok(())
     }
 
+    /// The plan of the child table at `path` before its first rows (see [`child_plan`]); on a files target with its folder's files, as the target's plan reads them, and refused while another load holds the folder.
+    async fn child_table(
+        &self,
+        parent: &TablePlan,
+        (path, table): (&str, &str),
+    ) -> Result<TablePlan, LoaderError> {
+        let planned = child_plan(parent, (path, table));
+        let Destination::Files(files) = &self.destination else {
+            return Ok(planned);
+        };
+        let read = plan_files_table(&planned.spec, files, &self.options).await?;
+        if let Some(blocked) = &read.schema.blocked {
+            return Err(LoaderError::Invalid(format!(
+                "child table {table}: {}",
+                blocked.reasons.join("; ")
+            )));
+        }
+        Ok(TablePlan {
+            live: read.live,
+            exists: read.exists,
+            output: read.output,
+            ..planned
+        })
+    }
+
+    /// Whether the child table `table` is there already: on a files target, whether its folder holds files.
+    async fn exists(&self, table: &TablePlan) -> Result<bool, LoaderError> {
+        match &self.destination {
+            Destination::Files(_) => Ok(table.exists),
+            destination => Ok(live_columns(destination, &table.spec.destination)
+                .await?
+                .is_some()),
+        }
+    }
+
     /// Whether `child`'s table may be filled: always on the table's first load; after it, a child table that is not there yet is a schema change, which `on_schema_change` decides like a new column: added, left out with its rows and everything below (`"ignore"`, `false`), or refused.
     async fn admits(
         &self,
-        (parent, child): (&TablePlan, &ChildBatch),
+        (parent, child, table): (&TablePlan, &ChildBatch, &TablePlan),
     ) -> Result<bool, LoaderError> {
         let spec = &parent.spec;
         if !parent.exists || spec.on_schema_change == OnSchemaChange::AppendNewColumns {
             return Ok(true);
         }
-        let table = TableName {
-            table: child.table.clone(),
-            ..spec.destination.clone()
-        };
-        if live_columns(&self.destination, &table).await?.is_some() {
+        if self.exists(table).await? {
             return Ok(true);
         }
         match spec.on_schema_change {
@@ -1422,12 +1456,14 @@ impl ChildTables {
         }
     }
 
-    /// Commit every child table's rows so far, before the parent's commit (of `staging`'s rows, by `mode`) names them: under a merge or `delete_insert`, once the rows of the roots it replaces are cleared (see [`Self::clear_replaced`]).
+    /// Commit every child table's rows so far, before the parent's commit (of `staging`'s rows by `mode`, `None` for a files target's) names them: under a merge or `delete_insert`, once the rows of the roots it replaces are cleared (see [`Self::clear_replaced`]).
     pub(crate) async fn cut(
         &mut self,
-        (parent, destination, commit): (&TablePlan, &Destination, (&TableName, &WriteMode)),
+        (parent, destination, commit): (&TablePlan, &Destination, Option<(&TableName, &WriteMode)>),
     ) -> Result<(), LoaderError> {
-        self.clear_replaced((parent, destination, commit)).await?;
+        if let Some(commit) = commit {
+            self.clear_replaced((parent, destination, commit)).await?;
+        }
         for publisher in self
             .feeds
             .iter_mut()
@@ -1469,15 +1505,12 @@ impl ChildTables {
                 continue;
             }
             let mut feed = ChildFeed {
-                table: child_plan(parent, (path, table)),
+                table: self.child_table(parent, (path, table)).await?,
                 path: path.clone(),
                 merged: Schema::empty(),
                 publisher: None,
             };
-            if live_columns(&self.destination, &feed.table.spec.destination)
-                .await?
-                .is_none()
-            {
+            if !self.exists(&feed.table).await? {
                 continue;
             }
             feed.plan((&self.destination, &self.options), true).await?;

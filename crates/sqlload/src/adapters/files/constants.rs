@@ -19,6 +19,9 @@ pub const CURSOR_PLACEHOLDER: &str = "{cursor}";
 /// The placeholder for the cursor's date in a path template.
 pub const CURSOR_DATE_PLACEHOLDER: &str = "{cursor:date}";
 
+/// The placeholder for the table's name in a path template.
+pub const TABLE_PLACEHOLDER: &str = "{table}";
+
 /// What every cursor placeholder starts with.
 pub const CURSOR_PLACEHOLDER_START: &str = "{cursor";
 

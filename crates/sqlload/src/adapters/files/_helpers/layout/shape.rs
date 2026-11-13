@@ -7,7 +7,7 @@ use arrow_schema::SchemaRef;
 use crate::load_naming::models::MetadataRole;
 use crate::row_ids::main::random_row_ids::random_row_ids;
 
-/// `batch` as the table's columns: each cast to the file type, and the load id and time filled in where `metadata`, aligned with `schema`'s fields, says the load adds them.
+/// `batch` as the table's columns: each cast to the file type, and the load id and time filled in where `metadata`, aligned with `schema`'s fields, says the load adds them; row ids too, unless the batch carries them (a table with child tables, whose rows name them).
 pub(crate) fn shape_batch(
     batch: &RecordBatch,
     (schema, metadata): (&SchemaRef, &[Option<MetadataRole>]),
@@ -32,7 +32,8 @@ pub(crate) fn shape_batch(
                     TimestampMicrosecondArray::from(vec![loaded_at_micros; rows])
                         .with_timezone("UTC"),
                 )),
-                (Some(MetadataRole::RowId), _) => {
+                (Some(MetadataRole::RowId), Some(ids)) => Ok(ids.clone()),
+                (Some(MetadataRole::RowId), None) => {
                     Ok(Arc::new(StringArray::from(random_row_ids(rows)?)))
                 }
                 (_, Some(column)) => {

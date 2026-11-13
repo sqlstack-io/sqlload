@@ -1,5 +1,6 @@
 use crate::adapters::contract::models::{ChangeApply, TableName};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
@@ -265,7 +266,7 @@ pub(crate) fn build_spec(
     let contract = layered(&settings.contract, &defaults.contract)
         .map(|(value, _)| value)
         .unwrap_or_default();
-    let (nesting, found) = nesting(context, overrides);
+    let (nesting, found) = nesting(context, overrides, strategy);
     problems.extend(found);
     problems.extend(after_load_problems(context, strategy));
     let layout = table_layout(settings, defaults);
@@ -869,7 +870,11 @@ struct Nesting {
 }
 
 /// The table's naming (its own, its source's, then its target's), whether its rows get an id (always under dlt's naming), its `unnest` and `max_depth`, and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
-fn nesting(context: &SourceContext<'_>, overrides: &TableOverride) -> (Nesting, Vec<String>) {
+fn nesting(
+    context: &SourceContext<'_>,
+    overrides: &TableOverride,
+    strategy: WriteStrategy,
+) -> (Nesting, Vec<String>) {
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
     let naming = table_naming((settings, defaults), context.target.naming);
@@ -903,7 +908,7 @@ fn nesting(context: &SourceContext<'_>, overrides: &TableOverride) -> (Nesting, 
         }
         Unnest::None => {}
         Unnest::All | Unnest::Paths(_) => {
-            problems.extend(refused_writes(context));
+            problems.extend(refused_writes(context, overrides, strategy));
             problems.extend(unbuilt_writes(context));
             if row_id == Some(false) {
                 problems.push("row_id = false: unnest gives every row an id, which its child rows name as their parent's; drop row_id".to_owned());
@@ -1010,11 +1015,39 @@ fn unbuilt_writes(context: &SourceContext<'_>) -> Vec<String> {
     .collect()
 }
 
-/// Why this table's writes cannot carry child tables yet: a files target or captured changes.
-fn refused_writes(context: &SourceContext<'_>) -> Vec<String> {
+/// Why this table's writes cannot carry child tables yet: captured changes; on a files target, `"all"` (whose earlier child tables a load cannot find), a merge or `delete_insert` (which would rewrite a child table's files), and a path that would not give each child table a folder of its own (without `{table}`, or partitioned by the cursor, which child rows do not carry).
+fn refused_writes(
+    context: &SourceContext<'_>,
+    overrides: &TableOverride,
+    strategy: WriteStrategy,
+) -> Vec<String> {
+    let template = context.target.path.as_ref().map(|target_path| {
+        overrides
+            .destination_path
+            .as_ref()
+            .or(context.source.destination_path.as_ref())
+            .unwrap_or(target_path)
+    });
+    let files = |refused: bool, what: String| (template.is_some() && refused).then_some(what);
+    let all = matches!(&overrides.unnest, Some(UnnestSetting::Word(word)) if word == UNNEST_ALL);
+    let rewrites = matches!(strategy, WriteStrategy::Merge | WriteStrategy::DeleteInsert);
+    let template = template.map(String::as_str).unwrap_or_default();
     [
-        context.target.path.is_some().then_some("a files target"),
-        (context.source.kind == SourceKind::PostgresCdc).then_some("kind = \"postgres_cdc\""),
+        (context.source.kind == SourceKind::PostgresCdc)
+            .then(|| "kind = \"postgres_cdc\"".to_owned()),
+        files(all, "unnest = \"all\" on a files target (list the paths)".to_owned()),
+        files(
+            rewrites,
+            format!("write_strategy = \"{strategy}\" on a files target"),
+        ),
+        files(
+            !template.contains(TABLE_PLACEHOLDER),
+            format!("a files path without {TABLE_PLACEHOLDER} ({template:?}), as each child table needs its own folder"),
+        ),
+        files(
+            template.contains(CURSOR_PLACEHOLDER_START),
+            format!("a files path partitioned by the cursor ({template:?})"),
+        ),
     ]
     .into_iter()
     .flatten()

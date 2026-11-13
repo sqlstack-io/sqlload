@@ -1135,6 +1135,17 @@ pub(crate) struct RowIdTestCase {
     pub(crate) expected_result: &'static str,
 }
 
+/// An NDJSON files source under `drop/` with `settings`, loaded by the executable into a files target (`out/{table}/`) once per run, each run adding its file.
+pub(crate) struct FilesTargetUnnestTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// Each run's new file, as `name`, `contents`.
+    pub(crate) runs: &'static [(&'static str, &'static str)],
+    /// A DuckDB query over the target's Parquet files, each table read as `{out}/<table>/**/*.parquet`, returning one text.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// A merge into child tables whose rows hang off root ids the merge's keys did not give (as dlt's `delete-insert` merge leaves them).
 pub(crate) struct RekeyedTestCase {
     pub(crate) description: &'static str,

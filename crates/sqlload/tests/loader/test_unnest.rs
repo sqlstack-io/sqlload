@@ -19,8 +19,8 @@ use crate::helpers::{
     described_project, duckdb_execute, duckdb_text, load_ndjson_runs, run_async, run_sqlload,
 };
 use crate::test_types::{
-    ClearRowsTestCase, NamedLikeTestCase, RekeyedTestCase, RowIdTestCase, UnnestFailTestCase,
-    UnnestPlanTestCase,
+    ClearRowsTestCase, FilesTargetUnnestTestCase, NamedLikeTestCase, RekeyedTestCase,
+    RowIdTestCase, UnnestFailTestCase, UnnestPlanTestCase,
 };
 
 const COLUMNS: &str = "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders'";
@@ -209,6 +209,21 @@ const NAMED_LIKE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders__notes) 
 /// [`NAMED_LIKE_CHECK`] in ClickHouse's SQL.
 const CLICKHOUSE_NAMED_LIKE_CHECK: &str = "SELECT toString((SELECT count() FROM raw.orders__notes)) || '/' || toString((SELECT count() FROM raw.orders__x__items)) || '/' || toString((SELECT count() FROM raw.orders__tags)) || '/' || toString((SELECT count() FROM raw.orders__items))";
 
+/// Two runs into a files target: an order with two parts, then one with one.
+const FILES_TARGET_RUNS: &[(&str, &str)] = &[
+    (
+        "a.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n",
+    ),
+    (
+        "b.ndjson",
+        "{\"id\": 2, \"items\": [{\"sku\": \"b\", \"parts\": [3]}]}\n",
+    ),
+];
+
+/// The files target's order, item and part counts, and each order's items and parts joined by id.
+const FILES_TARGET_CHECK: &str = "SELECT (SELECT count(*) FROM read_parquet('{out}/orders/**/*.parquet')) || '/' || (SELECT count(*) FROM read_parquet('{out}/orders__items/**/*.parquet')) || '/' || (SELECT count(*) FROM read_parquet('{out}/orders__items__parts/**/*.parquet')) || '/' || (SELECT coalesce(string_agg(o.id || ':' || i.sku || ':' || p.value, ',' ORDER BY p.value), '') FROM read_parquet('{out}/orders/**/*.parquet') o JOIN read_parquet('{out}/orders__items/**/*.parquet') i ON i._sqlload_parent_id = o._sqlload_row_id JOIN read_parquet('{out}/orders__items__parts/**/*.parquet') p ON p._sqlload_parent_id = i._sqlload_row_id)";
+
 #[test]
 fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_problem()
 -> Result<(), String> {
@@ -286,12 +301,28 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             expected_problem: "max_depth limits the child tables unnest makes, and this table sets no unnest",
         },
         UnnestPlanTestCase {
-            description: "a files target",
+            description: "a files target with listed paths plans a folder per child table",
+            settings: "[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            files_target: true,
+            file: ORDERS,
+            expected_ok: true,
+            expected_problem: "├── unnest  orders__items, orders__items__parts  child tables, columns inferred at load",
+        },
+        UnnestPlanTestCase {
+            description: "unnest = \"all\" on a files target, whose earlier child tables a load cannot find",
             settings: "[sources.orders.tables.orders]\nunnest = \"all\"\n",
             files_target: true,
             file: ORDERS,
             expected_ok: false,
-            expected_problem: "unnest does not yet write child tables with a files target",
+            expected_problem: "unnest does not yet write child tables with unnest = \"all\" on a files target (list the paths)",
+        },
+        UnnestPlanTestCase {
+            description: "a merge on a files target, which would rewrite the child tables' files",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"items\"]\n",
+            files_target: true,
+            file: ORDERS,
+            expected_ok: false,
+            expected_problem: "unnest does not yet write child tables with write_strategy = \"merge\" on a files target",
         },
         UnnestPlanTestCase {
             description: "the unnested field is not a column of the table: the plan lists id and items only",
@@ -375,6 +406,77 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             (ok, output.contains(test_case.expected_problem)),
             (test_case.expected_ok, true),
             "{}: {output}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_unnest_when_loading_into_a_files_target_then_each_child_table_gets_its_own_linked_folder()
+-> Result<(), String> {
+    let test_cases = [
+        FilesTargetUnnestTestCase {
+            description: "an append: each run's orders, items and parts are added, linked by id",
+            settings: "write_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            runs: FILES_TARGET_RUNS,
+            check_query: FILES_TARGET_CHECK,
+            expected_result: "2/2/3/1:a:1,1:a:2,2:b:3",
+        },
+        FilesTargetUnnestTestCase {
+            description: "a replace: the child tables are replaced with their parent, so only the last run's rows stay",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            runs: &[
+                (
+                    "a.ndjson",
+                    "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n",
+                ),
+                (
+                    "a.ndjson",
+                    "{\"id\": 3, \"items\": [{\"sku\": \"c\", \"parts\": [7]}]}\n",
+                ),
+            ],
+            check_query: FILES_TARGET_CHECK,
+            expected_result: "1/1/1/3:c:7",
+        },
+        FilesTargetUnnestTestCase {
+            description: "a replace whose rows hold no items any more: the child tables are emptied, not left with the last load's",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            runs: &[
+                (
+                    "a.ndjson",
+                    "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n",
+                ),
+                ("a.ndjson", "{\"id\": 3, \"items\": []}\n"),
+            ],
+            check_query: FILES_TARGET_CHECK,
+            expected_result: "1/0/0/",
+        },
+    ];
+    for test_case in &test_cases {
+        let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(root.path().join("drop")).map_err(|error| error.to_string())?;
+        let config = root.path().join("sqlload.toml");
+        let text = format!(
+            "[targets.dev]\nconnection = \"files\"\npath = \"out/{{table}}/\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"ndjson\"\n{}",
+            root.path().display(),
+            test_case.settings
+        );
+        std::fs::write(&config, text).map_err(|error| error.to_string())?;
+        for (name, contents) in test_case.runs {
+            std::fs::write(root.path().join("drop").join(name), contents)
+                .map_err(|error| error.to_string())?;
+            let (ok, output) = run_sqlload(&config, &["load"], ("", ""))?;
+            assert!(ok, "{}: {output}", test_case.description);
+        }
+        let out = root.path().join("out").display().to_string();
+        let result = duckdb_text(
+            &root.path().join("check.duckdb"),
+            &test_case.check_query.replace("{out}", &out),
+        )?;
+        assert_eq!(
+            result, test_case.expected_result,
+            "{}",
             test_case.description
         );
     }
