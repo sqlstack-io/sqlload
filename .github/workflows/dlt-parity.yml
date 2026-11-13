@@ -1,0 +1,84 @@
+name: dlt parity
+
+# SQLLoad's naming = "dlt" and unnest against the pinned dlt, on the synthetic cases of tests/dlt_parity:
+# on changes to what it compares, nightly (where a failure opens or updates an issue), and on demand.
+on:
+  pull_request:
+    paths:
+      - "tests/dlt_parity/**"
+      - "crates/sqlload/src/row_batches/**"
+      - "crates/sqlload/src/row_ids/**"
+      - "crates/sqlload/src/load_naming/**"
+      - "crates/sqlload/src/loader/**"
+      - "crates/sqlload/src/files_source/**"
+      - "Cargo.lock"
+      - ".github/workflows/dlt-parity.yml"
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dlt-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    name: dlt parity
+    runs-on: ubuntu-24.04
+    # A cold cache compiles DuckDB from source (about 25 minutes); warm runs take a few.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dlt-parity
+      - run: make clean-partial-duckdb-sources
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.9"
+      - name: Build sqlload
+        run: cargo build --locked -p sqlload --bin sqlload
+      - name: Load the cases with dlt
+        run: uv run --locked --project tests/dlt_parity python -I tests/dlt_parity/run_dlt.py "$RUNNER_TEMP/dlt" > "$RUNNER_TEMP/dlt.json"
+      - name: Load the cases with SQLLoad
+        run: uv run --locked --script tests/dlt_parity/run_sqlload.py target/debug/sqlload "$RUNNER_TEMP/sqlload" > "$RUNNER_TEMP/sqlload.json"
+      - name: Compare
+        run: python3 -I tests/dlt_parity/compare.py "$RUNNER_TEMP/dlt.json" "$RUNNER_TEMP/sqlload.json" tests/dlt_parity/allowlist.toml
+      - name: Keep both outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlt-parity-output
+          path: |
+            ${{ runner.temp }}/dlt.json
+            ${{ runner.temp }}/sqlload.json
+          if-no-files-found: ignore
+
+  # A nightly failure opens an issue, or comments on the one still open, so it reaches the maintainers.
+  report:
+    name: Report a nightly failure
+    needs: parity
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="dlt parity fails on main"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "It failed again: $RUN_URL"
+          else
+            gh issue create --title "$title" --body "The nightly dlt parity run failed: $RUN_URL. Its log lists each difference the allowlist does not allow (tests/dlt_parity/allowlist.toml)."
+          fi
