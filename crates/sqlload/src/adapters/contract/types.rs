@@ -22,6 +22,7 @@ use crate::adapters::contract::_helpers::schema::{
 };
 use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::_helpers::write::write_statements;
+use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
 use crate::adapters::contract::models::{
     ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, TableName,
     WriteStatementsRequest, WriteTarget,
@@ -297,6 +298,15 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         indexes: &[String],
     ) -> Vec<String> {
         drop_and_rename(self, target, build, indexes)
+    }
+
+    /// Under a merge that dedupes, a query of the ordinal (as text) of each row of `staging` the merge of `request` drops, so the rows hanging off them (child tables' rows) are dropped too; `None` without `dedupe`.
+    fn render_dropped_ordinals(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+    ) -> Option<String> {
+        dropped_ordinals(self, request, staging)
     }
 
     /// One `MERGE`: key matches update every other column, the rest are inserted.

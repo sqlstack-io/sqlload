@@ -116,7 +116,7 @@ use crate::run_log::main::runs_location::runs_location;
 use crate::run_log::main::runs_table::runs_table;
 use crate::run_log::models::RunOutcome;
 use crate::run_log::models::RunRecord;
-use crate::schema_plan::constants::MERGE_ROW_COLUMN;
+use crate::schema_plan::constants::{MERGE_ROW_COLUMN, ROOT_ROW_COLUMN};
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
@@ -135,9 +135,10 @@ use arrow_array::Int64Array;
 use arrow_array::RecordBatch;
 use arrow_array::StringArray;
 use arrow_array::TimestampMicrosecondArray;
+use arrow_array::cast::AsArray;
 use arrow_array::new_null_array;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
-use arrow_cast::{CastOptions, cast_with_options};
+use arrow_cast::{CastOptions, cast, cast_with_options};
 use arrow_schema::Field;
 use arrow_schema::Schema;
 use bytes::Bytes;
@@ -174,6 +175,26 @@ fn write_target<'a>(
         builds,
         constants: &table.spec.constants,
     }
+}
+
+/// Under a merge, the child tables of `table` already in the destination that its commits clear the rows of their roots from: every one under `"all"`, the listed paths' otherwise.
+async fn merged_children(
+    table: &TablePlan,
+    destination: &Destination,
+) -> Result<Vec<String>, LoaderError> {
+    if !matches!(table.mode, WriteMode::Merge { .. }) {
+        return Ok(Vec::new());
+    }
+    let spec = &table.spec;
+    let live = live_child_tables(destination, spec).await?;
+    Ok(child_paths(spec, live)
+        .into_iter()
+        .filter(|(path, _)| match &spec.unnest {
+            Unnest::Paths(paths) => paths.contains(path),
+            _ => true,
+        })
+        .map(|(_, table)| table)
+        .collect())
 }
 
 /// The list fields a load under `unnest = "all"` starts with chosen: the plan's, and every path at every level an existing child table holds, as an earlier load chose it.
@@ -233,6 +254,11 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
         column_type: ColumnType::Int,
         origin: ColumnOrigin::Metadata,
     }));
+    columns.extend(table.spec.root_rows.then(|| DesiredColumn {
+        name: ROOT_ROW_COLUMN.to_owned(),
+        column_type: ColumnType::Int,
+        origin: ColumnOrigin::Metadata,
+    }));
     columns
 }
 
@@ -253,6 +279,54 @@ fn row_ids(table: &TablePlan, batch: &RecordBatch) -> Result<Option<Vec<String>>
         key.push((name.clone(), index));
     }
     key_row_ids(batch, &key).map(Some)
+}
+
+/// Under a merge, the ordinal each of `batch`'s rows is staged with, which its child rows carry so a dropped repeated row's leave with it: a files source's `_sqlload_source_row` when the merge ranks by it, otherwise from `first`, as `_sqlload_row` numbers them; `None` without a merge.
+fn root_ordinals(
+    table: &TablePlan,
+    batch: &RecordBatch,
+    first: i64,
+) -> Result<Option<Vec<i64>>, String> {
+    let WriteMode::Merge { dedupe, .. } = &table.mode else {
+        return Ok(None);
+    };
+    let rows = i64::try_from(batch.num_rows()).unwrap_or(i64::MAX);
+    let Some(dedupe) = dedupe
+        .as_ref()
+        .filter(|dedupe| dedupe.ordinal != MERGE_ROW_COLUMN)
+    else {
+        return Ok(Some((first..first + rows).collect()));
+    };
+    let column = batch
+        .column_by_name(&dedupe.ordinal)
+        .ok_or_else(|| format!("the staged rows have no {} column", dedupe.ordinal))?;
+    let ordinals =
+        cast(column, &arrow_schema::DataType::Int64).map_err(|error| error.to_string())?;
+    Ok(Some(
+        ordinals
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .iter()
+            .map(|ordinal| ordinal.unwrap_or_default())
+            .collect(),
+    ))
+}
+
+/// `batch` with `_sqlload_root_row` added last: each row's root row's ordinal, `roots`.
+fn with_root_rows(batch: RecordBatch, roots: Vec<i64>) -> Result<RecordBatch, LoaderError> {
+    let schema = batch.schema();
+    let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
+    let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+    fields.push(Arc::new(Field::new(
+        ROOT_ROW_COLUMN,
+        arrow_schema::DataType::Int64,
+        false,
+    )));
+    columns.push(Arc::new(Int64Array::from(roots)));
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+        columns,
+    )
+    .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
 /// Whether the table's staged rows carry `_sqlload_row`: a merge keeping the last of the rows sharing a key, from a source without its own row numbers.
@@ -431,6 +505,7 @@ impl Publisher {
         let direct = files.is_none()
             && table.spec.checks.is_none()
             && table.spec.unnest == Unnest::None
+            && !table.spec.root_rows
             && writes_directly(&table, &writer);
         let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
         let keeps_tables = sql_adapter(table.spec.warehouse).keeps_tables();
@@ -480,6 +555,7 @@ impl Publisher {
         let children = match table.spec.unnest {
             Unnest::None => None,
             _ => Some(ChildTables {
+                merged: merged_children(&table, &destination).await?,
                 choices: live_choices(&table.spec, &destination).await?,
                 destination: table_destination(&destination)?,
                 options: options.clone(),
@@ -550,6 +626,8 @@ impl Publisher {
                 for (name, chosen) in list_choices(spec) {
                     children.choices.entry(name).or_insert(chosen);
                 }
+                let merging = matches!(self.table.mode, WriteMode::Merge { .. });
+                let given = ids.as_deref().unwrap_or_default();
                 let unnested = unnest_batch(
                     &masked,
                     &UnnestRequest {
@@ -557,16 +635,18 @@ impl Publisher {
                         unnest: &spec.unnest,
                         max_depth: spec.max_depth,
                         naming: spec.naming,
-                        ids: ids.as_deref().unwrap_or_default(),
-                        roots: None,
+                        ids: given,
+                        roots: merging.then_some(given),
                     },
                     &mut children.choices,
                 )
                 .map_err(LoaderError::Invalid)?;
+                let ordinals = root_ordinals(&self.table, &masked, self.staged_ordinal)
+                    .map_err(LoaderError::Invalid)?;
                 children
                     .stage(
                         (&self.table, (&self.load_id, &self.loaded_at)),
-                        unnested.children,
+                        (unnested.children, ordinals.as_deref()),
                     )
                     .await?;
                 with_planned_columns((&masked, unnested.parent), &staged_columns(&self.table))
@@ -574,14 +654,14 @@ impl Publisher {
             }
             None => masked,
         };
-        self.stage_rows(masked, ids).await
+        self.stage_rows(masked, (ids, None)).await
     }
 
     /// Stage `masked`, rows as the table's columns hold them, with this load's metadata and each row's id from `ids` when the table gives rows one (a child table's are its parent's to give).
     pub(crate) async fn stage_rows(
         &mut self,
         masked: RecordBatch,
-        ids: Option<Vec<String>>,
+        (ids, roots): (Option<Vec<String>>, Option<Vec<i64>>),
     ) -> Result<(), LoaderError> {
         let micros = DateTime::parse_from_rfc3339(&self.loaded_at)
             .map(|time| time.timestamp_micros())
@@ -594,6 +674,10 @@ impl Publisher {
             (micros, first_row),
         )
         .map_err(LoaderError::Invalid)?;
+        let batch = match roots {
+            Some(roots) => with_root_rows(batch, roots)?,
+            None => batch,
+        };
         self.batch_rows += batch.num_rows() as u64;
         self.arrow_bytes += batch.get_array_memory_size();
         let columns = staged_columns(&self.table);
@@ -639,7 +723,7 @@ impl Publisher {
             return Ok(());
         }
         if let Some(children) = &mut self.children {
-            Box::pin(children.cut()).await?;
+            Box::pin(children.cut((&self.table, &self.destination, self.staging.as_ref()))).await?;
         }
         self.commit(false).await
     }
@@ -660,7 +744,11 @@ impl Publisher {
             || matches!(&self.table.mode, WriteMode::Changes(change) if change.truncated.is_some())
             || self.leftover_deletes();
         if let Some(children) = &mut self.children {
-            Box::pin(children.finish((&self.table, (&self.load_id, &self.loaded_at)))).await?;
+            Box::pin(children.finish(
+                (&self.table, (&self.load_id, &self.loaded_at)),
+                (&self.destination, self.staging.as_ref()),
+            ))
+            .await?;
         }
         match (self.direct, pending, &self.run) {
             (false, true, _) => self.commit(true).await?,
@@ -747,7 +835,7 @@ impl Publisher {
     }
 
     /// Load the batch where it goes: `COPY` its staged files (straight into the table, committing, or into the staging table) and remove them; DuckDB commits a straight batch's transaction. Then start the next batch.
-    async fn flush_batch(&mut self) -> Result<(), LoaderError> {
+    pub(crate) async fn flush_batch(&mut self) -> Result<(), LoaderError> {
         let columns = staged_columns(&self.table);
         let target = write_target(
             &self.table,

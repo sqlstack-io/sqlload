@@ -34,6 +34,7 @@ pub(crate) struct Level {
     positions: Vec<i64>,
     ids: Vec<String>,
     roots: Vec<String>,
+    root_rows: Vec<usize>,
 }
 
 /// What every level of one split shares: which fields unnest, how deep, and how names are made.
@@ -60,6 +61,8 @@ struct ListPlace<'a> {
     depth: u32,
     parent: &'a str,
     root: Option<&'a str>,
+    /// The root's row in the split batch.
+    root_row: usize,
 }
 
 /// An object's keys and raw values in the order the JSON writes them.
@@ -117,6 +120,7 @@ impl Split<'_> {
                     .roots
                     .and_then(|roots| roots.get(row))
                     .map(String::as_str),
+                root_row: row,
             };
             self.add_list(text, &place)?;
         }
@@ -228,6 +232,7 @@ impl Split<'_> {
             .push(i64::try_from(position).unwrap_or(i64::MAX));
         level.ids.push(id.clone());
         level.roots.extend(place.root.map(str::to_owned));
+        level.root_rows.push(place.root_row);
         for (key, value) in &lists {
             let path = format!("{}.{key}", place.path);
             let table = child_table_name(self.naming, place.table, key);
@@ -237,6 +242,7 @@ impl Split<'_> {
                 depth: place.depth + 1,
                 parent: &id,
                 root: place.root,
+                root_row: place.root_row,
             };
             self.add_list(value.get(), &below)?;
         }
@@ -258,6 +264,7 @@ impl Split<'_> {
                 positions: Vec::new(),
                 ids: Vec::new(),
                 roots: Vec::new(),
+                root_rows: Vec::new(),
             });
             self.levels.len() - 1
         });
@@ -309,6 +316,7 @@ fn level_batch(level: Level, naming: Naming) -> Result<ChildBatch, String> {
         path: level.path,
         table: level.table,
         batch,
+        root_rows: level.root_rows,
     })
 }
 

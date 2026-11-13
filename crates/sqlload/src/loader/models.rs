@@ -124,6 +124,8 @@ pub struct TableSpec {
     pub flatten: Vec<String>,
     /// Every row gets a unique id column.
     pub row_id: bool,
+    /// A child table of a merge: always staged, never written straight to the table, its staged rows carrying their root row's ordinal (`_sqlload_root_row`, staging only), so the rows of roots the merge drops leave before the commit.
+    pub root_rows: bool,
     /// The list fields whose items become rows of child tables.
     pub unnest: Unnest,
     /// How many levels of child tables `unnest` makes at most; deeper lists stay JSON.
@@ -699,6 +701,8 @@ pub struct ChildTables {
     pub ignored: Vec<String>,
     /// `created ...` and `altered ...` lines.
     pub changes: Vec<String>,
+    /// Under a merge, the child tables there before the load, each commit clearing the rows of its roots from them before their new rows land.
+    pub merged: Vec<String>,
 }
 
 /// One child table's load: its plan from the rows so far, and its publisher once it has rows.

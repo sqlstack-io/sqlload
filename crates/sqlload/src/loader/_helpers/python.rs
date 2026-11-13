@@ -3,7 +3,9 @@ use crate::adapters::contract::constants::{STAGING_SUFFIX, SWAP_SUFFIX};
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
@@ -26,6 +28,7 @@ use crate::loader::_helpers::run_log::run_entry;
 use crate::loader::_helpers::table_plan::append_problem;
 use crate::loader::_helpers::table_plan::replan_columns;
 use crate::loader::_helpers::table_plan::schema_statements;
+use crate::loader::constants::DROPPED_CHUNK;
 use crate::loader::constants::EMPTY_REPLACE_PROBLEM;
 use crate::loader::constants::NO_DATA_NOTE;
 use crate::loader::constants::NO_STATE;
@@ -70,6 +73,7 @@ use crate::row_batches::main::settled_schema::settled_schema;
 use crate::row_batches::models::ChildBatch;
 use crate::row_batches::models::Unnest;
 use crate::row_batches::types::ListChoices;
+use crate::schema_plan::constants::ROOT_ROW_COLUMN;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::SchemaPlan;
@@ -1177,6 +1181,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         destination_path: None,
         flatten: Vec::new(),
         row_id: true,
+        root_rows: matches!(parent.mode, WriteMode::Merge { .. }),
         unnest: Unnest::None,
         python: Some(PythonTable {
             module: String::new(),
@@ -1243,14 +1248,23 @@ pub(crate) fn unnested_table(spec: &TableSpec, path: &str) -> String {
     table
 }
 
+/// The staged ordinal of each child row's root, from the root's row in the parent's batch.
+fn root_ordinals_of(root_rows: &[usize], ordinals: &[i64]) -> Vec<i64> {
+    root_rows
+        .iter()
+        .map(|row| ordinals.get(*row).copied().unwrap_or_default())
+        .collect()
+}
+
 impl ChildTables {
     /// Stage the child rows of one of the parent's batches: a child table is planned (and created or altered) when its rows bring new columns, then they wait in its staging table for the parent's next commit.
     pub(crate) async fn stage(
         &mut self,
         (parent, (load_id, loaded_at)): (&TablePlan, (&str, &str)),
-        batches: Vec<ChildBatch>,
+        (batches, ordinals): (Vec<ChildBatch>, Option<&[i64]>),
     ) -> Result<(), LoaderError> {
         for child in batches {
+            let roots = ordinals.map(|ordinals| root_ordinals_of(&child.root_rows, ordinals));
             let below =
                 |path: &String| child.path == *path || child.path.starts_with(&format!("{path}."));
             if self.ignored.iter().any(below) {
@@ -1296,7 +1310,7 @@ impl ChildTables {
                     feed.publisher.insert(opened)
                 }
             };
-            publisher.stage_rows(typed, Some(ids)).await?;
+            publisher.stage_rows(typed, (Some(ids), roots)).await?;
         }
         Ok(())
     }
@@ -1329,8 +1343,12 @@ impl ChildTables {
         }
     }
 
-    /// Commit every child table's rows so far, before the parent's commit names them.
-    pub(crate) async fn cut(&mut self) -> Result<(), LoaderError> {
+    /// Commit every child table's rows so far, before the parent's commit names them (under a merge, once the rows of the roots it merges are cleared, see [`Self::clear_merged`]).
+    pub(crate) async fn cut(
+        &mut self,
+        (parent, destination, staging): (&TablePlan, &Destination, Option<&TableName>),
+    ) -> Result<(), LoaderError> {
+        self.clear_merged((parent, destination, staging)).await?;
         for publisher in self
             .feeds
             .iter_mut()
@@ -1345,7 +1363,9 @@ impl ChildTables {
     pub(crate) async fn finish(
         &mut self,
         (parent, (load_id, loaded_at)): (&TablePlan, (&str, &str)),
+        (destination, staging): (&Destination, Option<&TableName>),
     ) -> Result<(), LoaderError> {
+        self.clear_merged((parent, destination, staging)).await?;
         let replaced = matches!(parent.mode, WriteMode::Replace | WriteMode::Recreate);
         let spec = &parent.spec;
         let adapter = sql_adapter(spec.warehouse);
@@ -1403,6 +1423,101 @@ impl ChildTables {
             }
         }
         Ok(())
+    }
+
+    /// Under a merge, before the commit of the parent's rows staged in `staging` (on the parent's `destination`): the staged child rows of the parent rows the merge drops (a repeated key's others) leave each child table's staging table, and every child table's rows whose root is being merged are deleted, so a root's items are replaced by its new ones, an empty or missing list leaving none. Each runs on its own, before the child and parent commits: a failure between them leaves a root without its items until a rerun merges it again.
+    async fn clear_merged(
+        &mut self,
+        (parent, destination, staging): (&TablePlan, &Destination, Option<&TableName>),
+    ) -> Result<(), LoaderError> {
+        let (WriteMode::Merge { .. }, Some(staging)) = (&parent.mode, staging) else {
+            return Ok(());
+        };
+        let spec = &parent.spec;
+        let adapter = sql_adapter(spec.warehouse);
+        for publisher in self
+            .feeds
+            .iter_mut()
+            .filter_map(|feed| feed.publisher.as_mut())
+        {
+            publisher.flush_batch().await?;
+        }
+        let request = WriteStatementsRequest {
+            table: &spec.destination,
+            columns: &parent.schema.write_columns,
+            mode: &parent.mode,
+            hashed: &[],
+            built: None,
+        };
+        let dropped: Vec<i64> = match adapter.render_dropped_ordinals(&request, staging) {
+            Some(query) => text_values(destination, query)
+                .await?
+                .iter()
+                .map(|text| {
+                    text.parse::<i64>().map_err(|error| {
+                        LoaderError::Invalid(format!("a dropped row's ordinal {text}: {error}"))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+            None => Vec::new(),
+        };
+        let root_row = adapter.render_identifier(ROOT_ROW_COLUMN);
+        for publisher in self
+            .feeds
+            .iter_mut()
+            .filter_map(|feed| feed.publisher.as_mut())
+        {
+            let Some(child_staging) = publisher.staging.clone() else {
+                continue;
+            };
+            let deletes: Vec<String> = dropped
+                .chunks(DROPPED_CHUNK)
+                .map(|chunk| {
+                    let listed: Vec<String> = chunk.iter().map(i64::to_string).collect();
+                    format!(
+                        "DELETE FROM {} WHERE {root_row} IN ({})",
+                        adapter.render_qualified_name(&child_staging),
+                        listed.join(", ")
+                    )
+                })
+                .collect();
+            execute(&publisher.destination, deletes).await?;
+        }
+        let root_name = metadata_name(spec.naming, MetadataRole::RootId);
+        let row_id = adapter.render_identifier(metadata_name(spec.naming, MetadataRole::RowId));
+        let mut tables: Vec<String> = self.merged.clone();
+        for feed in self.feeds.iter().filter(|feed| feed.publisher.is_some()) {
+            let table = &feed.table.spec.destination.table;
+            if !tables
+                .iter()
+                .any(|known| adapter.stored_name(known) == adapter.stored_name(table))
+            {
+                tables.push(table.clone());
+            }
+        }
+        let mut deletes: Vec<String> = Vec::new();
+        for table in tables {
+            let name = TableName {
+                table,
+                ..spec.destination.clone()
+            };
+            let rooted = live_columns(destination, &name)
+                .await?
+                .is_some_and(|columns| {
+                    columns
+                        .iter()
+                        .any(|column| column.name.eq_ignore_ascii_case(root_name))
+                });
+            if rooted {
+                deletes.push(format!(
+                    "DELETE FROM {} WHERE {} IN (SELECT {row_id} FROM {})",
+                    adapter.render_qualified_name(&name),
+                    adapter.render_identifier(root_name),
+                    adapter.render_qualified_name(staging)
+                ));
+            }
+        }
+        execute(destination, deletes).await
     }
 
     /// Close every child table's publisher; best effort.
