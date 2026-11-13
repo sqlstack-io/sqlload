@@ -1,5 +1,6 @@
 use crate::column_types::models::ColumnType;
 use crate::column_types::models::Warehouse;
+use crate::load_naming::models::Naming;
 use crate::loader::_helpers::python::fitting_type;
 use crate::loader::tests::helpers::{
     bound_text, crossed_schema, inferred_columns, integer_code, live_paths, lower_case_rows,
@@ -255,6 +256,8 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         ChildPathsTestCase {
             description: "Snowflake lists plain names upper-cased; their paths are the fields as the rows name them",
             warehouse: Warehouse::Snowflake,
+            naming: Naming::Sqlload,
+            pinned: &[],
             parent: "s__t",
             tables: &["S__T__ITEMS", "S__T__ITEMS__PARTS"],
             expected_paths: &[
@@ -265,13 +268,34 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         ChildPathsTestCase {
             description: "DuckDB lists them as written",
             warehouse: Warehouse::DuckDb,
+            naming: Naming::Sqlload,
+            pinned: &[],
             parent: "s__t",
             tables: &["s__t__items"],
             expected_paths: &[("items", "s__t__items")],
         },
         ChildPathsTestCase {
+            description: "under dlt naming a pinned child column gives the path of a list in a flattened object, whose field holds __; an unpinned table's path comes from its name",
+            warehouse: Warehouse::DuckDb,
+            naming: Naming::Dlt,
+            pinned: &["items.dims__tags.value"],
+            parent: "s__t",
+            tables: &[
+                "s__t__items",
+                "s__t__items__dims__tags",
+                "s__t__notes__lines",
+            ],
+            expected_paths: &[
+                ("items", "s__t__items"),
+                ("items.dims__tags", "s__t__items__dims__tags"),
+                ("notes.lines", "s__t__notes__lines"),
+            ],
+        },
+        ChildPathsTestCase {
             description: "Postgres lists an upper-case parent's children folded to lower case",
             warehouse: Warehouse::Postgres,
+            naming: Naming::Sqlload,
+            pinned: &[],
             parent: "S__T",
             tables: &["s__t__items", "other__items"],
             expected_paths: &[("items", "s__t__items")],

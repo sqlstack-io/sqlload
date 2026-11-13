@@ -108,6 +108,8 @@ pub struct FilesTable {
     pub unmatched: usize,
     /// The loader's own columns found in the files (as they spell them), dropped for this load's.
     pub dropped: Vec<String>,
+    /// The objects `naming = "dlt"` flattened into `<object>__<key>` columns in the sampled JSON records, sorted (a key holding `__` inside an object is not one).
+    pub objects: Vec<String>,
 }
 
 /// Which files to read and the columns to produce, in table order.

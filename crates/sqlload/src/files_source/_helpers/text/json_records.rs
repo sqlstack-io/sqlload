@@ -61,14 +61,15 @@ impl<'de> Visitor<'de> for ObjectVisitor {
 /// One field of a JSON record: its key, its value (an empty placeholder for an object or array) and the nested value's compact text.
 type JsonField = (String, Value, Option<String>);
 
-/// `record` with each field holding an object replaced where it stands, and recursively, by one field per key named `<field>__<key>`, as dlt flattens objects (an empty object, or a NULL inside an object, leaves none); with each name flattening made, and each field it replaced. A made name the record already has is an error naming it.
+/// `record` with each field holding an object replaced where it stands, and recursively, by one field per key named `<field>__<key>`, as dlt flattens objects (an empty object, or a NULL inside an object, leaves none); with each name flattening made and each field it replaced, and those replaced fields alone (the objects: a key holding `__` is not one). A made name the record already has is an error naming it.
 pub(crate) fn flattened_record(
     record: JsonRecord,
-) -> Result<(JsonRecord, BTreeSet<String>), String> {
+) -> Result<(JsonRecord, BTreeSet<String>, BTreeSet<String>), String> {
     let mut fields: Vec<JsonField> = Vec::with_capacity(record.fields.len());
     let mut flattened: BTreeSet<String> = BTreeSet::new();
+    let mut objects: BTreeSet<String> = BTreeSet::new();
     for field in record.fields {
-        flatten_field(field, "", (&mut fields, &mut flattened))?;
+        flatten_field(field, "", (&mut fields, &mut flattened, &mut objects))?;
     }
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     if let Some((name, _, _)) = fields
@@ -86,14 +87,19 @@ pub(crate) fn flattened_record(
             fields,
         },
         flattened,
+        objects,
     ))
 }
 
-/// Push `field`, named below `prefix` when an object holds it, onto `fields`, or its keys in its place when it holds an object (a NULL below a prefix leaves nothing); the object's name and names below a prefix join `flattened`.
+/// Push `field`, named below `prefix` when an object holds it, onto `fields`, or its keys in its place when it holds an object (a NULL below a prefix leaves nothing); the object's name and names below a prefix join `flattened`, and the object's name `objects`.
 fn flatten_field(
     (key, value, nested): JsonField,
     prefix: &str,
-    (fields, flattened): (&mut Vec<JsonField>, &mut BTreeSet<String>),
+    (fields, flattened, objects): (
+        &mut Vec<JsonField>,
+        &mut BTreeSet<String>,
+        &mut BTreeSet<String>,
+    ),
 ) -> Result<(), String> {
     let name = match prefix.is_empty() {
         true => key,
@@ -103,8 +109,9 @@ fn flatten_field(
         let object: OrderedObject =
             serde_json::from_str(text).map_err(|error| format!("{name}: {error}"))?;
         flattened.insert(name.clone());
+        objects.insert(name.clone());
         for inner in object.0 {
-            flatten_field(inner, &name, (fields, flattened))?;
+            flatten_field(inner, &name, (fields, flattened, objects))?;
         }
         return Ok(());
     }

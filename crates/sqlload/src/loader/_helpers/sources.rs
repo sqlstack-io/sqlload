@@ -839,8 +839,9 @@ pub(crate) fn files_source_parts(
     let rule = (naming, sql_adapter(warehouse).max_identifier_length());
     let pinned_only = pinned_unsampled(overrides, (&table, &added, rule), encoding.format)?;
     if encoding.flatten_objects {
-        let problems = flattened_object_problems((source, overrides), &table.columns, rule)
-            .map_err(LoaderError::Invalid)?;
+        let problems =
+            flattened_object_problems((source, overrides), (&table.columns, &table.objects), rule)
+                .map_err(LoaderError::Invalid)?;
         if !problems.is_empty() {
             return Err(LoaderError::Invalid(problems.join("; ")));
         }

@@ -385,7 +385,7 @@ pub(crate) fn flatten_json(test_case: &FlattenJsonTestCase) -> Result<String, St
     let mut splitter = JsonSplitter::new(true, 1024);
     let mut records = splitter.push(test_case.text.as_bytes())?;
     records.extend(splitter.finish()?);
-    let (record, made) = flattened_record(records.remove(0))?;
+    let (record, made, _) = flattened_record(records.remove(0))?;
     let fields: Vec<String> = record
         .fields
         .iter()
