@@ -9,6 +9,7 @@ use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
+use crate::adapters::dispatch::main::session::table_names::table_names;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::batch_plan::main::window_at::window_at;
@@ -153,7 +154,7 @@ pub(crate) async fn live_child_tables(
         return Ok(Vec::new());
     }
     let adapter = sql_adapter(spec.warehouse);
-    let found = text_values(
+    let found = table_names(
         destination,
         adapter.list_child_tables_sql(&spec.destination),
     )
