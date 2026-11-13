@@ -48,6 +48,10 @@ pub(crate) struct Split<'a> {
     pub(crate) name_limit: Option<usize>,
     /// Whether an object inside an item flattens into `<key>__<inner>` fields.
     pub(crate) flatten_objects: bool,
+    /// Under `"all"`, the child tables the destination already has, whose fields are list fields.
+    pub(crate) live: &'a [String],
+    /// The paths [`Self::choose_live`] has looked up in `live`.
+    pub(crate) looked_up: std::collections::BTreeSet<String>,
     /// Under `"all"`, the fields chosen as list fields or not so far, chosen further as values decide.
     pub(crate) choices: &'a mut ListChoices,
     pub(crate) levels: Vec<Level>,
@@ -109,10 +113,11 @@ impl Split<'_> {
         if !self.unnests(field.name(), 1) {
             return Ok(false);
         }
+        let table = child_table_name((self.naming, self.name_limit), request.table, field.name());
+        self.choose_live(field.name(), || table.clone());
         let Some(texts) = self.choose_column((field, column))? else {
             return Ok(false);
         };
-        let table = child_table_name((self.naming, self.name_limit), request.table, field.name());
         for (row, text) in texts.iter().enumerate() {
             let (Some(text), Some(parent)) = (text, request.ids.get(row)) else {
                 continue;
@@ -165,6 +170,24 @@ impl Split<'_> {
                 Ok(true)
             }
             (None, _) => Ok(false),
+        }
+    }
+
+    /// Under `"all"`, choose the field at `path` as a list field when the destination already has its child table, which `table` names, as an earlier load chose it; each path is looked up once per split.
+    fn choose_live(&mut self, path: &str, table: impl FnOnce() -> String) {
+        if self.live.is_empty()
+            || self.choices.get(path) == Some(&true)
+            || !self.looked_up.insert(path.to_owned())
+        {
+            return;
+        }
+        let table = table();
+        if self
+            .live
+            .iter()
+            .any(|live| live.eq_ignore_ascii_case(&table))
+        {
+            self.choices.insert(path.to_owned(), true);
         }
     }
 
@@ -222,8 +245,12 @@ impl Split<'_> {
         let mut cells: Vec<(String, Box<RawValue>)> = Vec::new();
         for (key, value) in entries {
             let nested = format!("{}.{key}", place.path);
-            let taken = self.unnests(&nested, place.depth + 1)
-                && self.chooses(&nested, &Seen::default().and(value.get()))?;
+            let unnests = self.unnests(&nested, place.depth + 1);
+            if unnests {
+                let rule = (self.naming, self.name_limit);
+                self.choose_live(&nested, || child_table_name(rule, place.table, &key));
+            }
+            let taken = unnests && self.chooses(&nested, &Seen::default().and(value.get()))?;
             match taken {
                 true => lists.push((key, value)),
                 false => cells.push((key, value)),

@@ -712,6 +712,8 @@ pub struct Publisher {
 pub struct ChildTables {
     /// Under `unnest = "all"`, the fields at every level chosen as list fields or not so far: the plan's, then as the rows decide.
     pub choices: crate::row_batches::types::ListChoices,
+    /// Under `unnest = "all"`, the child tables there before the load, as the destination stores their names: an earlier load chose the fields they hold as list fields, at every level.
+    pub live: Vec<String>,
     /// A connection of their own that plans, creates and alters them before each has its publisher.
     pub destination: Destination,
     pub options: PlanOptions,
