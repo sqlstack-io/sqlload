@@ -4,6 +4,7 @@ use arrow_array::RecordBatch;
 use std::collections::{BTreeMap, HashMap};
 use tokio_postgres::Client;
 
+use crate::adapters::contract::models::TableName;
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
@@ -25,6 +26,7 @@ use crate::files_source::constants::{
     NANOSECOND_SCALE, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
     VERSION_SEPARATOR,
 };
+use crate::files_source::errors::FilesError;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::merge_order::merge_order;
@@ -50,8 +52,8 @@ use crate::loader::constants::{
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    CommitRule, FilesSource, PlanOptions, ProjectPlan, ResolvedTables, SkippedTable, SourceEnd,
-    SourceProblem, SourceReader, TablePlan, TableSpec,
+    CommitRule, DrainedFiles, FilesSource, PlanOptions, ProjectPlan, ResolvedTables, SkippedTable,
+    SourceEnd, SourceProblem, SourceReader, TablePlan, TableSpec,
 };
 use crate::loader::models::{FoundSource, FoundSources};
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
@@ -238,6 +240,11 @@ pub(crate) async fn source_tables(
             Ok(
                 match discover_files_table(project, source_name, source, warehouse).await {
                     Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
+                    Err(LoaderError::Files(FilesError::NoFiles { .. }))
+                        if source.after_load != AfterLoad::Keep =>
+                    {
+                        Ok((Vec::new(), None, Vec::new()))
+                    }
                     Err(error) => Err(error.into()),
                 },
             )
@@ -1560,12 +1567,85 @@ pub(crate) async fn scoped_tables(
             })));
         }
     };
+    if source.kind == SourceKind::Files && discovered.is_empty() {
+        return Ok(Ok((
+            drained_files((project, options), (source_name, source)),
+            None,
+        )));
+    }
     let mut resolved = resolve_tables(project, source_name, &discovered);
     match source_in_scope((project, options), (source_name, source), Some(&discovered)) {
         true => resolved.warnings = warnings,
         false => resolved.problems.clear(),
     }
     Ok(Ok((resolved, files)))
+}
+
+/// A files source whose `after_load` emptied its folder, which a load leaves alone until new files come, as with `keep` every file in the folder is already loaded: its destination table, which [`found_sources`] checks exists before skipping it (when the selection in `options` takes it).
+fn drained_files(
+    (project, options): (&ProjectConfig, &PlanOptions),
+    (source_name, source): (&str, &SourceConfig),
+) -> ResolvedTables {
+    let target = match source_target(project, source) {
+        Ok(target) => target,
+        Err(problem) => {
+            return ResolvedTables {
+                problems: vec![format!("[sources.{source_name}]: {problem}")],
+                ..ResolvedTables::default()
+            };
+        }
+    };
+    let listed = SourceTable {
+        schema: String::new(),
+        name: source_name.to_owned(),
+        columns: Vec::new(),
+        primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
+        estimated_rows: -1,
+        estimated_bytes: 0,
+        comment: None,
+    };
+    let name = source
+        .tables
+        .get(source_name)
+        .and_then(|table| table.name.as_deref());
+    let table = TableName {
+        database: target.database,
+        schema: target.schema,
+        table: table_name((source_name, source), name, &listed),
+    };
+    let in_scope = selected(options, (source_name, &table.table, source_name));
+    if target.path.is_some() {
+        return ResolvedTables {
+            problems: in_scope
+                .then(|| {
+                    format!("[sources.{source_name}]: after_load is for database targets so far, not a files target")
+                })
+                .into_iter()
+                .collect(),
+            ..ResolvedTables::default()
+        };
+    }
+    let path = source.path.as_deref().unwrap_or_default();
+    ResolvedTables {
+        drained: Some(DrainedFiles {
+            in_scope,
+            target: target.name,
+            skipped: SkippedTable {
+                source_name: source_name.to_owned(),
+                source_table: source_name.to_owned(),
+                reason: format!(
+                    "no files to load in {path}: after_load deleted or moved the ones already loaded"
+                ),
+            },
+            problem: format!(
+                "[sources.{source_name}]: no files to load in {path}, and {} was never loaded: after_load skips an emptied folder only once its table exists; check the source's path and connection",
+                table.table
+            ),
+            table,
+        }),
+        ..ResolvedTables::default()
+    }
 }
 
 /// Whether the selection in `options` takes anything from source `source_name`: a table it `listed`, or one named under its `tables` but not listed, by destination name or `schema.table`, or the source itself when it holds no table. A source that could not list its tables (`None`) counts when selected by name, or for any `--select` selector naming no source, since that table could be its. Only then do the source's problems count, so one source's bad settings do not fail a command run on another.
@@ -1716,8 +1796,9 @@ pub(crate) async fn found_sources<'a>(
     options: &PlanOptions,
 ) -> Result<FoundSources<'a>, LoaderError> {
     let mut found = FoundSources::default();
+    let mut drained_sources: Vec<(usize, DrainedFiles)> = Vec::new();
     for (source_name, source) in &project.sources {
-        let (resolved, files) =
+        let (mut resolved, files) =
             match scoped_tables((project, options), (source_name, source)).await? {
                 Ok(tables) => tables,
                 Err(problem) => {
@@ -1731,6 +1812,9 @@ pub(crate) async fn found_sources<'a>(
                     continue;
                 }
             };
+        if let Some(drained) = resolved.drained.take() {
+            drained_sources.push((found.sources.len(), drained));
+        }
         found
             .claims
             .extend(folder_claims(&resolved.specs, files.as_ref(), destinations));
@@ -1741,6 +1825,43 @@ pub(crate) async fn found_sources<'a>(
             resolved,
             files,
         });
+    }
+    for (index, drained) in drained_sources {
+        let source = &mut found.sources[index];
+        let shared = found
+            .configured
+            .iter()
+            .any(|spec| spec.target == drained.target && spec.destination == drained.table);
+        if shared {
+            found.unresolved.push(source.name.clone());
+        }
+        found
+            .drained
+            .push((drained.table.table.clone(), source.name.clone()));
+        if !drained.in_scope {
+            continue;
+        }
+        let exists = match destinations.get(&drained.target) {
+            Some(destination) => live_columns(destination, &drained.table).await?.is_some(),
+            None => false,
+        };
+        let path = source.source.path.as_deref().unwrap_or_default();
+        let problem = match (exists, shared, options.reload) {
+            (false, _, _) => Some(drained.problem),
+            (true, true, _) => Some(format!(
+                "[sources.{}]: no files to load in {path}, and other tables load into {} too: a load that cannot see this source could misread or remove its rows, so it fails until files come; run the others with --exclude {}",
+                source.name, drained.table.table, source.name
+            )),
+            (true, false, true) => Some(format!(
+                "[sources.{}]: --reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded",
+                source.name
+            )),
+            (true, false, false) => None,
+        };
+        match problem {
+            Some(problem) => source.resolved.problems.push(problem),
+            None => source.resolved.skipped.push(drained.skipped),
+        }
     }
     Ok(found)
 }

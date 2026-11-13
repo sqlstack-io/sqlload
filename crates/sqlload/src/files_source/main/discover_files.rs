@@ -8,6 +8,7 @@ use crate::files_source::_helpers::plan::columns::{
     ColumnMerge, SampledColumn, case_problems, drop_loader_columns, file_columns, merge_columns,
 };
 use crate::files_source::_helpers::plan::encoding::{file_codec, file_names};
+use crate::files_source::_helpers::plan::folder::unreadable;
 use crate::files_source::_helpers::plan::partitions::data_file;
 use crate::files_source::_helpers::plan::sample::newest_columns;
 use crate::files_source::constants::{
@@ -135,14 +136,23 @@ async fn listed_files(
         0 => String::new(),
         count => format!("; {count} listed files do not match path_columns"),
     };
-    match listed.files.is_empty() {
-        true => Err(FilesError::File {
-            key: folder.location.to_string(),
-            reason: format!(
-                "no {} files found{unmatched}; check the source's path and format (an empty source never empties the destination)",
-                file_names(encoding)
-            ),
+    let reason = format!(
+        "no {} files found{unmatched}; check the source's path and format (an empty source never empties the destination)",
+        file_names(encoding)
+    );
+    let key = folder.location.to_string();
+    let others = listed.skipped + listed.unmatched;
+    match (
+        listed.files.is_empty(),
+        others,
+        unreadable(&folder.location),
+    ) {
+        (false, _, _) => Ok(listed),
+        (true, 0, None) => Err(FilesError::NoFiles { key, reason }),
+        (true, _, None) => Err(FilesError::File { key, reason }),
+        (true, _, Some(error)) => Err(FilesError::File {
+            key,
+            reason: format!("{reason}; the folder cannot be read: {error}"),
         }),
-        false => Ok(listed),
     }
 }

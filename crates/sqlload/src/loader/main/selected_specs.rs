@@ -27,6 +27,12 @@ pub async fn selected_specs(
             };
         let module = project.python_modules.get(source_name);
         chosen.problems.extend(resolved.problems);
+        chosen
+            .problems
+            .extend(resolved.drained.filter(|drained| drained.in_scope).map(|drained| format!(
+                "[sources.{}]: after_load emptied its folder, so there are no files to read its columns from until new ones come",
+                drained.skipped.source_name
+            )));
         for mut spec in resolved.specs {
             spec.files = files.clone();
             spec.python = module.map(|module| python_table(module, &spec.source_table));
