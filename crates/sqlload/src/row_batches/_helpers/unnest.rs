@@ -113,11 +113,14 @@ impl Split<'_> {
         if !self.unnests(field.name(), 1) {
             return Ok(false);
         }
-        let table = child_table_name((self.naming, self.name_limit), request.table, field.name());
-        self.choose_live(field.name(), || table.clone());
+        let rule = (self.naming, self.name_limit);
+        self.choose_live(field.name(), || {
+            child_table_name(rule, request.table, field.name())
+        });
         let Some(texts) = self.choose_column((field, column))? else {
             return Ok(false);
         };
+        let table = child_table_name(rule, request.table, field.name());
         for (row, text) in texts.iter().enumerate() {
             let (Some(text), Some(parent)) = (text, request.ids.get(row)) else {
                 continue;
@@ -176,11 +179,12 @@ impl Split<'_> {
     /// Under `"all"`, choose the field at `path` as a list field when the destination already has its child table, which `table` names, as an earlier load chose it; each path is looked up once per split.
     fn choose_live(&mut self, path: &str, table: impl FnOnce() -> String) {
         if self.live.is_empty()
+            || self.looked_up.contains(path)
             || self.choices.get(path) == Some(&true)
-            || !self.looked_up.insert(path.to_owned())
         {
             return;
         }
+        self.looked_up.insert(path.to_owned());
         let table = table();
         if self
             .live
