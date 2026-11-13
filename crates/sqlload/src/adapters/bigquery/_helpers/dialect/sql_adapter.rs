@@ -183,14 +183,14 @@ impl SqlAdapter for BigQuerySql {
     }
 
     /// The dataset's own `INFORMATION_SCHEMA`, qualified by its project.
-    fn render_schema_tables(&self, table: &TableName) -> String {
+    fn render_schema_columns(&self, table: &TableName) -> String {
         let project = table
             .database
             .as_deref()
             .map(|name| format!("{}.", self.render_identifier(name)))
             .unwrap_or_default();
         format!(
-            "{project}{}.INFORMATION_SCHEMA.TABLES",
+            "{project}{}.INFORMATION_SCHEMA.COLUMNS",
             self.render_identifier(&table.schema)
         )
     }

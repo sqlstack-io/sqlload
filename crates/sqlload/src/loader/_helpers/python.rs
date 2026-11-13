@@ -1,5 +1,5 @@
 use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
-use crate::adapters::contract::constants::{STAGING_SUFFIX, SWAP_SUFFIX};
+use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
@@ -147,7 +147,7 @@ pub(crate) fn python_table(module: &str, table: &SourceTable) -> PythonTable {
     }
 }
 
-/// The child tables `spec`'s table has in the destination (tables named `<table>__...`, staging and swap tables left out); none without `unnest`.
+/// The child tables `spec`'s table has in the destination (tables named `<table>__...` that have a parent-id column, staging tables and the swap tables named after them, in any case, left out); none without `unnest`. A table named so without that column is another table, and so are the child tables of such a table (`orders__notes__items` beside a table `orders__notes`).
 pub(crate) async fn live_child_tables(
     destination: &Destination,
     spec: &TableSpec,
@@ -161,10 +161,25 @@ pub(crate) async fn live_child_tables(
         adapter.list_child_tables_sql(&spec.destination),
     )
     .await?;
-    Ok(found
+    let (children, others): (Vec<&String>, Vec<&String>) =
+        found.iter().partition(|marked| marked.starts_with('1'));
+    let others: Vec<&str> = others.iter().filter_map(|marked| marked.get(1..)).collect();
+    Ok(children
         .into_iter()
-        .filter(|name| !name.contains(STAGING_SUFFIX) && !name.ends_with(SWAP_SUFFIX))
+        .filter_map(|marked| marked.get(1..))
+        .filter(|name| !name.to_ascii_lowercase().contains(STAGING_SUFFIX))
+        .filter(|name| !is_child_of_any(name, &others))
+        .map(str::to_owned)
         .collect())
+}
+
+/// Whether `table` is named as a child table of one of `parents` is (`orders__notes__items` of `orders__notes`).
+fn is_child_of_any(table: &str, parents: &[&str]) -> bool {
+    parents.iter().any(|parent| {
+        table
+            .strip_prefix(parent)
+            .is_some_and(|rest| rest.starts_with(CHILD_TABLE_SEPARATOR))
+    })
 }
 
 /// The dotted path each of `spec`'s child tables among `tables` holds, by its name as the load writes it (`orders__items__parts` holds `items.parts`; Snowflake's `ORDERS__ITEMS` holds `items`; Postgres lists the children of `ORDERS` folded, as `orders__items`).

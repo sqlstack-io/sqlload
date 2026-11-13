@@ -97,10 +97,10 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
             ],
         },
         RenderedTestCase {
-            description: "an unnested table's child tables are listed from its dataset's own INFORMATION_SCHEMA",
+            description: "an unnested table's child tables are listed from its dataset's own INFORMATION_SCHEMA, each marked by whether it has a parent-id column under either naming",
             rendered: vec![adapter.list_child_tables_sql(&orders())],
             expected_statements: &[
-                "SELECT table_name FROM `p`.`raw`.INFORMATION_SCHEMA.TABLES WHERE table_schema = 'raw' AND left(table_name, 8) = 'orders__'",
+                "SELECT max(CASE WHEN column_name IN ('_sqlload_parent_id', '_dlt_parent_id') THEN '1' ELSE '0' END) || table_name FROM `p`.`raw`.INFORMATION_SCHEMA.COLUMNS WHERE table_schema = 'raw' AND left(table_name, 8) = 'orders__' GROUP BY table_name",
             ],
         },
     ];
