@@ -12,7 +12,7 @@ use crate::files_source::_helpers::text::csv_reader::CsvReader;
 use crate::files_source::_helpers::text::inference::{csv_value_type, json_value_type};
 use crate::files_source::_helpers::text::json_reader::JsonReader;
 use crate::files_source::_helpers::text::json_records::JsonRecord;
-use crate::files_source::constants::SAMPLE_ROWS;
+use crate::files_source::constants::{FLATTENED_KEY, SAMPLE_ROWS};
 use crate::files_source::models::{CellRecord, Codec, FilesEncoding, SourceFormat, StoredRead};
 
 /// The columns in the first records of a JSON or CSV `file`, with the types their values suggest.
@@ -35,8 +35,15 @@ pub(crate) async fn sample_file(
             Ok(csv_columns(reader.names(), batch.as_ref()))
         }
         format => {
-            let mut reader = JsonReader::new(bytes, format == SourceFormat::Ndjson);
-            Ok(json_columns(&reader.next_records(SAMPLE_ROWS).await?))
+            let mut reader = JsonReader::new(bytes, format == SourceFormat::Ndjson)
+                .flattening(encoding.flatten_objects);
+            let mut columns = json_columns(&reader.next_records(SAMPLE_ROWS).await?);
+            for column in &mut columns {
+                if reader.flattened().contains(&column.name) {
+                    column.direct_refusal = Some(FLATTENED_KEY.to_owned());
+                }
+            }
+            Ok(columns)
         }
     }
 }

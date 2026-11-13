@@ -14,6 +14,7 @@ pub fn choose_lists(batch: &RecordBatch, choices: &mut ListChoices) -> Result<bo
         max_depth: 1,
         naming: Naming::Sqlload,
         name_limit: None,
+        flatten_objects: false,
         choices,
         levels: Vec::new(),
     };

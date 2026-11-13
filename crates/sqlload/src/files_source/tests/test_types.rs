@@ -74,6 +74,14 @@ pub(crate) struct MergeColumnsTestCase {
     pub(crate) expected_problems: usize,
 }
 
+pub(crate) struct FlattenJsonTestCase {
+    pub(crate) description: &'static str,
+    /// One NDJSON object.
+    pub(crate) text: &'static str,
+    /// The flattened record's fields as `name=value` joined by `|`, then ` made ` and the names flattening made or replaced joined by `,`; or the error text.
+    pub(crate) expected: Result<&'static str, &'static str>,
+}
+
 pub(crate) struct SplitJsonTestCase {
     pub(crate) description: &'static str,
     pub(crate) by_line: bool,

@@ -35,8 +35,8 @@ use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
 use crate::files_source::models::{
-    AfterLoad, BatchFooters, DataFile, FileColumn, FileSelection, FilesRead, FilesTable,
-    LoadedFile, PathValues, SourceFormat, StoredRead, TextChecks,
+    AfterLoad, BatchFooters, DataFile, FileColumn, FileSelection, FilesEncoding, FilesRead,
+    FilesTable, LoadedFile, PathValues, SourceFormat, StoredRead, TextChecks,
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
@@ -743,7 +743,10 @@ pub(crate) async fn discover_files_table(
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
     let (values, _) = path_values((source_name, source), warehouse)?;
-    let encoding = source.files_encoding();
+    let encoding = FilesEncoding {
+        flatten_objects: naming == Naming::Dlt,
+        ..source.files_encoding()
+    };
     let table = discover_files(&folder, &values, &encoding).await?;
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
@@ -819,7 +822,10 @@ pub(crate) fn files_source_parts(
     (warehouse, naming): (Warehouse, Naming),
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
-    let encoding = source.files_encoding();
+    let encoding = FilesEncoding {
+        flatten_objects: naming == Naming::Dlt,
+        ..source.files_encoding()
+    };
     let (values, partition_types) = path_values((source_name, source), warehouse)?;
     let added: Vec<&str> = partition_types
         .iter()

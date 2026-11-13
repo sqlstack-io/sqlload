@@ -327,6 +327,8 @@ pub struct FilesEncoding {
     pub members: Option<String>,
     /// With `shape = "record"`, the one column each JSON object or CSV line loads into whole; `None` for typed columns.
     pub record: Option<String>,
+    /// Under `naming = "dlt"`, a JSON object's fields that hold objects load as one column per key, `<field>__<key>`, as dlt flattens them.
+    pub flatten_objects: bool,
 }
 
 /// How a JSON or CSV source's records load: as typed columns sampled from them, or each whole in one `json` column.

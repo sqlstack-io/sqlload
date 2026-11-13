@@ -133,6 +133,11 @@ Where SQLLoad and dlt still differ under `naming = "dlt"`:
   source loads under dlt's names too, its snapshot and change stream matching each column by the
   source's spelling.
 
-- An object stays a JSON column; dlt flattens it into `parent__key` columns.
+- Added in 0.42: a JSON or NDJSON files source flattens objects into `parent__key` columns as dlt
+  does, at every level and inside unnested items, and a list inside an object becomes a child
+  table such as `orders__customer__tags`. An object from a Python table or a database's JSON
+  column stays a JSON column; a Python table's `flatten` expands objects one level.
+- A field that is only NULL in the sampled rows is a text column, beside the `parent__key`
+  columns of its objects; dlt makes no column for it.
 - A field listed in `unnest` always goes to its child table, even when an XML element appears
   only once; dlt keeps a single match as a column of the parent.

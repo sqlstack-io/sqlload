@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, StringArray};
@@ -10,7 +10,9 @@ use crate::column_types::models::ColumnType;
 use crate::files_source::_helpers::text::bytes_reader::BytesReader;
 use crate::files_source::_helpers::text::checks::{ColumnChecks, misfit, value_fits};
 use crate::files_source::_helpers::text::inference::json_value_type;
-use crate::files_source::_helpers::text::json_records::{JsonRecord, JsonSplitter};
+use crate::files_source::_helpers::text::json_records::{
+    JsonRecord, JsonSplitter, flattened_record,
+};
 use crate::files_source::constants::MAX_RECORD_BYTES;
 
 /// Reads a JSON file's objects in order, a chunk of bytes at a time.
@@ -19,6 +21,10 @@ pub(crate) struct JsonReader {
     splitter: JsonSplitter,
     ready: VecDeque<JsonRecord>,
     finished: bool,
+    /// Whether objects flatten into `<field>__<key>` fields (see [`flattened_record`]).
+    flatten_objects: bool,
+    /// The fields flattening has made, and the object fields it replaced, so far.
+    flattened: BTreeSet<String>,
 }
 
 impl JsonReader {
@@ -29,7 +35,20 @@ impl JsonReader {
             splitter: JsonSplitter::new(by_line, MAX_RECORD_BYTES),
             ready: VecDeque::new(),
             finished: false,
+            flatten_objects: false,
+            flattened: BTreeSet::new(),
         }
+    }
+
+    /// This reader flattening objects when `flatten_objects` says so.
+    pub(crate) fn flattening(mut self, flatten_objects: bool) -> Self {
+        self.flatten_objects = flatten_objects;
+        self
+    }
+
+    /// The fields flattening has made, and the object fields it replaced, in the records read so far.
+    pub(crate) fn flattened(&self) -> &BTreeSet<String> {
+        &self.flattened
     }
 
     /// Up to `limit` more objects; empty at the end of the file.
@@ -44,7 +63,14 @@ impl JsonReader {
             self.ready.extend(records);
         }
         let take = limit.min(self.ready.len());
-        Ok(self.ready.drain(..take).collect())
+        let records: Vec<JsonRecord> = self.ready.drain(..take).collect();
+        match self.flatten_objects {
+            false => Ok(records),
+            true => records
+                .into_iter()
+                .map(|record| flattened_record(record, &mut self.flattened))
+                .collect(),
+        }
     }
 }
 

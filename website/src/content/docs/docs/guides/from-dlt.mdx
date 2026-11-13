@@ -218,9 +218,11 @@ kept between runs, so it can run on workers whose disks are thrown away.
 
 Under `naming = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
 
-- An object stays a JSON column, where dlt flattens it into `parent__key` columns
+- An object from a Python table or a database's JSON column stays a JSON column, where dlt
+  flattens it into `parent__key` columns
   ([relational.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/relational.py#L154-L186)). A Python table's
-  `flatten` expands objects one level.
+  `flatten` expands objects one level. A JSON or NDJSON files source flattens them as dlt does
+  (added in 0.42).
 - A value that doesn't fit its column's type fails the load, or widens the column as the table's
   [contract](/docs/concepts/contracts/) allows. dlt adds a variant column such as `amount__v_text`
   ([schema.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/general-usage/schema.md#L172-L204)).
