@@ -1,6 +1,7 @@
 use arrow_schema::Schema;
 
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::load_naming::models::Naming;
 
 pub(crate) struct FittingTypeTestCase {
     pub(crate) description: &'static str,
@@ -125,6 +126,9 @@ pub(crate) struct ConstantsAddedTestCase {
 pub(crate) struct ChildPathsTestCase {
     pub(crate) description: &'static str,
     pub(crate) warehouse: Warehouse,
+    pub(crate) naming: Naming,
+    /// The parent's `child_pinned` keys (`items.sku`).
+    pub(crate) pinned: &'static [&'static str],
     /// The parent table's name as the load writes it.
     pub(crate) parent: &'static str,
     /// Live child tables of `parent`, as the warehouse lists them.

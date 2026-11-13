@@ -35,6 +35,7 @@ pub async fn discover_files(
             skipped: listed.skipped,
             unmatched: listed.unmatched,
             dropped: Vec::new(),
+            objects: Vec::new(),
         });
     }
     let replaced: Vec<&str> = values
@@ -50,12 +51,13 @@ pub async fn discover_files(
             skipped: listed.skipped,
             unmatched: listed.unmatched,
             dropped: Vec::new(),
+            objects: Vec::new(),
         });
     }
     let text_format = encoding.format != SourceFormat::Parquet;
     let mut columns: Vec<SampledColumn> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
-    let sampled = newest_columns(folder, &files, encoding).await?;
+    let (sampled, objects) = newest_columns(folder, &files, encoding).await?;
     for ((data, _), found) in files.iter().rev().zip(sampled) {
         let (found, loader) = drop_loader_columns(found);
         for name in loader {
@@ -82,6 +84,7 @@ pub async fn discover_files(
         skipped: listed.skipped,
         unmatched: listed.unmatched,
         dropped,
+        objects,
     })
 }
 

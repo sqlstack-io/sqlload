@@ -397,6 +397,22 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             expected_problem: "mask c names c, which naming = \"dlt\" flattens into c__n; name those columns instead",
         },
         UnnestPlanTestCase {
+            description: "under dlt naming a key holding __ inside an object is no object of its own, so an exclusion naming it is no flattened object",
+            settings: "naming = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
+            files_target: false,
+            file: "{\"id\": 1, \"a\": {\"b__c\": 1}}\n",
+            expected_ok: true,
+            expected_problem: "├── id",
+        },
+        UnnestPlanTestCase {
+            description: "under dlt naming the same exclusion naming an object nested in an object is refused",
+            settings: "naming = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
+            files_target: false,
+            file: "{\"id\": 1, \"a\": {\"b\": {\"c\": 1}}}\n",
+            expected_ok: false,
+            expected_problem: "exclude_columns a__b names a__b, which naming = \"dlt\" flattens into a__b__c; name those columns instead",
+        },
+        UnnestPlanTestCase {
             description: "under dlt naming an exclusion matching a flattened object's columns applies to them",
             settings: "naming = \"dlt\"\nexclude_columns = [\"Customer*\"]\n",
             files_target: false,

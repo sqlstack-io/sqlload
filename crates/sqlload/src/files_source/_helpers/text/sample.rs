@@ -15,24 +15,24 @@ use crate::files_source::_helpers::text::json_records::JsonRecord;
 use crate::files_source::constants::{FLATTENED_KEY, SAMPLE_ROWS};
 use crate::files_source::models::{CellRecord, Codec, FilesEncoding, SourceFormat, StoredRead};
 
-/// The columns in the first records of a JSON or CSV `file`, with the types their values suggest.
+/// The columns in the first records of a JSON or CSV `file`, with the types their values suggest, and the objects flattening replaced with their keys' columns in them.
 pub(crate) async fn sample_file(
     folder: &OpenFolder,
     file: &StoredFile,
     codec: Codec,
     encoding: &FilesEncoding,
-) -> Result<Vec<SampledColumn>, String> {
+) -> Result<(Vec<SampledColumn>, Vec<String>), String> {
     let bytes = open_bytes(folder, file, codec).await?;
     match encoding.format {
         SourceFormat::Xlsx | SourceFormat::Xml => {
             let mut reader = CellReader::open(bytes, encoding).await?;
             let records = reader.next_records(SAMPLE_ROWS);
-            Ok(cell_columns(reader.names(), &records))
+            Ok((cell_columns(reader.names(), &records), Vec::new()))
         }
         SourceFormat::Csv => {
             let mut reader = CsvReader::open(bytes, &encoding.csv, SAMPLE_ROWS).await?;
             let batch = reader.next_batch().await?.map(|(batch, _)| batch);
-            Ok(csv_columns(reader.names(), batch.as_ref()))
+            Ok((csv_columns(reader.names(), batch.as_ref()), Vec::new()))
         }
         format => {
             let mut reader = JsonReader::new(bytes, format == SourceFormat::Ndjson)
@@ -43,7 +43,7 @@ pub(crate) async fn sample_file(
                     column.direct_refusal = Some(FLATTENED_KEY.to_owned());
                 }
             }
-            Ok(columns)
+            Ok((columns, reader.objects().iter().cloned().collect()))
         }
     }
 }

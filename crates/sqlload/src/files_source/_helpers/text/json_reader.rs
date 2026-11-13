@@ -25,6 +25,8 @@ pub(crate) struct JsonReader {
     flatten_objects: bool,
     /// The fields flattening has made, and the object fields it replaced, so far.
     flattened: BTreeSet<String>,
+    /// The object fields flattening has replaced so far.
+    objects: BTreeSet<String>,
 }
 
 impl JsonReader {
@@ -37,6 +39,7 @@ impl JsonReader {
             finished: false,
             flatten_objects: false,
             flattened: BTreeSet::new(),
+            objects: BTreeSet::new(),
         }
     }
 
@@ -54,6 +57,11 @@ impl JsonReader {
     /// The fields flattening has made, and the object fields it replaced, in the records read so far.
     pub(crate) fn flattened(&self) -> &BTreeSet<String> {
         &self.flattened
+    }
+
+    /// The object fields flattening has replaced, in the records read so far.
+    pub(crate) fn objects(&self) -> &BTreeSet<String> {
+        &self.objects
     }
 
     /// Up to `limit` more objects; empty at the end of the file.
@@ -74,8 +82,9 @@ impl JsonReader {
         }
         let mut flat: Vec<JsonRecord> = Vec::with_capacity(records.len());
         for record in records {
-            let (record, made) = flattened_record(record)?;
+            let (record, made, objects) = flattened_record(record)?;
             self.flattened.extend(made);
+            self.objects.extend(objects);
             flat.push(record);
         }
         Ok(flat)

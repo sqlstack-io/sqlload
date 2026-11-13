@@ -327,6 +327,17 @@ pub(crate) fn constants_added(
 pub(crate) fn live_paths(test_case: &ChildPathsTestCase) -> Result<Vec<(String, String)>, String> {
     let mut spec = python_spec("{}")?;
     spec.warehouse = test_case.warehouse;
+    spec.naming = test_case.naming;
+    spec.child_pinned = test_case
+        .pinned
+        .iter()
+        .map(|key| {
+            (
+                (*key).to_owned(),
+                crate::column_types::models::ColumnType::Text,
+            )
+        })
+        .collect();
     test_case.parent.clone_into(&mut spec.destination.table);
     let tables = test_case
         .tables

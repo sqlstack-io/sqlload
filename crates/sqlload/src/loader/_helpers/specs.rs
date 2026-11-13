@@ -8,7 +8,6 @@ use crate::cdc::constants::{
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::files_source::constants::FLATTENED_KEY;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::models::AfterLoad;
 use crate::files_source::models::FileColumn;
@@ -1071,23 +1070,13 @@ pub(crate) fn referenced_columns(
         .collect()
 }
 
-/// Problems with settings naming an object that flattening replaced with its `<object>__<key>` columns in `columns` (the sampled ones, flattened ones marked by [`FLATTENED_KEY`]; an object NULL in some sampled rows is a column too, but its keys still escape a setting naming only it), so they would silently stop applying: a `columns` or `mask` key naming it (by its loaded name under `rule`, as pins may), or an `exclude_columns` or `allow_columns` pattern matching it but none of its columns.
+/// Problems with settings naming an object that flattening replaced with its `<object>__<key>` columns (`objects`, as the sampled records held them; an object NULL in some sampled rows is a column too, but its keys still escape a setting naming only it), so they would silently stop applying: a `columns` or `mask` key naming it (by its loaded name under `rule`, as pins may), or an `exclude_columns` or `allow_columns` pattern matching it but none of its sampled `columns`.
 pub(crate) fn flattened_object_problems(
     (source, overrides): (&SourceConfig, Option<&TableOverride>),
-    columns: &[FileColumn],
+    (columns, objects): (&[FileColumn], &[String]),
     rule: NameRule,
 ) -> Result<Vec<String>, String> {
     let sampled: BTreeSet<&str> = columns.iter().map(|column| column.name.as_str()).collect();
-    let mut objects: BTreeSet<String> = BTreeSet::new();
-    for column in columns {
-        if column.direct_refusal.as_deref() != Some(FLATTENED_KEY) {
-            continue;
-        }
-        let parts: Vec<&str> = column.name.split(FLATTEN_SEPARATOR).collect();
-        for end in 1..parts.len() {
-            objects.insert(parts[..end].join(FLATTEN_SEPARATOR));
-        }
-    }
     let mut names: Vec<(&str, &String)> = Vec::new();
     let mut patterns: Vec<(&str, &String)> = Vec::new();
     if let Some(overrides) = overrides {
@@ -1134,14 +1123,14 @@ pub(crate) fn flattened_object_problems(
             Some(matcher) => matcher.is_match(name),
             None => loaded_name(rule.0, name, rule.1) == loaded_name(rule.0, pattern, rule.1),
         };
-        for object in &objects {
+        for object in objects {
             let prefix = format!("{object}{FLATTEN_SEPARATOR}");
             let keys: Vec<&str> = sampled
                 .iter()
                 .copied()
                 .filter(|name| name.starts_with(&prefix))
                 .collect();
-            if !matches(object) || keys.iter().any(|key| matches(key)) {
+            if keys.is_empty() || !matches(object) || keys.iter().any(|key| matches(key)) {
                 continue;
             }
             problems.push(format!(
