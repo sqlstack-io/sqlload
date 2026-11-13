@@ -64,10 +64,18 @@ pub(crate) async fn run_after_load_case(
         after_load
             .as_object_mut()
             .map(|object| object.insert("failed".to_owned(), failed.into()));
+        let skipped: Vec<serde_json::Value> = report["plan"]["skipped"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .map(|item| item["details"][0]["text"].clone())
+            .collect();
         let shown = serde_json::json!({
             "status": table["status"],
             "rows": table["rows"],
             "after_load": after_load,
+            "skipped": skipped,
         });
         assert_eq!(
             (output.status.code(), shown.to_string()),

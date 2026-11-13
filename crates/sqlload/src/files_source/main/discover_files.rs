@@ -135,14 +135,14 @@ async fn listed_files(
         0 => String::new(),
         count => format!("; {count} listed files do not match path_columns"),
     };
-    match listed.files.is_empty() {
-        true => Err(FilesError::File {
-            key: folder.location.to_string(),
-            reason: format!(
-                "no {} files found{unmatched}; check the source's path and format (an empty source never empties the destination)",
-                file_names(encoding)
-            ),
-        }),
-        false => Ok(listed),
+    let reason = format!(
+        "no {} files found{unmatched}; check the source's path and format (an empty source never empties the destination)",
+        file_names(encoding)
+    );
+    let key = folder.location.to_string();
+    match (listed.files.is_empty(), listed.unmatched) {
+        (false, _) => Ok(listed),
+        (true, 0) => Err(FilesError::NoFiles { key, reason }),
+        (true, _) => Err(FilesError::File { key, reason }),
     }
 }

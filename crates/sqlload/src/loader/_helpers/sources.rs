@@ -25,6 +25,7 @@ use crate::files_source::constants::{
     NANOSECOND_SCALE, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
     VERSION_SEPARATOR,
 };
+use crate::files_source::errors::FilesError;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::merge_order::merge_order;
@@ -238,6 +239,11 @@ pub(crate) async fn source_tables(
             Ok(
                 match discover_files_table(project, source_name, source, warehouse).await {
                     Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
+                    Err(LoaderError::Files(FilesError::NoFiles { .. }))
+                        if source.after_load != AfterLoad::Keep =>
+                    {
+                        Ok((Vec::new(), None, Vec::new()))
+                    }
                     Err(error) => Err(error.into()),
                 },
             )
@@ -1560,12 +1566,40 @@ pub(crate) async fn scoped_tables(
             })));
         }
     };
+    if source.kind == SourceKind::Files && discovered.is_empty() {
+        return Ok(Ok((
+            drained_files((project, options), (source_name, source)),
+            None,
+        )));
+    }
     let mut resolved = resolve_tables(project, source_name, &discovered);
     match source_in_scope((project, options), (source_name, source), Some(&discovered)) {
         true => resolved.warnings = warnings,
         false => resolved.problems.clear(),
     }
     Ok(Ok((resolved, files)))
+}
+
+/// A files source whose `after_load` emptied its folder, which a load leaves alone until new files come: its table is skipped with nothing to load (when the selection in `options` takes it), as with `keep` every file in the folder is already loaded.
+fn drained_files(
+    (project, options): (&ProjectConfig, &PlanOptions),
+    (source_name, source): (&str, &SourceConfig),
+) -> ResolvedTables {
+    let skipped =
+        source_in_scope((project, options), (source_name, source), Some(&[])).then(|| {
+            SkippedTable {
+                source_name: source_name.to_owned(),
+                source_table: source_name.to_owned(),
+                reason: format!(
+                    "no files to load in {}: after_load deleted or moved the ones already loaded",
+                    source.path.as_deref().unwrap_or_default()
+                ),
+            }
+        });
+    ResolvedTables {
+        skipped: skipped.into_iter().collect(),
+        ..ResolvedTables::default()
+    }
 }
 
 /// Whether the selection in `options` takes anything from source `source_name`: a table it `listed`, or one named under its `tables` but not listed, by destination name or `schema.table`, or the source itself when it holds no table. A source that could not list its tables (`None`) counts when selected by name, or for any `--select` selector naming no source, since that table could be its. Only then do the source's problems count, so one source's bad settings do not fail a command run on another.

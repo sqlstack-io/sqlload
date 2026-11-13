@@ -7,6 +7,9 @@ pub enum FilesError {
     Store(#[from] StoreError),
     #[error("{key}: {reason}")]
     File { key: String, reason: String },
+    /// The folder `key` lists no file of the source's format, and none that `path_columns` refuses.
+    #[error("{key}: {reason}")]
+    NoFiles { key: String, reason: String },
 }
 
 /// Why a batch could not be shaped for the destination, and the first row (within the batch) at fault when one is.

@@ -233,6 +233,10 @@ after_load = { move_to = "loaded" }
 - It needs `write_strategy = "append"` or `"merge"`, which never read a loaded file again. A file
   that reappears under a loaded name is a new file when its version differs; an identical copy,
   such as the same bytes on S3, is skipped as loaded and stays. `--reload` is refused.
+- From 0.39.1 (not released yet), a run that finds the folder without a file to load skips the
+  table and exits 0, since `after_load` handled every file loaded before: `plan` lists it under
+  skipped, as does `load --json` in `plan.skipped`. Without `after_load`, an empty folder still
+  fails, as does one whose files don't match `path_columns`.
 - It isn't for SFTP connections, which SQLLoad only reads, ZIP archives, whose members another
   source may still read, or files targets.
 
