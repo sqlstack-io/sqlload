@@ -205,7 +205,7 @@ async fn merged_children(
         Unnest::Paths(paths) => Some(
             paths
                 .iter()
-                .map(|path| adapter.stored_name(&unnested_table(spec, path)))
+                .map(|path| adapter.stored_table_name(&unnested_table(spec, path)))
                 .collect(),
         ),
         _ => None,
@@ -216,7 +216,7 @@ async fn merged_children(
         .filter(|live| {
             listed
                 .as_ref()
-                .is_none_or(|listed| listed.contains(&adapter.stored_name(live)))
+                .is_none_or(|listed| listed.contains(&adapter.stored_table_name(live)))
         })
         .collect())
 }

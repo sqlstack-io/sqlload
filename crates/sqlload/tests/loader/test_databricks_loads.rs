@@ -1,9 +1,10 @@
 use sqlload::databricks_api::main::execute_statement::execute_statement;
 
 use crate::databricks_helpers::{
-    copy_fails, databricks_columns, expired_token, listed_items, live_databricks,
-    live_databricks_client, nothing_in_databricks, poll_refused, reset_live_databricks,
-    run_databricks, run_live_databricks, slow_paged_answers, stale_and_running_loads,
+    camel_items, copy_fails, databricks_columns, expired_token, listed_items, live_databricks,
+    live_databricks_client, lowercased_child_table, nothing_in_databricks, poll_refused,
+    reset_live_databricks, run_databricks, run_live_databricks, slow_paged_answers,
+    stale_and_running_loads,
 };
 use crate::helpers::{found, not_found, run_async, two_batches, two_days};
 use crate::test_types::{DatabricksAnswerTestCase, DatabricksLoadTestCase, LiveDatabricksTestCase};
@@ -105,6 +106,19 @@ fn given_a_databricks_target_when_loading_files_then_each_batch_is_staged_copied
                 "DELETE FROM `main`.`raw`.`orders__items` WHERE `_sqlload_root_id` IN (SELECT `_sqlload_row_id` FROM `main`.`raw`.`orders` WHERE `day` IN (CAST('2026-11-01' AS DATE)))",
                 "WHEN NOT MATCHED BY SOURCE AND __target.`day` IN (CAST('2026-11-01' AS DATE)) THEN DELETE",
             ],
+            expected_copies: 2,
+            ..BASE
+        },
+        DatabricksLoadTestCase {
+            description: "replace with unnest = \"all\" finds an existing child table by the lower-cased name Unity Catalog lists, so a camelCase field's items load into it once and no second, empty table replaces them",
+            settings: "write_strategy = \"replace\"\nformat = \"ndjson\"\n[sources.orders.tables.orders]\nunnest = \"all\"",
+            file_set: camel_items,
+            prepare: lowercased_child_table,
+            expected_sent: &[
+                "information_schema.columns WHERE table_schema = 'raw' AND left(table_name, 8) = 'orders__'",
+                "`main`.`raw`.`orders__lineItems`",
+            ],
+            expected_unsent: &["`main`.`raw`.`orders__lineitems`"],
             expected_copies: 2,
             ..BASE
         },

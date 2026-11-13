@@ -35,7 +35,7 @@ Set in a table entry:
   `"items.sku" = "text"`, to pin its type. Under `contract = "enforced"`, each child table loads
   only the columns named so, with its id and link columns, and leaves out the rest. These keys
   aren't checked against the data, since a field may be missing from the first rows: a misspelled
-  one loads as an empty column, and under `contract = "enforced"` the field it meant is left out.
+  one is ignored, and under `contract = "enforced"` the field it meant is left out.
 - `row_id` (also on a source): every table with `unnest` gives its rows an id, so it can't be
   `false`.
 
@@ -63,9 +63,10 @@ tables are staged and copied in as their parent is; so far they are tested again
 the Databricks API, not a live warehouse.
 `state = "logged"` and `contract = "enforced"` tables write child tables from 0.42.0. A logged
 table's child rows commit just before the commit that records its state. When that commit fails, a
-rerun reads from the state last recorded and loads those rows and their items again, while the
-failed commit's child rows stay behind with a parent id no row holds, so a join on the parent id
-never shows them.
+rerun reads from the state last recorded and loads those rows and their items again. Under
+`append` and `delete_insert`, whose row ids are random, the failed commit's child rows stay behind
+with a parent id no row holds, so a join on the parent id never shows them. Under `merge` a row's
+id comes from its key, so the rerun clears those items and loads them once.
 
 Files targets write child tables from 0.42.0, each in a folder of its own beside its parent's
 (`orders__items/` beside `orders/`), under `append` and `replace` with the paths to unnest listed.

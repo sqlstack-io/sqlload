@@ -196,7 +196,7 @@ fn is_child_of_any(table: &str, parents: &[&str]) -> bool {
 /// The dotted path each of `spec`'s child tables among `tables` holds, by its name as the load writes it (`orders__items__parts` holds `items.parts`; Snowflake's `ORDERS__ITEMS` holds `items`; Postgres lists the children of `ORDERS` folded, as `orders__items`).
 pub(crate) fn child_paths(spec: &TableSpec, tables: Vec<String>) -> Vec<(String, String)> {
     let prefix = format!("{}{CHILD_TABLE_SEPARATOR}", spec.destination.table);
-    let stored = sql_adapter(spec.warehouse).stored_name(&prefix);
+    let stored = sql_adapter(spec.warehouse).stored_table_name(&prefix);
     tables
         .into_iter()
         .filter(|table| table.starts_with(&stored))
@@ -222,7 +222,7 @@ pub(crate) fn with_live_children(spec: &TableSpec, children: &[String]) -> Table
             &spec.destination.table,
             field,
         );
-        children.contains(&adapter.stored_name(&table))
+        children.contains(&adapter.stored_table_name(&table))
     };
     if let Some(files) = &mut chosen.files {
         for column in &mut files.table.columns {
@@ -232,7 +232,7 @@ pub(crate) fn with_live_children(spec: &TableSpec, children: &[String]) -> Table
         }
     }
     if let Some(python) = &mut chosen.python {
-        let prefix = adapter.stored_name(&format!(
+        let prefix = adapter.stored_table_name(&format!(
             "{}{CHILD_TABLE_SEPARATOR}",
             spec.destination.table
         ));
@@ -1506,8 +1506,8 @@ impl ChildTables {
         };
         for (path, table) in &candidates {
             let fed = self.feeds.iter().any(|feed| {
-                adapter.stored_name(&feed.table.spec.destination.table)
-                    == adapter.stored_name(table)
+                adapter.stored_table_name(&feed.table.spec.destination.table)
+                    == adapter.stored_table_name(table)
             });
             if fed {
                 continue;
@@ -1617,7 +1617,7 @@ impl ChildTables {
             let table = &feed.table.spec.destination.table;
             if !tables
                 .iter()
-                .any(|known| adapter.stored_name(known) == adapter.stored_name(table))
+                .any(|known| adapter.stored_table_name(known) == adapter.stored_table_name(table))
             {
                 tables.push(table.clone());
             }
@@ -1739,7 +1739,7 @@ pub(crate) fn without_deleted_items(
     Ok(unnested)
 }
 
-/// Under captured changes, the condition choosing the rows of `table`, a child table of `spec`'s, whose roots the changes in `staging` replace: every changed root (in a changelog, rows a replay wrote before), but under `merge` a root keeps its items when its list field came unchanged (a TOASTed value the change left out) and, under soft deletes, when it is deleted, as its row stays; under hard deletes a truncate also takes the roots it removes. A child table under captured changes appends its rows straight in, so this load's own rows (`load_id`) are never among them.
+/// Under captured changes, the condition choosing the rows of `table`, a child table of `spec`'s, whose roots the changes in `staging` replace: every changed root (in a changelog, rows a replay wrote before), but under `merge` a root keeps its items when its list field came unchanged (a TOASTed value the change left out) and, under soft deletes, when it is deleted, as its row stays; under hard deletes a truncate also takes the roots it removes. A child table under captured changes appends its rows straight in, so this load's own rows (`load_id`) are never among them. Under `unnest = "all"` the list field is the source column whose child table `table` is or is below, the longest when names overlap (`line__items` beside `line`), as a column name may hold the separator.
 fn changed_roots(
     (spec, table): (&TableSpec, &str),
     (staging, change): (&TableName, &ChangeWrite),
@@ -1749,22 +1749,20 @@ fn changed_roots(
     let adapter = sql_adapter(spec.warehouse);
     let id = |name: &str| adapter.render_identifier(name);
     let text = |value: &str| adapter.render_loader_value_literal(value);
-    let stored = adapter.stored_name(table);
+    let stored = adapter.stored_table_name(table);
     let field: Option<String> = match &spec.unnest {
         Unnest::Paths(paths) => paths
             .iter()
-            .find(|path| adapter.stored_name(&unnested_table(spec, path)) == stored)
+            .find(|path| adapter.stored_table_name(&unnested_table(spec, path)) == stored)
             .and_then(|path| path.split('.').next())
             .map(str::to_owned),
-        // The source column whose child table this is or is below, the longest when names overlap
-        // (`line__items` beside `line`), as a column name may hold the separator.
         _ => spec
             .source_table
             .columns
             .iter()
             .map(|column| column.name.as_str())
             .filter(|column| {
-                let child = adapter.stored_name(&child_table_name(
+                let child = adapter.stored_table_name(&child_table_name(
                     (spec.naming, adapter.max_identifier_length()),
                     &spec.destination.table,
                     column,

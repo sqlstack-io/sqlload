@@ -178,6 +178,11 @@ impl FakeState {
                 .extend(rows);
             return succeeded(&["num_affected_rows"], Vec::new());
         }
+        if statement.contains("information_schema.columns")
+            && statement.contains("left(table_name, ")
+        {
+            return child_tables(state, statement);
+        }
         if statement.contains("information_schema.columns") {
             return described_columns(state, statement);
         }
@@ -252,6 +257,30 @@ impl FakeState {
             vec![vec![json!(loaded.to_string()), json!(loaded.to_string())]],
         )
     }
+}
+
+/// The tables in the asked schema whose lower-cased names, as Unity Catalog stores them, start with the asked prefix, each after `1` when it has a parent-id column and `0` when not.
+fn child_tables(state: &FakeState, statement: &str) -> Value {
+    let schema = literal_after(statement, "table_schema = ").unwrap_or_default();
+    let prefix = statement
+        .split_once("left(table_name, ")
+        .and_then(|(_, rest)| literal_after(rest, ") = "))
+        .unwrap_or_default();
+    let rows: Vec<Vec<Value>> = state
+        .tables
+        .iter()
+        .filter_map(|(key, table)| {
+            let name = key.strip_prefix(&format!("{schema}."))?;
+            let child = table.columns.iter().any(|(column, _)| {
+                ["_sqlload_parent_id", "_dlt_parent_id"]
+                    .iter()
+                    .any(|parent_id| column.eq_ignore_ascii_case(parent_id))
+            });
+            name.starts_with(&prefix)
+                .then(|| vec![json!(format!("{}{name}", u8::from(child)))])
+        })
+        .collect();
+    succeeded(&["marked"], rows)
 }
 
 /// The columns of the table `information_schema.columns` is asked about: name, `full_data_type`, precision and scale.

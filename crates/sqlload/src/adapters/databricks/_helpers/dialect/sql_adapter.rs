@@ -1,6 +1,5 @@
 //! Databricks SQL, where it differs from the contract's shared rendering.
 
-use crate::adapters::contract::_helpers::queries::child_tables_query;
 use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::models::{CursorValue, TableName, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
@@ -143,14 +142,9 @@ impl SqlAdapter for DatabricksSql {
         format!("{catalog}information_schema.columns")
     }
 
-    /// Unity Catalog reports schema and table names lower-cased.
-    fn list_child_tables_sql(&self, parent: &TableName) -> String {
-        let stored = TableName {
-            database: parent.database.clone(),
-            schema: parent.schema.to_ascii_lowercase(),
-            table: parent.table.to_ascii_lowercase(),
-        };
-        child_tables_query(self, (&stored, &self.render_schema_columns(parent)))
+    /// Unity Catalog stores table and schema names lower-cased, and column names as given.
+    fn stored_table_name(&self, name: &str) -> String {
+        name.to_ascii_lowercase()
     }
 
     /// Unity Catalog reports schema names lower-cased.

@@ -127,6 +127,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         name.to_owned()
     }
 
+    /// How the warehouse stores the table or schema name `name`, which a catalog lists it by: as [`stored_name`](Self::stored_name), unless it folds table names apart from columns.
+    fn stored_table_name(&self, name: &str) -> String {
+        self.stored_name(name)
+    }
+
     /// Whether the live column `live` is the one stored as `stored`.
     fn is_stored_as(&self, live: &str, stored: &str) -> bool {
         live.eq_ignore_ascii_case(stored)

@@ -281,3 +281,29 @@ pub(crate) fn listed_items() -> Result<Vec<(String, bytes::Bytes)>, String> {
         ),
     )])
 }
+
+/// A child table an earlier load left for the camelCase field `lineItems`, listed lower-cased as Unity Catalog stores table names.
+pub(crate) fn lowercased_child_table(
+    fake: &sqlload_testkit::fake_databricks::models::FakeDatabricks,
+) {
+    fake.state.lock().tables.insert(
+        "raw.orders__lineitems".to_owned(),
+        sqlload_testkit::fake_databricks::models::FakeTable {
+            columns: vec![
+                ("sku".to_owned(), "string".to_owned()),
+                ("_sqlload_parent_id".to_owned(), "string".to_owned()),
+            ],
+            rows: Vec::new(),
+        },
+    );
+}
+
+/// Orders with a camelCase list field.
+pub(crate) fn camel_items() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(vec![(
+        "day=2026-11-01/a.ndjson".to_owned(),
+        bytes::Bytes::from_static(
+            b"{\"id\": 1, \"lineItems\": [{\"sku\": \"a\"}]}\n{\"id\": 2, \"lineItems\": [{\"sku\": \"b\"}]}\n",
+        ),
+    )])
+}

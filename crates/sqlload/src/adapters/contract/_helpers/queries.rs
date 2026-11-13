@@ -85,8 +85,8 @@ pub(crate) fn child_tables_query<A: SqlAdapter + ?Sized>(
     adapter: &A,
     (parent, columns): (&TableName, &str),
 ) -> String {
-    let schema = adapter.render_loader_value_literal(&adapter.stored_name(&parent.schema));
-    let prefix = adapter.stored_name(&format!("{}{CHILD_TABLE_SEPARATOR}", parent.table));
+    let schema = adapter.render_loader_value_literal(&adapter.stored_table_name(&parent.schema));
+    let prefix = adapter.stored_table_name(&format!("{}{CHILD_TABLE_SEPARATOR}", parent.table));
     let parent_ids = [Naming::Sqlload, Naming::Dlt]
         .map(|naming| {
             let name = metadata_name(naming, MetadataRole::ParentId);
