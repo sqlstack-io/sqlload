@@ -50,6 +50,10 @@ configuration file:
 sqlload copy orders/ duckdb://shop.duckdb#raw.orders
 ```
 
+Moving from dlt? [Coming from dlt](https://sqlload.io/docs/guides/from-dlt/) maps sources,
+write dispositions, incremental loading, `rest_api` and `filesystem`, and keeps the table and column
+names dlt gave your tables.
+
 ## Speed
 
 The same data loaded by each tool on a 4-vCPU machine, median of 5 runs:

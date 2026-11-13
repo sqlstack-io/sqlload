@@ -1,0 +1,16 @@
+python_paths = ["sources"]
+default_target = "warehouse"
+
+[connections.shop_api]
+kind = "http"
+base_url = "${ENV:SHOP_API_URL}"
+token = "${ENV:SHOP_TOKEN}"
+
+[connections.duckdb]
+kind = "duckdb"
+database = "warehouse.duckdb"
+
+[targets.warehouse]
+connection = "duckdb"
+loader_schema = "shop"
+naming = "dlt"

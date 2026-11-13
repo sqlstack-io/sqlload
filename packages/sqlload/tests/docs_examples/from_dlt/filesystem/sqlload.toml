@@ -1,0 +1,27 @@
+default_target = "warehouse"
+
+[connections.landing]
+kind = "filesystem"
+root = "landing"
+
+[connections.duckdb]
+kind = "duckdb"
+database = "warehouse.duckdb"
+
+[targets.warehouse]
+connection = "duckdb"
+loader_schema = "shop"
+naming = "dlt"
+
+[sources.orders]
+kind = "files"
+connection = "landing"
+path = "orders/"
+format = "ndjson"
+description = "Orders the shop exports, one row per order."
+write_strategy = "merge"
+unique_key = "OrderID"
+after_load = { move_to = "loaded" }
+
+[sources.orders.tables.orders]
+unnest = "all"

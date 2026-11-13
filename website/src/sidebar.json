@@ -17,7 +17,8 @@
 			"docs/guides/files",
 			"docs/guides/python",
 			"docs/guides/reload-a-window",
-			"docs/guides/kafka"
+			"docs/guides/kafka",
+			"docs/guides/from-dlt"
 		]
 	},
 	{

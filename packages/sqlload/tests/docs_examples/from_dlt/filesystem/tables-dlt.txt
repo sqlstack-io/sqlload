@@ -1,0 +1,3 @@
+orders: order_id, status, _dlt_load_id, _dlt_id
+orders__lines: sku, qty, _dlt_root_id, _dlt_parent_id, _dlt_list_idx, _dlt_id
+orders__tags: value, _dlt_root_id, _dlt_parent_id, _dlt_list_idx, _dlt_id
