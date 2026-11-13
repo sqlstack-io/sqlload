@@ -11,6 +11,7 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
@@ -26,6 +27,7 @@ use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
 use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
+use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnChange, ColumnOrigin, DesiredColumn, TableAction};
 use crate::store_paths::models::StoreKind;
@@ -399,6 +401,19 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             .as_ref()
             .map(|python| detail("schema", python_columns_line(table, python))),
     );
+    if let Unnest::Paths(paths) = &spec.unnest {
+        let tables: Vec<String> = paths
+            .iter()
+            .map(|path| unnested_table(spec, path))
+            .collect();
+        details.push(detail(
+            "unnest",
+            format!(
+                "{}  child tables, columns inferred at load",
+                tables.join(", ")
+            ),
+        ));
+    }
     details.extend(
         spec.files
             .as_ref()

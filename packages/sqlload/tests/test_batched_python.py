@@ -540,3 +540,35 @@ def test_given_shaping_when_declaring_a_python_table_then_it_is_refused_as_an_un
 	refused = sqlload(project, "plan", "shaped__rows")
 	assert refused.returncode != 0
 	assert "shaping" in refused.stdout + refused.stderr
+
+
+UNNEST_MODULE = """
+import pyarrow as pa
+import sqlload as sl
+
+api = sl.source("api")
+
+
+@api.table(description="Test table.", write_strategy="replace", unnest=["items", "tags"])
+def orders(ctx):
+    yield pa.table({"id": [1, 2], "items": [[{"sku": "a"}, {"sku": "b"}], []], "tags": [["x"], None]})
+    yield [{"id": 3, "items": [{"sku": "c", "qty": 2}], "tags": ["y", "z"]}]
+"""
+
+
+def test_given_unnest_when_loading_a_python_table_then_its_lists_become_child_tables_linked_by_id(project: Path) -> None:
+	(project / "sources" / "api.py").write_text(UNNEST_MODULE)
+	done = sqlload(project, "load", "api__orders")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert "altered  RAW.api__orders__items  add column  qty int -> BIGINT" in done.stdout
+	parent = [name for (name,) in query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'api__orders' ORDER BY ordinal_position")]
+	linked = query(
+		project,
+		'SELECT o.id, i.sku, i.qty, i._sqlload_list_idx FROM "RAW".api__orders o JOIN "RAW".api__orders__items i ON i._sqlload_parent_id = o._sqlload_row_id ORDER BY i.sku',
+	)
+	tags = query(project, 'SELECT o.id, t.value FROM "RAW".api__orders o JOIN "RAW".api__orders__tags t ON t._sqlload_parent_id = o._sqlload_row_id ORDER BY t.value')
+	assert (parent, linked, tags) == (
+		["id", "_sqlload_load_id", "_sqlload_loaded_at", "_sqlload_row_id"],
+		[(1, "a", None, 0), (1, "b", None, 1), (3, "c", 2, 0)],
+		[(1, "x"), (3, "y"), (3, "z")],
+	)

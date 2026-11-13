@@ -59,7 +59,7 @@ use crate::files_source::main::batch_footers::batch_footers;
 use crate::files_source::main::batch_headers::batch_headers;
 use crate::files_source::main::key_columns::key_columns;
 use crate::files_source::models::AfterLoad;
-use crate::files_source::models::AfterLoadReport;
+
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
@@ -91,6 +91,7 @@ use crate::loader::models::FolderSwap;
 use crate::loader::models::Publisher;
 use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
+use crate::loader::models::TableLoaded;
 use crate::loader::models::TablePlan;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
@@ -99,7 +100,9 @@ use crate::project::models::WriteStrategy;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
 use crate::publish_checks::models::CheckedCommit;
+use crate::row_batches::main::unnest_batch::unnest_batch;
 use crate::row_batches::models::Unnest;
+use crate::row_batches::models::UnnestRequest;
 use crate::row_ids::main::key_row_ids::key_row_ids;
 use crate::row_ids::main::random_row_ids::random_row_ids;
 use crate::run_log::main::insert_run::insert_run;
@@ -421,11 +424,15 @@ impl Publisher {
             }
         };
         let committed_state = run.as_ref().and_then(|run| run.record.state.clone());
-        let children = (table.spec.unnest != Unnest::None).then(|| ChildTables {
-            options: options.clone(),
-            feeds: Vec::new(),
-            changes: Vec::new(),
-        });
+        let children = match table.spec.unnest {
+            Unnest::None => None,
+            _ => Some(ChildTables {
+                destination: table_destination(&destination)?,
+                options: options.clone(),
+                feeds: Vec::new(),
+                changes: Vec::new(),
+            }),
+        };
         Ok(Self {
             children,
             writer,
@@ -482,6 +489,31 @@ impl Publisher {
             return self.stage_files(masked).await;
         }
         let ids = row_ids(&self.table, &masked).map_err(LoaderError::Invalid)?;
+        let masked = match &mut self.children {
+            Some(children) => {
+                let spec = &self.table.spec;
+                let unnested = unnest_batch(
+                    &masked,
+                    &UnnestRequest {
+                        table: &spec.destination.table,
+                        unnest: &spec.unnest,
+                        max_depth: spec.max_depth,
+                        naming: spec.naming,
+                        ids: ids.as_deref().unwrap_or_default(),
+                        roots: None,
+                    },
+                )
+                .map_err(LoaderError::Invalid)?;
+                children
+                    .stage(
+                        (&self.table, (&self.load_id, &self.loaded_at)),
+                        unnested.children,
+                    )
+                    .await?;
+                unnested.parent
+            }
+            None => masked,
+        };
         self.stage_rows(masked, ids).await
     }
 
@@ -514,6 +546,14 @@ impl Publisher {
         self.writer.write_batch(&target, batch).await
     }
 
+    /// The `created ...`, `altered ...` and `loaded ...` lines of the child tables filled so far.
+    pub(crate) fn child_changes(&mut self) -> Vec<String> {
+        self.children
+            .as_mut()
+            .map(|children| std::mem::take(&mut children.changes))
+            .unwrap_or_default()
+    }
+
     /// Whether the batch holds about 1 GB (Parquet staged on Snowflake, Arrow elsewhere), where a size-cut table may end it.
     pub(crate) fn full(&self) -> bool {
         let bytes = self.writer.staged_bytes().unwrap_or(self.arrow_bytes);
@@ -538,6 +578,9 @@ impl Publisher {
         if self.direct || self.at_end || unchanged || unfinished || publishes_once(&self.table) {
             return Ok(());
         }
+        if let Some(children) = &mut self.children {
+            Box::pin(children.cut()).await?;
+        }
         self.commit(false).await
     }
 
@@ -556,6 +599,9 @@ impl Publisher {
             || empty_range
             || matches!(&self.table.mode, WriteMode::Changes(change) if change.truncated.is_some())
             || self.leftover_deletes();
+        if let Some(children) = &mut self.children {
+            Box::pin(children.finish((&self.table, (&self.load_id, &self.loaded_at)))).await?;
+        }
         match (self.direct, pending, &self.run) {
             (false, true, _) => self.commit(true).await?,
             (_, _, Some(_)) if self.commits == 0 || self.state != self.committed_state => {
@@ -579,6 +625,9 @@ impl Publisher {
 
     /// Drop the staging table and its swap table, and the staged files of a batch that did not load; best effort, after success or failure.
     pub(crate) async fn close(&mut self) {
+        if let Some(children) = &mut self.children {
+            Box::pin(children.close()).await;
+        }
         self.abandon_files().await;
         if let Some(sink) = self.files.as_mut() {
             if let Some((stop, renewal)) = sink.keeper.take() {
@@ -1087,7 +1136,7 @@ pub(crate) async fn publish_table(
     reader: &SourceReader,
     table: &TablePlan,
     (destination, run): (&Destination, &LoadRun<'_>),
-) -> Result<(u64, Option<AfterLoadReport>), LoaderError> {
+) -> Result<TableLoaded, LoaderError> {
     let publisher = Publisher::open(table.clone(), (destination, run.options), None).await?;
     let published = feed(reader, table, publisher, run).await;
     let (mut publisher, result) = published;
@@ -1099,7 +1148,12 @@ pub(crate) async fn publish_table(
         }
         _ => None,
     };
-    Ok((rows, report))
+    Ok(TableLoaded {
+        rows,
+        changes: publisher.child_changes(),
+        note: None,
+        after_load: report,
+    })
 }
 
 /// Pass the rows to `publisher`, cutting commits where the plan says; returns the publisher for its clean-up, and the rows committed.
