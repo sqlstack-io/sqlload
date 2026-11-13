@@ -345,10 +345,20 @@ pub(crate) fn loaded_overrides(overrides: &TableOverride, rule: NameRule) -> Tab
     }
 }
 
-/// `settings` with every column they name as the column loads under `rule`: the unique key, cursor, constant columns, dedup sort and checks.
+/// `settings` with every column they name as the column loads under `rule`: the unique key, cursor, constant columns, dedup sort, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
 pub(crate) fn loaded_settings(settings: &TableSettings, rule: NameRule) -> TableSettings {
     let name = |column: &str| loaded_name(rule.0, column, rule.1);
     let names = |columns: &Vec<String>| columns.iter().map(|column| name(column)).collect();
+    let keyed = |expression: &str| match is_plain_name(expression) {
+        true => name(expression),
+        false => expression.to_owned(),
+    };
+    let keys = |expressions: &Vec<String>| {
+        expressions
+            .iter()
+            .map(|expression| keyed(expression))
+            .collect()
+    };
     let mut checks = settings.checks.clone();
     if let Some(checks) = &mut checks {
         checks.unique = checks.unique.as_ref().map(names);
@@ -366,8 +376,20 @@ pub(crate) fn loaded_settings(settings: &TableSettings, rule: NameRule) -> Table
             .as_ref()
             .map(|sort| renamed_keys(sort, &name)),
         checks,
+        order_by: settings.order_by.as_ref().map(keys),
+        primary_key: settings.primary_key.as_ref().map(keys),
+        partition_by: settings.partition_by.as_deref().map(keyed),
         ..settings.clone()
     }
+}
+
+/// Whether a layout entry is a column's bare name (`OrderID`) rather than an expression (`toDate(CreatedAt)`), which the naming leaves as written.
+fn is_plain_name(expression: &str) -> bool {
+    let mut characters = expression.chars();
+    characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 /// `unnest` with each part of each dotted path renamed by `name`; `"all"` as it is.

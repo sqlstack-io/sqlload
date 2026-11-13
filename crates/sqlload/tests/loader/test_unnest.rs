@@ -1,11 +1,22 @@
 //! Child tables from list fields (`unnest`), and dlt's naming.
 
+use sqlload_testkit::clickhouse::constants::{
+    PASSWORD as CLICKHOUSE_PASSWORD, USER as CLICKHOUSE_USER,
+};
+use sqlload_testkit::clickhouse::main::run_client::run_client;
+use sqlload_testkit::clickhouse::main::start_clickhouse::start_clickhouse;
 use sqlload_testkit::postgres::constants::PASSWORD;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
-use crate::helpers::{duckdb_text, load_ndjson_runs, run_async, run_sqlload};
-use crate::test_types::{RowIdTestCase, UnnestFailTestCase, UnnestPlanTestCase};
+use sqlload::adapters::contract::models::TableName;
+use sqlload::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use sqlload::adapters::dispatch::main::session::execute::execute;
+use sqlload::column_types::models::Warehouse;
+use sqlload::loader::main::connect_targets::connect_targets;
+
+use crate::helpers::{described_project, duckdb_text, load_ndjson_runs, run_async, run_sqlload};
+use crate::test_types::{ClearRowsTestCase, RowIdTestCase, UnnestFailTestCase, UnnestPlanTestCase};
 
 const COLUMNS: &str = "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders'";
 
@@ -88,6 +99,18 @@ const MERGE_RUNS: &[(&str, &str)] = &[
 
 /// The merge's orders, items and parts counts, and each order's items and parts joined by id.
 const MERGE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',') FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
+
+/// The parent's columns on ClickHouse, in table order.
+const CLICKHOUSE_COLUMNS: &str = "SELECT arrayStringConcat(groupArray(name), ',') FROM (SELECT name FROM system.columns WHERE database = 'raw' AND table = 'orders' ORDER BY position)";
+
+/// [`REPLACE_CHECK`] in ClickHouse's SQL.
+const CLICKHOUSE_REPLACE_CHECK: &str = "SELECT toString((SELECT count() FROM raw.orders__tags)) || '/' || toString((SELECT count() FROM raw.orders__items)) || '/' || (SELECT arrayStringConcat(arraySort(groupArray(toString(o.id) || ':' || i.sku || ':' || toString(i.qty) || ':' || toString(p.value))), ',') FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id AND i._sqlload_load_id = o._sqlload_load_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id AND p._sqlload_load_id = o._sqlload_load_id)";
+
+/// [`APPEND_CHECK`] in ClickHouse's SQL.
+const CLICKHOUSE_APPEND_CHECK: &str = "SELECT (SELECT arrayStringConcat(arraySort(groupArray(toString(o.id) || ':' || t.value)), ',') FROM raw.orders o JOIN raw.orders__tags t ON t._sqlload_parent_id = o._sqlload_row_id AND t._sqlload_load_id = o._sqlload_load_id) || '/' || (SELECT arrayStringConcat(arraySort(groupArray(toString(o.id) || ':' || i.sku || ':' || toString(p.value) || '@' || toString(p._sqlload_list_idx))), ',') FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id AND i._sqlload_load_id = o._sqlload_load_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id AND p._sqlload_load_id = o._sqlload_load_id)";
+
+/// The staging table holding the merged roots in the clear test.
+const CLEAR_STAGING: &str = "orders__sqlload_staging_20261113";
 
 #[test]
 fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_problem()
@@ -474,6 +497,195 @@ fn given_unnest_when_loading_into_postgres_then_lists_become_child_tables_linked
             assert_eq!(
                 found,
                 [test_case.expected_columns, test_case.expected_result],
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_unnest_when_loading_into_clickhouse_then_lists_become_child_tables_linked_as_in_duckdb()
+-> Result<(), String> {
+    let test_cases = [
+        RowIdTestCase {
+            description: "unnest on a replace: the lists leave the parent, the second run replaces parent and children alike, and a list no row has any more is emptied (ClickHouse)",
+            settings: REPLACE_SETTINGS,
+            runs: REPLACE_RUNS,
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: CLICKHOUSE_REPLACE_CHECK,
+            expected_result: "0/1/3:c:5:7",
+        },
+        RowIdTestCase {
+            description: "unnest on an append: each run's children link to that run's rows by id and position, and a list first seen in run 2 gets its table then (ClickHouse)",
+            settings: APPEND_SETTINGS,
+            runs: APPEND_RUNS,
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: CLICKHOUSE_APPEND_CHECK,
+            expected_result: "2:new/1:a:1@0,1:a:2@1,2:b:3@0",
+        },
+        RowIdTestCase {
+            description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then (ClickHouse)",
+            settings: ALL_SETTINGS,
+            runs: ALL_RUNS,
+            expected_columns: ALL_COLUMNS,
+            check_query: CLICKHOUSE_APPEND_CHECK,
+            expected_result: "2:t/1:a:1@0,1:a:2@1",
+        },
+        RowIdTestCase {
+            description: "naming = \"dlt\" on an append: the child table and its links take dlt's names (ClickHouse)",
+            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = [\"LineItems\"]\n",
+            runs: &[(
+                "a.ndjson",
+                "{\"OrderID\": 1, \"LineItems\": [{\"UnitPrice\": 5}, {\"UnitPrice\": 6}]}\n{\"OrderID\": 2, \"LineItems\": []}\n",
+            )],
+            expected_columns: "order_id,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_dlt_load_id,_sqlload_loaded_at,_dlt_id",
+            check_query: "SELECT arrayStringConcat(arraySort(groupArray(toString(o.order_id) || ':' || toString(i.unit_price) || '@' || toString(i._dlt_list_idx))), ',') FROM raw.orders o JOIN raw.orders__line_items i ON i._dlt_parent_id = o._dlt_id",
+            expected_result: "1:5@0,1:6@1",
+        },
+        RowIdTestCase {
+            description: "naming = \"dlt\" with a layout naming columns as the files spell them: bare names take the loaded names, an expression stays as written (ClickHouse)",
+            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\norder_by = [\"OrderID\", \"cityHash64(order_id)\"]\npartition_by = \"Region\"\n",
+            runs: &[(
+                "a.ndjson",
+                "{\"OrderID\": 1, \"Region\": \"eu\"}\n{\"OrderID\": 2, \"Region\": \"us\"}\n",
+            )],
+            expected_columns: "order_id,region,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_dlt_load_id,_sqlload_loaded_at,_dlt_id",
+            check_query: "SELECT sorting_key || '/' || partition_key || '/' || toString((SELECT count() FROM raw.orders)) FROM system.tables WHERE database = 'raw' AND name = 'orders'",
+            expected_result: "order_id, cityHash64(order_id)/region/2",
+        },
+    ];
+    run_async(async {
+        let clickhouse = start_clickhouse().await?;
+        let connection = format!(
+            "kind = \"clickhouse\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"{CLICKHOUSE_USER}\"\npassword = \"{CLICKHOUSE_PASSWORD}\"",
+            clickhouse.port
+        );
+        for test_case in &test_cases {
+            run_client(&clickhouse, "DROP DATABASE IF EXISTS raw", &[]).await?;
+            let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+            load_ndjson_runs(
+                root.path(),
+                &connection,
+                (test_case.settings, test_case.runs),
+            )?;
+            let mut found: Vec<String> = Vec::new();
+            for query in [CLICKHOUSE_COLUMNS, test_case.check_query] {
+                found.push(run_client(&clickhouse, query, &[]).await?.trim().to_owned());
+            }
+            assert_eq!(
+                found,
+                [test_case.expected_columns, test_case.expected_result],
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_merged_roots_when_clearing_a_clickhouse_child_table_then_only_their_items_leave_by_partition_publishes()
+-> Result<(), String> {
+    let test_cases = [
+        ClearRowsTestCase {
+            description: "an unpartitioned table loses the merged roots' items; another root's and a NULL root's stay",
+            partition_by: "",
+            rows: "('r1', 'a'), ('r1', 'b'), ('r2', 'c'), (NULL, 'n')",
+            roots: "('r1'), ('r3')",
+            expected_rows: "NULL:n,r2:c",
+        },
+        ClearRowsTestCase {
+            description: "a table partitioned by sku: every partition holding a merged root's items is rebuilt, and one left empty goes",
+            partition_by: "PARTITION BY sku",
+            rows: "('r1', 'a'), ('r2', 'a'), ('r1', 'b'), ('r3', 'c')",
+            roots: "('r1')",
+            expected_rows: "r2:a,r3:c",
+        },
+        ClearRowsTestCase {
+            description: "a single partition emptied by the clear goes",
+            partition_by: "PARTITION BY sku",
+            rows: "('r1', 'a'), ('r2', 'b')",
+            roots: "('r1')",
+            expected_rows: "r2:b",
+        },
+        ClearRowsTestCase {
+            description: "roots with no items leave the table as it was",
+            partition_by: "PARTITION BY sku",
+            rows: "('r1', 'a'), ('r2', 'b')",
+            roots: "('r9')",
+            expected_rows: "r1:a,r2:b",
+        },
+    ];
+    run_async(async {
+        let clickhouse = start_clickhouse().await?;
+        let project = described_project(&format!(
+            "[connections.wh]\nkind = \"clickhouse\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"{CLICKHOUSE_USER}\"\npassword = \"{CLICKHOUSE_PASSWORD}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n",
+            clickhouse.port
+        ))
+        .await?;
+        let destinations = connect_targets(&project)
+            .await
+            .map_err(|error| error.to_string())?;
+        let serving = destinations
+            .get("dev")
+            .ok_or_else(|| "no ClickHouse destination".to_owned())?;
+        let adapter = sql_adapter(Warehouse::ClickHouse);
+        let table = TableName {
+            database: None,
+            schema: "raw".to_owned(),
+            table: "orders__items".to_owned(),
+        };
+        let staging = TableName {
+            table: CLEAR_STAGING.to_owned(),
+            ..table.clone()
+        };
+        let condition = format!(
+            "{} IN (SELECT {} FROM {})",
+            adapter.render_identifier("_sqlload_root_id"),
+            adapter.render_identifier("_sqlload_row_id"),
+            adapter.render_qualified_name(&staging)
+        );
+        let scratch = TableName {
+            table: format!("{CLEAR_STAGING}_0"),
+            ..table.clone()
+        };
+        for test_case in &test_cases {
+            for setup in [
+                "DROP DATABASE IF EXISTS raw".to_owned(),
+                "CREATE DATABASE raw".to_owned(),
+                format!(
+                    "CREATE TABLE raw.orders__items (_sqlload_root_id Nullable(String), sku String) ENGINE = MergeTree ORDER BY tuple() {}",
+                    test_case.partition_by
+                ),
+                format!("INSERT INTO raw.orders__items VALUES {}", test_case.rows),
+                format!(
+                    "CREATE TABLE raw.{CLEAR_STAGING} (_sqlload_row_id String) ENGINE = MergeTree ORDER BY tuple()"
+                ),
+                format!("INSERT INTO raw.{CLEAR_STAGING} VALUES {}", test_case.roots),
+            ] {
+                run_client(&clickhouse, &setup, &[]).await?;
+            }
+            execute(
+                serving,
+                adapter.render_clear_rows(&table, &condition, &scratch),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let mut found: Vec<String> = Vec::new();
+            for query in [
+                "SELECT arrayStringConcat(arraySort(groupArray(ifNull(_sqlload_root_id, 'NULL') || ':' || sku)), ',') FROM raw.orders__items",
+                "SELECT arrayStringConcat(arraySort(groupArray(name)), ',') FROM system.tables WHERE database = 'raw'",
+            ] {
+                found.push(run_client(&clickhouse, query, &[]).await?.trim().to_owned());
+            }
+            assert_eq!(
+                found,
+                [
+                    test_case.expected_rows.to_owned(),
+                    format!("orders__items,{CLEAR_STAGING}")
+                ],
                 "{}",
                 test_case.description
             );

@@ -48,6 +48,7 @@ use crate::loader::models::PythonFeed;
 use crate::loader::models::PythonLoad;
 use crate::loader::models::PythonTable;
 use crate::loader::models::ReadWindow;
+use crate::loader::models::TableLayout;
 use crate::loader::models::TableLoaded;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
@@ -1237,6 +1238,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         cdc: None,
         checks: None,
         warehouse_source: None,
+        layout: TableLayout::default(),
         ..spec.clone()
     };
     TablePlan {
@@ -1526,10 +1528,9 @@ impl ChildTables {
                 .chunks(DROPPED_CHUNK)
                 .map(|chunk| {
                     let listed: Vec<String> = chunk.iter().map(i64::to_string).collect();
-                    format!(
-                        "DELETE FROM {} WHERE {root_row} IN ({})",
-                        adapter.render_qualified_name(&child_staging),
-                        listed.join(", ")
+                    adapter.render_delete_staged(
+                        &child_staging,
+                        &format!("{root_row} IN ({})", listed.join(", ")),
                     )
                 })
                 .collect();
@@ -1548,7 +1549,7 @@ impl ChildTables {
             }
         }
         let mut deletes: Vec<String> = Vec::new();
-        for table in tables {
+        for (index, table) in tables.into_iter().enumerate() {
             let name = TableName {
                 table,
                 ..spec.destination.clone()
@@ -1561,11 +1562,18 @@ impl ChildTables {
                         .any(|column| column.name.eq_ignore_ascii_case(root_name))
                 });
             if rooted {
-                deletes.push(format!(
-                    "DELETE FROM {} WHERE {} IN (SELECT {row_id} FROM {})",
-                    adapter.render_qualified_name(&name),
-                    adapter.render_identifier(root_name),
-                    adapter.render_qualified_name(staging)
+                let scratch = TableName {
+                    table: format!("{}_{index}", staging.table),
+                    ..staging.clone()
+                };
+                deletes.extend(adapter.render_clear_rows(
+                    &name,
+                    &format!(
+                        "{} IN (SELECT {row_id} FROM {})",
+                        adapter.render_identifier(root_name),
+                        adapter.render_qualified_name(staging)
+                    ),
+                    &scratch,
                 ));
             }
         }

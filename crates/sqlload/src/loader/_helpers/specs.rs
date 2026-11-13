@@ -984,7 +984,7 @@ fn matching_pattern<'a>(field: &str, patterns: &[&'a String]) -> Option<&'a Stri
         .copied()
 }
 
-/// What this build cannot yet do with `unnest` while its writers are taught to: warehouses other than DuckDB and Postgres; and a `state = "logged"` table, whose commit can wait on its state while its child rows would not.
+/// What this build cannot yet do with `unnest` while its writers are taught to: a warehouse whose writer does not write child tables (Databricks); and a `state = "logged"` table, whose commit can wait on its state while its child rows would not.
 fn unbuilt_writes(context: &SourceContext<'_>, logged: bool) -> Vec<String> {
     let warehouse = context.target.warehouse;
     [

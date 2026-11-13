@@ -1134,3 +1134,16 @@ pub(crate) struct RowIdTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// A ClickHouse child table cleared of the items of the roots a merge stages.
+pub(crate) struct ClearRowsTestCase {
+    pub(crate) description: &'static str,
+    /// The child table's `PARTITION BY` clause, empty for none.
+    pub(crate) partition_by: &'static str,
+    /// The child table's rows, as `VALUES` of `(root id, sku)`.
+    pub(crate) rows: &'static str,
+    /// The staged parent rows' ids, as `VALUES`.
+    pub(crate) roots: &'static str,
+    /// The rows left, as sorted `root:sku`, joined by `,`.
+    pub(crate) expected_rows: &'static str,
+}
