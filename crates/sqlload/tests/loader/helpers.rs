@@ -1833,6 +1833,14 @@ pub(crate) fn duckdb_text(database: &std::path::Path, query: &str) -> Result<Str
         .map_err(|error| format!("{query}: {error}"))
 }
 
+/// Run `statements` (several, separated by `;`) on the DuckDB file `database`.
+pub(crate) fn duckdb_execute(database: &std::path::Path, statements: &str) -> Result<(), String> {
+    let connection = duckdb::Connection::open(database).map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(statements)
+        .map_err(|error| format!("{statements}: {error}"))
+}
+
 /// One captured-changes run.
 pub(crate) const fn step(
     source_change: &'static str,

@@ -158,13 +158,15 @@ from. Its child tables also carry `_dlt_load_id`, which dlt writes on root rows 
 ([relational.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/relational.py#L294-L296)).
 
 A table dlt loaded can carry on under SQLLoad with the same settings: the first load adds SQLLoad's
-columns to it and merges into the rows dlt wrote. One case needs a fresh start. dlt's default
-`delete-insert` merge gives root rows random ids, where SQLLoad's `merge` (like dlt's `upsert`)
-derives them from the key ([helpers.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/helpers.py#L107-L120)). SQLLoad's merge then can't find the child rows of an order dlt merged,
-and they would stay beside its new ones. Before merging into child tables dlt merged with
-`delete-insert`, load the table from the start once: `sqlload load --reload --yes <table>` for a
-Python table, or for a files source drop its tables and merge every file again, moving files
-`after_load` moved back under `path` first. Postgres targets refuse `--reload`
+columns to it and merges into the rows dlt wrote. dlt's default `delete-insert` merge gives root
+rows random ids, where SQLLoad's `merge` (like dlt's `upsert`) derives them from the key
+([helpers.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/helpers.py#L107-L120)).
+From 0.41.1 (not released yet), SQLLoad's merge also finds a merged row's child rows by the id it
+held before, so the items dlt loaded are replaced like any others, and the row keeps its new,
+key-derived id from then on. Before 0.41.1 those items stay beside the new ones: load such a table
+from the start once instead, with `sqlload load --reload --yes <table>` for a Python table, or for a
+files source by dropping its tables and merging every file again, moving files `after_load` moved
+back under `path` first. Postgres targets refuse `--reload`
 ([Reloading a table](/docs/concepts/write-strategies/#reloading-a-table)), so there drop the table
 and its child tables and load it again.
 
