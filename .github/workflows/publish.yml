@@ -179,7 +179,9 @@ jobs:
           bash .github/scripts/build_unixodbc.sh "$RUNNER_TEMP/unixodbc" "$HOMEBREW/etc" '' "$HOMEBREW/lib"
           echo "RUSTFLAGS=-L native=$RUNNER_TEMP/unixodbc/lib" >> "$GITHUB_ENV"
       # sccache keeps compiled crates and DuckDB's bundled C++ between runs of the same branch, so a
-      # release build reuses the previous release's work and recompiles little beyond sqlload.
+      # release build reuses the previous release's work and recompiles little beyond sqlload. Not on
+      # Windows, where it made the build about 12 minutes slower. If the Actions cache is down when
+      # sccache starts, the build fails; rerun it (PyPI skips wheels it already has).
       - name: Build ${{ matrix.package.name }} wheel
         uses: PyO3/maturin-action@v1
         env:
@@ -192,7 +194,7 @@ jobs:
           args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
-          sccache: true
+          sccache: ${{ runner.os != 'Windows' }}
           working-directory: ${{ matrix.package.directory }}
           # The vendored OpenSSL build runs Perl's Configure, which needs modules the
           # manylinux image leaves out. unixODBC reads /etc, where distribution drivers register.
