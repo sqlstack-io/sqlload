@@ -13,6 +13,7 @@ use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::constants::VALUE_COLUMN;
 use crate::load_naming::main::child_table_name::child_table_name;
+use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
 use crate::row_batches::_helpers::arrow_json::normalise_column;
@@ -201,11 +202,12 @@ impl Split<'_> {
     ) -> Result<(), String> {
         let id = child_row_id(place.parent, place.table, position);
         let entries: Vec<(String, Box<RawValue>)> = match item.trim_start().as_bytes().first() {
-            Some(b'{') => {
+            Some(b'{') => self.loaded_keys(
                 serde_json::from_str::<OrderedObject>(item)
                     .map_err(|error| format!("{}: {error}", place.path))?
-                    .0
-            }
+                    .0,
+                place.path,
+            )?,
             Some(b'[') => vec![(NESTED_LIST_KEY.to_owned(), raw(item, place.path)?)],
             _ => vec![(VALUE_COLUMN.to_owned(), raw(item, place.path)?)],
         };
@@ -249,6 +251,31 @@ impl Split<'_> {
             self.add_list(value.get(), &below)?;
         }
         Ok(())
+    }
+
+    /// An item's `entries` with each key as it loads under the split's naming (dlt's normalises it); two keys of one item at `path` loading as one name is an error naming both.
+    fn loaded_keys(
+        &self,
+        entries: Vec<(String, Box<RawValue>)>,
+        path: &str,
+    ) -> Result<Vec<(String, Box<RawValue>)>, String> {
+        if self.naming == Naming::Sqlload {
+            return Ok(entries);
+        }
+        let mut loaded: Vec<(String, Box<RawValue>)> = Vec::with_capacity(entries.len());
+        let mut spelled: Vec<String> = Vec::with_capacity(entries.len());
+        for (key, value) in entries {
+            let name = loaded_name(self.naming, &key, self.name_limit);
+            if let Some(other) = loaded.iter().position(|(taken, _)| *taken == name) {
+                return Err(format!(
+                    "{path}: keys {:?} and {key:?} both load as {name} under naming = \"dlt\"",
+                    spelled[other]
+                ));
+            }
+            loaded.push((name, value));
+            spelled.push(key);
+        }
+        Ok(loaded)
     }
 
     /// The level gathering `place`'s rows, made when its first row arrives, after its parent's.

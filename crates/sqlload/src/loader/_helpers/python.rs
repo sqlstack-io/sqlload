@@ -230,7 +230,12 @@ pub(crate) fn list_choices(spec: &TableSpec) -> ListChoices {
         .files
         .iter()
         .flat_map(|files| &files.table.columns)
-        .filter_map(|column| Some((column.name.clone(), column.lists?)));
+        .filter_map(|column| {
+            Some((
+                spec.source_table.loaded_as(&column.name).to_owned(),
+                column.lists?,
+            ))
+        });
     let yielded = spec.python.iter().flat_map(|python| python.lists.clone());
     sampled.chain(yielded).collect()
 }
