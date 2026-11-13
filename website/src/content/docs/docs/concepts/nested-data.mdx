@@ -160,8 +160,9 @@ Where SQLLoad and dlt still differ under `naming = "dlt"`:
 - Two columns whose names normalise to one (`OrderID` and `Order ID`) stop the plan, naming
   both; dlt keeps the last value of a row it is given as a dictionary. Exclude one of them with
   `exclude_columns`. Two tables of one source whose names normalise to one (`order-items` and
-  `order_items`) stop the plan too; give one its own `name`. A `postgres_cdc` source whose column
-  names would change is refused, since its change stream matches columns by the source's names.
+  `order_items`) stop the plan too; give one its own `name`. Added in 0.42: a `postgres_cdc`
+  source loads under dlt's names too, its snapshot and change stream matching each column by the
+  source's spelling.
 
 - An object stays a JSON column; dlt flattens it into `parent__key` columns.
 - A field listed in `unnest` always goes to its child table, even when an XML element appears
