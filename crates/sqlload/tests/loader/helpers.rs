@@ -1960,3 +1960,25 @@ pub(crate) async fn run_merge_case(
         .await
         .map_err(|error| error.to_string())
 }
+
+/// Write a project loading the NDJSON files of `root/drop/` into `[connections.wh]` (given as `connection`'s settings, schema `raw`) with `settings` added, then load once per run, each after writing its new file; fails with the output of a load that fails.
+pub(crate) fn load_ndjson_runs(
+    root: &std::path::Path,
+    connection: &str,
+    (settings, runs): (&str, &[(&str, &str)]),
+) -> Result<(), String> {
+    std::fs::create_dir_all(root.join("drop")).map_err(|error| error.to_string())?;
+    let config = root.join("sqlload.toml");
+    let text = format!(
+        "[connections.wh]\n{connection}\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"ndjson\"\n{settings}",
+        root.display()
+    );
+    std::fs::write(&config, text).map_err(|error| error.to_string())?;
+    for (name, contents) in runs {
+        std::fs::write(root.join("drop").join(name), contents)
+            .map_err(|error| error.to_string())?;
+        let (ok, output) = run_sqlload(&config, &["load"], ("", ""))?;
+        ok.then_some(()).ok_or(output)?;
+    }
+    Ok(())
+}

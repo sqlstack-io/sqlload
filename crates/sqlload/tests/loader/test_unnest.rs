@@ -1,12 +1,56 @@
 //! Child tables from list fields (`unnest`), and dlt's naming.
 
-use crate::helpers::{duckdb_text, run_sqlload};
+use sqlload_testkit::postgres::constants::PASSWORD;
+use sqlload_testkit::postgres::main::connect::connect;
+use sqlload_testkit::postgres::main::start_postgres::start_postgres;
+
+use crate::helpers::{duckdb_text, load_ndjson_runs, run_async, run_sqlload};
 use crate::test_types::{RowIdTestCase, UnnestPlanTestCase};
 
-const COLUMNS: &str = "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_name = 'orders'";
+const COLUMNS: &str = "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders'";
 
 const ORDERS: &str =
     "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}], \"tags\": [\"x\"]}\n";
+
+/// The parent's columns once `unnest` takes its list fields.
+const UNNESTED_COLUMNS: &str = "id,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at,_sqlload_row_id";
+
+/// The settings of the replace with `unnest`.
+const REPLACE_SETTINGS: &str =
+    "[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\", \"tags\"]\n";
+
+/// Two runs of the replace: the second has no tags, and its item a new field.
+const REPLACE_RUNS: &[(&str, &str)] = &[
+    (
+        "a.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}], \"tags\": [\"x\"]}\n",
+    ),
+    (
+        "a.ndjson",
+        "{\"id\": 3, \"items\": [{\"sku\": \"c\", \"qty\": 5, \"parts\": [7]}]}\n",
+    ),
+];
+
+/// The replace's tags count, items count, and each order's items and parts joined by id and load.
+const REPLACE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders__tags) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || i.qty || ':' || p.value, ',') FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id AND i._sqlload_load_id = o._sqlload_load_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id AND p._sqlload_load_id = o._sqlload_load_id)";
+
+/// The settings of the append with `unnest`.
+const APPEND_SETTINGS: &str = "write_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\", \"tags\"]\n";
+
+/// Two runs of the append: tags first appear in the second.
+const APPEND_RUNS: &[(&str, &str)] = &[
+    (
+        "a.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n",
+    ),
+    (
+        "b.ndjson",
+        "{\"id\": 2, \"items\": [{\"sku\": \"b\", \"parts\": [3]}], \"tags\": [\"new\"]}\n",
+    ),
+];
+
+/// The append's tags and parts joined to their orders by id and load, with each part's position.
+const APPEND_CHECK: &str = "SELECT (SELECT string_agg(o.id || ':' || t.value, ',') FROM raw.orders o JOIN raw.orders__tags t ON t._sqlload_parent_id = o._sqlload_row_id AND t._sqlload_load_id = o._sqlload_load_id) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value || '@' || p._sqlload_list_idx, ',' ORDER BY p.value) FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id AND i._sqlload_load_id = o._sqlload_load_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id AND p._sqlload_load_id = o._sqlload_load_id)";
 
 #[test]
 fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_problem()
@@ -17,7 +61,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             settings: "naming = \"dlt\"\nrow_id = true\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\", \"tags\"]\n",
             files_target: false,
             expected_ok: true,
-            expected_problem: "",
+            expected_problem: "├── unnest  orders__items, orders__items__parts, orders__tags  child tables, columns inferred at load",
         },
         UnnestPlanTestCase {
             description: "a word other than all",
@@ -143,7 +187,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
 }
 
 #[test]
-fn given_row_id_settings_when_loading_then_each_row_gets_its_id_and_a_merged_row_keeps_it()
+fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_become_linked_child_tables()
 -> Result<(), String> {
     let test_cases = [
         RowIdTestCase {
@@ -182,37 +226,99 @@ fn given_row_id_settings_when_loading_then_each_row_gets_its_id_and_a_merged_row
             check_query: "SELECT string_agg(id || ':' || v || ':' || _dlt_id, ',' ORDER BY id) FROM raw.orders",
             expected_result: "1:c:z5jIxXIbUnmbKw,2:b:M6/KlLzJ2FeV/w",
         },
+        RowIdTestCase {
+            description: "unnest on a replace: the lists leave the parent, the second run replaces parent and children alike, and a list no row has any more is emptied",
+            settings: REPLACE_SETTINGS,
+            runs: REPLACE_RUNS,
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: REPLACE_CHECK,
+            expected_result: "0/1/3:c:5:7",
+        },
+        RowIdTestCase {
+            description: "unnest on an append: each run's children link to that run's rows by id and position, and a list first seen in run 2 gets its table then",
+            settings: APPEND_SETTINGS,
+            runs: APPEND_RUNS,
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: APPEND_CHECK,
+            expected_result: "2:new/1:a:1@0,1:a:2@1,2:b:3@0",
+        },
     ];
     for test_case in &test_cases {
         let root = tempfile::tempdir().map_err(|error| error.to_string())?;
-        std::fs::create_dir_all(root.path().join("drop")).map_err(|error| error.to_string())?;
         let database = root.path().join("out.duckdb");
-        let config = root.path().join("sqlload.toml");
-        let text = format!(
-            "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"ndjson\"\n{}",
-            database.display(),
-            root.path().display(),
-            test_case.settings
-        );
-        std::fs::write(&config, text).map_err(|error| error.to_string())?;
-        for (name, contents) in test_case.runs {
-            std::fs::write(root.path().join("drop").join(name), contents)
-                .map_err(|error| error.to_string())?;
-            let (ok, output) = run_sqlload(&config, &["load"], ("", ""))?;
-            assert!(ok, "{}: {output}", test_case.description);
-        }
+        let connection = format!("kind = \"duckdb\"\ndatabase = \"{}\"", database.display());
+        load_ndjson_runs(
+            root.path(),
+            &connection,
+            (test_case.settings, test_case.runs),
+        )?;
         assert_eq!(
-            (
+            [
                 duckdb_text(&database, COLUMNS)?,
                 duckdb_text(&database, test_case.check_query)?
-            ),
-            (
-                test_case.expected_columns.to_owned(),
-                test_case.expected_result.to_owned()
-            ),
+            ],
+            [test_case.expected_columns, test_case.expected_result],
             "{}",
             test_case.description
         );
     }
     Ok(())
+}
+
+#[test]
+fn given_unnest_when_loading_into_postgres_then_lists_become_child_tables_linked_as_in_duckdb()
+-> Result<(), String> {
+    let test_cases = [
+        RowIdTestCase {
+            description: "unnest on a replace: the lists leave the parent, the second run replaces parent and children alike, and a list no row has any more is emptied (Postgres)",
+            settings: REPLACE_SETTINGS,
+            runs: REPLACE_RUNS,
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: REPLACE_CHECK,
+            expected_result: "0/1/3:c:5:7",
+        },
+        RowIdTestCase {
+            description: "unnest on an append: each run's children link to that run's rows by id and position, and a list first seen in run 2 gets its table then (Postgres)",
+            settings: APPEND_SETTINGS,
+            runs: APPEND_RUNS,
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: APPEND_CHECK,
+            expected_result: "2:new/1:a:1@0,1:a:2@1,2:b:3@0",
+        },
+    ];
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        let connection = format!(
+            "kind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"sqlload\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"",
+            postgres.port
+        );
+        for test_case in &test_cases {
+            client
+                .batch_execute("DROP SCHEMA IF EXISTS raw CASCADE")
+                .await
+                .map_err(|error| error.to_string())?;
+            let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+            load_ndjson_runs(
+                root.path(),
+                &connection,
+                (test_case.settings, test_case.runs),
+            )?;
+            let mut found: Vec<String> = Vec::new();
+            for query in [COLUMNS, test_case.check_query] {
+                let row = client
+                    .query_one(query, &[])
+                    .await
+                    .map_err(|error| format!("{query}: {error}"))?;
+                found.push(row.get(0));
+            }
+            assert_eq!(
+                found,
+                [test_case.expected_columns, test_case.expected_result],
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
 }

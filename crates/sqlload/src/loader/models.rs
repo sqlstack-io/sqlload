@@ -687,6 +687,8 @@ pub struct Publisher {
 /// The child tables of one table's load, each planned from its rows as they arrive.
 #[derive(Debug)]
 pub struct ChildTables {
+    /// A connection of their own that plans, creates and alters them before each has its publisher.
+    pub destination: Destination,
     pub options: PlanOptions,
     pub feeds: Vec<ChildFeed>,
     /// `created ...` and `altered ...` lines.

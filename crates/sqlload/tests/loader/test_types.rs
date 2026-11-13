@@ -1113,7 +1113,7 @@ pub(crate) struct RowIdTestCase {
     pub(crate) runs: &'static [(&'static str, &'static str)],
     /// The table's columns in order, joined by `,`.
     pub(crate) expected_columns: &'static str,
-    /// A query over `raw.orders` returning one text.
+    /// A query over `raw.orders` (and its child tables) returning one text.
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }

@@ -40,13 +40,7 @@ pub(in crate::loader) async fn load_one(
         (Some(_), None) => return Err(LoaderError::Invalid(NO_PYTHON_HOST.to_owned())),
         (None, _) => {
             let reader = open_source(project, source, source_readers(planned)).await?;
-            let (rows, after_load) = publish_table(&reader, planned, (destination, run)).await?;
-            TableLoaded {
-                rows,
-                changes: Vec::new(),
-                note: None,
-                after_load,
-            }
+            publish_table(&reader, planned, (destination, run)).await?
         }
     };
     Ok((name, loaded))
