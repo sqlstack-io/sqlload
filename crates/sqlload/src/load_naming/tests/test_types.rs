@@ -1,6 +1,6 @@
 pub(crate) struct DltNameTestCase {
     pub(crate) description: &'static str,
-    /// `dlt_identifier` or `dlt_table_path`.
+    /// `dlt_identifier`, `dlt_path` or a child table of one parent.
     pub(crate) normalise: fn(&str, Option<usize>) -> String,
     pub(crate) name: &'static str,
     pub(crate) max_length: Option<usize>,

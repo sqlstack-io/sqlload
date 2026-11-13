@@ -45,8 +45,7 @@ Set in a table entry:
   only what it holds now. When a commit repeats a key, only the kept row's items load (see
   [Repeated keys](/docs/concepts/write-strategies/#repeated-keys)).
 
-Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets. MotherDuck goes
-through the same DuckDB writer, which is tested locally rather than against MotherDuck itself.
+Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets.
 ClickHouse and Databricks targets, files targets, `delete_insert`, `state = "logged"`,
 `contract = "enforced"` and `postgres_cdc` sources are refused for now: `plan` names the setting,
 and without `unnest` the lists load as JSON columns.

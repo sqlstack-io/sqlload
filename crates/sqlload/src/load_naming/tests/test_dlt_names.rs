@@ -1,5 +1,6 @@
 use crate::load_naming::main::dlt_identifier::dlt_identifier;
-use crate::load_naming::main::dlt_table_path::dlt_table_path;
+use crate::load_naming::main::dlt_path::dlt_path;
+use crate::load_naming::tests::helpers::child_of_orders;
 use crate::load_naming::tests::test_types::DltNameTestCase;
 
 // Every expected name is what dlt 1.32.0 gives (`dlt.common.normalizers.naming.snake_case.NamingConvention`, with no limit or `max_length = 63`, Postgres's), run with Python.
@@ -121,17 +122,66 @@ fn given_names_when_normalising_as_dlt_then_they_match_dlts_snake_case() {
         },
         DltNameTestCase {
             description: "each table in a path is normalised, the __ between them kept",
-            normalise: dlt_table_path,
+            normalise: dlt_path,
             name: "Orders__line_items__SubParts",
             max_length: None,
             expected_name: "orders__line_items__sub_parts",
         },
         DltNameTestCase {
             description: "a path past the limit is shortened as a whole, with a tag of the original path",
-            normalise: dlt_table_path,
+            normalise: dlt_path,
             name: "orders__LineItemPartLineItemPartLineItemPartLineItemPartLineItemPartLineItemPart",
             max_length: Some(63),
             expected_name: "orders__line_item_part_line_iwskgbgine_item_part_line_item_part",
+        },
+        DltNameTestCase {
+            description: "a column holding __ keeps it, as dlt names columns by path",
+            normalise: dlt_path,
+            name: "a__B",
+            max_length: None,
+            expected_name: "a__b",
+        },
+        DltNameTestCase {
+            description: "a trailing __ is an empty last name, dropped, not two x",
+            normalise: dlt_path,
+            name: "x__",
+            max_length: None,
+            expected_name: "x",
+        },
+        DltNameTestCase {
+            description: "three underscores split into a name and one starting with _",
+            normalise: dlt_path,
+            name: "a___b",
+            max_length: None,
+            expected_name: "a___b",
+        },
+        DltNameTestCase {
+            description: "a name already normalised stays as it is",
+            normalise: dlt_path,
+            name: "order__line_items",
+            max_length: None,
+            expected_name: "order__line_items",
+        },
+        DltNameTestCase {
+            description: "a child table past the limit: its field is shortened first, then the joined name is tagged with itself",
+            normalise: child_of_orders,
+            name: "line_itemsline_itemsline_itemsline_itemsline_itemsline_itemsline_items",
+            max_length: Some(63),
+            expected_name: "orders__line_itemsline_itemslpshx3wne_itemsline_itemsline_items",
+        },
+        DltNameTestCase {
+            description: "a child table's field is normalised",
+            normalise: child_of_orders,
+            name: "LineItems",
+            max_length: Some(63),
+            expected_name: "orders__line_items",
+        },
+        DltNameTestCase {
+            description: "a list field holding __ is one name, its __ merged",
+            normalise: child_of_orders,
+            name: "a__B",
+            max_length: Some(63),
+            expected_name: "orders__a_b",
         },
     ];
     for test_case in test_cases {
