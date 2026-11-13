@@ -695,6 +695,8 @@ pub struct ChildTables {
     pub destination: Destination,
     pub options: PlanOptions,
     pub feeds: Vec<ChildFeed>,
+    /// The paths of new child tables `on_schema_change = "ignore"` leaves out, with everything below them.
+    pub ignored: Vec<String>,
     /// `created ...` and `altered ...` lines.
     pub changes: Vec<String>,
 }

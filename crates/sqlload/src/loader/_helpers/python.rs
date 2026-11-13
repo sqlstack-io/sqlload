@@ -52,6 +52,7 @@ use crate::postgres_source::models::SourceColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::constants::FILES_CONNECTION_KINDS;
 use crate::project::models::CheckName;
+use crate::project::models::OnSchemaChange;
 use crate::project::models::ProjectConfig;
 use crate::project::models::SourceConfig;
 use crate::publish_checks::main::check_column_problems::check_column_problems;
@@ -157,6 +158,23 @@ pub(crate) async fn live_child_tables(
         .into_iter()
         .filter(|name| !name.contains(STAGING_SUFFIX) && !name.ends_with(SWAP_SUFFIX))
         .collect())
+}
+
+/// The dotted path each of `spec`'s child tables among `tables` holds, by its name (`orders__items__parts` holds `items.parts`).
+pub(crate) fn child_paths(spec: &TableSpec, tables: Vec<String>) -> Vec<(String, String)> {
+    let prefix = sql_adapter(spec.warehouse).stored_name(&format!(
+        "{}{CHILD_TABLE_SEPARATOR}",
+        spec.destination.table
+    ));
+    tables
+        .into_iter()
+        .filter_map(|table| {
+            let path = table
+                .get(prefix.len()..)?
+                .replace(CHILD_TABLE_SEPARATOR, ".");
+            Some((path, table))
+        })
+        .collect()
 }
 
 /// `spec` with each top-level field whose child table is among `children` chosen as a list field under `unnest = "all"`: an earlier load chose it, so this one keeps it one whatever its sampled values show (a value that is not a list then fails the load).
@@ -1233,9 +1251,18 @@ impl ChildTables {
         batches: Vec<ChildBatch>,
     ) -> Result<(), LoaderError> {
         for child in batches {
+            let below =
+                |path: &String| child.path == *path || child.path.starts_with(&format!("{path}."));
+            if self.ignored.iter().any(below) {
+                continue;
+            }
             let index = match self.feeds.iter().position(|feed| feed.path == child.path) {
                 Some(index) => index,
                 None => {
+                    if !self.admits((parent, &child)).await? {
+                        self.ignored.push(child.path.clone());
+                        continue;
+                    }
                     self.feeds.push(ChildFeed {
                         table: child_plan(parent, (&child.path, &child.table)),
                         path: child.path.clone(),
@@ -1274,6 +1301,34 @@ impl ChildTables {
         Ok(())
     }
 
+    /// Whether `child`'s table may be filled: always on the table's first load; after it, a child table that is not there yet is a schema change, which `on_schema_change` decides like a new column: added, left out with its rows and everything below (`"ignore"`, `false`), or refused.
+    async fn admits(
+        &self,
+        (parent, child): (&TablePlan, &ChildBatch),
+    ) -> Result<bool, LoaderError> {
+        let spec = &parent.spec;
+        if !parent.exists || spec.on_schema_change == OnSchemaChange::AppendNewColumns {
+            return Ok(true);
+        }
+        let table = TableName {
+            table: child.table.clone(),
+            ..spec.destination.clone()
+        };
+        if live_columns(&self.destination, &table).await?.is_some() {
+            return Ok(true);
+        }
+        match spec.on_schema_change {
+            OnSchemaChange::Fail => Err(LoaderError::Invalid(format!(
+                "new list field {} would make the child table {} and on_schema_change = \"fail\"",
+                child.path, child.table
+            ))),
+            _ => {
+                tracing::warn!(table = %child.table, field = %child.path, "new list field is not loaded (on_schema_change = \"ignore\")");
+                Ok(false)
+            }
+        }
+    }
+
     /// Commit every child table's rows so far, before the parent's commit names them.
     pub(crate) async fn cut(&mut self) -> Result<(), LoaderError> {
         for publisher in self
@@ -1300,20 +1355,7 @@ impl ChildTables {
                 .map(|path| (path.clone(), unnested_table(spec, path)))
                 .collect(),
             Unnest::All if replaced => {
-                let prefix = adapter.stored_name(&format!(
-                    "{}{CHILD_TABLE_SEPARATOR}",
-                    spec.destination.table
-                ));
-                live_child_tables(&self.destination, spec)
-                    .await?
-                    .into_iter()
-                    .filter_map(|table| {
-                        let path = table
-                            .get(prefix.len()..)?
-                            .replace(CHILD_TABLE_SEPARATOR, ".");
-                        Some((path, table))
-                    })
-                    .collect()
+                child_paths(spec, live_child_tables(&self.destination, spec).await?)
             }
             _ => Vec::new(),
         };
