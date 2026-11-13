@@ -101,7 +101,7 @@ jobs:
     runs-on: ubuntu-24.04
     # A cold cache compiles DuckDB from source (about 25 minutes); warm runs take a few.
     timeout-minutes: 60
-    # packages: read lets the job sign in to GHCR when the bastion image is not cached yet.
+    # packages: read lets the job sign in to GHCR when it has to pull the bastion image.
     permissions:
       contents: read
       packages: read
@@ -150,12 +150,6 @@ jobs:
         with:
           path: ${{ runner.temp }}/ssh-bastion.tar
           key: ${{ steps.bastion.outputs.key }}
-      # Even on a cache hit, so a cached image that does not resolve is still pulled signed in.
-      - name: Sign in to GHCR
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       # Loaded from the cache when it resolves by digest there; otherwise pulled once, signed in, so the tests find
       # it here, GHCR's rate limit (toomanyrequests) getting one retry a minute later and any other failure none,
       # then saved for the cache.
@@ -165,6 +159,8 @@ jobs:
           IMAGE: ${{ steps.bastion.outputs.image }}
           TAGGED: ${{ steps.bastion.outputs.tagged }}
           ARCHIVE: ${{ runner.temp }}/ssh-bastion.tar
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
         run: |
           if [ -f "$ARCHIVE" ]; then
             docker load -i "$ARCHIVE"
@@ -174,6 +170,7 @@ jobs:
             fi
             echo "::warning::the cached SSH bastion image does not resolve as $IMAGE; pulling it"
           fi
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
           for attempt in 1 2; do
             if out=$(timeout -k 10 240 docker pull "$IMAGE" 2>&1); then
               echo "$out"
