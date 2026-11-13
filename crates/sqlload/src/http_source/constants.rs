@@ -56,3 +56,6 @@ pub const SECRET_HEADER_WORDS: &[&str] = &[
     "jwt",
     "bearer",
 ];
+
+/// Key values a failed batch's error shows before it gives only their count.
+pub const SHOWN_KEYS: usize = 5;

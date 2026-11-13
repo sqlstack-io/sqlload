@@ -57,6 +57,14 @@ GRID = {
 class Api(BaseHTTPRequestHandler):
 	"""A stub shop API; `self.server.log` records every request's path and auth header."""
 
+	def lookup(self, path: str, body: dict[str, Any]) -> None:
+		"""The items of the orders a body names, by `$.ids` (a list) or `$.order.id`; `/v1/lookup-flaky` answers 503 the first time a batch holds order 4."""
+		ids = body["ids"] if "ids" in body else [body["order"]["id"]]
+		if path.endswith("-flaky") and 4 in ids and not self.server.lookup_failed:  # type: ignore[attr-defined]
+			self.server.lookup_failed = True  # type: ignore[attr-defined]
+			return self.reply(503, {"message": "busy"})
+		self.reply(200, {"items": [item for order in ids for item in ITEMS[order]]})
+
 	def log_message(self, *args: Any) -> None:
 		pass
 
@@ -129,6 +137,8 @@ class Api(BaseHTTPRequestHandler):
 			return self.reply(200, {"items": ORDERS[:1], "next": f"{self.server.other}/steal"})  # type: ignore[attr-defined]
 		if moved is not None:
 			return self.reply(moved[0], {}, {"Location": moved[1]})
+		if url.path in ("/v1/lookup", "/v1/lookup-flaky"):
+			return self.lookup(url.path, body)
 		after = body.get("filter", {}).get("after") or 0
 		rows = [row for row in ORDERS if row["order_id"] > after]
 		page = body.get("page", {})
@@ -312,6 +322,7 @@ def api(elsewhere: ThreadingHTTPServer) -> Iterator[ThreadingHTTPServer]:
 	server.log = []  # type: ignore[attr-defined]
 	server.bodies = []  # type: ignore[attr-defined]
 	server.flaky = 0  # type: ignore[attr-defined]
+	server.lookup_failed = False  # type: ignore[attr-defined]
 	server.refused = 0  # type: ignore[attr-defined]
 	server.oauth = {}  # type: ignore[attr-defined]
 	server.tokens = {}  # type: ignore[attr-defined]
@@ -502,6 +513,106 @@ def test_given_a_failing_job_when_loading_with_json_then_the_exit_code_and_repor
 	assert done.returncode == expected_exit, done.stdout + done.stderr
 	result = json.loads(done.stdout)
 	assert (result["ok"], result["retryable"], result["tables"][0]["retryable"]) == (False, expected_retryable, expected_retryable)
+
+
+ALL_ITEMS = sorted((n, line) for n, lines in ITEMS.items() for line in range(len(lines)))
+
+
+@pytest.mark.parametrize(
+	("job", "expected_bodies"),
+	[
+		(
+			"api.fan_out('/lookup', method='POST', json_body={'order': {'id': '{order_id}'}, 'note': 'order {order_id}'}, over=range(1, 8), select='$.items')",
+			[{"order": {"id": n}, "note": f"order {n}"} for n in range(1, 8)],
+		),
+		(
+			"api.fan_out('/lookup-flaky', method='POST', json_body={'ids': '{order_id}'}, batch=3, concurrency=2, select='$.items', "
+			"over=api.paginate('/next', paginator=sl.next_link('$.next'), select='$.data.items[*].order_id'))",
+			[{"ids": [1, 2, 3]}, {"ids": [4, 5, 6]}, {"ids": [4, 5, 6]}, {"ids": [7]}],
+		),
+	],
+	ids=["one-key-per-post", "batches-of-keys-each-retried-whole"],
+)
+def test_given_fan_out_keys_in_a_post_body_when_loading_then_each_request_carries_its_keys(
+	tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_bodies: list[dict[str, Any]]
+) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='Items.')\ndef items(ctx):\n    return {job}\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT order_id, line FROM "RAW".shop__items ORDER BY 1, 2') == ALL_ITEMS
+	sent = sorted(json.dumps(body, sort_keys=True) for _, _, body in api.bodies)  # type: ignore[attr-defined]
+	assert sent == sorted(json.dumps(body, sort_keys=True) for body in expected_bodies)
+
+
+def test_given_a_batch_that_fails_when_loading_then_the_error_names_its_keys(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	job = "quick.fan_out('/lookup-flaky', method='POST', json_body={'ids': '{order_id}'}, batch=3, concurrency=1, over=range(1, 8), select='$.items')"
+	project = make_project(tmp_path, api, f"quick = sl.http(shop, auth=sl.bearer(), retries=0)\n\n@shop.table(description='Items.')\ndef items(ctx):\n    return {job}\n")
+	done = sqlload(project, "load", "--json")
+	assert done.returncode == 75, done.stdout + done.stderr
+	(table,) = json.loads(done.stdout)["tables"]
+	assert table["error"].startswith("order_id=4, 5, 6 → POST http://"), table["error"]
+
+
+def test_given_a_body_placeholder_no_key_gives_when_loading_then_no_request_is_sent(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	job = "api.fan_out('/lookup', method='POST', json_body={'order': {'id': '{order}'}}, over=api.paginate('/next', paginator=sl.next_link('$.next'), select='$.data.items[*].order_id'), select='$.items')"
+	project = make_project(tmp_path, api, f"@shop.table(description='Items.')\ndef items(ctx):\n    return {job}\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 1
+	assert "fan-out json_body needs {order}, but over gives only order_id" in done.stdout + done.stderr, done.stdout + done.stderr
+	assert api.log == [] and api.bodies == []  # type: ignore[attr-defined]
+
+
+FAIL_FAST_TABLES = """\
+quick = sl.http(shop, auth=sl.bearer(), retries=0)
+
+@shop.table(description='Fails at once.')
+def a_fails(ctx):
+    return quick.paginate('{path}', paginator=sl.single())
+
+@shop.table(description='Still loading when a_fails fails.')
+def b_slow(ctx):
+    return api.paginate('/slow', paginator=sl.page_number('p'), select='$.items')
+
+@shop.table(description='Not started.')
+def c_later(ctx):
+    return api.paginate('/next', paginator=sl.next_link('$.next'), select='$.data.items')
+
+@shop.table(description='Not started.')
+def d_later(ctx):
+    return api.paginate('/pages', paginator=sl.page_number('p'), select='$.items')
+"""
+
+
+@pytest.mark.parametrize(
+	("path", "fail_fast", "expected_exit", "expected_statuses"),
+	[
+		("/broken", True, 75, ["failed", "loaded", "skipped", "skipped"]),
+		("/missing", True, 1, ["failed", "loaded", "skipped", "skipped"]),
+		("/missing", False, 1, ["failed", "loaded", "loaded", "loaded"]),
+	],
+	ids=["retryable-failure-exits-75", "lasting-failure-exits-1", "without-the-flag-the-rest-still-load"],
+)
+def test_given_fail_fast_when_a_table_fails_while_another_loads_then_that_one_finishes_and_no_other_starts(
+	tmp_path: Path, api: ThreadingHTTPServer, path: str, fail_fast: bool, expected_exit: int, expected_statuses: list[str]
+) -> None:
+	project = make_project(tmp_path, api, FAIL_FAST_TABLES.format(path=path))
+	flags = ["--fail-fast"] if fail_fast else []
+	done = sqlload(project, "load", "--json", "--concurrency", "2", *flags)
+	assert done.returncode == expected_exit, done.stdout + done.stderr
+	result = json.loads(done.stdout)
+	tables = sorted(result["tables"], key=lambda table: table["table"])
+	assert [table["status"] for table in tables] == expected_statuses
+	assert (result["summary"]["failed"], result["summary"]["skipped"]) == (1, expected_statuses.count("skipped"))
+	assert result["retryable"] == (expected_exit == 75)
+	for table in tables:
+		if table["status"] == "skipped":
+			assert table["error"] == f"not started: --fail-fast stopped the load after {tables[0]['table']} failed"
+			assert table["retryable"] is True and table["rows"] is None
+	assert query(project, 'SELECT count(*) FROM "RAW".shop__b_slow') == [(len(ORDERS),)]
+	loaded = {name for (name,) in query(project, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'RAW'")}
+	assert ("shop__c_later" in loaded) == (not fail_fast)
+	requested = {path for path, _, _ in api.log}  # type: ignore[attr-defined]
+	assert ("/v1/next" in requested) == (not fail_fast)
 
 
 def test_given_a_bad_definition_when_loading_then_no_request_is_sent(tmp_path: Path, api: ThreadingHTTPServer) -> None:

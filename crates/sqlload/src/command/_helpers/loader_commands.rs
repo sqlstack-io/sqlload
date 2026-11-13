@@ -60,6 +60,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         end_cursor: args.end_cursor,
         concurrency: args.concurrency.map(usize::from),
         resnapshot: args.resnapshot,
+        fail_fast: args.fail_fast,
         batch_bytes: args
             .batch_bytes
             .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),

@@ -252,7 +252,7 @@ def test_given_one_table_failing_when_loading_with_json_then_stdout_is_one_docum
 	assert done.returncode == 1, done.stdout + done.stderr
 	result = json.loads(done.stdout)
 	assert (result["schema_version"], result["command"], result["ok"], result["retryable"]) == (1, "load", False, False)
-	assert result["summary"] == {"created": 1, "altered": 0, "recreated": 0, "loaded": 1, "failed": 1, "rows": 2}
+	assert result["summary"] == {"created": 1, "altered": 0, "recreated": 0, "loaded": 1, "failed": 1, "skipped": 0, "rows": 2}
 	assert [(o["action"], o["name"]) for o in result["objects"]] == [("created", "RAW.shop__good")]
 	outcomes = {table["table"]: table for table in result["tables"]}
 	assert {name: (t["status"], t["rows"], t["source"], t["target"], t["write_strategy"]) for name, t in outcomes.items()} == {

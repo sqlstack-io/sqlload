@@ -23,7 +23,28 @@ loaded   raw.app__orders     1,000 rows  0.0s
 ```
 
 Each table prints `created`, `altered`, `loaded` or `failed`. A failed table doesn't stop the
-others; the summary counts them and the command exits 1.
+others; the summary counts them and the command exits 1, or 75 when every failure may pass on a
+rerun (see [Retrying failed runs](/docs/cli/#retrying-failed-runs)).
+
+### Stopping at the first failure
+
+From 0.43.0, `--fail-fast` stops the load once a table fails: no other table starts, and tables
+already loading finish and keep what they committed. Each table that never started prints
+`skipped` with the table that stopped the run, and the command exits as it would have otherwise: 1,
+or 75 when every table that failed, including any still loading when the first failed, may pass on a
+rerun. A rerun loads the skipped tables as usual.
+
+```console
+$ sqlload load --fail-fast --concurrency 2
+…
+failed   raw.shop__refunds  GET http://api.example.com/v1/refunds?page=3: HTTP 503: unavailable (after 4 attempts)
+loaded   raw.shop__orders   1,200 rows  0.4s
+skipped  raw.shop__returns  not started: --fail-fast stopped the load after raw.shop__refunds failed
+
+✗ Completed with failures  1 loaded, 1 failed, 1 skipped, 1,200 rows, 0.5s
+```
+
+`--fail-fast` doesn't combine with `--follow`.
 
 Large loads commit along the way, so a failure keeps what committed and the next run carries on from
 there; a `delete_insert` into ClickHouse read by cursor publishes once per run instead. See
@@ -81,6 +102,7 @@ $ sqlload load --json
     "recreated": 0,
     "loaded": 1,
     "failed": 1,
+    "skipped": 0,
     "rows": 1200
   },
   "plan": { "ok": true, "summary": "2 selected, 2 objects to create, 2 to load", … },
@@ -122,10 +144,10 @@ $ sqlload load --json
 | `command` | `apply` or `load`. |
 | `ok` | Whether every selected table planned and loaded: `true` exactly when the exit code is 0. |
 | `retryable` | From 0.34.0. Whether running the command again unchanged may fix every failure: `true` exactly when the exit code is 75. It's `false` when `ok` is `true`, whenever a table failed for good, and whenever a plan error other than an unreachable source left one out. See [Retrying failed runs](/docs/cli/#retrying-failed-runs). |
-| `summary` | How many objects were `created`, `altered` (each table once, however many changes it had) and `recreated`; tables `loaded` and `failed`; `rows` loaded. |
+| `summary` | How many objects were `created`, `altered` (each table once, however many changes it had) and `recreated`; tables `loaded` and `failed`, and from 0.43.0 `skipped`; `rows` loaded. |
 | `plan` | The same document `plan --json` prints, with its own `ok` and, from 0.34.0, `retryable`. Tables a plan error left out are in its `errors`, and tables with nothing to load in `skipped`. |
 | `objects` | One entry per change to a table or stage, by `apply` or during a load: its `action` (`created`, `altered` or `recreated`), its `name` and the `detail`. A table that gains two columns has two `altered` entries. |
-| `tables` | Each table loaded: its `status` (`loaded` or `failed`), `rows`, `duration_seconds`, a `note` (the cursor window it read, or that its table waits for first data), and the `error` when it failed. From 0.34.0, `retryable` says whether that failure may pass on a rerun. `source`, `target` and `write_strategy` are `null` only for a `load --follow` that failed before any table. From 0.39.0, a files source with `after_load` also has `after_load`: its `action` (`delete` or `move`), `status` (`done`, or `failed` when any file stayed), `files` handled, and `failed`, each file left with its `error`. A table that keeps its files has no such field. `apply` loads nothing, so its list is empty. |
+| `tables` | Each table loaded: its `status` (`loaded` or `failed`, or from 0.43.0 `skipped` for a table [`--fail-fast`](#stopping-at-the-first-failure) didn't start, its `error` naming the table that stopped the run and `retryable` `true`), `rows`, `duration_seconds`, a `note` (the cursor window it read, or that its table waits for first data), and the `error` when it failed. From 0.34.0, `retryable` says whether that failure may pass on a rerun. `source`, `target` and `write_strategy` are `null` only for a `load --follow` that failed before any table. From 0.39.0, a files source with `after_load` also has `after_load`: its `action` (`delete` or `move`), `status` (`done`, or `failed` when any file stayed), `files` handled, and `failed`, each file left with its `error`. A table that keeps its files has no such field. `apply` loads nothing, so its list is empty. |
 
 When the run can't start (the configuration doesn't parse, a connection fails), standard output
 holds one error document instead, the same as `plan --json`'s:

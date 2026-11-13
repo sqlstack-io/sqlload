@@ -3,10 +3,22 @@
 use crate::cdc::_helpers::stream::{captured_sources, load_source, source_outcomes};
 use crate::loader::models::{LoadRun, ProjectPlan, TableOutcome};
 
-/// Load each `postgres_cdc` source of `plan` in turn; a source with a blocked table does not load at all, since its slot would skip that table's changes. Every unblocked table of a source reports the source's error when it fails.
-pub async fn load_cdc(run: &LoadRun<'_>, plan: &ProjectPlan) -> Vec<TableOutcome> {
+/// Load each `postgres_cdc` source of `plan` in turn; a source with a blocked table does not load at all, since its slot would skip that table's changes. Every unblocked table of a source reports the source's error when it fails. Once `--fail-fast` has `stopped` the run after a table failed (its name), before the sources or as one fails, the unblocked tables of every source left are reported skipped.
+pub async fn load_cdc(
+    run: &LoadRun<'_>,
+    plan: &ProjectPlan,
+    mut stopped: Option<String>,
+) -> Vec<TableOutcome> {
     let mut outcomes: Vec<TableOutcome> = Vec::new();
     for (name, (tables, blocked)) in captured_sources(plan) {
+        if let Some(failed) = &stopped {
+            outcomes.extend(
+                tables
+                    .iter()
+                    .map(|table| TableOutcome::skipped(table, failed)),
+            );
+            continue;
+        }
         let started = std::time::Instant::now();
         let loaded = match blocked.is_empty() {
             true => load_source(run, name, (&tables, None))
@@ -27,6 +39,9 @@ pub async fn load_cdc(run: &LoadRun<'_>, plan: &ProjectPlan) -> Vec<TableOutcome
         };
         let retryable = matches!(loaded, Err((true, _)));
         let loaded = loaded.map_err(|(_, error)| error);
+        if run.options.fail_fast && loaded.is_err() {
+            stopped = tables.first().map(|table| table.outcome_name());
+        }
         outcomes.extend(source_outcomes(
             &tables,
             &loaded,

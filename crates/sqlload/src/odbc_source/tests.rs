@@ -1,3 +1,5 @@
+#[path = "tests/test_connect.rs"]
+mod connect;
 #[path = "tests/test_converted.rs"]
 mod converted;
 #[path = "tests/helpers.rs"]

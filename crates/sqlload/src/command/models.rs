@@ -210,6 +210,9 @@ pub struct LoaderArgs {
     /// Backfill only cursor values below this one, typed from each selected table's cursor.
     #[arg(long, value_name = "VALUE")]
     pub end_cursor: Option<String>,
+    /// `load`: once a table fails, start no other table; tables already loading finish, and the run exits 1, or 75 when the failure is retryable.
+    #[arg(long, conflicts_with = "follow")]
+    pub fail_fast: bool,
     /// The most tables loading at once (default: the project's `concurrency`, else 4); one table's batches always commit one at a time.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     pub concurrency: Option<u16>,
