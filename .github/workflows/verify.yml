@@ -116,9 +116,34 @@ jobs:
       - run: make clean-partial-duckdb-sources
       - name: Sign in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      # The SSH bastion's image, as crates/sqlload-testkit/src/ssh/constants.rs pins it, pulled signed in so the tests find it here.
+      # The SSH bastion's image, read from where the testkit pins it, pulled once and signed in so the tests find it here;
+      # GHCR's rate limit (toomanyrequests) gets one retry a minute later, any other failure none.
+      - name: Pull the SSH bastion image
+        run: |
+          pins=$(tr -d '\n' < crates/sqlload-testkit/src/ssh/constants.rs)
+          name=$(grep -o 'const IMAGE: &str = *"[^"]*"' <<<"$pins" | cut -d'"' -f2 || true)
+          tag=$(grep -o 'const TAG: &str = *"[^"]*"' <<<"$pins" | cut -d'"' -f2 || true)
+          image="$name:$tag"
+          if [ -z "$name" ] || [ -z "$tag" ]; then
+            echo "::error::cannot read the SSH bastion image's IMAGE and TAG from crates/sqlload-testkit/src/ssh/constants.rs"
+            exit 1
+          fi
+          for attempt in 1 2; do
+            if out=$(timeout 240 docker pull "$image" 2>&1); then
+              echo "$out"
+              exit 0
+            fi
+            echo "$out"
+            if [ "$attempt" = 1 ] && grep -q toomanyrequests <<<"$out"; then
+              echo "GHCR rate-limited the pull of $image; retrying once in 60 s"
+              sleep 60
+              continue
+            fi
+            break
+          done
+          echo "::error::cannot pull the SSH bastion image $image: $(tail -n 1 <<<"$out")"
+          exit 1
       - run: |
-          docker pull ghcr.io/linuxserver/openssh-server:10.3_p1-r2-ls242@sha256:aa4e1b3916e8555f24e574e6108b0b89a1b20362b0a11800a71280b45999649e
           docker pull redpandadata/redpanda:v25.1.4
           docker pull postgres:17-alpine
           docker pull chrislusf/seaweedfs:3.97
