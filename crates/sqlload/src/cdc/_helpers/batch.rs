@@ -233,13 +233,24 @@ fn applied_changes(
     Ok((fold_changes(kept, &positions)?, truncated))
 }
 
-/// `relation` with each column the load renames (under `naming = "dlt"`) under the name it loads as, so the plan's read columns and key find it; a column the plan lacks keeps the source's name.
-pub(crate) fn loaded_relation(relation: &Relation, planned: &SourceTable) -> Relation {
+/// `relation` with each column the load renames (under `naming = "dlt"`) under the name it loads as, so the plan's read columns and key find it; a column the plan lacks keeps the source's name. A column added since the plan whose name another column loads as is an error naming both, so neither overwrites the other.
+pub(crate) fn loaded_relation(
+    relation: &Relation,
+    planned: &SourceTable,
+) -> Result<Relation, String> {
     let mut loaded = relation.clone();
+    let mut seen: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for column in &mut loaded.columns {
-        column.name = planned.loaded_as(&column.name).to_owned();
+        let name = planned.loaded_as(&column.name).to_owned();
+        if let Some(other) = seen.insert(name.clone(), column.name.clone()) {
+            return Err(format!(
+                "{}.{}: columns {other} and {} both load as {name} under naming = \"dlt\"; one was added during the load, so run the load again to plan it, and rename or exclude one of them",
+                relation.schema, relation.table, column.name
+            ));
+        }
+        column.name = name;
     }
-    loaded
+    Ok(loaded)
 }
 
 /// The columns of `relation` on the stream that `planned`, the table as its load was planned, lacks: added (or renamed) since, so the load has nowhere to write them.

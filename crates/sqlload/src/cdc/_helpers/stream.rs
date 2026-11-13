@@ -1028,7 +1028,8 @@ impl CdcSource<'_> {
                     self.cdc.publication, relation.schema, relation.table, self.name
                 )));
             };
-            changes.relation = loaded_relation(&changes.relation, &table.spec.source_table);
+            changes.relation = loaded_relation(&changes.relation, &table.spec.source_table)
+                .map_err(LoaderError::Invalid)?;
             let gone = self.gone_columns(control, changes, table).await?;
             planned.push((*oid, table, gone));
         }

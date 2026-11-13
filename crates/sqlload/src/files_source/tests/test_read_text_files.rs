@@ -1,5 +1,5 @@
 use crate::column_types::models::ColumnType;
-use crate::files_source::models::{CsvOptions, SourceFormat};
+use crate::files_source::models::{CsvOptions, FilesEncoding, SourceFormat};
 use crate::files_source::tests::helpers::{
     block_on, csv_encoding, decoded, encoding, read_rows, record_encoding,
 };
@@ -280,6 +280,32 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             exclude: &["la*"],
             pinned: &[],
             expected_rows: Ok("2\n1"),
+        },
+        ReadTextFilesTestCase {
+            description: "flattening objects: an object that is NULL outside the sample loads as NULLs in its columns",
+            encoding: FilesEncoding {
+                flatten_objects: true,
+                ..encoding(SourceFormat::Ndjson)
+            },
+            files: &[("b.ndjson", "{\"id\":1,\"c\":{\"n\":\"a\"}}\n")],
+            unsampled: &[("a.ndjson", "{\"id\":2,\"c\":null}\n")],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("2|NULL\n1|a"),
+        },
+        ReadTextFilesTestCase {
+            description: "flattening objects: an object's key outside the sampled schema is an error naming its column",
+            encoding: FilesEncoding {
+                flatten_objects: true,
+                ..encoding(SourceFormat::Ndjson)
+            },
+            files: &[("b.ndjson", "{\"id\":1,\"c\":{\"n\":\"a\"}}\n")],
+            unsampled: &[("a.ndjson", "{\"id\":2,\"c\":{\"m\":1}}\n")],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "a.ndjson: line 1: key c__m is not in the sampled schema; pin it in columns or add it to exclude_columns",
+            ),
         },
         ReadTextFilesTestCase {
             description: "a CSV header outside the sampled schema is an error",
