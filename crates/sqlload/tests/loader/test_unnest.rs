@@ -104,17 +104,32 @@ const MERGE_RUNS: &[(&str, &str)] = &[
 /// The merge's orders, items and parts counts, and each order's items and parts joined by id.
 const MERGE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',') FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
 
-/// The merge's roots given ids their keys don't derive, as dlt's `delete-insert` merge gives them random ones; their items and parts follow.
-const REKEY_SQL: &str = "UPDATE raw.orders SET _sqlload_row_id = 'old-' || _sqlload_row_id; UPDATE raw.orders__items SET _sqlload_parent_id = 'old-' || _sqlload_parent_id, _sqlload_root_id = 'old-' || _sqlload_root_id; UPDATE raw.orders__items__parts SET _sqlload_root_id = 'old-' || _sqlload_root_id";
+/// A merge's runs for roots with other ids: the first adds order 3, which the second leaves alone.
+const REKEYED_RUNS: &[(&str, &str)] = &[
+    (
+        "a.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}, {\"sku\": \"b\", \"parts\": [3]}]}\n{\"id\": 2, \"items\": [{\"sku\": \"c\", \"parts\": [4]}]}\n{\"id\": 3, \"items\": [{\"sku\": \"e\", \"parts\": [6]}]}\n",
+    ),
+    (
+        "b.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"x\", \"parts\": [9]}]}\n{\"id\": 1, \"items\": [{\"sku\": \"d\", \"parts\": [5]}]}\n{\"id\": 2, \"items\": []}\n",
+    ),
+];
+
+/// Orders 1 and 3 given ids their keys don't derive, as dlt's `delete-insert` merge gives them random ones, their items and parts following; order 2 keeps its own.
+const REKEY_SQL: &str = "UPDATE raw.orders SET _sqlload_row_id = 'old-' || _sqlload_row_id WHERE id <> 2; UPDATE raw.orders__items SET _sqlload_parent_id = 'old-' || _sqlload_parent_id, _sqlload_root_id = 'old-' || _sqlload_root_id WHERE 'old-' || _sqlload_root_id IN (SELECT _sqlload_row_id FROM raw.orders); UPDATE raw.orders__items__parts SET _sqlload_root_id = 'old-' || _sqlload_root_id WHERE 'old-' || _sqlload_root_id IN (SELECT _sqlload_row_id FROM raw.orders)";
+
+/// The orders, items and parts counts after the rekeyed merge, and each order's items and parts joined by id, in order.
+const REKEYED_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',' ORDER BY o.id) FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
 
 /// [`MERGE_SETTINGS`] under dlt's naming.
 const DLT_MERGE_SETTINGS: &str = "naming = \"dlt\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n";
 
 /// [`REKEY_SQL`] under dlt's naming.
-const DLT_REKEY_SQL: &str = "UPDATE raw.orders SET _dlt_id = 'old-' || _dlt_id; UPDATE raw.orders__items SET _dlt_parent_id = 'old-' || _dlt_parent_id, _dlt_root_id = 'old-' || _dlt_root_id; UPDATE raw.orders__items__parts SET _dlt_root_id = 'old-' || _dlt_root_id";
+const DLT_REKEY_SQL: &str = "UPDATE raw.orders SET _dlt_id = 'old-' || _dlt_id WHERE id <> 2; UPDATE raw.orders__items SET _dlt_parent_id = 'old-' || _dlt_parent_id, _dlt_root_id = 'old-' || _dlt_root_id WHERE 'old-' || _dlt_root_id IN (SELECT _dlt_id FROM raw.orders); UPDATE raw.orders__items__parts SET _dlt_root_id = 'old-' || _dlt_root_id WHERE 'old-' || _dlt_root_id IN (SELECT _dlt_id FROM raw.orders)";
 
-/// [`MERGE_CHECK`] under dlt's naming.
-const DLT_MERGE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',') FROM raw.orders o JOIN raw.orders__items i ON i._dlt_parent_id = o._dlt_id JOIN raw.orders__items__parts p ON p._dlt_parent_id = i._dlt_id)";
+/// [`REKEYED_CHECK`] under dlt's naming.
+const DLT_REKEYED_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',' ORDER BY o.id) FROM raw.orders o JOIN raw.orders__items i ON i._dlt_parent_id = o._dlt_id JOIN raw.orders__items__parts p ON p._dlt_parent_id = i._dlt_id)";
 
 /// The parent's columns on ClickHouse, in table order.
 const CLICKHOUSE_COLUMNS: &str = "SELECT arrayStringConcat(groupArray(name), ',') FROM (SELECT name FROM system.columns WHERE database = 'raw' AND table = 'orders' ORDER BY position)";
@@ -452,22 +467,22 @@ fn given_roots_whose_ids_their_keys_did_not_give_when_merging_then_their_old_ite
 -> Result<(), String> {
     let test_cases = [
         RekeyedTestCase {
-            description: "roots with other ids (as an append or dlt's delete-insert gives them): a merged order's old items and parts are replaced, an emptied list leaves none",
+            description: "roots with other ids (as dlt's delete-insert gives them) beside one with its own: a merged order's old items and parts are replaced, an emptied list leaves none, and an order the merge leaves alone keeps its items",
             settings: MERGE_SETTINGS,
-            loaded: &MERGE_RUNS[..1],
-            merged: &MERGE_RUNS[1..],
+            loaded: &REKEYED_RUNS[..1],
+            merged: &REKEYED_RUNS[1..],
             rekey: REKEY_SQL,
-            check_query: MERGE_CHECK,
-            expected_result: "2/1/1/1:d:5",
+            check_query: REKEYED_CHECK,
+            expected_result: "3/2/2/1:d:5,3:e:6",
         },
         RekeyedTestCase {
-            description: "naming = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the old items and parts go",
+            description: "naming = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the merged orders' old items and parts go, the unmerged order's stay",
             settings: DLT_MERGE_SETTINGS,
-            loaded: &MERGE_RUNS[..1],
-            merged: &MERGE_RUNS[1..],
+            loaded: &REKEYED_RUNS[..1],
+            merged: &REKEYED_RUNS[1..],
             rekey: DLT_REKEY_SQL,
-            check_query: DLT_MERGE_CHECK,
-            expected_result: "2/1/1/1:d:5",
+            check_query: DLT_REKEYED_CHECK,
+            expected_result: "3/2/2/1:d:5,3:e:6",
         },
     ];
     for test_case in &test_cases {
@@ -500,22 +515,22 @@ fn given_roots_whose_ids_their_keys_did_not_give_when_merging_into_postgres_then
 -> Result<(), String> {
     let test_cases = [
         RekeyedTestCase {
-            description: "roots with other ids (as an append or dlt's delete-insert gives them): a merged order's old items and parts are replaced, an emptied list leaves none",
+            description: "roots with other ids (as dlt's delete-insert gives them) beside one with its own: a merged order's old items and parts are replaced, an emptied list leaves none, and an order the merge leaves alone keeps its items",
             settings: MERGE_SETTINGS,
-            loaded: &MERGE_RUNS[..1],
-            merged: &MERGE_RUNS[1..],
+            loaded: &REKEYED_RUNS[..1],
+            merged: &REKEYED_RUNS[1..],
             rekey: REKEY_SQL,
-            check_query: MERGE_CHECK,
-            expected_result: "2/1/1/1:d:5",
+            check_query: REKEYED_CHECK,
+            expected_result: "3/2/2/1:d:5,3:e:6",
         },
         RekeyedTestCase {
-            description: "naming = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the old items and parts go",
+            description: "naming = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the merged orders' old items and parts go, the unmerged order's stay",
             settings: DLT_MERGE_SETTINGS,
-            loaded: &MERGE_RUNS[..1],
-            merged: &MERGE_RUNS[1..],
+            loaded: &REKEYED_RUNS[..1],
+            merged: &REKEYED_RUNS[1..],
             rekey: DLT_REKEY_SQL,
-            check_query: DLT_MERGE_CHECK,
-            expected_result: "2/1/1/1:d:5",
+            check_query: DLT_REKEYED_CHECK,
+            expected_result: "3/2/2/1:d:5,3:e:6",
         },
     ];
     run_async(async {

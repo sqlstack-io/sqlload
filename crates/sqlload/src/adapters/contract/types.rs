@@ -336,7 +336,7 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         dropped_ordinals(self, request, staging)
     }
 
-    /// Under a merge, a query of the `row_id` of each row of the table that a row of `staging` shares its key with but whose `row_id` differs (an id not derived from the key, as dlt's `delete-insert` merge or an earlier `append` gives), so the rows hanging off it can be replaced too; `None` without a merge.
+    /// Under a merge, a query of the `row_id` of each row of the table that a row of `staging` shares its key with but whose `row_id` differs (an id not derived from the key, as dlt's `delete-insert` merge gives), so the rows hanging off it can be replaced too; `None` without a merge.
     fn render_rekeyed_row_ids(
         &self,
         request: &WriteStatementsRequest<'_>,

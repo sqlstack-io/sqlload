@@ -3,7 +3,7 @@
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 
-/// Under a merge, a query of the `row_id` of each row of `request.table` that shares its `unique_key` with a row of `staging` but holds another `row_id`: rows whose id was not derived from their key (loaded by dlt's `delete-insert` merge, or by `append` before the table merged), so the rows hanging off them are found by the ids they hold. Keys compare as the merge compares them (equal, so an empty key matches nothing); `None` without a merge.
+/// Under a merge, a query of the `row_id` of each row of `request.table` that shares its `unique_key` with a row of `staging` but holds another `row_id`: rows whose id was not derived from their key (as dlt's `delete-insert` merge gives them, random), so the rows hanging off them are found by the ids they hold. Keys compare as the merge compares them (equal, so an empty key matches nothing); `None` without a merge.
 pub(in crate::adapters) fn rekeyed_row_ids<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
