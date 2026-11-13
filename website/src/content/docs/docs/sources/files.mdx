@@ -239,7 +239,8 @@ after_load = { move_to = "loaded" }
   ones aside) and a table that has loaded before. A folder on a local disk that is missing or can't
   be read, one holding files of another format or that don't match `path_columns`, and a table
   that was never loaded all still fail, as does an empty folder whose destination table another
-  source loads too. On S3 a prefix exists only while it holds files, and an unmounted share is an
+  source loads too. Added in 0.42: while the folder is empty, a source sharing its destination table
+  still can't replace or `delete_insert` into it, even when it runs alone. On S3 a prefix exists only while it holds files, and an unmounted share is an
   empty folder, so after the first load those look empty: watch the `skipped` reason. Without
   `after_load`, an empty folder always fails.
 - It isn't for SFTP connections, which SQLLoad only reads, ZIP archives, whose members another

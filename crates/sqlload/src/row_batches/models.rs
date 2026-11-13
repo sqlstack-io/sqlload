@@ -283,6 +283,8 @@ pub struct UnnestRequest<'a> {
     pub naming: Naming,
     /// The longest name dlt's naming gives on the destination.
     pub name_limit: Option<usize>,
+    /// Whether an object inside an item flattens into `<key>__<inner>` fields, as dlt flattens it (files sources under `naming = "dlt"`).
+    pub flatten_objects: bool,
     /// Each row's id, which its child rows name as their parent's.
     pub ids: &'a [String],
     /// Each row's root row's id, which child rows carry under a merge; `None` otherwise.

@@ -17,7 +17,9 @@ use crate::adapters::files::main::newest_load_files::newest_load_files;
 use crate::adapters::files::main::read_table_state::read_table_state;
 use crate::adapters::files::main::table_path::table_path;
 use crate::adapters::files::models::TablePathRequest;
-use crate::cdc::_helpers::batch::{change_parts, refuse_renamed, rows_batch, unplanned_columns};
+use crate::cdc::_helpers::batch::{
+    change_parts, loaded_relation, refuse_renamed, rows_batch, unplanned_columns,
+};
 use crate::cdc::_helpers::buffer::buffer_change;
 use crate::cdc::_helpers::reshape::reshape_problem;
 use crate::cdc::_helpers::snapshot_log::{SnapshotLog, snapshot_folder};
@@ -296,7 +298,7 @@ impl CdcSource<'_> {
                 .read_columns
                 .iter()
                 .filter(|column| !column.name.starts_with(CDC_PREFIX))
-                .map(|column| column.name.clone())
+                .map(|column| source.spelling(&column.name).to_owned())
                 .collect();
             let mut unstreamed: Vec<String> = control
                 .query(
@@ -1011,11 +1013,11 @@ impl CdcSource<'_> {
     async fn flush(
         &self,
         control: &Client,
-        tables: BTreeMap<u32, TableChanges>,
+        mut tables: BTreeMap<u32, TableChanges>,
         mut spilled: BTreeMap<u32, SpillFile>,
     ) -> Result<BTreeMap<String, u64>, LoaderError> {
         let mut planned: Vec<(u32, &TablePlan, Vec<String>)> = Vec::with_capacity(tables.len());
-        for (oid, changes) in &tables {
+        for (oid, changes) in &mut tables {
             let relation = &changes.relation;
             let Some(table) = self.tables.iter().find(|table| {
                 let source = &table.spec.source_table;
@@ -1026,6 +1028,8 @@ impl CdcSource<'_> {
                     self.cdc.publication, relation.schema, relation.table, self.name
                 )));
             };
+            changes.relation = loaded_relation(&changes.relation, &table.spec.source_table)
+                .map_err(LoaderError::Invalid)?;
             let gone = self.gone_columns(control, changes, table).await?;
             planned.push((*oid, table, gone));
         }
@@ -1100,12 +1104,11 @@ impl CdcSource<'_> {
             .collect();
         let (present, gone): (Vec<String>, Vec<String>) =
             unplanned.into_iter().partition(|name| live.contains(name));
-        let known: std::collections::BTreeSet<&str> = table
-            .spec
-            .source_table
+        let source = &table.spec.source_table;
+        let known: std::collections::BTreeSet<&str> = source
             .columns
             .iter()
-            .map(|column| column.name.as_str())
+            .map(|column| source.spelling(&column.name))
             .collect();
         let new_live: Vec<&String> = live
             .iter()
@@ -1306,7 +1309,7 @@ fn key_list(names: &[String]) -> String {
     list
 }
 
-/// `table`'s columns in the catalog as `client` sees it, dropped ones included.
+/// `table`'s columns in the catalog as `client` sees it, dropped ones included, each under the name it loads as (see [`SourceTable::loaded_as`]).
 async fn catalog_columns(
     client: &Client,
     table: &SourceTable,
@@ -1320,7 +1323,7 @@ async fn catalog_columns(
         .map_err(postgres)?
         .iter()
         .map(|row| CatalogColumn {
-            name: row.get(0),
+            name: table.loaded_as(row.get(0)).to_owned(),
             attnum: row.get(1),
             dropped: row.get(2),
             has_default: row.get(3),

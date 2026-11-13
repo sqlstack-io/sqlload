@@ -10,7 +10,7 @@ use crate::helpers::{
     CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, run_async,
     run_sqlload, spawn_sqlload, step, stop_sqlload,
 };
-use crate::postgres_helpers::run_cdc_scenario;
+use crate::postgres_helpers::{DLT_CRM, DLT_CRM_CHECK, DLT_CRM_SOURCE, run_cdc_scenario};
 use crate::test_types::{
     CdcPlanTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
     QuietSlotTestCase,
@@ -1444,6 +1444,15 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             steps: &DROPPED_COLUMN_TOAST,
             check_query: "SELECT string_agg(id || ':' || length(big) || ':' || tags, ',' ORDER BY id) FROM raw.strict__orders WHERE id = 1",
             expected_result: "1:9600:{q}",
+        },
+        CdcScenarioTestCase {
+            description: "naming = \"dlt\" renames quoted mixed-case columns, and the snapshot, an insert, an update and a delete all land under the loaded names",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: DLT_CRM_SOURCE,
+            steps: &DLT_CRM,
+            check_query: DLT_CRM_CHECK,
+            expected_result: "1:Ann B:true:update:false,2:Bo:true:delete:true,3:Cy:false:insert:false",
         },
     ];
     for test_case in &test_cases {

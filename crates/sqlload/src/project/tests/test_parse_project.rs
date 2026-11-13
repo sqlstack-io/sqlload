@@ -165,7 +165,7 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
         ParseProjectTestCase {
             description: "a files source reads its format, compression and CSV options; unset options keep their defaults",
             read: |project| format!("{:?}", project.sources["events"].files_encoding()),
-            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0 }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0 }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None }",
+            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0 }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0 }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None, flatten_objects: false }",
         },
         ParseProjectTestCase {
             description: "a files source without settings reads Parquet",

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, StringArray};
@@ -10,7 +10,9 @@ use crate::column_types::models::ColumnType;
 use crate::files_source::_helpers::text::bytes_reader::BytesReader;
 use crate::files_source::_helpers::text::checks::{ColumnChecks, misfit, value_fits};
 use crate::files_source::_helpers::text::inference::json_value_type;
-use crate::files_source::_helpers::text::json_records::{JsonRecord, JsonSplitter};
+use crate::files_source::_helpers::text::json_records::{
+    JsonRecord, JsonSplitter, flattened_record,
+};
 use crate::files_source::constants::MAX_RECORD_BYTES;
 
 /// Reads a JSON file's objects in order, a chunk of bytes at a time.
@@ -19,6 +21,10 @@ pub(crate) struct JsonReader {
     splitter: JsonSplitter,
     ready: VecDeque<JsonRecord>,
     finished: bool,
+    /// Whether objects flatten into `<field>__<key>` fields (see [`flattened_record`]).
+    flatten_objects: bool,
+    /// The fields flattening has made, and the object fields it replaced, so far.
+    flattened: BTreeSet<String>,
 }
 
 impl JsonReader {
@@ -29,7 +35,25 @@ impl JsonReader {
             splitter: JsonSplitter::new(by_line, MAX_RECORD_BYTES),
             ready: VecDeque::new(),
             finished: false,
+            flatten_objects: false,
+            flattened: BTreeSet::new(),
         }
+    }
+
+    /// This reader flattening objects when `flatten_objects` says so.
+    pub(crate) fn flattening(mut self, flatten_objects: bool) -> Self {
+        self.flatten_objects = flatten_objects;
+        self
+    }
+
+    /// Whether this reader flattens objects.
+    pub(crate) fn flattens(&self) -> bool {
+        self.flatten_objects
+    }
+
+    /// The fields flattening has made, and the object fields it replaced, in the records read so far.
+    pub(crate) fn flattened(&self) -> &BTreeSet<String> {
+        &self.flattened
     }
 
     /// Up to `limit` more objects; empty at the end of the file.
@@ -44,15 +68,25 @@ impl JsonReader {
             self.ready.extend(records);
         }
         let take = limit.min(self.ready.len());
-        Ok(self.ready.drain(..take).collect())
+        let records: Vec<JsonRecord> = self.ready.drain(..take).collect();
+        if !self.flatten_objects {
+            return Ok(records);
+        }
+        let mut flat: Vec<JsonRecord> = Vec::with_capacity(records.len());
+        for record in records {
+            let (record, made) = flattened_record(record)?;
+            self.flattened.extend(made);
+            flat.push(record);
+        }
+        Ok(flat)
     }
 }
 
-/// `records` as a batch of text columns, one per `columns` entry (a missing key is NULL; a repeated key keeps its last value), and the line each row starts on; a key the source lacks, or a value that does not fit its inferred type, is an error.
+/// `records` as a batch of text columns, one per `columns` entry (a missing key is NULL; a repeated key keeps its last value), and the line each row starts on; a key the source lacks, or a value that does not fit its inferred type, is an error, except, when `flattened`, a NULL for an object the source has flattened columns of (an object NULL in this row, which loads as a missing key does).
 pub(crate) fn records_batch(
     records: &[JsonRecord],
     columns: &[(String, ColumnType)],
-    checks: &ColumnChecks,
+    (checks, flattened): (&ColumnChecks, bool),
 ) -> Result<(RecordBatch, Vec<u64>), String> {
     let index: HashMap<&str, usize> = columns
         .iter()
@@ -64,7 +98,9 @@ pub(crate) fn records_batch(
         for field in &record.fields {
             let (key, value, nested) = field;
             let Some(position) = index.get(key.as_str()) else {
-                checks.check_name("key", key, record.line)?;
+                if !(flattened && value.is_null() && checks.is_flattened_object(key)) {
+                    checks.check_name("key", key, record.line)?;
+                }
                 continue;
             };
             check_value(checks, field, record.line)?;

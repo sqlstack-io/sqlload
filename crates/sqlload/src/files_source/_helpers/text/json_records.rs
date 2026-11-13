@@ -1,8 +1,11 @@
+use std::collections::BTreeSet;
+
 use serde::de::{Deserialize, Deserializer, Error as _, MapAccess, Visitor};
 use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 
 use crate::files_source::_helpers::text::bytes_reader::too_long;
+use crate::row_batches::constants::FLATTEN_SEPARATOR;
 
 /// One JSON object from a file: its keys and values in file order, and the line it starts on; a nested object or array is an empty placeholder value with its compact source text (keys in file order) beside it.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +56,66 @@ impl<'de> Visitor<'de> for ObjectVisitor {
         }
         Ok(OrderedObject(last_values(fields)))
     }
+}
+
+/// One field of a JSON record: its key, its value (an empty placeholder for an object or array) and the nested value's compact text.
+type JsonField = (String, Value, Option<String>);
+
+/// `record` with each field holding an object replaced where it stands, and recursively, by one field per key named `<field>__<key>`, as dlt flattens objects (an empty object, or a NULL inside an object, leaves none); with each name flattening made, and each field it replaced. A made name the record already has is an error naming it.
+pub(crate) fn flattened_record(
+    record: JsonRecord,
+) -> Result<(JsonRecord, BTreeSet<String>), String> {
+    let mut fields: Vec<JsonField> = Vec::with_capacity(record.fields.len());
+    let mut flattened: BTreeSet<String> = BTreeSet::new();
+    for field in record.fields {
+        flatten_field(field, "", (&mut fields, &mut flattened))?;
+    }
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    if let Some((name, _, _)) = fields
+        .iter()
+        .find(|(name, _, _)| !seen.insert(name.as_str()))
+    {
+        return Err(format!(
+            "line {}: naming = \"dlt\" flattens an object into the column {name}, which the record already has as a key; rename one of them",
+            record.line
+        ));
+    }
+    Ok((
+        JsonRecord {
+            line: record.line,
+            fields,
+        },
+        flattened,
+    ))
+}
+
+/// Push `field`, named below `prefix` when an object holds it, onto `fields`, or its keys in its place when it holds an object (a NULL below a prefix leaves nothing); the object's name and names below a prefix join `flattened`.
+fn flatten_field(
+    (key, value, nested): JsonField,
+    prefix: &str,
+    (fields, flattened): (&mut Vec<JsonField>, &mut BTreeSet<String>),
+) -> Result<(), String> {
+    let name = match prefix.is_empty() {
+        true => key,
+        false => format!("{prefix}{FLATTEN_SEPARATOR}{key}"),
+    };
+    if let (Value::Object(_), Some(text)) = (&value, &nested) {
+        let object: OrderedObject =
+            serde_json::from_str(text).map_err(|error| format!("{name}: {error}"))?;
+        flattened.insert(name.clone());
+        for inner in object.0 {
+            flatten_field(inner, &name, (fields, flattened))?;
+        }
+        return Ok(());
+    }
+    if !prefix.is_empty() {
+        if value.is_null() {
+            return Ok(());
+        }
+        flattened.insert(name.clone());
+    }
+    fields.push((name, value, nested));
+    Ok(())
 }
 
 /// `fields` with only the last value of a key given more than once, as Snowflake's JSON reader keeps it, so both routes read and check the same value.

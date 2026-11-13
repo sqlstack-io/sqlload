@@ -18,6 +18,7 @@ use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
 use crate::row_batches::_helpers::arrow_json::normalise_column;
 use crate::row_batches::_helpers::json_seed::raw_cell;
+use crate::row_batches::constants::FLATTEN_SEPARATOR;
 use crate::row_batches::main::columns_batch::columns_batch;
 use crate::row_batches::models::{ChildBatch, RowColumns, Unnest, UnnestRequest};
 use crate::row_batches::types::ListChoices;
@@ -45,6 +46,8 @@ pub(crate) struct Split<'a> {
     pub(crate) naming: Naming,
     /// The longest name dlt's naming gives on the destination.
     pub(crate) name_limit: Option<usize>,
+    /// Whether an object inside an item flattens into `<key>__<inner>` fields.
+    pub(crate) flatten_objects: bool,
     /// Under `"all"`, the fields chosen as list fields or not so far, chosen further as values decide.
     pub(crate) choices: &'a mut ListChoices,
     pub(crate) levels: Vec<Level>,
@@ -202,12 +205,16 @@ impl Split<'_> {
     ) -> Result<(), String> {
         let id = child_row_id(place.parent, place.table, position);
         let entries: Vec<(String, Box<RawValue>)> = match item.trim_start().as_bytes().first() {
-            Some(b'{') => self.loaded_keys(
-                serde_json::from_str::<OrderedObject>(item)
+            Some(b'{') => {
+                let object = serde_json::from_str::<OrderedObject>(item)
                     .map_err(|error| format!("{}: {error}", place.path))?
-                    .0,
-                place.path,
-            )?,
+                    .0;
+                let entries = match self.flatten_objects {
+                    true => flatten_entries(object, ("", place.path))?,
+                    false => object,
+                };
+                self.loaded_keys(entries, place.path)?
+            }
             Some(b'[') => vec![(NESTED_LIST_KEY.to_owned(), raw(item, place.path)?)],
             _ => vec![(VALUE_COLUMN.to_owned(), raw(item, place.path)?)],
         };
@@ -299,6 +306,30 @@ impl Split<'_> {
         });
         &mut self.levels[index]
     }
+}
+
+/// `entries`, named below `prefix` when an object holds them, with each object's keys in its place as `<key>__<inner>`, recursively, as dlt flattens an item's objects (an empty object, or a NULL inside an object, leaves nothing); an error names the item's `path`.
+fn flatten_entries(
+    entries: Vec<(String, Box<RawValue>)>,
+    (prefix, path): (&str, &str),
+) -> Result<Vec<(String, Box<RawValue>)>, String> {
+    let mut flat: Vec<(String, Box<RawValue>)> = Vec::with_capacity(entries.len());
+    for (key, value) in entries {
+        let name = match prefix.is_empty() {
+            true => key,
+            false => format!("{prefix}{FLATTEN_SEPARATOR}{key}"),
+        };
+        match value.get().trim_start().as_bytes().first() {
+            Some(b'{') => {
+                let object = serde_json::from_str::<OrderedObject>(value.get())
+                    .map_err(|error| format!("{path}.{name}: {error}"))?;
+                flat.extend(flatten_entries(object.0, (&name, path))?);
+            }
+            Some(b'n') if !prefix.is_empty() => {}
+            _ => flat.push((name, value)),
+        }
+    }
+    Ok(flat)
 }
 
 /// `text` as a raw JSON value, an error naming `path` when it is not one.

@@ -35,8 +35,8 @@ use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
 use crate::files_source::models::{
-    AfterLoad, BatchFooters, DataFile, FileColumn, FileSelection, FilesRead, FilesTable,
-    LoadedFile, PathValues, SourceFormat, StoredRead, TextChecks,
+    AfterLoad, BatchFooters, DataFile, FileColumn, FileSelection, FilesEncoding, FilesRead,
+    FilesTable, LoadedFile, PathValues, SourceFormat, StoredRead, TextChecks,
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
@@ -47,7 +47,9 @@ use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::resolve::{NameRule, resolve_tables, source_target};
 use crate::loader::_helpers::run_log::merged_files;
 use crate::loader::_helpers::specs::is_child_column;
-use crate::loader::_helpers::specs::{missing_description, table_name, table_naming};
+use crate::loader::_helpers::specs::{
+    flattened_object_problems, missing_description, referenced_columns, table_name, table_naming,
+};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
     KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, RELOAD_FIX,
@@ -744,7 +746,10 @@ pub(crate) async fn discover_files_table(
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
     let (values, _) = path_values((source_name, source), warehouse)?;
-    let encoding = source.files_encoding();
+    let encoding = FilesEncoding {
+        flatten_objects: naming == Naming::Dlt,
+        ..source.files_encoding()
+    };
     let table = discover_files(&folder, &values, &encoding).await?;
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
@@ -820,7 +825,10 @@ pub(crate) fn files_source_parts(
     (warehouse, naming): (Warehouse, Naming),
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
-    let encoding = source.files_encoding();
+    let encoding = FilesEncoding {
+        flatten_objects: naming == Naming::Dlt,
+        ..source.files_encoding()
+    };
     let (values, partition_types) = path_values((source_name, source), warehouse)?;
     let added: Vec<&str> = partition_types
         .iter()
@@ -830,6 +838,13 @@ pub(crate) fn files_source_parts(
     let overrides = source.tables.get(source_name);
     let rule = (naming, sql_adapter(warehouse).max_identifier_length());
     let pinned_only = pinned_unsampled(overrides, (&table, &added, rule), encoding.format)?;
+    if encoding.flatten_objects {
+        let problems = flattened_object_problems((source, overrides), &table.columns, rule)
+            .map_err(LoaderError::Invalid)?;
+        if !problems.is_empty() {
+            return Err(LoaderError::Invalid(problems.join("; ")));
+        }
+    }
     let dropped = (!table.dropped.is_empty()).then(|| {
         format!(
             "dropped {} from the files (replaced by this load's)",
@@ -1645,16 +1660,6 @@ fn drained_files(
             };
         }
     };
-    let listed = SourceTable {
-        schema: String::new(),
-        name: source_name.to_owned(),
-        columns: Vec::new(),
-        primary_key: Vec::new(),
-        indexed_columns: Vec::new(),
-        estimated_rows: -1,
-        estimated_bytes: 0,
-        comment: None,
-    };
     let overrides = source.tables.get(source_name);
     let name = overrides.and_then(|table| table.name.as_deref());
     let unset = TableSettings::default();
@@ -1669,6 +1674,16 @@ fn drained_files(
         naming,
         sql_adapter(target.warehouse).max_identifier_length(),
     );
+    let listed = SourceTable {
+        schema: String::new(),
+        name: source_name.to_owned(),
+        columns: referenced_columns(overrides, rule),
+        primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
+        estimated_rows: -1,
+        estimated_bytes: 0,
+        comment: None,
+    };
     let table = TableName {
         database: target.database,
         schema: target.schema,
@@ -1687,8 +1702,12 @@ fn drained_files(
         };
     }
     let path = source.path.as_deref().unwrap_or_default();
+    let spec = resolve_tables(project, source_name, std::slice::from_ref(&listed))
+        .specs
+        .pop();
     ResolvedTables {
         drained: Some(DrainedFiles {
+            spec,
             in_scope,
             target: target.name,
             skipped: SkippedTable {
@@ -1906,6 +1925,7 @@ pub(crate) async fn found_sources<'a>(
             files,
         });
     }
+    let mut drained_specs: Vec<TableSpec> = Vec::new();
     for (index, drained) in drained_sources {
         let source = &mut found.sources[index];
         let shared = found
@@ -1918,6 +1938,7 @@ pub(crate) async fn found_sources<'a>(
         found
             .drained
             .push((drained.table.table.clone(), source.name.clone()));
+        drained_specs.extend(drained.spec);
         if !drained.in_scope {
             continue;
         }
@@ -1943,6 +1964,7 @@ pub(crate) async fn found_sources<'a>(
             None => source.resolved.skipped.push(drained.skipped),
         }
     }
+    found.configured.extend(drained_specs);
     Ok(found)
 }
 

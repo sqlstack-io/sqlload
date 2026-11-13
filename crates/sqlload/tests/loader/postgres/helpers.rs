@@ -11,8 +11,8 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 use tokio_postgres::Client;
 
-use crate::helpers::{cdc_project, duckdb_text, run_async, run_sqlload};
-use crate::test_types::CdcScenarioTestCase;
+use crate::helpers::{cdc_project, duckdb_text, run_async, run_sqlload, step};
+use crate::test_types::{CdcScenarioTestCase, CdcStep};
 
 /// The project: the test database's `public` tables loaded into its `mart` schema, through a Postgres target on the same connection.
 pub(crate) fn project_text(port: u16) -> String {
@@ -198,3 +198,44 @@ pub(crate) fn run_cdc_scenario(
     })?;
     Ok(observed)
 }
+
+/// A source capturing `crm."Contacts"` under dlt's names, so its columns `ContactID`, `Full Name` and `IsActive` load as `contact_id`, `full_name` and `is_active`.
+pub(crate) const DLT_CRM_SOURCE: &str = r#"
+[sources.crm]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["crm.*"]
+naming = "dlt"
+"#;
+
+const CRM: &[&str] = &["load", "crm"];
+
+/// The table, its snapshot, then a transaction inserting, updating and deleting a contact, and a re-run of nothing.
+pub(crate) const DLT_CRM: [CdcStep; 3] = [
+    step(
+        r#"
+CREATE SCHEMA crm;
+CREATE TABLE crm."Contacts" ("ContactID" int8 PRIMARY KEY, "Full Name" text, "IsActive" boolean);
+INSERT INTO crm."Contacts" VALUES (1, 'Ann', true), (2, 'Bo', true);
+"#,
+        CRM,
+        "",
+        (true, "loaded"),
+    ),
+    step(
+        r#"
+BEGIN;
+INSERT INTO crm."Contacts" VALUES (3, 'Cy', false);
+UPDATE crm."Contacts" SET "Full Name" = 'Ann B' WHERE "ContactID" = 1;
+DELETE FROM crm."Contacts" WHERE "ContactID" = 2;
+COMMIT;
+"#,
+        CRM,
+        "",
+        (true, "Completed"),
+    ),
+    step("", CRM, "", (true, "0 rows")),
+];
+
+/// Each contact under its loaded names, with its last change and whether it is deleted.
+pub(crate) const DLT_CRM_CHECK: &str = "SELECT string_agg(contact_id || ':' || full_name || ':' || is_active || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY contact_id) FROM raw.crm__contacts";

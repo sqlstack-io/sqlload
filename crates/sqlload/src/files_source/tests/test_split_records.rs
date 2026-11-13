@@ -1,5 +1,7 @@
-use crate::files_source::tests::helpers::{read_csv, split_json};
-use crate::files_source::tests::test_types::{SplitJsonTestCase, TrackCsvTestCase};
+use crate::files_source::tests::helpers::{flatten_json, read_csv, split_json};
+use crate::files_source::tests::test_types::{
+    FlattenJsonTestCase, SplitJsonTestCase, TrackCsvTestCase,
+};
 
 #[test]
 fn given_json_bytes_in_chunks_when_splitting_then_objects_keep_their_lines_and_long_records_fail() {
@@ -115,6 +117,49 @@ fn given_csv_bytes_in_chunks_when_reading_then_the_first_record_and_open_quotes_
                 .err()
                 .unwrap_or_default()
                 .contains(test_case.expected_first.err().unwrap_or_default()),
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_json_objects_with_nested_objects_when_flattening_as_dlt_then_keys_become_parent_key_fields_in_place()
+ {
+    let test_cases = [
+        FlattenJsonTestCase {
+            description: "objects flatten in place at every level; an empty object or a NULL inside one leaves nothing; a list stays",
+            text: r#"{"id":1,"c":{"n":"a","addr":{"city":"x"},"gone":null,"e":{}},"tags":[1],"z":2}"#,
+            expected_flattened: Ok(
+                r#"id=1|c__n="a"|c__addr__city="x"|tags=[1]|z=2 made c,c__addr,c__addr__city,c__e,c__n"#,
+            ),
+        },
+        FlattenJsonTestCase {
+            description: "a NULL at the top level stays a field",
+            text: r#"{"c":null}"#,
+            expected_flattened: Ok("c=null made "),
+        },
+        FlattenJsonTestCase {
+            description: "a flattened name the record already has is an error naming it",
+            text: r#"{"c__n":1,"c":{"n":2}}"#,
+            expected_flattened: Err(
+                "line 1: naming = \"dlt\" flattens an object into the column c__n",
+            ),
+        },
+    ];
+    for test_case in test_cases {
+        let flattened = flatten_json(&test_case);
+        assert_eq!(
+            flattened.as_deref().ok(),
+            test_case.expected_flattened.ok(),
+            "{}",
+            test_case.description
+        );
+        assert!(
+            flattened
+                .err()
+                .unwrap_or_default()
+                .contains(test_case.expected_flattened.err().unwrap_or_default()),
             "{}",
             test_case.description
         );

@@ -20,6 +20,7 @@ pub fn unnest_batch(
         max_depth: request.max_depth,
         naming: request.naming,
         name_limit: request.name_limit,
+        flatten_objects: request.flatten_objects,
         choices,
         levels: Vec::new(),
     };

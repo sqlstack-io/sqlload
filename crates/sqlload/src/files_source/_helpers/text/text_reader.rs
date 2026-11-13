@@ -92,7 +92,8 @@ impl TextReader {
                 let records = reader.next_records(*batch_rows).await?;
                 match records.is_empty() {
                     true => Ok(None),
-                    false => records_batch(&records, columns, &self.checks).map(Some),
+                    false => records_batch(&records, columns, (&self.checks, reader.flattens()))
+                        .map(Some),
                 }
             }
             Records::Cells {
@@ -151,7 +152,8 @@ async fn typed_records(
             Records::Csv(Box::new(reader))
         }
         format => Records::Json {
-            reader: JsonReader::new(bytes, format == SourceFormat::Ndjson),
+            reader: JsonReader::new(bytes, format == SourceFormat::Ndjson)
+                .flattening(request.encoding.flatten_objects),
             columns: request
                 .columns
                 .iter()
