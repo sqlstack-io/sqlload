@@ -1654,14 +1654,24 @@ fn drained_files(
         estimated_bytes: 0,
         comment: None,
     };
-    let name = source
-        .tables
-        .get(source_name)
-        .and_then(|table| table.name.as_deref());
+    let overrides = source.tables.get(source_name);
+    let name = overrides.and_then(|table| table.name.as_deref());
+    let unset = TableSettings::default();
+    let naming = table_naming(
+        (
+            overrides.map_or(&unset, |overrides| &overrides.settings),
+            &source.defaults,
+        ),
+        target.naming,
+    );
+    let rule = (
+        naming,
+        sql_adapter(target.warehouse).max_identifier_length(),
+    );
     let table = TableName {
         database: target.database,
         schema: target.schema,
-        table: table_name((source_name, source), name, &listed),
+        table: table_name((source_name, source), name, (&listed, rule)),
     };
     let in_scope = selected(options, (source_name, &table.table, source_name));
     if target.path.is_some() {
