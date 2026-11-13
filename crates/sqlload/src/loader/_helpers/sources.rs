@@ -40,11 +40,12 @@ use crate::files_source::models::{
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
+use crate::load_naming::main::loaded_name::loaded_name;
 use crate::loader::_helpers::destination::table_folder;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::resolve::{resolve_tables, source_target};
 use crate::loader::_helpers::run_log::merged_files;
-use crate::loader::_helpers::specs::{missing_description, table_name};
+use crate::loader::_helpers::specs::{missing_description, table_name, table_naming};
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
     KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, RELOAD_FIX,
@@ -1472,7 +1473,12 @@ pub(crate) async fn source_ends(
                         Ok(ColumnType::Int | ColumnType::SmallInt)
                     )
                 })
-                .map(|column| column.name.clone())
+                .map(|column| {
+                    column
+                        .source_spelling
+                        .clone()
+                        .unwrap_or_else(|| column.name.clone())
+                })
         });
         let wanted = matches!(spec.batch, Some(BatchStep::Integer(_)))
             && selected(
@@ -1666,26 +1672,46 @@ pub(crate) fn source_in_scope(
                     .any(|selector| !project.sources.contains_key(selector)));
     };
     let found: Vec<String> = discovered.iter().map(SourceTable::qualified_name).collect();
+    let (target_naming, limit) = source_target(project, source).map_or((None, None), |target| {
+        (
+            target.naming,
+            sql_adapter(target.warehouse).max_identifier_length(),
+        )
+    });
+    let unset = TableSettings::default();
+    let rule = |overrides: Option<&TableOverride>| {
+        (
+            table_naming(
+                (
+                    overrides.map_or(&unset, |overrides| &overrides.settings),
+                    &source.defaults,
+                ),
+                target_naming,
+            ),
+            limit,
+        )
+    };
     let named = source
         .tables
         .iter()
         .filter(|(qualified, _)| !found.contains(qualified))
         .map(|(qualified, overrides)| {
             let destination = match overrides.name.as_deref() {
-                Some(name) if !name.contains('{') => name,
-                _ => "",
+                Some(name) if !name.contains('{') => {
+                    let (naming, limit) = rule(Some(overrides));
+                    loaded_name(naming, name, limit)
+                }
+                _ => String::new(),
             };
-            (destination.to_owned(), qualified.clone())
+            (destination, qualified.clone())
         });
     let tables: Vec<(String, String)> = discovered
         .iter()
         .map(|table| {
-            let name = source
-                .tables
-                .get(&table.qualified_name())
-                .and_then(|overrides| overrides.name.as_deref());
+            let overrides = source.tables.get(&table.qualified_name());
+            let name = overrides.and_then(|overrides| overrides.name.as_deref());
             (
-                table_name((source_name, source), name, table),
+                table_name((source_name, source), name, (table, rule(overrides))),
                 table.qualified_name(),
             )
         })

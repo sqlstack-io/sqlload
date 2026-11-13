@@ -635,6 +635,7 @@ impl Publisher {
                         unnest: &spec.unnest,
                         max_depth: spec.max_depth,
                         naming: spec.naming,
+                        name_limit: sql_adapter(spec.warehouse).max_identifier_length(),
                         ids: given,
                         roots: merging.then_some(given),
                     },

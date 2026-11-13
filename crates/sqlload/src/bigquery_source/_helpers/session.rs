@@ -8,6 +8,7 @@ use crate::bigquery_api::main::create_read_session::create_read_session;
 use crate::bigquery_api::main::query_destination::query_destination;
 use crate::bigquery_api::main::read_stream::read_stream;
 use crate::bigquery_api::models::{ReadSession, ReadSessionRequest};
+use crate::bigquery_source::_helpers::convert::source_name;
 use crate::bigquery_source::_helpers::query::select_query;
 use crate::bigquery_source::constants::{BATCHES_AHEAD, READ_STREAMS};
 use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
@@ -21,7 +22,7 @@ pub(crate) async fn read_session(
     let fields: Vec<String> = request
         .columns
         .iter()
-        .map(|column| column.name.clone())
+        .map(|column| source_name(request.table, &column.name).to_owned())
         .collect();
     let direct = request.sql.is_none() && request.table.estimated_bytes >= 0;
     let (table, restriction, snapshot_ms) = match direct {

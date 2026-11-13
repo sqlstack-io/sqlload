@@ -30,6 +30,10 @@ impl SqlAdapter for SnowflakeSql {
         Warehouse::Snowflake
     }
 
+    fn max_identifier_length(&self) -> Option<usize> {
+        Some(255)
+    }
+
     fn writes_child_tables(&self) -> bool {
         true
     }

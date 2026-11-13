@@ -190,7 +190,11 @@ pub(crate) fn with_live_children(spec: &TableSpec, children: &[String]) -> Table
     }
     let adapter = sql_adapter(spec.warehouse);
     let live = |field: &str| {
-        let table = child_table_name(spec.naming, &spec.destination.table, field);
+        let table = child_table_name(
+            (spec.naming, adapter.max_identifier_length()),
+            &spec.destination.table,
+            field,
+        );
         children.contains(&adapter.stored_name(&table))
     };
     if let Some(files) = &mut chosen.files {
@@ -1244,7 +1248,14 @@ fn given_ids(batch: &RecordBatch, naming: Naming) -> Result<Vec<String>, LoaderE
 pub(crate) fn unnested_table(spec: &TableSpec, path: &str) -> String {
     let mut table = spec.destination.table.clone();
     for field in path.split('.') {
-        table = child_table_name(spec.naming, &table, field);
+        table = child_table_name(
+            (
+                spec.naming,
+                sql_adapter(spec.warehouse).max_identifier_length(),
+            ),
+            &table,
+            field,
+        );
     }
     table
 }

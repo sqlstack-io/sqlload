@@ -17,6 +17,10 @@ impl SqlAdapter for BigQuerySql {
         Warehouse::BigQuery
     }
 
+    fn max_identifier_length(&self) -> Option<usize> {
+        Some(300)
+    }
+
     fn writes_child_tables(&self) -> bool {
         true
     }

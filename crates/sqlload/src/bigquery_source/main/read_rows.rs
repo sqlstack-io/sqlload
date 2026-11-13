@@ -2,7 +2,7 @@
 
 use arrow_array::RecordBatch;
 
-use crate::bigquery_source::_helpers::convert::{convert_batch, output_schema};
+use crate::bigquery_source::_helpers::convert::{convert_batch, loaded_fields, output_schema};
 use crate::bigquery_source::_helpers::session::{read_session, read_streams};
 use crate::bigquery_source::errors::BigQuerySourceError;
 use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
@@ -24,7 +24,8 @@ pub async fn read_rows(
         tokio::select! {
             batch = receiver.recv() => {
                 let Some(batch) = batch else { break };
-                let batch = convert_batch(&batch, (&schema, &json))
+                let batch = loaded_fields(&batch, request.table)
+                    .and_then(|batch| convert_batch(&batch, (&schema, &json)))
                     .map_err(BigQuerySourceError::Invalid)?;
                 rows += batch.num_rows() as u64;
                 on_batch(batch)

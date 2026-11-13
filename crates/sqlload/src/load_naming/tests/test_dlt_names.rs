@@ -1,12 +1,12 @@
-use crate::load_naming::main::dlt_identifier::dlt_identifier;
-use crate::load_naming::main::dlt_path::dlt_path;
+use crate::load_naming::main::_dlt_identifier::dlt_identifier;
+use crate::load_naming::main::_dlt_path::dlt_path;
 use crate::load_naming::tests::helpers::child_of_orders;
 use crate::load_naming::tests::test_types::DltNameTestCase;
 
 // Every expected name is what dlt 1.32.0 gives (`dlt.common.normalizers.naming.snake_case.NamingConvention`, with no limit or `max_length = 63`, Postgres's), run with Python.
 
 #[test]
-fn given_names_when_normalising_as_dlt_then_they_match_dlts_snake_case() {
+fn given_names_when_normalising_as_dlt_then_they_match_dlts_snake_case_and_stay_normalised() {
     let test_cases = [
         DltNameTestCase {
             description: "an acronym at the end splits from the word before it",
@@ -189,6 +189,12 @@ fn given_names_when_normalising_as_dlt_then_they_match_dlts_snake_case() {
             (test_case.normalise)(test_case.name, test_case.max_length),
             test_case.expected_name,
             "{}",
+            test_case.description
+        );
+        assert_eq!(
+            dlt_path(test_case.expected_name, test_case.max_length),
+            test_case.expected_name,
+            "{}: normalising the name again changes it",
             test_case.description
         );
     }

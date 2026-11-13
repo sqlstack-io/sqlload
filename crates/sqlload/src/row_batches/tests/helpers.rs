@@ -240,6 +240,7 @@ pub(crate) fn unnested(
         unnest: &unnest,
         max_depth: test_case.max_depth,
         naming: crate::load_naming::models::Naming::Sqlload,
+        name_limit: None,
         ids: &ids,
         roots: roots.as_deref(),
     };

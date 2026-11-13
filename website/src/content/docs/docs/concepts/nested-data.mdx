@@ -79,7 +79,17 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
 
 `naming` on a target, source or table chooses the names of the columns a load adds and of the
 child tables `unnest` makes. `sqlload`, the default, leaves every existing table as it was.
-`dlt` uses the names dlt gives them, so tables a dlt pipeline loaded can carry on under SQLLoad:
+`dlt` uses the names dlt gives them, so tables a dlt pipeline loaded can carry on under SQLLoad.
+
+Under `naming = "dlt"` the tables and columns themselves are also named as dlt's default
+`snake_case` naming names them: `Orders-V2` loads as `orders_v2`, `OrderID` as `order_id` and
+`Unit Price` as `unit_price`, and a name longer than the destination allows (63 characters on
+Postgres) is shortened with a tag, as dlt shortens it. Settings may name a column either way
+(`unique_key = ["OrderID"]` or `["order_id"]`), and `plan` shows the loaded name.
+`exclude_columns`, `allow_columns` and `skip_tables_with_columns` match the source's own names,
+and `flatten` the names a Python table yields. The target schema keeps the name it is given.
+
+The columns a load adds:
 
 | What it holds | `naming = "sqlload"` | `naming = "dlt"` |
 | --- | --- | --- |
@@ -97,6 +107,11 @@ merged row's children keep their ids on every load. dlt's own tables (`_dlt_load
 `_dlt_pipeline_state`, `_dlt_version`) are not written.
 
 Where SQLLoad and dlt still differ under `naming = "dlt"`:
+
+- Two columns whose names normalise to one (`OrderID` and `Order ID`) stop the plan, naming
+  both; dlt keeps the last value of a row it is given as a dictionary. Exclude one of them with
+  `exclude_columns`. A `postgres_cdc` source whose column names would change is refused, since
+  its change stream matches columns by the source's names.
 
 - An object stays a JSON column; dlt flattens it into `parent__key` columns.
 - A field listed in `unnest` always goes to its child table, even when an XML element appears
