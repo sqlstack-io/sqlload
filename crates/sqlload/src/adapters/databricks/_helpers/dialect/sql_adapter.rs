@@ -132,6 +132,21 @@ impl SqlAdapter for DatabricksSql {
         }
     }
 
+    /// The table's catalog's, as statements run with no default catalog.
+    fn render_schema_columns(&self, table: &TableName) -> String {
+        let catalog = table
+            .database
+            .as_deref()
+            .map(|name| format!("{}.", self.render_identifier(name)))
+            .unwrap_or_default();
+        format!("{catalog}information_schema.columns")
+    }
+
+    /// Unity Catalog stores table and schema names lower-cased, and column names as given.
+    fn stored_table_name(&self, name: &str) -> String {
+        name.to_ascii_lowercase()
+    }
+
     /// Unity Catalog reports schema names lower-cased.
     fn list_staging_relations_sql(&self, table: &TableName, database: Option<&str>) -> String {
         let catalog = table

@@ -14,6 +14,7 @@ use crate::cdc::constants::{
     UPDATE_OP,
 };
 use crate::cdc::models::{Change, ChangeOp, Relation, TableChanges, TupleValue};
+use crate::column_types::main::arrow_field::arrow_field;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::schema_plan::constants::{
     CDC_COMMITTED_AT_COLUMN, CDC_LSN_COLUMN, CDC_OP_COLUMN, CDC_PREFIX, CDC_SEQ_COLUMN,
@@ -39,7 +40,13 @@ pub(crate) fn rows_batch(
             Some(position) => data_array(changes, *position, column)?,
             None => metadata_array(changes, column, &data_positions)?,
         };
-        fields.push(Field::new(&column.name, array.data_type().clone(), true));
+        let field = Field::new(&column.name, array.data_type().clone(), true);
+        fields.push(match arrow_field(&column.name, &column.output) {
+            Some(planned) if planned.data_type() == array.data_type() => {
+                field.with_metadata(planned.metadata().clone())
+            }
+            _ => field,
+        });
         arrays.push(array);
     }
     RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|error| error.to_string())

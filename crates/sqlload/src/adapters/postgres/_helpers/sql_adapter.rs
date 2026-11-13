@@ -44,10 +44,6 @@ impl SqlAdapter for PostgresSql {
         true
     }
 
-    fn writes_child_tables(&self) -> bool {
-        true
-    }
-
     fn keeps_nanoseconds(&self) -> bool {
         false
     }

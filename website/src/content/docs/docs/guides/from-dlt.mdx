@@ -227,8 +227,8 @@ Under `naming = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
 - A field listed in `unnest` is always a child table, even when an XML element appears only once;
   dlt keeps a single match as a column of the parent.
 - Two columns whose names normalise to one stop the plan, naming both, where dlt keeps one of them.
-- `unnest` is refused on Databricks and files targets, on ClickHouse until 0.41.0, under
-  `delete_insert`, `state = "logged"` and `contract = "enforced"`, and for `postgres_cdc` sources:
-  `plan` names the setting.
+- Before 0.42.0, `unnest` is refused on Databricks and files targets, under `delete_insert`,
+  `state = "logged"` and `contract = "enforced"`, and for `postgres_cdc` sources, and `plan` names
+  the setting. ClickHouse targets take it from 0.41.0.
 
 The full list, with how row ids are derived, is under [Naming](/docs/concepts/nested-data/#naming).

@@ -98,6 +98,8 @@ pub struct TableSpec {
     /// Where an integer `batch_size`'s windows end without `--end-cursor`: the Postgres source's cursor maximum, read at plan.
     pub source_end: Option<SourceEnd>,
     pub pinned: BTreeMap<String, ColumnType>,
+    /// The child tables' declared columns under `unnest`, each by its dotted path (`items.sku`), which an enforced contract loads alone, as it does the table's `pinned`.
+    pub child_pinned: BTreeMap<String, ColumnType>,
     /// Source columns not loaded, with the rule that dropped each.
     pub excluded_columns: Vec<(String, String)>,
     /// Columns loaded masked (read as text), and the hmac key.

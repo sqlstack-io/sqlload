@@ -34,10 +34,6 @@ impl SqlAdapter for SnowflakeSql {
         Some(255)
     }
 
-    fn writes_child_tables(&self) -> bool {
-        true
-    }
-
     /// The table's database's `INFORMATION_SCHEMA`, which need not be the session's.
     fn render_schema_columns(&self, table: &TableName) -> String {
         let catalog = table

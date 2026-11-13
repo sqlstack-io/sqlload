@@ -10,6 +10,7 @@ use crate::helpers::{
     CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, run_async,
     run_sqlload, spawn_sqlload, step, stop_sqlload,
 };
+use crate::postgres_helpers::run_cdc_scenario;
 use crate::test_types::{
     CdcPlanTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
     QuietSlotTestCase,
@@ -22,6 +23,11 @@ CREATE SCHEMA other;
 CREATE TABLE other.audit (n int8);
 CREATE SCHEMA docs;
 CREATE TABLE docs.pages (id int8 PRIMARY KEY, body json);
+CREATE SCHEMA shop;
+CREATE TABLE shop.carts (id int8 PRIMARY KEY, note text, items jsonb);
+INSERT INTO shop.carts VALUES
+  (1, 'a', '[{\"sku\": \"a\"}, {\"sku\": \"b\"}]'), (2, 'b', '[{\"sku\": \"c\"}]'),
+  (3, 'c', (SELECT jsonb_agg(jsonb_build_object('sku', md5(g::text))) FROM generate_series(1, 300) g));
 INSERT INTO public.orders VALUES
   (1, 1, (SELECT string_agg(md5(g::text), '') FROM generate_series(1, 300) g), '{a,b}'),
   (2, 2, 'b', '{c}'), (3, 3, 'c', NULL);
@@ -775,6 +781,95 @@ const EXTRA_PUBLISHED: [CdcStep; 5] = [
     step(CHANGES, APP, "", (true, "Completed")),
 ];
 
+/// A source capturing `shop.carts` with soft deletes, whose `items` lists become the child table `shop__carts__items`.
+const CARTS_SOURCE: &str = r#"
+[sources.shop]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["shop.*"]
+
+[sources.shop.tables."shop.carts"]
+description = "Carts, captured."
+unnest = ["items"]
+"#;
+
+/// [`CARTS_SOURCE`] taking every list field.
+const ALL_CARTS_SOURCE: &str = r#"
+[sources.shop]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["shop.*"]
+
+[sources.shop.tables."shop.carts"]
+description = "Carts, captured."
+unnest = "all"
+"#;
+
+/// [`CARTS_SOURCE`] with hard deletes.
+const HARD_CARTS_SOURCE: &str = r#"
+[sources.shop]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["shop.*"]
+deletes = "hard"
+
+[sources.shop.tables."shop.carts"]
+description = "Carts, captured."
+unnest = ["items"]
+"#;
+
+/// [`CARTS_SOURCE`] as a changelog.
+const CHANGELOG_CARTS_SOURCE: &str = r#"
+[sources.shop]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["shop.*"]
+cdc_mode = "changelog"
+
+[sources.shop.tables."shop.carts"]
+description = "Carts, captured."
+unnest = ["items"]
+"#;
+
+/// The changelog's item rows, those whose change row is not there, and its change rows.
+const CHANGELOG_CARTS_CHECK: &str = "SELECT (SELECT count(*) FROM raw.shop__carts__items) || '/' || (SELECT count(*) FROM raw.shop__carts__items i WHERE NOT EXISTS (SELECT 1 FROM raw.shop__carts c WHERE c._sqlload_row_id = i._sqlload_parent_id)) || '/' || (SELECT count(*) FROM raw.shop__carts)";
+
+const SHOP: &[&str] = &["load", "shop"];
+
+/// One transaction on the carts: cart 1's items replaced, cart 3's note changed (its large items, TOASTed, come unchanged), cart 2 deleted and cart 4 added.
+const CARTS_CHANGES: &str = r#"
+BEGIN;
+UPDATE shop.carts SET items = '[{"sku": "z"}]' WHERE id = 1;
+UPDATE shop.carts SET note = 'c2' WHERE id = 3;
+DELETE FROM shop.carts WHERE id = 2;
+INSERT INTO shop.carts VALUES (4, 'd', '[{"sku": "d"}]');
+COMMIT;
+"#;
+
+/// The snapshot, the changes in a load stopped before the slot confirmed them, their replay, then a re-run of nothing.
+const CARTS_REPLAYED: [CdcStep; 4] = [
+    step("", SHOP, "", (true, "loaded")),
+    step(CARTS_CHANGES, SHOP, "batch-before-confirm", (false, "")),
+    step("", SHOP, "", (true, "Completed")),
+    step("", SHOP, "", (true, "0 rows")),
+];
+
+/// [`CARTS_REPLAYED`] on a table with `REPLICA IDENTITY FULL`, whose deletes carry the old row, items included.
+const CARTS_FULL_REPLAYED: [CdcStep; 4] = [
+    step(
+        "ALTER TABLE shop.carts REPLICA IDENTITY FULL",
+        SHOP,
+        "",
+        (true, "loaded"),
+    ),
+    step(CARTS_CHANGES, SHOP, "batch-before-confirm", (false, "")),
+    step("", SHOP, "", (true, "Completed")),
+    step("", SHOP, "", (true, "0 rows")),
+];
+
+/// Each cart's items joined by parent id (cart 3's 300 counted), then the count of every item row, so an item left without its cart shows as a difference.
+const CARTS_CHECK: &str = "SELECT (SELECT string_agg(id || ':' || skus, ',' ORDER BY id) FROM (SELECT c.id, CASE WHEN c.id = 3 THEN CAST(count(i.sku) AS VARCHAR) ELSE string_agg(i.sku, '+' ORDER BY i.sku) END AS skus FROM raw.shop__carts c LEFT JOIN raw.shop__carts__items i ON i._sqlload_parent_id = c._sqlload_row_id GROUP BY c.id)) || ' / ' || (SELECT count(*) FROM raw.shop__carts__items)";
+
 const JSON_SOURCE: &str = r#"
 [sources.pages]
 kind = "postgres_cdc"
@@ -1351,50 +1446,84 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: "1:9600:{q}",
         },
     ];
-    for test_case in test_cases {
-        run_async(async {
-            let postgres = start_postgres_version(test_case.tag).await?;
-            let client = connect(&postgres).await?;
-            client
-                .batch_execute(SETUP)
-                .await
-                .map_err(|error| error.to_string())?;
-            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
-            let database = folder.path().join("out.duckdb");
-            let config = folder.path().join("sqlload.toml");
-            let project = cdc_project(postgres.port, &database)
-                + &test_case
-                    .extra_config
-                    .replace("{port}", &postgres.port.to_string());
-            std::fs::write(&config, project).map_err(|error| error.to_string())?;
-            for (index, step) in test_case.steps.iter().enumerate() {
-                client
-                    .batch_execute(step.source_change)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let (success, output) =
-                    run_sqlload(&config, step.args, (step.crash_at, test_case.spill_bytes))?;
-                assert_eq!(
-                    success, step.expected_success,
-                    "{}: step {index} {:?}\n{output}",
-                    test_case.description, step.args
-                );
-                assert!(
-                    output.contains(step.expected_output),
-                    "{}: step {index} {:?} output lacks {:?}\n{output}",
-                    test_case.description,
-                    step.args,
-                    step.expected_output
-                );
-            }
-            assert_eq!(
-                duckdb_text(&database, test_case.check_query)?,
-                test_case.expected_result,
-                "{}",
-                test_case.description
-            );
-            Ok(())
-        })?;
+    for test_case in &test_cases {
+        assert_eq!(
+            run_cdc_scenario(test_case, SETUP)?,
+            test_case.expected_result,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+/// Child tables (`unnest`) from captured changes: each change replaces its root's items, keyed by root id, and a batch replayed after a stop before the slot confirmed it leaves them as one load would.
+#[test]
+fn given_unnest_on_a_postgres_cdc_source_when_a_batch_replays_then_each_roots_items_load_once()
+-> Result<(), String> {
+    let test_cases = [
+        CdcScenarioTestCase {
+            description: "unnest under soft deletes: a changed list replaces its cart's items, an unchanged TOASTed list keeps them, a deleted cart keeps its row and items, and a replayed batch adds nothing",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: CARTS_SOURCE,
+            steps: &CARTS_REPLAYED,
+            check_query: CARTS_CHECK,
+            expected_result: "1:z,2:c,3:300,4:d / 303",
+        },
+        CdcScenarioTestCase {
+            description: "unnest under hard deletes: a deleted cart's items leave with it",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: HARD_CARTS_SOURCE,
+            steps: &CARTS_REPLAYED,
+            check_query: CARTS_CHECK,
+            expected_result: "1:z,3:300,4:d / 302",
+        },
+        CdcScenarioTestCase {
+            description: "unnest = \"all\" under soft deletes: the TOASTed list a change left out keeps its items, found by the child table's column",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: ALL_CARTS_SOURCE,
+            steps: &CARTS_REPLAYED,
+            check_query: CARTS_CHECK,
+            expected_result: "1:z,2:c,3:300,4:d / 303",
+        },
+        CdcScenarioTestCase {
+            description: "unnest under soft deletes with REPLICA IDENTITY FULL: a delete's old items, which it carries, never load again",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: CARTS_SOURCE,
+            steps: &CARTS_FULL_REPLAYED,
+            check_query: CARTS_CHECK,
+            expected_result: "1:z,2:c,3:300,4:d / 303",
+        },
+        CdcScenarioTestCase {
+            description: "unnest under hard deletes with REPLICA IDENTITY FULL: a delete's old items leave no orphans",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: HARD_CARTS_SOURCE,
+            steps: &CARTS_FULL_REPLAYED,
+            check_query: CARTS_CHECK,
+            expected_result: "1:z,3:300,4:d / 302",
+        },
+        CdcScenarioTestCase {
+            description: "unnest in a changelog: each change row's items load once, a replayed batch writing the same rows again rather than more",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: CHANGELOG_CARTS_SOURCE,
+            steps: &CARTS_REPLAYED,
+            check_query: CHANGELOG_CARTS_CHECK,
+            expected_result: "305/0/7",
+        },
+    ];
+    for test_case in &test_cases {
+        assert_eq!(
+            run_cdc_scenario(test_case, SETUP)?,
+            test_case.expected_result,
+            "{}",
+            test_case.description
+        );
     }
     Ok(())
 }

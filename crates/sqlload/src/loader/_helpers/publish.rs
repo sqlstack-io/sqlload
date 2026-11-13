@@ -3,6 +3,7 @@ use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::main::staging_id::staging_id;
 use crate::adapters::contract::models::BoundParameter;
+use crate::adapters::contract::models::ChangeApply;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::TableShape;
 use crate::adapters::contract::models::WriteMode;
@@ -69,6 +70,7 @@ use crate::loader::_helpers::python::child_paths;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
 use crate::loader::_helpers::python::unnested_table;
+use crate::loader::_helpers::python::without_deleted_items;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_merge_log;
@@ -118,7 +120,9 @@ use crate::run_log::main::runs_location::runs_location;
 use crate::run_log::main::runs_table::runs_table;
 use crate::run_log::models::RunOutcome;
 use crate::run_log::models::RunRecord;
-use crate::schema_plan::constants::{MERGE_ROW_COLUMN, ROOT_ROW_COLUMN};
+use crate::schema_plan::constants::{
+    CDC_LSN_COLUMN, CDC_SEQ_COLUMN, MERGE_ROW_COLUMN, ROOT_ROW_COLUMN,
+};
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
@@ -179,12 +183,20 @@ fn write_target<'a>(
     }
 }
 
-/// Under a merge, the child tables of `table` already in the destination that its commits clear the rows of their roots from: every one under `"all"`, the listed paths' otherwise.
+/// Whether a commit by `mode` replaces some of the table's rows, whose child rows it clears first: a merge, `delete_insert`, and captured changes (a changelog's only on a replay, whose rows keep their ids).
+pub(crate) fn replaces_roots(mode: &WriteMode) -> bool {
+    matches!(
+        mode,
+        WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. } | WriteMode::Changes(_)
+    )
+}
+
+/// Under a write that replaces rows (see [`replaces_roots`]), the child tables of `table` already in the destination that its commits clear the rows of their replaced roots from: every one under `"all"`, the listed paths' otherwise.
 async fn merged_children(
     table: &TablePlan,
     destination: &Destination,
 ) -> Result<Vec<String>, LoaderError> {
-    if !matches!(table.mode, WriteMode::Merge { .. }) {
+    if !replaces_roots(&table.mode) {
         return Ok(Vec::new());
     }
     let spec = &table.spec;
@@ -193,7 +205,7 @@ async fn merged_children(
         Unnest::Paths(paths) => Some(
             paths
                 .iter()
-                .map(|path| adapter.stored_name(&unnested_table(spec, path)))
+                .map(|path| adapter.stored_table_name(&unnested_table(spec, path)))
                 .collect(),
         ),
         _ => None,
@@ -204,7 +216,7 @@ async fn merged_children(
         .filter(|live| {
             listed
                 .as_ref()
-                .is_none_or(|listed| listed.contains(&adapter.stored_name(live)))
+                .is_none_or(|listed| listed.contains(&adapter.stored_table_name(live)))
         })
         .collect())
 }
@@ -274,17 +286,38 @@ pub(crate) fn staged_columns(table: &TablePlan) -> Vec<DesiredColumn> {
     columns
 }
 
-/// Each row's id when the table gives its rows one: under a merge, the hash of its `unique_key` (so a row keeps its id, and its child rows theirs, on every load), otherwise a fresh random id.
+/// The columns a row's id is the hash of, so a row keeps its id (and its child rows theirs) on every load: a merge's `unique_key`; with `unnest`, a `postgres_cdc` table's key, in its snapshot as in its changes, and in a changelog the change's `_sqlload_lsn` and `_sqlload_seq` before it, so a replayed change gets its ids again; `None` for random ids.
+fn id_key(table: &TablePlan) -> Option<Vec<String>> {
+    let cdc = table
+        .spec
+        .cdc
+        .as_ref()
+        .filter(|_| table.spec.unnest != Unnest::None);
+    match (&table.mode, cdc) {
+        (WriteMode::Merge { unique_key, .. }, _) => Some(unique_key.clone()),
+        (_, Some(cdc)) if cdc.apply == ChangeApply::Changelog => Some(
+            [CDC_LSN_COLUMN, CDC_SEQ_COLUMN]
+                .map(str::to_owned)
+                .into_iter()
+                .chain(table.spec.unique_key.iter().cloned())
+                .collect(),
+        ),
+        (_, Some(_)) => Some(table.spec.unique_key.clone()),
+        _ => None,
+    }
+}
+
+/// Each row's id when the table gives its rows one: the hash of its key (see [`id_key`]), otherwise a fresh random id.
 fn row_ids(table: &TablePlan, batch: &RecordBatch) -> Result<Option<Vec<String>>, String> {
     if !table.spec.row_id {
         return Ok(None);
     }
-    let WriteMode::Merge { unique_key, .. } = &table.mode else {
+    let Some(unique_key) = id_key(table) else {
         return random_row_ids(batch.num_rows()).map(Some);
     };
     let schema = batch.schema();
     let mut key: Vec<(String, usize)> = Vec::with_capacity(unique_key.len());
-    for name in unique_key {
+    for name in &unique_key {
         let index = schema.index_of(name).map_err(|_| {
             format!("the staged rows have no unique_key column {name} to give their row ids from")
         })?;
@@ -445,6 +478,22 @@ fn with_planned_columns(
         columns,
     )
     .map_err(|error| error.to_string())
+}
+
+/// `batch` with only the columns the table writes, as a build table holds no others (an enforced contract leaves undeclared columns out of a table that unnests, whose rows are read rather than copied).
+fn written_only(batch: RecordBatch, written: &[DesiredColumn]) -> Result<RecordBatch, LoaderError> {
+    let names: BTreeSet<&str> = written.iter().map(|column| column.name.as_str()).collect();
+    let kept: Vec<usize> = batch
+        .schema()
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| names.contains(field.name().as_str()))
+        .map(|(position, _)| position)
+        .collect();
+    batch
+        .project(&kept)
+        .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
 impl Publisher {
@@ -626,7 +675,7 @@ impl Publisher {
         let constants: Vec<&(String, ColumnType, String)> =
             added_constants(&self.table.spec, &self.table.read_columns).collect();
         let masked = with_constants(&masked, &constants).map_err(LoaderError::Invalid)?;
-        if self.files.is_some() {
+        if self.files.is_some() && self.children.is_none() {
             self.batch_rows += masked.num_rows() as u64;
             self.arrow_bytes += masked.get_array_memory_size();
             return self.stage_files(masked).await;
@@ -638,7 +687,8 @@ impl Publisher {
                 for (name, chosen) in list_choices(spec) {
                     children.choices.entry(name).or_insert(chosen);
                 }
-                let merging = matches!(self.table.mode, WriteMode::Merge { .. });
+                let rooted = id_key(&self.table).is_some()
+                    || matches!(self.table.mode, WriteMode::DeleteInsert { .. });
                 let given = ids.as_deref().unwrap_or_default();
                 let unnested = unnest_batch(
                     &masked,
@@ -649,10 +699,11 @@ impl Publisher {
                         naming: spec.naming,
                         name_limit: sql_adapter(spec.warehouse).max_identifier_length(),
                         ids: given,
-                        roots: merging.then_some(given),
+                        roots: rooted.then_some(given),
                     },
                     &mut children.choices,
                 )
+                .and_then(|unnested| without_deleted_items(&self.table, &masked, unnested))
                 .map_err(LoaderError::Invalid)?;
                 let ordinals = root_ordinals(&self.table, &masked, self.staged_ordinal)
                     .map_err(LoaderError::Invalid)?;
@@ -691,8 +742,15 @@ impl Publisher {
             Some(roots) => with_root_rows(batch, roots)?,
             None => batch,
         };
+        let batch = match self.builds {
+            true => written_only(batch, &self.table.schema.write_columns)?,
+            false => batch,
+        };
         self.batch_rows += batch.num_rows() as u64;
         self.arrow_bytes += batch.get_array_memory_size();
+        if self.files.is_some() {
+            return self.stage_files(batch).await;
+        }
         let columns = staged_columns(&self.table);
         let target = write_target(
             &self.table,
@@ -756,7 +814,7 @@ impl Publisher {
         if let Some(children) = self.children.as_mut().filter(|_| self.direct || !pending) {
             Box::pin(children.finish(
                 (&self.table, (&self.load_id, &self.loaded_at)),
-                (&self.destination, self.staging.as_ref()),
+                (&self.destination, None),
             ))
             .await?;
         }
@@ -975,6 +1033,18 @@ impl Publisher {
     async fn commit(&mut self, last: bool) -> Result<(), LoaderError> {
         if self.files.is_some() {
             self.waiting_range = None;
+            if let Some(children) = &mut self.children {
+                match last {
+                    true => {
+                        Box::pin(children.finish(
+                            (&self.table, (&self.load_id, &self.loaded_at)),
+                            (&self.destination, None),
+                        ))
+                        .await?
+                    }
+                    false => Box::pin(children.cut((&self.table, &self.destination, None))).await?,
+                }
+            }
             return self.commit_files(last).await;
         }
         let Some(staging) = self.staging.clone() else {
@@ -1047,12 +1117,17 @@ impl Publisher {
                 true => {
                     Box::pin(children.finish(
                         (&self.table, (&self.load_id, &self.loaded_at)),
-                        (&self.destination, Some(&staging)),
+                        (&self.destination, Some((&staging, &mode))),
                     ))
                     .await?
                 }
                 false => {
-                    Box::pin(children.cut((&self.table, &self.destination, Some(&staging)))).await?
+                    Box::pin(children.cut((
+                        &self.table,
+                        &self.destination,
+                        Some((&staging, &mode)),
+                    )))
+                    .await?
                 }
             }
         }

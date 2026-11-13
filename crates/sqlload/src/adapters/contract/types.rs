@@ -21,7 +21,7 @@ use crate::adapters::contract::_helpers::schema::{
     staging_table,
 };
 use crate::adapters::contract::_helpers::type_fit::type_fit;
-use crate::adapters::contract::_helpers::write::write_statements;
+use crate::adapters::contract::_helpers::write::{replaced_rows, write_statements};
 use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
 use crate::adapters::contract::main::_rekeyed_row_ids::rekeyed_row_ids;
 use crate::adapters::contract::models::{
@@ -46,11 +46,6 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// Whether a `postgres_cdc` source applying its changes by `apply` may load into the destination: every SQL warehouse its changes have been applied to live; a files target only as a changelog, having no tables to merge into.
     fn captures_changes(&self, apply: ChangeApply) -> bool {
         self.runs_sql() || apply == ChangeApply::Changelog
-    }
-
-    /// Whether the warehouse's writer has been taught to write the child tables `unnest` makes, beside their parent.
-    fn writes_child_tables(&self) -> bool {
-        false
     }
 
     /// The statements deleting published table `table`'s rows matching `condition` (a merge clearing the items of the roots it replaces from a child table): one `DELETE`. `scratch` names the tables a warehouse that publishes by swaps builds beside it.
@@ -130,6 +125,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// `name` as the warehouse stores it and reports it in its information schema.
     fn stored_name(&self, name: &str) -> String {
         name.to_owned()
+    }
+
+    /// How the warehouse stores the table or schema name `name`, which a catalog lists it by: as [`stored_name`](Self::stored_name), unless it folds table names apart from columns.
+    fn stored_table_name(&self, name: &str) -> String {
+        self.stored_name(name)
     }
 
     /// Whether the live column `live` is the one stored as `stored`.
@@ -334,6 +334,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging: &TableName,
     ) -> Option<String> {
         dropped_ordinals(self, request, staging)
+    }
+
+    /// Under `delete_insert`, the condition choosing the rows its commit replaces, which their child tables' rows go with; `None` when it replaces every row.
+    fn render_replaced_rows(&self, request: &WriteStatementsRequest<'_>) -> Option<String> {
+        replaced_rows(self, request)
     }
 
     /// Under a merge, a query of the `row_id` of each row of the table that a row of `staging` shares its key with but whose `row_id` differs (an id not derived from the key, as dlt's `delete-insert` merge gives), so the rows hanging off it can be replaced too; `None` without a merge.

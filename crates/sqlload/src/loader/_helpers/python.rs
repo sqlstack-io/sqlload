@@ -4,6 +4,8 @@ use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::WriteStatementsRequest;
+use crate::adapters::contract::models::{ChangeApply, ChangeWrite};
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
@@ -14,6 +16,7 @@ use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;
+use crate::cdc::constants::DELETE_OP;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
@@ -23,10 +26,12 @@ use crate::load_naming::main::child_table_name::child_table_name;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
+use crate::loader::_helpers::publish::replaces_roots;
 use crate::loader::_helpers::publish::staged_columns;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
 use crate::loader::_helpers::run_log::run_entry;
+use crate::loader::_helpers::specs::is_child_column;
 use crate::loader::_helpers::table_plan::append_problem;
 use crate::loader::_helpers::table_plan::replan_columns;
 use crate::loader::_helpers::table_plan::schema_statements;
@@ -38,6 +43,7 @@ use crate::loader::constants::PYTHON_COLUMN_TYPE;
 use crate::loader::constants::UNKNOWN_CURSOR_TYPE;
 use crate::loader::constants::UTC_OFFSET_SUFFIX;
 use crate::loader::errors::LoaderError;
+use crate::loader::main::_plan_files::plan_files_table;
 use crate::loader::models::ChildFeed;
 use crate::loader::models::ChildTables;
 use crate::loader::models::CommitRange;
@@ -75,8 +81,10 @@ use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::row_batches::models::ChildBatch;
 use crate::row_batches::models::Unnest;
+use crate::row_batches::models::Unnested;
 use crate::row_batches::types::ListChoices;
 use crate::schema_plan::constants::ROOT_ROW_COLUMN;
+use crate::schema_plan::constants::{CDC_LSN_COLUMN, CDC_OP_COLUMN, CDC_UNCHANGED_COLUMN};
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
 use crate::schema_plan::models::SchemaPlan;
@@ -84,11 +92,13 @@ use crate::schema_plan::models::TableAction;
 use crate::similar_names::main::close_name::close_name;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
+use arrow_array::BooleanArray;
 use arrow_array::Date32Array;
 use arrow_array::RecordBatch;
 use arrow_array::Scalar;
 use arrow_array::StringArray;
 use arrow_array::TimestampMicrosecondArray;
+use arrow_array::cast::AsArray;
 use arrow_cast::cast::CastOptions;
 use arrow_cast::cast::cast_with_options;
 use arrow_cast::display::ArrayFormatter;
@@ -116,7 +126,8 @@ pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
     for (name, table) in &source.tables {
         let mut columns: Vec<SourceColumn> = Vec::new();
         for column in table.columns.keys().chain(table.mask.keys()) {
-            if !columns.iter().any(|known| known.name == *column) {
+            if !columns.iter().any(|known| known.name == *column) && !is_child_column(column, table)
+            {
                 columns.push(python_column(column, ColumnType::Text));
             }
         }
@@ -185,7 +196,7 @@ fn is_child_of_any(table: &str, parents: &[&str]) -> bool {
 /// The dotted path each of `spec`'s child tables among `tables` holds, by its name as the load writes it (`orders__items__parts` holds `items.parts`; Snowflake's `ORDERS__ITEMS` holds `items`; Postgres lists the children of `ORDERS` folded, as `orders__items`).
 pub(crate) fn child_paths(spec: &TableSpec, tables: Vec<String>) -> Vec<(String, String)> {
     let prefix = format!("{}{CHILD_TABLE_SEPARATOR}", spec.destination.table);
-    let stored = sql_adapter(spec.warehouse).stored_name(&prefix);
+    let stored = sql_adapter(spec.warehouse).stored_table_name(&prefix);
     tables
         .into_iter()
         .filter(|table| table.starts_with(&stored))
@@ -211,7 +222,7 @@ pub(crate) fn with_live_children(spec: &TableSpec, children: &[String]) -> Table
             &spec.destination.table,
             field,
         );
-        children.contains(&adapter.stored_name(&table))
+        children.contains(&adapter.stored_table_name(&table))
     };
     if let Some(files) = &mut chosen.files {
         for column in &mut files.table.columns {
@@ -221,7 +232,7 @@ pub(crate) fn with_live_children(spec: &TableSpec, children: &[String]) -> Table
         }
     }
     if let Some(python) = &mut chosen.python {
-        let prefix = adapter.stored_name(&format!(
+        let prefix = adapter.stored_table_name(&format!(
             "{}{CHILD_TABLE_SEPARATOR}",
             spec.destination.table
         ));
@@ -1234,12 +1245,19 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         constants: Vec::new(),
         shared_destination: false,
         source_end: None,
-        pinned: BTreeMap::new(),
+        pinned: spec
+            .child_pinned
+            .iter()
+            .filter_map(|(key, column_type)| {
+                let column = key.strip_prefix(path)?.strip_prefix('.')?;
+                (!column.contains('.')).then(|| (column.to_owned(), column_type.clone()))
+            })
+            .collect(),
+        child_pinned: BTreeMap::new(),
         excluded_columns: Vec::new(),
         masked: MaskRules::default(),
         logged: false,
         files: None,
-        destination_path: None,
         flatten: Vec::new(),
         row_id: true,
         root_rows: matches!(parent.mode, WriteMode::Merge { .. }),
@@ -1342,12 +1360,15 @@ impl ChildTables {
             let index = match self.feeds.iter().position(|feed| feed.path == child.path) {
                 Some(index) => index,
                 None => {
-                    if !self.admits((parent, &child)).await? {
+                    let table = self
+                        .child_table(parent, (&child.path, &child.table))
+                        .await?;
+                    if !self.admits((parent, &child, &table)).await? {
                         self.ignored.push(child.path.clone());
                         continue;
                     }
                     self.feeds.push(ChildFeed {
-                        table: child_plan(parent, (&child.path, &child.table)),
+                        table,
                         path: child.path.clone(),
                         merged: Schema::empty(),
                         publisher: None,
@@ -1384,20 +1405,51 @@ impl ChildTables {
         Ok(())
     }
 
+    /// The plan of the child table at `path` before its first rows (see [`child_plan`]); on a files target with its folder's files, as the target's plan reads them, and refused while another load holds the folder.
+    async fn child_table(
+        &self,
+        parent: &TablePlan,
+        (path, table): (&str, &str),
+    ) -> Result<TablePlan, LoaderError> {
+        let planned = child_plan(parent, (path, table));
+        let Some(files) = files_destination(&self.destination) else {
+            return Ok(planned);
+        };
+        let read = plan_files_table(&planned.spec, files, &self.options).await?;
+        if let Some(blocked) = &read.schema.blocked {
+            return Err(LoaderError::Invalid(format!(
+                "child table {table}: {}",
+                blocked.reasons.join("; ")
+            )));
+        }
+        Ok(TablePlan {
+            live: read.live,
+            exists: read.exists,
+            output: read.output,
+            ..planned
+        })
+    }
+
+    /// Whether the child table `table` is there already: on a files target, whether its folder holds files.
+    async fn exists(&self, table: &TablePlan) -> Result<bool, LoaderError> {
+        match files_destination(&self.destination) {
+            Some(_) => Ok(table.exists),
+            None => Ok(live_columns(&self.destination, &table.spec.destination)
+                .await?
+                .is_some()),
+        }
+    }
+
     /// Whether `child`'s table may be filled: always on the table's first load; after it, a child table that is not there yet is a schema change, which `on_schema_change` decides like a new column: added, left out with its rows and everything below (`"ignore"`, `false`), or refused.
     async fn admits(
         &self,
-        (parent, child): (&TablePlan, &ChildBatch),
+        (parent, child, table): (&TablePlan, &ChildBatch, &TablePlan),
     ) -> Result<bool, LoaderError> {
         let spec = &parent.spec;
         if !parent.exists || spec.on_schema_change == OnSchemaChange::AppendNewColumns {
             return Ok(true);
         }
-        let table = TableName {
-            table: child.table.clone(),
-            ..spec.destination.clone()
-        };
-        if live_columns(&self.destination, &table).await?.is_some() {
+        if self.exists(table).await? {
             return Ok(true);
         }
         match spec.on_schema_change {
@@ -1412,12 +1464,14 @@ impl ChildTables {
         }
     }
 
-    /// Commit every child table's rows so far, before the parent's commit names them (under a merge, once the rows of the roots it merges are cleared, see [`Self::clear_merged`]).
+    /// Commit every child table's rows so far, before the parent's commit (of `staging`'s rows by `mode`, `None` for a files target's) names them: under a merge or `delete_insert`, once the rows of the roots it replaces are cleared (see [`Self::clear_replaced`]).
     pub(crate) async fn cut(
         &mut self,
-        (parent, destination, staging): (&TablePlan, &Destination, Option<&TableName>),
+        (parent, destination, commit): (&TablePlan, &Destination, Option<(&TableName, &WriteMode)>),
     ) -> Result<(), LoaderError> {
-        self.clear_merged((parent, destination, staging)).await?;
+        if let Some(commit) = commit {
+            self.clear_replaced((parent, destination, commit)).await?;
+        }
         for publisher in self
             .feeds
             .iter_mut()
@@ -1428,13 +1482,15 @@ impl ChildTables {
         Ok(())
     }
 
-    /// Finish every child table before the parent: columns that only held NULL become text, and what waits commits; under a `replace` (or `--reload`) an existing child table no rows reached (a listed one, or under `"all"` any named as the table's) is emptied too, so it never keeps an earlier load's items.
+    /// Finish every child table before the parent (`commit`, its last commit's staging table and mode, when one follows): columns that only held NULL become text, and what waits commits; under a `replace` (or `--reload`) an existing child table no rows reached (a listed one, or under `"all"` any named as the table's) is emptied too, so it never keeps an earlier load's items.
     pub(crate) async fn finish(
         &mut self,
         (parent, (load_id, loaded_at)): (&TablePlan, (&str, &str)),
-        (destination, staging): (&Destination, Option<&TableName>),
+        (destination, commit): (&Destination, Option<(&TableName, &WriteMode)>),
     ) -> Result<(), LoaderError> {
-        self.clear_merged((parent, destination, staging)).await?;
+        if let Some(commit) = commit {
+            self.clear_replaced((parent, destination, commit)).await?;
+        }
         let replaced = matches!(parent.mode, WriteMode::Replace | WriteMode::Recreate);
         let spec = &parent.spec;
         let adapter = sql_adapter(spec.warehouse);
@@ -1450,22 +1506,19 @@ impl ChildTables {
         };
         for (path, table) in &candidates {
             let fed = self.feeds.iter().any(|feed| {
-                adapter.stored_name(&feed.table.spec.destination.table)
-                    == adapter.stored_name(table)
+                adapter.stored_table_name(&feed.table.spec.destination.table)
+                    == adapter.stored_table_name(table)
             });
             if fed {
                 continue;
             }
             let mut feed = ChildFeed {
-                table: child_plan(parent, (path, table)),
+                table: self.child_table(parent, (path, table)).await?,
                 path: path.clone(),
                 merged: Schema::empty(),
                 publisher: None,
             };
-            if live_columns(&self.destination, &feed.table.spec.destination)
-                .await?
-                .is_none()
-            {
+            if !self.exists(&feed.table).await? {
                 continue;
             }
             feed.plan((&self.destination, &self.options), true).await?;
@@ -1494,14 +1547,18 @@ impl ChildTables {
         Ok(())
     }
 
-    /// Under a merge, before the commit of the parent's rows staged in `staging` (on the parent's `destination`): the staged child rows of the parent rows the merge drops (a repeated key's others) leave each child table's staging table, and every child table's rows whose root is being merged are deleted, so a root's items are replaced by its new ones, an empty or missing list leaving none. Each runs on its own, before the child and parent commits: a failure between them leaves a root without its items until a rerun merges it again.
-    async fn clear_merged(
+    /// Before the commit of the parent's rows staged in `staging` (on the parent's `destination`) by `mode`, every child table's rows whose root that commit replaces are deleted, so a root's items are replaced by its new ones, an empty or missing list leaving none: under a merge the roots it merges (and the staged child rows of the parent rows it drops, a repeated key's others, leave each child table's staging table), under `delete_insert` the rows in its window or partitions. Each runs on its own, before the child and parent commits: a failure between them leaves a root without its items until a rerun replaces it again.
+    async fn clear_replaced(
         &mut self,
-        (parent, destination, staging): (&TablePlan, &Destination, Option<&TableName>),
+        (parent, destination, (staging, mode)): (
+            &TablePlan,
+            &Destination,
+            (&TableName, &WriteMode),
+        ),
     ) -> Result<(), LoaderError> {
-        let (WriteMode::Merge { .. }, Some(staging)) = (&parent.mode, staging) else {
+        if !replaces_roots(mode) {
             return Ok(());
-        };
+        }
         let spec = &parent.spec;
         let adapter = sql_adapter(spec.warehouse);
         for publisher in self
@@ -1514,7 +1571,7 @@ impl ChildTables {
         let request = WriteStatementsRequest {
             table: &spec.destination,
             columns: &parent.schema.write_columns,
-            mode: &parent.mode,
+            mode,
             hashed: &[],
             built: None,
         };
@@ -1560,7 +1617,7 @@ impl ChildTables {
             let table = &feed.table.spec.destination.table;
             if !tables
                 .iter()
-                .any(|known| adapter.stored_name(known) == adapter.stored_name(table))
+                .any(|known| adapter.stored_table_name(known) == adapter.stored_table_name(table))
             {
                 tables.push(table.clone());
             }
@@ -1585,22 +1642,46 @@ impl ChildTables {
         if rooted.is_empty() {
             return Ok(());
         }
-        let mut roots = format!(
-            "{root} IN (SELECT {row_id} FROM {})",
-            adapter.render_qualified_name(staging)
-        );
+        let mut roots = match mode {
+            WriteMode::DeleteInsert { .. } => format!(
+                "{root} IN (SELECT {row_id} FROM {}{})",
+                adapter.render_qualified_name(&spec.destination),
+                adapter
+                    .render_replaced_rows(&request)
+                    .map(|condition| format!(" WHERE {condition}"))
+                    .unwrap_or_default()
+            ),
+            _ => format!(
+                "{root} IN (SELECT {row_id} FROM {})",
+                adapter.render_qualified_name(staging)
+            ),
+        };
         if let Some(rekeyed) = adapter.render_rekeyed_row_ids(&request, staging, row_id_name) {
             let found = text_values(destination, format!("{rekeyed} LIMIT 1")).await?;
             if !found.is_empty() {
                 roots = format!("{roots} OR {root} IN ({rekeyed})");
             }
         }
+        let load_id = self
+            .feeds
+            .iter()
+            .find_map(|feed| feed.publisher.as_ref())
+            .map(|publisher| publisher.load_id.clone());
         let deletes: Vec<String> = rooted
             .iter()
             .flat_map(|(index, name)| {
                 let scratch = TableName {
                     table: format!("{}_{index}", staging.table),
                     ..staging.clone()
+                };
+                let roots = match mode {
+                    WriteMode::Changes(change) => changed_roots(
+                        (spec, &name.table),
+                        (staging, change),
+                        (root_name, row_id_name),
+                        load_id.as_deref(),
+                    ),
+                    _ => roots.clone(),
                 };
                 adapter.render_clear_rows(name, &roots, &scratch)
             })
@@ -1617,6 +1698,118 @@ impl ChildTables {
         {
             publisher.close().await;
         }
+    }
+}
+
+/// `unnested` without its deletes' child rows when `table` applies captured changes (a changelog keeps them): with `REPLICA IDENTITY FULL` a delete carries its row's old lists, whose items stay loaded under soft deletes and are cleared under hard ones.
+pub(crate) fn without_deleted_items(
+    table: &TablePlan,
+    batch: &RecordBatch,
+    mut unnested: Unnested,
+) -> Result<Unnested, String> {
+    let WriteMode::Changes(change) = &table.mode else {
+        return Ok(unnested);
+    };
+    let Ok(index) = batch.schema().index_of(CDC_OP_COLUMN) else {
+        return Ok(unnested);
+    };
+    if change.apply == ChangeApply::Changelog {
+        return Ok(unnested);
+    }
+    let ops = cast_with_options(
+        batch.column(index),
+        &DataType::Utf8,
+        &CastOptions::default(),
+    )
+    .map_err(|error| error.to_string())?;
+    let ops = ops.as_string::<i32>();
+    let deleted: Vec<bool> = (0..ops.len())
+        .map(|row| ops.is_valid(row) && ops.value(row) == DELETE_OP)
+        .collect();
+    for child in &mut unnested.children {
+        let keep: BooleanArray = child
+            .root_rows
+            .iter()
+            .map(|row| Some(!deleted[*row]))
+            .collect();
+        child.batch =
+            filter_record_batch(&child.batch, &keep).map_err(|error| error.to_string())?;
+        child.root_rows.retain(|row| !deleted[*row]);
+    }
+    Ok(unnested)
+}
+
+/// Under captured changes, the condition choosing the rows of `table`, a child table of `spec`'s, whose roots the changes in `staging` replace: every changed root (in a changelog, rows a replay wrote before), but under `merge` a root keeps its items when its list field came unchanged (a TOASTed value the change left out) and, under soft deletes, when it is deleted, as its row stays; under hard deletes a truncate also takes the roots it removes. A child table under captured changes appends its rows straight in, so this load's own rows (`load_id`) are never among them. Under `unnest = "all"` the list field is the source column whose child table `table` is or is below, the longest when names overlap (`line__items` beside `line`), as a column name may hold the separator.
+fn changed_roots(
+    (spec, table): (&TableSpec, &str),
+    (staging, change): (&TableName, &ChangeWrite),
+    (root_name, row_id_name): (&str, &str),
+    load_id: Option<&str>,
+) -> String {
+    let adapter = sql_adapter(spec.warehouse);
+    let id = |name: &str| adapter.render_identifier(name);
+    let text = |value: &str| adapter.render_loader_value_literal(value);
+    let stored = adapter.stored_table_name(table);
+    let field: Option<String> = match &spec.unnest {
+        Unnest::Paths(paths) => paths
+            .iter()
+            .find(|path| adapter.stored_table_name(&unnested_table(spec, path)) == stored)
+            .and_then(|path| path.split('.').next())
+            .map(str::to_owned),
+        _ => spec
+            .source_table
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .filter(|column| {
+                let child = adapter.stored_table_name(&child_table_name(
+                    (spec.naming, adapter.max_identifier_length()),
+                    &spec.destination.table,
+                    column,
+                ));
+                stored == child || stored.starts_with(&format!("{child}{CHILD_TABLE_SEPARATOR}"))
+            })
+            .max_by_key(|column| column.len())
+            .map(str::to_owned),
+    };
+    let mut kept: Vec<String> = Vec::new();
+    if let Some(field) = field.filter(|_| change.apply != ChangeApply::Changelog) {
+        kept.push(format!(
+            "POSITION({} IN COALESCE({}, {})) = 0",
+            text(&format!(",{field},")),
+            id(CDC_UNCHANGED_COLUMN),
+            text("")
+        ));
+    }
+    if change.apply == ChangeApply::SoftDeletes {
+        kept.push(format!("{} <> {}", id(CDC_OP_COLUMN), text(DELETE_OP)));
+    }
+    let filter = match kept.is_empty() {
+        true => String::new(),
+        false => format!(" WHERE {}", kept.join(" AND ")),
+    };
+    let root = id(root_name);
+    let row_id = id(row_id_name);
+    let changed = format!(
+        "{root} IN (SELECT {row_id} FROM {}{filter})",
+        adapter.render_qualified_name(staging)
+    );
+    let replaced = match (&change.truncated, change.apply) {
+        (Some(truncation), ChangeApply::HardDeletes) => format!(
+            "{changed} OR {root} IN (SELECT {row_id} FROM {} WHERE {} < {})",
+            adapter.render_qualified_name(&spec.destination),
+            id(CDC_LSN_COLUMN),
+            truncation.lsn
+        ),
+        _ => changed,
+    };
+    match load_id {
+        Some(load_id) => format!(
+            "({replaced}) AND {} <> {}",
+            id(metadata_name(spec.naming, MetadataRole::LoadId)),
+            text(load_id)
+        ),
+        None => replaced,
     }
 }
 

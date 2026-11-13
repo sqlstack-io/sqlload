@@ -30,6 +30,9 @@ A `postgres_cdc` source takes a `postgres` connection, `include` and `exclude` p
 as for other sources. A captured table takes no `write_strategy`, `cursor_column`, `batch_size` or
 `state`, and `merge` matches rows on the primary key.
 
+From 0.42.0, a table's `unnest` turns the lists in its `json` and `jsonb` columns into child
+tables, except into files targets; see [Nested data](/docs/concepts/nested-data/).
+
 ## Into Databricks
 
 From sqlload 0.23.0, a `postgres_cdc` source loads into a

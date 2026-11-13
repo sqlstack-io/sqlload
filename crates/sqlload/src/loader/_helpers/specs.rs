@@ -1,5 +1,6 @@
 use crate::adapters::contract::models::{ChangeApply, TableName};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
@@ -20,9 +21,8 @@ use crate::loader::models::{
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::SourceTable;
 use crate::project::models::{
-    CdcDeletes, CdcMode, Contract, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection,
-    SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, UnnestSetting,
-    WriteStrategy,
+    CdcDeletes, CdcMode, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection, SourceConfig,
+    SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
@@ -108,7 +108,18 @@ pub(crate) fn pinned_types(
     }
 }
 
-/// Problems with `columns` and `mask` keys that name no source column, so a typo never loads a column unmasked.
+/// Whether `columns` key `key` declares a column of one of the table's child tables (`items.sku`): its path before the last dot is a listed `unnest` path, or under `unnest = "all"` it has one.
+pub(crate) fn is_child_column(key: &str, overrides: &TableOverride) -> bool {
+    match &overrides.unnest {
+        Some(UnnestSetting::Paths(paths)) => key
+            .rsplit_once('.')
+            .is_some_and(|(path, _)| paths.iter().any(|listed| listed == path)),
+        Some(UnnestSetting::Word(word)) if word == UNNEST_ALL => key.contains('.'),
+        _ => false,
+    }
+}
+
+/// Problems with `columns` and `mask` keys that name no source column, so a typo never loads a column unmasked; a `columns` key declaring a child table's column is not checked, as its field may be missing from the rows read first.
 fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> Vec<String> {
     let names: Vec<&str> = table
         .columns
@@ -118,6 +129,7 @@ fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> 
     let keys = overrides
         .columns
         .keys()
+        .filter(|key| !is_child_column(key, overrides))
         .map(|key| ("columns", key))
         .chain(overrides.mask.keys().map(|key| ("mask", key)));
     keys.filter(|(_, key)| !names.contains(&key.as_str()))
@@ -254,7 +266,7 @@ pub(crate) fn build_spec(
     let contract = layered(&settings.contract, &defaults.contract)
         .map(|(value, _)| value)
         .unwrap_or_default();
-    let (nesting, found) = nesting(context, overrides, (strategy, contract));
+    let (nesting, found) = nesting(context, overrides, strategy);
     problems.extend(found);
     problems.extend(after_load_problems(context, strategy));
     let layout = table_layout(settings, defaults);
@@ -302,7 +314,17 @@ pub(crate) fn build_spec(
         #[cfg(not(feature = "container-tests"))]
         test_loader_route: false,
         source_end: None,
-        pinned: columns.pinned,
+        pinned: columns
+            .pinned
+            .iter()
+            .filter(|(key, _)| !is_child_column(key, overrides))
+            .map(|(key, column_type)| (key.clone(), column_type.clone()))
+            .collect(),
+        child_pinned: columns
+            .pinned
+            .into_iter()
+            .filter(|(key, _)| is_child_column(key, overrides))
+            .collect(),
         excluded_columns: columns.excluded,
         masked: MaskRules {
             columns: overrides.mask.clone(),
@@ -851,15 +873,13 @@ struct Nesting {
 fn nesting(
     context: &SourceContext<'_>,
     overrides: &TableOverride,
-    (strategy, contract): (WriteStrategy, Contract),
+    strategy: WriteStrategy,
 ) -> (Nesting, Vec<String>) {
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
     let naming = table_naming((settings, defaults), context.target.naming);
     let row_id = layered(&settings.row_id, &defaults.row_id).map(|(value, _)| value);
     let max_depth = overrides.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
-    let logged = layered(&settings.state, &defaults.state)
-        .is_some_and(|(value, _)| value == StateMode::Logged);
     let mut problems: Vec<String> = Vec::new();
     if naming == Naming::Dlt && row_id == Some(false) {
         problems.push("row_id = false: naming = \"dlt\" gives every row its _dlt_id; drop row_id or use naming = \"sqlload\"".to_owned());
@@ -888,8 +908,7 @@ fn nesting(
         }
         Unnest::None => {}
         Unnest::All | Unnest::Paths(_) => {
-            problems.extend(refused_writes(context, (strategy, contract)));
-            problems.extend(unbuilt_writes(context, logged));
+            problems.extend(refused_writes(context, overrides, strategy));
             if row_id == Some(false) {
                 problems.push("row_id = false: unnest gives every row an id, which its child rows name as their parent's; drop row_id".to_owned());
             }
@@ -984,30 +1003,40 @@ fn matching_pattern<'a>(field: &str, patterns: &[&'a String]) -> Option<&'a Stri
         .copied()
 }
 
-/// What this build cannot yet do with `unnest` while its writers are taught to: a warehouse whose writer does not write child tables (Databricks); and a `state = "logged"` table, whose commit can wait on its state while its child rows would not.
-fn unbuilt_writes(context: &SourceContext<'_>, logged: bool) -> Vec<String> {
-    let warehouse = context.target.warehouse;
-    [
-        (context.target.path.is_none() && !sql_adapter(warehouse).writes_child_tables())
-            .then(|| format!("a {warehouse} target")),
-        logged.then(|| "state = \"logged\"".to_owned()),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|what| format!("unnest does not yet write child tables with {what}; drop unnest, and its lists stay JSON columns"))
-    .collect()
-}
-
-/// Why this table's writes cannot carry child tables yet: a files target, `delete_insert`, captured changes or an enforced contract.
+/// Why this table's writes cannot carry child tables yet: captured changes on a files target; on a files target, `"all"` (whose earlier child tables a load cannot find), a merge or `delete_insert` (which would rewrite a child table's files), and a path that would not give each child table a folder of its own (without `{table}`, or partitioned by the cursor, which child rows do not carry).
 fn refused_writes(
     context: &SourceContext<'_>,
-    (strategy, contract): (WriteStrategy, Contract),
+    overrides: &TableOverride,
+    strategy: WriteStrategy,
 ) -> Vec<String> {
+    let template = context.target.path.as_ref().map(|target_path| {
+        overrides
+            .destination_path
+            .as_ref()
+            .or(context.source.destination_path.as_ref())
+            .unwrap_or(target_path)
+    });
+    let files = |refused: bool, what: String| (template.is_some() && refused).then_some(what);
+    let all = matches!(&overrides.unnest, Some(UnnestSetting::Word(word)) if word == UNNEST_ALL);
+    let rewrites = matches!(strategy, WriteStrategy::Merge | WriteStrategy::DeleteInsert);
+    let files_target = template.is_some();
+    let template = template.map(String::as_str).unwrap_or_default();
     [
-        context.target.path.is_some().then_some("a files target"),
-        (strategy == WriteStrategy::DeleteInsert).then_some("write_strategy = \"delete_insert\""),
-        (context.source.kind == SourceKind::PostgresCdc).then_some("kind = \"postgres_cdc\""),
-        (contract == Contract::Enforced).then_some("contract = \"enforced\""),
+        (context.source.kind == SourceKind::PostgresCdc && files_target)
+            .then(|| "kind = \"postgres_cdc\" on a files target".to_owned()),
+        files(all, "unnest = \"all\" on a files target (list the paths)".to_owned()),
+        files(
+            rewrites,
+            format!("write_strategy = \"{strategy}\" on a files target"),
+        ),
+        files(
+            !template.contains(TABLE_PLACEHOLDER),
+            format!("a files path without {TABLE_PLACEHOLDER} ({template:?}), as each child table needs its own folder"),
+        ),
+        files(
+            template.contains(CURSOR_PLACEHOLDER_START),
+            format!("a files path partitioned by the cursor ({template:?})"),
+        ),
     ]
     .into_iter()
     .flatten()

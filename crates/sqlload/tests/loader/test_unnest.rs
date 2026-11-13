@@ -19,8 +19,8 @@ use crate::helpers::{
     described_project, duckdb_execute, duckdb_text, load_ndjson_runs, run_async, run_sqlload,
 };
 use crate::test_types::{
-    ClearRowsTestCase, NamedLikeTestCase, RekeyedTestCase, RowIdTestCase, UnnestFailTestCase,
-    UnnestPlanTestCase,
+    ClearRowsTestCase, FilesTargetUnnestTestCase, NamedLikeTestCase, RekeyedTestCase,
+    RowIdTestCase, UnnestFailTestCase, UnnestPlanTestCase,
 };
 
 const COLUMNS: &str = "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders'";
@@ -144,6 +144,34 @@ const CLICKHOUSE_APPEND_CHECK: &str = "SELECT (SELECT arrayStringConcat(arraySor
 /// The staging table holding the merged roots in the clear test.
 const CLEAR_STAGING: &str = "orders__sqlload_staging_20261113";
 
+/// The parent's columns under [`DELETE_INSERT_SETTINGS`].
+const DELETE_INSERT_COLUMNS: &str = "id,day,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at,_sqlload_row_id";
+
+/// A `delete_insert` on a date partition with `unnest`.
+const DELETE_INSERT_SETTINGS: &str = "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_columns = { day = \"date\" }\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n";
+
+/// Two days' files, then the second day's rewritten with other items.
+const DELETE_INSERT_RUNS: &[(&str, &str)] = &[
+    (
+        "day=2026-11-03/a.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1]}]}\n",
+    ),
+    (
+        "day=2026-11-04/b.ndjson",
+        "{\"id\": 2, \"items\": [{\"sku\": \"b\", \"parts\": [2, 3]}]}\n",
+    ),
+    (
+        "day=2026-11-04/b.ndjson",
+        "{\"id\": 2, \"items\": [{\"sku\": \"c\", \"parts\": [4]}]}\n",
+    ),
+];
+
+/// Rows in orders/items/parts, then each part linked up to its order.
+const DELETE_INSERT_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',' ORDER BY p.value) FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
+
+/// [`DELETE_INSERT_CHECK`] in ClickHouse's SQL.
+const CLICKHOUSE_DELETE_INSERT_CHECK: &str = "SELECT toString((SELECT count() FROM raw.orders)) || '/' || toString((SELECT count() FROM raw.orders__items)) || '/' || toString((SELECT count() FROM raw.orders__items__parts)) || '/' || (SELECT arrayStringConcat(arraySort(groupArray(toString(o.id) || ':' || i.sku || ':' || toString(p.value))), ',') FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
+
 /// Tables seeded beside `orders` and named like its child tables: `orders__notes`, a plain table, and `orders__x__items`, the child table of another root `orders__x`; each with one row. `{parent_id}` is the naming's parent-id column.
 const NAMED_LIKE_CHILDREN: &[&str] = &[
     "CREATE SCHEMA raw",
@@ -180,6 +208,21 @@ const NAMED_LIKE_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders__notes) 
 
 /// [`NAMED_LIKE_CHECK`] in ClickHouse's SQL.
 const CLICKHOUSE_NAMED_LIKE_CHECK: &str = "SELECT toString((SELECT count() FROM raw.orders__notes)) || '/' || toString((SELECT count() FROM raw.orders__x__items)) || '/' || toString((SELECT count() FROM raw.orders__tags)) || '/' || toString((SELECT count() FROM raw.orders__items))";
+
+/// Two runs into a files target: an order with two parts, then one with one.
+const FILES_TARGET_RUNS: &[(&str, &str)] = &[
+    (
+        "a.ndjson",
+        "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n",
+    ),
+    (
+        "b.ndjson",
+        "{\"id\": 2, \"items\": [{\"sku\": \"b\", \"parts\": [3]}]}\n",
+    ),
+];
+
+/// The files target's order, item and part counts, and each order's items and parts joined by id.
+const FILES_TARGET_CHECK: &str = "SELECT (SELECT count(*) FROM read_parquet('{out}/orders/**/*.parquet')) || '/' || (SELECT count(*) FROM read_parquet('{out}/orders__items/**/*.parquet')) || '/' || (SELECT count(*) FROM read_parquet('{out}/orders__items__parts/**/*.parquet')) || '/' || (SELECT coalesce(string_agg(o.id || ':' || i.sku || ':' || p.value, ',' ORDER BY p.value), '') FROM read_parquet('{out}/orders/**/*.parquet') o JOIN read_parquet('{out}/orders__items/**/*.parquet') i ON i._sqlload_parent_id = o._sqlload_row_id JOIN read_parquet('{out}/orders__items__parts/**/*.parquet') p ON p._sqlload_parent_id = i._sqlload_row_id)";
 
 #[test]
 fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_problem()
@@ -258,28 +301,28 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             expected_problem: "max_depth limits the child tables unnest makes, and this table sets no unnest",
         },
         UnnestPlanTestCase {
-            description: "delete_insert",
-            settings: "write_strategy = \"delete_insert\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
-            files_target: false,
+            description: "a files target with listed paths plans a folder per child table",
+            settings: "[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            files_target: true,
             file: ORDERS,
-            expected_ok: false,
-            expected_problem: "unnest does not yet write child tables with write_strategy = \"delete_insert\"",
+            expected_ok: true,
+            expected_problem: "├── unnest  orders__items, orders__items__parts  child tables, columns inferred at load",
         },
         UnnestPlanTestCase {
-            description: "an enforced contract",
-            settings: "contract = \"enforced\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
-            files_target: false,
-            file: ORDERS,
-            expected_ok: false,
-            expected_problem: "unnest does not yet write child tables with contract = \"enforced\"",
-        },
-        UnnestPlanTestCase {
-            description: "a files target",
+            description: "unnest = \"all\" on a files target, whose earlier child tables a load cannot find",
             settings: "[sources.orders.tables.orders]\nunnest = \"all\"\n",
             files_target: true,
             file: ORDERS,
             expected_ok: false,
-            expected_problem: "unnest does not yet write child tables with a files target",
+            expected_problem: "unnest does not yet write child tables with unnest = \"all\" on a files target (list the paths)",
+        },
+        UnnestPlanTestCase {
+            description: "a merge on a files target, which would rewrite the child tables' files",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"items\"]\n",
+            files_target: true,
+            file: ORDERS,
+            expected_ok: false,
+            expected_problem: "unnest does not yet write child tables with write_strategy = \"merge\" on a files target",
         },
         UnnestPlanTestCase {
             description: "the unnested field is not a column of the table: the plan lists id and items only",
@@ -363,6 +406,77 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             (ok, output.contains(test_case.expected_problem)),
             (test_case.expected_ok, true),
             "{}: {output}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_unnest_when_loading_into_a_files_target_then_each_child_table_gets_its_own_linked_folder()
+-> Result<(), String> {
+    let test_cases = [
+        FilesTargetUnnestTestCase {
+            description: "an append: each run's orders, items and parts are added, linked by id",
+            settings: "write_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            runs: FILES_TARGET_RUNS,
+            check_query: FILES_TARGET_CHECK,
+            expected_result: "2/2/3/1:a:1,1:a:2,2:b:3",
+        },
+        FilesTargetUnnestTestCase {
+            description: "a replace: the child tables are replaced with their parent, so only the last run's rows stay",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            runs: &[
+                (
+                    "a.ndjson",
+                    "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n",
+                ),
+                (
+                    "a.ndjson",
+                    "{\"id\": 3, \"items\": [{\"sku\": \"c\", \"parts\": [7]}]}\n",
+                ),
+            ],
+            check_query: FILES_TARGET_CHECK,
+            expected_result: "1/1/1/3:c:7",
+        },
+        FilesTargetUnnestTestCase {
+            description: "a replace whose rows hold no items any more: the child tables are emptied, not left with the last load's",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            runs: &[
+                (
+                    "a.ndjson",
+                    "{\"id\": 1, \"items\": [{\"sku\": \"a\", \"parts\": [1, 2]}]}\n",
+                ),
+                ("a.ndjson", "{\"id\": 3, \"items\": []}\n"),
+            ],
+            check_query: FILES_TARGET_CHECK,
+            expected_result: "1/0/0/",
+        },
+    ];
+    for test_case in &test_cases {
+        let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(root.path().join("drop")).map_err(|error| error.to_string())?;
+        let config = root.path().join("sqlload.toml");
+        let text = format!(
+            "[targets.dev]\nconnection = \"files\"\npath = \"out/{{table}}/\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"ndjson\"\n{}",
+            root.path().display(),
+            test_case.settings
+        );
+        std::fs::write(&config, text).map_err(|error| error.to_string())?;
+        for (name, contents) in test_case.runs {
+            std::fs::write(root.path().join("drop").join(name), contents)
+                .map_err(|error| error.to_string())?;
+            let (ok, output) = run_sqlload(&config, &["load"], ("", ""))?;
+            assert!(ok, "{}: {output}", test_case.description);
+        }
+        let out = root.path().join("out").display().to_string();
+        let result = duckdb_text(
+            &root.path().join("check.duckdb"),
+            &test_case.check_query.replace("{out}", &out),
+        )?;
+        assert_eq!(
+            result, test_case.expected_result,
+            "{}",
             test_case.description
         );
     }
@@ -460,6 +574,25 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             expected_columns: UNNESTED_COLUMNS,
             check_query: MERGE_CHECK,
             expected_result: "2/1/1/1:d:5",
+        },
+        RowIdTestCase {
+            description: "unnest on a delete_insert: a rewritten partition's orders lose their old items and parts at every level, and another partition's keep theirs",
+            settings: DELETE_INSERT_SETTINGS,
+            runs: DELETE_INSERT_RUNS,
+            expected_columns: DELETE_INSERT_COLUMNS,
+            check_query: DELETE_INSERT_CHECK,
+            expected_result: "2/2/2/1:a:1,2:c:4",
+        },
+        RowIdTestCase {
+            description: "unnest under an enforced contract: columns declares the child tables' columns by dotted path; each table loads its declared columns and links, and leaves out the rest (an item's qty, the parent's note and tags)",
+            settings: "contract = \"enforced\"\n[sources.orders.tables.orders]\ncolumns = { id = \"int\", \"items.sku\" = \"text\", \"items.parts.value\" = \"int\" }\nunnest = [\"items\", \"items.parts\"]\n",
+            runs: &[(
+                "a.ndjson",
+                "{\"id\": 1, \"note\": \"n\", \"items\": [{\"sku\": \"a\", \"qty\": 5, \"parts\": [1, 2]}], \"tags\": [\"x\"]}\n",
+            )],
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: "SELECT (SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'orders__items') || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',' ORDER BY p.value) FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)",
+            expected_result: "sku,_sqlload_parent_id,_sqlload_list_idx,_sqlload_load_id,_sqlload_loaded_at,_sqlload_row_id/1:a:1,1:a:2",
         },
         RowIdTestCase {
             description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then",
@@ -642,6 +775,14 @@ fn given_unnest_when_loading_into_postgres_then_lists_become_child_tables_linked
             expected_result: "2/1/1/1:d:5",
         },
         RowIdTestCase {
+            description: "unnest on a delete_insert: a rewritten partition's orders lose their old items and parts at every level, and another partition's keep theirs (Postgres)",
+            settings: DELETE_INSERT_SETTINGS,
+            runs: DELETE_INSERT_RUNS,
+            expected_columns: DELETE_INSERT_COLUMNS,
+            check_query: DELETE_INSERT_CHECK,
+            expected_result: "2/2/2/1:a:1,2:c:4",
+        },
+        RowIdTestCase {
             description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then (Postgres)",
             settings: ALL_SETTINGS,
             runs: ALL_RUNS,
@@ -706,6 +847,14 @@ fn given_unnest_when_loading_into_clickhouse_then_lists_become_child_tables_link
             expected_columns: UNNESTED_COLUMNS,
             check_query: CLICKHOUSE_APPEND_CHECK,
             expected_result: "2:new/1:a:1@0,1:a:2@1,2:b:3@0",
+        },
+        RowIdTestCase {
+            description: "unnest on a delete_insert: a rewritten partition's orders lose their old items and parts at every level, and another partition's keep theirs (ClickHouse)",
+            settings: DELETE_INSERT_SETTINGS,
+            runs: DELETE_INSERT_RUNS,
+            expected_columns: DELETE_INSERT_COLUMNS,
+            check_query: CLICKHOUSE_DELETE_INSERT_CHECK,
+            expected_result: "2/2/2/1:a:1,2:c:4",
         },
         RowIdTestCase {
             description: "unnest = \"all\" on an append: lists at every level become child tables, an object stays a column, and a list field first seen in run 2 gets its table then (ClickHouse)",

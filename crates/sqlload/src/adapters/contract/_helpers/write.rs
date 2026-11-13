@@ -35,6 +35,33 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
         values.join(", ")
     );
     let insert = format!("INSERT INTO {target} {insert_from}");
+    let delete = match request.mode {
+        WriteMode::Recreate => {
+            return adapter.render_replace_table_from_relation(request, &source, &values);
+        }
+        WriteMode::Merge { unique_key, .. } => {
+            return vec![adapter.render_merge(request, unique_key, &source, &values)];
+        }
+        WriteMode::Replace => return adapter.render_replace(request, staging, &insert_from),
+        WriteMode::Changes(change) => return adapter.render_changes(request, change, staging),
+        WriteMode::Append => None,
+        WriteMode::DeleteInsert { .. } => Some(match adapter.render_replaced_rows(request) {
+            Some(condition) => format!("DELETE FROM {target} WHERE {condition}"),
+            None => format!("DELETE FROM {target}"),
+        }),
+    };
+    let mut statements = vec!["BEGIN".to_owned()];
+    statements.extend(delete);
+    statements.push(insert);
+    statements.push("COMMIT".to_owned());
+    statements
+}
+
+/// Under `delete_insert`, the condition choosing the rows of `request.table` its commit replaces: those whose cursor is one of its values, or within its window; `None` when that is every row (no bounds, or not a `delete_insert`).
+pub(crate) fn replaced_rows<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    request: &WriteStatementsRequest<'_>,
+) -> Option<String> {
     let column_type = |name: &str| {
         request
             .columns
@@ -49,16 +76,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             _ => column,
         }
     };
-    let delete = match request.mode {
-        WriteMode::Recreate => {
-            return adapter.render_replace_table_from_relation(request, &source, &values);
-        }
-        WriteMode::Merge { unique_key, .. } => {
-            return vec![adapter.render_merge(request, unique_key, &source, &values)];
-        }
-        WriteMode::Replace => return adapter.render_replace(request, staging, &insert_from),
-        WriteMode::Changes(change) => return adapter.render_changes(request, change, staging),
-        WriteMode::Append => None,
+    match request.mode {
         WriteMode::DeleteInsert {
             cursor_column,
             values,
@@ -77,7 +95,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
                 })
                 .collect();
             Some(format!(
-                "DELETE FROM {target} WHERE {} IN ({})",
+                "{} IN ({})",
                 compared(cursor_column),
                 listed.join(", ")
             ))
@@ -102,15 +120,8 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
                     ))
                 })
                 .collect();
-            Some(match bounds.is_empty() {
-                true => format!("DELETE FROM {target}"),
-                false => format!("DELETE FROM {target} WHERE {}", bounds.join(" AND ")),
-            })
+            (!bounds.is_empty()).then(|| bounds.join(" AND "))
         }
-    };
-    let mut statements = vec!["BEGIN".to_owned()];
-    statements.extend(delete);
-    statements.push(insert);
-    statements.push("COMMIT".to_owned());
-    statements
+        _ => None,
+    }
 }
