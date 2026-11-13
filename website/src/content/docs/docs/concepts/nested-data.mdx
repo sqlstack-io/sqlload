@@ -79,8 +79,8 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
   naming the field. Its rows are never stored as JSON or dropped. To keep such a field as JSON, list
   the paths to unnest without it.
 - A field with a child table from an earlier load stays one. A table counts as one only when it is
-  named `<table>__<field>` and has a parent-id column (`_sqlload_parent_id`, or `_dlt_parent_id`
-  under either naming), and is not another table's child table (`orders__notes__items` when a
+  named `<table>__<field>` and has a parent-id column (`_sqlload_parent_id` or `_dlt_parent_id`,
+  whatever the `naming`), and is not another table's child table (`orders__notes__items` when a
   table `orders__notes` holds no parent-id column). From 0.41.1 (not released yet), other tables
   named so, such as a plain `orders__notes` beside `orders`, are left as they are. Before that, a
   `replace` emptied them and a `merge` could delete rows from them.
