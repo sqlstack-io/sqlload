@@ -20,6 +20,7 @@ use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::constants::CHILD_TABLE_SEPARATOR;
 use crate::load_naming::main::child_table_name::child_table_name;
+use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
 use crate::loader::_helpers::publish::staged_columns;
@@ -267,6 +268,36 @@ pub(crate) fn with_live_columns(
     let mut augmented = spec.clone();
     augmented.source_table.columns.extend(added);
     Some(augmented)
+}
+
+/// A yielded batch with its fields named as they load under `spec`'s naming: as yielded under SQLLoad's, normalised under dlt's; two fields loading as one name fail, naming both.
+fn dlt_named(batch: RecordBatch, spec: &TableSpec) -> Result<RecordBatch, LoaderError> {
+    if spec.naming == Naming::Sqlload {
+        return Ok(batch);
+    }
+    let limit = sql_adapter(spec.warehouse).max_identifier_length();
+    let schema = batch.schema();
+    let mut fields: Vec<arrow_schema::FieldRef> = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let name = loaded_name(spec.naming, field.name(), limit);
+        if let Some(other) = fields.iter().find(|taken| *taken.name() == name) {
+            let yielded = schema
+                .fields()
+                .iter()
+                .find(|yielded| loaded_name(spec.naming, yielded.name(), limit) == *other.name())
+                .map_or(name.clone(), |yielded| yielded.name().clone());
+            return Err(LoaderError::Invalid(format!(
+                "fields {yielded:?} and {:?} both load as {name} under naming = \"dlt\"; rename one in the table function",
+                field.name()
+            )));
+        }
+        fields.push(Arc::new(field.as_ref().clone().with_name(name)));
+    }
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+        batch.columns().to_vec(),
+    )
+    .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
 /// The name a table function most likely yields for live column `stored`: its lower-case form when the warehouse stores that as `stored` (upper case on Snowflake), else `stored` itself.
@@ -851,6 +882,7 @@ impl PythonFeed {
         window: Option<&CursorWindow>,
     ) -> Result<(), LoaderError> {
         self.check_flattened(&batch)?;
+        let batch = dlt_named(batch, &self.table.spec)?;
         let merged = merge_schema(&self.merged, &batch.schema());
         self.rows += batch.num_rows() as u64;
         let chosen = match (&self.table.spec.unnest, &mut self.table.spec.python) {
