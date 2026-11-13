@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.39.1](https://github.com/sqlstack-io/sqlload/compare/v0.39.0...v0.39.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **files:** a folder after_load emptied skips its table instead of failing the load ([#210](https://github.com/sqlstack-io/sqlload/issues/210)) ([5b74442](https://github.com/sqlstack-io/sqlload/commit/5b7444209e37e28bc737c2d296cb5a08f41fe08c))
+
+
+### Documentation
+
+* drop the not-released marks for 0.39.0 ([#209](https://github.com/sqlstack-io/sqlload/issues/209)) ([2596ea9](https://github.com/sqlstack-io/sqlload/commit/2596ea9049f5b283ecadee2fcc68bc95c2bf49f5))
+
 ## [0.39.0](https://github.com/sqlstack-io/sqlload/compare/v0.38.0...v0.39.0) (2026-11-12)
 
 
