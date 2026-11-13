@@ -219,20 +219,27 @@ fn pinned_child_paths(spec: &TableSpec) -> BTreeSet<&str> {
     paths
 }
 
-/// Each of `tables` (as the warehouse lists them) that a `child_pinned` path's child table is, with that path: the table spelt exactly as the path's is, or else one spelt so in another case (Postgres lists an upper-case parent's children folded), so `items` and `Items` keep their own paths.
+/// Each of `tables` (as the warehouse lists them) that a `child_pinned` path's child table is, with that path: the table spelt exactly as the path's is, or else, when no pin spells it exactly, one spelt so in another case (Postgres lists an upper-case parent's children folded), so `items` and `Items` keep their own paths.
 fn pinned_tables(spec: &TableSpec, tables: &[String]) -> BTreeMap<String, String> {
     let adapter = sql_adapter(spec.warehouse);
+    let named: Vec<(&str, String)> = pinned_child_paths(spec)
+        .into_iter()
+        .map(|path| (path, adapter.stored_table_name(&unnested_table(spec, path))))
+        .collect();
     let mut found: BTreeMap<String, String> = BTreeMap::new();
-    for path in pinned_child_paths(spec) {
-        let name = adapter.stored_table_name(&unnested_table(spec, path));
-        let mut table = tables.iter().find(|table| **table == name);
-        if table.is_none() {
-            table = tables
-                .iter()
-                .find(|table| table.eq_ignore_ascii_case(&name));
-        }
-        if let Some(table) = table {
-            found.insert(table.clone(), path.to_owned());
+    for exact in [true, false] {
+        for (path, name) in &named {
+            for table in tables {
+                let spelt = match exact {
+                    true => table == name,
+                    false => table.eq_ignore_ascii_case(name),
+                };
+                if spelt {
+                    found
+                        .entry(table.clone())
+                        .or_insert_with(|| (*path).to_owned());
+                }
+            }
         }
     }
     found
