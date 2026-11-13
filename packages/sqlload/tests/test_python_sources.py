@@ -165,6 +165,30 @@ def test_given_a_python_table_when_loaded_twice_into_duckdb_then_its_strategy_ap
 	assert query(project, 'SELECT count(DISTINCT _sqlload_load_id) FROM "RAW"."shop__rows"')[0][0] >= 1
 
 
+def test_given_dlt_naming_when_a_python_table_merges_twice_then_fields_load_snake_cased_and_merge_by_the_yielded_key(tmp_path: Path) -> None:
+	project = make_project(
+		tmp_path,
+		DUCKDB_PROJECT,
+		"shop.table(description='Test table.', naming='dlt', write_strategy='merge', unique_key='OrderID', unnest=['LineItems'])(rows)\n",
+	)
+	give(project, "rows", [{"OrderID": 1, "Unit Price": "a", "LineItems": [{"UnitPrice": 5}]}, {"OrderID": 2, "Unit Price": "b", "LineItems": []}])
+	load(project)
+	give(project, "rows", [{"OrderID": 1, "Unit Price": "c", "LineItems": [{"UnitPrice": 7}]}])
+	load(project)
+	columns = query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
+	assert [name for (name,) in columns] == ["order_id", "unit_price", "_dlt_load_id", "_sqlload_loaded_at", "_dlt_id"]
+	assert query(project, 'SELECT order_id, unit_price FROM "RAW"."shop__rows" ORDER BY order_id') == [(1, "c"), (2, "b")]
+	assert query(project, 'SELECT o.order_id, i.unit_price FROM "RAW"."shop__rows" o JOIN "RAW"."shop__rows__line_items" i ON i._dlt_parent_id = o._dlt_id') == [(1, 7)]
+
+
+def test_given_dlt_naming_when_two_yielded_fields_load_as_one_name_then_the_table_fails_naming_both(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', naming='dlt')(rows)\n")
+	give(project, "rows", [{"OrderID": 1, "Order ID": 2}])
+	done = sqlload(project, "load")
+	assert done.returncode != 0
+	assert 'fields "OrderID" and "Order ID" both load as order_id under naming = "dlt"' in done.stdout + done.stderr
+
+
 def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_fit_the_live_types(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
 	give(project, "rows", [{"id": 1, "code": "x1", "meta": {"k": 1}}])
