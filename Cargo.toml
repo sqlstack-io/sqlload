@@ -87,6 +87,7 @@ tower-layer = "0.3"
 tower-service = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
+unicode-properties = { version = "0.1.5", default-features = false, features = ["general-category"] }
 uuid = { version = "1", features = ["v4"] }
 webpki-roots = "1"
 zstd = "0.14"

@@ -75,3 +75,30 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
 - A list field first seen after a table's first load is a new child table, which
   `on_schema_change` decides: `append_new_columns` creates it, `ignore` leaves its items out with a
   warning, and `fail` stops the load.
+
+## Naming
+
+`naming` on a target, source or table chooses the names of the columns a load adds and of the
+child tables `unnest` makes. `sqlload`, the default, leaves every existing table as it was.
+`dlt` uses the names dlt gives them, so tables a dlt pipeline loaded can carry on under SQLLoad:
+
+| What it holds | `naming = "sqlload"` | `naming = "dlt"` |
+| --- | --- | --- |
+| The load that wrote the row | `_sqlload_load_id` | `_dlt_load_id` |
+| When that load started | `_sqlload_loaded_at` | `_sqlload_loaded_at` (dlt has none) |
+| The row's own id | `_sqlload_row_id`, with `row_id` or `unnest` | `_dlt_id`, always |
+| A child row's parent row | `_sqlload_parent_id` | `_dlt_parent_id` |
+| A child row's place in its list, from 0 | `_sqlload_list_idx` | `_dlt_list_idx` |
+| A child row's root row, under `merge` | `_sqlload_root_id` | `_dlt_root_id` |
+
+Row ids are made as dlt makes them: random for a root row; under `merge`, a hash of the
+`unique_key`, as dlt's `upsert` merge gives it (its default `delete-insert` merge gives random
+ones); and for a child row a hash of its parent's id, its table and its place in the list, so a
+merged row's children keep their ids on every load. dlt's own tables (`_dlt_loads`,
+`_dlt_pipeline_state`, `_dlt_version`) are not written.
+
+Where SQLLoad and dlt still differ under `naming = "dlt"`:
+
+- An object stays a JSON column; dlt flattens it into `parent__key` columns.
+- A field listed in `unnest` always goes to its child table, even when an XML element appears
+  only once; dlt keeps a single match as a column of the parent.
