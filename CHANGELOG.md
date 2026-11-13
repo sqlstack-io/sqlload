@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.42.1](https://github.com/sqlstack-io/sqlload/compare/v0.42.0...v0.42.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **files:** take flattened objects and child-table paths from the data, not from splitting names on __ ([#232](https://github.com/sqlstack-io/sqlload/issues/232)) ([01cf6de](https://github.com/sqlstack-io/sqlload/commit/01cf6de62fd0210667a007bfeeba9e967c061b98))
+* **unnest:** keep list fields an earlier load chose wherever their child table names put them ([#230](https://github.com/sqlstack-io/sqlload/issues/230)) ([23b7a6c](https://github.com/sqlstack-io/sqlload/commit/23b7a6ccc785f87ee35f7a32caaa454043525678))
+
 ## [0.42.0](https://github.com/sqlstack-io/sqlload/compare/v0.41.1...v0.42.0) (2026-11-13)
 
 
