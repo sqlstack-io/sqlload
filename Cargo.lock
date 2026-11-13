@@ -5692,6 +5692,7 @@ dependencies = [
  "tower-service",
  "tracing",
  "tracing-subscriber",
+ "unicode-properties",
  "uuid",
  "webpki-roots",
  "zip",
