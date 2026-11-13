@@ -6,6 +6,7 @@ use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
 use crate::files_source::_helpers::plan::columns::loader_column;
 use crate::files_source::models::FilesRead;
+use crate::row_batches::constants::FLATTEN_SEPARATOR;
 
 /// What a JSON or CSV read checks: that every key or header is a source column, and that inferred columns' values follow the inference rules.
 #[derive(Debug)]
@@ -48,6 +49,12 @@ impl ColumnChecks {
         self.known.contains(name)
             || (self.exclude.is_match(name) && !self.allow.is_match(name))
             || loader_column(name)
+    }
+
+    /// Whether `name` is an object whose `<name>__<key>` columns the source has, as `naming = "dlt"` flattens it.
+    pub(crate) fn is_flattened_object(&self, name: &str) -> bool {
+        let prefix = format!("{name}{FLATTEN_SEPARATOR}");
+        self.known.iter().any(|known| known.starts_with(&prefix))
     }
 
     /// The inferred type of column `name`, when its type was inferred rather than pinned.

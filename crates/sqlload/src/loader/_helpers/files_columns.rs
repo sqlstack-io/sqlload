@@ -13,11 +13,16 @@ use crate::postgres_source::models::{PgType, SourceColumn};
 use crate::project::models::{SourceConfig, TableOverride};
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
 
-/// A text column for each name `overrides` pins in `columns` or masks, so a table whose files are gone still resolves with them.
-pub(crate) fn referenced_columns(overrides: Option<&TableOverride>) -> Vec<SourceColumn> {
-    let names: BTreeSet<&String> = overrides
+/// A text column for each column `overrides` pins in `columns` or masks, one per name it loads as under `rule` (a pin and a mask may spell one column two ways), so a table whose files are gone still resolves with them.
+pub(crate) fn referenced_columns(
+    overrides: Option<&TableOverride>,
+    rule: NameRule,
+) -> Vec<SourceColumn> {
+    let mut loaded: BTreeSet<String> = BTreeSet::new();
+    let names: Vec<&String> = overrides
         .into_iter()
         .flat_map(|table| table.columns.keys().chain(table.mask.keys()))
+        .filter(|name| loaded.insert(loaded_name(rule.0, name, rule.1)))
         .collect();
     names
         .into_iter()
@@ -32,7 +37,7 @@ pub(crate) fn referenced_columns(overrides: Option<&TableOverride>) -> Vec<Sourc
         .collect()
 }
 
-/// Problems with settings naming an object that flattening replaced with its `<object>__<key>` columns in `columns` (the sampled ones, flattened ones marked by [`FLATTENED_KEY`]), so they would silently stop applying: a `columns` or `mask` key naming it (by its loaded name under `rule`, as pins may), or an `exclude_columns` or `allow_columns` pattern matching it but none of its columns.
+/// Problems with settings naming an object that flattening replaced with its `<object>__<key>` columns in `columns` (the sampled ones, flattened ones marked by [`FLATTENED_KEY`]; an object NULL in some sampled rows is a column too, but its keys still escape a setting naming only it), so they would silently stop applying: a `columns` or `mask` key naming it (by its loaded name under `rule`, as pins may), or an `exclude_columns` or `allow_columns` pattern matching it but none of its columns.
 pub(crate) fn flattened_object_problems(
     (source, overrides): (&SourceConfig, Option<&TableOverride>),
     columns: &[FileColumn],
@@ -49,7 +54,6 @@ pub(crate) fn flattened_object_problems(
             objects.insert(parts[..end].join(FLATTEN_SEPARATOR));
         }
     }
-    objects.retain(|object| !sampled.contains(object.as_str()));
     let mut names: Vec<(&str, &String)> = Vec::new();
     let mut patterns: Vec<(&str, &String)> = Vec::new();
     if let Some(overrides) = overrides {

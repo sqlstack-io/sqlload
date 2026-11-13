@@ -346,6 +346,14 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             expected_problem: "columns customer names Customer, which naming = \"dlt\" flattens into Customer__Email; name those columns instead",
         },
         UnnestPlanTestCase {
+            description: "under dlt naming a mask naming an object NULL in some sampled rows is refused, as its keys would load unmasked",
+            settings: "naming = \"dlt\"\n[sources.orders.tables.orders]\nmask = { c = \"hash\" }\n",
+            files_target: false,
+            file: "{\"id\": 1, \"c\": null}\n{\"id\": 2, \"c\": {\"n\": \"s\"}}\n",
+            expected_ok: false,
+            expected_problem: "mask c names c, which naming = \"dlt\" flattens into c__n; name those columns instead",
+        },
+        UnnestPlanTestCase {
             description: "under dlt naming an exclusion matching a flattened object's columns applies to them",
             settings: "naming = \"dlt\"\nexclude_columns = [\"Customer*\"]\n",
             files_target: false,

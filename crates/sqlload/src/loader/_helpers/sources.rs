@@ -1659,16 +1659,6 @@ fn drained_files(
         }
     };
     let overrides = source.tables.get(source_name);
-    let listed = SourceTable {
-        schema: String::new(),
-        name: source_name.to_owned(),
-        columns: referenced_columns(overrides),
-        primary_key: Vec::new(),
-        indexed_columns: Vec::new(),
-        estimated_rows: -1,
-        estimated_bytes: 0,
-        comment: None,
-    };
     let name = overrides.and_then(|table| table.name.as_deref());
     let unset = TableSettings::default();
     let naming = table_naming(
@@ -1682,6 +1672,16 @@ fn drained_files(
         naming,
         sql_adapter(target.warehouse).max_identifier_length(),
     );
+    let listed = SourceTable {
+        schema: String::new(),
+        name: source_name.to_owned(),
+        columns: referenced_columns(overrides, rule),
+        primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
+        estimated_rows: -1,
+        estimated_bytes: 0,
+        comment: None,
+    };
     let table = TableName {
         database: target.database,
         schema: target.schema,

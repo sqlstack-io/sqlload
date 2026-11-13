@@ -190,6 +190,13 @@ fn given_names_when_normalising_as_dlt_then_they_match_dlts_snake_case_and_stay_
             max_length: Some(63),
             expected_name: "orders___empty",
         },
+        DltNameTestCase {
+            description: "a list field of only __ is named _empty too, never orders__",
+            normalise: child_of_orders,
+            name: "__",
+            max_length: Some(63),
+            expected_name: "orders___empty",
+        },
     ];
     for test_case in test_cases {
         assert_eq!(
