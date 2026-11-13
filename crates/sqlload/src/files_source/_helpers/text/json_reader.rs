@@ -79,7 +79,7 @@ impl JsonReader {
     }
 }
 
-/// `records` as a batch of text columns, one per `columns` entry (a missing key is NULL; a repeated key keeps its last value), and the line each row starts on; a key the source lacks, or a value that does not fit its inferred type, is an error, except a NULL when `flattened` (an object that is NULL in this row and flattened in others, which a missing key already loads as).
+/// `records` as a batch of text columns, one per `columns` entry (a missing key is NULL; a repeated key keeps its last value), and the line each row starts on; a key the source lacks, or a value that does not fit its inferred type, is an error, except, when `flattened`, a NULL for an object the source has flattened columns of (an object NULL in this row, which loads as a missing key does).
 pub(crate) fn records_batch(
     records: &[JsonRecord],
     columns: &[(String, ColumnType)],
@@ -95,7 +95,7 @@ pub(crate) fn records_batch(
         for field in &record.fields {
             let (key, value, nested) = field;
             let Some(position) = index.get(key.as_str()) else {
-                if !(flattened && value.is_null()) {
+                if !(flattened && value.is_null() && checks.is_flattened_object(key)) {
                     checks.check_name("key", key, record.line)?;
                 }
                 continue;

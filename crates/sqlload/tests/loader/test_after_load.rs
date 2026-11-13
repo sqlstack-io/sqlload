@@ -157,8 +157,8 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             expected_files: &["other/b.csv=id,v\\n2,b\\n"],
         },
         AfterLoadTestCase {
-            description: "an emptied source whose table pins a column still protects its rows",
-            settings: "write_strategy = \"append\"\nafter_load = \"delete\"\nconstant_columns = { feed = \"a\" }\n[sources.scores.tables.scores]\ncolumns = { v = \"text\" }\n\n[sources.other]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"other/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\nconstant_columns = { feed = \"b\" }\n[sources.other.tables.other]\nname = \"scores\"\n",
+            description: "an emptied source whose table pins and masks one column, spelled two ways under dlt naming, still protects its rows",
+            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\nafter_load = \"delete\"\nconstant_columns = { feed = \"a\" }\n[sources.scores.tables.scores]\ncolumns = { \"V Val\" = \"text\" }\nmask = { v_val = \"hash\" }\n\n[sources.other]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"other/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\nconstant_columns = { feed = \"b\" }\n[sources.other.tables.other]\nname = \"scores\"\n",
             linked: &[],
             steps: &[AfterLoadStep {
                 removed: &[],
