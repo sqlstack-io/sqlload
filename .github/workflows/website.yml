@@ -41,4 +41,5 @@ jobs:
         run: python3 scripts/check_links.py dist
       # Every docs page at 1280px and 390px, in the runner's Chrome.
       - name: Check layout
+        timeout-minutes: 5
         run: node scripts/check-layout.mjs dist

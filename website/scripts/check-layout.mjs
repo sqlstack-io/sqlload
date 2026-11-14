@@ -55,6 +55,7 @@ async function launchChrome() {
 			if (match) done(match[1]);
 		});
 		chrome.on('exit', (code) => fail(new Error(`Chrome exited (${code}):\n${log}`)));
+		chrome.on('error', fail);
 	});
 	return { chrome, profile, url };
 }
@@ -151,7 +152,7 @@ try {
 	cdp.close();
 	chrome.kill();
 	server.close();
-	await new Promise((done) => chrome.once('exit', done));
+	if (chrome.exitCode === null && chrome.signalCode === null) await new Promise((done) => chrome.once('exit', done));
 	await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
