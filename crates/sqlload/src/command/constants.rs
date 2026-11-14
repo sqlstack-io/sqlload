@@ -14,3 +14,6 @@ pub const RETRYABLE_EXIT: u8 = 75;
 
 /// The stack a command runs on: a Linux main thread's default, 8 MiB, on every system.
 pub const COMMAND_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// What `load` adds to the plan's closing line, since it leaves out the Loads and Skipped trees.
+pub const PLAN_TREE_HINT: &str = "(sqlload plan shows the tree)";

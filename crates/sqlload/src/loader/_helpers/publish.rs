@@ -88,6 +88,7 @@ use crate::loader::_helpers::table_plan::{cursor_binding, source_filter};
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
+use crate::loader::constants::PROGRESS_EVERY;
 use crate::loader::constants::SNAPSHOT_BEGIN;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_repair::files_to_replace;
@@ -627,6 +628,7 @@ impl Publisher {
             batch: 1,
             arrow_bytes: 0,
             batch_rows: 0,
+            progressed_at: std::time::Instant::now(),
             staged_ordinal: 0,
             waiting_rows: 0,
             waiting_range: None,
@@ -664,6 +666,7 @@ impl Publisher {
         if self.files.is_some() && self.children.is_none() {
             self.batch_rows += masked.num_rows() as u64;
             self.arrow_bytes += masked.get_array_memory_size();
+            self.report_rows();
             return self.stage_files(masked).await;
         }
         let ids = row_ids(&self.table, &masked).map_err(LoaderError::Invalid)?;
@@ -739,6 +742,7 @@ impl Publisher {
         };
         self.batch_rows += batch.num_rows() as u64;
         self.arrow_bytes += batch.get_array_memory_size();
+        self.report_rows();
         if self.files.is_some() {
             return self.stage_files(batch).await;
         }
@@ -750,6 +754,22 @@ impl Publisher {
             ((&self.load_id, self.batch), (self.direct, self.builds)),
         );
         self.writer.write_batch(&target, batch).await
+    }
+
+    /// A `table_progress` event for the batch being read, with the rows so far, at most once per `PROGRESS_EVERY`; a batch's end reports it anyway (see [`Self::flush_batch`]).
+    fn report_rows(&mut self) {
+        if self.progressed_at.elapsed() < PROGRESS_EVERY {
+            return;
+        }
+        self.progressed_at = std::time::Instant::now();
+        emit(
+            Some(&self.table.outcome_name()),
+            EventKind::TableProgress {
+                unit: "batch".to_owned(),
+                count: self.batch,
+                rows: self.committed_rows + self.waiting_rows + self.batch_rows,
+            },
+        );
     }
 
     /// The `created ...`, `altered ...` and `loaded ...` lines of the child tables filled so far.
@@ -927,6 +947,7 @@ impl Publisher {
         self.batch_rows = 0;
         self.arrow_bytes = 0;
         self.writer.next_batch();
+        self.progressed_at = std::time::Instant::now();
         emit(
             Some(&self.table.outcome_name()),
             EventKind::TableProgress {

@@ -745,6 +745,8 @@ pub struct Publisher {
     /// Arrow bytes of the batch so far, which measure it when the writer stages no files.
     pub arrow_bytes: usize,
     pub batch_rows: u64,
+    /// When the last `table_progress` event went out, so a long batch reports its rows as they arrive.
+    pub progressed_at: std::time::Instant,
     /// Rows staged so far, the next row's `_sqlload_row` when a merge dedupes by source order.
     pub staged_ordinal: i64,
     /// Rows in `staging` not committed yet, and what they replace.

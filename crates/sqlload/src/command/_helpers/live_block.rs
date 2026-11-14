@@ -16,9 +16,6 @@ const QUEUED_NAMED: usize = 3;
 /// The width of a running table's name column.
 const NAME_COLUMN: usize = 28;
 
-/// The width of the table-count bar's surroundings, as the mock lays them out: the terminal's width less this is the bar's.
-const HEADER_TEXT: usize = 46;
-
 /// The widest the block draws, however wide the terminal.
 const MAX_WIDTH: usize = 112;
 
@@ -123,7 +120,7 @@ impl LiveState {
     }
 }
 
-/// The block's lines for `state`, `elapsed` into the load, at redraw `frame`, for a terminal `width` columns wide; `coloured` as the mock has it: cyan for what runs, red only for a failure, yellow for waits and fail-fast, dim for notes.
+/// The block's lines, after a blank one that parts it from the finished tables' lines, for `state`, `elapsed` into the load, at redraw `frame`, for a terminal `width` columns wide; `coloured` as the mock has it: cyan for what runs, red only for a failure, yellow for waits and fail-fast, dim for notes.
 pub(crate) fn live_lines(
     state: &LiveState,
     (elapsed, frame): (Duration, usize),
@@ -141,15 +138,27 @@ pub(crate) fn live_lines(
             .iter()
             .map(|running| running.rows)
             .sum::<u64>();
-    let bar_width = width.saturating_sub(HEADER_TEXT).max(10);
+    let seconds = elapsed.as_secs();
+    let counts = format!(
+        "{}/{} tables · {:>5} rows · {:02}:{:02}",
+        state.done,
+        state.total,
+        thousands(rows),
+        seconds / 60,
+        seconds % 60
+    );
+    // The badge, a space, the bar and two spaces before the counts, a column short of the edge so the line never wraps.
+    let bar_width = width
+        .saturating_sub(" LOADING ".len() + 3 + counts.chars().count() + 1)
+        .max(10);
     let filled = match state.total {
         0 => bar_width,
         total => bar_width * state.done / total,
     };
-    let seconds = elapsed.as_secs();
     let mut lines = vec![
+        String::new(),
         format!(
-            "{} {}{}  {}/{} tables · {:>5} rows · {:02}:{:02}",
+            "{} {}{}  {counts}",
             paint(&format!("{BOLD}{CYAN}"), " LOADING ".to_owned()),
             paint(
                 match state.stopped_after {
@@ -159,11 +168,6 @@ pub(crate) fn live_lines(
                 "━".repeat(filled)
             ),
             paint(DIM, "━".repeat(bar_width - filled)),
-            state.done,
-            state.total,
-            thousands(rows),
-            seconds / 60,
-            seconds % 60
         ),
         String::new(),
     ];
@@ -186,8 +190,11 @@ pub(crate) fn live_lines(
         lines.push(paint(
             YELLOW,
             format!(
-                "  ⊘ fail-fast: {} tables will not start after {failed} failed; running tables finish",
-                state.waiting.len()
+                "  ⊘ fail-fast: {} will not start after {failed} failed; running tables finish",
+                match state.waiting.len() {
+                    1 => "1 table".to_owned(),
+                    count => format!("{count} tables"),
+                }
             ),
         ));
     } else if !state.waiting.is_empty() {

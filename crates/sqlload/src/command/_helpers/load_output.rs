@@ -6,6 +6,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::command::_helpers::live_block::{LiveState, live_lines};
 use crate::command::_helpers::output::print_lines;
+use crate::command::constants::PLAN_TREE_HINT;
 use crate::load_events::main::event_line::event_line;
 use crate::load_events::models::{EventKind, LoadEvent};
 use crate::loader::_helpers::render::thousands;
@@ -152,7 +153,7 @@ pub(crate) fn change_tally_line(line: &str, name_width: usize) -> String {
     tally_line((verb, name), detail.trim_start(), name_width)
 }
 
-/// What `load` prints of its plan before it starts: the closing line, and the Objects, Errors and Warnings sections when there are any; the Loads and Skipped trees and the `Plan ready` line are `plan`'s.
+/// What `load` prints of its plan before it starts: the closing line, pointing a complete plan to `sqlload plan`, and the Objects, Errors and Warnings sections when there are any; the Loads and Skipped trees and the `Plan ready` line are `plan`'s.
 pub(crate) fn start_lines(plan_lines: Vec<String>) -> Vec<String> {
     let dropped = ["Plan ready", "Loads (", "Skipped ("];
     let mut kept: Vec<String> = Vec::new();
@@ -165,6 +166,11 @@ pub(crate) fn start_lines(plan_lines: Vec<String>) -> Vec<String> {
         kept.push(String::new());
     }
     kept.pop();
+    if let Some(closing) = kept.last_mut()
+        && closing.starts_with('✓')
+    {
+        closing.push_str(&format!("   {PLAN_TREE_HINT}"));
+    }
     kept
 }
 

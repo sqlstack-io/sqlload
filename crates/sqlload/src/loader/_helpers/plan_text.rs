@@ -14,10 +14,15 @@ use crate::project::models::BatchStep;
 /// Details the project view leaves out where a table has the text most of its tables have.
 const SHARED_LABELS: [&str; 4] = ["route", "why", "batch", "schema"];
 
-/// For each of `SHARED_LABELS`, the text most of `items` have, when at least two share it; ties go to the text first in order.
-pub(crate) fn usual_details(items: &[PlanItem]) -> HashMap<String, String> {
+/// For each of `SHARED_LABELS`, the text most of `items` show, when at least two share it; ties go to the text first in order. An incremental table's `batch`, which `reads` and `commits` replace, isn't counted.
+pub(crate) fn usual_details(tables: &[&TablePlan], items: &[PlanItem]) -> HashMap<String, String> {
     let mut counts: Vec<(&str, &str, usize)> = Vec::new();
-    for detail in items.iter().flat_map(|item| &item.details) {
+    let shown = tables.iter().zip(items).flat_map(|(table, item)| {
+        item.details.iter().filter(|detail| {
+            !(incremental(table) && REPLACED_LABELS.contains(&detail.label.as_str()))
+        })
+    });
+    for detail in shown {
         if !SHARED_LABELS.contains(&detail.label.as_str()) {
             continue;
         }
@@ -42,6 +47,14 @@ pub(crate) fn usual_details(items: &[PlanItem]) -> HashMap<String, String> {
         .collect()
 }
 
+/// The details an incremental table's `reads` and `commits` stand in for.
+const REPLACED_LABELS: [&str; 3] = ["cursor", "state", "batch"];
+
+/// Whether `table` reads from a cursor or a logged state, so `reads` and `commits` describe it.
+fn incremental(table: &TablePlan) -> bool {
+    table.window.is_some() || table.logged.is_some()
+}
+
 /// `item`, `load_item`'s view of `table`, as `plan` prints it: named as it lands, and, for an incremental table, `reads` and `commits` in place of `cursor`, `state` and `batch`. With `one` (one table selected) every detail stays, with times to the millisecond; otherwise a detail with its `usual` text is left out, and `commits` only shows when it says more than the usual.
 pub(crate) fn text_item(
     table: &TablePlan,
@@ -49,12 +62,12 @@ pub(crate) fn text_item(
     one: bool,
     usual: &HashMap<String, String>,
 ) -> PlanItem {
-    let incremental = table.window.is_some() || table.logged.is_some();
+    let incremental = incremental(table);
     let mut details: Vec<PlanDetail> = item
         .details
         .into_iter()
         .filter(|detail| match detail.label.as_str() {
-            "cursor" | "state" | "batch" if incremental => false,
+            label if incremental && REPLACED_LABELS.contains(&label) => false,
             label => one || usual.get(label) != Some(&detail.text),
         })
         .collect();

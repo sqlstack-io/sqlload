@@ -67,6 +67,9 @@ pub const PARALLEL_READERS: usize = 2;
 /// Tables Postgres estimates below this size (128 MiB) are read over one connection.
 pub const PARALLEL_READ_MIN_BYTES: i64 = 128 * 1024 * 1024;
 
+/// The least time between two `table_progress` events of a batch still being read.
+pub const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// ANSI escapes for coloured output.
 pub const BOLD: &str = "\x1b[1m";
 /// Dimmed text: a heading's command note.

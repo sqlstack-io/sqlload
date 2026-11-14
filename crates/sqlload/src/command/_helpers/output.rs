@@ -1,9 +1,9 @@
 use std::io::{BufRead, IsTerminal, Write};
 
-use crate::command::constants::RELOAD_YES;
+use crate::command::constants::{PLAN_TREE_HINT, RELOAD_YES};
 use crate::loader::constants::{BOLD, DIM, GREEN, RED, RESET, YELLOW};
 
-/// The colour a line of `plan`, `apply` or `load` output is printed in, if any: bold headings, red errors and failures, yellow warnings, green completions.
+/// The colour a line of `plan`, `apply` or `load` output is printed in, if any: bold headings, red errors and failures, yellow warnings, green completions. A `loaded` line has only its first word green, and an outcome line only its label (see [`paint`]).
 fn colour(line: &str) -> Option<&'static str> {
     let starts = |prefixes: &[&str]| prefixes.iter().any(|prefix| line.starts_with(prefix));
     match line.chars().next() {
@@ -18,9 +18,24 @@ fn colour(line: &str) -> Option<&'static str> {
 
 /// `line` coloured, with a heading's command note dimmed in place.
 pub(crate) fn paint(line: String) -> String {
+    if let Some(rest) = line.strip_prefix("loaded ") {
+        return format!("{GREEN}loaded{RESET} {rest}");
+    }
     let Some(code) = colour(&line) else {
         return line;
     };
+    if line.starts_with(['✓', '✗']) {
+        let (label, counts) = line.split_once("  ").unwrap_or((&line, ""));
+        let gap = match counts.is_empty() {
+            true => "",
+            false => "  ",
+        };
+        let counts = match counts.strip_suffix(PLAN_TREE_HINT) {
+            Some(before) => format!("{before}{DIM}{PLAN_TREE_HINT}{RESET}"),
+            None => counts.to_owned(),
+        };
+        return format!("{code}{BOLD}{label}{RESET}{gap}{counts}");
+    }
     let note = line.trim_end().rsplit("  ").next().unwrap_or_default();
     match line.starts_with("Objects (") || line.starts_with("Loads (") {
         true => {

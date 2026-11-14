@@ -1028,7 +1028,7 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
             false => loading.iter().map(|table| load_item(table)).collect(),
             true => {
                 let items: Vec<PlanItem> = loading.iter().map(|table| load_item(table)).collect();
-                let usual = usual_details(&items);
+                let usual = usual_details(&loading, &items);
                 let one = plan.tables.len() == 1;
                 sorted(
                     loading
