@@ -162,3 +162,40 @@ Under `--json`, what a Python source prints goes to standard error, so standard 
 the document. Output written to the process's standard output directly, such as by a child process
 that inherits it or `os.write(1, …)`, still reaches standard output: capture or redirect it in the
 source.
+
+## Events
+
+From 0.51.0, `--events jsonl` writes each load event to standard error as one line of JSON, next to
+the logs, while it happens. `--events-file PATH` writes them to a file instead. Neither combines with
+`--follow`. [Prefect and Dagster](/docs/guides/orchestrators/) shows how to send them to an
+orchestrator's log.
+
+```console
+$ sqlload load --events jsonl 2>&1 >/dev/null
+{"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.263Z","event":"run_started","selected":2,"to_load":2}
+{"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.266Z","table":"raw.items","event":"table_started","strategy":"replace"}
+…
+{"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.286Z","table":"raw.items","event":"table_failed","reason":"checks.min_rows failed: 1 row(s) staged, fewer than the 1000 required; nothing was published","retryable":false,"elapsed_ms":18}
+{"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.289Z","table":"raw.orders","event":"table_done","rows":3,"elapsed_ms":22}
+{"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.290Z","event":"run_finished","loaded":1,"failed":1,"not_started":0,"rows":3,"elapsed_ms":62,"exit_code":1}
+```
+
+The events are version 0: names and fields can still change in a minor release until
+`schema_version` is 1. Every event has `schema_version`, `run_id`, `at` (RFC 3339, UTC) and
+`event`, and a table's events have `table`, named as `plan` names it.
+
+| `event` | Fields |
+|---------|--------|
+| `run_started` | `selected`, `to_load`: the tables selected and the tables the load starts. |
+| `table_started` | `strategy`: the write strategy, as `plan` shows it. |
+| `table_progress` | `unit` (`page`, `batch`, `window` or `file`), `count` of them read so far, `rows` so far. |
+| `rate_limited` | `connection`, its `rate_limit` as `rate`, and `wait_ms`, how long a request waited. No `table`. |
+| `table_committing` | `rows`: the table's rows are read and its last commit starts. |
+| `table_done` | `rows`, `elapsed_ms`, and `position`, the cursor value it reached, when it keeps one. `changes` lists the `created` and `altered` lines of a table that made or widened its columns while loading. |
+| `table_failed` | `reason`, `retryable` (whether a rerun may pass), `elapsed_ms`. |
+| `table_not_started` | `reason`, such as the table that stopped a [`--fail-fast`](#stopping-at-the-first-failure) load. |
+| `run_finished` | `loaded`, `failed`, `not_started`, `rows`, `elapsed_ms` and `exit_code`. |
+
+On a terminal, `load` also draws a live block of running tables on standard error. `--progress
+never` leaves it out and `--progress always` draws it anyway; the default, `auto`, draws it only on
+a terminal and without `--json` or `--log-format json`.

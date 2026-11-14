@@ -1,0 +1,130 @@
+---
+title: "Prefect and Dagster"
+description: "Run sqlload load from a Prefect flow or a Dagster asset, with each load event in the orchestrator's own log and a table of loaded tables."
+---
+
+`sqlload load --events jsonl` writes one JSON object per [load event](/docs/cli/load/#events) to
+stderr, next to the logs. These recipes read stderr line by line, send each event to the
+orchestrator's logger at its level, and record a row per table. A table that fails logs an error,
+and the run fails when `sqlload load` exits with a non-zero code. Run them in the project folder,
+with `sqlload` on `PATH`.
+
+## Prefect
+
+The flow logs through `get_run_logger()` and saves a table artifact, `sqlload-load`, with one row
+per table.
+
+```python
+import json
+import subprocess
+
+from prefect import flow, get_run_logger
+from prefect.artifacts import create_table_artifact
+
+
+@flow
+def sqlload_load(project: str = ".") -> None:
+    logger = get_run_logger()
+    load = subprocess.Popen(
+        ["sqlload", "load", "--events", "jsonl", "--progress", "never"],
+        cwd=project,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    tables = []
+    for line in load.stderr:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = None
+        if not isinstance(event, dict) or "schema_version" not in event:
+            logger.info(line.rstrip())
+            continue
+        kind, table = event["event"], event.get("table", "")
+        if kind == "table_done":
+            logger.info("loaded %s: %s rows in %s ms", table, event["rows"], event["elapsed_ms"])
+            tables.append({"table": table, "status": "loaded", "rows": event["rows"], "ms": event["elapsed_ms"]})
+        elif kind == "table_failed":
+            logger.error("failed %s: %s", table, event["reason"])
+            tables.append({"table": table, "status": "failed", "rows": 0, "ms": event["elapsed_ms"]})
+        elif kind == "table_not_started":
+            logger.warning("not started %s: %s", table, event["reason"])
+            tables.append({"table": table, "status": "not started", "rows": 0, "ms": 0})
+        elif kind == "rate_limited":
+            logger.warning("%s waits %s ms under rate_limit %s", event["connection"], event["wait_ms"], event["rate"])
+        elif kind == "run_finished":
+            logger.info("%s loaded, %s failed, %s rows", event["loaded"], event["failed"], event["rows"])
+        else:
+            logger.debug(line.rstrip())
+    create_table_artifact(key="sqlload-load", table=tables, description="sqlload load")
+    if load.wait() != 0:
+        raise RuntimeError(f"sqlload load exited with {load.returncode}")
+
+
+if __name__ == "__main__":
+    sqlload_load()
+```
+
+## Dagster
+
+The asset logs through `context.log` and attaches a `tables` table to its materialization, or to
+the failure when the load fails.
+
+```python
+import json
+import subprocess
+
+import dagster as dg
+
+
+@dg.asset
+def sqlload_tables(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    load = subprocess.Popen(
+        ["sqlload", "load", "--events", "jsonl", "--progress", "never"],
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    records = []
+    for line in load.stderr:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = None
+        if not isinstance(event, dict) or "schema_version" not in event:
+            context.log.info(line.rstrip())
+            continue
+        kind, table = event["event"], event.get("table", "")
+        if kind == "table_done":
+            context.log.info(f"loaded {table}: {event['rows']} rows in {event['elapsed_ms']} ms")
+            records.append(dg.TableRecord({"table": table, "status": "loaded", "rows": event["rows"], "ms": event["elapsed_ms"]}))
+        elif kind == "table_failed":
+            context.log.error(f"failed {table}: {event['reason']}")
+            records.append(dg.TableRecord({"table": table, "status": "failed", "rows": 0, "ms": event["elapsed_ms"]}))
+        elif kind == "table_not_started":
+            context.log.warning(f"not started {table}: {event['reason']}")
+            records.append(dg.TableRecord({"table": table, "status": "not started", "rows": 0, "ms": 0}))
+        elif kind == "rate_limited":
+            context.log.warning(f"{event['connection']} waits {event['wait_ms']} ms under rate_limit {event['rate']}")
+        elif kind == "run_finished":
+            context.log.info(f"{event['loaded']} loaded, {event['failed']} failed, {event['rows']} rows")
+        else:
+            context.log.debug(line.rstrip())
+    schema = dg.TableSchema(
+        columns=[
+            dg.TableColumn("table", "string"),
+            dg.TableColumn("status", "string"),
+            dg.TableColumn("rows", "int"),
+            dg.TableColumn("ms", "int"),
+        ]
+    )
+    metadata = {"tables": dg.MetadataValue.table(records, schema=schema)}
+    if load.wait() != 0:
+        raise dg.Failure(f"sqlload load exited with {load.returncode}", metadata=metadata)
+    return dg.MaterializeResult(metadata=metadata)
+
+
+defs = dg.Definitions(assets=[sqlload_tables])
+```
+
+Both recipes log lines that are not events, such as warnings, as they are, and `table_started`,
+`table_progress` and `table_committing` at debug level.

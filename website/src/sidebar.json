@@ -18,6 +18,7 @@
 			"docs/guides/python",
 			"docs/guides/reload-a-window",
 			"docs/guides/kafka",
+			"docs/guides/orchestrators",
 			"docs/guides/from-dlt"
 		]
 	},
