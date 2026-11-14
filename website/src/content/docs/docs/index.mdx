@@ -27,6 +27,8 @@ SQLLoad loads data into your warehouse, and shows you how before it changes anyt
 ² From 0.34.0, through a separate DuckDB 1.5 process: install `sqlload[motherduck]`.
 
 See the [connector matrix](/docs/supported-systems/) for every combination and write strategy.
+To stream Kafka topics into Snowflake continuously, use the separate
+[Kafka exporter](/docs/kafka/).
 
 `sqlload plan` shows each table's columns, write strategy and route before `apply` and `load` run.
 Where Snowflake or DuckDB can load files exactly by itself, the files never pass through SQLLoad.
