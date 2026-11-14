@@ -140,7 +140,7 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
 }
 
 #[test]
-fn given_each_odbc_driver_when_cursor_tables_have_no_reported_primary_key_then_plan_refuses_them_and_names_the_keys_the_database_lists()
+fn given_each_odbc_driver_when_tables_merge_on_a_primary_key_it_does_not_report_then_plan_refuses_them_and_names_the_keys_the_database_lists()
 -> Result<(), String> {
     let test_cases = [
         OdbcKeylessTestCase {
@@ -154,9 +154,9 @@ fn given_each_odbc_driver_when_cursor_tables_have_no_reported_primary_key_then_p
                 "CREATE TABLE erp.codes (code varchar(10) NOT NULL UNIQUE, at datetime2(3) NOT NULL)",
             ],
             expected_reasons: &[
-                "erp.logs (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column\n",
-                "erp.codes (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists UNIQUE (code)\n",
-                "fix     set unique_key (unique_key = [\"code\"]) to merge on it, or choose write_strategy = \"delete_insert\" or \"append\"",
+                "erp.logs (kind = \"odbc\"): unique_key = \"{primary_key}\", but the source reports no primary key for the table\n",
+                "erp.codes (kind = \"odbc\"): unique_key = \"{primary_key}\", but the source reports no primary key for the table. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists UNIQUE (code)\n",
+                "fix     name the key columns, such as unique_key = [\"code\"]",
             ],
             absent: &[],
         },
@@ -171,10 +171,10 @@ fn given_each_odbc_driver_when_cursor_tables_have_no_reported_primary_key_then_p
                 "CREATE TABLE erp.codes (code varchar(10) UNIQUE, at timestamp(3) NOT NULL)",
             ],
             expected_reasons: &[
-                "erp.logs (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column\n",
-                "erp.codes (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists UNIQUE (code)\n",
+                "erp.logs (kind = \"odbc\"): unique_key = \"{primary_key}\", but the source reports no primary key for the table\n",
+                "erp.codes (kind = \"odbc\"): unique_key = \"{primary_key}\", but the source reports no primary key for the table. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists UNIQUE (code)\n",
             ],
-            absent: &["unique_key = ["],
+            absent: &["unique_key = [\"code\"]"],
         },
         OdbcKeylessTestCase {
             description: "MySQL through Connector/ODBC, which reports a unique index as the primary key, so only the table without a key is refused",
@@ -186,13 +186,13 @@ fn given_each_odbc_driver_when_cursor_tables_have_no_reported_primary_key_then_p
                 "CREATE TABLE codes (code varchar(10) UNIQUE, at DATETIME(3) NOT NULL)",
             ],
             expected_reasons: &[
-                "logs (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column\n",
+                "logs (kind = \"odbc\"): unique_key = \"{primary_key}\", but the source reports no primary key for the table\n",
                 "Errors (1)",
             ],
             absent: &[],
         },
         OdbcKeylessTestCase {
-            description: "MySQL 8.4 through MariaDB Connector/ODBC 3.1, which reports no primary key from MySQL 8.4 (it compares COLUMN_KEY with 'pri'): its key, which INFORMATION_SCHEMA lists under the database as the schema, is named instead of the table silently taking delete_insert",
+            description: "MySQL 8.4 through MariaDB Connector/ODBC 3.1, which reports no primary key from MySQL 8.4 (it compares COLUMN_KEY with 'pri'): its key, which INFORMATION_SCHEMA lists under the database as the schema, is named instead of the table merging on no key",
             database: OdbcDatabase::MySql,
             driver: ("MySQL ODBC Unicode Driver", "MariaDB Unicode"),
             tables: ("logs", "items"),
@@ -201,9 +201,9 @@ fn given_each_odbc_driver_when_cursor_tables_have_no_reported_primary_key_then_p
                 "CREATE TABLE items (id int PRIMARY KEY, at DATETIME(3) NOT NULL)",
             ],
             expected_reasons: &[
-                "logs (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column\n",
-                "items (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists PRIMARY KEY (id), so the driver's key lookup is wrong (MariaDB Connector/ODBC 3.1 finds none in MySQL 8.4)\n",
-                "fix     set unique_key (unique_key = [\"id\"]) to merge on it",
+                "logs (kind = \"odbc\"): unique_key = \"{primary_key}\", but the source reports no primary key for the table\n",
+                "items (kind = \"odbc\"): unique_key = \"{primary_key}\", but the source reports no primary key for the table. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists PRIMARY KEY (id), so the driver's key lookup is wrong (MariaDB Connector/ODBC 3.1 finds none in MySQL 8.4)\n",
+                "fix     name the key columns, such as unique_key = [\"id\"]",
             ],
             absent: &[],
         },

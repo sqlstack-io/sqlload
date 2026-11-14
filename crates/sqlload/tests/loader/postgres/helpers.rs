@@ -39,6 +39,7 @@ table_name = "{{table}}"
 [sources.app.tables."public.accounts"]
 description = "Test accounts."
 write_strategy = "merge"
+unique_key = "{{primary_key}}"
 cursor_column = "updated_at"
 
 [sources.app.tables."public.events"]

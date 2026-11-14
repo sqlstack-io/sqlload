@@ -53,6 +53,7 @@ const SORTED_DELTAS: &str = r"SELECT toString(countIf(partitioned AND NOT sorted
 const TABLES: &str = r#"
 [sources.app.tables."public.accounts"]
 write_strategy = "merge"
+unique_key = "{primary_key}"
 cursor_column = "updated_at"
 partition_by = "toYYYYMM(updated_at)"
 order_by = "id"

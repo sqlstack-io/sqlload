@@ -66,11 +66,11 @@ Objects (2)                                         sqlload apply
     └── + _sqlload_load_id, _loaded_at
 
 Loads (2)                                           sqlload load
-├── app__customers                                  merge (unique_key: customer_id)
+├── app__customers                                  merge (unique_key: customer_id ← {primary_key})
 │   ├── source  postgres  app  public.customers
 │   ├── route   read as Arrow -> DuckDB takes Arrow
 │   └── batch   about every 1 GB
-└── app__orders                                     merge (unique_key: order_id)
+└── app__orders                                     merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
     ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values

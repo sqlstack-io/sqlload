@@ -258,8 +258,8 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `write_strategy` | from the cursor and key | `append`, `merge`, `delete_insert` or `replace`: `replace` without a cursor, `merge` with a cursor and a key. A table with a cursor and no key must set it or `unique_key` (from 0.44.0; a files source sets it). See [Write strategies](/docs/concepts/write-strategies/). |
-| `unique_key` | the primary key | A column or list of columns, for `merge`. |
+| `write_strategy` | required | `append`, `merge`, `delete_insert` or `replace`. From 0.46.0 every table needs one, from its own entry or its source; `plan` refuses a table without it. See [Write strategies](/docs/concepts/write-strategies/). |
+| `unique_key` | required for `merge` | A column or list of columns, or `"{primary_key}"` for the primary key the source reports (not for Python, files or Google Sheets sources). From 0.46.0 a `merge` table needs one. See [merge](/docs/concepts/write-strategies/#merge). |
 | `on_duplicate_keys` | `dedupe` | From 0.39.0. What `merge` does with rows of one commit that repeat a key: `dedupe` keeps one row per key, `fail` refuses the commit. See [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). |
 | `dedup_sort` | none | From 0.39.0. Which repeated row `merge` keeps: `{ column = "desc" }` the highest value, `"asc"` the lowest; without it, the row read last. |
 | `cursor_column` | none | The column runs continue from. See [Cursors](/docs/concepts/cursors/). |

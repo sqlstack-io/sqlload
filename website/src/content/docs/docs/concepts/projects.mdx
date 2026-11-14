@@ -35,6 +35,7 @@ connection = "app"
 description = "The shop's application database."
 include = ["public.*"]
 write_strategy = "merge"
+unique_key = "{primary_key}"
 ```
 
 Python sources are declared in Python instead, in the folders `python_paths` lists. See

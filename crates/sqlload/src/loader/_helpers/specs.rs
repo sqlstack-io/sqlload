@@ -16,7 +16,8 @@ use crate::load_naming::models::Naming;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::constants::{
-    DEFAULT_MAX_DEPTH, ODBC_SOURCE, PRIMARY_KEY, SNOWFLAKE_SOURCE, UNNEST_ALL,
+    DEFAULT_MAX_DEPTH, ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, SNOWFLAKE_SOURCE,
+    UNNEST_ALL,
 };
 use crate::loader::models::{
     CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
@@ -161,17 +162,27 @@ pub(crate) fn build_spec(
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
     let cursor = cursor(settings, defaults);
-    let unique_key = layered(&settings.unique_key, &defaults.unique_key)
-        .map_or_else(|| table.primary_key.clone(), |(key, _)| key);
+    let cdc = cdc_spec(context);
     let (strategy, strategy_origin) = match (
         layered(&settings.write_strategy, &defaults.write_strategy),
-        default_strategy(cursor.as_ref(), !unique_key.is_empty()),
+        &cdc,
     ) {
         (Some(set), _) => set,
-        (None, Some(strategy)) => (strategy, SettingOrigin::Default),
-        (None, None) => return Err(vec![missing_key_problem(context, table)]),
+        (None, Some(_)) => (WriteStrategy::Append, SettingOrigin::Source),
+        (None, None) => {
+            return Err(vec![missing_strategy_problem(
+                context,
+                table,
+                cursor.as_ref(),
+            )]);
+        }
     };
-    let cdc = cdc_spec(context);
+    let merges = strategy == WriteStrategy::Merge && cdc.is_none();
+    let (unique_key, key_from_primary_key) =
+        match table_key(context, table, (settings, defaults), merges) {
+            Ok(key) => key,
+            Err(problem) => return Err(vec![problem]),
+        };
     let (strategy, mut problems) = match &cdc {
         Some(cdc) if !sql_adapter(context.target.warehouse).captures_changes(cdc.apply) => (
             WriteStrategy::Append,
@@ -210,7 +221,6 @@ pub(crate) fn build_spec(
                 format!("constant column {name} cannot be the cursor_column: it holds one value")
             }),
     );
-    let merges = strategy == WriteStrategy::Merge;
     let table_sorts = settings.dedup_sort.is_some();
     let on_duplicate_keys = layered(&settings.on_duplicate_keys, &defaults.on_duplicate_keys)
         .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_sorts));
@@ -304,6 +314,7 @@ pub(crate) fn build_spec(
         strategy,
         strategy_origin,
         unique_key,
+        key_from_primary_key,
         naming: nesting.naming,
         on_duplicate_keys: on_duplicate_keys
             .map(|(value, _)| value)
@@ -754,20 +765,95 @@ pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<Cu
     })
 }
 
-/// The default strategy: full replace without a cursor, merge with a cursor and key; none with a cursor alone, as `delete_insert` and `append` would each load an updated row again, so the table must choose.
-pub(crate) fn default_strategy(
-    cursor: Option<&CursorSpec>,
-    has_key: bool,
-) -> Option<WriteStrategy> {
-    match (cursor, has_key) {
-        (None, _) => Some(WriteStrategy::Replace),
-        (Some(_), true) => Some(WriteStrategy::Merge),
-        (Some(_), false) => None,
+/// A table's `unique_key` (table over source) and whether a `merge` takes it from the primary key its source reports, set as `"{primary_key}"`. A `merge` table without one gets none, so it is refused; `"{primary_key}"` on it is refused for a source that reports no keys, and for a table whose source reports none. A table that doesn't merge (a `postgres_cdc` table included) keeps the primary key its source reports unless it names columns: it only orders and identifies rows (a ClickHouse table's sorting key, a CDC table's merge key), so a source's `"{primary_key}"` never fails it.
+fn table_key(
+    context: &SourceContext<'_>,
+    table: &SourceTable,
+    (settings, defaults): (&TableSettings, &TableSettings),
+    merges: bool,
+) -> Result<(Vec<String>, bool), String> {
+    let set = layered(&settings.unique_key, &defaults.unique_key).map(|(key, _)| key);
+    let placeholder = set
+        .as_ref()
+        .is_some_and(|key| key.iter().any(|column| column == PRIMARY_KEY_PLACEHOLDER));
+    match set {
+        None if merges => Ok((Vec::new(), false)),
+        None => Ok((table.primary_key.clone(), false)),
+        Some(key) if !placeholder => Ok((key, false)),
+        Some(key) if key.len() > 1 => Err(format!(
+            "{}: unique_key {PRIMARY_KEY_PLACEHOLDER:?} stands for the whole primary key, so it can't be listed with other columns; set unique_key = {PRIMARY_KEY_PLACEHOLDER:?} or name every key column",
+            table.qualified_name()
+        )),
+        Some(_) if !merges => Ok((table.primary_key.clone(), false)),
+        Some(_)
+            if matches!(
+                context.source.kind,
+                SourceKind::Python | SourceKind::Files | SourceKind::GoogleSheets
+            ) =>
+        {
+            Err(format!(
+                "{} (kind = \"{}\"): unique_key = {PRIMARY_KEY_PLACEHOLDER:?} merges on the primary key the source reports, and a {} source reports none. Fix: name the key columns, such as unique_key = [\"id\"]",
+                table.qualified_name(),
+                context.source.kind.name(),
+                context.source.kind.name()
+            ))
+        }
+        Some(_) if table.primary_key.is_empty() => Err(no_primary_key_problem(context, table)),
+        Some(_) => Ok((table.primary_key.clone(), true)),
     }
 }
 
-/// Why a table with a cursor and no key has no write strategy, naming the keys the database lists though its driver reported no primary key (a listed primary key means the driver's key lookup is wrong), and suggesting the first whose columns are never NULL, as a merge inserts rows with a NULL key again.
-fn missing_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> String {
+/// Why a table that neither it nor its source gives a `write_strategy` can't be planned, with the line to add at source and at table level: `replace` without a cursor, otherwise `merge` on a key, `delete_insert` or `append`, which the table must choose.
+fn missing_strategy_problem(
+    context: &SourceContext<'_>,
+    table: &SourceTable,
+    cursor: Option<&CursorSpec>,
+) -> String {
+    let qualified = table.qualified_name();
+    let files = context.source.kind == SourceKind::Files;
+    let suggested = match (cursor, table.primary_key.is_empty()) {
+        (None, _) => "write_strategy = \"replace\"".to_owned(),
+        (Some(_), _) if files => "write_strategy = \"delete_insert\"".to_owned(),
+        (Some(_), false) => format!(
+            "write_strategy = \"merge\" with unique_key = {PRIMARY_KEY_PLACEHOLDER:?} (or the key columns)"
+        ),
+        (Some(_), true) => {
+            "write_strategy = \"merge\" with unique_key = [the key columns]".to_owned()
+        }
+    };
+    let alternatives = match cursor {
+        None => "\"append\", or \"merge\" with a unique_key",
+        Some(_) if files => {
+            "\"append\", or \"merge\" with unique_key columns and no cursor_column, as a files merge reads each new file once"
+        }
+        Some(_) => {
+            "\"delete_insert\" or \"append\", which can load a row updated since an earlier load again beside its old version"
+        }
+    };
+    let standalone = context.source.table_name.as_deref() == Some("{table}")
+        && context.source.tables.len() == 1
+        && context.source.tables.contains_key(context.name);
+    let fix = match context.source.kind {
+        SourceKind::Python if standalone => {
+            format!("set {suggested} in @sl.table(...); or choose {alternatives}")
+        }
+        SourceKind::Python => format!(
+            "set {suggested} in sl.source({:?}, ...) for all its tables, or in @{}.table(...) for this one; or choose {alternatives}",
+            context.name, context.name
+        ),
+        _ => format!(
+            "add {suggested} under [sources.{}] for all its tables, or under [sources.{}.tables.{qualified:?}] for this one; or choose {alternatives}",
+            context.name, context.name
+        ),
+    };
+    format!(
+        "{qualified} (kind = \"{}\"): no write_strategy is set on the table or its source, and SQLLoad doesn't choose one. Fix: {fix}",
+        context.source.kind.name()
+    )
+}
+
+/// Why a table set to `unique_key = "{primary_key}"` has no key: its source reports no primary key. It names the keys the database lists (a listed primary key means the driver's key lookup is wrong) and suggests the first whose columns are never NULL, as a merge inserts rows with a NULL key again.
+fn no_primary_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> String {
     let shown: Vec<String> = table
         .listed_keys
         .iter()
@@ -801,14 +887,9 @@ fn missing_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> Stri
                 .collect::<BTreeSet<&str>>()
                 .is_subset(&never_null)
         })
-        .map(|key| format!(" (unique_key = {:?})", key.columns))
-        .unwrap_or_default();
-    let fix = match context.source.kind {
-        SourceKind::Files => "choose write_strategy = \"delete_insert\", which replaces the partitions of the cursor values it reads, or \"append\"; a files source's merge takes no cursor_column".to_owned(),
-        _ => format!("set unique_key{example} to merge on it, or choose write_strategy = \"delete_insert\" or \"append\" if that is what you want; either can load a row updated since an earlier load again, beside its old version"),
-    };
+        .map_or_else(|| "[\"id\"]".to_owned(), |key| format!("{:?}", key.columns));
     format!(
-        "{} (kind = \"{}\"): no primary key found and no unique_key set for a table with a cursor_column{listed}. Fix: {fix}",
+        "{} (kind = \"{}\"): unique_key = {PRIMARY_KEY_PLACEHOLDER:?}, but the source reports no primary key for the table{listed}. Fix: name the key columns, such as unique_key = {example}",
         table.qualified_name(),
         context.source.kind.name()
     )
@@ -876,9 +957,9 @@ pub(crate) fn strategy_problems(
 ) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     match (strategy, cursor) {
-        (WriteStrategy::Merge, _) if unique_key.is_empty() => problems.push(
-            "write_strategy = \"merge\" needs a unique_key (the table has no primary key)".to_owned(),
-        ),
+        (WriteStrategy::Merge, _) if unique_key.is_empty() => problems.push(format!(
+            "write_strategy = \"merge\" needs a unique_key: the key columns, such as unique_key = [\"id\"], or unique_key = {PRIMARY_KEY_PLACEHOLDER:?} for the primary key the source reports"
+        )),
         (WriteStrategy::Append, Some(cursor)) if cursor.lookback.is_some() => problems.push(
             "lookback re-inserts the window on every run with append; use delete_insert (no key needed) or merge"
                 .to_owned(),

@@ -115,6 +115,7 @@ connection = "app"
 description = "The shop's application database."
 include = ["public.*"]
 write_strategy = "merge"
+unique_key = "{primary_key}"
 
 [sources.app.tables."public.orders"]
 description = "Orders, one row per order."
@@ -127,7 +128,9 @@ description = "Customers, one row per customer."
 - `[connections]` say how to reach each system. `${ENV:PGPASSWORD}` reads the password from the
   environment, so it stays out of the file.
 - `[targets.local]` loads into the DuckDB file, in schema `raw`.
-- `[sources.app]` syncs every table in `public`. `merge` upserts on each table's primary key.
+- `[sources.app]` syncs every table in `public`. Every table needs a `write_strategy`; here the
+  source sets `merge` for all of them, and `unique_key = "{primary_key}"` upserts on each table's
+  primary key.
 - `orders` is incremental: each run continues from the highest `updated_at` already loaded.
 - Each table SQLLoad writes needs a description, which becomes the table's comment.
 
@@ -168,11 +171,11 @@ Objects (2)                                         sqlload apply
     └── + _sqlload_load_id, _loaded_at
 
 Loads (2)                                           sqlload load
-├── app__customers                                  merge (unique_key: customer_id)
+├── app__customers                                  merge (unique_key: customer_id ← {primary_key})
 │   ├── source  postgres  app  public.customers
 │   ├── route   read as Arrow -> DuckDB takes Arrow
 │   └── batch   about every 1 GB
-└── app__orders                                     merge (unique_key: order_id)
+└── app__orders                                     merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
     ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
@@ -181,8 +184,8 @@ Loads (2)                                           sqlload load
 ✓ Plan complete  2 selected, 2 objects to create, 2 to load
 ```
 
-Tables are named `{source}__{table}` unless you set `table_name`. The `unique_key` comes from each
-table's primary key. Because an index leads with `updated_at`, `orders` is read in cursor order and
+Tables are named `{source}__{table}` unless you set `table_name`. `← {primary_key}` shows that each
+`unique_key` is the table's primary key. Because an index leads with `updated_at`, `orders` is read in cursor order and
 can commit along the way.
 
 `sqlload apply` creates the tables, and `sqlload load` fills them. Both print the plan first;
@@ -219,7 +222,7 @@ $ sqlload load app__orders
 Plan ready  1 selected, 1 to load
 
 Loads (1)                                           sqlload load
-└── app__orders                                     merge (unique_key: order_id)
+└── app__orders                                     merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
     ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values

@@ -23,6 +23,7 @@ kind = "snowflake"
 connection = "warehouse"
 description = "Order tables of the shop's warehouse."
 include = ["SHOP.ORDERS"]
+write_strategy = "replace"
 
 [sources.shop.tables."SHOP.ORDERS"]
 description = "Orders, one row per order."

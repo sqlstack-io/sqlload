@@ -140,7 +140,7 @@ pub(crate) fn python_spec(settings: &str) -> Result<TableSpec, String> {
         serde_json::from_str(settings).map_err(|error| error.to_string())?;
     settings["description"] = serde_json::Value::from("Table t.");
     let sources = format!(
-        r#"[{{"name": "s", "module": "s.py", "settings": {{"mask_key": "k", "tables": {{"t": {settings}}}}}}}]"#
+        r#"[{{"name": "s", "module": "s.py", "settings": {{"mask_key": "k", "write_strategy": "replace", "tables": {{"t": {settings}}}}}}}]"#
     );
     let python: Vec<PythonSource> =
         serde_json::from_str(&sources).map_err(|error| error.to_string())?;

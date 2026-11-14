@@ -89,6 +89,8 @@ integer cursor without `--end-cursor` ends at its maximum when `plan` ran.
 ```toml
 [sources.app.tables."public.orders"]
 description = "Orders, one row per order."
+write_strategy = "merge"
+unique_key = "{primary_key}"
 cursor_column = "updated_at"
 cursor_start = "2026-09-01"
 batch_size = "7d"

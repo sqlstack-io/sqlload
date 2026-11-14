@@ -40,8 +40,8 @@ named connection.
 
 | Option | Meaning |
 |--------|---------|
-| `--write-strategy <STRATEGY>` | `append`, `merge`, `delete_insert` or `replace`. Default as for a project: `replace` without a cursor, `merge` with a cursor and a key; with a cursor and no key, from 0.44.0, set this or `--unique-key` (from files, set this). |
-| `--unique-key <COLUMN>...` | The key for `merge` and `delete_insert`. A Postgres table's primary key by default. |
+| `--write-strategy <STRATEGY>` | `append`, `merge`, `delete_insert` or `replace`. By default `replace` without a cursor, and `merge` with a cursor and a key; with a cursor and no key, as from files, set this or `--unique-key`. `--print-toml` writes the strategy out, as a project needs it set. |
+| `--unique-key <COLUMN>...` | The key for `merge` and `delete_insert`. A Postgres table's primary key by default, written `unique_key = "{primary_key}"` by `--print-toml`. |
 | `--cursor-column <COLUMN>` | The column incremental copies continue from. |
 | `--format <FORMAT>` | A files source's format: `parquet`, `ndjson`, `json` or `csv`. |
 | `--print-toml` | Print the copy as a project entry for `sqlload.toml` instead of running it. |
@@ -49,7 +49,7 @@ named connection.
 ```console
 $ sqlload copy 'postgresql://postgres:${ENV:PGPASSWORD}@localhost:5432/shop#public.orders' duckdb://shop.duckdb#raw.orders --cursor-column updated_at
 …
-└── orders                                          merge (unique_key: order_id)
+└── orders                                          merge (unique_key: order_id ← {primary_key})
 …
     └── cursor  updated_at first run, everything
 ```
@@ -85,6 +85,7 @@ kind = "files"
 path = ""
 schema = "raw"
 table_name = "orders"
+write_strategy = "replace"
 
 [targets.copy_orders]
 connection = "copy_orders_destination"

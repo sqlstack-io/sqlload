@@ -17,6 +17,7 @@ connection = "sheets"
 description = "Reference tables kept in a spreadsheet."
 spreadsheet_id = "${ENV:REFERENCE_SHEET_ID}"
 ranges = { locations = "Locations!A:F", codes = "Codes" }
+write_strategy = "replace"
 ```
 
 Share the spreadsheet with the service account's email as a Viewer. SQLLoad asks for read-only
@@ -125,8 +126,10 @@ same name, ignoring case, fails `plan`.
 
 ## Writing
 
-A sheet has no column to read after, so its tables `replace` by default and reload whole each run.
-`merge` on a `unique_key` and `append` (a snapshot each run) also work; `cursor_column`,
+A sheet has no column to read after, so its tables usually take `write_strategy = "replace"` and
+reload whole each run; every table needs a `write_strategy`, from the source or its entry. `merge`
+on `unique_key` columns (a sheet reports no primary key, so not `"{primary_key}"`) and `append` (a
+snapshot each run) also work; `cursor_column`,
 `delete_insert` and `batch_size` are refused at `plan`, and so is a `merge` whose key repeats in the
 sheet, naming both rows. Each table goes through the target's usual staging and swap, so a failed
 read leaves the table as it was.

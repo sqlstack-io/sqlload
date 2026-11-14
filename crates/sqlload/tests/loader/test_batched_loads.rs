@@ -451,7 +451,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
             BatchedScenarioTestCase {
                 description: "tables load at once; a failing table leaves the others loaded",
                 setup: PARALLEL,
-                settings: "exclude = [\"public.*_raw\"]",
+                settings: "write_strategy = \"replace\"\nexclude = [\"public.*_raw\"]",
                 batch_bytes: None,
                 concurrency: Some(2),
                 runs: &[BatchedRun {

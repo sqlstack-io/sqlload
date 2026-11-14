@@ -392,7 +392,7 @@ fn sheets_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             || settings.write_strategy == Some(WriteStrategy::DeleteInsert)
         {
             problems.push(format!(
-                "{place} a sheet has no cursor, so cursor_column, batch_size and write_strategy = \"delete_insert\" do not apply; use replace (the default), merge on a unique_key, or append"
+                "{place} a sheet has no cursor, so cursor_column, batch_size and write_strategy = \"delete_insert\" do not apply; use replace, merge on a unique_key, or append"
             ));
             break;
         }

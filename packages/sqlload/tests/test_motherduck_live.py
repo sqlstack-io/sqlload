@@ -38,7 +38,7 @@ from pathlib import Path
 import sqlload as sl
 
 HERE = Path(__file__).resolve().parent.parent
-cloud = sl.source("cloud", destination="cloud")
+cloud = sl.source("cloud", write_strategy="replace", destination="cloud")
 
 
 def rows(ctx):

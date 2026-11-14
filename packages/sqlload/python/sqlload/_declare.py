@@ -177,7 +177,7 @@ def table(
 	description: str | None = None,
 	**settings: Any,
 ) -> Table | Callable[[TableFunction], Table]:
-	"""A standalone table, with the target's defaults: `@sl.table` or `@sl.table(...)`; its
+	"""A standalone table, which sets its own write_strategy: `@sl.table` or `@sl.table(...)`; its
 	description, which `plan` requires, is `description` or else the function's docstring."""
 	_check_settings(settings, TABLE_SETTINGS | TABLE_ONLY_SETTINGS, "table")
 

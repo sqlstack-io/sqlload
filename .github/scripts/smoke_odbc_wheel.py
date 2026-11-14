@@ -40,6 +40,7 @@ kind = "odbc"
 connection = "erp"
 description = "Smoke test."
 include = ["*"]
+write_strategy = "replace"
 """
 
 #: Where a unixODBC library would be if one were installed.

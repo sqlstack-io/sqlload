@@ -9,6 +9,7 @@ use crate::loader::_helpers::specs::table_name;
 use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, pinned_types, table_naming,
 };
+use crate::loader::constants::PRIMARY_KEY_PLACEHOLDER;
 use crate::loader::models::{ResolvedTables, SkippedTable, TableSpec};
 use crate::postgres_source::models::SourceTable;
 use crate::project::main::motherduck_path::motherduck_path;
@@ -333,7 +334,15 @@ pub(crate) fn loaded_overrides(overrides: &TableOverride, rule: NameRule) -> Tab
 /// `settings` with every column they name as the column loads under `rule`: the unique key, cursor, constant columns, dedup sort, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
 pub(crate) fn loaded_settings(settings: &TableSettings, rule: NameRule) -> TableSettings {
     let name = |column: &str| loaded_name(rule.0, column, rule.1);
-    let names = |columns: &Vec<String>| columns.iter().map(|column| name(column)).collect();
+    let names = |columns: &Vec<String>| {
+        columns
+            .iter()
+            .map(|column| match column == PRIMARY_KEY_PLACEHOLDER {
+                true => column.clone(),
+                false => name(column),
+            })
+            .collect()
+    };
     let keyed = |expression: &str| match is_plain_name(expression) {
         true => name(expression),
         false => expression.to_owned(),

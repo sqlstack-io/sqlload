@@ -95,6 +95,9 @@ pub const ODBC_SOURCE: &str = "odbc";
 /// The constraint type a database's `INFORMATION_SCHEMA` gives a primary key.
 pub const PRIMARY_KEY: &str = "PRIMARY KEY";
 
+/// The `unique_key` that stands for the primary key a table's source reports.
+pub const PRIMARY_KEY_PLACEHOLDER: &str = "{primary_key}";
+
 /// The version of the document `apply --json` and `load --json` print; it changes only when a field changes meaning or goes away.
 pub const RESULT_SCHEMA_VERSION: u32 = 1;
 

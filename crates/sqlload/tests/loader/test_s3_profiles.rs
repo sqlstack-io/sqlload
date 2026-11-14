@@ -65,7 +65,7 @@ fn given_keys_only_in_a_shared_credentials_file_when_loading_from_s3_then_the_co
         for test_case in test_cases {
             let config = directory.path().join(format!("{}.toml", test_case.profile));
             let text = format!(
-                "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[connections.files]\nkind = \"s3\"\nbucket = \"example-bucket-test\"\nregion = \"{REGION}\"\nendpoint = \"{}\"\nprofile = \"{}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"{prefix}\"\npartition_columns = {{ day = \"date\" }}\n",
+                "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[connections.files]\nkind = \"s3\"\nbucket = \"example-bucket-test\"\nregion = \"{REGION}\"\nendpoint = \"{}\"\nprofile = \"{}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"{prefix}\"\npartition_columns = {{ day = \"date\" }}\nwrite_strategy = \"replace\"\n",
                 directory
                     .path()
                     .join(format!("{}.duckdb", test_case.profile))

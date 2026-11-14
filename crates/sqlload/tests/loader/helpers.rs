@@ -1882,7 +1882,7 @@ BEGIN; DELETE FROM public.orders WHERE id = 2; UPDATE public.items SET name = 'o
 /// A Postgres source `app` on `host:port` as `user` with the TLS `settings`, and an in-memory DuckDB target.
 pub(crate) fn tls_project((host, port, user): (&str, u16, &str), settings: &str) -> String {
     format!(
-        "[connections.pg]\nkind = \"postgres\"\nhost = \"{host}\"\nport = {port}\nuser = \"{user}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n{settings}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.*\"]\n"
+        "[connections.pg]\nkind = \"postgres\"\nhost = \"{host}\"\nport = {port}\nuser = \"{user}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n{settings}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.*\"]\nwrite_strategy = \"replace\"\n"
     )
 }
 

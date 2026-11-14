@@ -1,6 +1,6 @@
 //! Helpers for the ODBC loader test.
 
-/// The project: an odbc source over psqlODBC, its items table merged on a cursor, a query table, and DuckDB as the target.
+/// The project: an odbc source over psqlODBC replacing its tables, its items table merged on its reported primary key after a cursor, a query table, and DuckDB as the target.
 pub(crate) fn project(port: u16, database: &std::path::Path, max_text_size: usize) -> String {
     format!(
         r#"
@@ -23,11 +23,12 @@ description = "Tables of a generic ERP."
 include = ["erp.*"]
 exclude = ["erp.ignored"]
 max_text_size = {max_text_size}
+write_strategy = "replace"
 
 [sources.erp.tables."erp.items"]
 description = "Items, changed rows found by updated_at."
 cursor_column = "updated_at"
-unique_key = ["id"]
+unique_key = "{{primary_key}}"
 write_strategy = "merge"
 
 [sources.erp.tables.recent]
@@ -132,7 +133,7 @@ write_strategy = "delete_insert"
     )
 }
 
-/// A project reading both tables through `connection_string` into DuckDB, each with an `at` cursor and neither a `unique_key` nor a `write_strategy`.
+/// A project reading both tables through `connection_string` into DuckDB, each merged on the primary key the driver reports (`unique_key = "{primary_key}"`) after its `at` cursor.
 pub(crate) fn keyless_project(
     connection_string: &str,
     (first, second): (&str, &str),
@@ -157,6 +158,8 @@ kind = "odbc"
 connection = "erp"
 description = "Tables of a generic ERP."
 include = ["{first}", "{second}"]
+write_strategy = "merge"
+unique_key = "{{primary_key}}"
 
 [sources.erp.tables."{first}"]
 description = "The first table, read after the newest at."

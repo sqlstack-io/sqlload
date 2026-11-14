@@ -51,8 +51,7 @@ const ALL_RUNS: &[(&str, &str)] = &[
 ];
 
 /// The settings of the replace with `unnest`.
-const REPLACE_SETTINGS: &str =
-    "[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\", \"tags\"]\n";
+const REPLACE_SETTINGS: &str = "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\", \"tags\"]\n";
 
 /// Two runs of the replace: the second has no tags, and its item a new field.
 const REPLACE_RUNS: &[(&str, &str)] = &[
@@ -230,7 +229,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
     let test_cases = [
         UnnestPlanTestCase {
             description: "parent and child paths, dlt naming and its row id plan",
-            settings: "naming = \"dlt\"\nrow_id = true\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\", \"tags\"]\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nrow_id = true\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\", \"tags\"]\n",
             files_target: false,
             file: ORDERS,
             expected_ok: true,
@@ -238,7 +237,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "unnest = \"all\" names the child tables of the list fields the sampled rows hold",
-            settings: "[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
             files_target: false,
             file: ORDERS,
             expected_ok: true,
@@ -246,7 +245,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "a word other than all",
-            settings: "[sources.orders.tables.orders]\nunnest = \"every\"\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = \"every\"\n",
             files_target: false,
             file: ORDERS,
             expected_ok: false,
@@ -254,7 +253,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "a child path without its parent",
-            settings: "[sources.orders.tables.orders]\nunnest = [\"items.parts\"]\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items.parts\"]\n",
             files_target: false,
             file: ORDERS,
             expected_ok: false,
@@ -262,7 +261,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "only the path deeper than max_depth",
-            settings: "[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\nmax_depth = 1\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\nmax_depth = 1\n",
             files_target: false,
             file: ORDERS,
             expected_ok: false,
@@ -270,7 +269,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "an empty part",
-            settings: "[sources.orders.tables.orders]\nunnest = [\"items\", \"items.\"]\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.\"]\n",
             files_target: false,
             file: ORDERS,
             expected_ok: false,
@@ -278,7 +277,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "a masked list field",
-            settings: "[sources.orders.tables.orders]\nunnest = [\"tags\"]\nmask = { tags = \"hash\" }\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"tags\"]\nmask = { tags = \"hash\" }\n",
             files_target: false,
             file: ORDERS,
             expected_ok: false,
@@ -286,7 +285,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "a list field an exclude pattern matches",
-            settings: "[sources.orders.tables.orders]\nunnest = [\"tags\"]\nexclude_columns = [\"ta*\"]\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"tags\"]\nexclude_columns = [\"ta*\"]\n",
             files_target: false,
             file: ORDERS,
             expected_ok: false,
@@ -294,7 +293,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "max_depth without unnest",
-            settings: "[sources.orders.tables.orders]\nmax_depth = 2\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nmax_depth = 2\n",
             files_target: false,
             file: ORDERS,
             expected_ok: false,
@@ -302,7 +301,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "a files target with listed paths plans a folder per child table",
-            settings: "[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
             files_target: true,
             file: ORDERS,
             expected_ok: true,
@@ -310,7 +309,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "unnest = \"all\" on a files target, whose earlier child tables a load cannot find",
-            settings: "[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
             files_target: true,
             file: ORDERS,
             expected_ok: false,
@@ -326,7 +325,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "the unnested field is not a column of the table: the plan lists id and items only",
-            settings: "[sources.orders.tables.orders]\nunnest = [\"tags\"]\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = [\"tags\"]\n",
             files_target: false,
             file: ORDERS,
             expected_ok: true,
@@ -342,7 +341,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "row ids turned off under dlt naming",
-            settings: "naming = \"dlt\"\nrow_id = false\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nrow_id = false\n",
             files_target: false,
             file: ORDERS,
             expected_ok: false,
@@ -350,7 +349,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "two columns loading as one name under dlt naming, both named",
-            settings: "naming = \"dlt\"\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n",
             files_target: false,
             file: "{\"OrderID\": 1, \"Order ID\": 2}\n",
             expected_ok: false,
@@ -358,7 +357,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "under dlt naming a pin may name a sampled column by its loaded name",
-            settings: "naming = \"dlt\"\n[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
             files_target: false,
             file: "{\"OrderID\": 1}\n",
             expected_ok: true,
@@ -366,7 +365,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "under SQLLoad's naming the same pin is a typo of the file's name",
-            settings: "[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
             files_target: false,
             file: "{\"OrderID\": 1}\n",
             expected_ok: false,
@@ -374,7 +373,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "under dlt naming an exclusion naming a flattened object is refused, naming its columns",
-            settings: "naming = \"dlt\"\nexclude_columns = [\"Customer\"]\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"Customer\"]\n",
             files_target: false,
             file: "{\"id\": 1, \"Customer\": {\"Email\": \"e\", \"Name\": \"n\"}}\n",
             expected_ok: false,
@@ -382,7 +381,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "under dlt naming a pin naming a flattened object by its loaded name is refused",
-            settings: "naming = \"dlt\"\n[sources.orders.tables.orders]\ncolumns = { customer = \"json\" }\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n[sources.orders.tables.orders]\ncolumns = { customer = \"json\" }\n",
             files_target: false,
             file: "{\"id\": 1, \"Customer\": {\"Email\": \"e\"}}\n",
             expected_ok: false,
@@ -390,7 +389,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "under dlt naming a mask naming an object NULL in some sampled rows is refused, as its keys would load unmasked",
-            settings: "naming = \"dlt\"\n[sources.orders.tables.orders]\nmask = { c = \"hash\" }\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n[sources.orders.tables.orders]\nmask = { c = \"hash\" }\n",
             files_target: false,
             file: "{\"id\": 1, \"c\": null}\n{\"id\": 2, \"c\": {\"n\": \"s\"}}\n",
             expected_ok: false,
@@ -398,7 +397,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "under dlt naming a key holding __ inside an object is no object of its own, so an exclusion naming it is no flattened object",
-            settings: "naming = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
             files_target: false,
             file: "{\"id\": 1, \"a\": {\"b__c\": 1}}\n",
             expected_ok: true,
@@ -406,7 +405,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "under dlt naming the same exclusion naming an object nested in an object is refused",
-            settings: "naming = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
             files_target: false,
             file: "{\"id\": 1, \"a\": {\"b\": {\"c\": 1}}}\n",
             expected_ok: false,
@@ -414,7 +413,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "under dlt naming an exclusion matching a flattened object's columns applies to them",
-            settings: "naming = \"dlt\"\nexclude_columns = [\"Customer*\"]\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"Customer*\"]\n",
             files_target: false,
             file: "{\"id\": 1, \"Customer\": {\"Email\": \"e\"}}\n",
             expected_ok: true,
@@ -422,7 +421,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "excluding one of two colliding columns resolves it",
-            settings: "naming = \"dlt\"\nexclude_columns = [\"Order ID\"]\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"Order ID\"]\n",
             files_target: false,
             file: "{\"OrderID\": 1, \"Order ID\": 2}\n",
             expected_ok: true,
@@ -537,7 +536,7 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
     let test_cases = [
         RowIdTestCase {
             description: "without row_id or naming the table is as before: no row id, SQLLoad's own names",
-            settings: "",
+            settings: "write_strategy = \"replace\"\n",
             runs: &[("a.ndjson", "{\"id\": 1, \"v\": \"a\"}\n")],
             expected_columns: "id,v,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at",
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.orders",
@@ -633,7 +632,7 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
         },
         RowIdTestCase {
             description: "unnest under an enforced contract: columns declares the child tables' columns by dotted path; each table loads its declared columns and links, and leaves out the rest (an item's qty, the parent's note and tags)",
-            settings: "contract = \"enforced\"\n[sources.orders.tables.orders]\ncolumns = { id = \"int\", \"items.sku\" = \"text\", \"items.parts.value\" = \"int\" }\nunnest = [\"items\", \"items.parts\"]\n",
+            settings: "write_strategy = \"replace\"\ncontract = \"enforced\"\n[sources.orders.tables.orders]\ncolumns = { id = \"int\", \"items.sku\" = \"text\", \"items.parts.value\" = \"int\" }\nunnest = [\"items\", \"items.parts\"]\n",
             runs: &[(
                 "a.ndjson",
                 "{\"id\": 1, \"note\": \"n\", \"items\": [{\"sku\": \"a\", \"qty\": 5, \"parts\": [1, 2]}], \"tags\": [\"x\"]}\n",
@@ -1221,13 +1220,13 @@ fn given_tables_named_like_child_tables_when_unnest_all_replaces_then_only_its_o
     let test_cases = [
         NamedLikeTestCase {
             description: "a plain table and another root's child table named like child tables keep their rows, and a real child table no row fills is emptied (naming = \"sqlload\")",
-            settings: "[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
             parent_id: "_sqlload_parent_id",
             expected_result: "1/1/0/1",
         },
         NamedLikeTestCase {
             description: "a plain table and another root's child table named like child tables keep their rows, and a real child table no row fills is emptied (naming = \"dlt\", which names the parent-id column _dlt_parent_id)",
-            settings: "naming = \"dlt\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
             parent_id: "_dlt_parent_id",
             expected_result: "1/1/0/1",
         },

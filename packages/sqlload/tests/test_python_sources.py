@@ -82,7 +82,7 @@ def rows(ctx):
     yield from data
 
 
-shop = sl.source("shop", connection="shop")
+shop = sl.source("shop", write_strategy="replace", connection="shop")
 
 {tables}
 '''
@@ -279,7 +279,7 @@ from pathlib import Path
 import sqlload as sl
 
 HERE = Path(__file__).resolve().parent.parent
-shop = sl.source("shop")
+shop = sl.source("shop", write_strategy="replace")
 
 
 def failure():
@@ -349,7 +349,7 @@ def test_given_a_retryable_and_a_lasting_failure_when_loading_then_it_exits_1_an
 def test_given_a_plan_error_and_a_printing_source_when_loading_with_json_then_stdout_parses_and_the_run_is_not_ok(tmp_path: Path) -> None:
 	module = """import sqlload as sl
 
-shop = sl.source("shop", connection="shop")
+shop = sl.source("shop", write_strategy="replace", connection="shop")
 
 
 @shop.table(description="Orders.")
@@ -394,14 +394,22 @@ def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come
 		("import sqlload as sl\nraise ValueError('broken module')\n", "cannot import sources/shop.py: ValueError: broken module"),
 		("import sqlload as sl\n@sl.table(description='Test table.', uniq_key='id')\ndef t(ctx):\n    yield {}\n", "unknown table setting(s): uniq_key"),
 		("import sqlload as sl\n@sl.table(description='Test table.', write_strategy='upsert')\ndef t(ctx):\n    yield {}\n", "unknown variant `upsert`"),
-		("import sqlload as sl\na = sl.source('a')\nb = sl.source('b')\na.table(description='Test table.', name='t')(lambda ctx: [])\nb.table(description='Test table.', name='t')(lambda ctx: [])\n", "Python table t is declared twice"),
-		("import sqlload as sl\nshop = sl.source('shop', connection='nope')\n", "Python source shop (sources/shop.py) connection \"nope\" is not a [connections] entry"),
+		("import sqlload as sl\na = sl.source('a', write_strategy='replace')\nb = sl.source('b', write_strategy='replace')\na.table(description='Test table.', name='t')(lambda ctx: [])\nb.table(description='Test table.', name='t')(lambda ctx: [])\n", "Python table t is declared twice"),
+		("import sqlload as sl\nshop = sl.source('shop', write_strategy='replace', connection='nope')\n", "Python source shop (sources/shop.py) connection \"nope\" is not a [connections] entry"),
 		(
-			"import sqlload as sl\n@sl.table\ndef t(ctx):\n    yield {}\n",
+			"import sqlload as sl\n@sl.table(write_strategy='replace')\ndef t(ctx):\n    yield {}\n",
 			"t\n    └── reason  no description; add description=\"...\" to its table declaration, or a docstring to its function",
 		),
+		(
+			"import sqlload as sl\nshop = sl.source('shop')\n@shop.table(description='Test table.')\ndef t(ctx):\n    yield {}\n",
+			't (kind = "python"): no write_strategy is set on the table or its source, and SQLLoad doesn\'t choose one\n    └── fix     set write_strategy = "replace" in sl.source("shop", ...) for all its tables, or in @shop.table(...) for this one',
+		),
+		(
+			"import sqlload as sl\nshop = sl.source('shop', write_strategy='merge', unique_key='{primary_key}')\n@shop.table(description='Test table.')\ndef t(ctx):\n    yield {}\n",
+			't (kind = "python"): unique_key = "{primary_key}" merges on the primary key the source reports, and a python source reports none\n    └── fix     name the key columns',
+		),
 	],
-	ids=["import error", "unknown setting", "bad value", "duplicate table", "unknown connection", "no description"],
+	ids=["import error", "unknown setting", "bad value", "duplicate table", "unknown connection", "no description", "no write_strategy", "primary_key placeholder"],
 )
 def test_given_bad_python_sources_when_planning_then_the_project_fails_closed(tmp_path: Path, module: str, message: str) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
@@ -411,7 +419,7 @@ def test_given_bad_python_sources_when_planning_then_the_project_fails_closed(tm
 
 
 def test_given_a_toml_python_source_when_parsing_then_it_is_rejected(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT + '\n[sources.shop]\nkind = "python"\n', "")
+	project = make_project(tmp_path, DUCKDB_PROJECT + '\n[sources.shop]\nwrite_strategy = "replace"\nkind = "python"\n', "")
 	done = sqlload(project, "debug", "--no-connection")
 	assert done.returncode == 1
 	assert "Python sources are declared in Python with sl.source" in done.stdout + done.stderr
@@ -553,7 +561,7 @@ from pathlib import Path
 import sqlload as sl
 
 HERE = Path(__file__).resolve().parent.parent
-shop = sl.source("shop", connection="shop")
+shop = sl.source("shop", write_strategy="replace", connection="shop")
 
 
 class Client:
@@ -769,7 +777,7 @@ def test_given_a_target_connection_when_a_table_function_asks_for_it_then_it_is_
 NAMED_MODULE = """
 import sqlload as sl
 
-shop = sl.source("shop", table_name="api_{table}")
+shop = sl.source("shop", write_strategy="replace", table_name="api_{table}")
 
 
 @shop.table(description="Test table.", name="orders")
@@ -782,7 +790,7 @@ def stores(ctx):
     yield {"id": 1}
 
 
-@sl.table
+@sl.table(write_strategy="replace")
 def standalone(ctx):
     '''A table described by its docstring.'''
     yield {"id": 1}
@@ -864,7 +872,7 @@ def test_given_no_rows_when_loading_into_files_with_rows_then_only_an_allowed_re
 
 
 def test_given_allow_empty_on_a_source_with_a_bad_value_when_planning_then_the_setting_is_validated(tmp_path: Path) -> None:
-	module = "import sqlload as sl\nshop = sl.source('shop', allow_empty='yes')\nshop.table(description='Test table.', name='t')(lambda ctx: [])\n"
+	module = "import sqlload as sl\nshop = sl.source('shop', write_strategy='replace', allow_empty='yes')\nshop.table(description='Test table.', name='t')(lambda ctx: [])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
@@ -872,7 +880,7 @@ def test_given_allow_empty_on_a_source_with_a_bad_value_when_planning_then_the_s
 
 
 def test_given_allow_empty_in_sqlload_toml_when_parsing_then_it_is_an_unknown_key(tmp_path: Path) -> None:
-	toml = DUCKDB_PROJECT + '\n[connections.pg]\nkind = "postgres"\nhost = "h"\nuser = "u"\ndatabase = "d"\n\n[sources.app]\nkind = "postgres"\nconnection = "pg"\ninclude = ["*"]\nallow_empty = true\n'
+	toml = DUCKDB_PROJECT + '\n[connections.pg]\nkind = "postgres"\nhost = "h"\nuser = "u"\ndatabase = "d"\n\n[sources.app]\nwrite_strategy = "replace"\nkind = "postgres"\nconnection = "pg"\ninclude = ["*"]\nallow_empty = true\n'
 	project = make_project(tmp_path, toml, "")
 	done = sqlload(project, "debug", "--no-connection")
 	assert done.returncode == 1
@@ -880,7 +888,7 @@ def test_given_allow_empty_in_sqlload_toml_when_parsing_then_it_is_an_unknown_ke
 
 
 def test_given_a_python_source_on_a_warehouse_targets_connection_when_planning_then_the_project_is_refused(tmp_path: Path) -> None:
-	module = "import sqlload as sl\nshop = sl.source('shop', connection='wh')\nshop.table(description='Test table.', name='t')(lambda ctx: [])\n"
+	module = "import sqlload as sl\nshop = sl.source('shop', write_strategy='replace', connection='wh')\nshop.table(description='Test table.', name='t')(lambda ctx: [])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
@@ -890,7 +898,7 @@ def test_given_a_python_source_on_a_warehouse_targets_connection_when_planning_t
 LAKE_MODULE = """
 import sqlload as sl
 
-lake = sl.source("lake_files", connection="lake")
+lake = sl.source("lake_files", write_strategy="replace", connection="lake")
 
 
 @lake.table(description="Test table.", name="listing")
@@ -1050,7 +1058,7 @@ FLATTEN_YIELDS = {
 
 @pytest.mark.parametrize("test_case", ["dicts", "bytes", "arrow"])
 def test_given_flatten_when_yielding_dicts_bytes_or_arrow_then_the_tables_match(tmp_path: Path, test_case: str) -> None:
-	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [{FLATTEN_YIELDS[test_case]}])\n"
+	module = f"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [{FLATTEN_YIELDS[test_case]}])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	load(project)
 	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__t' ORDER BY ordinal_position")
@@ -1075,7 +1083,7 @@ TYPED_FLATTEN = {
 
 @pytest.mark.parametrize("test_case", ["dicts", "arrow"])
 def test_given_flatten_when_the_object_holds_typed_values_then_its_columns_keep_their_types(tmp_path: Path, test_case: str) -> None:
-	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', flatten=['totals'])(lambda ctx: [{TYPED_FLATTEN[test_case]}])\n"
+	module = f"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', flatten=['totals'])(lambda ctx: [{TYPED_FLATTEN[test_case]}])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	load(project)
 	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__t' ORDER BY ordinal_position")
@@ -1084,7 +1092,7 @@ def test_given_flatten_when_the_object_holds_typed_values_then_its_columns_keep_
 
 
 def test_given_flatten_when_a_later_batch_has_a_field_of_a_flattened_name_then_the_load_fails(tmp_path: Path) -> None:
-	module = "import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [[{'id': 1, 'customer': {'country': 'GB'}}], sl.json(b'[{\"id\": 2, \"customer__country\": \"x\"}]')])\n"
+	module = "import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [[{'id': 1, 'customer': {'country': 'GB'}}], sl.json(b'[{\"id\": 2, \"customer__country\": \"x\"}]')])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "load")
 	assert done.returncode == 1
@@ -1120,14 +1128,14 @@ FLATTEN_ARROW_CASES = {
 
 @pytest.mark.parametrize("test_case", list(FLATTEN_ARROW_CASES))
 def test_given_flatten_on_arrow_structs_and_maps_when_loading_then_null_parents_give_null_keys(tmp_path: Path, test_case: str) -> None:
-	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [{FLATTEN_ARROW_CASES[test_case]}])\n"
+	module = f"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [{FLATTEN_ARROW_CASES[test_case]}])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	load(project)
 	assert query(project, 'SELECT id, customer__country FROM "RAW".shop__t ORDER BY id') == [(1, "GB"), (2, None)]
 
 
 def test_given_flatten_when_walked_rows_collide_then_the_load_fails(tmp_path: Path) -> None:
-	module = "import decimal\nimport sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [[{'n': decimal.Decimal('1.5'), 'customer': {'country': 'GB'}}, {'n': decimal.Decimal('2'), 'customer__country': 'x'}]])\n"
+	module = "import decimal\nimport sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', flatten=['customer'])(lambda ctx: [[{'n': decimal.Decimal('1.5'), 'customer': {'country': 'GB'}}, {'n': decimal.Decimal('2'), 'customer__country': 'x'}]])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "load")
 	assert done.returncode == 1
@@ -1151,7 +1159,7 @@ def test_given_flatten_with_a_path_when_planning_then_it_is_refused(tmp_path: Pa
 
 
 def test_given_flatten_on_a_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:
-	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "ndjson"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
+	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "ndjson"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
 	project = make_project(tmp_path, toml, "")
 	(project / "lake" / "events").mkdir()
 	(project / "lake" / "events" / "a.ndjson").write_text('{"customer": {"country": "GB"}}\n')
@@ -1165,7 +1173,7 @@ import datetime
 
 import sqlload as sl
 
-shop = sl.source("shop", connection="shop")
+shop = sl.source("shop", write_strategy="replace", connection="shop")
 
 
 @shop.table(description="Test table.", write_strategy="append", cursor_column="day")
@@ -1191,7 +1199,7 @@ def test_given_append_with_an_undeclared_date_cursor_when_loading_then_it_is_ref
 )
 def test_given_non_finite_floats_in_an_arrow_list_when_loading_then_a_pinned_array_keeps_them_and_json_is_unchanged(tmp_path: Path, data: str) -> None:
 	module = (
-		"import sqlload as sl\nshop = sl.source('shop')\n"
+		"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\n"
 		f"shop.table(description='Test table.', name='pinned', columns={{'xs': 'array(float)'}})(lambda ctx: [{data}])\n"
 		f"shop.table(description='Test table.', name='inferred')(lambda ctx: [{data}])\n"
 	)
@@ -1203,7 +1211,7 @@ def test_given_non_finite_floats_in_an_arrow_list_when_loading_then_a_pinned_arr
 
 def test_given_an_int_array_pinned_over_arrow_float_lists_of_whole_numbers_when_loading_then_they_load_without_a_note(tmp_path: Path) -> None:
 	data = "__import__('pyarrow').table({'id': [1], 'xs': [[1.0, 2.0]]})"
-	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={{'xs': 'array(int)'}})(lambda ctx: [{data}])\n"
+	module = f"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', columns={{'xs': 'array(int)'}})(lambda ctx: [{data}])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	planned = sqlload(project, "plan")
 	assert planned.returncode == 0, planned.stderr
@@ -1224,7 +1232,7 @@ def test_given_an_int_array_pinned_over_arrow_float_lists_of_whole_numbers_when_
 def test_given_an_array_pin_when_an_element_would_lose_digits_then_the_load_fails_and_nothing_loads(
 	tmp_path: Path, data: str, column_type: str, message: str
 ) -> None:
-	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={{'xs': '{column_type}'}})(lambda ctx: [{data}])\n"
+	module = f"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', columns={{'xs': '{column_type}'}})(lambda ctx: [{data}])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	done = sqlload(project, "load")
 	assert done.returncode == 1, done.stdout + done.stderr
@@ -1256,7 +1264,7 @@ def test_given_an_array_pin_when_an_element_would_lose_digits_then_the_load_fail
 def test_given_arrow_list_batches_when_loading_a_pinned_array_then_every_batch_keeps_its_values(
 	tmp_path: Path, data: str, column_type: str, expected: list[tuple[int, str]]
 ) -> None:
-	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={{'xs': '{column_type}'}})(lambda ctx: {data})\n"
+	module = f"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', columns={{'xs': '{column_type}'}})(lambda ctx: {data})\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	load(project)
 	assert query(project, 'SELECT id, xs::VARCHAR FROM "RAW".shop__t ORDER BY id') == expected
@@ -1264,14 +1272,14 @@ def test_given_arrow_list_batches_when_loading_a_pinned_array_then_every_batch_k
 
 def test_given_dlt_naming_when_a_source_spelled_arrow_list_is_pinned_as_an_array_then_it_crosses_as_a_list(tmp_path: Path) -> None:
 	data = "[__import__('pyarrow').table({'ID': [1], 'Scores': [[float('nan'), 1]]})]"
-	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', naming='dlt', columns={{'Scores': 'array(float)'}})(lambda ctx: {data})\n"
+	module = f"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', naming='dlt', columns={{'Scores': 'array(float)'}})(lambda ctx: {data})\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	load(project)
 	assert query(project, 'SELECT id, scores::VARCHAR FROM "RAW".shop__t') == [(1, "[nan, 1.0]")]
 
 
 def test_given_a_native_type_pinned_for_a_files_target_when_planning_then_plan_refuses_the_column(tmp_path: Path) -> None:
-	module = "import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={'n': 'native(\"HUGEINT\")'})(lambda ctx: [{'id': 1, 'n': 5}])\n"
+	module = "import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', columns={'n': 'native(\"HUGEINT\")'})(lambda ctx: [{'id': 1, 'n': 5}])\n"
 	project = make_project(tmp_path, FILES_PROJECT, "", module=module)
 	planned = sqlload(project, "plan")
 	assert planned.returncode == 1, planned.stdout
@@ -1359,7 +1367,7 @@ def test_given_a_python_table_with_a_dedupe_setting_it_cannot_use_when_planning_
 
 
 def test_given_source_level_dedupe_settings_when_loading_then_only_its_merge_tables_take_them_and_a_table_can_choose_fail(tmp_path: Path) -> None:
-	module = SHOP_MODULE.replace('sl.source("shop", connection="shop")', 'sl.source("shop", connection="shop", dedup_sort={"v": "desc"})')
+	module = SHOP_MODULE.replace('sl.source("shop", write_strategy="replace", connection="shop")', 'sl.source("shop", write_strategy="replace", connection="shop", dedup_sort={"v": "desc"})')
 	tables = (
 		"shop.table(description='Test table.', name='log', write_strategy='append')(rows)\n"
 		"shop.table(description='Test table.', name='kept', write_strategy='merge', unique_key='id')(rows)\n"
@@ -1378,7 +1386,7 @@ def test_given_source_level_dedupe_settings_when_loading_then_only_its_merge_tab
 
 
 def test_given_a_source_that_fails_on_repeated_keys_when_a_table_sets_dedup_sort_then_that_table_keeps_its_ranked_row(tmp_path: Path) -> None:
-	module = SHOP_MODULE.replace('sl.source("shop", connection="shop")', 'sl.source("shop", connection="shop", on_duplicate_keys="fail")')
+	module = SHOP_MODULE.replace('sl.source("shop", write_strategy="replace", connection="shop")', 'sl.source("shop", write_strategy="replace", connection="shop", on_duplicate_keys="fail")')
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', dedup_sort={'v': 'asc'})(rows)\n", module=module)
 	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "a"}, {"id": 1, "v": "c"}])
 	load(project)

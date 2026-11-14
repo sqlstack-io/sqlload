@@ -365,7 +365,7 @@ def make_project(tmp_path: Path, server: ThreadingHTTPServer, tables: str) -> Pa
 			loader_schema = "RAW"
 		""")
 	)
-	module = f"import sqlload as sl\n\nTOKEN_URL = 'http://{host}:{port}/oauth/token'\nshop = sl.source('shop', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=3)\n\n" + textwrap.dedent(tables)
+	module = f"import sqlload as sl\n\nTOKEN_URL = 'http://{host}:{port}/oauth/token'\nshop = sl.source('shop', write_strategy='replace', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=3)\n\n" + textwrap.dedent(tables)
 	(tmp_path / "sources" / "shop.py").write_text(module)
 	return tmp_path
 
@@ -1150,7 +1150,7 @@ ONE_LEVEL_JOB = (
 
 def test_given_a_one_level_fan_out_when_defined_then_its_job_is_unchanged_by_multi_level_support() -> None:
 	code = (
-		"import sqlload as sl\nshop = sl.source('shop', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=3)\n"
+		"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=3)\n"
 		"orders = api.paginate('/orders', paginator=sl.page_number('p'), select='$.items[*].order_id')\n"
 		"print(api.fan_out('/orders/{order_id}/items', over=orders, concurrency=3, select='$.items', on_status={404: 'skip'}).__sqlload_http_job__())"
 	)
@@ -1285,7 +1285,7 @@ def test_given_cells_that_cannot_pivot_when_loading_then_it_fails_naming_why(
 def test_given_a_job_without_cells_when_built_then_its_definition_has_no_cells_field() -> None:
 	import sqlload as sl
 
-	api = sl.http(sl.source("shop", connection="shop"))
+	api = sl.http(sl.source("shop", write_strategy="replace", connection="shop"))
 	plain = json.loads(api.paginate("/orders", paginator=sl.single(), select="$.items").__sqlload_http_job__())
 	pivoted = json.loads(api.paginate("/orders", paginator=sl.single(), select="$.items", cells=sl.cells()).__sqlload_http_job__())
 	assert "cells" not in plain

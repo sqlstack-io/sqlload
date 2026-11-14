@@ -191,14 +191,14 @@ class SqlLoad(Competitor):
 			return text + (
 				f'\n[connections.lake]\nkind = "s3"\nbucket = "{context.lake.bucket}"\nregion = "{context.lake.region}"\n\n'
 				f'[sources.{scenario.table}]\nkind = "files"\nconnection = "lake"\npath = "{snowflake.files_key(context.dataset)}"\nformat = "parquet"\n'
-				f'description = "{DESCRIPTION}"\n'
+				f'description = "{DESCRIPTION}"\nwrite_strategy = "replace"\n'
 			)
 		if scenario.group == "files":
 			file_format = scenario.name.removeprefix("files_")
 			return text + (
 				f'\n[connections.files]\nkind = "filesystem"\nroot = "{context.dataset.path("files")}"\n\n'
 				f'[sources.{scenario.table}]\nkind = "files"\nconnection = "files"\npath = "{file_format}/"\nformat = "{file_format}"\n'
-				f'description = "{DESCRIPTION}"\n'
+				f'description = "{DESCRIPTION}"\nwrite_strategy = "replace"\n'
 			)
 		return 'python_paths = ["sources"]\n\n' + text
 
@@ -215,6 +215,8 @@ class SqlLoad(Competitor):
 		if scenario.name == "pg_incremental":
 			# `id` only grows, so the next load starts after the loaded maximum rather than at it.
 			text += 'write_strategy = "append"\ncursor_column = "id"\nappend_cursor_inclusive = false\n'
+		else:
+			text += 'write_strategy = "replace"\n'
 		return text + "".join(f'\n[sources.app.tables."public.{table}"]\ndescription = "{DESCRIPTION}"\n' for table in tables)
 
 	def _files_snowflake(self, scenario: Scenario, context: Context) -> str:
