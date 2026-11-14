@@ -1,8 +1,10 @@
 pub mod choose_lists;
 pub mod columns_batch;
 pub mod conform_batch;
+pub mod field_path;
 pub mod flatten_batch;
 pub mod flattened_columns;
+pub mod item_position;
 pub mod json_lists;
 pub mod json_rows;
 pub mod loaded_batch;

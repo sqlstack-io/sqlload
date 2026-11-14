@@ -176,8 +176,9 @@ def accounts(ctx):
     )
 ```
 
-- A path is `$` followed by keys, such as `$.address.city`. A key may hold any character but `.`.
-  `$` alone is the whole object.
+- A path is `$` followed by keys, such as `$.address.city`. A key may hold any character but `.`,
+  `[` and `]`. `$` alone is the whole object. This is the [path syntax](#path-syntax) for every
+  field.
 - A missing key, or a path that runs through a value that isn't an object, loads NULL.
   `sl.field(path, required=True)` fails the table instead, naming the row and the path.
 - `keep_record` adds the whole row object as a JSON column. It needs `fields`, and its name can't
@@ -197,6 +198,28 @@ def accounts(ctx):
   1 to 9999 doesn't convert.
   A value that doesn't convert fails the table, naming the row, the field and the value, or loads
   NULL with `on_error="null"`. Anything else belongs downstream or in a Python table that yields rows.
+
+#### Path syntax
+
+From 0.50.0, a path in `fields` (a plain string, `sl.field` or `sl.parent`), in `key_path` and in
+`sl.json(..., fields=)` takes exactly this, as JSONPath, jq and dlt write it:
+
+| Path | Reads |
+| --- | --- |
+| `$` | The whole row object. |
+| `$.id`, `$.address.city` | A key, and keys below it. |
+| `$.items[0].id` | Item 0 of a list, the first, then a key below it. |
+| `$.statuses[-1].name` | Counting from the end: `[-1]` is the last item, `[-2]` the one before. |
+| `$.grid[1][0]` | A list inside a list. |
+
+- A missing key, an index past either end of its list, or an index on a value that isn't a list
+  loads NULL, as a missing key does; `required=True` fails the table instead, naming the row, the
+  field and the path.
+- Anything else is refused, naming the field and the path: `[*]` and `.*` (one column can't hold
+  every item; `select` makes each item a row), filters such as `[?(@.type == "email")]`, slices
+  such as `[0:2]`, recursive descent `..`, and bracketed keys such as `['id']`. An `sl.http` job
+  fails before any request, and `sl.json` when it is called. Before 0.50.0 these paths loaded NULL
+  without a warning.
 
 #### Values from around the row
 
@@ -232,7 +255,8 @@ api.fan_out(
   `fields={"version_id": sl.key("version_id"), "activity_id": "$.id"}`. A name no level provides
   fails before any request, and so does `sl.key` with `batch=`, where one request carries many keys;
   read the key from a response field or `sl.parent` instead.
-- `key_path` on `fan_out` (a path from each record, or `sl.parent(...)`) fails the table when a
+- `key_path` on `fan_out` (a path from each record, or `sl.parent(...)`, in the
+  [path syntax](#path-syntax)) fails the table when a
   record's key isn't among the keys its request sent (with `batch=`, the batch's), naming the key,
   for an API that answers for other keys.
 - `sl.parent` and `sl.key` read an `sl.http` job's rows; `sl.json` and `sl.ndjson` refuse them, and

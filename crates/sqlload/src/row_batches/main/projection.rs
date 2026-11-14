@@ -1,7 +1,8 @@
 //! A projection of JSON row objects: which values load, under which column names.
 
 use crate::row_batches::_helpers::parsed::format_problem;
-use crate::row_batches::_helpers::projected::{column_name, names_field, path, path_tree};
+use crate::row_batches::_helpers::projected::{column_name, names_field, path_tree};
+use crate::row_batches::main::field_path::field_path;
 use crate::row_batches::models::{FieldSpec, ProjectedField, Projection};
 
 /// The projection `fields` and `keep_record` describe, `None` when neither is given, or why it can't be read.
@@ -33,7 +34,8 @@ pub fn projection(
             }
             Ok(ProjectedField {
                 name: column_name(&field.name)?,
-                path: path(&field.path)?,
+                path: field_path(&field.path)
+                    .map_err(|reason| format!("fields[{:?}]: field path {reason}", field.name))?,
                 text: field.path.clone(),
                 required: field.required,
                 parse: field.parse.clone(),

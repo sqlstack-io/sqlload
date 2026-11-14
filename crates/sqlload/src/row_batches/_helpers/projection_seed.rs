@@ -1,10 +1,11 @@
-//! Reading a row object once for a projection: only the keys on its paths are kept, and each object on them is parsed once.
+//! Reading a row object once for a projection: only the keys on its paths are kept, and each object or indexed list on them is parsed once.
 
 use serde::de::{DeserializeSeed, Deserializer, Error as _, IgnoredAny, MapAccess, Visitor};
 use serde_json::de::StrRead;
 use serde_json::value::RawValue;
 
 use crate::row_batches::_helpers::json_seed::Key;
+use crate::row_batches::main::item_position::item_position;
 use crate::row_batches::models::PathNode;
 
 /// Each field's value in the row object `raw`, by position, `None` where its path finds nothing; `fields` is how many fields `tree` holds.
@@ -68,7 +69,10 @@ impl<'de> Visitor<'de> for NodeSeed<'_, '_, 'de> {
 
     fn visit_map<A: MapAccess<'de>>(mut self, mut map: A) -> Result<(), A::Error> {
         while let Some(key) = map.next_key::<Key<'de>>()? {
-            let Some(child) = self.node.children.get(key.as_str()) else {
+            let child = Some(key.as_str())
+                .filter(|key| !key.starts_with('['))
+                .and_then(|key| self.node.children.get(key));
+            let Some(child) = child else {
                 map.next_value::<IgnoredAny>()?;
                 continue;
             };
@@ -79,8 +83,8 @@ impl<'de> Visitor<'de> for NodeSeed<'_, '_, 'de> {
     }
 }
 
-/// Record `value` for the fields ending at `child`, after clearing what an earlier copy of the same key left (the last copy wins), then walk into it when it is an object.
 impl<'de> NodeSeed<'_, '_, 'de> {
+    /// Record `value` for the fields ending at `child`, after clearing what an earlier copy of the same key left (the last copy wins), then walk into it when it is an object, or into the items its indexes name when it is a list.
     fn take(&mut self, child: &PathNode, value: &'de RawValue) -> Result<(), String> {
         for index in &child.under {
             self.values[*index] = None;
@@ -88,9 +92,24 @@ impl<'de> NodeSeed<'_, '_, 'de> {
         for index in &child.ends {
             self.values[*index] = Some(value);
         }
-        match !child.children.is_empty() && value.get().starts_with('{') {
-            true => walk(value, child, self.values),
-            false => Ok(()),
+        if child.children.is_empty() {
+            return Ok(());
+        }
+        match value.get().as_bytes().first() {
+            Some(b'{') => walk(value, child, self.values),
+            Some(b'[') if child.children.keys().any(|key| key.starts_with('[')) => {
+                let items: Vec<&'de RawValue> =
+                    serde_json::from_str(value.get()).map_err(|error| reason(&error))?;
+                for (segment, below) in &child.children {
+                    let item = item_position(segment, items.len())
+                        .and_then(|position| items.get(position));
+                    if let Some(item) = item {
+                        self.take(below, item)?;
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 }

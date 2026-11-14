@@ -3,6 +3,7 @@
 use serde_json::Value;
 
 use crate::http_source::models::Selector;
+use crate::row_batches::main::item_position::item_position;
 
 /// `text` as a selector; `None` and `$` select the whole response.
 pub(crate) fn selector(text: Option<&str>) -> Result<Selector, String> {
@@ -133,17 +134,14 @@ fn indexed(part: &str) -> Option<Vec<String>> {
     Some(found)
 }
 
-/// The value under `node` at `segment`: an object's field, or a list's item for `[n]`.
+/// The value under `node` at `segment`: an object's field, or a list's item for `[n]`, or for `[-n]` counting from the end.
 pub(crate) fn step<'a>(node: &'a Value, segment: &str) -> Option<&'a Value> {
-    match segment
-        .strip_prefix('[')
-        .and_then(|rest| rest.strip_suffix(']'))
-    {
-        Some(index) => match index.parse::<usize>() {
-            Ok(index) => node.as_array()?.get(index),
-            Err(_) => None,
-        },
-        None => node.get(segment),
+    match segment.starts_with('[') {
+        true => {
+            let items = node.as_array()?;
+            items.get(item_position(segment, items.len())?)
+        }
+        false => node.get(segment),
     }
 }
 

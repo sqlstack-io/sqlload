@@ -109,6 +109,19 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
             ],
         },
         JobProblemsTestCase {
+            description: "indexes in sl.parent and key_path are fine",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"select":"$.issues[*].histories[*]","fields":[{"name":"last","path":"$.changes[-1].id","from":{"kind":"parent","levels":1}},{"name":"first","path":"$.items[0].to"}],"key_path":{"path":"$.keys[0]","from":{"kind":"parent","levels":1}},"over":{"kind":"values","values":[1]}}"#,
+            expected_problems: &[],
+        },
+        JobProblemsTestCase {
+            description: "unsupported syntax in sl.parent and key_path is refused, naming the field and the path",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"select":"$.issues[*].histories[*]","fields":[{"name":"first","path":"$.items[0].to"},{"name":"all","path":"$.items[*].id","from":{"kind":"parent","levels":1}}],"key_path":{"path":"$.keys[0:1]","from":{"kind":"parent","levels":1}},"over":{"kind":"values","values":[1]}}"#,
+            expected_problems: &[
+                "fields[\"all\"]: field path \"$.items[*].id\" uses the wildcard [*], which one column can't hold; take one item with [n] or [-1], or select the list's items as rows",
+                "key_path \"$.keys[0:1]\" uses the slice [0:1], which field paths don't support; they take dotted names and [n] or [-1] indexes, such as \"$.items[0].id\"",
+            ],
+        },
+        JobProblemsTestCase {
             description: "a paginate selecting a key field",
             job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].id"}"#,
             expected_problems: &[

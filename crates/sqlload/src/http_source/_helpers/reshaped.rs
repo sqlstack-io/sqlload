@@ -2,8 +2,9 @@
 
 use serde_json::{Map, Value};
 
-use crate::http_source::_helpers::selector::{rows_with_parents, selector, step};
+use crate::http_source::_helpers::selector::{rows_with_parents, step};
 use crate::http_source::models::{KeyPath, Request, RowContext, Selector};
+use crate::row_batches::main::field_path::field_path;
 use crate::row_batches::main::projection::projection;
 use crate::row_batches::models::{BadValue, FieldFrom, FieldSpec, Projection};
 
@@ -72,7 +73,10 @@ pub(crate) fn wrapped_rows(
 ) -> Result<String, String> {
     let specs = request.fields.as_deref().unwrap_or_default();
     let key_path = match &request.key_path {
-        Some(key_path) => Some((key_path, selector(Some(&key_path.path))?.rows)),
+        Some(key_path) => Some((
+            key_path,
+            field_path(&key_path.path).map_err(|reason| format!("key_path {reason}"))?,
+        )),
         None => None,
     };
     let mut loaded: Vec<Value> = Vec::new();
