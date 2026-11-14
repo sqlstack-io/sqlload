@@ -11,7 +11,9 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::load_naming::main::is_load_column::is_load_column;
-use crate::loader::_helpers::plan_text::{folded_warning, text_error, text_item, usual_details};
+use crate::loader::_helpers::plan_text::{
+    folded_warning, reads_line, text_error, text_item, usual_details,
+};
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::display_name;
@@ -930,13 +932,21 @@ pub(crate) fn text_view(plan: &ProjectPlan) -> PlanView {
 fn up_to_date(table: &TablePlan) -> Option<String> {
     let (source, read) = table.spec.files.as_ref().zip(table.files.as_ref())?;
     let incremental = !matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+    let ranged = table
+        .cursor_note
+        .as_deref()
+        .is_some_and(|note| note.contains("--start-cursor") || note.contains("--end-cursor"));
     (incremental && read.files.is_empty()).then(|| {
-        format!(
-            "up to date: 0 new of {} files in {} ({})",
+        let files = format!(
+            "{} files in {} ({})",
             thousands(source.table.files.len() as u64),
             source.location,
             source.encoding
-        )
+        );
+        match (ranged, reads_line(table, false)) {
+            (true, Some(reads)) => format!("nothing in range: 0 of {files} for {reads}"),
+            _ => format!("up to date: 0 new of {files}"),
+        }
     })
 }
 

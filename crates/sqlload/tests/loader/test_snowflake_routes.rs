@@ -4,7 +4,7 @@ use crate::helpers::{
     integration_and_orders, json_layouts, long_names, long_names_with_text, nanos_in_a_later_batch,
     nanos_newest, no_stage_or_channel, no_stage_or_host, no_user_stage, not_found, not_owned,
     nothing, old_leftovers, run_async, run_debug, run_route, similar_integration, stage_exists,
-    stage_on_other_integration, two_batches, two_days, with_text,
+    stage_on_other_integration, two_batches, two_days, with_text, words,
 };
 use crate::test_types::{
     DebugStageTestCase, MaskMatrixTestCase, RouteFileSet, RouteFiles, RouteTestCase,
@@ -545,7 +545,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
             let outcome = run_route(directory.path(), test_case).await?;
             assert!(
-                outcome.error.contains(test_case.expected_error),
+                words(&outcome.error).contains(&words(test_case.expected_error)),
                 "{}: {}",
                 test_case.description,
                 outcome.error

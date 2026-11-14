@@ -182,13 +182,14 @@ pub(crate) async fn write_events(
         .map_or(MAX_LIVE_WIDTH, |(_, columns)| usize::from(columns));
     let mut ticks = tokio::time::interval(LIVE_REDRAW);
     let mut frame: usize = 0;
+    let coloured = !output.no_color && std::env::var_os("NO_COLOR").is_none();
     loop {
         let event = tokio::select! {
             event = receiver.recv() => event,
             _ = ticks.tick(), if block.is_some() => {
                 frame += 1;
                 if let (Some(bar), Some(state)) = (&block, &output.live) {
-                    bar.set_message(live_lines(state, (started.elapsed(), frame), width).join("\n"));
+                    bar.set_message(live_lines(state, (started.elapsed(), frame), (width, coloured)).join("\n"));
                 }
                 continue;
             }

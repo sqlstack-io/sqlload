@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::load_events::models::{EventKind, LoadEvent};
 use crate::loader::_helpers::render::thousands;
+use crate::loader::constants::{BOLD, CYAN, DIM, RED, RESET, YELLOW};
 
 /// Spinner frames, one per redraw.
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -122,14 +123,18 @@ impl LiveState {
     }
 }
 
-/// The block's lines for `state`, `elapsed` into the load, at redraw `frame`, for a terminal `width` columns wide. Plain text: colour is the caller's.
+/// The block's lines for `state`, `elapsed` into the load, at redraw `frame`, for a terminal `width` columns wide; `coloured` as the mock has it: cyan for what runs, red only for a failure, yellow for waits and fail-fast, dim for notes.
 pub(crate) fn live_lines(
     state: &LiveState,
     (elapsed, frame): (Duration, usize),
-    width: usize,
+    (width, coloured): (usize, bool),
 ) -> Vec<String> {
+    let paint = |code: &str, text: String| match coloured && !text.is_empty() {
+        true => format!("{code}{text}{RESET}"),
+        false => text,
+    };
     let width = width.min(MAX_WIDTH);
-    let spinner = SPINNER[frame % SPINNER.len()];
+    let spinner = paint(CYAN, SPINNER[frame % SPINNER.len()].to_string());
     let rows = state.finished_rows
         + state
             .running
@@ -144,9 +149,16 @@ pub(crate) fn live_lines(
     let seconds = elapsed.as_secs();
     let mut lines = vec![
         format!(
-            " LOADING  {}{}  {}/{} tables · {:>5} rows · {:02}:{:02}",
-            "━".repeat(filled),
-            "━".repeat(bar_width - filled),
+            "{} {}{}  {}/{} tables · {:>5} rows · {:02}:{:02}",
+            paint(&format!("{BOLD}{CYAN}"), " LOADING ".to_owned()),
+            paint(
+                match state.stopped_after {
+                    Some(_) => RED,
+                    None => CYAN,
+                },
+                "━".repeat(filled)
+            ),
+            paint(DIM, "━".repeat(bar_width - filled)),
             state.done,
             state.total,
             thousands(rows),
@@ -161,13 +173,22 @@ pub(crate) fn live_lines(
             running.table,
             running.strategy,
             thousands(running.rows),
-            running.doing
+            paint(
+                match running.committing {
+                    true => CYAN,
+                    false => DIM,
+                },
+                running.doing.clone()
+            )
         ));
     }
     if let Some(failed) = &state.stopped_after {
-        lines.push(format!(
-            "  ⊘ fail-fast: {} tables will not start after {failed} failed; running tables finish",
-            state.waiting.len()
+        lines.push(paint(
+            YELLOW,
+            format!(
+                "  ⊘ fail-fast: {} tables will not start after {failed} failed; running tables finish",
+                state.waiting.len()
+            ),
         ));
     } else if !state.waiting.is_empty() {
         let named: Vec<&str> = state
@@ -180,10 +201,13 @@ pub(crate) fn live_lines(
             true => ", …",
             false => "",
         };
-        lines.push(format!(
-            "  · {} queued: {}{more}",
-            state.waiting.len(),
-            named.join(", ")
+        lines.push(paint(
+            DIM,
+            format!(
+                "  · {} queued: {}{more}",
+                state.waiting.len(),
+                named.join(", ")
+            ),
         ));
     }
     lines.push(String::new());
@@ -194,15 +218,26 @@ pub(crate) fn live_lines(
             .map(|(connection, (rate, waited))| {
                 let busy = waited.is_some_and(|at| elapsed.saturating_sub(at) < RATE_RECENT);
                 match busy {
-                    true => format!("{connection} ▮▮▮▮▮▮▮▮ at {rate}"),
-                    false => format!("{connection} ▯▯▯▯▯▯▯▯ under {rate}"),
+                    true => format!(
+                        "{connection} {}",
+                        paint(YELLOW, format!("▮▮▮▮▮▮▮▮ at {rate}"))
+                    ),
+                    false => format!(
+                        "{connection} {}",
+                        paint(DIM, format!("▯▯▯▯▯▯▯▯ under {rate}"))
+                    ),
                 }
             })
             .collect();
-        lines.push(format!("  rate  {}", meters.join("   ")));
+        lines.push(format!(
+            "  {}{}",
+            paint(DIM, "rate  ".to_owned()),
+            meters.join("   ")
+        ));
     }
-    lines.push(
+    lines.push(paint(
+        DIM,
         "  ctrl-c finishes running tables and stops · a second ctrl-c stops at once".to_owned(),
-    );
+    ));
     lines
 }

@@ -5,7 +5,7 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_tls::start_postgres_tls;
 
-use crate::helpers::{described_project, run_async, run_merge_case, run_sqlload};
+use crate::helpers::{described_project, run_async, run_merge_case, run_sqlload, words};
 use crate::postgres_helpers::{load_once, project_text, text};
 use crate::test_files_to_duckdb::{
     MERGE_CHECK, MERGE_FAIL_SETTINGS, MERGE_SETTINGS, MERGE_SORT_SETTINGS,
@@ -222,7 +222,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_a_postgres_target_then_eac
                 .await
                 .unwrap_or_else(|error| error);
             assert!(
-                loaded.contains(test_case.expected_load),
+                words(&loaded).contains(&words(test_case.expected_load)),
                 "{}: {loaded}",
                 test_case.description
             );

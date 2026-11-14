@@ -1,7 +1,7 @@
 use sqlload_testkit::odbc_servers::main::start_odbc_server::start_odbc_server;
 use sqlload_testkit::odbc_servers::models::OdbcDatabase;
 
-use crate::helpers::{duckdb_text, run_async, run_sqlload};
+use crate::helpers::{duckdb_text, run_async, run_sqlload, words};
 use crate::odbc_helpers::{driver_project, keyless_project, odbc_execute};
 use crate::test_types::{OdbcDriverTestCase, OdbcKeylessTestCase};
 
@@ -272,8 +272,11 @@ fn given_each_odbc_driver_when_tables_merge_on_a_primary_key_it_does_not_report_
                     && test_case
                         .expected_reasons
                         .iter()
-                        .all(|reason| output.contains(reason))
-                    && !test_case.absent.iter().any(|text| output.contains(text)),
+                        .all(|reason| words(&output).contains(&words(reason)))
+                    && !test_case
+                        .absent
+                        .iter()
+                        .any(|text| words(&output).contains(&words(text))),
                 "{}:\n{output}",
                 test_case.description
             );
