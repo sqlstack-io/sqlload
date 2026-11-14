@@ -26,8 +26,8 @@ a local build without `SITE_URL` leaves out the sitemap and `llms.txt`.
 Cloudflare Pages builds it from this folder: root directory `website`, build command
 `npm ci && npm run build`, output directory `dist`, Node from `.nvmrc`.
 
-The Website workflow builds the site and checks its links and content on pull requests that touch
-it, and when run by hand. It deploys nothing.
+The Website workflow builds the site and checks its links, content and layout on pull requests
+that touch it, and when run by hand. It deploys nothing.
 
 ## Commands
 
@@ -39,4 +39,5 @@ npm run dev      # live preview
 npm run build    # checks content (scripts/check-content.mjs), then builds dist/ with the search index
 npm run preview  # serve dist/
 python3 scripts/check_links.py dist
+node scripts/check-layout.mjs dist   # no docs page wider than its content column; needs Chrome (CHROME_PATH)
 ```

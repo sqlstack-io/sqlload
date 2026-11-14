@@ -1,13 +1,11 @@
 ---
-title: "Stream Kafka topics into Snowflake"
+title: "Run the Kafka exporter"
 description: "Stream Kafka topics into Snowflake tables continuously, with Snowpipe Streaming or staged files."
 ---
 
-The Kafka exporter is SQLLoad's mode for Kafka. It runs continuously, reads Kafka topics and writes
-each one into a Snowflake table, through Snowpipe Streaming or staged files. It's separate from
-loader projects: its `sqlload.toml` has `[source]` with `kind = "kafka"`, `[destination]`,
-`[staging]` and the sections in [Kafka exporter configuration](/docs/kafka/configuration/), instead
-of `[connections]`, `[targets]` and `[sources]`. The repository's
+The [Kafka exporter](/docs/kafka/) reads Kafka topics continuously and writes each one into a
+Snowflake table, through Snowpipe Streaming or staged files. Its `sqlload.toml` is described in
+[Kafka exporter configuration](/docs/kafka/configuration/); the repository's
 [`sqlload.example.toml`](https://github.com/sqlstack-io/sqlload/blob/main/sqlload.example.toml)
 is a complete example.
 

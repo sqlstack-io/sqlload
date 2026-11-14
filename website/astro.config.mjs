@@ -1,9 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { satteri } from '@astrojs/markdown-satteri';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import { sqlloadDark, sqlloadLight } from './src/code-themes.mjs';
 import { redirects, sidebar } from './src/navigation.mjs';
+import { docsTables } from './src/docs-tables.mjs';
 
 // The site lives at https://sqlload.io. Cloudflare Pages builds of main use it; preview builds use
 // their own deployment URL, so their canonical links and llms.txt point at the preview. SITE_URL
@@ -36,6 +38,7 @@ const homepageSiteUrls = {
 export default defineConfig({
 	site,
 	redirects,
+	markdown: { processor: satteri({ hastPlugins: [docsTables] }) },
 	integrations: [
 		starlight({
 			title: 'SQLLoad',

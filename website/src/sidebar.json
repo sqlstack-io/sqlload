@@ -17,9 +17,29 @@
 			"docs/guides/files",
 			"docs/guides/python",
 			"docs/guides/reload-a-window",
-			"docs/guides/kafka",
 			"docs/guides/orchestrators",
 			"docs/guides/from-dlt"
+		]
+	},
+	{
+		"label": "Kafka exporter",
+		"items": [
+			{
+				"label": "Overview",
+				"slug": "docs/kafka"
+			},
+			{
+				"label": "Run it",
+				"slug": "docs/kafka/run"
+			},
+			{
+				"label": "Configuration",
+				"slug": "docs/kafka/configuration"
+			},
+			{
+				"label": "Topic naming",
+				"slug": "docs/kafka/naming"
+			}
 		]
 	},
 	{
@@ -101,8 +121,6 @@
 				"label": "Python API",
 				"link": "/docs/sources/python/"
 			},
-			"docs/kafka/configuration",
-			"docs/kafka/naming",
 			"docs/troubleshooting"
 		]
 	}
