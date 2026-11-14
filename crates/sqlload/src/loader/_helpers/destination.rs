@@ -11,9 +11,10 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
+use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec};
+use crate::loader::models::{LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec, UnreadSharing};
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::models::WriteStrategy;
 use crate::schema_plan::models::LiveColumn;
@@ -197,15 +198,18 @@ pub(crate) fn mark_shared_destinations(
         .collect()
 }
 
-/// A warning naming the `specs` whose cursors read within their constant values only because the `unresolved` sources' tables are unknown, if any do.
+/// A warning naming the `specs` whose cursors read within their constant values only because the `unresolved` sources' tables are unknown, if any do, with those tables' display names.
 pub(crate) fn unknown_sharing(
     specs: &[TableSpec],
     configured: &[TableSpec],
     unresolved: &[String],
-) -> Option<String> {
-    let names: Vec<String> = specs
+) -> Option<UnreadSharing> {
+    let unknown: Vec<&TableSpec> = specs
         .iter()
         .filter(|spec| spec.shared_destination && !shared(spec, configured))
+        .collect();
+    let names: Vec<String> = unknown
+        .iter()
         .map(|spec| {
             format!(
                 "{}.{}",
@@ -214,12 +218,17 @@ pub(crate) fn unknown_sharing(
             )
         })
         .collect();
-    (!names.is_empty()).then(|| {
-        format!(
+    (!names.is_empty()).then(|| UnreadSharing {
+        warning: format!(
             "{} could not be read, so {} may share a destination table with it: their incremental cursors read only rows with their own constant values",
             unresolved.join(", "),
             names.join(", ")
-        )
+        ),
+        sources: unresolved.to_vec(),
+        tables: unknown
+            .iter()
+            .map(|spec| display_name(spec.warehouse, &spec.destination))
+            .collect(),
     })
 }
 

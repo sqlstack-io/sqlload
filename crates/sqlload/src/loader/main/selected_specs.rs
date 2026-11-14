@@ -1,7 +1,7 @@
 //! The settings of every selected table, without reading any destination.
 
 use crate::loader::_helpers::python::python_table;
-use crate::loader::_helpers::sources::{scoped_tables, selected, unmatched_selectors};
+use crate::loader::_helpers::sources::{scoped_tables, selected, spec_names, unmatched_selectors};
 use crate::loader::_helpers::table_plan::{desired_columns, read_columns};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{PlanOptions, SelectedTable, SelectedTables};
@@ -13,7 +13,7 @@ pub async fn selected_specs(
     options: &PlanOptions,
 ) -> Result<SelectedTables, LoaderError> {
     let mut chosen = SelectedTables::default();
-    let mut names: Vec<(String, String)> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
     for (source_name, source) in &project.sources {
         let (resolved, files) =
             match scoped_tables((project, options), (source_name, source)).await? {
@@ -36,9 +36,9 @@ pub async fn selected_specs(
         for mut spec in resolved.specs {
             spec.files = files.clone();
             spec.python = module.map(|module| python_table(module, &spec.source_table));
-            let qualified = spec.source_table.qualified_name();
-            names.push((spec.destination.table.clone(), qualified.clone()));
-            if selected(options, (source_name, &spec.destination.table, &qualified)) {
+            let picked = spec_names(&spec);
+            names.extend(picked.iter().cloned());
+            if selected(options, (source_name, &picked)) {
                 let source_columns = read_columns(&spec).map(|read| desired_columns(&spec, &read));
                 chosen.tables.push(SelectedTable {
                     spec,

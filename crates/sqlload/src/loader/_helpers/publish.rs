@@ -1,6 +1,4 @@
 use crate::adapters::contract::constants::COMMIT_STATEMENT;
-use crate::load_events::main::emit::emit;
-use crate::load_events::models::EventKind;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::main::staging_id::staging_id;
@@ -62,6 +60,8 @@ use crate::files_source::main::batch_footers::batch_footers;
 use crate::files_source::main::batch_headers::batch_headers;
 use crate::files_source::main::key_columns::key_columns;
 use crate::files_source::models::AfterLoad;
+use crate::load_events::main::emit::emit;
+use crate::load_events::models::EventKind;
 
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;

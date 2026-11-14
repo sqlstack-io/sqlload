@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use crate::adapters::dispatch::models::Destination;
 use crate::auth::main::allow_sign_in::allow_sign_in;
+use crate::command::_helpers::live_block::LiveState;
 use crate::command::_helpers::load_output::{
     EventsTarget, LoadOutput, change_tally_line, start_lines, summary_lines, write_events,
 };
-use crate::command::_helpers::live_block::LiveState;
 use crate::command::_helpers::output::{confirm_reload, print_lines};
 use crate::command::_helpers::project_file::replace_file;
 use crate::command::_helpers::signals::wait_for_signal;
@@ -21,14 +21,14 @@ use crate::contract::main::compare_contracts::compare_contracts;
 use crate::contract::main::render_contract::render_contract;
 use crate::contract::main::write_contracts::write_contracts;
 use crate::contract::models::{ContractReport, ContractRequest};
-use crate::loader::constants::NO_PYTHON_HOST;
-use crate::loader::main::apply_project::apply_project;
-use crate::loader::main::connect_targets::connect_targets;
-use crate::loader::main::debug_project::debug_project;
 use crate::load_events::main::close::close;
 use crate::load_events::main::emit::emit;
 use crate::load_events::main::listen::listen;
 use crate::load_events::models::EventKind;
+use crate::loader::constants::NO_PYTHON_HOST;
+use crate::loader::main::apply_project::apply_project;
+use crate::loader::main::connect_targets::connect_targets;
+use crate::loader::main::debug_project::debug_project;
 use crate::loader::main::failing_sources::failing_sources;
 use crate::loader::main::json_report::json_report;
 use crate::loader::main::load_tables::load_tables;
@@ -252,7 +252,9 @@ async fn run_command(
     );
     let started = (chrono::Utc::now(), std::time::Instant::now());
     if !loads && (args.events.is_some() || args.events_file.is_some()) {
-        return Err("--events and --events-file apply to load only".to_owned().into());
+        return Err("--events and --events-file apply to load only"
+            .to_owned()
+            .into());
     }
     let events = match (args.events, &args.events_file) {
         (Some(EventsFormat::Jsonl), _) => Some(EventsTarget::Stderr),
@@ -413,7 +415,11 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
     let receiver = listen(&uuid::Uuid::new_v4().to_string());
     let width = load.output.name_width;
     let mut first: Vec<String> = vec![String::new()];
-    first.extend(load.applied.iter().map(|line| change_tally_line(line, width)));
+    first.extend(
+        load.applied
+            .iter()
+            .map(|line| change_tally_line(line, width)),
+    );
     let print = load.output.print;
     let no_color = load.output.no_color;
     let mut kept: Vec<String> = Vec::new();
@@ -433,10 +439,7 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
     let outcomes = load_tables(load.run, load.plan, None).await;
     let completed = outcomes.iter().all(|outcome| outcome.loaded.is_ok());
     let retryable = outcomes.iter().all(TableOutcome::passes_on_rerun);
-    let code = exit_code(
-        load.planned.0 && completed,
-        load.planned.1 && retryable,
-    );
+    let code = exit_code(load.planned.0 && completed, load.planned.1 && retryable);
     let elapsed_ms = u64::try_from(load.started.1.elapsed().as_millis()).unwrap_or(u64::MAX);
     let count = |loaded: bool, skipped: bool| {
         outcomes
@@ -474,9 +477,9 @@ fn name_width(plan: &ProjectPlan, applied: &[String]) -> usize {
         .iter()
         .filter(|table| table.schema.blocked.is_none())
         .map(|table| table.outcome_name().len());
-    let objects = applied.iter().map(|line| {
-        line.split_whitespace().nth(1).map_or(0, str::len)
-    });
+    let objects = applied
+        .iter()
+        .map(|line| line.split_whitespace().nth(1).map_or(0, str::len));
     tables.chain(objects).max().unwrap_or(0) + 2
 }
 
@@ -498,7 +501,10 @@ fn follow_refused(project: &ProjectConfig, plan: &ProjectPlan) -> String {
     }));
     let leave_out = match ways.is_empty() {
         true => String::new(),
-        false => format!(", or leave them out to follow the rest: {}", ways.join("; ")),
+        false => format!(
+            ", or leave them out to follow the rest: {}",
+            ways.join("; ")
+        ),
     };
     format!(
         "✗ load --follow did not start: it follows only when every selected source and table plans, since the replication slot would move past the changes of one left out; fix the errors above{leave_out}"

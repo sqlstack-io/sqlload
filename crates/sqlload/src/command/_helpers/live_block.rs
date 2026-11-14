@@ -90,7 +90,9 @@ impl LiveState {
                     running.committing = true;
                 }
             }
-            EventKind::RateLimited { connection, rate, .. } => {
+            EventKind::RateLimited {
+                connection, rate, ..
+            } => {
                 self.rates
                     .insert(connection.clone(), (rate.clone(), Some(at)));
             }
@@ -128,7 +130,12 @@ pub(crate) fn live_lines(
 ) -> Vec<String> {
     let width = width.min(MAX_WIDTH);
     let spinner = SPINNER[frame % SPINNER.len()];
-    let rows = state.finished_rows + state.running.iter().map(|running| running.rows).sum::<u64>();
+    let rows = state.finished_rows
+        + state
+            .running
+            .iter()
+            .map(|running| running.rows)
+            .sum::<u64>();
     let bar_width = width.saturating_sub(HEADER_TEXT).max(10);
     let filled = match state.total {
         0 => bar_width,

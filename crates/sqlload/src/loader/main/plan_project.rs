@@ -10,7 +10,8 @@ use crate::loader::_helpers::destination::{
 };
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::sources::{
-    admit_tables, destination_names, found_sources, selected, source_ends, unmatched_selectors,
+    admit_tables, destination_names, found_sources, selected, source_ends, spec_names,
+    unmatched_selectors,
 };
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::table_plan::block_refused_bounds;
@@ -42,13 +43,16 @@ pub async fn plan_project(
             plan.failed_sources.insert(source_name.clone());
         }
         plan.problems.extend(resolved.problems);
+        plan.problem_names.extend(resolved.problem_names);
         plan.warnings.extend(resolved.warnings);
         plan.skipped.extend(resolved.skipped);
         let unknown = !unresolved.is_empty() && files.is_none();
         let shared =
             mark_shared_destinations(std::mem::take(&mut resolved.specs), &configured, unknown);
-        plan.warnings
-            .extend(unknown_sharing(&shared, &configured, &unresolved));
+        if let Some(sharing) = unknown_sharing(&shared, &configured, &unresolved) {
+            plan.warnings.push(sharing.warning.clone());
+            plan.unread_sharing.push(sharing);
+        }
         let specs = source_ends(project, (source_name, source), shared, options).await?;
         let (planned, unselected) = planned_tables(
             project,
@@ -85,8 +89,7 @@ async fn planned_tables(
     for mut spec in specs {
         spec.files = files.clone();
         spec.python = module.map(|module| python_table(module, &spec.source_table));
-        let qualified = spec.source_table.qualified_name();
-        if !selected(options, (source_name, &spec.destination.table, &qualified)) {
+        if !selected(options, (source_name, &spec_names(&spec))) {
             unselected.push(spec);
             continue;
         }
@@ -105,7 +108,7 @@ async fn planned_tables(
 /// The plan with a warning for each selector matching none of the `configured` tables, every selected files table blocked whose folder clashes with any other configured table's, every selected table blocked whose destination table it shares with configured tables it could remove or overwrite rows of (see [`block_shared_destinations`]), and every cursor table blocked when a cursor range meets cursors of different kinds.
 fn block_conflicts(
     mut plan: ProjectPlan,
-    (claims, configured, drained): (&[FolderClaim], &[TableSpec], &[(String, String)]),
+    (claims, configured, drained): (&[FolderClaim], &[TableSpec], &[String]),
     (project, options): (&ProjectConfig, &PlanOptions),
 ) -> ProjectPlan {
     let mut names = destination_names(configured);

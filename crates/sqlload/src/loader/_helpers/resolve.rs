@@ -1,3 +1,4 @@
+use crate::adapters::contract::models::TableName;
 use crate::adapters::dispatch::main::dialect::connection_warehouse::connection_warehouse;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
@@ -50,6 +51,18 @@ pub(crate) fn resolve_tables(
             source,
             target: &target,
         };
+        let shown = || {
+            let rule = (
+                table_naming((&overrides.settings, &source.defaults), target.naming),
+                sql_adapter(target.warehouse).max_identifier_length(),
+            );
+            let name = table_name(
+                (source_name, source),
+                overrides.name.as_deref(),
+                (table, rule),
+            );
+            target_display_name(&target, name)
+        };
         match resolve_table(&context, table, &overrides) {
             Ok(Ok(mut spec)) => {
                 let query = overrides.sql.is_some();
@@ -72,13 +85,19 @@ pub(crate) fn resolve_tables(
             Ok(Err(reason)) => resolved.skipped.push(SkippedTable {
                 source_name: source_name.to_owned(),
                 source_table: qualified,
+                destination: shown(),
                 reason,
             }),
-            Err(problems) => resolved.problems.extend(
-                problems
-                    .into_iter()
-                    .map(|problem| format!("{qualified}: {problem}")),
-            ),
+            Err(problems) => {
+                let destination = shown();
+                for problem in problems {
+                    let problem = format!("{qualified}: {problem}");
+                    resolved
+                        .problem_names
+                        .push((problem.clone(), destination.clone()));
+                    resolved.problems.push(problem);
+                }
+            }
         }
     }
     resolved
@@ -257,6 +276,26 @@ pub(crate) fn source_target(
         path: None,
         naming: target.naming,
     })
+}
+
+/// The name `plan` shows table `name` of `target` by: `schema.table` as the warehouse displays it, or the table alone in a files target, which has no schema.
+pub(crate) fn target_display_name(target: &ResolvedTarget, name: String) -> String {
+    display_name(
+        target.warehouse,
+        &TableName {
+            database: target.database.clone(),
+            schema: target.schema.clone(),
+            table: name,
+        },
+    )
+}
+
+/// The name `plan` shows `table` of a `warehouse` by: `schema.table` as the warehouse displays it, or the table alone where it has no schema (a files target).
+pub(crate) fn display_name(warehouse: Warehouse, table: &TableName) -> String {
+    match table.schema.is_empty() {
+        true => table.table.clone(),
+        false => sql_adapter(warehouse).render_display_name(table),
+    }
 }
 
 /// How a table's names load: its naming and its destination's name limit.

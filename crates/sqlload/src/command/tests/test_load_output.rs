@@ -1,4 +1,4 @@
-use crate::command::_helpers::load_output::{event_lines, summary_lines, Tally};
+use crate::command::_helpers::load_output::{Tally, event_lines, summary_lines};
 use crate::command::tests::test_types::LoadOutputTestCase;
 use crate::load_events::constants::EVENTS_SCHEMA_VERSION;
 use crate::load_events::models::{EventKind, LoadEvent};
