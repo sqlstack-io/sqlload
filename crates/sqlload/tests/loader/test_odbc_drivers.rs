@@ -2,8 +2,8 @@ use sqlload_testkit::odbc_servers::main::start_odbc_server::start_odbc_server;
 use sqlload_testkit::odbc_servers::models::OdbcDatabase;
 
 use crate::helpers::{duckdb_text, run_async, run_sqlload};
-use crate::odbc_helpers::{driver_project, odbc_execute};
-use crate::test_types::OdbcDriverTestCase;
+use crate::odbc_helpers::{driver_project, keyless_project, odbc_execute};
+use crate::test_types::{OdbcDriverTestCase, OdbcKeylessTestCase};
 
 const TABLES: &str = "SELECT (SELECT string_agg(id::VARCHAR, ',' ORDER BY id) || ' to ' || strftime(max(happened_at), '%Y-%m-%d %H:%M:%S.%g') FROM raw.erp__events) || ' | ' || (SELECT string_agg(id::VARCHAR, ',' ORDER BY id) || ' to ' || max(opened)::VARCHAR FROM raw.erp__days)";
 
@@ -131,6 +131,106 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
                 duckdb_text(&database, TABLES)?,
                 test_case.expected_tables.1,
                 "{}, second load: the event at .996 is before the maximum and the day 2026-01-31 is read again",
+                test_case.description
+            );
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+#[test]
+fn given_each_odbc_driver_when_cursor_tables_have_no_reported_primary_key_then_plan_refuses_them_and_names_the_keys_the_database_lists()
+-> Result<(), String> {
+    let test_cases = [
+        OdbcKeylessTestCase {
+            description: "SQL Server through Microsoft's ODBC Driver 18: a table without a key, and one with only a unique constraint on a NOT NULL column, suggested as its unique_key",
+            database: OdbcDatabase::SqlServer,
+            driver: ("", ""),
+            tables: ("erp.logs", "erp.codes"),
+            setup: &[
+                "CREATE SCHEMA erp",
+                "CREATE TABLE erp.logs (id int, at datetime2(3) NOT NULL)",
+                "CREATE TABLE erp.codes (code varchar(10) NOT NULL UNIQUE, at datetime2(3) NOT NULL)",
+            ],
+            expected_reasons: &[
+                "erp.logs (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column\n",
+                "erp.codes (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists UNIQUE (code)\n",
+                "fix     set unique_key (unique_key = [\"code\"]) to merge on it, or choose write_strategy = \"delete_insert\" or \"append\"",
+            ],
+            absent: &[],
+        },
+        OdbcKeylessTestCase {
+            description: "Postgres through psqlODBC: a table without a key, and one with only a unique constraint on a nullable column, named but not suggested, as a merge would insert its NULL rows again",
+            database: OdbcDatabase::Postgres,
+            driver: ("", ""),
+            tables: ("erp.logs", "erp.codes"),
+            setup: &[
+                "CREATE SCHEMA erp",
+                "CREATE TABLE erp.logs (id int, at timestamp(3) NOT NULL)",
+                "CREATE TABLE erp.codes (code varchar(10) UNIQUE, at timestamp(3) NOT NULL)",
+            ],
+            expected_reasons: &[
+                "erp.logs (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column\n",
+                "erp.codes (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists UNIQUE (code)\n",
+            ],
+            absent: &["unique_key = ["],
+        },
+        OdbcKeylessTestCase {
+            description: "MySQL through Connector/ODBC, which reports a unique index as the primary key, so only the table without a key is refused",
+            database: OdbcDatabase::MySql,
+            driver: ("", ""),
+            tables: ("logs", "codes"),
+            setup: &[
+                "CREATE TABLE logs (id int, at DATETIME(3) NOT NULL)",
+                "CREATE TABLE codes (code varchar(10) UNIQUE, at DATETIME(3) NOT NULL)",
+            ],
+            expected_reasons: &[
+                "logs (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column\n",
+                "Errors (1)",
+            ],
+            absent: &[],
+        },
+        OdbcKeylessTestCase {
+            description: "MySQL 8.4 through MariaDB Connector/ODBC 3.1, which reports no primary key from MySQL 8.4 (it compares COLUMN_KEY with 'pri'): its key, which INFORMATION_SCHEMA lists under the database as the schema, is named instead of the table silently taking delete_insert",
+            database: OdbcDatabase::MySql,
+            driver: ("MySQL ODBC Unicode Driver", "MariaDB Unicode"),
+            tables: ("logs", "items"),
+            setup: &[
+                "CREATE TABLE logs (id int, at DATETIME(3) NOT NULL)",
+                "CREATE TABLE items (id int PRIMARY KEY, at DATETIME(3) NOT NULL)",
+            ],
+            expected_reasons: &[
+                "logs (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column\n",
+                "items (kind = \"odbc\"): no primary key found and no unique_key set for a table with a cursor_column. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists PRIMARY KEY (id), so the driver's key lookup is wrong (MariaDB Connector/ODBC 3.1 finds none in MySQL 8.4)\n",
+                "fix     set unique_key (unique_key = [\"id\"]) to merge on it",
+            ],
+            absent: &[],
+        },
+    ];
+    for test_case in test_cases {
+        run_async(async {
+            let server = start_odbc_server(test_case.database).await?;
+            odbc_execute(&server.connection_string, test_case.setup)?;
+            let (tested, other) = test_case.driver;
+            let connection_string = server.connection_string.replace(tested, other);
+            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let database = folder.path().join("out.duckdb");
+            let config = folder.path().join("sqlload.toml");
+            std::fs::write(
+                &config,
+                keyless_project(&connection_string, test_case.tables, &database),
+            )
+            .map_err(|error| error.to_string())?;
+            let (succeeded, output) = run_sqlload(&config, &["plan"], ("", ""))?;
+            assert!(
+                !succeeded
+                    && test_case
+                        .expected_reasons
+                        .iter()
+                        .all(|reason| output.contains(reason))
+                    && !test_case.absent.iter().any(|text| output.contains(text)),
+                "{}:\n{output}",
                 test_case.description
             );
             Ok(())

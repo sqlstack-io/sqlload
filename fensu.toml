@@ -31,6 +31,12 @@ reason = "SftpLink holds russh-sftp's session and russh's session handle, which 
 
 
 [[targets.rust.rule_exceptions]]
+rule = "FPRSH005"
+path = "crates/sqlload/src/odbc_source/_helpers/catalog.rs"
+symbols = ["listed_keys"]
+reason = "The keys INFORMATION_SCHEMA lists only explain plan's error for a table whose driver reports no primary key; a database without INFORMATION_SCHEMA, or one answering with an error or a name that is not UTF-8, gets the error without them rather than failing the catalog read."
+
+[[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/parity/main/comparison_sql.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."

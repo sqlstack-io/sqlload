@@ -146,6 +146,9 @@ or an archive naming two members alike, fails.
 | `replace` | Every file, swapped in as a new table. |
 | `merge` with a `unique_key` (from 0.38.0) | Only files not merged yet, one at a time, oldest modified first. |
 
+From 0.44.0, a files source with a `cursor_column` and no `unique_key` needs `write_strategy`, set
+to `delete_insert` or `append`: `plan` refuses it otherwise, where it took `delete_insert` before.
+
 ```console
 $ sqlload load
 …

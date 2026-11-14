@@ -63,6 +63,7 @@ fn orders(_: &crate::project::models::SourceConfig) -> Vec<SourceTable> {
         estimated_rows: -1,
         estimated_bytes: -1,
         comment: None,
+        listed_keys: Vec::new(),
     }]
 }
 

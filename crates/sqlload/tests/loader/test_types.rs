@@ -984,6 +984,21 @@ pub(crate) struct OdbcDriverTestCase {
     pub(crate) expected_tables: (&'static str, &'static str),
 }
 
+pub(crate) struct OdbcKeylessTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) database: sqlload_testkit::odbc_servers::models::OdbcDatabase,
+    /// The driver name in the server's connection string and the one SQLLoad reads through instead; both empty to keep it.
+    pub(crate) driver: (&'static str, &'static str),
+    /// Both tables, each with an `at` cursor column, as the source's `include` names them.
+    pub(crate) tables: (&'static str, &'static str),
+    /// Statements creating both tables.
+    pub(crate) setup: &'static [&'static str],
+    /// Text the failed `plan` must show: each refused table's reason, ending its line, and fixes.
+    pub(crate) expected_reasons: &'static [&'static str],
+    /// Text it must not show.
+    pub(crate) absent: &'static [&'static str],
+}
+
 pub(crate) struct SheetsUserTestCase {
     pub(crate) description: &'static str,
     /// The connection's `refresh_token`.

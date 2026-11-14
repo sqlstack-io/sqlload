@@ -15,7 +15,9 @@ use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
-use crate::loader::constants::{DEFAULT_MAX_DEPTH, ODBC_SOURCE, SNOWFLAKE_SOURCE, UNNEST_ALL};
+use crate::loader::constants::{
+    DEFAULT_MAX_DEPTH, ODBC_SOURCE, PRIMARY_KEY, SNOWFLAKE_SOURCE, UNNEST_ALL,
+};
 use crate::loader::models::{
     CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
 };
@@ -161,13 +163,14 @@ pub(crate) fn build_spec(
     let cursor = cursor(settings, defaults);
     let unique_key = layered(&settings.unique_key, &defaults.unique_key)
         .map_or_else(|| table.primary_key.clone(), |(key, _)| key);
-    let (strategy, strategy_origin) = layered(&settings.write_strategy, &defaults.write_strategy)
-        .unwrap_or_else(|| {
-            (
-                default_strategy(cursor.as_ref(), !unique_key.is_empty()),
-                SettingOrigin::Default,
-            )
-        });
+    let (strategy, strategy_origin) = match (
+        layered(&settings.write_strategy, &defaults.write_strategy),
+        default_strategy(cursor.as_ref(), !unique_key.is_empty()),
+    ) {
+        (Some(set), _) => set,
+        (None, Some(strategy)) => (strategy, SettingOrigin::Default),
+        (None, None) => return Err(vec![missing_key_problem(context, table)]),
+    };
     let cdc = cdc_spec(context);
     let (strategy, mut problems) = match &cdc {
         Some(cdc) if !sql_adapter(context.target.warehouse).captures_changes(cdc.apply) => (
@@ -751,13 +754,64 @@ pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<Cu
     })
 }
 
-/// The default strategy: full replace without a cursor, merge with a cursor and key, delete_insert with a cursor alone.
-pub(crate) fn default_strategy(cursor: Option<&CursorSpec>, has_key: bool) -> WriteStrategy {
+/// The default strategy: full replace without a cursor, merge with a cursor and key; none with a cursor alone, as `delete_insert` and `append` would each load an updated row again, so the table must choose.
+pub(crate) fn default_strategy(
+    cursor: Option<&CursorSpec>,
+    has_key: bool,
+) -> Option<WriteStrategy> {
     match (cursor, has_key) {
-        (None, _) => WriteStrategy::Replace,
-        (Some(_), true) => WriteStrategy::Merge,
-        (Some(_), false) => WriteStrategy::DeleteInsert,
+        (None, _) => Some(WriteStrategy::Replace),
+        (Some(_), true) => Some(WriteStrategy::Merge),
+        (Some(_), false) => None,
     }
+}
+
+/// Why a table with a cursor and no key has no write strategy, naming the keys the database lists though its driver reported no primary key (a listed primary key means the driver's key lookup is wrong), and suggesting the first whose columns are never NULL, as a merge inserts rows with a NULL key again.
+fn missing_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> String {
+    let shown: Vec<String> = table
+        .listed_keys
+        .iter()
+        .map(|key| format!("{} ({})", key.constraint_type, key.columns.join(", ")))
+        .collect();
+    let listed = match table.listed_keys.first() {
+        None => String::new(),
+        Some(first) => format!(
+            ". The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists {}{}",
+            shown.join(" and "),
+            match first.constraint_type == PRIMARY_KEY {
+                true =>
+                    ", so the driver's key lookup is wrong (MariaDB Connector/ODBC 3.1 finds none in MySQL 8.4)",
+                false => "",
+            }
+        ),
+    };
+    let never_null: BTreeSet<&str> = table
+        .columns
+        .iter()
+        .filter(|column| !column.nullable)
+        .map(|column| column.name.as_str())
+        .collect();
+    let example = table
+        .listed_keys
+        .iter()
+        .find(|key| {
+            key.columns
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<&str>>()
+                .is_subset(&never_null)
+        })
+        .map(|key| format!(" (unique_key = {:?})", key.columns))
+        .unwrap_or_default();
+    let fix = match context.source.kind {
+        SourceKind::Files => "choose write_strategy = \"delete_insert\", which replaces the partitions of the cursor values it reads, or \"append\"; a files source's merge takes no cursor_column".to_owned(),
+        _ => format!("set unique_key{example} to merge on it, or choose write_strategy = \"delete_insert\" or \"append\" if that is what you want; either can load a row updated since an earlier load again, beside its old version"),
+    };
+    format!(
+        "{} (kind = \"{}\"): no primary key found and no unique_key set for a table with a cursor_column{listed}. Fix: {fix}",
+        table.qualified_name(),
+        context.source.kind.name()
+    )
 }
 
 /// The `dedup_sort` column and direction of a merge, and the problems with `on_duplicate_keys` and `dedup_sort` (a source's apply only to its merge tables, and either one set on a table drops the other from its source): both are for `merge`, `dedup_sort` names one column that is neither in the key nor masked, and has nothing to pick under `on_duplicate_keys = "fail"`.

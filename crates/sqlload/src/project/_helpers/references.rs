@@ -118,7 +118,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         Some(connection) if !kinds.contains(&connection.kind()) => {
             problems.push(format!(
                 "{place} has kind = {:?} but connection {:?} is a {} connection (expected {expected})",
-                source_kind_name(source.kind),
+                source.kind.name(),
                 source.connection,
                 connection.kind()
             ));
@@ -161,19 +161,6 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         problems.extend(cdc_name_problems(&place, name, source));
     }
     problems
-}
-
-fn source_kind_name(kind: SourceKind) -> &'static str {
-    match kind {
-        SourceKind::Postgres => "postgres",
-        SourceKind::PostgresCdc => "postgres_cdc",
-        SourceKind::Files => "files",
-        SourceKind::Snowflake => "snowflake",
-        SourceKind::Odbc => "odbc",
-        SourceKind::BigQuery => "bigquery",
-        SourceKind::Python => "python",
-        SourceKind::GoogleSheets => "google_sheets",
-    }
 }
 
 /// A Python source reading a connection a warehouse target loads into, whose credentials Python code must never get (a files target's s3 or filesystem connection may be shared).

@@ -37,3 +37,10 @@ pub const LEGACY_DATETIME_DIGITS: std::ops::RangeInclusive<i16> = 1..=3;
 
 /// The fractional digits of a SQL Server timestamp bound sent as text when the driver can't describe its parameter: `datetime2`'s seven, which a legacy `datetime` refuses rather than rounds.
 pub const TIMESTAMP_TEXT_DIGITS: u16 = 7;
+
+/// The primary key and unique constraints the database's `INFORMATION_SCHEMA` lists for one table (schema, then name, bound), a constraint's columns in order: what a table's driver should have reported as its key.
+pub const LISTED_KEYS_QUERY: &str = "SELECT tc.CONSTRAINT_TYPE, tc.CONSTRAINT_NAME, kcu.COLUMN_NAME \
+FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc \
+JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu ON kcu.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA AND kcu.TABLE_NAME = tc.TABLE_NAME \
+WHERE tc.CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE') AND tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ? \
+ORDER BY tc.CONSTRAINT_TYPE, tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION";

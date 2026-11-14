@@ -131,3 +131,41 @@ write_strategy = "delete_insert"
         database = database.display(),
     )
 }
+
+/// A project reading both tables through `connection_string` into DuckDB, each with an `at` cursor and neither a `unique_key` nor a `write_strategy`.
+pub(crate) fn keyless_project(
+    connection_string: &str,
+    (first, second): (&str, &str),
+    database: &std::path::Path,
+) -> String {
+    format!(
+        r#"
+[connections.erp]
+kind = "odbc"
+connection_string = "{connection_string}"
+
+[connections.local]
+kind = "duckdb"
+database = '{database}'
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.erp]
+kind = "odbc"
+connection = "erp"
+description = "Tables of a generic ERP."
+include = ["{first}", "{second}"]
+
+[sources.erp.tables."{first}"]
+description = "The first table, read after the newest at."
+cursor_column = "at"
+
+[sources.erp.tables."{second}"]
+description = "The second table, read after the newest at."
+cursor_column = "at"
+"#,
+        database = database.display(),
+    )
+}

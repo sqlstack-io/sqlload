@@ -19,7 +19,25 @@ Without `write_strategy`, a table takes:
 |-----------|---------|
 | No `cursor_column` | `replace` |
 | A `cursor_column` and a key | `merge` |
-| A `cursor_column` and no key | `delete_insert` |
+| A `cursor_column` and no key | None: `plan` refuses the table |
+
+The key is the table's `unique_key`, or else the primary key its source reports. From 0.44.0, a
+table with a `cursor_column` and no key has no default, whatever its source: `plan` refuses it, so
+set `unique_key`, or choose `delete_insert` or `append` yourself (a files source: `delete_insert` or
+`append`, as its `merge` takes no `cursor_column`). Before 0.44.0 such a table took
+`delete_insert`, which loads a row updated after an earlier load again, as its old version is
+outside the cursor range it replaces; that went unnoticed when a driver failed to report a key the
+table has, as [MariaDB Connector/ODBC 3.1](/docs/sources/odbc/#mariadb-connectorodbc-31) does
+against MySQL 8.4.
+
+```console
+$ sqlload plan
+…
+Errors (1)
+└── public.page_views
+    ├── reason  public.page_views (kind = "postgres"): no primary key found and no unique_key set for a table with a cursor_column
+    └── fix     set unique_key to merge on it, or choose write_strategy = "delete_insert" or "append" if that is what you want; either can load a row updated since an earlier load again, beside its old version
+```
 
 `plan` shows each table's strategy next to its name, with its key or cursor, such as
 `merge (unique_key: order_id)` or `delete_insert (cursor: dt)`.
@@ -60,7 +78,7 @@ A files source under `append` loads each file once, by `_sqlload_source_file`.
 unique_key = ["order_id", "line_no"]
 ```
 
-A Postgres table's primary key is the default key. With a `cursor_column`, `merge` reads from the
+The primary key the source reports is the default key. With a `cursor_column`, `merge` reads from the
 destination's maximum (minus any `lookback`); without one, it reads the whole table each run.
 
 `merge` isn't available for files targets. A files source merges one file at a time; see
@@ -104,7 +122,9 @@ The plan line names the rule when it isn't the default, as in
 
 `delete_insert` replaces a cursor range: it deletes rows in the range it read, `[start, end)`, then
 inserts the rows. It needs a `cursor_column` and no key, so it suits tables without one, and
-`lookback` windows that re-read recent data:
+`lookback` windows that re-read recent data. A row updated after it was loaded is loaded again
+beside its old version unless the old one is in the range, so set it only where rows don't change
+or a `lookback` covers their changes; a table without a key never takes it by default:
 
 ```toml
 [sources.app.tables."public.page_views"]

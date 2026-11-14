@@ -102,6 +102,7 @@ pub(crate) fn listed_table((dataset, table): (String, String), found: &Value) ->
             false => -1,
         },
         comment: found["description"].as_str().map(str::to_owned),
+        listed_keys: Vec::new(),
     }
 }
 

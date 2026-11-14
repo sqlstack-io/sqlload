@@ -617,6 +617,22 @@ pub enum SourceKind {
     GoogleSheets,
 }
 
+impl SourceKind {
+    /// The kind as `kind` spells it in `sqlload.toml`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Postgres => "postgres",
+            Self::PostgresCdc => "postgres_cdc",
+            Self::Files => "files",
+            Self::Snowflake => "snowflake",
+            Self::Odbc => "odbc",
+            Self::BigQuery => "bigquery",
+            Self::Python => "python",
+            Self::GoogleSheets => "google_sheets",
+        }
+    }
+}
+
 /// The file formats a files target writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
