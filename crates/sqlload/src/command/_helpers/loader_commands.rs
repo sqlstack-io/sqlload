@@ -415,16 +415,26 @@ struct StreamedLoad<'a> {
     planned: (bool, bool),
 }
 
-/// Load `load.plan`, rendering its events as they come: each table's outcome, the lines not printed yet (the `created`/`altered` lines `apply` reported, each table's line as it finished, and the summary), and the exit code, the same as a load without events.
+/// Load `load.plan`, rendering its events as they come: each table's outcome, the lines not printed yet (the `created`/`altered` lines `apply` reported, each table's line as it finished, and the summary, which a load of no table leaves to the plan's closing line), and the exit code, the same as a load without events.
 async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String>, u8) {
     let receiver = listen(&uuid::Uuid::new_v4().to_string());
     let width = load.output.name_width;
-    let mut first: Vec<String> = vec![String::new()];
-    first.extend(
-        load.applied
-            .iter()
-            .map(|line| change_tally_line(line, width)),
-    );
+    let selected = load.plan.tables.len();
+    let to_load = load
+        .plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_none())
+        .count();
+    let mut first: Vec<String> = Vec::new();
+    if to_load > 0 || !load.applied.is_empty() {
+        first.push(String::new());
+        first.extend(
+            load.applied
+                .iter()
+                .map(|line| change_tally_line(line, width)),
+        );
+    }
     let print = load.output.print;
     let no_color = load.output.no_color;
     let mut kept: Vec<String> = Vec::new();
@@ -433,13 +443,6 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
         false => kept.extend(first),
     }
     let writer = tokio::spawn(write_events(load.output, receiver));
-    let selected = load.plan.tables.len();
-    let to_load = load
-        .plan
-        .tables
-        .iter()
-        .filter(|table| table.schema.blocked.is_none())
-        .count();
     emit(None, EventKind::RunStarted { selected, to_load });
     let outcomes = load_tables(load.run, load.plan, None).await;
     let completed = outcomes.iter().all(|outcome| outcome.loaded.is_ok());
@@ -470,8 +473,10 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
     close();
     let (lines, tally) = writer.await.unwrap_or_default();
     kept.extend(lines);
-    kept.push(String::new());
-    kept.extend(summary_lines(&tally, elapsed_ms, code));
+    if to_load > 0 {
+        kept.push(String::new());
+        kept.extend(summary_lines(&tally, elapsed_ms, code));
+    }
     (outcomes, kept, code)
 }
 

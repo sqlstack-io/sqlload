@@ -66,25 +66,63 @@ Objects (2)                                         sqlload apply
     └── + _sqlload_load_id, _loaded_at
 
 Loads (2)                                           sqlload load
-├── app__customers                                  merge (unique_key: customer_id ← {primary_key})
-│   ├── source  postgres  app  public.customers
-│   ├── route   read as Arrow -> DuckDB takes Arrow
-│   └── batch   about every 1 GB
-└── app__orders                                     merge (unique_key: order_id ← {primary_key})
+├── raw.app__customers                              merge (unique_key: customer_id ← {primary_key})
+│   └── source  postgres  app  public.customers
+└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
-    └── cursor  updated_at first run, everything
+    └── reads   updated_at: first run, everything
 
 ✓ Plan complete  2 selected, 2 objects to create, 2 to load
 ```
 
+Tables are named as they land, `schema.table`, and sorted by that name. A table read by cursor
+says where its read starts and when it commits:
+
+```console
+$ sqlload plan
+Plan ready  2 selected, 2 to load
+
+Loads (2)                                           sqlload load
+├── raw.app__customers                              merge (unique_key: customer_id ← {primary_key})
+│   └── source  postgres  app  public.customers
+└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
+    ├── source  postgres  app  public.orders
+    └── reads   updated_at >= 2026-11-01 16:40:00+00 (warehouse maximum)
+
+✓ Plan complete  2 selected, 2 to load
+```
+
+`reads` gives the cursor's bound (`>=` when the bound row is read again, `>` when it isn't) and
+where it comes from: the warehouse maximum, minus any `lookback`, `--start-cursor`, or a logged
+state. `commits` shows when the read doesn't commit the usual way.
+
+A plan of several tables leaves out the `route`, `why`, `batch` and `schema` lines most of its tables
+share. Select one table to see every line, with times to the millisecond:
+
+```console
+$ sqlload plan app__orders
+Plan ready  1 selected, 1 to load
+
+Loads (1)                                           sqlload load
+└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
+    ├── source  postgres  app  public.orders
+    ├── key     order_id, the primary key the source reports (unique_key = "{primary_key}")
+    ├── reads   updated_at >= 2026-11-01 16:40:00.000+00 (warehouse maximum)
+    ├── commits about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
+    └── route   read as Arrow -> DuckDB takes Arrow
+
+✓ Plan complete  1 selected, 1 to load
+```
+
+On a terminal, `plan` shows `Planning  checking sources, 1 of 3 done` while it reads catalogs, and
+clears it when the plan prints.
+
 | Section | Lists |
 |---------|-------|
 | `Objects` | Tables `apply` creates or alters: each column as its portable type `->` the warehouse type, then in brackets what that type loses, if anything (from 0.29.0; for an array, the array's own loss, then its elements' after `elements:`), added and widened columns, with the same note from 0.31.0, excluded and masked columns. |
-| `Loads` | Each table `load` loads, with its write strategy, and lines for `source`, `files`, `schema`, `route`, `batch`, `cursor`, `state` and `note`. |
-| `Skipped` | Tables left out on purpose, such as by `skip_tables_with_columns` or `new_tables = "skip"`, with the reason. |
-| `Errors` | Tables that can't load as configured, with the reason and the fix. |
+| `Loads` | Each table `load` loads, with its write strategy, and lines for `source`, `key`, `reads`, `commits`, `files`, `schema`, `route`, `why`, `batch` and `note`. |
+| `Skipped` | Tables left out on purpose, with the reason: a files table with no new file (`up to date: 0 new of 3 files in drop/orders/ (csv)`), or one left out by `skip_tables_with_columns` or `new_tables = "skip"`. `load` reads nothing for them. |
+| `Errors` | Tables that can't load as configured, with a short headline, the reason and the fix. A source that can't be read is one item, with what it holds up under `blocks`. |
 | `Warnings` | Tables that load, but slower or with less than you might expect. |
 
 A table under `Errors` is left out; the others still run, and the command exits 1.

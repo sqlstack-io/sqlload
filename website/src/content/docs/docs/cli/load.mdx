@@ -8,40 +8,55 @@ sqlload load [SELECTOR ...] [OPTIONS]
 ```
 
 `sqlload load` loads the selected tables, creating any that don't exist yet. It prints the
-[plan](/docs/cli/plan/) first, then a line per table. It takes the same
-[options](/docs/cli/plan/#options) as `plan`.
+[plan](/docs/cli/plan/)'s closing line and any errors and warnings, then a line per table as it
+finishes. It takes the same [options](/docs/cli/plan/#options) as `plan`.
 
 ## Loading
 
 ```console
 $ sqlload load
-…
-loaded   raw.app__customers  50 rows  0.0s
-loaded   raw.app__orders     1,000 rows  0.0s
+✓ Plan complete  2 selected, 2 objects to create, 2 to load   (sqlload plan shows the tree)
+
+created  raw.app__customers  6 columns
+created  raw.app__orders     7 columns
+loaded  raw.app__customers     50 rows 0.0s
+loaded  raw.app__orders     1,000 rows 0.0s
 
 ✓ Completed  2 loaded, 1,050 rows, 0.1s
+└── slowest      raw.app__orders 0.0s
 ```
 
-Each table prints `created`, `altered`, `loaded` or `failed`. A failed table doesn't stop the
-others; the summary counts them and the command exits 1, or 75 when every failure may pass on a
-rerun (see [Retrying failed runs](/docs/cli/#retrying-failed-runs)).
+Each table prints `created`, `altered`, `loaded` or `failed`; a `loaded` line ends with the
+table's new cursor position when it keeps one. A failed table doesn't stop the others. The summary
+counts them, names the slowest table, and after failures says what a rerun does. The command exits
+1, or 75 when every failure may pass on a rerun (see
+[Retrying failed runs](/docs/cli/#retrying-failed-runs)). A table the plan skips, such as a files
+table with no new file, isn't read.
+
+On a terminal, a live block under these lines shows how many tables are done, each running table
+with its rows so far, the tables waiting, and any `rate_limit` in use. It's redrawn in place and
+cleared at the end. See [Events](#events) for `--progress`.
 
 ### Stopping at the first failure
 
 From 0.43.0, `--fail-fast` stops the load once a table fails: no other table starts, and tables
-already loading finish and keep what they committed. Each table that never started prints
-`skipped` with the table that stopped the run, and the command exits as it would have otherwise: 1,
-or 75 when every table that failed, including any still loading when the first failed, may pass on a
-rerun. A rerun loads the skipped tables as usual.
+already loading finish and keep what they committed. The summary names the tables that never
+started under `not started`, and the command exits as it would have otherwise: 1, or 75 when every
+table that failed, including any still loading when the first failed, may pass on a rerun. A rerun
+loads the tables that didn't start as usual.
 
 ```console
 $ sqlload load --fail-fast --concurrency 2
 …
-failed   raw.shop__refunds  GET http://api.example.com/v1/refunds?page=3: HTTP 503: unavailable (after 4 attempts)
-loaded   raw.shop__orders   1,200 rows  0.4s
-skipped  raw.shop__returns  not started: --fail-fast stopped the load after raw.shop__refunds failed
+loaded  raw.shop__customers  400,000 rows 1.0s
+loaded  raw.shop__refunds    200,000 rows 0.3s
+failed  raw.shop__returns    checks.min_rows failed: 50,000 rows staged, fewer than the 100,000 required; nothing was published
+loaded  raw.shop__orders     3,000,000 rows 3.0s
 
-✗ Completed with failures  1 loaded, 1 failed, 1 skipped, 1,200 rows, 0.5s
+✗ Completed with failures  3 loaded, 1 failed, 1 not started, 3,600,000 rows, 3.1s
+├── not started  raw.shop__shipments (--fail-fast)
+├── slowest      raw.shop__orders 3.0s
+└── next         the 2 unchanged tables load; the 3 that committed carry on from their positions
 ```
 
 `--fail-fast` doesn't combine with `--follow`.
@@ -59,10 +74,12 @@ range](/docs/concepts/cursors/#backfilling-a-range).
 
 ```console
 $ sqlload load --reload --yes app__customers
-…
-loaded   raw.app__customers  50 rows  0.0s
+✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
+
+loaded  raw.app__customers     50 rows 0.0s
 
 ✓ Completed  1 loaded, 50 rows, 0.1s
+└── slowest      raw.app__customers 0.0s
 ```
 
 A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` refuses it. See
