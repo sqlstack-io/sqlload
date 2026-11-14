@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.47.0](https://github.com/sqlstack-io/sqlload/compare/v0.46.0...v0.47.0) (2026-11-14)
+
+
+### Features
+
+* **odbc:** write cursor bounds as ODBC escapes, bind them at the column's digits, and check them at plan ([#243](https://github.com/sqlstack-io/sqlload/issues/243)) ([58f3674](https://github.com/sqlstack-io/sqlload/commit/58f3674708bdb6ab629d6ee8cba181ee58eded9c))
+
 ## [0.46.0](https://github.com/sqlstack-io/sqlload/compare/v0.45.0...v0.46.0) (2026-11-14)
 
 
