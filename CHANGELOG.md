@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.46.0](https://github.com/sqlstack-io/sqlload/compare/v0.45.0...v0.46.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **load:** a loader table without write_strategy, on the table or its source, fails plan; before, it took replace without a cursor_column and merge with one and a key. A merge table without unique_key fails plan; before, it merged on the primary key the source reported. Set write_strategy, and unique_key = "{primary_key}" or the key columns.
+
+### Features
+
+* **load:** require an explicit write_strategy and merge key on every loader table ([#241](https://github.com/sqlstack-io/sqlload/issues/241)) ([a476490](https://github.com/sqlstack-io/sqlload/commit/a476490d0485324bc20cca1155866129d631dc2d))
+
 ## [0.45.0](https://github.com/sqlstack-io/sqlload/compare/v0.44.0...v0.45.0) (2026-11-14)
 
 
