@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.48.0](https://github.com/sqlstack-io/sqlload/compare/v0.47.0...v0.48.0) (2026-11-14)
+
+
+### Features
+
+* HTTP read-ahead, field parsing and row context, and `sqll` as a short name ([#245](https://github.com/sqlstack-io/sqlload/issues/245)) ([d481e69](https://github.com/sqlstack-io/sqlload/commit/d481e69bd8bf1cdca19f1f51c0b999fbe6a9a4bd))
+
 ## [0.47.0](https://github.com/sqlstack-io/sqlload/compare/v0.46.0...v0.47.0) (2026-11-14)
 
 
