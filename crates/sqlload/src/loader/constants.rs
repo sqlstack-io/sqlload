@@ -49,6 +49,15 @@ pub const PYTHON_COLUMN_TYPE: &str = "python";
 /// Why the standalone executable cannot run a project's Python sources.
 pub const NO_PYTHON_HOST: &str = "this project has Python sources (python_paths), which run only in the sqlload Python package's command; install it (for example `uv tool install sqlload`) and run its sqlload instead of the standalone executable";
 
+/// Why the standalone executable cannot run a `transform`; `{place}` names the source or table that sets it.
+pub const NO_TRANSFORM_HOST: &str = "{place} sets transform, which runs only in the sqlload Python package's command; install it (for example `uv tool install sqlload`) and run its sqlload instead of the standalone executable";
+
+/// The rows of a file or range a `transform` returned dicts for, from which a slow call gets the hint that Arrow or a DataFrame is faster.
+pub const DICT_HINT_ROWS: u64 = 100_000;
+
+/// How long a `transform` that returned dicts took, in milliseconds, from which a large file's call gets the hint that Arrow or a DataFrame is faster.
+pub const DICT_HINT_MILLISECONDS: u64 = 5_000;
+
 /// The cursor type a Python table function is told before the table's first load shows it.
 pub const UNKNOWN_CURSOR_TYPE: &str = "unknown";
 

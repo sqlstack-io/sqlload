@@ -201,6 +201,19 @@ pub struct TableSpec {
     pub layout: TableLayout,
     /// How the load names the columns it adds, and under dlt's naming its tables and columns.
     pub naming: Naming,
+    /// The Python function each file's (or Sheets range's) rows go through before they load; `None` without `transform`.
+    pub transform: Option<TableTransform>,
+}
+
+/// A table's `transform`: the Python function each file's (or Sheets range's) rows go through before they load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableTransform {
+    /// `module:function`.
+    pub function: String,
+    /// `module:function@` and a hash of the module's source.
+    pub version: String,
+    /// Whether the version differs from the one the table's last load recorded.
+    pub changed: bool,
 }
 
 /// A warehouse source's table: the query behind it, if any, and the route its warehouse reads it by.
@@ -292,6 +305,21 @@ pub struct FilesSource {
     pub notes: Vec<String>,
     /// `copy_to_internal_stage`: files no external stage reads are uploaded unchanged to an internal stage, and loaded from there by the warehouse.
     pub copy_to_internal_stage: bool,
+    /// How each file is read for its table's `transform`; `None` without one, when `table`'s columns are the files'.
+    pub transform: Option<FilesTransform>,
+}
+
+/// How a files table with a `transform` reads each file before the function runs; its source table's columns are then what the function returned for `sample` at plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesTransform {
+    /// The columns each file is read in: as stored (Parquet) or as the workbook holds them (xlsx), JSON's nested values as JSON and every other value as text.
+    pub input: Vec<DesiredColumn>,
+    /// Time and timestamp columns read at nanoseconds, as the files hold them.
+    pub nanos: Vec<String>,
+    /// What the files' keys and headers are checked against.
+    pub checks: TextChecks,
+    /// The file the function ran on at plan, as `_sqlload_source_file` names it.
+    pub sample: String,
 }
 
 /// A table that matched a source's selection but is not loaded.
@@ -704,6 +732,25 @@ pub struct TableLoaded {
     pub after_load: Option<AfterLoadReport>,
     /// The `replace_key` values a `delete_insert` replaced; `None` without a `replace_key`.
     pub replaced_keys: Option<ReplacedKeys>,
+    /// How long the table's `transform` took on each file or range, in the order they loaded.
+    pub transforms: Vec<crate::python_sources::models::TransformTime>,
+}
+
+/// What a load's reads need to run a table's `transform`: the host, and where each call's time goes.
+#[derive(Debug, Clone)]
+pub struct TransformRun {
+    pub host: std::sync::Arc<dyn PythonHost>,
+    pub times: std::sync::Arc<std::sync::Mutex<Vec<crate::python_sources::models::TransformTime>>>,
+}
+
+impl TransformRun {
+    /// A run of `host`'s transforms, no call timed yet.
+    pub fn new(host: std::sync::Arc<dyn PythonHost>) -> Self {
+        Self {
+            host,
+            times: std::sync::Arc::default(),
+        }
+    }
 }
 
 /// The `replace_key` values whose rows a table's `delete_insert` replaced, as `load --json` reports them.
@@ -1153,6 +1200,9 @@ pub struct TableResult {
     /// The `replace_key` values its `delete_insert` replaced; left out without a `replace_key`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replaced_keys: Option<ReplacedKeys>,
+    /// How long the table's `transform` took on each file or range; left out without one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub transforms: Vec<crate::python_sources::models::TransformTime>,
 }
 
 /// Why a source's tables could not be listed, and whether a rerun may get past it.

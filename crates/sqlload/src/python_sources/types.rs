@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use arrow_array::RecordBatch;
+use arrow_schema::SchemaRef;
 
 use crate::python_sources::errors::ReadError;
-use crate::python_sources::models::{PythonSource, TableRead};
+use crate::python_sources::models::{PythonSource, TableRead, TransformCall, Transformed};
 
 /// What a table function's read gives next.
 #[derive(Debug)]
@@ -14,7 +15,7 @@ pub enum Streamed {
 }
 
 /// A table function's data, one Arrow batch at a time; `next_batch` blocks.
-pub trait BatchStream: Send {
+pub trait BatchStream: Send + std::fmt::Debug {
     /// The next batch or state, an error, or `None` at the end.
     fn next_batch(&mut self) -> Option<Result<Streamed, ReadError>>;
 }
@@ -27,6 +28,15 @@ pub trait PythonHost: Send + Sync + std::fmt::Debug {
     fn read_table(&self, request: &TableRead) -> Result<Box<dyn BatchStream>, String>;
     /// The position the table function last started for `table` left in `ctx.state`, as JSON text; `None` when it set none.
     fn table_state(&self, table: &str) -> Result<Option<String>, String>;
+    /// Import a `transform` function (`module:function`, the module as discovery imported it) and check it can run: its version, `module:function@` and a hash of the module's source, or why it cannot.
+    fn transform_version(&self, function: &str) -> Result<String, String>;
+    /// Call a `transform` function on `rows` (in `schema`) and stream what it returned, crossed as a table function's yields are.
+    fn transform(
+        &self,
+        call: &TransformCall,
+        rows: Vec<RecordBatch>,
+        schema: SchemaRef,
+    ) -> Result<Transformed, String>;
     /// Close the clients the run built.
     fn finish(&self);
 }

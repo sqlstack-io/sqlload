@@ -464,9 +464,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             ),
         },
     };
-    let source = match &spec.tunnel {
-        Some(route) => format!("{source}  via {route}"),
-        None => source,
+    let source = match (&spec.tunnel, &spec.transform) {
+        (Some(route), _) => format!("{source}  via {route}"),
+        (None, Some(transform)) => format!("{source}  transform {}", transform.function),
+        (None, None) => source,
     };
     let mut details = vec![detail("source", source)];
     details.extend(
@@ -648,6 +649,12 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             format!("logged: {}", describe_state(logged.current.as_ref())),
         )
     }));
+    details.extend(
+        spec.transform
+            .iter()
+            .filter(|transform| transform.changed)
+            .map(|_| detail("", "transform  changed since the last load")),
+    );
     details.extend(
         table
             .output
@@ -1016,7 +1023,7 @@ pub(crate) fn text_view(plan: &ProjectPlan) -> PlanView {
     sections(plan, true)
 }
 
-/// Why a files table that exists and has no new file to read is skipped, as `up to date: 0 new of 3 files in drop/stock_counts/ (csv in ZIP archives)`; `None` for any other table, for one with a schema change or an unfinished load to repair, and for a `delete_insert` over a `--start-cursor`/`--end-cursor` range (`ranged`), which clears that range even with no file in it.
+/// Why a files table that exists and has no new file to read is skipped, as `up to date: 0 new of 3 files in drop/stock_counts/ (csv in ZIP archives)`; `None` for any other table, for one with a schema change, an unfinished load to repair or a `transform` changed since its last load, and for a `delete_insert` over a `--start-cursor`/`--end-cursor` range (`ranged`), which clears that range even with no file in it.
 pub(crate) fn up_to_date(table: &TablePlan, ranged: bool) -> Option<String> {
     let (source, read) = table.spec.files.as_ref().zip(table.files.as_ref())?;
     let incremental =
@@ -1026,7 +1033,15 @@ pub(crate) fn up_to_date(table: &TablePlan, ranged: bool) -> Option<String> {
             .output
             .as_ref()
             .is_none_or(|output| output.pending.is_empty());
-    if !settled || ranged && matches!(table.mode, WriteMode::DeleteInsert { .. }) {
+    let transform_changed = table
+        .spec
+        .transform
+        .as_ref()
+        .is_some_and(|transform| transform.changed);
+    if !settled
+        || transform_changed
+        || ranged && matches!(table.mode, WriteMode::DeleteInsert { .. })
+    {
         return None;
     }
     (incremental && read.files.is_empty()).then(|| {
@@ -1343,6 +1358,10 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
         replaced_keys: match &outcome.loaded {
             Ok(loaded) => loaded.replaced_keys.clone(),
             Err(_) => None,
+        },
+        transforms: match &outcome.loaded {
+            Ok(loaded) => loaded.transforms.clone(),
+            Err(_) => Vec::new(),
         },
     }
 }

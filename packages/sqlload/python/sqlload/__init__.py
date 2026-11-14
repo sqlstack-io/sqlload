@@ -48,13 +48,14 @@ from sqlload._http import (
 	page_number,
 	single,
 )
-from sqlload._declare import Context, Source, Table, source, table
+from sqlload._declare import Context, FileContext, Source, Table, source, table
 
 __version__: str = version("sqlload")
 
 __all__ = [
 	"Cells",
 	"Context",
+	"FileContext",
 	"Http",
 	"Job",
 	"Source",

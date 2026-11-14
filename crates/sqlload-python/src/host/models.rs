@@ -1,19 +1,20 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use arrow_array::RecordBatch;
+use arrow_pyarrow::{IntoPyArrow, Table};
+use arrow_schema::SchemaRef;
+use pyo3::exceptions::PyValueError;
 use pyo3::types::PyAnyMethods;
-use pyo3::{PyResult, Python};
+use pyo3::{Bound, PyAny, PyResult, Python};
 use sqlload::python_sources::errors::ReadError;
-use sqlload::python_sources::models::{PythonSource, TableRead};
+use sqlload::python_sources::models::{PythonSource, TableRead, TransformCall, Transformed};
 use sqlload::python_sources::types::{BatchStream, PythonHost, Streamed};
 
-use crate::bindings::constants::{
-    DEFAULT_BATCH_ROWS, DEFAULT_DICT_CROSSING, DEFAULT_MAX_QUEUED, DEFAULT_MAX_QUEUED_BYTES,
-};
 use crate::crossing::errors::CrossError;
-use crate::crossing::main::default_parse_threads::default_parse_threads;
 use crate::crossing::main::table_batches::table_batches;
-use crate::crossing::models::{CrossingOptions, Polled, ReadContext, TableBatches};
+use crate::crossing::models::{Polled, ReadContext, TableBatches};
+use crate::host::_helpers::crossing::crossing_options;
 use crate::host::_helpers::python_errors::{error_text, read_error};
 use crate::host::constants::RUNTIME_MODULE;
 
@@ -39,14 +40,7 @@ impl PythonHost for ExtensionHost {
 
     fn read_table(&self, request: &TableRead) -> Result<Box<dyn BatchStream>, String> {
         let text = serde_json::to_string(request).map_err(|error| error.to_string())?;
-        let options = CrossingOptions {
-            batch_rows: DEFAULT_BATCH_ROWS,
-            max_queued: DEFAULT_MAX_QUEUED,
-            dict_crossing: DEFAULT_DICT_CROSSING,
-            parse_threads: default_parse_threads(),
-            panic_at: None,
-            max_queued_bytes: DEFAULT_MAX_QUEUED_BYTES,
-        };
+        let options = crossing_options();
         Python::attach(|py| -> PyResult<TableBatches> {
             let runtime = py.import(RUNTIME_MODULE)?;
             let iterator = runtime.call_method1("start_table", (text,))?;
@@ -83,6 +77,56 @@ impl PythonHost for ExtensionHost {
                 .extract()
         })
         .map_err(|error| error_text(&error))
+    }
+
+    fn transform_version(&self, function: &str) -> Result<String, String> {
+        let checked = Python::attach(|py| -> PyResult<(Option<String>, Option<String>)> {
+            py.import(RUNTIME_MODULE)?
+                .call_method1("transform_version", (function,))?
+                .extract()
+        })
+        .map_err(|error| error_text(&error))?;
+        match checked {
+            (Some(version), _) => Ok(version),
+            (None, problem) => Err(problem.unwrap_or_else(|| format!("{function} cannot run"))),
+        }
+    }
+
+    fn transform(
+        &self,
+        call: &TransformCall,
+        rows: Vec<RecordBatch>,
+        schema: SchemaRef,
+    ) -> Result<Transformed, String> {
+        let context = serde_json::to_string(&call.context).map_err(|error| error.to_string())?;
+        Python::attach(|py| -> PyResult<Result<Transformed, String>> {
+            let table = Table::try_new(rows, schema)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?
+                .into_pyarrow(py)?;
+            let (returned, dicts, problem): (Bound<'_, PyAny>, bool, Option<String>) = py
+                .import(RUNTIME_MODULE)?
+                .call_method1("call_transform", (call.function.as_str(), table, context))?
+                .extract()?;
+            if let Some(problem) = problem {
+                return Ok(Err(problem));
+            }
+            let batches = table_batches(
+                &returned,
+                None,
+                crossing_options(),
+                ReadContext {
+                    masked: call.masked.clone(),
+                    arrays: call.arrays.clone(),
+                    naming: call.naming,
+                    ..ReadContext::default()
+                },
+            );
+            Ok(Ok(Transformed {
+                batches: Box::new(PythonBatches(batches)),
+                dicts,
+            }))
+        })
+        .map_err(|error| error_text(&error))?
     }
 
     fn finish(&self) {

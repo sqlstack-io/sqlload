@@ -4,6 +4,7 @@ The native loader calls these functions through `sqlload._native` while running 
 `load` and the other commands; they are not a public API.
 """
 
+import hashlib
 import importlib
 import json
 import logging
@@ -16,7 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlload._declare import Connection, Context, Source, Table
+from sqlload._declare import Connection, Context, FileContext, Source, Table
 from sqlload._http import Job
 
 #: Folders under `python_paths` never imported: virtual environments, build output and caches.
@@ -25,7 +26,12 @@ SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-pack
 #: The destination name of a table declared without a source: its own name.
 STANDALONE_TABLE_NAME = "{table}"
 
+#: How long a transform's version hash is, in hex digits.
+VERSION_DIGITS = 16
+
 _tables: dict[str, Table] = {}
+#: The folders `discover` imported modules from; a `transform` module must be in one.
+_module_folders: list[Path] = []
 _contexts: dict[str, Context] = {}
 _clients: dict[str, Any] = {}
 #: Held while a client is built, since tables of one source load at the same time.
@@ -53,6 +59,7 @@ def discover(root: str, python_paths: list[str]) -> str:
 				standalone.setdefault(id(value), (value, relative))
 			elif isinstance(value, Table) and value.source is not None:
 				sources.setdefault(id(value.source), (value.source, relative))
+	_module_folders[:] = [(root_path / entry).resolve() for entry in python_paths]
 	_tables.clear()
 	declared: list[dict[str, Any]] = []
 	for source, relative in sources.values():
@@ -141,6 +148,57 @@ def table_state(table: str) -> str | None:
 	except (TypeError, ValueError) as error:
 		raise TypeError(f"ctx.state of table {table} is not JSON: {error}") from error
 	return final if final != ctx.started_state else None
+
+
+def transform_version(function: str) -> tuple[str | None, str | None]:
+	"""Import a `transform` function (`module:function`, the module named as `discover` imports it) and check it can run.
+
+	Returns its version, `module:function@` and a hash of the module's source (an edit to the
+	module, not only to the function, changes it), or why it cannot run.
+	"""
+	module_name, _, name = function.partition(":")
+	folders = ", ".join(folder.name for folder in _module_folders)
+	try:
+		module = importlib.import_module(module_name)
+	except ModuleNotFoundError as error:
+		if error.name is None or not f"{module_name}.".startswith(f"{error.name}."):
+			raise
+		return None, f"no module {module_name} under python_paths ({folders})"
+	source = Path(getattr(module, "__file__", None) or "").resolve()
+	if not any(folder in source.parents for folder in _module_folders):
+		return None, f"module {module_name} is not under python_paths ({folders})"
+	if not hasattr(module, name):
+		return None, f"module {module_name} has no function {name}"
+	if not callable(getattr(module, name)):
+		return None, f"{module_name}.{name} is not callable"
+	try:
+		importlib.import_module("pyarrow")
+	except ImportError:
+		return None, "transform needs pyarrow: pip install pyarrow"
+	digest = hashlib.sha256(source.read_bytes()).hexdigest()[:VERSION_DIGITS]
+	return f"{function}@{digest}", None
+
+
+def call_transform(function: str, table: Any, context: str) -> tuple[Any, bool, str | None]:
+	"""Call a `transform` function on one file's (or range's) rows, a pyarrow Table.
+
+	Returns what crosses (an iterator of one yield), whether it is dicts, and why the returned
+	value cannot load when it is not a list of dicts, a pyarrow Table or a DataFrame.
+	"""
+	module_name, _, name = function.partition(":")
+	fields: dict[str, Any] = json.loads(context)
+	modified_at = fields.get("modified_at")
+	ctx = FileContext(**{**fields, "modified_at": datetime.fromisoformat(_offset_text(modified_at)) if modified_at else None})
+	returned = getattr(importlib.import_module(module_name), name)(table, ctx)
+	if isinstance(returned, list) and all(isinstance(row, dict) for row in returned):
+		return iter([returned] if returned else []), True, None
+	if hasattr(returned, "__arrow_c_stream__") or hasattr(returned, "__arrow_c_array__"):
+		return iter([returned]), False, None
+	return (
+		iter([]),
+		False,
+		f"it returned {type(returned).__name__}; return a list of dicts, a pyarrow Table, or a polars or pandas DataFrame",
+	)
 
 
 def finish_run() -> None:

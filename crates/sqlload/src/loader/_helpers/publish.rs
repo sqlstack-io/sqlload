@@ -68,6 +68,7 @@ use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
+use crate::loader::_helpers::destination::nanosecond_columns;
 use crate::loader::_helpers::destination::{give_back, keep_in_background, leased_folder};
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
@@ -80,16 +81,16 @@ use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::logs_files;
 use crate::loader::_helpers::run_log::merged_record;
+use crate::loader::_helpers::run_log::transformed;
 use crate::loader::_helpers::run_log::{
     in_file, listed_sources, merged_file_text, merged_name, with_file_keys,
 };
 use crate::loader::_helpers::sources::ReadPart;
-use crate::loader::_helpers::sources::files_read_as;
 use crate::loader::_helpers::sources::files_source_parts;
-use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
 use crate::loader::_helpers::specs::checked_key;
+use crate::loader::_helpers::specs::files_read_as;
 use crate::loader::_helpers::specs::{null_cursor_problem, null_cursor_rows};
 use crate::loader::_helpers::table_plan::{
     cursor_binding, source_cursor, source_filter, with_null_cursors,
@@ -113,6 +114,7 @@ use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
 use crate::loader::models::TableLoaded;
 use crate::loader::models::TablePlan;
+use crate::loader::models::TransformRun;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
@@ -1236,7 +1238,11 @@ impl Publisher {
         files: &[DataFile],
     ) -> Result<BatchFooters, LoaderError> {
         let spec = &self.table.spec;
-        let Some(source_files) = spec.files.as_ref() else {
+        let Some(source_files) = spec
+            .files
+            .as_ref()
+            .filter(|files| files.transform.is_none())
+        else {
             return Ok(BatchFooters::default());
         };
         if source_files.encoding.record.is_some() {
@@ -1448,10 +1454,12 @@ pub(crate) async fn publish_table(
         return Err(LoaderError::Invalid(null_cursor_problem(&table.spec, rows)));
     }
     let publisher = Publisher::open(table.clone(), (destination, run.options), None).await?;
-    let published = feed(reader, table, publisher, run).await;
+    let transform = run.host.clone().map(TransformRun::new);
+    let published = feed(reader, table, publisher, (run, transform.as_ref())).await;
     let (mut publisher, result) = published;
     publisher.close().await;
     let rows = result?;
+    let transforms = transformed(table, (destination, transform)).await?;
     let report = match reader {
         SourceReader::Files(folder) => {
             after_load(folder, &table.spec.after_load, &publisher.settled_files).await
@@ -1464,6 +1472,7 @@ pub(crate) async fn publish_table(
         note: None,
         after_load: report,
         replaced_keys: publisher.replaced.clone(),
+        transforms,
     })
 }
 
@@ -1472,7 +1481,7 @@ async fn feed(
     reader: &SourceReader,
     table: &TablePlan,
     mut publisher: Publisher,
-    run: &LoadRun<'_>,
+    (run, transform): (&LoadRun<'_>, Option<&TransformRun>),
 ) -> (Publisher, Result<u64, LoaderError>) {
     let batch_bytes = run.options.batch_bytes;
     let fed = async {
@@ -1548,6 +1557,7 @@ async fn feed(
                         let part = ReadPart {
                             files: Some(files),
                             footers,
+                            transform: transform.cloned(),
                             ..ReadPart::default()
                         };
                         let current = publisher.table.clone();
@@ -1610,6 +1620,7 @@ async fn feed(
             CommitRule::Size => {
                 let part = ReadPart {
                     batch_bytes,
+                    transform: transform.cloned(),
                     ..ReadPart::default()
                 };
                 match pulls_unloaded(table.route.as_ref()) {
@@ -1629,6 +1640,7 @@ async fn feed(
             CommitRule::Whole(_) => {
                 let part = ReadPart {
                     batch_bytes,
+                    transform: transform.cloned(),
                     ..ReadPart::default()
                 };
                 publisher.pass_part(reader, part).await?;

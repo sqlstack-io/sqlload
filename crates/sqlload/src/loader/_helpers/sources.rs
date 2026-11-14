@@ -1,11 +1,12 @@
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use arrow_array::RecordBatch;
-use std::collections::{BTreeMap, HashMap};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use tokio_postgres::Client;
 
 use crate::adapters::contract::models::TableName;
-use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
@@ -17,55 +18,55 @@ use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_ca
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
 use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
 use crate::column_types::main::arrow_field::arrow_field;
-use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::config::models::{DestinationConfig, DestinationKind};
 use crate::file_store::main::open_folder::open_folder;
+use crate::file_store::models::OpenFolder;
 use crate::files_source::constants::{
-    NANOSECOND_SCALE, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
-    VERSION_SEPARATOR,
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::errors::FilesError;
-use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::discover_files::discover_files;
 use crate::files_source::main::merge_order::merge_order;
 use crate::files_source::main::move_to_prefix::move_to_prefix;
-use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::read_files::read_files;
 use crate::files_source::main::select_files::select_files;
+use crate::files_source::main::shape_rows::shape_rows;
 use crate::files_source::models::{
     AfterLoad, BatchFooters, DataFile, FileColumn, FileSelection, FilesEncoding, FilesRead,
-    FilesTable, LoadedFile, PathValues, SourceFormat, StoredRead, TextChecks,
+    FilesTable, LoadedFile, StoredRead, TextChecks,
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
-use crate::loader::_helpers::destination::folder_claims;
+use crate::loader::_helpers::destination::{folder_claims, nanosecond_columns};
 use crate::loader::_helpers::python::{fitting_type, python_tables};
+use crate::loader::_helpers::python::{read_schema, read_types};
 use crate::loader::_helpers::resolve::{
-    NameRule, display_name, resolve_tables, source_target, spec_names, target_display_name,
-    unread_source,
+    display_name, resolve_tables, source_target, spec_names, target_display_name, unread_source,
 };
 use crate::loader::_helpers::run_log::{
-    file_column_problem, logs_files, merged_files, unchanged_files,
+    file_column_problem, loaded_file, logs_files, merge_ledger,
 };
 use crate::loader::_helpers::specs::integer_cursor;
-use crate::loader::_helpers::specs::is_child_column;
+use crate::loader::_helpers::specs::{files_read_as, path_values, pinned_unsampled};
 use crate::loader::_helpers::specs::{
-    flattened_object_problems, missing_description, referenced_columns, table_name, table_naming,
+    flattened_object_problems, referenced_columns, table_name, table_naming,
 };
-use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
+use crate::loader::_helpers::specs::{returned_columns, runnable_transform, transform_input};
+use crate::loader::constants::NO_TRANSFORM_HOST;
 use crate::loader::constants::{
     DRAINED_REASON, KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READERS, PRIMARY_KEY_PLACEHOLDER,
     RELOAD_FIX, SOURCE_BATCH_ROWS,
 };
 use crate::loader::errors::LoaderError;
+use crate::loader::models::FilesTransform;
 use crate::loader::models::{
-    CommitRule, DrainedFiles, FilesSource, PlanOptions, ProjectPlan, ResolvedTables, SkippedTable,
-    SourceEnd, SourceProblem, SourceReader, TablePlan, TableSpec,
+    CommitRule, DrainedFiles, FilesSource, PlanOptions, ResolvedTables, SkippedTable, SourceEnd,
+    SourceProblem, SourceReader, TablePlan, TableSpec,
 };
-use crate::loader::models::{FoundSource, FoundSources};
+use crate::loader::models::{FoundSource, FoundSources, TransformRun};
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::constants::SPLIT_READ_MIN_PAGES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
@@ -74,28 +75,31 @@ use crate::postgres_source::main::cursor_end::cursor_end;
 use crate::postgres_source::main::read_catalog::read_catalog;
 use crate::postgres_source::models::{
     CopyRequest, Encryption, PgType, PostgresAddress, ReadColumn, SourceColumn, SourceTable,
-    SslMode, WireType,
+    SslMode,
 };
 use crate::project::main::postgres_address::postgres_address;
 use crate::project::models::{
-    BatchStep, ConnectionConfig, NewTables, OnDuplicateKeys, ProjectConfig, SourceConfig,
-    SourceKind, TableOverride, TableSettings, WriteStrategy,
+    BatchStep, ConnectionConfig, OnDuplicateKeys, ProjectConfig, SourceConfig, SourceKind,
+    TableOverride, TableSettings, WriteStrategy,
 };
+use crate::python_sources::main::transform_files::transform_files;
+use crate::python_sources::main::transform_range::transform_range;
+use crate::python_sources::models::{FileContext, TransformCall, TransformFiles};
+use crate::python_sources::types::PythonHost;
 use crate::row_batches::main::loaded_batch::loaded_batch;
-use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
+use crate::schema_plan::models::LiveColumn;
 use crate::sheets_source::constants::{EMPTY_SHEET_COLUMN_KIND, SCOPE, SHEET_COLUMN_KIND};
 use crate::sheets_source::main::a1_width::a1_width;
 use crate::sheets_source::main::duplicate_key::duplicate_key;
 use crate::sheets_source::main::read_grids::read_grids;
 use crate::sheets_source::main::sheet_batch::sheet_batch;
+use crate::sheets_source::main::sheet_input::sheet_input;
 use crate::sheets_source::main::sheet_table::sheet_table;
 use crate::sheets_source::main::sheets_client::sheets_client;
 use crate::sheets_source::main::tab_name::tab_name;
 use crate::sheets_source::main::tab_ranges::tab_ranges;
 use crate::sheets_source::main::user_sheets_client::user_sheets_client;
 use crate::sheets_source::models::{Grid, HeaderRule, KeySource, SheetsClient};
-use crate::similar_names::main::close_name::close_name;
-use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::SESSION_SCHEMA;
 use crate::snowflake_source::main::connect_snowflake_source::connect_snowflake_source;
 use crate::snowflake_source::main::read_catalog::read_catalog as read_snowflake_catalog;
@@ -565,6 +569,13 @@ async fn sheets_tables(
             ));
             continue;
         }
+        if let Some(transform) = runnable_transform(project, source, &name) {
+            match transformed_sheet(transform, (&spreadsheet_id, source), (&name, &grid)).await {
+                Ok(table) => tables.push(table),
+                Err(problem) => problems.push(problem),
+            }
+            continue;
+        }
         let mut read = match sheet_table(&grid, &sheet_rule(source, &name)) {
             Ok(read) => read,
             Err(found) => {
@@ -632,6 +643,54 @@ async fn sheets_tables(
     }
 }
 
+/// Table `name` of a `google_sheets` source with a `transform`: the columns the function returned for the range `grid` read now, typed as a Python table's yields are, or why it failed.
+async fn transformed_sheet(
+    (host, function): (Arc<dyn PythonHost>, String),
+    (spreadsheet_id, source): (&str, &SourceConfig),
+    (name, grid): (&str, &Grid),
+) -> Result<SourceTable, String> {
+    let input = sheet_input(grid, &sheet_rule(source, name))?;
+    let call = TransformCall {
+        function,
+        context: range_context(name, spreadsheet_id, (grid, source.ranges.get(name))),
+        masked: Vec::new(),
+        arrays: Vec::new(),
+        naming: (Naming::default(), None),
+    };
+    let (batches, _) = transform_range(host, call, input).await?;
+    let columns: Vec<SourceColumn> = returned_columns(&batches)
+        .into_iter()
+        .map(|(name, column_type)| SourceColumn {
+            name,
+            postgres_type: SHEET_COLUMN_KIND.to_owned(),
+            pg_type: PgType::Other,
+            column_type: Ok(column_type),
+            nullable: true,
+            source_spelling: None,
+        })
+        .collect();
+    Ok(SourceTable {
+        estimated_rows: batches.iter().map(RecordBatch::num_rows).sum::<usize>() as i64,
+        estimated_bytes: 0,
+        ..SourceTable::of_columns(name.to_owned(), columns)
+    })
+}
+
+/// The `ctx` of table `table`'s `transform` for the range `grid` read (`range` as configured, else its whole tab).
+fn range_context(
+    table: &str,
+    spreadsheet_id: &str,
+    (grid, range): (&Grid, Option<&String>),
+) -> FileContext {
+    FileContext {
+        table: table.to_owned(),
+        sheet: Some(grid.title.clone()),
+        range: range.cloned(),
+        spreadsheet_id: Some(spreadsheet_id.to_owned()),
+        ..FileContext::default()
+    }
+}
+
 /// A sheet table's spec with each column typed as the live table has it when its cells fit that type (see [`fitting_type`]; dates fit a timestamp column, at midnight), and each column no cell gave a value typed as the live table has it, so a column keeps its type as its values change or empty; a column holding an error cell keeps its error. `None` when no column's type changes.
 pub(crate) fn with_live_types(spec: &TableSpec, live: Option<&[LiveColumn]>) -> Option<TableSpec> {
     spec.sheet.as_ref()?;
@@ -661,12 +720,12 @@ pub(crate) fn with_live_types(spec: &TableSpec, live: Option<&[LiveColumn]>) -> 
     changed.then_some(typed)
 }
 
-/// A `google_sheets` table's rows as they are now, in its read columns' types.
+/// A `google_sheets` table's rows as they are now, in its read columns' types, named as they load; with a `transform`, what it returned for them (its time noted in `run`).
 async fn sheet_rows(
-    client: &SheetsClient,
-    spreadsheet_id: &str,
+    (client, spreadsheet_id): (&SheetsClient, &str),
     table: &TablePlan,
-) -> Result<RecordBatch, LoaderError> {
+    run: Option<&TransformRun>,
+) -> Result<Vec<RecordBatch>, LoaderError> {
     let name = &table.spec.source_table.name;
     let read = table
         .spec
@@ -692,6 +751,26 @@ async fn sheet_rows(
         .into_iter()
         .next()
         .ok_or_else(|| LoaderError::Invalid(format!("range {range:?} read no tab")))?;
+    if table.spec.transform.is_some() {
+        let (mut call, run) = transform_call(&table.spec, run)?;
+        call.context = range_context(name, spreadsheet_id, (&grid, read.range.as_ref()));
+        let input = sheet_input(&grid, &read.rule).map_err(LoaderError::Invalid)?;
+        let (batches, time) = transform_range(run.host.clone(), call, input)
+            .await
+            .map_err(LoaderError::Invalid)?;
+        let mut typed: Vec<RecordBatch> = Vec::with_capacity(batches.len());
+        for batch in &batches {
+            unplanned_column(batch, &table.spec, &time.file).map_err(LoaderError::Invalid)?;
+            let loaded =
+                loaded_batch(batch, &table.spec.source_table).map_err(LoaderError::Invalid)?;
+            typed.push(read_types(&loaded, &read_schema(table))?);
+        }
+        run.times
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(time);
+        return Ok(typed);
+    }
     let columns: Vec<(String, ColumnType)> = table
         .read_columns
         .iter()
@@ -702,7 +781,10 @@ async fn sheet_rows(
             )
         })
         .collect();
-    sheet_batch(&grid, &read.rule, &columns).map_err(LoaderError::Invalid)
+    let batch = sheet_batch(&grid, &read.rule, &columns).map_err(LoaderError::Invalid)?;
+    Ok(vec![
+        loaded_batch(&batch, &table.spec.source_table).map_err(LoaderError::Invalid)?,
+    ])
 }
 
 /// A warning when source `source_name` reads `address` over the network in plain text because the server refused TLS under `sslmode = "prefer"`; none for a loopback or Unix socket host, whose traffic stays on the machine, or for an explicit `disable`.
@@ -777,68 +859,99 @@ pub(crate) async fn discover_files_table(
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
     }
-    files_source_parts(source_name, source, (warehouse, naming), (location, table))
+    let overrides = source.tables.get(source_name);
+    let (table, transform) = match runnable_transform(project, source, source_name) {
+        Some((host, function)) => {
+            let own = |pick: fn(&TableOverride) -> &[String]| overrides.map_or(&[][..], pick);
+            let patterns = (
+                [
+                    &source.exclude_columns[..],
+                    own(|table| &table.exclude_columns),
+                ]
+                .concat(),
+                [&source.allow_columns[..], own(|table| &table.allow_columns)].concat(),
+            );
+            let input = transform_input(&table, encoding.format, patterns)?;
+            let call = TransformCall {
+                function,
+                context: FileContext {
+                    table: source_name.to_owned(),
+                    ..FileContext::default()
+                },
+                masked: Vec::new(),
+                arrays: Vec::new(),
+                naming: (naming, sql_adapter(warehouse).max_identifier_length()),
+            };
+            let (table, input) =
+                transform_sample((&folder, host, call), (input, &encoding), table).await?;
+            (table, Some(input))
+        }
+        None => (table, None),
+    };
+    let (table, files) =
+        files_source_parts(source_name, source, (warehouse, naming), (location, table))?;
+    Ok((table, FilesSource { transform, ..files }))
 }
 
-/// What files source `source_name` fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then its table's `constant_columns`; a `native(...)` type, which SQLLoad's reader cannot build, is refused.
-fn path_values(
-    (source_name, source): (&str, &SourceConfig),
-    warehouse: Warehouse,
-) -> Result<(PathValues, Vec<(String, ColumnType)>), LoaderError> {
-    let mut types: Vec<(String, ColumnType)> = Vec::new();
-    for (name, text) in &source.partition_columns {
-        let parsed = parse_type(text, &[warehouse])
-            .map_err(|error| LoaderError::Invalid(format!("partition column {name}: {error}")))?;
-        if matches!(parsed.column_type, ColumnType::Array(_)) {
-            return Err(LoaderError::Invalid(format!(
-                "partition column {name}: an array cannot come from a path"
-            )));
-        }
-        types.push((name.clone(), parsed.column_type));
-    }
-    let template = source
-        .path_columns
-        .as_deref()
-        .map(|text| path_template(text, &[warehouse]))
-        .transpose()
-        .map_err(LoaderError::Invalid)?;
-    types.extend(
-        template
-            .iter()
-            .flat_map(|template| template.captures.clone()),
-    );
-    let constants = constant_columns(&source.table_constants(source_name), &[warehouse])
-        .map_err(LoaderError::Invalid)?;
-    let typed = types
-        .iter()
-        .map(|(name, column_type)| (name, column_type))
-        .chain(
-            constants
-                .iter()
-                .map(|(name, column_type, _)| (name, column_type)),
-        );
-    for (name, column_type) in typed {
-        if arrow_field(name, column_type).is_none() {
-            return Err(LoaderError::Invalid(format!(
-                "column {name}: {column_type} has no Arrow type, so a partition, path or constant column cannot be one; pin a portable type"
-            )));
-        }
-    }
-    let values = PathValues {
-        partition_columns: source.partition_columns.keys().cloned().collect(),
-        template,
-        unmatched: source.unmatched_paths.unwrap_or_default(),
-        constants: constants
-            .iter()
-            .map(|(name, _, text)| (name.clone(), text.clone()))
-            .collect(),
+/// `table` with the columns `call`'s function returned for its newest file (the first sampling reads), typed as a Python table's yields are (a column only ever NULL as text), and `input` with that file as its sample.
+async fn transform_sample(
+    (folder, host, call): (&OpenFolder, Arc<dyn PythonHost>, TransformCall),
+    (input, encoding): (FilesTransform, &FilesEncoding),
+    table: FilesTable,
+) -> Result<(FilesTable, FilesTransform), LoaderError> {
+    let Some(newest) = table.files.last() else {
+        return Ok((table, input));
     };
-    types.extend(
-        constants
-            .into_iter()
-            .map(|(name, column_type, _)| (name, column_type)),
-    );
-    Ok((values, types))
+    let request = TransformFiles {
+        host,
+        call,
+        files: std::slice::from_ref(newest),
+        location: folder.location.to_string(),
+        encoding,
+    };
+    let mut returned: Vec<RecordBatch> = Vec::new();
+    transform_files(
+        &request,
+        async |data| {
+            Ok::<_, LoaderError>(file_rows(folder, &input_read(&input, encoding, data)).await?)
+        },
+        async |_, batch| {
+            returned.push(batch);
+            Ok(())
+        },
+    )
+    .await?;
+    let columns: Vec<FileColumn> = returned_columns(&returned)
+        .into_iter()
+        .map(|(name, column_type)| FileColumn {
+            name,
+            column_type: Ok(column_type),
+            direct_refusal: None,
+            stored_read: StoredRead::Plain,
+            lists: None,
+        })
+        .collect();
+    let sample = format!("{}{}", folder.location, newest.file.relative_key);
+    Ok((
+        FilesTable {
+            columns,
+            objects: Vec::new(),
+            ..table
+        },
+        FilesTransform { sample, ..input },
+    ))
+}
+
+/// The read of one file `data` for a `transform`: the file alone, in `input`'s columns.
+fn input_read(input: &FilesTransform, encoding: &FilesEncoding, data: &DataFile) -> FilesRead {
+    FilesRead {
+        files: vec![data.clone()],
+        encoding: encoding.clone(),
+        checks: input.checks.clone(),
+        columns: input.input.clone(),
+        nanos: input.nanos.clone(),
+        batch_rows: SOURCE_BATCH_ROWS,
+    }
 }
 
 /// A files source's table and files from the files found: the file columns, partition columns and source-file columns as one source table.
@@ -944,104 +1057,9 @@ pub(crate) fn files_source_parts(
             checks,
             notes,
             copy_to_internal_stage: source.copy_to_internal_stage,
+            transform: None,
         },
     ))
-}
-
-/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. Under `rule`'s dlt naming a pin naming a sampled column by its loaded name is one sampling saw.
-fn pinned_unsampled(
-    overrides: Option<&TableOverride>,
-    (table, added, rule): (&FilesTable, &[&str], NameRule),
-    format: SourceFormat,
-) -> Result<Vec<String>, LoaderError> {
-    let Some(overrides) = overrides.filter(|_| format != SourceFormat::Parquet) else {
-        return Ok(Vec::new());
-    };
-    let sampled: Vec<&str> = table
-        .columns
-        .iter()
-        .map(|column| column.name.as_str())
-        .collect();
-    let loaded = |name: &str| loaded_name(rule.0, name, rule.1);
-    let seen: Vec<String> = sampled
-        .iter()
-        .chain(added)
-        .map(|name| loaded(name))
-        .collect();
-    let mut unsampled: Vec<String> = Vec::new();
-    for name in overrides.columns.keys() {
-        if seen.contains(&loaded(name)) || is_child_column(name, overrides) {
-            continue;
-        }
-        let known = sampled.iter().chain(added).copied();
-        if let Some(close) = close_name(name, known) {
-            return Err(LoaderError::Invalid(format!(
-                "pinned column {name} was not seen in the sampled files; did you mean {close:?}? (pin a name exactly as it appears in the files)"
-            )));
-        }
-        unsampled.push(name.clone());
-    }
-    Ok(unsampled)
-}
-
-/// What a files read reads, as the files spell it (the batches it reads are renamed to the loaded names after): each of `read_columns` in its read type, and those whose types were inferred from sampled values, not pinned and not filled from the path (`partition_types`) or the file.
-pub(crate) fn files_read_as(
-    spec: &TableSpec,
-    read_columns: &[ReadColumn],
-    partition_types: &[(String, ColumnType)],
-) -> (Vec<DesiredColumn>, Vec<String>) {
-    let spelled = |name: &str| spec.source_table.spelling(name).to_owned();
-    let columns: Vec<DesiredColumn> = read_columns
-        .iter()
-        .map(|column| DesiredColumn {
-            name: spelled(&column.name),
-            column_type: column.output.clone(),
-            origin: ColumnOrigin::Source,
-        })
-        .collect();
-    let filled: Vec<&str> = partition_types
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
-        .collect();
-    let inferred: Vec<String> = read_columns
-        .iter()
-        .filter(|column| !spec.pinned.contains_key(&column.name))
-        .map(|column| spelled(&column.name))
-        .filter(|name| !filled.contains(&name.as_str()))
-        .collect();
-    (columns, inferred)
-}
-
-/// The read columns of a files source: the file's types, or the pinned ones (converted while reading).
-pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
-    let mut problems: Vec<String> = Vec::new();
-    let mut columns: Vec<ReadColumn> = Vec::new();
-    for column in &spec.source_table.columns {
-        let excluded = spec
-            .excluded_columns
-            .iter()
-            .any(|(excluded, _)| *excluded == column.name);
-        let output = match (spec.pinned.get(&column.name), &column.column_type) {
-            _ if excluded => continue,
-            (Some(pinned), _) => pinned.clone(),
-            (None, Ok(column_type)) => column_type.clone(),
-            (None, Err(reason)) => {
-                problems.push(format!("column {}: {reason}", column.name));
-                continue;
-            }
-        };
-        columns.push(ReadColumn {
-            name: column.name.clone(),
-            expression: column.name.clone(),
-            wire: WireType::Text,
-            output,
-        });
-    }
-    match problems.is_empty() {
-        true => Ok(columns),
-        false => Err(problems),
-    }
 }
 
 /// What a files source's load reads: the files in the cursor window that are not loaded yet.
@@ -1065,78 +1083,6 @@ pub(crate) enum LoadedSource<'a> {
     Recorded(&'a [LoadedFile]),
 }
 
-/// The files a merge already merged into `request`'s table at the version listed now, which it skips (one rewritten in place since is merged again, as the newest), or why a files source cannot merge into it: only into a DuckDB or Postgres table, never with `--reload` (one commit would lose the files' order) or `state = "logged"`; none while the table does not exist.
-async fn merge_ledger(
-    request: &FilesPlanRequest<'_>,
-) -> Result<Result<Vec<LoadedFile>, String>, LoaderError> {
-    let spec = request.spec;
-    let destination = match request.loaded {
-        LoadedSource::Query(destination) => destination,
-        LoadedSource::Recorded(_) => {
-            return Ok(Err("merge is not supported for files targets".to_owned()));
-        }
-    };
-    let what = match spec.strategy {
-        WriteStrategy::Merge => "merge",
-        _ => "load",
-    };
-    if !sql_adapter(spec.warehouse).merges_files() {
-        return Ok(Err(format!(
-            "{} from a files source loads into DuckDB and Postgres targets so far, not {}; use append, or delete_insert on a partition cursor",
-            spec.strategy, spec.warehouse
-        )));
-    }
-    if request.options.reload {
-        return Ok(Err(format!(
-            "--reload would {what} every file in one commit and lose their order; drop the table and load again to {what} every file anew"
-        )));
-    }
-    if spec.logged {
-        return Ok(Err(format!(
-            "state = \"logged\" does not apply to a files source's {}, which records each file it loads",
-            spec.strategy
-        )));
-    }
-    if let Some(cursor) = &spec.cursor {
-        return Ok(Err(format!(
-            "cursor_column {} does not apply to a files source's merge, which picks the files it has not merged from the run log, whatever their partition; remove it and set write_strategy = \"merge\", or keep it and use delete_insert",
-            cursor.column
-        )));
-    }
-    let merged = match request.live {
-        None => return Ok(Ok(Vec::new())),
-        Some(_) => merged_files(spec, destination).await?,
-    };
-    let location = request.files.location.to_string();
-    let listed: HashMap<String, String> = request
-        .files
-        .table
-        .files
-        .iter()
-        .map(|data| {
-            (
-                format!("{location}{}", data.file.relative_key),
-                data.file.version(),
-            )
-        })
-        .collect();
-    Ok(merged.map(|merged| unchanged_files(merged, &listed)))
-}
-
-/// A row of the loaded-files query: `file|version`, or just the file when `versioned` is false.
-pub(crate) fn loaded_file(text: String, versioned: bool) -> LoadedFile {
-    match (versioned, text.rsplit_once(VERSION_SEPARATOR)) {
-        (true, Some((name, version))) => LoadedFile {
-            name: name.to_owned(),
-            version: version.to_owned(),
-        },
-        _ => LoadedFile {
-            name: text,
-            version: String::new(),
-        },
-    }
-}
-
 /// Whether the live table has `column`.
 pub(crate) fn live_has(live: Option<&[LiveColumn]>, column: &str) -> bool {
     match live {
@@ -1145,69 +1091,6 @@ pub(crate) fn live_has(live: Option<&[LiveColumn]>, column: &str) -> bool {
             .any(|existing| existing.name.eq_ignore_ascii_case(column)),
         None => false,
     }
-}
-
-/// The columns of `columns` SQLLoad's reader keeps at nanoseconds for `spec`'s warehouse: those the files store at nanoseconds, unless pinned or `live` holds fewer digits.
-pub(crate) fn nanosecond_columns(
-    spec: &TableSpec,
-    columns: &[FileColumn],
-    live: Option<&[LiveColumn]>,
-) -> Vec<String> {
-    match sql_adapter(spec.warehouse).keeps_nanoseconds() {
-        true => columns
-            .iter()
-            .filter(|column| {
-                matches!(
-                    column.stored_read,
-                    StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
-                )
-            })
-            .filter(|column| {
-                let loaded = spec.source_table.loaded_as(&column.name);
-                !spec.pinned.contains_key(loaded) && fewer_digits(live, loaded).is_none()
-            })
-            .map(|column| column.name.clone())
-            .collect(),
-        false => Vec::new(),
-    }
-}
-
-/// A warning for each column the files store at nanoseconds but the live table holds at fewer digits, so the load cuts them; a column whose type is pinned is the user's choice and is not warned about.
-pub(crate) fn truncated_nanoseconds(spec: &TableSpec, live: Option<&[LiveColumn]>) -> Vec<String> {
-    let Some(files) = &spec.files else {
-        return Vec::new();
-    };
-    files
-        .table
-        .columns
-        .iter()
-        .filter(|column| {
-            matches!(
-                column.stored_read,
-                StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
-            ) && !spec
-                .pinned
-                .contains_key(spec.source_table.loaded_as(&column.name))
-        })
-        .filter_map(|column| truncated_warning(live, spec.source_table.loaded_as(&column.name)))
-        .collect()
-}
-
-/// The warning for column `name` when the live column holds fewer than nanosecond digits.
-fn truncated_warning(live: Option<&[LiveColumn]>, name: &str) -> Option<String> {
-    let digits = fewer_digits(live, name)?;
-    Some(format!(
-        "{name}: nanoseconds in the files, but the column holds {digits} digits after the second, so they are truncated.\nRebuild the column at (9) (--reload) to keep them."
-    ))
-}
-
-/// The digits after the second the live column `name` holds, when fewer than nanoseconds, so SQLLoad's reader cuts its values.
-fn fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> Option<i64> {
-    live.into_iter()
-        .flatten()
-        .find(|existing| existing.name.eq_ignore_ascii_case(name))
-        .and_then(|existing| existing.fraction_digits)
-        .filter(|digits| *digits < i64::from(NANOSECOND_SCALE))
 }
 
 /// How to give a table with rows a column a load needs, on `warehouse`.
@@ -1343,6 +1226,28 @@ pub(crate) async fn plan_files(
     }))
 }
 
+/// One file's rows as `read` (of that file alone) reads them, whole, and their schema: what a `transform` gets.
+pub(crate) async fn file_rows(
+    folder: &OpenFolder,
+    read: &FilesRead,
+) -> Result<(Vec<RecordBatch>, SchemaRef), FilesError> {
+    let mut rows: Vec<RecordBatch> = Vec::new();
+    read_files(folder, read, &BatchFooters::default(), async |batch| {
+        rows.push(batch);
+        Ok(())
+    })
+    .await?;
+    let fields = read.columns.iter().map(|column| {
+        arrow_field(&column.name, &column.column_type)
+            .unwrap_or_else(|| Field::new(&column.name, DataType::Utf8, true))
+    });
+    let schema = rows.first().map_or_else(
+        || Arc::new(Schema::new(fields.collect::<Vec<Field>>())),
+        RecordBatch::schema,
+    );
+    Ok((rows, schema))
+}
+
 /// Which part of a table's planned read one pass reads: a cursor window's filter, an order, or some of a files source's files.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ReadPart {
@@ -1362,6 +1267,8 @@ pub(crate) struct ReadPart {
     pub(crate) footers: BatchFooters,
     /// A smaller byte cap for the source's batches than the usual 64 MiB (the hidden `--batch-bytes`, for tests).
     pub(crate) batch_bytes: Option<usize>,
+    /// What runs the table's `transform`; `None` without a Python host.
+    pub(crate) transform: Option<TransformRun>,
 }
 
 /// Read `part` of `table`'s rows from `reader`, handing each batch to `on_batch`; when `on_batch` fails, the read fails with the reader's text, and stays retryable when `on_batch`'s error was.
@@ -1423,6 +1330,15 @@ async fn read_each(
                 None => files.clone(),
             };
             let mut on_batch = on_batch;
+            if let Some(transform) = table
+                .spec
+                .files
+                .as_ref()
+                .and_then(|files| files.transform.as_ref())
+            {
+                let run = part.transform.as_ref();
+                return read_transformed(folder, (&read, transform), (table, run), on_batch).await;
+            }
             let loaded = async |batch: RecordBatch| {
                 on_batch(loaded_batch(&batch, &table.spec.source_table)?).await
             };
@@ -1468,20 +1384,118 @@ async fn read_each(
             Ok(read_bigquery_rows(reader, &request, on_batch).await?)
         }
         (SourceReader::Sheets(client, spreadsheet_id), _) => {
-            let batch = loaded_batch(
-                &sheet_rows(client, spreadsheet_id, table).await?,
-                &table.spec.source_table,
-            )
-            .map_err(LoaderError::Invalid)?;
-            let rows = batch.num_rows() as u64;
+            let batches =
+                sheet_rows((client, spreadsheet_id), table, part.transform.as_ref()).await?;
+            let mut rows: u64 = 0;
             let mut on_batch = on_batch;
-            on_batch(batch).await.map_err(LoaderError::Invalid)?;
+            for batch in batches {
+                rows += batch.num_rows() as u64;
+                on_batch(batch).await.map_err(LoaderError::Invalid)?;
+            }
             Ok(rows)
         }
         (SourceReader::Files(_), None) => Err(LoaderError::Invalid(format!(
             "{}: a files source has no files planned",
             table.spec.source_table.qualified_name()
         ))),
+    }
+}
+
+/// Read each of `read`'s files in order through `table`'s `transform`, passing what it returned for the file, shaped as the file's rows, to `on_batch`; a file whose function fails, or returns a column the plan did not see, fails the read there, naming the file. Returns the row count.
+async fn read_transformed(
+    folder: &OpenFolder,
+    (read, input): (&FilesRead, &FilesTransform),
+    (table, run): (&TablePlan, Option<&TransformRun>),
+    mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), String>,
+) -> Result<u64, LoaderError> {
+    let spec = &table.spec;
+    let (call, run) = transform_call(spec, run)?;
+    let request = TransformFiles {
+        host: run.host.clone(),
+        call,
+        files: &read.files,
+        location: folder.location.to_string(),
+        encoding: &read.encoding,
+    };
+    let mut rows: u64 = 0;
+    let times = transform_files(
+        &request,
+        async |data| {
+            Ok::<_, LoaderError>(file_rows(folder, &input_read(input, &read.encoding, data)).await?)
+        },
+        async |(data, file_name, before), batch| {
+            let failed = |reason: String| LoaderError::Invalid(format!("{file_name}: {reason}"));
+            unplanned_column(&batch, spec, &input.sample).map_err(failed)?;
+            let shaped = shape_rows(&batch, (data, file_name, before), read).map_err(failed)?;
+            rows += shaped.num_rows() as u64;
+            on_batch(loaded_batch(&shaped, &spec.source_table).map_err(failed)?)
+                .await
+                .map_err(LoaderError::Invalid)
+        },
+    )
+    .await?;
+    run.times
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend(times);
+    Ok(rows)
+}
+
+/// The call of `spec`'s `transform`, before each file or range sets its context, and what runs it; why it cannot run without a Python host.
+fn transform_call<'a>(
+    spec: &TableSpec,
+    run: Option<&'a TransformRun>,
+) -> Result<(TransformCall, &'a TransformRun), LoaderError> {
+    let (Some(run), Some(transform)) = (run, spec.transform.as_ref()) else {
+        return Err(LoaderError::Invalid(NO_TRANSFORM_HOST.replace(
+            "{place}",
+            &format!("table {}", spec.source_table.qualified_name()),
+        )));
+    };
+    let call = TransformCall {
+        function: transform.function.clone(),
+        context: FileContext {
+            table: spec.source_table.name.clone(),
+            ..FileContext::default()
+        },
+        masked: spec.masked.columns.keys().cloned().collect(),
+        arrays: spec
+            .pinned
+            .iter()
+            .filter(|(_, column_type)| matches!(column_type, ColumnType::Array(_)))
+            .map(|(name, _)| name.clone())
+            .collect(),
+        naming: (
+            spec.naming,
+            sql_adapter(spec.warehouse).max_identifier_length(),
+        ),
+    };
+    Ok((call, run))
+}
+
+/// Why `batch`, returned by `spec`'s `transform`, cannot load: it has a column the function did not return for `sample` at plan (nor `columns` pins).
+fn unplanned_column(batch: &RecordBatch, spec: &TableSpec, sample: &str) -> Result<(), String> {
+    let planned: Vec<&str> = spec
+        .source_table
+        .columns
+        .iter()
+        .map(|column| spec.source_table.spelling(&column.name))
+        .collect();
+    match batch
+        .schema()
+        .fields()
+        .iter()
+        .find(|field| !planned.contains(&field.name().as_str()))
+    {
+        Some(extra) => Err(format!(
+            "transform {} returned column {}, which it did not return for {sample} at plan; return the same columns every time, or pin {} in columns",
+            spec.transform
+                .as_ref()
+                .map_or("", |transform| transform.function.as_str()),
+            extra.name(),
+            extra.name()
+        )),
+        None => Ok(()),
     }
 }
 
@@ -1549,31 +1563,6 @@ pub(crate) async fn source_ends(
         );
     }
     Ok(specs)
-}
-
-/// A warning for each selector matching no source or table, with the nearest name: `load` would otherwise say only `0 selected`.
-pub(crate) fn unmatched_selectors(
-    project: &ProjectConfig,
-    options: &PlanOptions,
-    names: &[String],
-) -> Vec<String> {
-    let known: Vec<&str> = names
-        .iter()
-        .map(String::as_str)
-        .chain(project.sources.keys().map(String::as_str))
-        .collect();
-    options
-        .select
-        .iter()
-        .chain(&options.exclude)
-        .filter(|selector| !known.contains(&selector.as_str()))
-        .map(
-            |selector| match nearest_name(selector, known.iter().copied()) {
-                Some(nearest) => format!("no table matches {selector}; did you mean {nearest}?"),
-                None => format!("no table matches {selector}"),
-            },
-        )
-        .collect()
 }
 
 /// Whether `--select` picks a table and `--exclude` does not, each by source name or one of the table's `names` (its destination name, the destination's display name, or its source's `schema.table`; empty ones match nothing); no `--select` picks every table.
@@ -1771,108 +1760,6 @@ pub(crate) fn source_in_scope(
         || tables
             .iter()
             .any(|names| selected(options, (source_name, names)))
-}
-
-/// `planned`, the selected tables of one source, added to `plan`, which is returned (`unselected` and `found`, the destinations and options, tell whether this is the source's first load): a table that appeared after the source's first load (`first_load`: none of its tables, selected or not, existed yet) and is not named exactly in `include` is skipped or fails as `new_tables` says, and a table without a description is blocked.
-pub(crate) async fn admit_tables(
-    mut plan: ProjectPlan,
-    (source_name, source): (&String, &SourceConfig),
-    (planned, unselected): (Vec<TablePlan>, &[TableSpec]),
-    found: (&BTreeMap<String, Destination>, &PlanOptions),
-) -> Result<ProjectPlan, LoaderError> {
-    let first_load = first_load(&planned, unselected, found).await?;
-    let mut planned = planned;
-    if let Some(problem) = partial_capture(source_name, source.kind, (&planned, unselected)) {
-        for table in &mut planned {
-            table.schema = blocked_plan(vec![problem.clone()]);
-        }
-    }
-    for mut table in planned {
-        let spec = &table.spec;
-        let qualified = spec.source_table.qualified_name();
-        let is_new = !first_load && !table.exists && !spec.approved;
-        let has_settings = source.tables.contains_key(&qualified);
-        match (is_new, spec.new_tables, has_settings) {
-            (true, NewTables::Skip, true) => plan.skipped.push(SkippedTable {
-                source_name: source_name.clone(),
-                source_table: qualified,
-                destination: display_name(spec.warehouse, &spec.destination),
-                reason: "new table (new_tables = \"skip\") has settings but is not approved; add it to include".to_owned(),
-            }),
-            (true, NewTables::Skip, false) => plan.skipped.push(SkippedTable {
-                source_name: source_name.clone(),
-                source_table: qualified,
-                destination: display_name(spec.warehouse, &spec.destination),
-                reason: "new table (new_tables = \"skip\"); add it to include to sync it".to_owned(),
-            }),
-            (true, NewTables::Fail, _) => {
-                plan.failed_sources.insert(source_name.clone());
-                let problem = format!(
-                    "{qualified}: new table and new_tables = \"fail\"; add it to include or exclude it"
-                );
-                plan.problem_names.push((
-                    problem.clone(),
-                    display_name(spec.warehouse, &spec.destination),
-                ));
-                plan.problems.push(problem);
-            }
-            _ => {
-                if let Some(problem) = missing_description(source_name, source, &spec.source_table)
-                {
-                    table.schema = blocked_plan(vec![problem]);
-                }
-                plan.tables.push(table);
-            }
-        }
-    }
-    Ok(plan)
-}
-
-/// Why the selection cannot load `postgres_cdc` source `name`, which blocks every table it picks: it picks some of its tables (`planned`) but not all (`unselected`), and the slot they share would confirm the left-out tables' changes unwritten. A plan problem alone would not stop the picked tables loading.
-fn partial_capture(
-    name: &str,
-    kind: SourceKind,
-    (planned, unselected): (&[TablePlan], &[TableSpec]),
-) -> Option<String> {
-    let partial = kind == SourceKind::PostgresCdc && !planned.is_empty() && !unselected.is_empty();
-    partial.then(|| {
-        let left_out: Vec<String> = unselected
-            .iter()
-            .map(|spec| spec.source_table.qualified_name())
-            .collect();
-        format!(
-            "this selection leaves out {} of source {name}, whose changes share its one slot and would be skipped; select the whole source, or move those tables to another postgres_cdc source",
-            left_out.join(", ")
-        )
-    })
-}
-
-/// Whether this is the source's first load: none of its tables exists in the destination, whether selected (`planned`) or not (`unselected`, looked up only while none is found, a table that cannot be read counting as absent), so `--select` cannot make a later table look present at the first load.
-async fn first_load(
-    planned: &[TablePlan],
-    unselected: &[TableSpec],
-    (destinations, options): (&BTreeMap<String, Destination>, &PlanOptions),
-) -> Result<bool, LoaderError> {
-    if planned.iter().any(|table| table.exists) {
-        return Ok(false);
-    }
-    for spec in unselected {
-        let Some(destination) = destinations.get(&spec.target) else {
-            continue;
-        };
-        let exists = match files_destination(destination) {
-            Some(_) => plan_table(spec, destination, options)
-                .await
-                .is_ok_and(|table| table.exists),
-            None => live_columns(destination, &spec.destination)
-                .await
-                .is_ok_and(|live| live.is_some()),
-        };
-        if exists {
-            return Ok(false);
-        }
-    }
-    Ok(true)
 }
 
 /// Every source's tables, resolved before any is planned so each knows which others share its destination table, with the folders they claim; a source whose tables cannot be read is a problem in the plan.

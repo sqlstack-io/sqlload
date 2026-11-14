@@ -10,9 +10,12 @@ use crate::command::_helpers::output::print_lines;
 use crate::command::constants::PLAN_TREE_HINT;
 use crate::load_events::main::event_line::event_line;
 use crate::load_events::models::{EventKind, LoadEvent};
-use crate::loader::constants::{BOLD, CYAN, DIM, INVERSE, RED, RESET, YELLOW};
+use crate::loader::constants::{
+    BOLD, CYAN, DICT_HINT_MILLISECONDS, DICT_HINT_ROWS, DIM, INVERSE, RED, RESET, YELLOW,
+};
 use crate::loader::models::ProjectPlan;
 use crate::number_text::main::thousands::thousands;
+use crate::python_sources::models::TransformTime;
 
 /// The width of a tally line's verb column: `loaded` or `failed` and two spaces.
 const VERB_COLUMN: usize = 8;
@@ -231,6 +234,7 @@ pub(crate) fn event_lines(
             elapsed_ms,
             position,
             changes,
+            transforms,
         } => {
             let word = match rows {
                 1 => "row",
@@ -238,9 +242,14 @@ pub(crate) fn event_lines(
             };
             let seconds = format!("{:.1}s", *elapsed_ms as f64 / 1000.0);
             let detail = format!(
-                "{:>rows_width$} {word:<5}{seconds:<6}{}",
-                thousands(*rows),
-                position.as_deref().unwrap_or_default()
+                "{}{}",
+                format!(
+                    "{:>rows_width$} {word:<5}{seconds:<6}{}",
+                    thousands(*rows),
+                    position.as_deref().unwrap_or_default()
+                )
+                .trim_end(),
+                transform_lines(transforms)
             );
             let mut lines: Vec<String> = changes
                 .iter()
@@ -253,6 +262,30 @@ pub(crate) fn event_lines(
         _ => return Vec::new(),
     };
     vec![tally_line((verb, name), &detail, name_width)]
+}
+
+/// A line per file or range a `transform` ran on, with its time, each after a line break; then, when it returned dicts for a large one and took a while, one hint naming the slowest such that Arrow or a DataFrame is faster.
+fn transform_lines(times: &[TransformTime]) -> String {
+    let seconds = |time: &TransformTime| time.milliseconds as f64 / 1000.0;
+    let mut lines: String = times
+        .iter()
+        .map(|time| format!("\ntransform  {}  {:.2}s", time.file, seconds(time)))
+        .collect();
+    let slow = times
+        .iter()
+        .filter(|time| {
+            time.dicts && time.rows >= DICT_HINT_ROWS && time.milliseconds >= DICT_HINT_MILLISECONDS
+        })
+        .max_by_key(|time| time.milliseconds);
+    if let Some(time) = slow {
+        lines.push_str(&format!(
+            "\nhint: the transform returned dicts for {} ({} rows, {:.1}s); a pyarrow Table or a DataFrame transforms faster",
+            time.file,
+            thousands(time.rows),
+            seconds(time)
+        ));
+    }
+    lines
 }
 
 /// `verb  name  detail` in the tally's columns, a detail's further lines under its first; a verb longer than `loaded` (`created`, `altered`), or a name wider than the column (a child table made as its parent loads), keeps two spaces after it.

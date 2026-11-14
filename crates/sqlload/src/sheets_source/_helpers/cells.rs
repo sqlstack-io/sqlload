@@ -59,6 +59,17 @@ pub(crate) fn cell_text(cell: &Cell, column_type: &ColumnType) -> Result<Option<
     })
 }
 
+/// A number's value as text, whatever the sheet shows for it: a date, a timestamp or a time of day for dated cells, any other number as it is (a whole one without a fraction).
+pub(crate) fn value_text(value: f64, kind: NumberKind) -> String {
+    let dated = match kind {
+        NumberKind::Date => ColumnType::Date,
+        NumberKind::DateTime => ColumnType::TimestampNtz,
+        NumberKind::Time => ColumnType::Time,
+        NumberKind::Plain | NumberKind::Fractional => ColumnType::Float,
+    };
+    number_text(value, kind, &dated)
+}
+
 /// A number as the text of its value: a date, a timestamp or a time of day for dated cells (by the column's type, so a date loads into a timestamp column at midnight), a whole number without a fraction, any other number as it is.
 fn number_text(value: f64, kind: NumberKind, column_type: &ColumnType) -> String {
     let time = serial_time(value);

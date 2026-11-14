@@ -62,6 +62,14 @@ pub(crate) struct RenderTallyTestCase {
     pub(crate) expected_output: &'static str,
 }
 
+pub(crate) struct TransformReaderTestCase {
+    pub(crate) description: &'static str,
+    /// The files table's `transform`, if any.
+    pub(crate) transform: Option<&'static str>,
+    /// Why SQLLoad must read the Parquet files itself, if it must.
+    pub(crate) expected_reason: Option<&'static str>,
+}
+
 /// A plan item: its name, its action, and each detail's label and text.
 pub(crate) type ItemSpec = (
     &'static str,

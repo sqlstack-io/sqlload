@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
 use crate::adapters::dispatch::models::Destination;
@@ -13,8 +14,10 @@ use crate::adapters::files::models::{
 };
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
+use crate::files_source::constants::NANOSECOND_SCALE;
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
+use crate::files_source::models::{FileColumn, StoredRead};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
@@ -425,4 +428,67 @@ pub(crate) async fn give_back(folder: &OpenFolder, lease: &Lease) {
     if let Err(error) = release_lease(folder, lease).await {
         tracing::warn!(%error, folder = %folder.location, "cannot release the table's lease; it expires on its own");
     }
+}
+
+/// The columns of `columns` SQLLoad's reader keeps at nanoseconds for `spec`'s warehouse: those the files store at nanoseconds, unless pinned or `live` holds fewer digits.
+pub(crate) fn nanosecond_columns(
+    spec: &TableSpec,
+    columns: &[FileColumn],
+    live: Option<&[LiveColumn]>,
+) -> Vec<String> {
+    match sql_adapter(spec.warehouse).keeps_nanoseconds() {
+        true => columns
+            .iter()
+            .filter(|column| {
+                matches!(
+                    column.stored_read,
+                    StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
+                )
+            })
+            .filter(|column| {
+                let loaded = spec.source_table.loaded_as(&column.name);
+                !spec.pinned.contains_key(loaded) && fewer_digits(live, loaded).is_none()
+            })
+            .map(|column| column.name.clone())
+            .collect(),
+        false => Vec::new(),
+    }
+}
+
+/// A warning for each column the files store at nanoseconds but the live table holds at fewer digits, so the load cuts them; a column whose type is pinned is the user's choice and is not warned about.
+pub(crate) fn truncated_nanoseconds(spec: &TableSpec, live: Option<&[LiveColumn]>) -> Vec<String> {
+    let Some(files) = &spec.files else {
+        return Vec::new();
+    };
+    files
+        .table
+        .columns
+        .iter()
+        .filter(|column| {
+            matches!(
+                column.stored_read,
+                StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
+            ) && !spec
+                .pinned
+                .contains_key(spec.source_table.loaded_as(&column.name))
+        })
+        .filter_map(|column| truncated_warning(live, spec.source_table.loaded_as(&column.name)))
+        .collect()
+}
+
+/// The warning for column `name` when the live column holds fewer than nanosecond digits.
+fn truncated_warning(live: Option<&[LiveColumn]>, name: &str) -> Option<String> {
+    let digits = fewer_digits(live, name)?;
+    Some(format!(
+        "{name}: nanoseconds in the files, but the column holds {digits} digits after the second, so they are truncated.\nRebuild the column at (9) (--reload) to keep them."
+    ))
+}
+
+/// The digits after the second the live column `name` holds, when fewer than nanoseconds, so SQLLoad's reader cuts its values.
+fn fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> Option<i64> {
+    live.into_iter()
+        .flatten()
+        .find(|existing| existing.name.eq_ignore_ascii_case(name))
+        .and_then(|existing| existing.fraction_digits)
+        .filter(|digits| *digits < i64::from(NANOSECOND_SCALE))
 }
