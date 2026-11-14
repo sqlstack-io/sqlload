@@ -397,7 +397,7 @@ def test_given_batch_windows_when_loading_a_python_table_then_its_function_is_ca
 	]
 
 
-def test_given_an_integer_batch_when_reloading_then_end_cursor_bounds_the_windows_and_start_cursor_is_refused(project: Path) -> None:
+def test_given_an_integer_batch_when_reloading_then_end_cursor_bounds_the_windows_and_start_cursor_drops_older_rows(project: Path) -> None:
 	loaded = sqlload(project, "load", "--end-cursor", "7", "api__counted")
 	assert loaded.returncode == 0, loaded.stdout + loaded.stderr
 	first = [(i, i // 2 + 1) for i in range(1, 7)]
@@ -405,9 +405,6 @@ def test_given_an_integer_batch_when_reloading_then_end_cursor_bounds_the_window
 	unbounded = sqlload(project, "load", "--reload", "--yes", "api__counted")
 	assert unbounded.returncode != 0, unbounded.stdout
 	assert "an integer batch needs --end-cursor to know where the last window ends, with --reload too" in unbounded.stdout
-	started = sqlload(project, "load", "--reload", "--yes", "--start-cursor", "3", "--end-cursor", "7", "api__counted")
-	assert started.returncode != 0, started.stdout
-	assert "--reload rebuilds the whole table from the start, so it takes no --start-cursor" in started.stdout
 	fail(project, 4)
 	failed = sqlload(project, "load", "--reload", "--yes", "--end-cursor", "7", "api__counted")
 	assert failed.returncode != 0, failed.stdout
@@ -417,6 +414,12 @@ def test_given_an_integer_batch_when_reloading_then_end_cursor_bounds_the_window
 	assert reloaded.returncode == 0, reloaded.stdout + reloaded.stderr
 	assert json.loads((project / "data" / "counted.json").read_text())[-4:] == [[0, 2], [2, 4], [4, 6], [6, 7]]
 	assert query(project, 'SELECT id, v FROM "RAW"."api__counted" ORDER BY id') == [(i, i // 2 + 7) for i in range(1, 7)]
+	planned = sqlload(project, "plan", "--reload", "--start-cursor", "3", "--end-cursor", "7", "api__counted")
+	assert "--reload rebuilds the table with only the rows from 3 (--start-cursor), below 7 (--end-cursor): rows before 3 and from 7 on are dropped" in planned.stdout
+	ranged = sqlload(project, "load", "--reload", "--yes", "--start-cursor", "3", "--end-cursor", "7", "api__counted")
+	assert ranged.returncode == 0, ranged.stdout + ranged.stderr
+	assert json.loads((project / "data" / "counted.json").read_text())[-2:] == [[3, 5], [5, 7]]
+	assert query(project, 'SELECT id, v FROM "RAW"."api__counted" ORDER BY id') == [(3, 11), (4, 11), (5, 12), (6, 12)]
 
 
 def test_given_a_large_generator_when_loading_then_batches_commit_along_the_way_without_spilling(project: Path) -> None:

@@ -251,6 +251,7 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
+    plan.schema.warnings.extend(reload_range(options));
     plan.schema.warnings.extend(split_ranking(&plan));
     with_run_log(plan, destination, options).await
 }
@@ -361,6 +362,32 @@ fn split_ranking(plan: &TablePlan) -> Option<String> {
     };
     Some(format!(
         "dedup_sort ranks repeated keys within one commit, and this table commits {commits}: a later commit still overwrites a key an earlier one wrote, whatever its {column} value{remedy}"
+    ))
+}
+
+/// What a `--reload` with `--start-cursor` or `--end-cursor` leaves out of the rebuilt table: the rows outside that range are dropped.
+fn reload_range(options: &PlanOptions) -> Option<String> {
+    let (start, end) = (
+        options.start_cursor.as_deref().filter(|_| options.reload),
+        options.end_cursor.as_deref().filter(|_| options.reload),
+    );
+    let (kept, dropped) = match (start, end) {
+        (Some(start), Some(end)) => (
+            format!("from {start} (--start-cursor), below {end} (--end-cursor)"),
+            format!("rows before {start} and from {end} on are dropped"),
+        ),
+        (Some(start), None) => (
+            format!("from {start} (--start-cursor)"),
+            format!("rows before {start} are dropped"),
+        ),
+        (None, Some(end)) => (
+            format!("below {end} (--end-cursor)"),
+            format!("rows from {end} on are dropped"),
+        ),
+        (None, None) => return None,
+    };
+    Some(format!(
+        "--reload rebuilds the table with only the rows {kept}: {dropped}"
     ))
 }
 
@@ -1452,19 +1479,6 @@ pub(crate) async fn cursor_window(
             maximum: None,
         }));
     };
-    if options.reload && options.start_cursor.is_some() {
-        return Ok(Err(
-            "--reload rebuilds the whole table from the start, so it takes no --start-cursor"
-                .to_owned(),
-        ));
-    }
-    let open_ended = matches!(spec.batch, Some(BatchStep::Integer(_))) && spec.source_end.is_none();
-    if options.reload && options.end_cursor.is_some() && !open_ended {
-        return Ok(Err(
-            "--reload rebuilds the whole table, so it takes --end-cursor only to end the windows of an integer batch_size on a source that can't report its maximum"
-                .to_owned(),
-        ));
-    }
     let flag = |value: &Option<String>| {
         value
             .as_deref()

@@ -246,6 +246,7 @@ pub(crate) async fn run_batched(
             .await
             .map_err(|error| error.to_string())?;
         let options = PlanOptions {
+            start_cursor: run.start_cursor.map(str::to_owned),
             end_cursor: run.end_cursor.map(str::to_owned),
             reload: run.reload,
             batch_bytes: test_case.batch_bytes,

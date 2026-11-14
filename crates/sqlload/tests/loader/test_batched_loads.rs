@@ -166,6 +166,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: Some("2026-11-06"),
                         reload: false,
                         check_query: IDS,
@@ -174,6 +175,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "UPDATE public.events_raw SET d = 1 WHERE id = 3;",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: Some("2026-11-06"),
                         reload: false,
                         check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) || ' ' || CAST(count(DISTINCT _sqlload_load_id) AS VARCHAR) FROM raw.app__events",
@@ -182,6 +184,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "DELETE FROM public.events_raw WHERE id = 4; INSERT INTO public.events_raw VALUES (5, '2026-11-04', 1);",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: Some("2026-11-06"),
                         reload: false,
                         check_query: IDS,
@@ -204,6 +207,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: Some("3"),
                         reload: false,
                         check_query: IDS,
@@ -212,6 +216,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "CREATE UNIQUE INDEX events_v ON raw.app__events (v)",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -220,6 +225,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "UPDATE public.events SET v = 'e' WHERE id = 5;",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -242,6 +248,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__events",
@@ -250,6 +257,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "UPDATE public.events_raw SET d = 1 WHERE id = 3;",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -271,6 +279,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -279,6 +288,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "INSERT INTO public.events VALUES (6, 'f'), (7, 'g');",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -291,7 +301,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 ],
             },
             BatchedScenarioTestCase {
-                description: "--reload of an integer batch on a source that reports its maximum ends there, and refuses --end-cursor",
+                description: "--reload of an integer batch on a source that reports its maximum keeps only the range given, and without one ends at the maximum",
                 setup: INTEGER,
                 settings: INTEGER_SETTINGS,
                 batch_bytes: None,
@@ -300,6 +310,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -308,6 +319,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "INSERT INTO public.events VALUES (6, 'f');",
                         destination_change: "",
+                        start_cursor: Some("2"),
                         end_cursor: Some("4"),
                         reload: true,
                         check_query: IDS,
@@ -316,6 +328,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: true,
                         check_query: IDS,
@@ -324,7 +337,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 ],
                 expected_outcomes: &[
                     "ok => 1,2,3,4,5",
-                    "plan: --reload rebuilds the whole table, so it takes --end-cursor only to end the windows of an integer batch_size on a source that can't report its maximum => 1,2,3,4,5",
+                    "ok => 2,3",
                     "ok => 1,2,3,4,5,6 | commits 3 windows of 2, read one after another into a new table, swapped in once at the end, up to the source's maximum 6 (read at plan)",
                 ],
             },
@@ -337,6 +350,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
+                    start_cursor: None,
                     end_cursor: Some("2026-01-03"),
                     reload: false,
                     check_query: IDS,
@@ -353,6 +367,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
+                    start_cursor: None,
                     end_cursor: Some("2026-11-03"),
                     reload: false,
                     check_query: IDS,
@@ -372,6 +387,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: Some("3"),
                         reload: false,
                         check_query: IDS,
@@ -380,6 +396,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "CREATE UNIQUE INDEX events_v ON raw.app__events (v)",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -388,6 +405,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "UPDATE public.events SET v = 'e' WHERE id = 5;",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -410,6 +428,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -418,6 +437,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "DELETE FROM public.events WHERE id = 4;",
                         destination_change: "",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -426,6 +446,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     BatchedRun {
                         source_change: "INSERT INTO public.events VALUES (6, '2026-11-06', 'f'), (7, '2026-11-07', NULL);",
                         destination_change: "ALTER TABLE raw.app__events ALTER COLUMN v SET NOT NULL",
+                        start_cursor: None,
                         end_cursor: None,
                         reload: false,
                         check_query: IDS,
@@ -447,6 +468,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
+                    start_cursor: None,
                     end_cursor: None,
                     reload: false,
                     check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY rowid) FROM raw.app__events",
@@ -463,6 +485,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
+                    start_cursor: None,
                     end_cursor: None,
                     reload: false,
                     check_query: IDS,
@@ -481,6 +504,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
+                    start_cursor: None,
                     end_cursor: None,
                     reload: false,
                     check_query: IDS,
@@ -499,6 +523,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
+                    start_cursor: None,
                     end_cursor: None,
                     reload: false,
                     check_query: IDS,
@@ -517,6 +542,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                 runs: &[BatchedRun {
                     source_change: "",
                     destination_change: "",
+                    start_cursor: None,
                     end_cursor: None,
                     reload: false,
                     check_query: "SELECT (SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM raw.app__a) || ' ' || (SELECT string_agg(CAST(id AS VARCHAR), ',') FROM raw.app__b)",

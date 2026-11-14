@@ -340,6 +340,8 @@ pub(crate) struct BatchedRun {
     pub(crate) source_change: &'static str,
     /// SQL run in the DuckDB destination first (a hand edit, such as a unique index that makes a later batch fail).
     pub(crate) destination_change: &'static str,
+    /// `--start-cursor`.
+    pub(crate) start_cursor: Option<&'static str>,
     /// `--end-cursor-*`.
     pub(crate) end_cursor: Option<&'static str>,
     /// `--reload`.

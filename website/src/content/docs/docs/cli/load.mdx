@@ -82,8 +82,26 @@ loaded  raw.app__customers     50 rows 0.0s
 └── slowest      raw.app__customers 0.0s
 ```
 
-`--reload` takes no `--start-cursor`. It takes `--end-cursor` only where a table's integer
-`batch_size` needs an end the source can't report; see [Batches](/docs/concepts/cursors/#batches).
+From 0.51.0, `--reload` takes `--start-cursor` and `--end-cursor`, and rebuilds the table with only
+the rows in that range, as SQLBuild's
+[`--full-refresh`](https://sqlbuild.com/docs/concepts/incremental/) does with an interval. Rows
+outside the range are dropped, and `plan` warns which:
+
+```console
+$ sqlload plan --reload --start-cursor 100000 --end-cursor 200000 shop__orders
+…
+    ├── reads   order_id from 100000 (--start-cursor), below 200000 (--end-cursor)
+…
+    └── commits 2 windows of 50000, read one after another into a new table, swapped in once at the end
+
+Warnings (1)
+└── shop__orders
+    └── --reload rebuilds the table with only the rows from 100000 (--start-cursor), below 200000 (--end-cursor): rows before 100000 and from 200000 on are dropped
+```
+
+Without `--start-cursor`, a reload starts from `cursor_start`, or from the first row. An integer
+`batch_size` on a source that can't report its maximum needs `--end-cursor`, with or without
+`--reload`; see [Batches](/docs/concepts/cursors/#batches).
 
 A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` refuses it. See
 [Reloading](/docs/guides/postgres-cdc/#reloading). `--reload` is also refused on

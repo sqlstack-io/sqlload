@@ -87,9 +87,9 @@ which publishes once per run (last row below). `plan` of one table shows how it 
 With `batch_size`, the first run needs a start, from `cursor_start` or `--start-cursor`. A Postgres
 integer cursor without `--end-cursor` ends at its maximum when `plan` ran. Other sources can't report
 their maximum, so an integer `batch_size` there needs `--end-cursor`. From 0.51.0 that includes
-`--reload`, which reads the windows from `cursor_start` up to `--end-cursor` into a new table and
-swaps it in once at the end; it takes no `--start-cursor`, since a reload always starts from the
-beginning:
+`--reload`, which reads the windows from `cursor_start` (or `--start-cursor`) up to `--end-cursor`
+into a new table and swaps it in once at the end. The rebuilt table holds only that range; see
+[Reloading](/docs/cli/load/#reloading).
 
 ```console
 $ sqlload plan --reload --end-cursor 200000 shop__orders
