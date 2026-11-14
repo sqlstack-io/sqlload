@@ -106,7 +106,7 @@ fn key_line(table: &TablePlan) -> Option<String> {
 }
 
 /// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`.
-fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
+pub(crate) fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
     if let Some(logged) = &table.logged {
         return Some(match &logged.current {
             Some(record) => format!(
@@ -127,10 +127,17 @@ fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
     let Some(from) = &window.from else {
         return Some(format!("{}: {said}", window.column));
     };
-    let after_bound = said
-        .strip_prefix("from ")
-        .or_else(|| said.strip_prefix("after "))
-        .and_then(|rest| rest.strip_prefix(from.as_str()));
+    let (bound, after_bound) = match (said.strip_prefix("from "), said.strip_prefix("after ")) {
+        (Some(rest), _) => (">=", rest.strip_prefix(from.as_str())),
+        (None, Some(rest)) => (">", rest.strip_prefix(from.as_str())),
+        (None, None) => (
+            match window.inclusive {
+                true => ">=",
+                false => ">",
+            },
+            None,
+        ),
+    };
     let origin = match after_bound {
         Some(rest) => match rest
             .trim()
@@ -147,10 +154,6 @@ fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
             Some(before) if !before.contains('(') => before.trim_end().to_owned(),
             _ => return Some(note.to_owned()),
         },
-    };
-    let bound = match window.inclusive {
-        true => ">=",
-        false => ">",
     };
     let origin = match origin.is_empty() {
         true => String::new(),

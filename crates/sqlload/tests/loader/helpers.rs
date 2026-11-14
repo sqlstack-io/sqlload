@@ -340,9 +340,9 @@ pub(crate) async fn run_scenario(
         let error = outcome.as_ref().err().cloned().unwrap_or_default();
         let planned = outcome.unwrap_or_default();
         assert!(
-            error.contains(run.expected_error)
+            words(&error).contains(&words(run.expected_error))
                 && error.is_empty() == run.expected_error.is_empty()
-                && planned.contains(run.expected_plan),
+                && words(&planned).contains(&words(run.expected_plan)),
             "{} run {}: {error}{planned}",
             test_case.description,
             index + 1
@@ -595,7 +595,8 @@ async fn run_written_files(
             .err()
             .unwrap_or_default();
         assert!(
-            error.contains(expected_error) && error.is_empty() == expected_error.is_empty(),
+            words(&error).contains(&words(expected_error))
+                && error.is_empty() == expected_error.is_empty(),
             "{} run {}: {error}",
             scenario.description,
             index + 1
@@ -1145,7 +1146,7 @@ pub(crate) fn not_found<'a>(texts: &[String], wanted: &[&'a str]) -> Vec<&'a str
     wanted
         .iter()
         .copied()
-        .filter(|text| !texts.iter().any(|sent| sent.contains(text)))
+        .filter(|text| !texts.iter().any(|sent| words(sent).contains(&words(text))))
         .collect()
 }
 
@@ -1338,13 +1339,14 @@ pub(crate) async fn run_files_target_scenario(
         let (plan, outcome) = plan_apply_load(&project, &destinations, &options).await;
         let error = outcome.as_ref().err().cloned().unwrap_or_default();
         assert!(
-            error.contains(run.expected_error) && error.is_empty() == run.expected_error.is_empty(),
+            words(&error).contains(&words(run.expected_error))
+                && error.is_empty() == run.expected_error.is_empty(),
             "{} run {}: {error}",
             test_case.description,
             index + 1
         );
         assert!(
-            plan.contains(run.expected_plan),
+            words(&plan).contains(&words(run.expected_plan)),
             "{} run {}: the plan lacks {:?}:\n{plan}",
             test_case.description,
             index + 1,
@@ -1665,7 +1667,7 @@ pub(crate) async fn run_cdc_steps(
             step.args
         );
         assert!(
-            output.contains(step.expected_output),
+            words(&output).contains(&words(step.expected_output)),
             "{description}: step {} {:?} output lacks {:?}\n{output}",
             first + index,
             step.args,
@@ -1953,7 +1955,7 @@ pub(crate) async fn run_merge_case(
             outcome.err().unwrap_or_default(),
         );
         assert!(
-            error.contains(step.expected_error)
+            words(&error).contains(&words(step.expected_error))
                 && error.is_empty() == step.expected_error.is_empty(),
             "{} step {}: {error}",
             test_case.description,
@@ -1993,4 +1995,12 @@ pub(crate) fn load_ndjson_runs(
         ok.then_some(()).ok_or(output)?;
     }
     Ok(config)
+}
+
+/// `text` with its whitespace collapsed and the plan tree's `│` left out, for checking wrapped plan text: a detail wraps where its width ends, which depends on paths and names.
+pub(crate) fn words(text: &str) -> String {
+    text.split_whitespace()
+        .filter(|word| *word != "│")
+        .collect::<Vec<_>>()
+        .join(" ")
 }

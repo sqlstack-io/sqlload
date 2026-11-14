@@ -77,6 +77,8 @@ pub const RED: &str = "\x1b[38;5;167m";
 pub const GREEN: &str = "\x1b[32m";
 /// Warnings.
 pub const YELLOW: &str = "\x1b[33m";
+/// What is running now: the live block's badge, bar and spinners.
+pub const CYAN: &str = "\x1b[36m";
 /// Back to plain text.
 pub const RESET: &str = "\x1b[0m";
 

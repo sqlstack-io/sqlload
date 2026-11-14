@@ -353,7 +353,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
                         encode: plain,
                     }],
                     expected_error: "",
-                    expected_plan: "day from 2026-11-03 (destination maximum)",
+                    expected_plan: "reads   day >= 2026-11-03 (warehouse maximum)",
                 },
             ],
             check_query: "SELECT string_agg(id || ':' || day, ',' ORDER BY id) FROM raw.scores",
