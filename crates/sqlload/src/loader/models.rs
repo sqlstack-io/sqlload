@@ -436,6 +436,8 @@ pub struct ProjectPlan {
     pub warnings: Vec<String>,
     /// The `problems` a rerun may get past: a source that could not be reached.
     pub retryable_problems: Vec<String>,
+    /// The sources with a problem in `problems`, which a table's problem names only by its `schema.table`.
+    pub failed_sources: std::collections::BTreeSet<String>,
 }
 
 impl ProjectPlan {

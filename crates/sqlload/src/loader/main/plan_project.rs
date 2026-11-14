@@ -38,6 +38,9 @@ pub async fn plan_project(
         files,
     } in found.sources
     {
+        if !resolved.problems.is_empty() {
+            plan.failed_sources.insert(source_name.clone());
+        }
         plan.problems.extend(resolved.problems);
         plan.warnings.extend(resolved.warnings);
         plan.skipped.extend(resolved.skipped);
